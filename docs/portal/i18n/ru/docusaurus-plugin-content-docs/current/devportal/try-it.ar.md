@@ -4,50 +4,52 @@ direction: ltr
 source: docs/portal/docs/devportal/try-it.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 # بيئة Try It التجريبية
 
-يوفر بوابة المطورين وحدة تحكم اختيارية "Try it" حتى تتمكن من استدعاء نقاط نهاية Torii بدون مغادرة الوثائق. تقوم وحدة التحكم بتمرير الطلبات عبر الوكيل المضمن حتى تتمكن المتصفحات من تجاوز قيود CORS مع الاستمرار في فرض حدود المعدل والمصادقة.
+В фильме "Попробуй" Дэн Тэхен в фильме "Попробуй" в фильме "Попробуй" Код Torii был установлен. Он был выбран в качестве президента США в 2007 году. Он был создан в рамках CORS в рамках программы по борьбе с коррупцией.
 
 ## المتطلبات المسبقة
 
-- Node.js 18.18 او احدث (يتطابق مع متطلبات بناء البوابة)
-- وصول شبكة الى بيئة staging من Torii
-- bearer token يمكنه استدعاء مسارات Torii التي تنوي اختبارها
+- Версия Node.js 18.18 (в версии 18.18)
+- Выполняется в промежуточном состоянии Torii.
+- токен на предъявителя يمكنه استدعاء مسارات Torii
 
-تتم كل تهيئة الوكيل عبر متغيرات البيئة. الجدول ادناه يسرد اهم المفاتيح:
+Он был отправлен в Нью-Йорк в Нью-Йорке. В сообщении говорится:
 
-| المتغير | الغرض | الافتراضي |
+| المتغير | غرض | الافتراضي |
 | --- | --- | --- |
-| `TRYIT_PROXY_TARGET` | عنوان Torii الاساسي الذي يعيد الوكيل توجيه الطلبات اليه | **Required** |
-| `TRYIT_PROXY_LISTEN` | عنوان الاستماع للتطوير المحلي (صيغة `host:port` او `[ipv6]:port`) | `127.0.0.1:8787` |
+| `TRYIT_PROXY_TARGET` | عنوان Torii الاساسي الذي يعيد الوكيل توجيه الطلبات اليه | **Обязательно** |
+| `TRYIT_PROXY_LISTEN` | عنوان الاستماع للتطوير المحلي (صيغة `host:port` и `[ipv6]:port`) | `127.0.0.1:8787` |
 | `TRYIT_PROXY_ALLOWED_ORIGINS` | قائمة مفصولة بفواصل للمصادر المسموح لها باستدعاء الوكيل | `http://localhost:3000` |
-| `TRYIT_PROXY_CLIENT_ID` | معرف يوضع في `X-TryIt-Client` لكل طلب upstream | `docs-portal` |
-| `TRYIT_PROXY_BEARER` | bearer token افتراضي يعاد توجيهه الى Torii | _empty_ |
+| `TRYIT_PROXY_CLIENT_ID` | معرف يوضع في `X-TryIt-Client` в восходящем направлении | `docs-portal` |
+| `TRYIT_PROXY_BEARER` | токен на предъявителя افتراضي يعاد توجيهه الى Torii | _пустой_ |
 | `TRYIT_PROXY_ALLOW_CLIENT_AUTH` | السماح للمستخدمين بتقديم token خاص بهم عبر `X-TryIt-Auth` | `0` |
-| `TRYIT_PROXY_MAX_BODY` | الحد الاقصى لحجم جسم الطلب (bytes) | `1048576` |
-| `TRYIT_PROXY_TIMEOUT_MS` | مهلة upstream بالميلي ثانية | `10000` |
-| `TRYIT_PROXY_RATE_LIMIT` | عدد الطلبات المسموح بها لكل نافذة معدل لكل IP عميل | `60` |
+| `TRYIT_PROXY_MAX_BODY` | Размер файла (байты) | `1048576` |
+| `TRYIT_PROXY_TIMEOUT_MS` | مهلة вверх по течению بالميلي ثانية | `10000` |
+| `TRYIT_PROXY_RATE_LIMIT` | Вы можете получить доступ к IP-адресам | `60` |
 | `TRYIT_PROXY_RATE_WINDOW_MS` | نافذة انزلاقية للحد من المعدل (ms) | `60000` |
-| `TRYIT_PROXY_METRICS_LISTEN` | عنوان استماع اختياري لنقطة metrics بأسلوب Prometheus (`host:port` او `[ipv6]:port`) | _empty (disabled)_ |
-| `TRYIT_PROXY_METRICS_PATH` | مسار HTTP الذي تخدمه نقطة metrics | `/metrics` |
+| `TRYIT_PROXY_METRICS_LISTEN` | Сохранение метрики بأسلوب Prometheus (`host:port` и `[ipv6]:port`) | _пусто (отключено)_ |
+| `TRYIT_PROXY_METRICS_PATH` | Параметры HTTP-метрики | `/metrics` |
 
-يعرض الوكيل ايضا `GET /healthz` ويعيد اخطاء JSON منظمة ويخفي bearer tokens من مخرجات السجل.
+Создается файл `GET /healthz`, который позволяет использовать JSON для хранения токенов-носителей в режиме реального времени.
 
-فعّل `TRYIT_PROXY_ALLOW_CLIENT_AUTH=1` عند عرض الوكيل لمستخدمي الوثائق حتى تتمكن لوحات Swagger وRapiDoc من تمرير bearer tokens المقدمة من المستخدم. لا يزال الوكيل يفرض حدود المعدل ويخفي البيانات الحساسة ويسجل ما اذا كان الطلب استخدم token الافتراضي او تجاوزا لكل طلب. اضبط `TRYIT_PROXY_CLIENT_ID` بالوسم الذي تريد ارساله كـ `X-TryIt-Client`
-(الافتراضي `docs-portal`). يقوم الوكيل بقص والتحقق من قيم `X-TryIt-Client` المقدمة من العميل والعودة الى هذا الافتراضي حتى تتمكن بوابات staging من تدقيق المصدر دون ربط بيانات المتصفح.
+На `TRYIT_PROXY_ALLOW_CLIENT_AUTH=1` написано в журнале Swagger и RapiDoc. Вы можете использовать жетоны на предъявителя в любой ситуации. В 2007 году он был выбран в качестве посредника в работе над фильмом "Старый мир" в Нью-Йорке. استخخدم token الافتراضي او تجاوزا لكل طلب. اضبط `TRYIT_PROXY_CLIENT_ID` بالوسم الذي تريد ارساله كـ `X-TryIt-Client`
+(Название `docs-portal`). В 2009 году он был отправлен в `X-TryIt-Client`, чтобы узнать больше о том, как это сделать. Постановщиком выступил Дэниел Бернс в постановке фильма "Тренер" в исполнении Дэна Робертса.
 
 ## تشغيل الوكيل محليا
 
-ثبت التبعيات اول مرة تجهز فيها البوابة:
+Сообщение о том, что он сделал в 2017 году:
 
 ```bash
 cd docs/portal
 npm install
 ```
 
-شغل الوكيل واشره الى مثيل Torii الخاص بك:
+Обратитесь к номеру Torii по запросу:
 
 ```bash
 export TRYIT_PROXY_TARGET="https://torii.devnet.sora.example"
@@ -57,18 +59,18 @@ export TRYIT_PROXY_BEARER="Bearer eyJhbGciOi..."
 npm run tryit-proxy
 ```
 
-يسجل السكربت عنوان الربط ويعيد توجيه الطلبات من `/proxy/*` الى اصل Torii المحدد.
+Для получения дополнительной информации обратитесь к `/proxy/*` на Torii. المحدد.
 
 قبل ربط المنفذ يتحقق السكربت من ان
-`static/openapi/torii.json` يطابق الـ digest المسجل في
-`static/openapi/manifest.json`. اذا انحرفت الملفات ينهي الامر بخطأ ويطلب منك تشغيل
+`static/openapi/torii.json` يطابق الـ дайджест المسجل في
+`static/openapi/manifest.json`. Он сказал, что его сын Уилсон Хейлз
 `npm run sync-openapi -- --latest`. صدّر
-`TRYIT_PROXY_ALLOW_STALE_SPEC=1` فقط لحالات الطوارئ؛ سيسجل الوكيل تحذيرا ويكمل حتى تتمكن من
-التعافي خلال نوافذ الصيانة.
+`TRYIT_PROXY_ALLOW_STALE_SPEC=1` فقط لحالات الطوارئ؛ Сэйл Уилсон Пьер и Уилсон Трэйси в фильме
+Он сказал, что это не так.
 
 ## ربط عناصر البوابة
 
-عند بناء البوابة او تشغيلها، اضبط عنوان URL الذي يجب ان تستخدمه العناصر للوكيل:
+عند بناء البوابة او تشغيلها, اضبط عنوان URL-адрес ссылки на сайт Людмила:
 
 ```bash
 export TRYIT_PROXY_PUBLIC_URL="http://localhost:8787"
@@ -76,43 +78,41 @@ export TRYIT_PROXY_DEFAULT_BEARER="Bearer eyJhbGciOi..." # Optional
 npm run start
 ```
 
-المكونات التالية تقرا هذه القيم من `docusaurus.config.js`:
-
-- **Swagger UI** - يعرض في `/reference/torii-swagger`; يسبق تفويض مخطط bearer عند وجود token،
-  يوسم الطلبات بـ `X-TryIt-Client`، يحقن `X-TryIt-Auth`، ويعيد توجيه الاستدعاءات عبر
-  الوكيل عندما يتم ضبط `TRYIT_PROXY_PUBLIC_URL`.
-- **RapiDoc** - يعرض في `/reference/torii-rapidoc`; يعكس حقل token،
-  ويعيد استخدام نفس headers الخاصة بـ Swagger، ويستهدف الوكيل تلقائيا عند ضبط العنوان.
-- **Try it console** - مضمّنة في صفحة نظرة عامة على الـ API؛ تتيح ارسال طلبات مخصصة،
-  عرض headers، وفحص اجسام الاستجابة.
+Чтобы получить информацию о `docusaurus.config.js`:- **Swagger UI** - Добавлен в `/reference/torii-swagger`; يسبق تفويض مخطط предъявитель عند وجود token,
+  Он был установлен `X-TryIt-Client`, `X-TryIt-Auth`, а также установлен на устройстве.
+  Это сообщение было создано `TRYIT_PROXY_PUBLIC_URL`.
+- **RapiDoc** - добавлено в `/reference/torii-rapidoc`; يعكس حقل токен,
+  Его заголовки были показаны Джоном Сваггером и его коллегой Сейном Сваггером.
+- **Попробуйте консоль** - Нажмите на ссылку API. تتيح ارسال طلبات مخصصة،
+  Используйте заголовки, чтобы получить доступ к ним.
 
 يعرض كلا اللوحتين **محدد snapshots** الذي يقرأ
 `docs/portal/static/openapi/versions.json`. املأ هذا الفهرس باستخدام
 `npm run sync-openapi -- --version=<label> --mirror=current --latest` حتى يتمكن المراجعون من
-التنقل بين المواصفات التاريخية ومشاهدة digest SHA-256 المسجل وتأكيد ما اذا كان snapshot
-الاصدار يحمل manifest موقعا قبل استخدام العناصر التفاعلية.
+Получение дайджеста SHA-256 для получения снимка SHA-256
+Это будет проявлением того, что вы хотите сделать это в ближайшее время.
 
-تغيير الـ token في اي عنصر يؤثر فقط على جلسة المتصفح الحالية؛ الوكيل لا يخزن ولا يسجل الـ token المقدم.
+Получите токен в случае, если вы хотите получить доступ к токену الوكيل لا يخزن ولا يسجل الـ token المقدم.
 
-## رموز OAuth قصيرة العمر
+## Проверка OAuth
 
-لتجنب توزيع رموز Torii طويلة العمر على المراجعين، اربط وحدة Try it بخادم OAuth لديك. عندما تكون
-متغيرات البيئة ادناه موجودة، تعرض البوابة واجهة تسجيل دخول device code، وتصدر bearer tokens قصيرة
-العمر وتحقنها تلقائيا في نموذج وحدة التحكم.
+لتجنب توزيع رموز Torii طويلة العمر على المراجعين, اربط وحدة Попробуйте بخادم OAuth لديك. Сан-Диего
+Для этого необходимо указать код устройства, идентификатор носителя жетоны
+Он был убит в Нью-Йорке.
 
-| المتغير | الغرض | الافتراضي |
+| المتغير | غرض | الافتراضي |
 | --- | --- | --- |
-| `DOCS_OAUTH_DEVICE_CODE_URL` | نقطة تفويض الجهاز OAuth (`/oauth/device/code`) | _empty (disabled)_ |
-| `DOCS_OAUTH_TOKEN_URL` | نقطة token تقبل `grant_type=urn:ietf:params:oauth:grant-type:device_code` | _empty_ |
-| `DOCS_OAUTH_CLIENT_ID` | معرف عميل OAuth المسجل لمعاينة الوثائق | _empty_ |
+| `DOCS_OAUTH_DEVICE_CODE_URL` | Открыть доступ к OAuth (`/oauth/device/code`) | _пусто (отключено)_ |
+| `DOCS_OAUTH_TOKEN_URL` | Код токена تقبل `grant_type=urn:ietf:params:oauth:grant-type:device_code` | _пустой_ |
+| `DOCS_OAUTH_CLIENT_ID` | Вход в систему OAuth для проверки подлинности | _пустой_ |
 | `DOCS_OAUTH_SCOPE` | نطاقات مفصولة بمسافة مطلوبة اثناء تسجيل الدخول | `openid profile offline_access` |
-| `DOCS_OAUTH_AUDIENCE` | Audience API اختياري لربط الـ token | _empty_ |
-| `DOCS_OAUTH_POLL_INTERVAL_MS` | اقل فترة polling اثناء انتظار الموافقة (ms) | `5000` (القيم < 5000 ms مرفوضة) |
-| `DOCS_OAUTH_DEVICE_CODE_TTL_SECONDS` | مدة صلاحية device code الاحتياطية (ثوان) | `600` (يجب ان تبقى بين 300 s و 900 s) |
-| `DOCS_OAUTH_TOKEN_TTL_SECONDS` | مدة صلاحية access token الاحتياطية (ثوان) | `900` (يجب ان تبقى بين 300 s و 900 s) |
-| `DOCS_OAUTH_ALLOW_INSECURE` | اضبط `1` لمعاينات محلية تتجاوز OAuth عمدا | _unset_ |
+| `DOCS_OAUTH_AUDIENCE` | Audience API Доступ к токену | _пустой_ |
+| `DOCS_OAUTH_POLL_INTERVAL_MS` | Результаты опроса اثناء انتظار الموافقة (ms) | `5000` (время < 5000 мс) |
+| `DOCS_OAUTH_DEVICE_CODE_TTL_SECONDS` | Код устройства مدة صلاحية الاحتياطية (ثوان) | `600` (от 300 до 900 с) |
+| `DOCS_OAUTH_TOKEN_TTL_SECONDS` | Получить токен доступа الاحتياطية (ثوان) | `900` (от 300 до 900 с) |
+| `DOCS_OAUTH_ALLOW_INSECURE` | `1` Доступ к протоколу OAuth | _закат_ |
 
-مثال تهيئة:
+Сообщение:
 
 ```bash
 export DOCS_OAUTH_DEVICE_CODE_URL="https://auth.dev.sora.example/oauth/device/code"
@@ -124,54 +124,52 @@ export DOCS_OAUTH_AUDIENCE="https://torii.devnet.sora.example"
 export DOCS_OAUTH_POLL_INTERVAL_MS="6000"
 ```
 
-عند تشغيل `npm run start` او `npm run build` تقوم البوابة بتضمين هذه القيم في
-`docusaurus.config.js`. اثناء المعاينة المحلية تعرض بطاقة Try it زر
-"Sign in with device code". يدخل المستخدمون الرمز المعروض في صفحة التحقق OAuth؛ عند نجاح
-device flow تقوم الاداة بما يلي:
+Установите `npm run start` и `npm run build`, чтобы получить информацию о том, как это сделать.
+`docusaurus.config.js`. اثناء المعاينة المحلية تعرض بطاقة Попробуйте زر
+«Войти с кодом устройства». Вы можете получить доступ к протоколу OAuth; عند نجاح
+Поток устройства
 
-- حقن bearer token الصادر في حقل وحدة Try it،
-- وسم الطلبات بالـ headers الحالية `X-TryIt-Client` و `X-TryIt-Auth`،
+- Доступ к токену на предъявителя для использования в режиме реального времени. Попробуйте,
+- Для заголовков `X-TryIt-Client` и `X-TryIt-Auth`.
 - عرض العمر المتبقي، و
 - حذف الـ token تلقائيا عند انتهاء الصلاحية.
 
-يظل ادخال Bearer اليدوي متاحا؛ احذف متغيرات OAuth عندما تريد اجبار المراجعين على لصق token مؤقت
-بانفسهم، او صدّر `DOCS_OAUTH_ALLOW_INSECURE=1` لمعاينات محلية معزولة يكون فيها الوصول المجهول مقبولا.
-عمليات build بدون OAuth مكون الان تفشل بسرعة لتلبية شرط DOCS-1b في خارطة الطريق.
+يظل ادخال Bearer اليدوي متاحا؛ Для доступа к OAuth необходимо получить доступ к токену
+بانفسهم, او صدّر `DOCS_OAUTH_ALLOW_INSECURE=1` لمعاينات محلية معزولة يكون فيها الوصول المجهول مقبولا.
+Выполните сборку OAuth в соответствии с требованиями протокола DOCS-1b для проверки подлинности.
 
-ملاحظة: راجع [Security hardening & pen-test checklist](./security-hardening.md)
-قبل فتح البوابة خارج المختبر؛ فهي توثق نموذج التهديد وملف CSP/Trusted Types وخطوات pen-test التي
-باتت تحجب DOCS-1b.
+Название: راجع [Контрольный список повышения безопасности и пен-теста](./security-hardening.md)
+قبل فتح البوابة خارج المختبر؛ Для проверки соответствия CSP/Trusted Types и проверки на проникновение.
+Приложение DOCS-1b.
 
-## امثلة Norito-RPC
+## Norito-RPCЗагрузите Norito-RPC для прокси-сервера и сантехники OAuth для JSON; в تضبط
+`Content-Type: application/x-norito` Отключает полезную нагрузку Norito Загрузка данных в NRPC
+(`docs/source/torii/nrpc_spec.md`). يوفر المستودع полезные нагрузки
+`fixtures/norito_rpc/` добавлен в программу SDK для проверки подлинности.
+Информационный центр CI.
 
-طلبات Norito-RPC تشترك في نفس proxy و OAuth plumbing كما في مسارات JSON؛ فهي تضبط
-`Content-Type: application/x-norito` وترسل payload Norito المشفر مسبقا الموضح في مواصفة NRPC
-(`docs/source/torii/nrpc_spec.md`). يوفر المستودع payloads قياسية تحت
-`fixtures/norito_rpc/` حتى يتمكن مؤلفو البوابة ومالكو SDK والمراجعون من اعادة ارسال نفس
-البايتات التي يستخدمها CI.
+### ارسال payload Norito в разделе Try It
 
-### ارسال payload Norito من وحدة Try It
-
-1. اختر fixture مثل `fixtures/norito_rpc/transfer_asset.norito`. هذه الملفات هي
-   اغلفة Norito خام؛ **لا** تقم بتحويلها الى base64.
-2. في Swagger او RapiDoc، حدد endpoint NRPC (مثلا
+1. Установите приспособление типа `fixtures/norito_rpc/transfer_asset.norito`. هذه الملفات هي
+   Сообщение Norito خام؛ **لا** Вы можете использовать base64.
+2. В Swagger в RapiDoc используется конечная точка NRPC (
    `POST /v1/pipeline/submit`) وغيّر محدد **Content-Type** الى
    `application/x-norito`.
-3. بدّل محرر جسم الطلب الى **binary** (وضع "File" في Swagger او محدد "Binary/File" في RapiDoc)
-   وارفع ملف `.norito`. تقوم الاداة بتمرير البايتات عبر الوكيل بدون تعديل.
-4. ارسل الطلب. اذا اعاد Torii `X-Iroha-Error-Code: schema_mismatch`، تحقق انك تستدعي
-   endpoint يقبل payloads ثنائية وتاكد ان schema hash المسجل في
-   `fixtures/norito_rpc/schema_hashes.json` يطابق build Torii الذي تستخدمه.
+3. Создайте файл **binary** (от «File» в Swagger и «Binary/File» в RapiDoc)
+   Код: `.norito`. Он выступил с речью в газете "Борнес-Турнир".
+4. Свободный день. اذا اعاد Torii `X-Iroha-Error-Code: schema_mismatch`, пожалуйста, проверьте
+   Конечная точка отображает полезные данные и хэш схемы.
+   `fixtures/norito_rpc/schema_hashes.json` установлен на сборку Torii.
 
-تحفظ وحدة التحكم اخر ملف في الذاكرة لتتمكن من اعادة ارسال نفس payload مع اختبار tokens مختلفة
-او مضيفي Torii. اضافة `scripts/run_norito_rpc_fixtures.sh --note "<ticket>"` الى سير عملك
-تنتج bundle الادلة المشار اليه في خطة اعتماد NRPC-4 (log + ملخص JSON)، وهو ما يتكامل جيدا مع
-التقاط screenshots لاستجابة Try It اثناء المراجعات.
+Создаётся впечатление, что в режиме реального времени происходит перегрузка полезной нагрузки в режиме реального времени. жетоны
+Там же Torii. اضافة `scripts/run_norito_rpc_fixtures.sh --note "<ticket>"` الى سير عملك
+Создает пакетный файл для просмотра в формате NRPC-4 (log + файл JSON), а также для просмотра в формате JSON.
+Посмотреть скриншоты Попробуйте попробовать.
 
-### مثال CLI (curl)
+### Доступ к CLI (curl)
 
-يمكن اعادة تشغيل نفس fixtures خارج البوابة عبر `curl`، وهو مفيد عند التحقق من الوكيل او
-تصحيح ردود gateway:
+يمكن اعادة تشغيل نفس светильники خارج البوابة عبر `curl`, وهو مفيد عند التحقق Во время праздника
+تصحيح ردود шлюз:
 
 ```bash
 TORII="https://torii.devnet.sora.example"
@@ -179,51 +177,49 @@ TOKEN="Bearer $(cat ~/.config/torii/devnet.token)"
 curl   -H "Content-Type: application/x-norito"   -H "Authorization: ${TOKEN}"   --data-binary @fixtures/norito_rpc/transfer_asset.norito   "${TORII}/v1/pipeline/submit"
 ```
 
-بدل fixture باي ادخال مدرج في `transaction_fixtures.manifest.json` او قم بترميز payload خاص بك عبر
-`cargo xtask norito-rpc-fixtures`. عندما يكون Torii في وضع canary يمكنك توجيه `curl` الى
-proxy try-it (`https://docs.sora.example/proxy/v1/pipeline/submit`) لاختبار نفس البنية
-التي تستخدمها عناصر البوابة.
+Приспособление установлено на `transaction_fixtures.manifest.json` в соответствии с полезной нагрузкой خاص بك عبر
+`cargo xtask norito-rpc-fixtures`. عندما يكوون Torii и Canary يمكنك توجيه `curl` الى
+пробный прокси (`https://docs.sora.example/proxy/v1/pipeline/submit`)
+التي تخدمها عناصر البوابة.
 
 ## المراقبة والعمليات
 
-يتم تسجيل كل طلب مرة واحدة مع method و path و origin وحالة upstream ومصدر المصادقة
-(`override` او `default` او `client`). لا يتم تخزين الـ tokens اطلاقا؛ يتم تنقيح bearer headers
-وقيم `X-TryIt-Auth` قبل التسجيل، لذا يمكنك تمرير stdout الى مجمع مركزي دون القلق من تسرب الاسرار.
+Для этого необходимо указать метод, путь и источник, восходящие потоки данных.
+(`override` или `default` или `client`). Доступ к токенам اطلاقا؛ Добавление заголовков носителя
+В `X-TryIt-Auth` используется стандартный стандартный вывод, который используется в стандартном интерфейсе. تسرب الاسرار.
 
 ### فحوصات الصحة والتنبيه
 
-شغل probe المرفق اثناء النشر او بجدول زمني:
+Исследование, проведенное в 2008 году и в Брэнсоне Стоуном:
 
 ```bash
 # Ensure the proxy responds to /healthz and forwards a sample request.
 TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" TRYIT_PROXY_SAMPLE_PATH="/v1/status" npm run probe:tryit-proxy
 ```
 
-مفاتيح البيئة:
+Видео по теме:
 
 - `TRYIT_PROXY_SAMPLE_PATH` - مسار Torii اختياري (بدون `/proxy`) لاختباره.
-- `TRYIT_PROXY_SAMPLE_METHOD` - الافتراضي `GET`; اضبط `POST` لعمليات الكتابة.
-- `TRYIT_PROXY_PROBE_TOKEN` - يحقن bearer token مؤقت للطلب التجريبي.
-- `TRYIT_PROXY_PROBE_TIMEOUT_MS` - يستبدل المهلة الافتراضية 5 s.
-- `TRYIT_PROXY_PROBE_METRICS_FILE` - وجهة نص Prometheus اختيارية لـ `probe_success`/`probe_duration_seconds`.
-- `TRYIT_PROXY_PROBE_LABELS` - ازواج `key=value` مفصولة بفواصل تضاف الى المقاييس (الافتراضي `job=tryit-proxy` و `instance=<proxy URL>`).
-- `TRYIT_PROXY_PROBE_METRICS_URL` - عنوان اختياري لنقطة metrics (مثل `http://localhost:9798/metrics`) يجب ان يستجيب عند تمكين `TRYIT_PROXY_METRICS_LISTEN`.
+- `TRYIT_PROXY_SAMPLE_METHOD` - Внутренний `GET`; Установите `POST`.
+- `TRYIT_PROXY_PROBE_TOKEN` - токен на предъявителя для обмена данными.
+- `TRYIT_PROXY_PROBE_TIMEOUT_MS` - Отмена сигнала в течение 5 с.
+- `TRYIT_PROXY_PROBE_METRICS_FILE` - Установите Prometheus на `probe_success`/`probe_duration_seconds`.
+- `TRYIT_PROXY_PROBE_LABELS` - `key=value` для проверки подлинности `job=tryit-proxy` و `instance=<proxy URL>`).
+- `TRYIT_PROXY_PROBE_METRICS_URL` - Установите метрики (для `http://localhost:9798/metrics`) `TRYIT_PROXY_METRICS_LISTEN`.
 
-ادمج النتائج في textfile collector عبر توجيه probe الى مسار قابل للكتابة
-(مثل `/var/lib/node_exporter/textfile_collector/tryit.prom`) واضافة وسوم مخصصة:
+ادمج النتائج в сборщике текстовых файлов, عبر توجيه зонд الى مسار قابل للكتابة
+(Для `/var/lib/node_exporter/textfile_collector/tryit.prom`) Обратите внимание:
 
 ```bash
 TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" TRYIT_PROXY_PROBE_METRICS_FILE="/var/lib/node_exporter/textfile_collector/tryit.prom" TRYIT_PROXY_PROBE_LABELS="job=tryit-proxy,cluster=prod" npm run probe:tryit-proxy
 ```
 
-يعيد السكربت كتابة ملف المقاييس بشكل ذري حتى يقرأ المجمع دائما payload كاملا.
-
-عند ضبط `TRYIT_PROXY_METRICS_LISTEN`، قم بتعيين
-`TRYIT_PROXY_PROBE_METRICS_URL` الى نقطة metrics حتى تفشل probe بسرعة اذا اختفت واجهة scrape
-(مثل ingress غير مضبوط او قواعد firewall مفقودة). اعداد production شائع هو
+Он был отправлен в космос, чтобы получить полезную нагрузку Кейла.عند ضبط `TRYIT_PROXY_METRICS_LISTEN`, قم بتعيين
+`TRYIT_PROXY_PROBE_METRICS_URL` позволяет получить метрики для проверки зонда и очистки данных.
+(Входной сигнал отключен от брандмауэра). اعداد Production شائع هو
 `TRYIT_PROXY_PROBE_METRICS_URL="http://127.0.0.1:9798/metrics"`.
 
-للتنبيه الخفيف، اربط probe بواجهة المراقبة لديك. مثال Prometheus يقوم بالتصعيد بعد فشلين متتاليين:
+Владелец полиции исследует ситуацию с Бэнкс-Сити. Код Prometheus в приложении :
 
 ```yaml
 groups:
@@ -240,12 +236,12 @@ groups:
             The try-it proxy at {{ $labels.instance }} is not responding to probe requests.
 ```
 
-### نقطة metrics ولوحات المتابعة
+### Получение метрик
 
-اضبط `TRYIT_PROXY_METRICS_LISTEN=127.0.0.1:9798` (او اي زوج host/port) قبل تشغيل الوكيل
-لكشف نقطة metrics بتنسيق Prometheus. المسار الافتراضي هو `/metrics` ويمكن تغييره عبر
-`TRYIT_PROXY_METRICS_PATH=/custom`. كل scrape يعيد عدادات لاجمالي الطلبات حسب method ورفض
-rate limit واخطاء/timeouts upstream ونتائج الوكيل وملخصات latency:
+`TRYIT_PROXY_METRICS_LISTEN=127.0.0.1:9798` (для хоста/порта)
+Для получения метрики используйте Prometheus. المسار الافتراضي هو `/metrics` ويمكن تغييره عبر
+`TRYIT_PROXY_METRICS_PATH=/custom`. Чтобы очистить метод, используйте метод Scrape.
+ограничение скорости и тайм-ауты в восходящем направлении.
 
 ```bash
 export TRYIT_PROXY_METRICS_LISTEN="127.0.0.1:9798"
@@ -256,15 +252,15 @@ tryit_proxy_requests_total{method="GET"} 12
 tryit_proxy_rate_limited_total 1
 ```
 
-وجّه مجمعات Prometheus/OTLP الى نقطة metrics واعِد استخدام لوحات
-`dashboards/grafana/docs_portal.json` حتى يتمكن SRE من مراقبة latencies الذيل وارتفاعات الرفض
-دون تحليل السجلات. ينشر الوكيل تلقائيا `tryit_proxy_start_timestamp_ms` لمساعدة المشغلين
+Установите Prometheus/OTLP для получения метрик.
+`dashboards/grafana/docs_portal.json` используется для SRE в случае задержки задержки.
+Дэн Тэйлл Уилсон. ينشر الوكيل تلقائيا `tryit_proxy_start_timestamp_ms` لمساعدة الشغلين
 على اكتشاف اعادة التشغيل.
 
 ### اتمتة التراجع
 
-استخدم اداة الادارة لتحديث او استعادة عنوان Torii المستهدف. يحفظ السكربت الاعداد السابق في
-`.env.tryit-proxy.bak` حتى يكون التراجع امرا واحدا.
+Установите флажок Torii. يحفظ السكربت الاعداد السابق في
+`.env.tryit-proxy.bak` حتى в التراجع امرا واحدا.
 
 ```bash
 # Update TRYIT_PROXY_TARGET and back up the previous config.
@@ -274,4 +270,4 @@ npm run manage:tryit-proxy -- update --target https://torii.devnet.sora.example
 npm run manage:tryit-proxy -- rollback
 ```
 
-يمكنك تجاوز مسار ملف env عبر `--env` او `TRYIT_PROXY_ENV` اذا كان النشر يحفظ الاعدادات في موقع اخر.
+Для этого необходимо установить env عبر `--env` и `TRYIT_PROXY_ENV`, чтобы получить доступ к соответствующему файлу. В Миссисипи.

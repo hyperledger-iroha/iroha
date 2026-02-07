@@ -7,16 +7,17 @@ generator: scripts/sync_docs_i18n.py
 source_hash: a3158cd70a42104bacaafc520fdcc10e20e3bc347d895be448fcb10da4f668bd
 source_last_modified: "2025-12-29T18:16:35.965528+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Iroha 3 Bench Suite
+# Iroha 3 вандан люкс
 
-The Iroha 3 bench suite times the hot paths we rely on during staking, fee
-charging, proof verification, scheduling, and proof endpoints. It runs as an
-`xtask` command with deterministic fixtures (fixed seeds, fixed key material,
-and stable request payloads) so results are reproducible across hosts.
+Iroha 3 вандан иж бүрдэл нь бооцоо тавих үед бидний найддаг халуун замаас хэд дахин их, хураамж
+цэнэглэх, нотлох баримтыг шалгах, хуваарь гаргах, баталгаажуулах эцсийн цэгүүд. Энэ нь хэлбэрээр ажилладаг
+Тодорхойлогч бэхэлгээтэй `xtask` тушаал (тогтмол үр, үндсэн материал,
+болон тогтвортой хүсэлтийн ачаалал) тул үр дүнг хостууд дээр дахин гаргах боломжтой.
 
-## Running the suite
+## Suite-г ажиллуулж байна
 
 ```bash
 cargo xtask i3-bench-suite \
@@ -29,41 +30,41 @@ cargo xtask i3-bench-suite \
   --allow-overwrite
 ```
 
-Flags:
+Тугнууд:
 
-- `--iterations` controls iterations per scenario sample (default: 64).
-- `--sample-count` repeats each scenario to compute the median (default: 5).
-- `--json-out|--csv-out|--markdown-out` choose output artifacts (all optional).
-- `--threshold` compares medians against the baseline bounds (set `--no-threshold`
-  to skip).
-- `--flamegraph-hint` annotates the Markdown report with the `cargo flamegraph`
-  command to profile a scenario.
+- `--iterations` нь хувилбарт түүврийн давталтуудыг хянадаг (өгөгдмөл: 64).
+- `--sample-count` медианыг тооцоолохын тулд хувилбар бүрийг давтана (өгөгдмөл: 5).
+- `--json-out|--csv-out|--markdown-out` гаралтын олдворуудыг сонгоно (бүгд сонголттой).
+- `--threshold` медианыг суурь хязгаартай харьцуулдаг (`--no-threshold` тохируулна)
+  алгасах).
+- `--flamegraph-hint` нь Markdown тайланд `cargo flamegraph` тайлбартай байдаг
+  сценарийг профайл болгох команд.
 
-CI glue lives in `ci/i3_bench_suite.sh` and defaults to the paths above; set
-`I3_BENCH_ITERATIONS`/`I3_BENCH_SAMPLES` to tune runtime in nightlies.
+CI цавуу нь `ci/i3_bench_suite.sh`-д амьдардаг бөгөөд дээрх замууд дээр анхдагчаар тохируулагддаг; тогтоосон
+Шөнийн цагаар ажиллах цагийг тааруулахын тулд `I3_BENCH_ITERATIONS`/`I3_BENCH_SAMPLES`.
 
-## Scenarios
+## Сценари
 
-- `fee_payer` / `fee_sponsor` / `fee_insufficient` — payer vs sponsor debit
-  and shortfall rejection.
-- `staking_bond` / `staking_slash` — bond/unbond queue with and without
-  slashing.
+- `fee_payer` / `fee_sponsor` / `fee_insufficient` — төлбөр төлөгч ба спонсорын дебит
+  болон дутагдлаас татгалзах.
+- `staking_bond` / `staking_slash` — бонд/барьцаагаагүй дараалал
+  цавчих.
 - `commit_cert_verify` / `jdg_attestation_verify` / `bridge_proof_verify` —
-  signature verification over commit certificates, JDG attestations, and bridge
-  proof payloads.
-- `commit_cert_assembly` — digest assembly for commit certificates.
-- `access_scheduler` — conflict-aware access-set scheduling.
-- `torii_proof_endpoint` — Axum proof endpoint parsing + verification round trip.
+  commit гэрчилгээ, JDG attestations, болон гүүр дээр гарын үсгийн баталгаажуулалт
+  нотлох ачаалал.
+- `commit_cert_assembly` — гэрчилгээ олгох угсралт.
+- `access_scheduler` - зөрчилдөөнийг мэддэг хандалтын хуваарь.
+- `torii_proof_endpoint` — Axum баталгаатай төгсгөлийн цэг задлан шинжилгээ + баталгаажуулах хоёр талт аялал.
 
-Every scenario records median nanoseconds per iteration, throughput, and a
-deterministic allocation counter for quick regressions. Thresholds live in
-`benchmarks/i3/thresholds.json`; bump bounds there when hardware changes and
-commit the new artifact alongside a report.
+Сценари бүр нэг давталт дахь дундаж наносекунд, дамжуулах чадвар болон a
+хурдан регрессийн тодорхойлогч хуваарилалтын тоолуур. Босгогууд амьдардаг
+`benchmarks/i3/thresholds.json`; Тоног төхөөрөмж өөрчлөгдөхөд тэнд овойлт үүсдэг ба
+тайлангийн хамт шинэ олдворыг хийх.
 
-## Troubleshooting
+## Алдааг олж засварлах
 
-- Pin CPU frequency/governor when collecting evidence to avoid noisy regressions.
-- Use `--no-threshold` for exploratory runs, then re-enable once the baseline is
-  refreshed.
-- To profile a single scenario, set `--iterations 1` and re-run under
+- Чимээ ихтэй регрессээс зайлсхийхийн тулд нотлох баримт цуглуулахдаа CPU-ийн давтамж/захирагчийг тогтооно.
+- Хайгуулын гүйлтэд `--no-threshold`-г ашиглаад үндсэн үзүүлэлт болмогц дахин идэвхжүүлнэ.
+  сэргээгдсэн.
+- Нэг хувилбарыг профайл болгохын тулд `--iterations 1` тохиргоог хийж, доор дахин ажиллуулна уу.
   `cargo flamegraph -p xtask -- i3-bench-suite --iterations 128 --sample-count 1 --no-threshold --flamegraph-hint`.

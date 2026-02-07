@@ -7,27 +7,37 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 1f133d9489c4bcfae2212e6c5dc098f39c3dea3e5cd42855ba76e8c9b73b4d03
 source_last_modified: "2025-12-29T18:16:35.946614+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-//! Notes for the RustCrypto SM integration spike.
+//! RustCrypto SM интеграцийн огцом өсөлтийн талаархи тэмдэглэл.
 
-# RustCrypto SM Spike Notes
+# RustCrypto SM баяжуулалтын тэмдэглэл
 
-## Objective
-Validate that introducing RustCrypto’s `sm2`, `sm3`, and `sm4` crates (plus `rfc6979`, `ccm`, `gcm`) as optional dependencies compiles cleanly in the `iroha_crypto` crate and yields acceptable build times before wiring the feature flag into the wider workspace.
+## Зорилго
+RustCrypto-н `sm2`, `sm3`, `sm4` хайрцагуудыг (нэмэх `rfc6979`, `ccm`, ```toml
+[features]
+sm = ["dep:sm2", "dep:sm3", "dep:sm4", "dep:rfc6979"]
 
-## Proposed Dependency Map
+[dependencies]
+sm2 = { version = "0.13", optional = true, default-features = false, features = ["std"] }
+sm3 = { version = "0.5.0-rc.1", optional = true }
+sm4 = { version = "0.5.1", optional = true }
+rfc6979 = { version = "0.4", optional = true, default-features = false }
+```. `iroha_crypto` хайрцаг ба функцийн тугийг илүү өргөн ажлын талбарт холбохоос өмнө бүтээхэд зөвшөөрөгдөх хугацааг өгдөг.
 
-| Crate | Suggested Version | Features | Notes |
+## Санал болгож буй хараат байдлын газрын зураг
+
+| Хайрцаг | Санал болгож буй хувилбар | Онцлогууд | Тэмдэглэл |
 |-------|-------------------|----------|-------|
-| `sm2` | `0.13` (RustCrypto/signatures) | `std` | Depends on `elliptic-curve`; verify MSRV matches workspace. |
-| `sm3` | `0.5.0-rc.1` (RustCrypto/hashes) | default | API parallels `sha2`, integrates with existing `digest` traits. |
-| `sm4` | `0.5.1` (RustCrypto/block-ciphers) | default | Works with cipher traits; AEAD wrappers deferred to later spike. |
-| `rfc6979` | `0.4` | default | Reuse for deterministic nonce derivation. |
+| `sm2` | `0.13` (RustCrypto/гарын үсэг) | `std` | `elliptic-curve`-ээс хамаарна; MSRV ажлын талбартай таарч байгаа эсэхийг шалгана уу. |
+| `sm3` | `0.5.0-rc.1` (RustCrypto/хэшүүд) | анхдагч | API нь `sha2`-тэй зэрэгцээ, одоо байгаа `digest` шинж чанаруудтай нэгддэг. |
+| `sm4` | `0.5.1` (RustCrypto/block-ciphers) | анхдагч | Шифрийн шинж чанаруудтай ажилладаг; AEAD боодол нь дараа нь баяжуулалтыг хойшлуулсан. |
+| `rfc6979` | `0.4` | анхдагч | Детерминист бус деривацийг дахин ашиглах. |
 
-*Versions reflect current releases as of 2024-12; confirm with `cargo search` before landing.*
+*Хувилбарууд нь 2024-12 оны одоогийн хувилбаруудыг тусгасан; буухын өмнө `cargo search`-р баталгаажуулна уу.*
 
-## Manifest Changes (draft)
+## Илэрхий өөрчлөлтүүд (ноорог)
 
 ```toml
 [features]
@@ -40,34 +50,41 @@ sm4 = { version = "0.5.1", optional = true }
 rfc6979 = { version = "0.4", optional = true, default-features = false }
 ```
 
-Follow-up: pin `elliptic-curve` to match versions already in `iroha_crypto` (currently `0.13.8`).
+Хяналт: `iroha_crypto` (одоогоор `0.13.8`) дээр байгаа хувилбаруудтай тааруулахын тулд `elliptic-curve` зүү.
 
-## Spike Checklist
-- [x] Add optional dependencies and feature to `crates/iroha_crypto/Cargo.toml`.
-- [x] Create `signature::sm` module behind `cfg(feature = "sm")` with placeholder structs to confirm wiring.
-- [x] Run `cargo check -p iroha_crypto --features sm` to confirm compile; record build time and new dependency count (`cargo tree --features sm`).
-- [x] Confirm the std-only posture with `cargo check -p iroha_crypto --features sm --locked`; `no_std` builds are no longer supported.
-- [x] File results (timings, dependency tree delta) in `docs/source/crypto/sm_program.md`.
+## Spike шалгах хуудас
+- [x] `crates/iroha_crypto/Cargo.toml`-д нэмэлт хамаарал болон функцийг нэмнэ үү.
+- [x] утсыг баталгаажуулахын тулд `signature::sm` модулийг `cfg(feature = "sm")`-ийн ард орлуулагчийн бүтэцтэй үүсгэнэ үү.
+- [x] эмхэтгэлийг баталгаажуулахын тулд `cargo check -p iroha_crypto --features sm`-г ажиллуул; бүтээх хугацаа болон шинэ хамаарлын тоог бүртгэ (`cargo tree --features sm`).
+- [x] `cargo check -p iroha_crypto --features sm --locked`-ээр зөвхөн std-ийн байрлалыг баталгаажуулна уу; `no_std` загваруудыг дэмжихээ больсон.
+- [x] `docs/source/crypto/sm_program.md` дээрх файлын үр дүн (цаг хугацаа, хамаарлын модны гурвалжин).
 
-## Observations To Capture
-- Additional compile time vs. baseline.
-- Binary size impact (if measurable) with `cargo builtinsize`.
-- Any MSRV or feature conflicts (e.g., with `elliptic-curve` minor versions).
-- Warnings emitted (unsafe code, const-fn gating) that may require upstream patches.
+## Баривчлах ажиглалт
+- Нэмэлт эмхэтгэх хугацаа, суурь үзүүлэлт.
+- `cargo builtinsize`-тэй хоёртын хэмжээний нөлөөлөл (хэрэв хэмжих боломжтой бол).
+- Аливаа MSRV эсвэл онцлог зөрчил (жишээ нь, `elliptic-curve` бага хувилбаруудтай).
+- Урсгалын өмнөх засваруудыг шаардаж болзошгүй анхааруулга (аюултай код, const-fn гарц).
 
-## Pending Items
-- Await Crypto WG approval before inflating workspace dependency graph.
-- Confirm whether to vendor crates for review or rely on crates.io (mirrors may be required).
-- Coordinate `Cargo.lock` refresh per `sm_lock_refresh_plan.md` before marking checklist complete.
-- Use `scripts/sm_lock_refresh.sh` once approval is granted to regenerate the lockfile and dependency tree.
+## Хүлээгдэж буй зүйлс
+- Ажлын талбайн хамаарлын графикийг хөөрөгдөхөөс өмнө Crypto WG-ийн зөвшөөрлийг хүлээнэ үү.
+- Худалдагчтай хайрцагыг хянуулах эсвэл crates.io-д найдах эсэхээ баталгаажуулна уу (толь шаардлагатай байж болно).
+- Хяналтын хуудсыг дууссан гэж тэмдэглэхээс өмнө `Cargo.lock` шинэчлэлтийг `sm_lock_refresh_plan.md` болгон тохируулна уу.
+- Түгжигдсэн файл болон хамаарлын модыг сэргээх зөвшөөрөл олгосны дараа `scripts/sm_lock_refresh.sh`-г ашиглана.
 
 ## 2025-01-19 Spike Log
-- Added optional dependencies (`sm2 0.13`, `sm3 0.5.0-rc.1`, `sm4 0.5.1`, `rfc6979 0.4`) and `sm` feature flag in `iroha_crypto`.
-- Stubbed `signature::sm` module to exercise hashing/block cipher APIs during compilation.
-- `cargo check -p iroha_crypto --features sm --locked` now resolves dependency graph but aborts with `Cargo.lock` update requirement; repository policy forbids lockfile edits, so the compile run remains pending until we coordinate an allowed lock refresh.
+- Нэмэлт хамаарал (`sm2 0.13`, `sm3 0.5.0-rc.1`, `sm4 0.5.1`, `rfc6979 0.4`) болон `sm` `iroha_crypto`-д онцлог шинж чанаруудын туг нэмсэн.
+- Эмхэтгэх явцад хэш/блок шифр API ашиглахын тулд `signature::sm` модуль.
+- `cargo check -p iroha_crypto --features sm --locked` одоо хамаарлын графикийг шийдэж байгаа боловч `Cargo.lock` шинэчлэлтийн шаардлагаар цуцална; Хадгалах сангийн бодлого нь түгжээний файлыг засварлахыг хориглодог тул бид зөвшөөрөгдсөн түгжээний шинэчлэлтийг зохицуулах хүртэл хөрвүүлэх ажил хүлээгдэж байна.## 2026-02-12 Spike Log
+- Өмнөх түгжигч файлыг хориглогчийг шийдсэн—хамааралууд нь аль хэдийн баригдсан тул `cargo check -p iroha_crypto --features sm --locked` амжилттай болсон (dev Mac дээр 7.9 секундын хүйтэн хувилбар; 0.23 секундын давтамжтайгаар дахин ажиллуулах).
+- `cargo check -p iroha_crypto --no-default-features --features "std sm" --locked` нь 1.0 секундын дотор дамждаг бөгөөд энэ нь зөвхөн `std` тохиргоонд (`no_std` зам үлдэхгүй) нэмэлт функцүүдийн хөрвүүлэлтийг баталгаажуулдаг.
+- `sm` функцийг идэвхжүүлсэн хараат дельта нь 11 хайрцгийг танилцуулж байна: `base64ct`, `ghash`, `opaque-debug`, `pem-rfc7468`, `pem-rfc7468`, ```toml
+[features]
+sm = ["dep:sm2", "dep:sm3", "dep:sm4", "dep:rfc6979"]
 
-## 2026-02-12 Spike Log
-- Resolved the previous lockfile blocker—the dependencies are already captured—so `cargo check -p iroha_crypto --features sm --locked` succeeds (cold build 7.9 s on dev Mac; incremental re-run 0.23 s).
-- `cargo check -p iroha_crypto --no-default-features --features "std sm" --locked` passes in 1.0 s, confirming the optional feature compiles in `std`-only configurations (no `no_std` path remains).
-- Dependency delta with the `sm` feature enabled introduces 11 crates: `base64ct`, `ghash`, `opaque-debug`, `pem-rfc7468`, `pkcs8`, `polyval`, `primeorder`, `sm2`, `sm3`, `sm4`, and `sm4-gcm`. (`rfc6979` was already part of the baseline graph.)
-- Build warnings persist for unused NEON policy helpers; leave as-is until the metering smoothing runtime re-enables those code paths.
+[dependencies]
+sm2 = { version = "0.13", optional = true, default-features = false, features = ["std"] }
+sm3 = { version = "0.5.0-rc.1", optional = true }
+sm4 = { version = "0.5.1", optional = true }
+rfc6979 = { version = "0.4", optional = true, default-features = false }
+``` `primeorder`, `sm2`, `sm3`, `sm4`, `sm4-gcm`. (`rfc6979` аль хэдийн суурь графикийн нэг хэсэг байсан.)
+- Ашиглагдаагүй NEON бодлогын туслагчдад зориулж бүтээх анхааруулга хэвээр байна; Хэмжилтийг жигдрүүлэх хугацаа тэдгээр кодын замыг дахин идэвхжүүлэх хүртэл байгаагаар нь үлдээгээрэй.

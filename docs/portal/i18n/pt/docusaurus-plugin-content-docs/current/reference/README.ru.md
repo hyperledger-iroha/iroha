@@ -4,18 +4,20 @@ direction: ltr
 source: docs/portal/docs/reference/README.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: Индекс справочников
-slug: /reference
+título: Индекс справочников
+slug: /referência
 ---
 
-Этот раздел собирает материалы «читайте как спецификацию» для Iroha. Эти страницы остаются стабильными даже по мере развития гайдов и туториалов.
+Este foi o material fornecido para o Iroha. Esta página é estabelecida por mais de uma semana, através de jogos e tutoriais.
 
-## Доступно сегодня
+## Segunda temporada
 
 - **Обзор кодека Norito** - `reference/norito-codec.md` напрямую ссылается на авторитетную спецификацию `norito.md`, пока таблица портала заполняется.
-- **Torii OpenAPI** - `/reference/torii-openapi` отображает последнюю спецификацию REST Torii через Redoc. Перегенерируйте spec командой `npm run sync-openapi -- --version=current --latest` (добавьте `--mirror=<label>` для копирования snapshot в дополнительные исторические версии).
-- **Таблицы конфигурации** - Полный каталог параметров хранится в `docs/source/references/configuration.md`. Пока портал не предоставляет auto-import, обращайтесь к этому Markdown файлу за точными значениями по умолчанию и переопределениями окружения.
-- **Версионирование docs** - Выпадающий список версий в навбаре показывает замороженные snapshots, созданные с помощью `npm run docs:version -- <label>`, что упрощает сравнение рекомендаций между релизами.
+- **Torii OpenAPI** - `/reference/torii-openapi` отображает последнюю спецификацию REST Torii через Redoc. Altere o comando spec `npm run sync-openapi -- --version=current --latest` (use `--mirror=<label>` para copiar snapshot no histórico de download versão).
+- **Configurações de configuração** - Verifique a configuração dos parâmetros do catálogo em `docs/source/references/configuration.md`. Se o portal não permitir a importação automática, você precisará deste Markdown para obter o valor desejado e переопределениями окружения.
+- **Documentos de documentação** - Выпадающий список версий навбаре показывает замороженные snapshots, созданные с помощью `npm run docs:version -- <label>`, este é o método de avaliação mais recomendado.

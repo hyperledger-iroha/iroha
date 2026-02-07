@@ -6,61 +6,60 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 4c0c7f98dbd9f49c573302f0b5cbe2e7a663d7fe35a1a9eea8da4f24c6f9bc8b
 source_last_modified: "2026-01-05T17:57:58.226177+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% Content Hosting Lane
-% Iroha Core
+٪ مواد کی میزبانی لین
+٪ Iroha کور
 
-# Content Hosting Lane
+# مواد کی میزبانی لین
 
-The content lane stores small static bundles (tar archives) on-chain and serves
-individual files directly from Torii.
+مواد لین چھوٹے چھوٹے جامد بنڈل (ٹار آرکائیوز) آن چین کو اسٹور کرتی ہے اور خدمت کرتی ہے
+Torii سے براہ راست انفرادی فائلیں۔
 
-- **Publish**: submit `PublishContentBundle` with a tar archive, optional expiry
-  height, and an optional manifest. The bundle ID is the blake2b hash of the
-  tarball. Tar entries must be regular files; names are normalised UTF-8 paths.
-  Size/path/file-count caps come from `content` config (`max_bundle_bytes`,
-  `max_files`, `max_path_len`, `max_retention_blocks`, `chunk_size_bytes`).
-  Manifests include the Norito-index hash, dataspace/lane, cache policy
-  (`max_age_seconds`, `immutable`), auth mode (`public` / `role:<role>` /
-  `sponsor:<uaid>`), retention policy placeholder, and MIME overrides.
-- **Deduping**: tar payloads are chunked (default 64 KiB) and stored once per
-  hash with reference counts; retiring a bundle decrements and prunes chunks.
-- **Serve**: Torii exposes `GET /v1/content/{bundle}/{path}`. Responses stream
-  directly from the chunk store with `ETag` = file hash, `Accept-Ranges: bytes`,
-  Range support, and Cache-Control derived from the manifest. Reads honour the
-  manifest auth mode: role-gated and sponsor-gated responses require canonical
-  request headers (`X-Iroha-Account`, `X-Iroha-Signature`) for the signed
-  account; missing/expired bundles return 404.
-- **CLI**: `iroha content publish --bundle <path.tar>` (or `--root <dir>`) now
-  auto-generates a manifest, emits optional `--manifest-out/--bundle-out`, and
-  accepts `--auth`, `--cache-max-age-secs`, `--dataspace`, `--lane`, `--immutable`,
-  and `--expires-at-height` overrides. `iroha content pack --root <dir>` builds
-  a deterministic tarball + manifest without submitting anything.
+- ** شائع کریں **: `PublishContentBundle` کو ٹار آرکائیو کے ساتھ جمع کروائیں ، اختیاری میعاد ختم
+  اونچائی ، اور ایک اختیاری منشور۔ بنڈل ID بلیک 2 بی ہیش ہے
+  ٹربال۔ ٹار اندراجات باقاعدگی سے فائلیں ہونی چاہئیں۔ نام عام طور پر UTF-8 راستے ہیں۔
+  سائز/پاتھ/فائل گنتی کیپس `content` کنفگ (`max_bundle_bytes` ، سے آتی ہیں ،
+  `max_files` ، `max_path_len` ، `max_retention_blocks` ، `chunk_size_bytes`)۔
+  منشور میں Norito-انڈیکس ہیش ، ڈیٹا اسپیس/لین ، کیشے کی پالیسی شامل ہے
+  .
+  `sponsor:<uaid>`) ، برقرار رکھنے کی پالیسی پلیس ہولڈر ، اور MIME کو اوور رائڈز۔
+۔
+  حوالہ گنتی کے ساتھ ہیش ؛ بنڈل کی کمی اور کٹے ہوئے حصوں کو ریٹائر کرنا۔
+- ** خدمت **: Torii `GET /v1/content/{bundle}/{path}` کو بے نقاب کرتا ہے۔ جوابات ندی
+  براہ راست `ETag` = فائل ہیش ، `Accept-Ranges: bytes` کے ساتھ حصہ اسٹور سے ،
+  رینج سپورٹ ، اور کیشے پر قابو پانے سے منشور سے اخذ کیا گیا ہے۔ اعزاز کے بارے میں پڑھتا ہے
+  مینی فیسٹ آتھ موڈ: رول گیٹڈ اور کفیل گیٹڈ ردعمل کی ضرورت ہوتی ہے
+  دستخط شدہ کے لئے ہیڈر (`X-Iroha-Account` ، `X-Iroha-Signature`) کی درخواست کریں
+  اکاؤنٹ ؛ گمشدہ/میعاد ختم ہونے والے بنڈل 404 لوٹتے ہیں۔
+- ** CLI **: `iroha content publish --bundle <path.tar>` (یا `--root <dir>`) اب
+  آٹو آٹو کو ایک منشور تیار کرتا ہے ، اختیاری `--manifest-out/--bundle-out` کا اخراج کرتا ہے ، اور
+  `--auth` ، `--cache-max-age-secs` ، `--dataspace` ، `--lane` ، `--immutable` کو قبول کرتا ہے۔
+  اور `--expires-at-height` اوور رائڈز۔ `iroha content pack --root <dir>` تعمیر کرتا ہے
+  کچھ بھی جمع کرائے بغیر ایک عین مطابق ٹربال + ظاہر ہوتا ہے۔
 - **Config**: cache/auth knobs live under `content.*` in `iroha_config`
-  (`default_cache_max_age_secs`, `max_cache_max_age_secs`, `immutable_bundles`,
-  `default_auth_mode`) and are enforced at publish time.
-- **SLO + limits**: `content.max_requests_per_second` / `request_burst` and
-  `content.max_egress_bytes_per_second` / `egress_burst_bytes` cap read-side
-  throughput; Torii enforces both before serving bytes and exports
-  `torii_content_requests_total`, `torii_content_request_duration_seconds`, and
-  `torii_content_response_bytes_total` metrics with outcome labels. Latency
-  targets live under `content.target_p50_latency_ms` /
-  `content.target_p99_latency_ms` / `content.target_availability_bps`.
-- **Abuse controls**: Rate buckets are keyed by UAID/API token/remote IP, and an
-  optional PoW guard (`content.pow_difficulty_bits`, `content.pow_header`) can
-  be required before reads. DA stripe layout defaults come from
-  `content.stripe_layout` and are echoed in receipts/manifest hashes.
-- **Receipts & DA evidence**: successful responses attach
-  `sora-content-receipt` (base64 Norito-framed `ContentDaReceipt` bytes) carrying
-  `bundle_id`, `path`, `file_hash`, `served_bytes`, the served byte range,
-  `chunk_root` / `stripe_layout`, optional PDP commitment, and a timestamp so
-  clients can pin what was fetched without re-reading the body.
+  (`default_cache_max_age_secs` ، `max_cache_max_age_secs` ، `immutable_bundles` ،
+  `default_auth_mode`) اور اشاعت کے وقت نافذ کیا جاتا ہے۔
+- ** سلو + حدود **: `content.max_requests_per_second` / `request_burst` اور
+  `content.max_egress_bytes_per_second` / `egress_burst_bytes` CAP پڑھنے کی طرف
+  تھرو پٹ ؛ Torii بائٹس اور برآمدات کی خدمت سے پہلے دونوں کو نافذ کرتا ہے
+  `torii_content_requests_total` ، `torii_content_request_duration_seconds` ، اور
+  `torii_content_response_bytes_total` میٹرکس نتائج کے لیبل کے ساتھ۔ تاخیر
+  اہداف `content.target_p50_latency_ms` / کے تحت رہتے ہیں
+  `content.target_p99_latency_ms` / `content.target_availability_bps`۔
+۔
+  اختیاری پاو گارڈ (`content.pow_difficulty_bits` ، `content.pow_header`) CAN
+  پڑھنے سے پہلے ضروری ہو۔ دا پٹی لے آؤٹ ڈیفالٹس سے آتے ہیں
+  `content.stripe_layout` اور رسیدوں/مینی فیسٹ ہیشوں میں بازگشت ہے۔
+- ** رسیدیں اور ڈی اے ثبوت **: کامیاب جوابات منسلک ہوتے ہیں
+  Torii (BASE64 Norito- فریم `ContentDaReceipt` بائٹس) لے جانا
+  `bundle_id` ، `path` ، `file_hash` ، `served_bytes` ، پیش کردہ بائٹ رینج ،
+  `chunk_root` / `stripe_layout` ، اختیاری PDP عزم ، اور ایک ٹائم اسٹیمپ تو
+  کلائنٹ جسم کو دوبارہ پڑھے بغیر جو کچھ حاصل کیا گیا تھا اسے پن کر سکتے ہیں۔
 
-Key references:
-
-- Data model: `crates/iroha_data_model/src/content.rs`
-- Execution: `crates/iroha_core/src/smartcontracts/isi/content.rs`
-- Torii handler: `crates/iroha_torii/src/content.rs`
-- CLI helper: `crates/iroha_cli/src/content.rs`
+کلیدی حوالہ جات:- ڈیٹا ماڈل: `crates/iroha_data_model/src/content.rs`
+- پھانسی: `crates/iroha_core/src/smartcontracts/isi/content.rs`
+- Torii ہینڈلر: `crates/iroha_torii/src/content.rs`
+- سی ایل آئی ہیلپر: `crates/iroha_cli/src/content.rs`

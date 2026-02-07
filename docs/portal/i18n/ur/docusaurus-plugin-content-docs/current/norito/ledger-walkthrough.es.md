@@ -4,43 +4,45 @@ direction: rtl
 source: docs/portal/docs/norito/ledger-walkthrough.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: Recorrido del libro mayor
-description: Reproduce un flujo determinista de register -> mint -> transfer con el CLI `iroha` y verifica el estado resultante del ledger.
-slug: /norito/ledger-walkthrough
+عنوان: لیجر ٹور
+تفصیل: `iroha` CLI کے ساتھ ایک تعی .ن شدہ رجسٹر -> ٹکسال -> منتقلی کے بہاؤ کو دوبارہ پیش کرتا ہے اور اس کے نتیجے میں لیجر اسٹیٹ کی جانچ پڑتال کرتا ہے۔
+سلگ: /نوریٹو /لیجر واک تھرو
 ---
 
-Este recorrido complementa el [inicio rapido de Norito](./quickstart.md) mostrando como mutar e inspeccionar el estado del ledger con el CLI `iroha`. Registraras una nueva definicion de activo, acunaras unidades en la cuenta de operador por defecto, transferiras parte del balance a otra cuenta y verificaras las transacciones y tenencias resultantes. Cada paso refleja los flujos cubiertos en los quickstarts de SDK de Rust/Python/JavaScript para que puedas confirmar la paridad entre CLI y SDK.
+یہ واک تھرو [Norito کوئیک اسٹارٹ] (./quickstart.md) کو Norito CLI کے ساتھ لیجر کی حیثیت کو کس طرح تبدیل اور معائنہ کرنے کا طریقہ دکھا کر ہے۔ آپ ایک نئی اثاثہ تعریف ، پہلے سے طے شدہ تاجر اکاؤنٹ میں یونٹوں کو مسدود کریں گے ، توازن کا کچھ حصہ دوسرے اکاؤنٹ میں منتقل کریں گے اور اس کے نتیجے میں لین دین اور ہولڈنگ کی تصدیق کریں گے۔ ہر قدم زنگ/ازگر/جاوا اسکرپٹ ایس ڈی کے کوئیک اسٹارٹ میں ڈھکے ہوئے بہاؤ کو آئینہ دیتا ہے تاکہ آپ سی ایل آئی اور ایس ڈی کے کے مابین برابری کی تصدیق کرسکیں۔
 
-## Requisitos previos
+## شرائط
 
-- Sigue el [quickstart](./quickstart.md) para iniciar la red de un solo peer via
-  `docker compose -f defaults/docker-compose.single.yml up --build`.
-- Asegurate de que `iroha` (el CLI) este compilado o descargado y que puedas
-  alcanzar el peer usando `defaults/client.toml`.
-- Helpers opcionales: `jq` (formateo de respuestas JSON) y un shell POSIX para
-  los snippets de variables de entorno usados abajo.
+- سنگل ہم مرتبہ نیٹ ورک کے ذریعے شروع کرنے کے لئے [کوئیک اسٹارٹ] (./quickstart.md) کی پیروی کریں
+  `docker compose -f defaults/docker-compose.single.yml up --build`۔
+- اس بات کو یقینی بنائیں کہ `iroha` (CLI) مرتب یا ڈاؤن لوڈ کیا گیا ہے اور آپ کر سکتے ہیں
+  `defaults/client.toml` کا استعمال کرتے ہوئے ہم مرتبہ تک پہنچیں۔
+- اختیاری مددگار: `jq` (JSON رسپانس فارمیٹنگ) اور ایک POSIX شیل
+  ماحولیاتی متغیر ٹکڑوں کو ذیل میں استعمال کیا جاتا ہے۔
 
-A lo largo de la guia, reemplaza `$ADMIN_ACCOUNT` y `$RECEIVER_ACCOUNT` con los
-IDs de cuenta que planeas usar. El bundle por defecto ya incluye dos cuentas
-Derivadas de las claves demo:
+گائیڈ کے دوران ، `$ADMIN_ACCOUNT` اور `$RECEIVER_ACCOUNT` کو تبدیل کریں
+اکاؤنٹ IDs جن کا آپ استعمال کرنے کا ارادہ رکھتے ہیں۔ پہلے سے طے شدہ بنڈل میں پہلے ہی دو اکاؤنٹس شامل ہیں
+ڈیمو کیز سے ماخوذ:
 
 ```sh
 export ADMIN_ACCOUNT="ih58..."
 export RECEIVER_ACCOUNT="ih58..."
 ```
 
-Confirma los valores listando las primeras cuentas:
+پہلے اکاؤنٹس کی فہرست دے کر اقدار کی تصدیق کریں:
 
 ```sh
 iroha --config defaults/client.toml account list all --limit 5 --table
 ```
 
-## 1. Inspecciona el estado genesis
+## 1. پیدائش کی حالت کا معائنہ کریں
 
-Empieza explorando el ledger al que apunta el CLI:
+لیجر کی کھوج سے شروع کریں جس کی طرف سی ایل آئی اشارہ کرتا ہے:
 
 ```sh
 # Domains registrados en genesis
@@ -55,11 +57,11 @@ iroha --config defaults/client.toml account list filter \
 iroha --config defaults/client.toml asset definition list all --table
 ```
 
-Estos comandos se basan en respuestas respaldadas por Norito, por lo que el filtrado y la paginacion son deterministas y coinciden con lo que reciben los SDK.
+یہ کمانڈ Norito کے ذریعہ تعاون یافتہ جوابات پر مبنی ہیں ، لہذا فلٹرنگ اور صفحہ بندی کا تعین کرنے والا ہے اور ایس ڈی کے کیا وصول کرتے ہیں اس سے ملتے ہیں۔
 
-## 2. Registra una definicion de activo
+## 2. اثاثہ کی تعریف کو رجسٹر کریں
 
-Crea un nuevo activo infinitamente acunable llamado `coffee` dentro del dominio
+ڈومین کے اندر `coffee` نامی ایک نیا لامحدود تحریری اثاثہ بناتا ہے
 `wonderland`:
 
 ```sh
@@ -67,12 +69,12 @@ iroha --config defaults/client.toml asset definition register \
   --id coffee#wonderland
 ```
 
-El CLI imprime el hash de la transaccion enviada (por ejemplo, `0x5f...`). Guardalo para consultar el estado mas tarde.
+CLI جمع کروائے گئے ٹرانزیکشن کی ہیش پرنٹ کرتا ہے (مثال کے طور پر ، `0x5f...`)۔ بعد میں حیثیت کی جانچ پڑتال کے لئے اسے محفوظ کریں۔
 
-## 3. Acuna unidades en la cuenta del operador
+## 3. آپریٹر کے اکاؤنٹ میں کیش یونٹ
 
-Las cantidades de activos viven bajo el par `(asset definition, account)`. Acuna
-250 unidades de `coffee#wonderland` en `$ADMIN_ACCOUNT`:
+اثاثہ کی رقم جوڑی `(asset definition, account)` کے تحت رہتی ہے۔ پالنا
+`$ADMIN_ACCOUNT` میں `coffee#wonderland` کے 250 یونٹ:
 
 ```sh
 iroha --config defaults/client.toml asset mint \
@@ -80,14 +82,14 @@ iroha --config defaults/client.toml asset mint \
   --quantity 250
 ```
 
-De nuevo, captura el hash de transaccion (`$MINT_HASH`) de la salida del CLI. Para
-verificar el balance, ejecuta:
+ایک بار پھر ، CLI آؤٹ پٹ سے ٹرانزیکشن ہیش (`$MINT_HASH`) پر قبضہ کریں۔ کے لئے
+بیلنس چیک کریں ، عمل کریں:
 
 ```sh
 iroha --config defaults/client.toml asset list all --limit 5 --table
 ```
 
-o, para apuntar solo al nuevo activo:
+یا ، صرف نئے اثاثہ کو نشانہ بنانا:
 
 ```sh
 iroha --config defaults/client.toml asset list filter \
@@ -95,9 +97,9 @@ iroha --config defaults/client.toml asset list filter \
   --limit 1 | jq .
 ```
 
-## 4. Transfiere parte del balance a otra cuenta
+## 4. توازن کا ایک حصہ کسی دوسرے اکاؤنٹ میں منتقل کریں
 
-Mueve 50 unidades de la cuenta del operador a `$RECEIVER_ACCOUNT`:
+آپریٹر کے اکاؤنٹ سے 50 یونٹ کو `$RECEIVER_ACCOUNT` میں منتقل کریں:
 
 ```sh
 iroha --config defaults/client.toml asset transfer \
@@ -106,8 +108,8 @@ iroha --config defaults/client.toml asset transfer \
   --quantity 50
 ```
 
-Guarda el hash de transaccion como `$TRANSFER_HASH`. Consulta los holdings en ambas
-cuentas para verificar los nuevos balances:
+`$TRANSFER_HASH` کے بطور ٹرانزیکشن ہیش کو محفوظ کریں۔ دونوں میں ہولڈنگز چیک کریں
+نئے بیلنس کی تصدیق کے لئے اکاؤنٹس:
 
 ```sh
 iroha --config defaults/client.toml asset list filter \
@@ -117,35 +119,33 @@ iroha --config defaults/client.toml asset list filter \
   "{\"id\":\"coffee#wonderland##${RECEIVER_ACCOUNT}\"}" --limit 1 | jq .
 ```
 
-## 5. Verifica la evidencia del ledger
+## 5. لیجر شواہد کی تصدیق کریں
 
-Usa los hashes guardados para confirmar que ambas transacciones se confirmaron:
+اس بات کی تصدیق کے لئے محفوظ شدہ ہیشوں کا استعمال کریں کہ دونوں لین دین کی تصدیق ہوگئی ہے:
 
 ```sh
 iroha --config defaults/client.toml transaction get --hash $MINT_HASH | jq .
 iroha --config defaults/client.toml transaction get --hash $TRANSFER_HASH | jq .
 ```
 
-Tambien puedes transmitir bloques recientes para ver que bloque incluyo la transferencia:
+آپ حالیہ بلاکس کو بھی اسٹریم کرسکتے ہیں کہ یہ دیکھنے کے لئے کہ منتقلی کو کس بلاک میں شامل کیا گیا ہے:
 
 ```sh
 # Stream desde el ultimo bloque y detente despues de ~5 segundos
 iroha --config defaults/client.toml blocks 0 --timeout 5s --table
-```
+```مذکورہ بالا ہر کمانڈ SDKs کی طرح ایک ہی Norito پے لوڈ کا استعمال کرتی ہے۔ اگر آپ جواب دیتے ہیں
+کوڈ کے ذریعے یہ بہاؤ (نیچے SDK کوئیک اسٹارٹ دیکھیں) ، ہیش اور بیلنس
+جب تک آپ ایک ہی نیٹ ورک اور ڈیفالٹس کی طرف اشارہ کریں گے تب تک وہ میچ کریں گے۔
 
-Cada comando anterior usa los mismos payloads Norito que los SDK. Si replicas
-este flujo mediante codigo (ver quickstarts de SDK abajo), los hashes y balances
-coincidiran siempre que apuntes a la misma red y defaults.
+## SDK کے ساتھ برابری پابندیاں
 
-## Enlaces de paridad con SDK
+-۔
+  لین دین بھیجیں اور مورچا سے حیثیت چیک کریں۔
+- [ازگر ایس ڈی کے کوئیک اسٹارٹ] (../sdks/python) - وہی رجسٹر/ٹکسال آپریشنز دکھاتا ہے
+  Norito کے تعاون سے JSON مددگاروں کے ساتھ۔
+-.
+  گورننس مددگار اور ٹائپ شدہ استفسار ریپرس۔
 
-- [Rust SDK quickstart](../sdks/rust) - demuestra como registrar instrucciones,
-  enviar transacciones y consultar estado desde Rust.
-- [Python SDK quickstart](../sdks/python) - muestra las mismas operaciones de register/mint
-  con helpers JSON respaldados por Norito.
-- [JavaScript SDK quickstart](../sdks/javascript) - cubre solicitudes Torii,
-  helpers de gobernanza y wrappers de queries tipados.
-
-Ejecuta primero el recorrido del CLI, luego repite el escenario con tu SDK
-preferido para asegurar que ambas superficies concuerdan en hashes de transaccion,
-balances y resultados de consultas.
+پہلے CLI واک تھرو چلائیں ، پھر اپنے SDK کے ساتھ منظر نامے کو دہرائیں
+اس بات کو یقینی بنانے کے لئے ترجیح دی کہ دونوں سطحیں لین دین کے ہیشوں پر متفق ہوں ،
+توازن اور مشاورت کے نتائج۔

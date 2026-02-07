@@ -4,307 +4,297 @@ direction: rtl
 source: docs/portal/docs/da/threat-model.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Source canonique
-Reflete `docs/source/da/threat_model.md`. Gardez les deux versions en sync
+::: نوٹ کینونیکل ماخذ
+`docs/source/da/threat_model.md` کی عکاسی کرتا ہے۔ دونوں ورژن کو مطابقت پذیری میں رکھیں
 :::
 
-# Modele de menaces Data Availability Sora Nexus
+# ڈیٹا کی دستیابی SORA خطرہ ماڈل Nexus
 
-_Derniere revision: 2026-01-19 -- Prochaine revision planifiee: 2026-04-19_
+_ لسٹ پر نظر ثانی: 2026-01-19-اگلی شیڈول پر نظر ثانی: 2026-04-19_
 
-Cadence de maintenance: Data Availability Working Group (<=90 jours). Chaque
-revision doit apparaitre dans `status.md` avec des liens vers les tickets de
-mitigation actifs et les artefacts de simulation.
+بحالی کیڈینس: ڈیٹا کی دستیابی ورکنگ گروپ (<= 90 دن)۔ ہر ایک
+نظرثانی `status.md` میں نظر ثانی کے ٹکٹوں کے لنکس کے ساتھ ظاہر ہونا چاہئے
+تخفیف کے اثاثے اور نقلی نمونے۔
 
-## But et perimetre
+## مقصد اور دائرہ کار
 
-Le programme Data Availability (DA) maintient les broadcasts Taikai, les blobs
-Nexus lane et les artefacts de gouvernance recuperables sous des fautes
-byzantines, reseau et operateur. Ce modele de menaces ancre le travail
-engineering pour DA-1 (architecture et modele de menaces) et sert de baseline
-pour les taches DA suivantes (DA-2 a DA-10).
+ڈیٹا کی دستیابی (ڈی اے) پروگرام تائکائی نشریات ، بلابز کو برقرار رکھتا ہے
+Nexus لین اور خرابیوں کے تحت بازیافت گورننس نمونے
+بازنطینی ، نیٹ ورک اور آپریٹر۔ یہ خطرہ ماڈل کام کو لنگر انداز کرتا ہے
+ڈی اے 1 (فن تعمیر اور خطرہ ماڈل) کے لئے انجینئرنگ اور بیس لائن کے طور پر کام کرتی ہے
+مندرجہ ذیل ڈی اے ٹاسکس کے لئے (DA-2 سے DA-10)۔
 
-Composants dans le scope:
-- Extension d'ingest DA Torii et writers de metadata Norito.
-- Arbres de stockage de blobs adosses a SoraFS (tiers hot/cold) et politiques de
-  replication.
-- Commitments de bloc Nexus (wire formats, proofs, APIs light-client).
-- Hooks d'enforcement PDP/PoTR specifiques aux payloads DA.
-- Workflows operateur (pinning, eviction, slashing) et pipelines
-  d'observabilite.
-- Approbations de gouvernance qui admettent ou expulsent les operateurs et
-  contenus DA.
+دائرہ کار میں اجزاء:
+- DA ingest توسیع Torii اور میٹا ڈیٹا مصنفین Norito۔
+- بلاب اسٹوریج کے درختوں کی حمایت SoraFS (گرم/سرد تیسری پارٹی) اور پالیسیاں
+  نقل
+- بلاک Nexus (تار فارمیٹس ، ثبوت ، لائٹ کلائنٹ APIs) کا ارتکاب کرتا ہے۔
+- PDP/POTR انفورسمنٹ ڈا پے لوڈز کے لئے مخصوص ہکس۔
+- آپریٹر ورک فلوز (پننگ ، بے دخل ، سلیشنگ) اور پائپ لائنز
+  مشاہدہ کی۔
+- گورننس کی منظوری جو آپریٹرز کو تسلیم کرتی ہے یا خارج کرتی ہے
+  ڈی اے مشمولات
 
-Hors scope pour ce document:
-- Modelisation economique complete (capturee dans le workstream DA-7).
-- Protocoles base SoraFS deja couverts par le modele de menaces SoraFS.
-- Ergonomie des SDK clients au-dela des considerations de surface de menace.
+اس دستاویز کے دائرہ کار سے باہر:
+- مکمل معاشی ماڈلنگ (DA-7 ورک اسٹریم میں پکڑا گیا)۔
+- SoraFS پر مبنی پروٹوکول SoraFS خطرہ ماڈل کے ذریعہ پہلے ہی شامل ہیں۔
+- خطرے کی سطح کے تحفظات سے بالاتر کلائنٹ ایس ڈی کے کے ایرگونومکس۔
 
-## Vue d'ensemble architecturale
+## آرکیٹیکچرل جائزہ
 
-1. **Soumission:** Les clients soumettent des blobs via l'API d'ingest DA Torii.
-   Le noeud decoupe les blobs, encode les manifests Norito (type de blob, lane,
-   epoch, flags de codec), et stocke les chunks dans le tier hot SoraFS.
-2. **Annonce:** Pin intents et hints de replication se propagent vers les
-   providers via le registry (SoraFS marketplace) avec des tags de politique qui
-   indiquent les objectifs de retention hot/cold.
-3. **Commitment:** Les sequencers Nexus incluent des commitments de blobs (CID +
-   racines KZG optionnelles) dans le bloc canonique. Les light clients se basent
-   sur le hash de commitment et la metadata annoncee pour verifier
-   l'availability.
-4. **Replication:** Les noeuds de stockage tirent les shares/chunks assignes,
-   satisfont les challenges PDP/PoTR, et promeuvent les donnees entre tiers hot
-   et cold selon la politique.
-5. **Fetch:** Les consommateurs recuperent les donnees via SoraFS ou des gateways
-   DA-aware, verifient les proofs et emettent des demandes de reparation quand
-   des replicas disparaissent.
-6. **Gouvernance:** Le Parlement et le comite de supervision DA approuvent les
-   operateurs, schedules de rent et escalations d'enforcement. Les artefacts de
-   gouvernance sont stockes via la meme voie DA pour garantir la transparence.
+1. ** جمع کرانے: ** کلائنٹ ڈی اے انجسٹ API Torii کے ذریعے بلب جمع کرواتے ہیں۔
+   نوڈ بلبس کو ٹکرا دیتا ہے ، Norito (بلاب کی قسم ، لین ، کو انکوڈ کرتا ہے
+   ایپوچ ، کوڈیک جھنڈے) ، اور گرم ٹیر SoraFS میں حصوں کو اسٹور کرتا ہے۔
+2. ** اعلان: ** پن کے ارادے اور نقل کے اشارے پھیلاتے ہیں
+   پالیسی ٹیگز کے ساتھ رجسٹری (SoraFS مارکیٹ) کے ذریعے فراہم کنندہ
+   گرم/سرد برقرار رکھنے کے مقاصد کی نشاندہی کریں۔
+3. ** عزم: ** Nexus سیکوینسرز میں بلاب کے عہد شامل ہیں (سی آئی ڈی +
+   اختیاری کے زیڈ جی جڑیں) کیننیکل بلاک میں۔ ہلکے کلائنٹ پر مبنی ہیں
+   عزم ہیش اور میٹا ڈیٹا نے تصدیق کرنے کا اعلان کیا
+   دستیابی
+4. ** نقل: ** اسٹوریج نوڈس تفویض کردہ حصص/ٹکڑوں کو کھینچیں ،
+   PDP/POTR چیلنجوں کو پورا کریں ، اور گرم تیسری پارٹی کے مابین ڈیٹا کو فروغ دیں
+   اور پالیسی پر منحصر سردی۔
+5. ** بازیافت: ** صارفین SoraFS یا گیٹ ویز کے ذریعے ڈیٹا بازیافت کرتے ہیں
+   ڈی اے سے واقف ، ثبوت چیک کریں اور مرمت کی درخواستیں جاری کریں
+   نقلیں غائب ہوجاتی ہیں۔
+6. ** گورننس: ** پارلیمنٹ اور ڈی اے سپروائزری کمیٹی نے منظوری دے دی
+   آپریٹرز ، کرایے کے نظام الاوقات اور نفاذ میں اضافہ۔ کے نمونے
+   گورننس شفافیت کی ضمانت کے لئے اسی ڈی اے چینل کے ذریعہ محفوظ کی جاتی ہے۔## اثاثے اور مالکان
 
-## Actifs et proprietaires
+امپیکٹ اسکیل: ** تنقیدی ** لیجر کی سلامتی/رواں دواں کو توڑ دیتا ہے۔ ** طالب علم **
+بلاکس ڈی اے بیک فل یا مؤکل ؛ ** اعتدال پسند ** معیار کو کم کرتا ہے لیکن باقی ہے
+بازیافت کے قابل ؛ ** کمزور ** بارڈر لائن اثر۔
 
-Echelle d'impact: **Critique** casse la securite/vivacite du ledger; **Eleve**
-bloque le backfill DA ou les clients; **Modere** degrade la qualite mais reste
-recuperable; **Faible** effet limite.
-
-| Actif | Description | Integrite | Disponibilite | Confidentialite | Owner |
+| فعال | تفصیل | سالمیت | دستیابی | رازداری | مالک |
 | --- | --- | --- | --- | --- | --- |
-| Blobs DA (chunks + manifests) | Blobs Taikai, lane, gouvernance stockes dans SoraFS | Critique | Critique | Modere | DA WG / Storage Team |
-| Manifests Norito DA | Metadata typee decrivant les blobs | Critique | Eleve | Modere | Core Protocol WG |
-| Commitments de bloc | CIDs + racines KZG dans les blocs Nexus | Critique | Eleve | Faible | Core Protocol WG |
-| Schedules PDP/PoTR | Cadence d'enforcement pour les replicas DA | Eleve | Eleve | Faible | Storage Team |
-| Registry operateur | Providers de stockage approuves et politiques | Eleve | Eleve | Faible | Governance Council |
-| Registres de rent et incentives | Entrees ledger pour rent DA et penalites | Eleve | Modere | Faible | Treasury WG |
-| Dashboards d'observabilite | SLOs DA, profondeur de replication, alertes | Modere | Eleve | Faible | SRE / Observability |
-| Intents de reparation | Requetes pour rehydrater des chunks manquants | Modere | Modere | Faible | Storage Team |
+| دا بلبس (ٹکڑوں + منشور) | Taikai blobs ، لین ، گورننس SoraFS میں محفوظ ہے جائزہ | جائزہ | اعتدال پسند | ڈا ڈبلیو جی / اسٹوریج ٹیم |
+| Norito DA | بلبس کی وضاحت کرتے ہوئے ٹائپ شدہ میٹا ڈیٹا | جائزہ | طالب علم | اعتدال پسند | کور پروٹوکول ڈبلیو جی |
+| بلاک وعدے | بلاکس Nexus میں CIDS + KZG کی جڑیں | جائزہ | طالب علم | کم | کور پروٹوکول ڈبلیو جی |
+| نظام الاوقات PDP/POTR | ڈی اے نقل کے لئے انفورسمنٹ کیڈینس | طالب علم | طالب علم | کم | اسٹوریج ٹیم |
+| رجسٹری آپریٹر | منظور شدہ اسٹوریج فراہم کرنے والے اور پالیسیاں | طالب علم | طالب علم | کم | گورننس کونسل |
+| کرایہ اور ترغیبی رجسٹر | کرایہ ڈی اے اور جرمانے کے لئے لیجر اندراجات | طالب علم | اعتدال پسند | کم | ٹریژری ڈبلیو جی |
+| مشاہدہ ڈیش بورڈز | دا سلوس ، نقل کی گہرائی ، انتباہات | اعتدال پسند | طالب علم | کم | SRE / مشاہدہ |
+| مرمت کے ارادے | لاپتہ حصوں کو ری ہائیڈریٹ کرنے کی درخواستیں | اعتدال پسند | اعتدال پسند | کم | اسٹوریج ٹیم |
 
-## Adversaires et capacites
+## مخالفین اور قابلیت
 
-| Acteur | Capacites | Motivations | Notes |
+| اداکار | صلاحیت | محرکات | نوٹ |
 | --- | --- | --- | --- |
-| Client malveillant | Soumettre des blobs malformes, rejouer des manifests obsoletes, tenter DoS sur l'ingest. | Perturber les broadcasts Taikai, injecter des donnees invalides. | Pas de cles privilegiees. |
-| Noeud de stockage byzantin | Dropper des replicas assignees, forger des proofs PDP/PoTR, colluder. | Reduire la retention DA, eviter la rent, retenir les donnees. | Possede des credentials valides. |
-| Sequencer compromis | Omettre des commitments, equivoker sur les blocs, reordonner la metadata. | Cacher des submissions DA, creer des incoherences. | Limite par la majorite de consensus. |
-| Operateur interne | Abuser de l'acces gouvernance, manipuler les politiques de retention, fuir des credentials. | Gain economique, sabotage. | Acces a l'infrastructure hot/cold. |
-| Adversaire reseau | Partitioner les noeuds, retarder la replication, injecter trafic MITM. | Reduire l'availability, degrader les SLOs. | Ne peut pas casser TLS mais peut dropper/ralentir les liens. |
-| Attaquant observabilite | Tamper dashboards/alertes, supprimer les incidents. | Cacher les outages DA. | Necessite un acces a la pipeline telemetrie. |
+| بدنیتی پر مبنی مؤکل | خراب شدہ بلابز جمع کروائیں ، متروک منشور کو دوبارہ چلائیں ، انجسٹ پر ڈوز کی کوشش کریں۔ | تائکائی نشریات میں خلل ڈالیں ، غلط ڈیٹا کو انجیکشن کریں۔ | کوئی مراعات یافتہ چابیاں نہیں۔ |
+| بازنطینی اسٹوریج نوڈ | تفویض کردہ نقلیں ، فورج PDP/POTR ثبوت ، کولڈ ڈراپ کریں۔ | ڈی اے برقرار رکھنے کو کم کریں ، کرایہ سے بچیں ، ڈیٹا کو برقرار رکھیں۔ | درست اسناد ہیں۔ |
+| سیکوینسر سمجھوتہ | وعدوں کو چھوڑ دیں ، بلاکس پر مساوی ، دوبارہ ترتیب دینے والا میٹا ڈیٹا۔ | ڈی اے گذارشات کو چھپانا ، تضادات پیدا کرنا۔ | اکثریت کے اتفاق رائے سے حد۔ |
+| اندرونی آپریٹر | بدسلوکی تک رسائی گورننس ، برقرار رکھنے کی پالیسیاں جوڑ توڑ ، لیک اسناد۔ | معاشی فائدہ ، تخریب کاری۔ | گرم/سرد انفراسٹرکچر تک رسائی۔ |
+| نیٹ ورک کے مخالف | پارٹیشن نوڈس ، تاخیر کی نقل ، انجیکشن MITM ٹریفک۔ | دستیابی کو کم کریں ، ایس ایل او کو ہراساں کریں۔ | TLS نہیں توڑ سکتا ہے لیکن لنکس کو چھوڑ/سست کرسکتا ہے۔ |
+| حملہ آور مشاہدہ | چھیڑ چھاڑ ڈیش بورڈز/الرٹس ، واقعات کو حذف کریں۔ | ڈا بندش چھپائیں۔ | ٹیلی میٹری پائپ لائن تک رسائی کی ضرورت ہے۔ |
 
-## Frontieres de confiance
+## اعتماد کی حدود- ** داخلہ بارڈر: ** کلائنٹ ٹو ڈی اے ایکسٹینشن Torii۔ بذریعہ تصنیف کی ضرورت ہے
+  استفسار ، شرح کو محدود کرنا اور پے لوڈ کی توثیق۔
+- ** نقل کی حد: ** اسٹوریج نوڈس ایکسچینج حص and ہ اور ثبوت۔
+  نوڈس باہمی طور پر تصدیق شدہ ہیں لیکن بازنطینی میں برتاؤ کرسکتے ہیں۔
+- ** لیجر کی حد: ** کمٹ بلاک ڈیٹا بمقابلہ آف چین اسٹوریج۔
+  اتفاق رائے سالمیت کو برقرار رکھتا ہے ، لیکن دستیابی کے لئے نفاذ کی ضرورت ہوتی ہے
+  آف چین
+- ** گورننس کی حد: ** کونسل/پارلیمنٹ کے فیصلے جو آپریٹرز کی منظوری دیتے ہیں ،
+  بجٹ اور سلیشنگ۔ یہاں ٹوٹ پھوٹ کا براہ راست اثر ڈی اے کی تعیناتی پر پڑتا ہے۔
+- ** مشاہدہ کی حد: ** میٹرکس/لاگز کا مجموعہ ڈیش بورڈز کو برآمد کیا گیا اور
+  الرٹ ٹولنگ۔ چھیڑ چھاڑ کرنا بندش یا حملوں کو چھپاتا ہے۔
 
-- **Frontiere ingress:** Client vers l'extension DA Torii. Requiert auth par
-  requete, rate limiting et validation du payload.
-- **Frontiere replication:** Noeuds de stockage echangent chunks et proofs. Les
-  noeuds sont mutuellement authentifies mais peuvent se comporter en byzantin.
-- **Frontiere ledger:** Donnees de bloc commits vs stockage off-chain. Le
-  consensus garde l'integrite, mais l'availability requiert un enforcement
-  off-chain.
-- **Frontiere gouvernance:** Decisions Council/Parliament approuvant operateurs,
-  budgets et slashing. Les bris ici impactent directement le deploiement DA.
-- **Frontiere observabilite:** Collecte metrics/logs exportee vers dashboards et
-  alert tooling. Le tampering cache outages ou attaques.
+## دھمکی کے منظرنامے اور کنٹرول
 
-## Scenarios de menace et controles
+### انجسٹ راہ پر حملے
 
-### Attaques sur le chemin d'ingest
+** منظر نامہ: ** بدنیتی پر مبنی کلائنٹ نے بدتمیزی کی گئی Norito پے لوڈز یا
+وسائل کو ختم کرنے یا میٹا ڈیٹا کو انجیکشن لگانے کے لئے بڑے بلب
+غلط
 
-**Scenario:** Client malveillant soumet des payloads Norito malformes ou des
-blobs surdimensionnes pour epuiser les ressources ou injecter une metadata
-invalide.
+** کنٹرول **
+- سخت ورژن مذاکرات کے ساتھ اسکیما Norito کی توثیق ؛ مسترد کریں
+  نامعلوم جھنڈے۔
+- ingest اختتامی نقطہ Torii پر شرح کو محدود اور توثیق۔
+- Chunk سائز اور ڈٹرمینسٹک انکوڈنگ کی حدیں chuncer SoraFS کے ذریعہ مجبور ہیں۔
+- داخلہ پائپ لائن صرف چیکم میچ کے بعد ظاہر ہوتی ہے۔
+- ری پلے ڈٹرمینسٹک کیشے (`ReplayCache`) ونڈوز `(لین ، ایپچ ، کی پیروی کرتا ہے
+  تسلسل) `، ڈسک پر پانی کے اعلی نشانات برقرار رکھتا ہے ، اور نقلوں کو مسترد کرتا ہے
+  اور متروک ری پلے ؛ جائیداد اور فوز کور فنگر پرنٹ کو استعمال کرتا ہے
+  مختلف اور آرڈر کی گذارشات سے باہر۔ .
+  .
 
-**Controles**
-- Validation de schema Norito avec negotiation stricte de version; rejeter les
-  flags inconnus.
-- Rate limiting et authentification sur l'endpoint d'ingest Torii.
-- Bornes de chunk size et encoding deterministe forces par le chunker SoraFS.
-- Pipeline d'admission ne persiste les manifests qu'apres match du checksum.
-- Replay cache deterministe (`ReplayCache`) suit les fenetres `(lane, epoch,
-  sequence)`, persiste des high-water marks sur disque, et rejette les duplicates
-  et replays obsoletes; harnesses property et fuzz couvrent les fingerprints
-  divergents et submissions hors ordre. [crates/iroha_core/src/da/replay_cache.rs:1]
-  [fuzz/da_replay_cache.rs:1] [crates/iroha_torii/src/da/ingest.rs:1]
+** بقایا فرق **
+- Torii ingest کو ری پلے کیشے کو داخلے سے جوڑنا چاہئے اور کرسروں کو برقرار رکھنا چاہئے
+  ریبوٹس کے ذریعے ترتیب۔
+- Norito DA اسکیمات میں اب ایک سرشار فز کنٹرول ہے
+  .
+  اگر ہدف دباؤ ڈال رہا ہے تو کوریج ڈیش بورڈز کو الرٹ کرنا ہوگا۔
 
-**Lacunes residuelles**
-- Torii ingest doit relier le replay cache a l'admission et persister les curseurs
-  de sequence a travers les redemarrages.
-- Les schemas Norito DA ont maintenant un fuzz harness dedie
-  (`fuzz/da_ingest_schema.rs`) pour stresser les invariants d'encode/decode; les
-  dashboards de couverture doivent alerter si la cible regress.
+### نقل و حرکت کے ذریعہ برقرار رکھنا
 
-### Retention par withholding de replication
+** منظر نامہ: ** بازنطینی اسٹوریج آپریٹرز پنوں کو قبول کرتے ہیں لیکن انہیں چھوڑ دیں
+ٹکڑوں ، جعلی ردعمل یا ملی بھگت کے ذریعہ PDP/POTR چیلنجز پاس کرنا۔
 
-**Scenario:** Operateurs de stockage byzantins acceptent les pins mais dropent les
-chunks, passant les challenges PDP/PoTR via des reponses forgees ou collusion.
+** کنٹرول **
+- PDP/POTR چیلنج کا شیڈول DA پے لوڈ تک کوریج کے ساتھ پھیلا ہوا ہے
+  عہد
+- کورم دہلیز کے ساتھ ملٹی سورس کی نقل۔ آرکسٹریٹر کا پتہ لگاتا ہے
+  گمشدہ شارڈز اور مرمت کو متحرک کرتا ہے۔
+- گورننس ناکام ثبوتوں اور گمشدہ نقلوں سے منسلک ہے۔
+- خودکار مفاہمت کی نوکری (`cargo xtask da-commitment-reconcile`) جو
+  ڈی اے کے وعدوں کے ساتھ انجسٹ رسیدوں کا موازنہ کرتا ہے (دستخط شدہ بلاک وائر ،
+  `.norito` یا JSON) ، گورننس کے لئے JSON بنڈل کا ثبوت دیتا ہے ، اور
+  گمشدہ/مماثل ٹکٹوں پر ناکام ہوجاتا ہے تاکہ انتباہ مینجر صفحہ لے سکے۔** بقایا فرق **
+- `integration_tests/src/da/pdp_potr.rs` میں نقلی کنٹرول (احاطہ کرتا ہے
+  `integration_tests/tests/da/pdp_potr_simulation.rs` کے ذریعہ) منظرنامے کی مشق کریں
+  ملی بھگت اور تقسیم کا ، اس بات کی توثیق کرتے ہوئے کہ PDP/POTR شیڈول کا پتہ لگاتا ہے
+  بازنطینی طرز عمل ایک عزم انداز میں۔ اسے DA-5 کے ساتھ بڑھانا جاری رکھیں
+  نئی پروف سطحوں کا احاطہ کرنے کے لئے۔
+- سرد درجے کی بے دخلی کی پالیسی کو روکنے کے لئے دستخط شدہ آڈٹ ٹریل کی ضرورت ہے
+  اسٹیلتھ ڈراپ
 
-**Controles**
-- Le schedule de challenges PDP/PoTR s'etend aux payloads DA avec couverture par
-  epoch.
-- Replication multi-source avec seuils de quorum; l'orchestrateur detecte les
-  shards manquants et declenche la reparation.
-- Slashing de gouvernance lie aux proofs echoues et aux replicas manquantes.
-- Job de reconciliation automatisee (`cargo xtask da-commitment-reconcile`) qui
-  compare les receipts d'ingest avec les commitments DA (SignedBlockWire,
-  `.norito` ou JSON), emet un bundle JSON d'evidence pour la gouvernance, et
-  echoue sur tickets manquants/mismatches pour que Alertmanager puisse pager.
+### وعدوں کی ہیرا پھیری
 
-**Lacunes residuelles**
-- Le harness de simulation dans `integration_tests/src/da/pdp_potr.rs` (couvert
-  par `integration_tests/tests/da/pdp_potr_simulation.rs`) exerce des scenarios
-  de collusion et partition, validant que le schedule PDP/PoTR detecte le
-  comportement byzantin de facon deterministe. Continuer a l'etendre avec DA-5
-  pour couvrir de nouvelles surfaces de proof.
-- La politique d'eviction cold-tier requiert un audit trail signe pour prevenir
-  les drops furtifs.
+** منظر نامہ: ** سیکوینسر سمجھوتہ کرنے والے بلاکس کو چھوڑنے یا ترمیم کرنے والے بلاکس کو شائع کرتا ہے
+وعدے ڈی اے ، بازیافت کی ناکامیوں یا ہلکے کلائنٹ کی عدم مطابقت کا سبب بنتے ہیں۔
 
-### Manipulation des commitments
+** کنٹرول **
+- اتفاق رائے جمع کرانے کی قطار کے خلاف بلاک تجاویز کی جانچ پڑتال کرتا ہے
+  دا ؛ ساتھی مطلوبہ وعدوں کے بغیر تجاویز کو مسترد کرتے ہیں۔
+- ہلکے کلائنٹ ہینڈلز کو بے نقاب کرنے سے پہلے شمولیت کے ثبوت چیک کرتے ہیں
+  بازیافت
+- وعدوں کو روکنے کے لئے انجسٹ رسیدوں کا موازنہ کرنے والے آڈٹ ٹریل۔
+- خودکار مفاہمت کی نوکری (`cargo xtask da-commitment-reconcile`) جو
+  ڈی اے کے وعدوں کے ساتھ انجسٹ رسیدوں کا موازنہ کرتا ہے (دستخط شدہ بلاک وائر ،
+  `.norito` یا JSON) ، گورننس کے لئے JSON بنڈل کا ثبوت دیتا ہے ، اور
+  گمشدہ یا مماثل ٹکٹوں پر ناکام ہوجاتا ہے تاکہ انتباہ مینجر صفحہ دے سکے۔
 
-**Scenario:** Sequencer compromis publie des blocs omettant ou modifiant les
-commitments DA, provoquant des fetch failures ou des incoherences light-client.
+** بقایا فرق **
+- مفاہمت کی نوکری + الرٹ مینجر ہک سے احاطہ کرتا ہے۔ کے پیکیج
+  گورننس اب ثبوت JSON بنڈل کو بطور ڈیفالٹ کھاتا ہے۔
 
-**Controles**
-- Le consensus verifie les propositions de bloc contre les files de submission
-  DA; les peers rejettent les propositions sans commitments requis.
-- Les light clients verifient les inclusion proofs avant d'exposer les handles
-  de fetch.
-- Audit trail comparant les receipts d'ingest aux commitments de bloc.
-- Job de reconciliation automatisee (`cargo xtask da-commitment-reconcile`) qui
-  compare les receipts d'ingest avec les commitments DA (SignedBlockWire,
-  `.norito` ou JSON), emet un bundle JSON d'evidence pour la gouvernance, et
-  echoue sur tickets manquants ou mismatches pour que Alertmanager puisse pager.
+### نیٹ ورک پارٹیشن اور سنسرشپ
 
-**Lacunes residuelles**
-- Couvert par le job de reconciliation + hook Alertmanager; les paquets de
-  gouvernance ingere nt maintenant le bundle JSON d'evidence par defaut.
+** منظر نامہ: ** مخالف پارٹیشنز ریپلیکشن نیٹ ورک ، روک تھام کرتے ہیں
+نوڈس تفویض کردہ ٹکڑے حاصل کرنے یا PDP/POTR چیلنجوں کا جواب دینے کے لئے۔
 
-### Partition reseau et censure
+** کنٹرول **
+- کثیر الجہتی فراہم کنندہ کی ضروریات نیٹ ورک کے متنوع راستوں کو یقینی بناتی ہیں۔
+- چینلز کی مرمت کے لئے ونڈوز کو جٹر اور فال بیک کے ساتھ چیلنج کریں
+  بینڈ سے باہر
+- مشاہدہ کرنے والی ڈیش بورڈز نقل کی گہرائی کی نگرانی کرتے ہیں ،
+  کامیابی کو چیلنج کریں اور انتباہ دہلیز کے ساتھ تاخیر کو بازیافت کریں۔
 
-**Scenario:** Adversaire partitionne le reseau de replication, empechant les
-noeuds d'obtenir les chunks assignes ou de repondre aux challenges PDP/PoTR.
+** بقایا فرق **
+- تائیکائی براہ راست واقعات کے لئے اسکور نقالی ابھی بھی غائب ہے۔
+  بھگنے کے ٹیسٹ کی ضرورت ہے۔
+- مرمت بینڈوتھ ریزرویشن پالیسی ابھی تک کوڈفائڈ نہیں ہے۔
 
-**Controles**
-- Exigences de providers multi-region garantissent des chemins reseau divers.
-- Fenetres de challenge avec jitter et fallback vers des canaux de reparation
-  hors bande.
-- Dashboards d'observabilite surveillent la profondeur de replication, les
-  succes de challenge et la latence de fetch avec seuils d'alerte.
+### داخلی زیادتی
 
-**Lacunes residuelles**
-- Simulations de partition pour les evenements Taikai live encore manquantes;
-  besoin de soak tests.
-- Politique de reservation de bande passante de reparation pas encore codifiee.
+** منظر: ** رجسٹری تک رسائی کے ساتھ آپریٹر کی پالیسیوں کو جوڑتا ہے
+برقرار رکھنا ، بدنیتی فراہم کرنے والوں کی وائٹ لسٹ یا انتباہات کو حذف کرتا ہے۔
 
-### Abus interne
+** کنٹرول **
+- گورننس کے اقدامات میں کثیر الجہتی دستخطوں اور ریکارڈوں کی ضرورت ہوتی ہے
+  notarized Norito۔
+- پالیسی میں تبدیلیوں سے واقعات کو نگرانی اور لاگ ان میں تبدیل کیا جاتا ہے
+  آرکائیو
+- مشاہدہ کرنے والی پائپ لائن Norito صرف ہیش کے ساتھ ضمیمہ لاگ ان کو نافذ کرتی ہے
+  زنجیر
+- سہ ماہی آڈٹ آٹومیشن (`cargo xtask da-privilege-audit`) گزرتا ہے
+  مینی فیسٹ/ری پلے ڈائریکٹریز (آپریٹرز کے ذریعہ فراہم کردہ راستے) ، اس کی نشاندہی کرتے ہیں
+  گمشدہ/غیر ڈائریکٹری/عالمی تحریری اندراجات ، اور دستخط شدہ JSON بنڈل خارج کردیتے ہیں
+  گورننس ڈیش بورڈز کے لئے۔
 
-**Scenario:** Operateur avec acces au registry manipule les politiques de
-retention, whitelist des providers malveillants ou supprime les alertes.
+** بقایا فرق **
+- چھیڑ چھاڑ کے ڈیش بورڈ کے ثبوت کے لئے دستخط شدہ اسنیپ شاٹس کی ضرورت ہے۔
 
-**Controles**
-- Actions de gouvernance requierent des signatures multi-party et des records
-  notarises Norito.
-- Les changements de politique emettent des evenements vers monitoring et logs
-  d'archive.
-- Le pipeline d'observabilite impose des logs Norito append-only avec hash
-  chaining.
-- L'automatisation d'audit trimestriel (`cargo xtask da-privilege-audit`) parcourt
-  les repertoires manifest/replay (plus paths fournis par operateurs), signale les
-  entries manquantes/non-directory/world-writable, et emet un bundle JSON signe
-  pour dashboards de gouvernance.
-
-**Lacunes residuelles**
-- La preuve de tamper dashboard requiert des snapshots signes.
-
-## Registre de risques residuels
-
-| Risque | Probabilite | Impact | Owner | Plan de mitigation |
+## بقایا خطرات رجسٹر کریں| خطرہ | امکان | اثر | مالک | تخفیف کا منصوبہ |
 | --- | --- | --- | --- | --- |
-| Replay de manifests DA avant l'arrivee du sequence cache DA-2 | Possible | Modere | Core Protocol WG | Implementer sequence cache + validation de nonce en DA-2; ajouter des tests de regression. |
-| Collusion PDP/PoTR quand >f noeuds sont compromis | Peu probable | Eleve | Storage Team | Deriver un nouveau schedule de challenges avec sampling cross-provider; valider via harness de simulation. |
-| Gap d'audit d'eviction cold-tier | Possible | Eleve | SRE / Storage Team | Attacher des logs signes & receipts on-chain pour evictions; monitorer via dashboards. |
-| Latence de detection d'omission de sequencer | Possible | Eleve | Core Protocol WG | `cargo xtask da-commitment-reconcile` nocturne compare receipts vs commitments (SignedBlockWire/`.norito`/JSON) et page la gouvernance sur tickets manquants ou mismatches. |
-| Resilience partition pour streams Taikai live | Possible | Critique | Networking TL | Executer des drills de partition; reserver la bande passante de reparation; documenter SOP de failover. |
-| Derive de privilege de gouvernance | Peu probable | Eleve | Governance Council | `cargo xtask da-privilege-audit` trimestriel (dirs manifest/replay + paths extra) avec JSON signe + gate dashboard; ancrer les artefacts d'audit on-chain. |
+| ڈی اے 2 کیشے کی ترتیب کی آمد سے پہلے ڈی اے کا دوبارہ پلے ممکن | اعتدال پسند | کور پروٹوکول ڈبلیو جی | ڈی اے 2 میں تسلسل کیشے + نونس کی توثیق کو نافذ کریں۔ رجعت ٹیسٹ شامل کریں۔ |
+| PDP/پوٹر ملی بھگت جب> F نوڈس سمجھوتہ کرتے ہیں | غیرمعمولی | طالب علم | اسٹوریج ٹیم | کراس فراہم کرنے والے نمونے لینے کے ساتھ چیلنجوں کا ایک نیا شیڈول اخذ کریں۔ نقلی کنٹرول کے ذریعے توثیق کریں۔ |
+| کولڈ ٹیر انوائس آڈٹ گیپ | ممکن | طالب علم | SRE / اسٹوریج ٹیم | بے دخلی کے ل logs لاگ ان علامات اور رسیدیں منسلک کریں۔ ڈیش بورڈ کے ذریعے مانیٹر کریں۔ |
+| سیکوینسر غلطی کا پتہ لگانے میں تاخیر | ممکن | طالب علم | کور پروٹوکول ڈبلیو جی | رات کے وقت `cargo xtask da-commitment-reconcile` رسیدوں بمقابلہ وعدوں (دستخط شدہ بلاک وائر/`.norito`/JSON) اور لاپتہ یا مماثل ٹکٹوں پر صفحہ گورننس کا موازنہ کرتا ہے۔ |
+| تائیکائی لائیو اسٹریمز کے لئے لچک اسکور | ممکن | جائزہ | نیٹ ورکنگ TL | پارٹیشن ڈرل چلائیں ؛ ریزرو مرمت بینڈوتھ ؛ دستاویز فیل اوور ایس او پی۔ |
+| گورننس استحقاق بڑھاو | غیرمعمولی | طالب علم | گورننس کونسل | `cargo xtask da-privilege-audit` سہ ماہی (DIRS مینی فیسٹ/ری پلے + راہیں اضافی) JSON سائن + گیٹ ڈیش بورڈ کے ساتھ ؛ اینکر آن چین آڈٹ نمونے۔ |
 
-## Follow-ups requis
+## فالو اپس کی ضرورت ہے
 
-1. Publier les schemas Norito d'ingest DA et des vecteurs d'exemple (porte dans
-   DA-2).
-2. Brancher le replay cache dans l'ingest DA Torii et persister les curseurs de
-   sequence a travers les redemarrages.
-3. **Termine (2026-02-05):** Le harness de simulation PDP/PoTR exerce maintenant
-   collusion + partition avec modelisation de backlog QoS; voir
-   `integration_tests/src/da/pdp_potr.rs` (tests sous
-   `integration_tests/tests/da/pdp_potr_simulation.rs`) pour l'implementation et
-   les resumes deterministes captures ci-dessous.
-4. **Termine (2026-05-29):** `cargo xtask da-commitment-reconcile` compare les
-   receipts d'ingest aux commitments DA (SignedBlockWire/`.norito`/JSON), emet
-   `artifacts/da/commitment_reconciliation.json`, et est branche a
-   Alertmanager/paquets de gouvernance pour alertes d'omission/tampering
-   (`xtask/src/da.rs`).
-5. **Termine (2026-05-29):** `cargo xtask da-privilege-audit` parcourt le spool
-   manifest/replay (plus paths fournis par operateurs), signale des entries
-   manquantes/non-directory/world-writable, et produit un bundle JSON signe pour
-   dashboards/revues de gouvernance (`artifacts/da/privilege_audit.json`),
-   fermant la lacune d'automatisation d'acces.
+1. DA اسکیمیٹکس Norito اور مثال کے ویکٹر (دروازہ میں شائع کریں
+   DA-2)۔
+2. ری پلے کیشے کو انجسٹ DA Torii میں پلگ ان کریں اور کرسرز کو برقرار رکھیں
+   ریبوٹس کے ذریعے ترتیب۔
+3. ** مکمل (2026-02-05): ** PDP/POTR تخروپن کا استعمال اب ورزش کر رہا ہے
+   ملی بھگت + QoS بیکلاگ ماڈلنگ کے ساتھ تقسیم ؛ دیکھو
+   `integration_tests/src/da/pdp_potr.rs` (ٹیسٹ کے تحت
+   `integration_tests/tests/da/pdp_potr_simulation.rs`) نفاذ کے لئے اور
+   ذیل میں پکڑے گئے عصبی خلاصے۔
+4. ** مکمل (2026-05-29): ** `cargo xtask da-commitment-reconcile` موازنہ کرتا ہے
+   ڈی اے کے وعدوں (دستخط شدہ بلاک وائر/`.norito`/json) کو رسیدیں ، اخراج
+   `artifacts/da/commitment_reconciliation.json` ، اور اس سے جڑا ہوا ہے
+   غلطی/چھیڑ چھاڑ کے انتباہات کے لئے الرٹ مینجر/گورننس پیکیجز
+   (`xtask/src/da.rs`)۔
+5. ** مکمل (2026-05-29): ** `cargo xtask da-privilege-audit` اسپول پر چلتا ہے
+   اندراجات کی رپورٹ کے مطابق ، ظاہر/ری پلے (آپریٹرز کے ذریعہ فراہم کردہ راستے)
+   گمشدہ/غیر ڈائریکٹری/عالمی تحریر ، اور اس کے لئے دستخط شدہ JSON بنڈل تیار کرتا ہے
+   گورننس ڈیش بورڈز/جائزے (`artifacts/da/privilege_audit.json`) ،
+   رسائی آٹومیشن گیپ کو بند کرنا۔
 
-**Ou regarder ensuite:**
+** یا اگلا دیکھیں: **- ری پلے کیشے اور کرسر استقامت ڈی اے 2 میں اترا ہے۔ دیکھو
+  `crates/iroha_core/src/da/replay_cache.rs` میں عمل درآمد (کی منطق
+  کیشے) اور `crates/iroha_torii/src/da/ingest.rs` میں انضمام Torii ، جو تھریڈ ہے
+  `/v1/da/ingest` کے ذریعے فنگر پرنٹ چیک کرتا ہے۔
+- PDP/POTR اسٹریمنگ تخروپن پروف اسٹریم کنٹرول کے ذریعے انجام دیئے جاتے ہیں
+  `crates/sorafs_car/tests/sorafs_cli.rs` میں ، درخواست کے سلسلے کا احاطہ کرنا
+  POR/PDP/POTR اور ناکامی کے منظرنامے خطرے کے ماڈل میں متحرک ہیں۔
+- صلاحیت اور مرمت کو بھگانا نتائج کے تحت زندہ رہتے ہیں
+  `docs/source/sorafs/reports/sf2c_capacity_soak.md` ، جبکہ میٹرکس
+  `docs/source/sumeragi_soak_matrix.md` میں وسیع تر بھگوا Sumeragi کی پیروی کی جاتی ہے
+  (مقامی شکلیں شامل ہیں)۔ یہ نمونے طویل مدتی مشقوں پر قبضہ کرتے ہیں
+  بقایا رسک رجسٹر میں حوالہ دیا گیا۔
+- مفاہمت + استحقاق-آڈٹ آٹومیشن میں رہتا ہے
+  `docs/automation/da/README.md` اور نئے کمانڈز
+  `cargo xtask da-commitment-reconcile` / `cargo xtask da-privilege-audit` ؛ استعمال کریں
+  `artifacts/da/` کے تحت پہلے سے طے شدہ آؤٹ پٹ جب ثبوت سے منسلک ہوتے ہیں
+  گورننس پیکیجز۔
 
-- Le replay cache et la persistence des curseurs ont atterri en DA-2. Voir
-  l'implementation dans `crates/iroha_core/src/da/replay_cache.rs` (logique de
-  cache) et l'integration Torii dans `crates/iroha_torii/src/da/ingest.rs`, qui thread
-  les checks de fingerprint via `/v1/da/ingest`.
-- Les simulations de streaming PDP/PoTR sont exercees via le harness proof-stream
-  dans `crates/sorafs_car/tests/sorafs_cli.rs`, couvrant les flux de requete
-  PoR/PDP/PoTR et les scenarios de failure animes dans le modele de menaces.
-- Les resultats de capacity et repair soak vivent sous
-  `docs/source/sorafs/reports/sf2c_capacity_soak.md`, tandis que la matrice de
-  soak Sumeragi plus large est suivie dans `docs/source/sumeragi_soak_matrix.md`
-  (variants localises inclus). Ces artefacts capturent les drills long terme
-  referencees dans le registre de risques residuels.
-- L'automatisation reconciliation + privilege-audit vit dans
-  `docs/automation/da/README.md` et les nouvelles commandes
-  `cargo xtask da-commitment-reconcile` / `cargo xtask da-privilege-audit`; utilisez
-  les sorties par defaut sous `artifacts/da/` lors de l'attachement d'evidence aux
-  paquets de gouvernance.
+## QOS تخروپن اور ماڈلنگ ثبوت (2026-02)
 
-## Evidence de simulation et modelisation QoS (2026-02)
-
-Pour fermer le follow-up DA-1 #3, nous avons code un harness de simulation
-PDP/PoTR deterministe sous `integration_tests/src/da/pdp_potr.rs` (couvert par
-`integration_tests/tests/da/pdp_potr_simulation.rs`). Le harness alloue des
-noeuds sur trois regions, injecte partitions/collusion selon les probabilites du
-roadmap, suit la lateness PoTR, et alimente un modele de backlog de reparation
-qui reflecte le budget de reparation du tier hot. L'execution du scenario par
-defaut (12 epochs, 18 challenges PDP + 2 fenetres PoTR par epoch) a produit les
-metriques suivantes:
+فالو اپ DA-1 #3 کو بند کرنے کے لئے ، ہم نے نقلی کنٹرول کو کوڈ کیا
+`integration_tests/src/da/pdp_potr.rs` کے تحت تعی .ن PDP/POTR (جس کا احاطہ کیا گیا ہے
+`integration_tests/tests/da/pdp_potr_simulation.rs`)۔ استعمال مختص کرتا ہے
+تین خطوں پر نوڈس ، کے امکانات کے مطابق پارٹیشنز/ملی بھگت کو انجیکشن لگاتے ہیں
+روڈ میپ ، پوٹر لیٹینسی کو ٹریک کرتا ہے ، اور مرمت کا بیکلاگ ماڈل کھلاتا ہے
+جو گرم درجے کی مرمت کے بجٹ کی عکاسی کرتا ہے۔ بذریعہ منظر نامہ پر عمل درآمد
+ڈیفالٹ (12 ایپوچز ، 18 پی ڈی پی چیلنجز + 2 پوٹ آر ونڈوز فی عہد) نے تیار کیا
+مندرجہ ذیل میٹرکس:
 
 <!-- BEGIN_DA_SIM_TABLE -->
 <!-- AUTO-GENERATED by scripts/docs/render_da_threat_model_tables.py; do not edit manually. -->
-| Metrique | Valeur | Notes |
+| میٹرک | قیمت | نوٹ |
 | --- | --- | --- |
-| PDP failures detectees | 48 / 49 (98.0%) | Les partitions declenchent encore la detection; un seul echec non detecte vient d'un jitter honnete. |
-| PDP mean detection latency | 0.0 epochs | Les echecs sont signales dans l'epoch d'origine. |
-| PoTR failures detectees | 28 / 77 (36.4%) | La detection se declenche quand un noeud rate >=2 fenetres PoTR, laissant la plupart des evenements dans le registre de risques residuels. |
-| PoTR mean detection latency | 2.0 epochs | Correspond au seuil de lateness a deux epochs integre dans l'escalation d'archivage. |
-| Repair queue peak | 38 manifests | Le backlog monte quand les partitions s'empilent plus vite que les quatre reparations disponibles par epoch. |
-| Response latency p95 | 30,068 ms | Reflete la fenetre de challenge 30 s avec jitter de +/-75 ms applique au sampling QoS. |
+| PDP کی ناکامیوں کا پتہ چلا | 48/49 (98.0 ٪) | پارٹیشنز اب بھی پتہ لگانے کو متحرک کرتے ہیں۔ ایک ہی ناقابل شناخت ناکامی ایک دیانت دار جھٹکے سے آتی ہے۔ |
+| PDP کا مطلب پتہ لگانے میں تاخیر | 0.0 ایپوچ | اصل عہد میں ناکامیوں کی اطلاع دی جاتی ہے۔ |
+| پوٹر کی ناکامیوں کا پتہ چلا | 28/77 (36.4 ٪) | جب ایک نوڈ کو یاد آتا ہے> = 2 پوٹ آر ونڈوز ، اس کا پتہ لگانے کا آغاز ہوتا ہے ، جس سے زیادہ تر واقعات بقایا رسک رجسٹر میں رہ جاتے ہیں۔ |
+| پوٹر کا مطلب پتہ لگانے میں تاخیر | 2.0 ایپوچز | آرکائیو میں اضافے میں مربوط دو الکحل لیٹینسی حد سے مساوی ہے۔ |
+| مرمت کی دم چوٹی | 38 منشور | بیک بلاگ اس وقت بڑھتا ہے جب پارٹیشنز ہر عہد میں دستیاب چار مرمتوں کے مقابلے میں تیزی سے اسٹیک کرتے ہیں۔ |
+| رسپانس لیٹینسی P95 | 30.068ms | QoS نمونے لینے پر لاگو +/- 75 ایم ایس کے جٹر کے ساتھ 30 ایس چیلنج ونڈو کی عکاسی کرتا ہے۔ |
 <!-- END_DA_SIM_TABLE -->
 
-Ces sorties alimentent maintenant les prototypes de dashboard DA et satisfont
-les criteres d'acceptation "simulation harness + QoS modelling" references dans
-le roadmap.
+یہ نتائج اب ڈی اے ڈیش بورڈ پروٹوٹائپس کو کھانا کھاتے ہیں اور مطمئن ہوتے ہیں
+قبولیت کے معیار "نقلی کنٹرول + QOS ماڈلنگ" حوالہ جات
+روڈ میپ
 
-L'automatisation vit derriere
-`cargo xtask da-threat-model-report [--out <path|->] [--seed <u64|0xhex>] [--config <path>]`,
-qui appelle le harness partage et emet Norito JSON vers
-`artifacts/da/threat_model_report.json` par defaut. Les jobs nocturnes
-consomment ce fichier pour rafraichir les matrices dans ce document et alerter
-sur la derive des taux de detection, des queues de reparation ou des samples QoS.
-
-Pour rafraichir la table ci-dessus pour les docs, executer `make docs-da-threat-model`,
-qui invoque `cargo xtask da-threat-model-report`, regenere
-`docs/source/da/_generated/threat_model_report.json`, et reecrit cette section
-via `scripts/docs/render_da_threat_model_tables.py`. Le miroir `docs/portal`
-(`docs/portal/docs/da/threat-model.md`) est mis a jour dans le meme passage pour
-que les deux copies restent en sync.
+آٹومیشن پیچھے رہتا ہے
+`cargo xtask da-threat-model-report [--out <path|->] [--seed <u64|0xhex>] [--config <path>]` ،
+جو شیئرنگ کنٹرول کو کہتے ہیں اور Norito JSON کو خارج کرتا ہے
+`artifacts/da/threat_model_report.json` بذریعہ ڈیفالٹ۔ رات کی ملازمتیں
+اس دستاویز میں میٹرک کو تازہ دم کرنے کے لئے اس فائل کا استعمال کریں اور انتباہ کریں
+پتہ لگانے کی شرحوں ، مرمت کی قطاریں یا QoS نمونے کے بہاؤ پر۔دستاویزات کے لئے مذکورہ بالا جدول کو تازہ دم کرنے کے لئے ، `make docs-da-threat-model` پر عمل کریں ،
+جو `cargo xtask da-threat-model-report` کی درخواست کرتا ہے ، دوبارہ تخلیق کرتا ہے
+`docs/source/da/_generated/threat_model_report.json` ، اور اس حصے کو دوبارہ لکھیں
+`scripts/docs/render_da_threat_model_tables.py` کے ذریعے۔ آئینہ `docs/portal`
+(`docs/portal/docs/da/threat-model.md`) اسی پاس میں اپ ڈیٹ ہوا ہے
+کہ دونوں کاپیاں مطابقت پذیر ہیں۔

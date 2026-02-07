@@ -7,126 +7,127 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 4ac4c98cc4aa6ab0c34e58e6428d0ee33eb9a0c3fdad9e6958bdc75f2a48dc66
 source_last_modified: "2026-01-22T16:26:46.488648+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Fraud Governance Playbook
+# གཞུང་སྐྱོང་རྩེད་དེབ་།
 
-This document summarizes the scaffolding required for the PSP fraud stack while
-full microservices and SDKs are under active development. It captures
-expectations for analytics, auditor workflows, and fallback procedures so that
-upcoming implementations can plug into the ledger safely.
+ཡིག་ཆ་འདི་གིས་ པི་ཨེསི་པི་ གཡོ་སྒྱུའི་བརྩེགས་ཕུང་གྱི་དོན་ལུ་ དགོ་པའི་ ལྕགས་ཐག་ཚུ་ བཅུད་བསྡུས་འབདཝ་ཨིན།
+མའི་ཀོརོ་སི་ཊིསི་དང་ ཨེསི་ཌི་ཀེ་ཚུ་ གོང་འཕེལ་འགྱོ་བའི་བསྒང་ཡོདཔ་ཨིན། འདི།
+དབྱེ་དཔྱད་ཀྱི་རེ་བ་དང་ རྩིས་ཞིབ་པའི་ལཱ་གི་རྒྱུན་རིམ་ དེ་ལས་ མར་འབབ་ཀྱི་བྱ་རིམ་ཚུ་ཨིན།
+འོང་ནི་ཨིན་པའི་ལག་ལེན་ཚུ་གིས་ ཉེན་སྲུང་དང་ལྡནམ་སྦེ་ ལག་དེབ་ནང་ལུ་བཙུགས་ཚུགས།
 
-## Services Overview
+## ཞབས་ཞུའི་སྤྱིར་བཏང་།
 
-1. **API Gateway** – receives synchronous `RiskQuery` payloads, forwards them to
-   feature aggregation, and relays `FraudAssessment` responses back to ledger
-   flows. High availability (active-active) is required; use regional pairs with
-   deterministic hashing to avoid request skew.
-2. **Feature Aggregation** – composes feature vectors for scoring. Emit
-   `FeatureInput` hashes only; sensitive payloads stay off-chain. Observability
-   must publish latency histograms, queue depth gauges, and replay counters per
-   tenant.
-3. **Risk Engine** – evaluates rules/models and produces deterministic
-   `FraudAssessment` outputs. Ensure rule execution order is stable and capture
-   audit logs per assessment ID.
+1. **API Gateway** – མཉམ་འབྱུང་ I18NI0000006X པེ་ལོཌ་ཚུ་ཐོབ་ཨིན། དེ་ཚུ་ལུ་གདོང་བསྐྱོད་འབདཝ་ཨིན།
+   ཁྱད་རྣམ་བསྡོམས་རྩིས་དང་ རི་ལེ་ཚུ་ I18NI000000007X ལན་འདེབས་ཚུ་ ལག་དེབ་ལུ་ལོག་འོང་།
+   ཆུ་བཞུར་བ། མཐོ་དྲགས་འཐོབ་ཚུགསཔ་ (ཤུགས་ལྡན་)དགོཔ་ཨིན། དང་བཅས་ ལུང་ཕྱོགས་ཆ་གཅིག་ལག་ལེན་འཐབ།
+   ཞུ་བ་འབད་མི་ skew ལས་འཛེམ་ནིའི་དོན་ལུ་ determistic hasing.
+2. **ཕགཔ་བསྡོམས་** – སྐུགས་ཐོབ་ནིའི་དོན་ལུ་ ཁྱད་རྣམ་ཝེག་ཊར་ཚུ་ བརྩམ་དོ་ཡོདཔ་ཨིན། བླངས་པ།
+   `FeatureInput` ཧ་ཤེ་རྐྱངམ་གཅིག; ཚོར་ཤུགས་ཅན་གྱི་ པེ་ལོཌ་ཚུ་ རིམ་ཐེངས་ནང་སྡོད་དགོ། བལྟ་རྟོག་འབད་ཚུགསཔ།
+   འཕྲོ་མཐུད་ཧིསི་ཊོ་གཱརམ་དང་ གྱལ་གཏིང་ཚད་ཚད་འཇལ་ནི་ དེ་ལས་ བསྐྱར་རྩེད་ཀྱི་གྱངས་ཁ་ཚུ་ པར་ཚུ་དཔར་བསྐྲུན་འབད་དགོ།
+   ཁང༌གླ༌ཁར༌སྡོད༌མི།
+༣. **ཉེན་ཁའི་འཕྲུལ་ཆས་** – ལམ་ལུགས་/དཔེ་སྟོན་ཚུ་དབྱེ་ཞིབ་འབད་དེ་ གཏན་འབེབས་བཟོཝ་ཨིན།
+   `FraudAssessment` ཐོན་འབྲས་ཚུ། ལམ་ལུགས་ལག་ལེན་འཐབ་ནིའི་གོ་རིམ་གཏན་ཏོག་ཏོ་དང་བཟུང་ནི་ངེས་གཏན་བཟོ།
+   བརྟག་དཔྱད་ ID རེ་ལུ་ དྲན་ཐོ་ཚུ་ རྩིས་ཞིབ་འབད་ནི།
 
-## Analytics & Model Promotion
+## དབྱེ་དཔྱད།
 
-- **Anomaly Detection**: maintain a streaming job that flags deviations in
-  decision rates per tenant. Feed alerts into the governance dashboard and store
-  summaries for quarterly reviews.
-- **Graph Analysis**: run nightly graph traversals on relational exports to
-  identify collusion clusters. Export findings into the governance portal via
-  `GovernanceExport` with references to supporting evidence.
-- **Feedback Ingestion**: curate manual review outcomes and chargeback reports.
-  Convert them into feature deltas and incorporate them into training datasets.
-  Publish ingestion status metrics so the risk team can spot stalled feeds.
-- **Model Promotion Pipeline**: automate candidate evaluation (offline metrics,
-  canary scoring, rollback readiness). Promotions should emit a signed
-  `FraudAssessment` sample set and update the `model_version` field in
+- **ཨེ་ནོ་མ་ལི་བརྟག་དཔྱད་**:: ༢༠ ལུ་ དར་ཁྱབ་འགྱོ་མི་ རྒྱུན་ལམ་ལཱ་ཅིག་རྒྱུན་སྐྱོང་འབད།
+  ཁང་གླར་སྡོད་མི་རེ་ལུ་ ཐག་གཅོད་ཀྱི་ཚད་གཞི། གཞུང་སྐྱོང་གི་ བརྡ་བཀོད་སྒྲོམ་ནང་ ཉེན་བརྡ་ཚུ་ དང་ གསོག་འཇོག་འབད།
+  ཟླཝ་གསུམ་གྱི་བསྐྱར་ཞིབ་ཀྱི་བཅུད་བསྡུས་ཚུ།
+- **གཱརཕ་དབྱེ་དཔྱད་**: འབྲེལ་མཐུན་ཕྱིར་འདྲེན་ཚུ་གུ་ མཚན་མོའི་ཐིག་ཁྲམ་གྱི་ བརྡ་རྟགས་ཚུ་ གཡོག་བཀོལ།
+  ཀོལ་ལུ་ཤཱན་ ཀླད་ཀོར་ཚུ་ངོས་འཛིན་འབད་ནི། གཞུང་སྐྱོང་དྲ་ཚིགས་ནང་ ཕྱིར་ཚོང་འཐབ་པའི་ཤེས་རྟོགས་
+  རྒྱབ་སྐྱོར་གྱི་སྒྲུབ་བྱེད་ལུ་གཞི་བསྟུན་ཚུ་དང་གཅིག་ཁར་ `GovernanceExport` དང་།
+- **Teedback inCeming**: ལག་ཐོག་བསྐྱར་ཞིབ་གྲུབ་འབྲས་དང་ གློག་ཤུགས་སྙན་ཞུ་ཚུ་ བསྒྲིག་དགོ།
+  དེ་ཚུ་ ཁྱད་རྣམ་ཌེལ་ཊསི་ལུ་བསྒྱུར་བཅོས་འབད་ཞིནམ་ལས་ སྦྱོང་བརྡར་གྱི་གནད་སྡུད་ཆ་ཚན་ནང་ མཉམ་བསྡོམས་འབད།
+  ཉེན་ཁ་སྡེ་ཚན་གྱིས་ བཀག་ཆ་འབད་ཡོད་པའི་ ཕིཌ་ཚུ་ མཐོང་ཚུགསཔ་ལས་ སྨན་ཁབ་བཙུགས་ནིའི་གནས་ཚད་མེ་ཊིག་ཚུ་ དཔར་བསྐྲུན་འབད་དགོ།
+- **དཔེ་ཚད་ཁྱབ་སྤེལ་གྱི་པའིཔ་ལའིན་**: རང་བཞིན་གྱི་འདེམས་ངོ་བརྟག་ཞིབ་ (ཨོཕ་ལ་ཐིག་མེ་ཊིགསི།
+  ཀེ་ན་རི་སྐུགས་ བསྐྱར་སྒྲིག་གྲ་སྒྲིག་འབད་ནི།). ཁྱབ་བསྒྲགས་ཚུ་གིས་ མཚན་རྟགས་བཀོད་དགོ།
+  I18NI000000011X དཔེ་ཚད་གཞི་སྒྲིག་དང་ I18NI000000012X ནང་ ནང་ ས་སྒོ་འདི་ དུས་མཐུན་བཟོ་ཡོདཔ་ཨིན།
   `GovernanceExport`.
 
-## Auditor Workflow
+## རྩིས་ཞིབ་ལས་རིམ།
 
-1. Snapshot the latest `GovernanceExport` and verify the `policy_digest` matches
-   the manifest provided by the risk team.
-2. Validate that rule aggregates reconcile with ledger-side decision totals for
-   the sampled window.
-3. Review the anomaly detection and graph analysis reports for outstanding
-   issues. Document escalations and expected remediation owners.
-4. Sign and archive the review checklist. Store the Norito-encoded artifacts in
-   the governance portal for reproducibility.
+1. གསར་ཤོས་`GovernanceExport` པར་འཚོལ་ཞིབ་འབད་དེ་ `policy_digest` མཐུན་སྒྲིག་ཚུ་བདེན་དཔྱད་འབད།
+   ཉེན་ཁའི་སྡེ་ཚན་གྱིས་བྱིན་མི་ གསལ་སྟོན་འདི།
+༢ ཁྲིམས་ལུགས་བསྡོམས་རྩིས་ཚུ་ རྩིས་ཁྲ་གི་གྲོས་ཐག་བསྡོམས་རྩིས་དང་ མཐུན་སྒྲིག་འབད་མི་འདི་ བདེན་དཔྱད་འབད།
+   དཔེ་ཚད་ཅན་གྱི་སྒོ་སྒྲིག་འདི།
+༣ ཁྱད་འཕགས་ཅན་གྱི་བརྟག་དཔྱད་དང་ ཚད་རིས་དབྱེ་དཔྱད་སྙན་ཞུ་བསྐྱར་ཞིབ་འབད་ནི།
+   སྟབས༌མ༌བདེཝ། ཡིག་ཆའི་ཡར་འཕར་དང་རེ་བ་བསྐྱེད་ཐབས་ཀྱི་ཇོ་བདག་ཚུ།
+༤ བསྐྱར་ཞིབ་ཞིབ་དཔྱད་ཐོ་ཡིག་ནང་ ནང་བསྐྱོད་འབད་དེ་ གཏན་མཛོད་འབད་ནི། Norito-encoded ཅ་རྙིང་ཚུ་ ༢༠༡༢ ལུ་ གསོག་འཇོག་འབད།
+   བསྐྱར་བཟོ་འབད་ནི་གི་དོན་ལུ་ གཞུང་སྐྱོང་དྲ་ཚིགས་།
 
-## Fallback Playbooks
+## ཕོལ་བེག་རྩེད་དེབ་ཚུ།
 
-- **Engine Outage**: if the risk engine is unavailable for more than 60 seconds,
-  the gateway should flip into review-only mode, issuing `AssessmentDecision::Review`
-  for all requests and alerting operators.
-- **Telemetry Gap**: when metrics or traces fall behind (missing for 5 minutes),
-  halt automatic model promotions and notify the on-call engineer.
-- **Model Regression**: if post-deployment feedback indicates elevated fraud
-  losses, roll back to the previous signed model bundle and update the roadmap
-  with corrective actions.
+- **འཕྲུལ་འཁོར་འགྲན་པ་**: གལ་སྲིད་ཉེན་ཁ་འཕྲུལ་འཁོར་འདི་སྐར་ཆ་ ༦༠ ལས་ལྷག་པའི་དོན་ལུ་མ་ཐོབ་པ་ཅིན་།
+  འཛུལ་སྒོ་འདི་ བསྐྱར་ཞིབ་རྐྱངམ་ཅིག་ཐབས་ལམ་ནང་ གཡོག་བཀོལ་དགོཔ་ཨིན་ དེ་གིས་ `AssessmentDecision::Review` བཏོན་དགོ།
+  ཞུ་བ་ཚུ་ཆ་མཉམ་དང་ ཉེན་བརྡ་བཀོལ་སྤྱོད་པ་ཚུ་གི་དོན་ལུ་ཨིན།
+- **ཊེ་ལི་མི་ཊི་གཱཔ་**: མེ་ཊིགསི་ཡང་ན་ རྗེས་འཇུག་ཚུ་ རྒྱབ་ལུ་ལྷོདཔ་ད་ (སྐར་མ་༥ གི་རིང་ལུ་ བརླག་སྟོར་ཞུགས་མི)།
+  རང་བཞིན་གྱི་དཔེ་ཚད་ཁྱབ་སྤེལ་ཚུ་བཀག་ཞིནམ་ལས་ ཁ་པར་ཐོག་ལུ་ཡོད་པའི་བཟོ་རིག་པ་ལུ་ བརྡ་དོན་སྤྲོད་དགོ།
+- **དཔེ་ཚད་བསྐྱར་བསྐྱོད་**: གལ་སྲིད་ བཀྲམ་སྤེལ་གྱི་ཤུལ་ལས་ བསམ་འཆར་ཚུ་གིས་ གཡོ་སྒྱུ་མཐོ་དྲགས་སྦེ་སྟོནམ་ཨིན།
+  གྱོང་རྒུད་ཚུ་ ཧེ་མའི་མིང་རྟགས་བཀོད་པའི་དཔེ་ཚད་བཱན་ཌལ་ལུ་ལོག་བསྐོར་ཏེ་ ལམ་སྟོན་གྱི་ས་ཁྲ་དུས་མཐུན་བཟོ་ནི།
+  བཅོས་སྒྲིག་བྱ་བ་དང་བཅས་པ།
 
-## Data-Sharing Agreements
+## གནད་སྡུད་-བརྗེ་སོར་གྱི་གན་ཡིག་།
 
-- Maintain jurisdiction-specific appendices covering retention, encryption, and
-  breach notification SLAs. Partners must sign the appendix before receiving
-  `FraudAssessment` exports.
-- Document data minimization practices for each integration (e.g., hashing
-  account identifiers, truncating card numbers).
-- Refresh agreements annually or whenever regulatory requirements change.
+- དབང་ཚད་དང་ གསང་བཟོའི་ ཁྱབ་པའི་ དམིགས་བསལ་གྱི་ ཟུར་ཤོག་ཚུ་ བདག་འཛིན་འཐབ་དགོ།
+  breach བརྡ་བསྐུལ་ SLAs. མཉམ་འབྲེལ་པ་ཚུ་གིས་ མ་ཐོབ་པའི་ཧེ་མར་ ཟུར་དེབ་ནང་ མཚན་རྟགས་བཀོད་དགོ།
+  I18NI000000017X ཕྱིར་གཏོང་།
+- མཉམ་བསྡོམས་རེ་རེའི་དོན་ལུ་ ཡིག་ཆའི་གནས་སྡུད་ཉུང་བཟོའི་ལག་ལེན་ (དཔེར་ན་ ཧེ་ཤིང་འབད་ནི།
+  རྩིས་ཁྲའི་ངོས་འཛིན་པ་ཚུ་, བཏོག་བཏང་བའི་ཤོག་བྱང་ཨང་།)།
+- ལོ་བསྟར་བཞིན་དུ་ གན་ཡིག་ཚུ་ ཡང་ན་ ཁྲིམས་ལུགས་དང་འཁྲིལ་བའི་ དགོས་མཁོ་ཚུ་ བསྒྱུར་བཅོས་འབད་བའི་སྐབས་ གསར་བསྐྲུན་འབད་ནི།
 
-## API Schemas
+## API ལས་རིམ།
 
-The gateway now exposes concrete JSON envelopes that map one-to-one to the
-Norito types implemented in `crates/iroha_data_model::fraud`:
+ད་ལྟོ་འཛུལ་སྒོ་འདི་གིས་ གཅིག་ལས་གཅིག་ལུ་ སབ་ཁྲ་བཟོ་མི་ JSON གི་ཡིག་ཤུབས་ཚུ་ གསལ་སྟོན་འབད་ཡོདཔ་ཨིན།
+`crates/iroha_data_model::fraud` ནང་ Norito དབྱེ་བ་ལག་ལེན་འཐབ་ཡོད།
 
-- **Risk intake** – `POST /v1/fraud/query` accepts the `RiskQuery` schema:
-  - `query_id` (`[u8; 32]`, hex encoded)
-  - `subject` (`AccountId`, canonical IH58 literal; optional `@<domain>` hint or alias)
-  - `operation` (tagged enum matching `RiskOperation`; the JSON `type`
-    discriminator mirrors the enum variant)
-  - `related_asset` (`AssetId`, optional)
-  - `features` (array of `{ key: String, value_hash: hex32 }` mapped from
-    `FeatureInput`)
+- **ཉེན་ཁ་ནང་འདྲེན་** – I18NI000000019X གིས་ `RiskQuery` ལས་འཆར་འདི་ངོས་ལེན་འབདཝ་ཨིན།
+  - `query_id` (I18NI00000022, ཧེགསི་ཨེན་ཀོཌ་)
+  - I18NI0000000023X (`AccountId`, ཀེ་ནོ་ནིག་ཨའི་ཨེཆ་༥༨ ལི་ཊར་ཊལ་ དང་གདམ་ཁ་ཅན་གྱི་ཨའི་༡༨ཨེན་ཨའི་༠༠༠༠༠༠༢༥ བརྡ་སྟོན།
+  - I18NI0000000026X (རྟགས་བཀོད་ཡོད་པའི་ཨེ་ནམ་གྱི་ I18NI000000027X; ཇེ་ཨེསི་ཨོ་ཨེན་ `type` འདི་ཨིན།
+    དབྱེ་བ་ཕྱེ་མི་གིས་ ཨེ་ནམ་གྱི་དབྱེ་བ་འདི་ གསལ་སྟོན་འབདཝ་ཨིན།)
+  - `related_asset` (`AssetId`, གདམ་ཁ།)
+  - `features` (I18NI0000000032X གི་ས་ཁྲ་འདི་ལས་ ས་ཁྲ་བཟོ་ཡོདཔ།
+    `FeatureInput`).
   - `issued_at_ms` (`u64`)
-  - `context` (`RiskContext`; carries `tenant_id`, optional `session_id`,
-    optional `reason`)
-- **Risk decision** – `POST /v1/fraud/assessment` consumes the
-  `FraudAssessment` payload (also mirrored in the governance exports):
-  - `query_id`, `engine_id`, `risk_score_bps`, `confidence_bps`,
-    `decision` (`AssessmentDecision` enum), `rule_outcomes`
-    (array of `{ rule_id, score_delta_bps, rationale? }`)
+  - I18NI000000036X (`RiskContext`; I18NI0000000038X, གདམ་ཁ་ཅན་གྱི་ `session_id`,
+    གདམ་ཁ་ཅན་ `reason`)
+- **ཉེན་ཁའི་གྲོས་ཐག་** – `POST /v1/fraud/assessment` གིས་ ཟ་སྤྱོད་འབདཝ་ཨིན།
+  I18NI0000042X པེ་ལོཌ་ (གཞུང་སྐྱོང་ཕྱིར་ཚོང་ནང་ཡང་མེ་ལོང་):
+  - `query_id`, `engine_id`, I18NI000000045X, I18NI0000000046X,
+    `decision` (I18NI000004X num), I18NI00000049.
+    (`{ rule_id, score_delta_bps, rationale? }` གི་ཨེ་རི།)
   - `generated_at_ms`
-  - `signature` (optional base64 wrapping the Norito-encoded assessment)
-- **Governance export** – `GET /v1/fraud/governance/export` returns the
-  `GovernanceExport` structure when the `governance` feature is enabled, bundling
-  active parameters, the latest enactment, model version, policy digest, and the
-  `DecisionAggregate` histogram.
+  - I18NI000000052X (གདམ་ཁ་ཅན་གྱི་གཞི་༦༤ Norito-encoded བརྟག་དཔྱད།)
+- **གཞུང་སྐྱོང་ཕྱིར་འདྲེན་** – I18NI000000053X གིས་ འདི་སླར་ལོག་འབདཝ་ཨིན།
+  I18NI000000054X གཞི་བཀོད་འདི་ I18NI0000005X ཁྱད་རྣམ་འདི་ལྕོགས་ཅན་བཟོ་བའི་སྐབས་ བུན་ཌིང་།
+  ཤུགས་ལྡན་ཚད་གཞི་ཚུ་ ཁྲིམས་ལུགས་གསརཔ་དང་ དཔེ་ཚད་ཐོན་རིམ་ སྲིད་བྱུས་བཞུ་བཅུག་ནི་དང་ དེ་ལས་ དེ་ཚུ་ཨིན།
+  `DecisionAggregate` ཧིསི་ཊོ་གཱརམ།
 
-Round-trip tests in `crates/iroha_data_model/src/fraud/types.rs` ensure these
-schemas remain binary-conformant with the Norito codec, and
-`integration_tests/tests/fraud_monitoring_requires_assessment_bands.rs` exercises
-the full intake/decision pipeline end-to-end.
+`FraudAssessment` ནང་ སྐོར་ཐེངས་བརྟག་དཔྱད་ཚུ་ ངེས་གཏན་བཟོཝ་ཨིན།
+ལས་འཆར་ཚུ་ Norito ཀོ་ཌེཀ་དང་གཅིག་ཁར་ གཉིས་ལྡན་མཐུན་སྒྲིག་སྦེ་ལུསཔ་ཨིན།
+I18NI0000008X ལུས་སྦྱོང་།
+ནང་འདྲེན་ཆ་ཚང་/གྲོས་ཆོད་མདོང་ལམ་མཐའ་མ་ལས་མཇུག་བསྡུ།
 
-## PSP SDK References
+## པི་ཨེསི་པི་ཨེསི་ཌི་ཀེ་གཞི་བསྟུན།
 
-The following language stubs track the PSP-facing integration examples:
+འོག་གི་སྐད་ཡིག་གི་ བཀབ་ཆ་འདི་གིས་ པི་ཨེསི་པི་-གདོང་ཕྱོགས་མཉམ་བསྡོམས་དཔེ་ཚུ་ བརྟག་ཞིབ་འབདཝ་ཨིན།
 
-- **Rust** – `integration_tests/tests/fraud_monitoring_requires_assessment_bands.rs`
-  uses the workspace `iroha` client to craft `RiskQuery` metadata and validate
-  admission failures/successes.
-- **TypeScript** – `docs/source/governance_api.md` documents the REST surface
-  consumed by the lightweight Torii gateway used in the PSP demo dashboard; the
-  scripted client lives in `scripts/ci/schedule_fraud_scoring.sh` for smoke
-  drills.
-- **Swift & Kotlin** – the existing SDKs (`IrohaSwift` and
-  `crates/iroha_cli/docs/multisig.md` references) expose the Torii metadata
-  hooks needed to attach `fraud_assessment_*` fields. PSP-specific helpers are
-  tracked under the “Fraud & Telemetry Governance Loop” milestone in
-  `status.md` and reuse those SDKs’ transaction builders.
+- **རསཊི་** – I18NI0000059X
+  ལཱ་གི་ས་སྒོ་ `iroha` མཁོ་སྤྲོད་པ་འདི་ `RiskQuery` མེ་ཊ་ཌེ་ཊ་བཟོ་ནི་དང་ བདེན་དཔྱད་འབད་ནི་ལུ་ ལག་ལེན་འཐབ་ཨིན།
+  འཛུལ་ཞུགས་འཐུས་ཤོར་/མཐར་འཁྱོལ།
+- **TypeScript** – I18NI000000062X གིས་ REST ཁ་ཐོག་འདི་ཡིག་ཆ་བཟོཝ་ཨིན།
+  PSP Demo dashboard ནང་ལག་ལེན་འཐབ་མི་ Torii གི་སྒོ་སྒྲིག་གིས་ བཀོལ་སྤྱོད་འབདཝ་ཨིན། ཚིག༌ཕྲད
+  ཡིག་གཟུགས་ཅན་གྱི་ཚོང་མགྲོན་པའི་འཚོ་བ་དེ་ I18NI000000063X ནང་དུ་དུ་བ་དང་།
+  དྲིལ་བའི།
+- **Swift & Kotlin** – ད་ལྟོ་ཡོད་པའི་ ཨེསི་ཌི་ཀེ་ (I18NI000000064X དང་།
+  `crates/iroha_cli/docs/multisig.md` གཞི་བསྟུན་)
+  I18NI0000006X ས་ཁོངས་ཚུ་ མཐུད་ནིའི་དོན་ལུ་ ཧུཀ་དགོཔ་ཨིན། PSP-special རོགས་རམ་པ་ནི།
+  བརྟག་ཞིབ་འདི་ “Fraud & Telemetry Governance Loop” ནང་ལུ་ བསྐོར་ར་རྐྱབ་སྟེ་ཡོདཔ་ཨིན།
+  I18NI000000067X དང་ དེ་ལས་ ཨེསི་ཌི་ཀེ་ཨེསི་གི་ ཚོང་འབྲེལ་བཟོ་བསྐྲུན་པ་ཚུ་ ལོག་སྟེ་ལག་ལེན་འཐབ།
 
-These references will be kept in sync with the microservice gateway so PSP
-implementers always have an up-to-date schema and sample code path for each
-supported language.
+འ་ནི་གཞི་བསྟུན་ཚུ་ མའི་ཀོརོ་སར་བར་གྱི་སྒོ་སྒྲིག་དང་གཅིག་ཁར་ མཉམ་འབྱུང་སྦེ་བཞག་ནི་ཨིནམ་ལས་ དེ་ལས་ པི་ཨེསི་པི་ཨིན།
+ལག་ལེན་འཐབ་མི་ཚུ་ལུ་ ཨ་རྟག་རང་ དུས་མཐུན་འཆར་གཞི་དང་ དཔེ་ཚད་ཨང་རྟགས་འགྲུལ་ལམ་རེ་རེ་ལུ་ དུས་མཐུན་གྱི་ ལས་འཆར་དང་ དཔེ་ཚད་ཀྱི་ འགྲུལ་ལམ་ཚུ་ཡོདཔ་ཨིན།
+རྒྱབ་སྐྱོར་སྐད་ཡིག།

@@ -7,43 +7,44 @@ generator: scripts/sync_docs_i18n.py
 source_hash: ba5f4fdc9221210a793fd0c2120d8cfb68487d7ddcbe67c208976798446ca5db
 source_last_modified: "2025-12-29T18:16:35.945760+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-//! SM program risk register for SM2/SM3/SM4 enablement.
+//！用於 SM2/SM3/SM4 啟用的 SM 程序風險寄存器。
 
-# SM Program Risk Register
+# SM 計劃風險登記冊
 
-Last updated: 2025-03-12.
+最後更新時間：2025 年 3 月 12 日。
 
-This register expands on the summary in `sm_program.md`, pairing each risk with
-ownership, monitoring triggers, and the current mitigation state. The Crypto WG
-and Core Platform leads review this register at the weekly SM cadence; changes
-are reflected both here and in the public roadmap.
+該寄存器擴展了 `sm_program.md` 中的摘要，將每個風險與
+所有權、監控觸發器和當前緩解狀態。加密貨幣工作組
+核心平台領導按每週 SM 節奏審查此登記冊；變化
+都反映在此處和公共路線圖中。
 
-## Risk Summary
+## 風險總結
 
-| ID | Risk | Category | Probability | Impact | Severity | Owner | Mitigation | Status | Triggers |
-|----|------|----------|-------------|--------|----------|-------|------------|--------|----------|
-| R1 | External audit for RustCrypto SM crates not executed before validator signing GA | Supply chain | Medium | High | High | Crypto WG | Contract Trail of Bits/NCC Group, keep verify-only posture until report accepted | Mitigation in progress | Audit SOW unsigned by 2025-04-15 or audit report delayed past 2025-06-01 |
-| R2 | Deterministic nonce regressions across SDKs | Implementation | Medium | High | High | SDK Program Leads | Share fixtures across SDK CI, enforce canonical r∥s encoding, add cross-SDK tamper tests | Monitoring | Fixture drift detected in CI or SDK release without SM fixtures |
-| R3 | ISA-specific bugs in intrinsics (NEON/SIMD) | Performance | Low | Medium | Medium | Performance WG | Gate intrinsics behind feature flags, require CI coverage on ARM, maintain scalar fallback | Mitigation in progress | NEON benches fail or hardware regression uncovered in SM perf matrix |
-| R4 | Compliance ambiguity delaying SM adoption | Governance | Medium | Medium | Medium | Docs & Legal Liaison | Publish compliance brief, operator checklist, liaison with legal counsel prior to GA | Mitigation in progress | Legal review outstanding after 2025-05-01 or missing checklist updates |
-| R5 | FFI backend drift with provider updates | Integration | Medium | Medium | Medium | Platform Ops | Pin provider versions, add parity tests, keep OpenSSL/Tongsuo preview opt-in | Monitoring | Package update merged without parity run or preview enabled outside pilot scope |
+|身份證 |風險|類別 |概率 |影響 |嚴重性 |業主|緩解措施 |狀態 |觸發器|
+|----|------|----------|-------------|--------|---------|--------|------------|--------|----------|
+| R1 |在驗證者簽署 GA 之前未執行 RustCrypto SM 箱的外部審計 |供應鏈|中等|高|高|加密工作組 | Bits/NCC Group 的合約追踪，在報告被接受之前保持僅驗證狀態 |緩解措施正在進行中 | 2025 年 4 月 15 日之前未簽署審計 SOW 或推遲到 2025 年 6 月 1 日之後的審計報告 |
+| R2 |跨 SDK 的確定性隨機數回歸 |實施|中等|高|高| SDK 項目負責人 |跨 SDK CI 共享固定裝置、強制執行規範的 r∥s 編碼、添加跨 SDK 篡改測試 |監控|在沒有 SM 夾具的 CI 或 SDK 版本中檢測到夾具漂移
+| R3 |內在函數 (NEON/SIMD) 中 ISA 特定的錯誤 |性能|低|中等|中等|績效工作組 |功能標誌背後的門內在函數，需要 ARM 上的 CI 覆蓋，維護標量回退 |緩解措施正在進行中| SM 性能矩陣中發現 NEON 工作台故障或硬件回歸
+| R4 |合規性模糊性阻礙 SM 的採用治理|中等|中等|中等|文件和法律聯絡 |在 GA 之前發布合規簡報、運營商清單、與法律顧問聯絡 |緩解措施正在進行中 | 2025 年 5 月 1 日後法律審查未完成或缺少清單更新 |
+| R5 | FFI 後端隨提供商更新而變化 |整合|中等|中等|中等|平台運營|固定提供商版本、添加奇偶校驗測試、保持 OpenSSL/Tongsuo 預覽選擇加入 |監控|程序包更新已合併，無需在試點範圍外啟用奇偶校驗運行或預覽 |
 
-## Review Cadence
+## 回顧節奏
 
-- Weekly Crypto WG sync (standing agenda item).
-- Monthly joint review with Platform Ops and Docs to confirm compliance posture.
-- Pre-release checkpoint: risk register freeze and attestation bundled with GA
-  artefacts.
+- 每週加密貨幣工作組同步（常設議程項目）。
+- 每月與平台運營和文檔進行聯合審查，以確認合規狀況。
+- 預發布檢查點：風險登記凍結和與 GA 捆綁的證明
+  文物。
 
-## Sign-off
+## 簽核
 
-| Role | Representative | Date | Notes |
-|------|----------------|------|-------|
-| Crypto WG Lead | (signature on file) | 2025-03-12 | Approved for publication and shared with WG backlog. |
-| Core Platform Lead | (signature on file) | 2025-03-12 | Accepted mitigations and monitoring cadence. |
+|角色 |代表|日期 |筆記|
+|------|----------------|------|--------|
+|加密貨幣工作組負責人 | （文件上簽名）| 2025-03-12 |批准發布並與工作組待辦事項共享。 |
+|核心平台負責人| （文件上簽名）| 2025-03-12 |接受的緩解措施和監控節奏。 |
 
-For historic approvals and meeting minutes, see `docs/source/crypto/sm_program.md`
-(`Communication Plan`) and the SM agenda archive linked from the Crypto WG
-workspace.
+有關歷史批准和會議記錄，請參閱 `docs/source/crypto/sm_program.md`
+(`Communication Plan`) 和從加密工作組鏈接的 SM 議程檔案
+工作區。

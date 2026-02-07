@@ -4,28 +4,30 @@ direction: ltr
 source: docs/portal/docs/norito/examples/nft-flow.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-slug: /norito/examples/nft-flow
-title: Cunhar, transferir e queimar um NFT
-description: Percorre o ciclo de vida de um NFT do inicio ao fim: cunhagem para o dono, transferencia, marcacao de metadados e queima.
-source: crates/ivm/docs/examples/12_nft_flow.ko
+babosa: /norito/ejemplos/nft-flow
+título: Cunhar, transferir y quemar un NFT
+descripción: Percorre o ciclo de vida de un NFT do inicio ao fim: cunhagem para o dono, transferencia, marcacao de metadados e queima.
+fuente: crates/ivm/docs/examples/12_nft_flow.ko
 ---
 
-Percorre o ciclo de vida de um NFT do inicio ao fim: cunhagem para o dono, transferencia, marcacao de metadados e queima.
+Percorre el ciclo de vida de un NFT de inicio ao fim: cunhagem para o dono, transferencia, marcacao de metadados e queima.
 
 ## Roteiro do livro razao
 
-- Garanta que a definicao do NFT (por exemplo `n0#wonderland`) exista junto com as contas de dono/destinatario usadas no trecho (`ih58...`, `ih58...`).
-- Invoque o entrypoint `nft_issue_and_transfer` para cunhar o NFT, transferi-lo de Alice para Bob e anexar um sinal de metadados que descreva a emissao.
-- Inspecione o estado do livro razao de NFT com `iroha_cli ledger nfts list --account <id>` ou os equivalentes do SDK para verificar a transferencia, depois confirme que o ativo e removido quando a instrucao de queima roda.
+- Garantía que a definicao do NFT (por ejemplo `n0#wonderland`) existe junto com as contas de dono/destinatario usadas no trecho (`ih58...`, `ih58...`).
+- Invoque el punto de entrada `nft_issue_and_transfer` para Cunhar o NFT, transferi-lo de Alice para Bob y anexar una señal de metadados que descreva a emissao.
+- Inspeccione el estado del libro razao de NFT con `iroha_cli ledger nfts list --account <id>` o sus equivalentes del SDK para verificar una transferencia, después de confirmar que o activo y eliminado cuando a instrucciones de queima roda.
 
-## Guias de SDK relacionados
+## Guías de SDK relacionadas
 
-- [Quickstart do SDK Rust](/sdks/rust)
-- [Quickstart do SDK Python](/sdks/python)
-- [Quickstart do SDK JavaScript](/sdks/javascript)
+- [Inicio rápido de SDK Rust](/sdks/rust)
+- [Inicio rápido del SDK Python](/sdks/python)
+- [Inicio rápido del SDK JavaScript](/sdks/javascript)
 
 [Baixe a fonte Kotodama](/norito-snippets/nft-flow.ko)
 

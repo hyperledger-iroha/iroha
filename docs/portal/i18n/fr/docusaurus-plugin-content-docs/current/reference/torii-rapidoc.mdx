@@ -4,27 +4,28 @@ direction: ltr
 source: docs/portal/docs/reference/torii-rapidoc.mdx
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-import RapiDocPanel from '@site/src/components/RapiDocPanel.jsx';
+importer RapiDocPanel depuis '@site/src/components/RapiDocPanel.jsx' ;
 
-# Torii API (RapiDoc)
+# API Torii (RapiDoc)
 
-`RapiDoc` offers a compact, documentation-first rendering of the same Torii
-OpenAPI document. Use it when you need a denser overview or read-only review of
-request/response models.
+`RapiDoc` offre un rendu compact et axé sur la documentation du même Torii.
+Document OpenAPI. Utilisez-le lorsque vous avez besoin d'un aperçu plus dense ou d'un examen en lecture seule de
+modèles de requête/réponse.
 
-## Usage tips
+## Conseils d'utilisation
 
-- Enter a bearer token to enable interactive calls. The value is forwarded as an
-  `X-TryIt-Auth` header and normalised by the proxy.
-- Configure `TRYIT_PROXY_PUBLIC_URL` when serving the portal so interactive
-  requests are routed through the staging proxy. The widget warns when the proxy
-  URL is missing.
-- Use the “OpenAPI snapshot” dropdown to load historical specs published by
-  `npm run sync-openapi`; the `Latest (tracked)` option always resolves to
+- Entrez un jeton au porteur pour activer les appels interactifs. La valeur est transmise sous forme de
+  En-tête `X-TryIt-Auth` et normalisé par le proxy.
+- Configurer `TRYIT_PROXY_PUBLIC_URL` lors de la desserte du portail de manière interactive
+  les demandes sont acheminées via le proxy intermédiaire. Le widget avertit lorsque le proxy
+  L'URL est manquante.
+- Utilisez la liste déroulante « Instantané OpenAPI » pour charger les spécifications historiques publiées par
+  `npm run sync-openapi` ; l'option `Latest (tracked)` résout toujours à
   `/openapi/torii.json`.
-- Combine with the “[Try it](/api/overview#try-it-sandbox-docs-3)” console when
-  working against staged gateways requiring the proxy.
+- Combinez avec la console « [Try it](/api/overview#try-it-sandbox-docs-3) » lorsque
+  travailler contre des passerelles par étapes nécessitant le proxy.
 
-<RapiDocPanel />

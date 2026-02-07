@@ -4,28 +4,30 @@ direction: ltr
 source: docs/portal/docs/norito/examples/register-and-mint.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-slug: /norito/examples/register-and-mint
-title: Зарегистрировать домен и выпустить активы
-description: Показывает создание доменов с разрешениями, регистрацию активов и детерминированный выпуск.
-source: crates/ivm/docs/examples/13_register_and_mint.ko
+babosa: /norito/examples/register-and-mint
+título: Зарегистрировать domен и выпустить активы
+descripción: Показывает создание доменов с разрешениями, регистрацию активов and детерминированный выпуск.
+fuente: crates/ivm/docs/examples/13_register_and_mint.ko
 ---
 
-Показывает создание доменов с разрешениями, регистрацию активов и детерминированный выпуск.
+Conecte los hogares con la configuración, el registro de activos y los controles predeterminados.
 
 ## Пошаговый обход реестра
 
-- Убедитесь, что аккаунт назначения (например `ih58...`) существует, повторяя фазу подготовки в каждом quickstart SDK.
-- Вызовите точку входа `register_and_mint`, чтобы создать определение актива ROSE и выпустить 250 единиц для Alice в одной транзакции.
-- Проверьте балансы через `client.request(FindAccountAssets)` или `iroha_cli ledger assets list --account ih58...`, чтобы подтвердить успешный выпуск.
+- Tenga en cuenta que esta cuenta de usuario (principal `ih58...`) está almacenada en el SDK de inicio rápido.
+- Utilice este vídeo `register_and_mint`, mantenga activada la activa ROSE y escriba 250 ediciones de Alice en una sola transmisión.
+- Asegúrese de que los equilibrios sean `client.request(FindAccountAssets)` o `iroha_cli ledger assets list --account ih58...`, para poder utilizar datos personales.
 
 ## Связанные руководства SDK
 
-- [Quickstart Rust SDK](/sdks/rust)
-- [Quickstart Python SDK](/sdks/python)
-- [Quickstart JavaScript SDK](/sdks/javascript)
+- [SDK de inicio rápido de Rust](/sdks/rust)
+- [SDK de Python de inicio rápido](/sdks/python)
+- [SDK de JavaScript de inicio rápido](/sdks/javascript)
 
 [Скачать исходник Kotodama](/norito-snippets/register-and-mint.ko)
 

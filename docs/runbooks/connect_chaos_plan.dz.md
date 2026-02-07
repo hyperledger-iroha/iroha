@@ -7,141 +7,137 @@ generator: scripts/sync_docs_i18n.py
 source_hash: b1d414173d2f43d403a6a1ba5cd59a645cb0b94f5765e69a00f7078b1e96b1cd
 source_last_modified: "2025-12-29T18:16:35.913527+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Connect Chaos & Fault Rehearsal Plan (IOS3 / IOS7)
+# ཟང་ཟིང་དང་ འཛོལ་བ་སྦྱོང་བརྡར་འཆར་གཞི་ (IOS3 / IOS7) མཐུད་དགོ།
 
-This playbook defines the repeatable chaos drills that satisfy the IOS3/IOS7
-roadmap action _“plan joint chaos rehearsal”_ (`roadmap.md:1527`). Pair it with
-the Connect preview runbook (`docs/runbooks/connect_session_preview_runbook.md`)
-when staging cross-SDK demos.
+འ་ནི་རྩེད་དེབ་འདི་གིས་ IOS3/IOS7 འདི་ བསྒྲུབ་ཚུགས་པའི་ བསྐྱར་ལོག་ཟང་ཟིང་སྦྱོང་བརྡར་ཚུ་ ངེས་འཛིན་འབདཝ་ཨིན།
+ལམ་གྱི་ས་ཁྲ་ _“Plan མཉམ་འབྲེལ་ཟང་ཟིང་སྦྱོང་བརྡར་”_ (`roadmap.md:1527`). དེ་དང་མཉམ་དུ་བསྡམས།
+མཐུད་ལམ་སྔོན་ལྟའི་རྒྱུག་དེབ་ (`docs/runbooks/connect_session_preview_runbook.md`)
+ཀོརསི་ཨེསི་ཌི་ཀེ་ བརྡ་སྟོན་གྱི་སྐབས།
 
-## Goals & Success Criteria
-- Exercise the shared Connect retry/back-off policy, offline queue limits, and
-  telemetry exporters under controlled faults without mutating production code.
-- Capture deterministic artefacts (`iroha connect queue inspect` output,
-  `connect.*` metrics snapshots, Swift/Android/JS SDK logs) so governance can
-  audit every drill.
-- Prove that wallets and dApps honour config changes (manifest drifts, salt
-  rotation, attestation failures) by surfacing the canonical `ConnectError`
-  category and redaction-safe telemetry events.
+## དམིགས་ཡུལ་དང་མཐར་འཁྱོལ་ཚད་གཞི།
+- རུབ་སྤྱོད་འབད་ཡོད་པའི་ མཐུད་ལམ་ལོག་ཚོད་བལྟ་/རྒྱབ་བསྐྱོར་སྲིད་བྱུས་ ཝེབ་གྱལ་ཚད་ཚུ་ལག་ལེན་འཐབ།
+  བཟོ་བསྐྲུན་གྱི་གསང་ཡིག་ཚུ་ འགྱུར་བཅོས་འབད་མ་དགོ་པར་ ཚད་འཛིན་འབད་བའི་ འཛོལ་བ་འོག་ལུ་ telemetry ཕྱིར་ཚོང་འཐབ་མི་ཚུ་ཨིན།
+- གཏན་འབེབས་བཟོ་ནིའི་ ཅ་རྙིང་ཚུ་ (`iroha connect queue inspect` ཐོན་འབྲས་,
+  `connect.*` མེ་ཊིགསི་པར་རིས་ཚུ་, སུའིཕཊི་/ཨེན་ཌོརཌི་/ཇེ་ཨེསི་ཨེསི་ཌི་ཀེ་དྲན་ཐོ་ཚུ་) དེ་འབདཝ་ལས་ གཞུང་སྐྱོང་ཅན།
+  དམག་སྦྱོང་ག་ར་རྩིས་ཞིབ་འབད།
+- དངུལ་ཁུག་དང་ ཌི་ཨེ་པི་ཨེསི་གུའི་གུས་བཏུད་རིམ་སྒྲིག་བསྒྱུར་བཅོས་ཚུ་ (མནར་གཅོད་ཅན་གྱི་ ཌིརཕཊི་ཚུ་, ཚྭ་ཁུངས།
+  འཁོར་སྐྱོད་དང་ བདེན་ཁུངས་ཀྱི་འཐུས་ཤོར་) གིས་ ཁྲིམས་ལུགས་ `ConnectError` འདི་ བརྒལ་ཏེ་ཨིན།
+  དབྱེ་ཁག་དང་ བསྐྱར་བཟོ་-ཉེན་སྲུང་ཡོད་པའི་ བརྒྱུད་འཕྲིན་ལས་རིམ།
 
-## Prerequisites
-1. **Environment bootstrap**
-   - Start the demo Torii stack: `scripts/ios_demo/start.sh --telemetry-profile full`.
-   - Launch at least one SDK sample (`examples/ios/NoritoDemoXcode/NoritoDemoXcode`,
-     `examples/ios/NoritoDemo`, Android `demo-connect`, JS `examples/connect`).
-2. **Instrumentation**
-   - Enable SDK diagnostics (`ConnectQueueDiagnostics`, `ConnectQueueStateTracker`,
-     `ConnectSessionDiagnostics` in Swift; `ConnectQueueJournal` + `ConnectQueueJournalTests`
-     equivalents in Android/JS).
-   - Ensure the CLI `iroha connect queue inspect --sid <sid> --metrics` resolves
-     the queue path produced by the SDK (`~/.iroha/connect/<sid>/state.json` and
+## སྔོན་འགྲོའི་ཆ་རྐྱེན།
+1. **མཐའ་འཁོར་བུཊི་སི་ཊརཔ་**།
+   - བརྡ་སྟོན་ Torii འགོ་བཙུགས།: `scripts/ios_demo/start.sh --telemetry-profile full`.
+   - ཉུང་མཐའ་ཨེསི་ཌི་ཀེ་དཔེ་ཚད་ (`examples/ios/NoritoDemoXcode/NoritoDemoXcode` འགོ་བཙུགས་ནི།
+     `examples/ios/NoritoDemo`, ཨེན་ཌོརཌི་ཨའི་༡༨ཨེན་ཨའི་༠༠༠༠༠༠༢༥ཨེགསི་, ཇེ་ཨེསི་ `examples/connect`).
+2. **instramentation**
+   - ཨེསི་ཌི་ཀེ་བརྟག་དཔྱད་ (`ConnectQueueDiagnostics`, `ConnectQueueStateTracker`, ལྕོགས་ཅན་བཟོ།
+     སུའིཕཊ་ནང་ `ConnectSessionDiagnostics`; `ConnectQueueJournal` + `ConnectQueueJournalTests`
+     Android/JS ནང་འདྲ་མཉམ་ཡོད།)
+   - སི་ཨེལ་ཨའི་ `iroha connect queue inspect --sid <sid> --metrics` འདི་བསལ་ནི་ངེས་གཏན་བཟོ།
+     ཨེསི་ཌི་ཀེ་ (Torii དང་ དང་ དང་ བར།
      `metrics.ndjson`).
-   - Wire telemetry exporters so the following time series are visible in
-     Grafana and via `scripts/swift_status_export.py telemetry`: `connect.queue_depth`,
+   - ཝའིར་ ཊེ་ལི་མི་ཊི་ཕྱིར་འདྲེན་འབད་མི་ཚུ་ འོག་གི་དུས་ཚོད་རིམ་སྒྲིག་ཚུ་ ནང་མཐོང་ཚུགས།
+     Grafana དང་ `scripts/swift_status_export.py telemetry`: `connect.queue_depth`, བརྒྱུད་དེ།
      `connect.queue_dropped_total`, `connect.reconnects_total`,
      `connect.resume_latency_ms`, `swift.connect.frame_latency`,
      `android.telemetry.redaction.salt_version`.
-3. **Evidence folders** – create `artifacts/connect-chaos/<date>/` and store:
-   - raw logs (`*.log`), metrics snapshots (`*.json`), dashboard exports
-     (`*.png`), CLI outputs, and PagerDuty IDs.
+3. **བདེན་དཔང་སྣོད་ཐོ་ཚུ་** – `artifacts/connect-chaos/<date>/` དང་ཚོང་ཁང་གསར་བསྐྲུན་འབད།
+   - རའུ་དྲན་ཐོ་ (`*.log`), མེ་ཊིགསི་པར་ལེན་ (`*.json`), ཌེཤ་བོརཌི་ཕྱིར་འདྲེན་ཚུ།
+     (`*.png`), སི་ཨེལ་ཨའི་ཨའུཊི་པུཊི་དང་ པེ་གར་ཌུཊི་ཨའི་ཌི་ཚུ།
 
-## Scenario Matrix
+## འཆར་གཞི།| ID | ཕཱོལ་ཊི་ | བཙུགས་ནིའི་གོ་རིམ་ | རེ་བ་ཡོད་པའི་བརྡ་རྟགས་ | སྒྲུབ་བྱེད་ |
+|--|-|---------------------------------------------------------- -------------------------
+| སི་༡ | WebSocket མེདཔ་ཐལ་ཏེ་ ལོག་སྟེ་མཐུད་དགོ། | ངོ་ཚབ་ཅིག་གི་རྒྱབ་ལས་ `/v1/connect/ws` བསྒྱིར་དགོ། (དཔེར་ན་ `kubectl -n demo port-forward svc/torii 18080:8080` + `toxiproxy-cli toxic add ... timeout`) ཡང་ན་ ཞབས་ཏོག་འདི་ (Torii གི་དོན་ལུ་ ≤༦༠s) གཞི་ཁྲམ་ཚུ་གཏང་བཞག་ནིའི་དོན་ལུ་ དངུལ་ཁུག་འདི་ བཀག་ཆ་འབད་དེ་ གློག་ཐག་ཚུ་ བཀང་དགོ། | `connect.reconnects_total` ཡར་འཕར་, `connect.resume_latency_ms` འཕར་ཚད་ དེ་འབདཝ་ད་ - བརླག་སྟོར་ཤོར་བའི་སྒོ་སྒྲིག་དོན་ལུ་ ཌེཤ་བོརཌི་མཆན་འགྲེལ་འབད་ཡོདཔ།- ལོག་སྟེ་ + ཆུ་བཏོན་འཕྲིན་དོན་ཚུ་ མཐུད་དེ་ཡོདཔ་ཨིན། |
+| C2 | Offline གྱལ་རིམ་བཤལ་ཆུ་/ TTL དུས་ཚོད་ | དཔེ་ཚད་འདི་ གྱལ་རིམ་ཆུང་ཆུང་གི་དོན་ལུ་ ཐབས་འཕྲུལ་ (Swift: `ConnectQueueJournal.Configuration(maxRecordsPerQueue: 4, maxBytesPerQueue: 4096, retentionInterval: 30)` `ConnectSessionDiagnostics` ནང་ལུ་ `ConnectSessionDiagnostics` ནང་ལུ་; Android/JS འདི་ མཐུན་སྒྲིག་ཅན་གྱི་བཟོ་བསྐྲུན་པ་ཚུ་ལག་ལེན་འཐབ་ཨིན།) དངུལ་ཁུག་འདི་ ≥2× `retentionInterval` གི་དོན་ལུ་ མཚམས་འཇོག་འབད། | `connect.queue_dropped_total{reason="overflow"}` དང་ `{reason="ttl"}` ཡར་སེང་ `connect.queue_depth` མཐོ་ཚད་གསརཔ་ནང་ མཐོ་སྒང་ SDKs ཁ་ཐོག་ `ConnectError.QueueOverflow(limit: 4)` (ཡང་ན་ `.QueueExpired`) `iroha connect queue inspect` གིས་ Torii གིས་ `warn/drop` ཆུ་རྟགས་ ༡༠༠% ལུ་སྟོནམ་ཨིན། | - མེ་ཊིག་གྱངས་ཁ་ཚུའི་ མེ་ཊིག་ གྱངས་ཁ་བརྐྱབ་ནིའི་ གསལ་གཞི་ བརྡ་སྟོན།- CLI JSON ཐོན་འབྲས་འདི་ བསྐྱར་ལོག་འབད་དོ་ཡོདཔ།- སོར་ཆུ/ཨེན་ཌོའིཌ་ ལོག སི་ནིཔ་ཊི་ `ConnectError` གྲལ་ཐིག་ཡོད་པའི་ snippet. |
+| C3 | ངོ་མཚར་ཅན་གྱི་ ཌིཕཊ་ / འཛུལ་ཞུགས་བཀག་ཆ་ | མཐུད་ལམ་གྱི་མངོན་རྟགས་འདི་ དངུལ་ཁུག་ཚུ་ལུ་བྱིན་ཡོདཔ་ཨིན། ༼དཔེར་ན་ `docs/connect_swift_ios.md` དཔེ་ཚད་ཀྱི་གསལ་སྟོན་ཡང་ན་ Torii འདི་ Grafana འདི་འགོ་བཙུགས་དོ་ཡོདཔ་དང་ འདྲ་བཤུས་འདི་ Torii ཡང་ན་ Grafana ཁྱད་པར་༽ ཌི་ཨེ་པི་གིས་ ཆ་འཇོག་འབད་ཞིནམ་ལས་ དངུལ་ཁུག་འདི་ སྲིད་བྱུས་བརྒྱུད་དེ་ ངོས་ལེན་མ་འབད་མི་ཚུ་ ངེས་གཏན་བཟོ། | Torii `HTTP 409` `/v1/connect/session` `manifest_mismatch` ལུ་ ལོག་ཐོབ་ཨིན། (I 18NI00000078X). | - Torii log exserpt ism མཐུན་སྒྲིག་བརྟག་དཔྱད་ལུ་སྟོན་མི་ དྲན་ཐོ་བཏོན་ཚད།- ཁ་ཐོག་འཛོལ་བ་གི་ཨེསི་ཌི་ཀེ་གསལ་གཞི་།- བརྟག་དཔྱད་ཀྱི་སྐབས་ལུ་ གྲལ་ཐིག་གཞི་ཁྲམ་ཚུ་བདེན་དཔང་འབད་མི་བཏུབ། |
+| C4 | གཙོ་བོ་འཁོར་སྐྱོད་ / ཚྭ་ཐོན་རིམ་ བམ་ | མཐུད་ལམ་ཚྭ་ཡང་ན་ཨེ་ཨི་ཨེ་ཌི་ལྡེ་མིག་འདི་བར་མཚམས་བར་མཚམས་བསྒྱིར། ཌིབ་བརྩེགས་བརྩེགས་ཚུ་ནང་ `CONNECT_SALT_VERSION=$((old+1))` དང་གཅིག་ཁར་ Torii ལོག་འགོ་བཙུགས། ཚྭ་བསྒྱིར་མ་ཚར་ཚུན་ཚོད་ དངུལ་ཁང་ཨོཕ་ལའིན་འདི་ ཨོཕ་ལའིན་འབད་བཞག་ཞིནམ་ལས་ ལོག་སྟེ་འགོ་བཙུགས་དགོ། | མི་ཚེའི་ལོ་རྒྱུས་འདི་ `ConnectError.Authorization.invalidSalt` དང་ཅིག་ཁར་ འཐུས་ཤོར་བྱུང་ཡོདཔ་ཨིན།,, བང་རིམ་ཚུ་ flush (dapp གིས་ འདྲ་མཛོད་འབད་ཡོད་པའི་གཞི་ཁྲམ་ཚུ་ `salt_version_mismatch` དང་ ཊེ་ལི་མི་ཊི་གིས་ `android.telemetry.redaction.salt_version` (Android) དང་ `swift.connect.session_event{event="salt_rotation"}` བཏོནམ་ཨིན། SID གསར་བསྐྲུན་གྱི་ཤུལ་ལས་ ལཱ་ཡུན་གཉིས་པ་ མཐར་འཁྱོལ་ཡོདཔ་ཨིན། | - ཌེཤ་བོརཌ་གི་མཆན་འགྲེལ་འདི་ ཚྭ་དུས་ཀྱི་ཧེ་མ་/ཤུལ་ལས་ཨིན།- ནུས་མེད་-ཚྭ་གི་འཛོལ་བ་དང་ དེ་གི་ཤུལ་ལས་ མཐར་འཁྱོལ་ཡོད་མི་ནང་བསྐྱོད་འབད།- `state=Stalled` འདི་ `state=Stalled` སྟོན་ཞིནམ་ལས་ དེ་གི་ཤུལ་ལས་ `state=Active`. || C5 | བདེན་དཔང་ / སྲོང་སྒྲོམ་འཐུས་ཤོར་ | Android གི་དངུལ་ཁུག་ནང་ `ConnectApproval` རིམ་སྒྲིག་འབད་དེ་ `attachments[]` + StrongBox གི་བདེན་དཔང་། བདེན་དཔང་འབད་མི་ སྲབ་འཁོར་ (`scripts/android_keystore_attestation.sh` with `--inject-failure strongbox-simulated`) ཡང་ན་ ཌི་ཨེཔ་ལུ་མ་སྤྲོད་པའི་ཧེ་མ་ ཇེ་ཨེསི་ཨོ་ཨེན་ དང་མཉམ་ཅིག་ལག་ལེན་འཐབ། | ཌེཔ་གིས་ `ConnectError.Authorization.invalidAttestation`, Torii དང་གཅིག་ཁར་ ཆ་འཇོག་འདི་ ངོས་ལེན་མ་འབད་བར་ འཐུས་ཤོར་གྱི་རྒྱུ་མཚན་ཚུ་ དྲན་ཐོ་བཀོདཔ་ཨིན། ཕྱིར་ཚོང་པ་ `connect.attestation_failed_total`, དང་ བང་རིམ་འདི་གིས་ ཉེས་ཅན་ཐོ་བཀོད་འདི་ གཙང་སྦྲ་འབདཝ་ཨིན། ལཱ་ཡུན་འདི་གསོན་པོ་སྦེ་བཞག་པའི་སྐབས་ འཛོལ་བ་འདི་སོར་བསྒྱུར་འབད། | - བཙུགས་ཡོད་པའི་འཐུས་ཤོར་ ID.- ཨེསི་ཌི་ཀེ་འཛོལ་བ་དྲན་ཐོ་ + ཊེ་ལི་མི་ཊི་ གྱངས་ཁ་བརྐྱབ་ནི།- གྱལ་རིམ་འདི་གིས་ གཞི་ཁྲམ་ངན་པ་འདི་བཏོན་གཏང་ཡོད་པའི་ སྒྲུབ་བྱེད་ (`recordsRemoved > 0`). |
 
-| ID | Fault | Injection steps | Expected signals | Evidence |
-|----|-------|-----------------|------------------|----------|
-| C1 | WebSocket outage & reconnect | Wrap `/v1/connect/ws` behind a proxy (e.g., `kubectl -n demo port-forward svc/torii 18080:8080` + `toxiproxy-cli toxic add ... timeout`) or temporarily block the service (`kubectl scale deploy/torii --replicas=0` for ≤60 s). Force the wallet to keep sending frames so offline queues fill. | `connect.reconnects_total` increments, `connect.resume_latency_ms` spikes but stays <1 s P95, queues enter `state=Draining` via `ConnectQueueStateTracker`. SDKs emit `ConnectError.Transport.reconnecting` once, then resume. | - `iroha connect queue inspect --sid <sid>` output showing non-zero `resume_attempts_total`.<br>- Dashboard annotation for outage window.<br>- Sample log excerpt with reconnect + drain messages. |
-| C2 | Offline queue overflow / TTL expiry | Patch the sample to shrink queue limits (Swift: instantiate `ConnectQueueJournal.Configuration(maxRecordsPerQueue: 4, maxBytesPerQueue: 4096, retentionInterval: 30)` inside `ConnectSessionDiagnostics`; Android/JS use corresponding constructors). Suspend the wallet for ≥2× `retentionInterval` while the dApp keeps enqueuing requests. | `connect.queue_dropped_total{reason="overflow"}` and `{reason="ttl"}` increment, `connect.queue_depth` plateaus at the new limit, SDKs surface `ConnectError.QueueOverflow(limit: 4)` (or `.QueueExpired`). `iroha connect queue inspect` shows `state=Overflow` with `warn/drop` watermarks at 100%. | - Screenshot of the metric counters.<br>- CLI JSON output capturing overflow.<br>- Swift/Android log snippet containing the `ConnectError` line. |
-| C3 | Manifest drift / admission rejection | Tamper with the Connect manifest served to wallets (e.g., modify `docs/connect_swift_ios.md` sample manifest, or start Torii with `--connect-manifest-path` pointing at a copy where `chain_id` or `permissions` differ). Have the dApp request approval and ensure the wallet rejects via policy. | Torii returns `HTTP 409` for `/v1/connect/session` with `manifest_mismatch`, SDKs emit `ConnectError.Authorization.manifestMismatch(manifestVersion)`, telemetry raises `connect.manifest_mismatch_total`, and queues remain empty (`state=Idle`). | - Torii log excerpt showing mismatch detection.<br>- SDK screenshot of surfaced error.<br>- Metrics snapshot proving no queued frames during the test. |
-| C4 | Key rotation / salt-version bump | Rotate the Connect salt or AEAD key mid-session. In dev stacks, restart Torii with `CONNECT_SALT_VERSION=$((old+1))` (mirrors the Android redaction salt test in `docs/source/sdk/android/telemetry_schema_diff.md`). Keep the wallet offline until salt rotation completes, then resume. | First resume attempt fails with `ConnectError.Authorization.invalidSalt`, queues flush (dApp drops cached frames with reason `salt_version_mismatch`), telemetry emits `android.telemetry.redaction.salt_version` (Android) and `swift.connect.session_event{event="salt_rotation"}`. Second session after SID refresh succeeds. | - Dashboard annotation with salt epoch before/after.<br>- Logs containing the invalid-salt error and subsequent success.<br>- `iroha connect queue inspect` output showing `state=Stalled` followed by fresh `state=Active`. |
-| C5 | Attestation / StrongBox failure | On Android wallets, configure `ConnectApproval` to include `attachments[]` + StrongBox attestation. Use the attestation harness (`scripts/android_keystore_attestation.sh` with `--inject-failure strongbox-simulated`) or tamper with the attestation JSON before handing to the dApp. | DApp rejects the approval with `ConnectError.Authorization.invalidAttestation`, Torii logs the failure reason, exporters bump `connect.attestation_failed_total`, and the queue purges the offending entry. Swift/JS dApps log the error while keeping the session alive. | - Harness log with injected failure ID.<br>- SDK error log + telemetry counter capture.<br>- Evidence that the queue removed the bad frame (`recordsRemoved > 0`). |
+## ལས་རིམ།
 
-## Scenario Details
-
-### C1 — WebSocket outage & reconnect
-1. Wrap Torii behind a proxy (toxiproxy, Envoy, or a `kubectl port-forward`) so
-   you can toggle availability without killing the entire node.
-2. Trigger a 45 s outage:
+### C1 — ཝེབ་སོ་ཀེཊི་མེདཔ་དང་ ལོག་མཐུད།
+1. པོརོ་སི་ (དུག་རྫས་ Envoy, ཡང་ན་ `kubectl port-forward`) དེ་བཞིན་ ལས་ Torii དེ་ གྱི་རྒྱབ་ལས་ བསྡམས།
+   ཁྱོད་ཀྱིས་ མཐུད་མཚམས་ཆ་མཉམ་མ་བསད་པར་ འཐོབ་ཚུགསཔ་ལས་ སོར་བསྒྱུར་འབད་ཚུགས།
+2. ཊི་རི་གར་ a 45s བརླག་པ།
    ```bash
    toxiproxy-cli toxic add connect-ws --type timeout --toxicity 1.0 --attribute timeout=45000
    sleep 45 && toxiproxy-cli toxic remove connect-ws --toxic timeout
    ```
-3. Observe telemetry dashboards and `scripts/swift_status_export.py telemetry
-   --json-out artifacts/connect-chaos/<date>/c1_metrics.json`.
-4. Dump queue state immediately after the outage:
+3. བརྒྱུད་འཕྲིན་བརྒྱུད་འཕྲིན་གྱི་བརྡ་འཕྲིན་དང་ `ཡིག་གཟུགས་/swift_status_export.py ཊེ་ལི་མི་ཊི་རི།
+   --json-out ཅ་མཛོད་/མཐུད་ལམ་-ཟང་ཟིང་//c1_metrics.json`.
+༤ བཏོན་གཏང་པའི་ཤུལ་ལས་ དེ་འཕྲོ་ལས་ བཀོ་བཞག་པའི་གནས་སྟངས་:
    ```bash
    iroha connect queue inspect --sid "$SID" --metrics > artifacts/connect-chaos/<date>/c1_queue.txt
    ```
-5. Success = a single reconnect attempt, bounded queue growth, and automatic
-   drain after the proxy recovers.
+5. མཐར་འཁྱོལ། = བསྐྱར་མཐུད་དཔའ་བཅམ་གཅིག་དང་ མཐའ་མཚམས་ཀྱི་གྱལ་འཕེལ་ དེ་ལས་ རང་འགུལ་
+   ཆུ་བཤལ་འདི་ ངོ་ཚབ་སླར་གསོ་འབད་བའི་ཤུལ་ལས་.
 
-### C2 — Offline queue overflow / TTL expiry
-1. Shrink queue thresholds in local builds:
-   - Swift: update the `ConnectQueueJournal` initializer inside your sample
-     (e.g., `examples/ios/NoritoDemoXcode/NoritoDemoXcode/ContentView.swift`)
-     to pass `ConnectQueueJournal.Configuration(maxRecordsPerQueue: 4, maxBytesPerQueue: 4096, retentionInterval: 30)`.
-   - Android/JS: pass the equivalent config object when constructing
-     `ConnectQueueJournal`.
-2. Suspend the wallet (simulator background or device airplane mode) for ≥60 s
-   while the dApp issues `ConnectClient.requestSignature(...)` calls.
-3. Use `ConnectQueueDiagnostics`/`ConnectQueueStateTracker` (Swift) or the JS
-   diagnostics helper to export the evidence bundle (`state.json`, `journal/*.to`,
+### C2 — གྱལ་རིམ་གྱལ་རིམ་ / ཊི་ཊི་ཨེལ་ ཕྱིར་འཐོན།
+༡ ས་གནས་ཀྱི་བཟོ་བསྐྲུན་ནང་ གྱལ་རིམ་ཚད་གཞི་ཚུ་ ཆུང་ཀུ་བཟོཝ་ཨིན།
+   - Swift: ཁྱོད་རའི་དཔེ་ཚད་ནང་ལུ་ `ConnectQueueJournal` འགོ་བཙུགས་མི་འདི་དུས་མཐུན་བཟོ་ནི།
+     (དཔེར་ན་ `examples/ios/NoritoDemoXcode/NoritoDemoXcode/ContentView.swift`)
+     `ConnectQueueJournal.Configuration(maxRecordsPerQueue: 4, maxBytesPerQueue: 4096, retentionInterval: 30)` ལུ་སྤྲོད་ནི།
+   - Android/JS: མཉམ་སྒྲིག་རིམ་སྒྲིག་དངོས་པོ་འདི་བཟོ་བསྐྲུན་འབད་བའི་སྐབས་ ཆ་འཇོག་འབད།
+     Torii.
+2. ≥60s གི་དོན་ལུ་ དངུལ་ཁུག་ (ཚོད་བརྟག་རྒྱབ་ཁུངས་ཡང་ན་ ཐབས་འཕྲུལ་གྱི་གནམ་གྲུ་ཐབས་ལམ་) འདི་ མཚམས་འཇོག་འབད།
+   dApp གིས་ `ConnectClient.requestSignature(...)` འབོད་བརྡ་ཚུ།
+3. Grafana/`ConnectQueueStateTracker` (Swift) ཡང་ན་ JS ལག་ལེན་འཐབ།
+   བརྟག་དཔྱད་རོགས་སྐྱོར་གྱི་གྲོགས་རམ་པ་ (`state.json`, `journal/*.to`,
    `metrics.ndjson`).
-4. Success = overflow counters increment, SDK surfaces `ConnectError.QueueOverflow`
-   once, and the queue recovers after the wallet resumes.
+4. མཐར་ཕྱིན་ = འཕྱུར་བའི་གྱངས་ཁ་ཡར་སེང་།, SDK ཁ་ཐོག་ `ConnectError.QueueOverflow`
+   ཚར་གཅིག་, དང་ བང་རིམ་འདི་ དངུལ་ཁུག་ལོག་སྟེ་འགོ་བཙུགས་པའི་ཤུལ་ལས་ ལོག་ཐོབ་ཨིན།
 
-### C3 — Manifest drift / admission rejection
-1. Make a copy of the admission manifest, e.g.:
+### C3 — གད་སྙིགས་ཤེས་རྟོགས་/ འཛུལ་ཞུགས་བཀག་ཆ།
+༡ འཛུལ་ཞུགས་ཀྱི་གསལ་སྟོན་གྱི་འདྲ་བཤུས་རྐྱབ། དཔེར་ན།
    ```bash
    cp configs/connect_manifest.json /tmp/manifest_drift.json
    sed -i '' 's/"chain_id": ".*"/"chain_id": "bogus-chain"/' /tmp/manifest_drift.json
    ```
-2. Launch Torii with `--connect-manifest-path /tmp/manifest_drift.json` (or
-   update the docker compose/k8s config for the drill).
-3. Attempt to start a session from the wallet; expect HTTP 409.
-4. Capture Torii + SDK logs plus `connect.manifest_mismatch_total` from
-   the telemetry dashboard.
-5. Success = rejection without queue growth, plus the wallet displays the shared
-   taxonomy error (`ConnectError.Authorization.manifestMismatch`).
-
-### C4 — Key rotation / salt bump
-1. Record the current salt version from telemetry:
+2. `--connect-manifest-path /tmp/manifest_drift.json` དང་བཅས་ Torii འགོ་བཙུགས་ཡོད།
+   དམག་སྦྱོང་གི་དོན་ལུ་ ཌོག་ཀར་ ཀོམ་སི/ཀེ་༨ རིམ་སྒྲིག་འདི་དུས་མཐུན་བཟོ་ནི།)།
+༣ དངུལ་ཁུག་ལས་ ལཱ་ཡུན་འགོ་བཙུགས་ནི་གི་ དཔའ་བཅམ་དགོ། རེ་བ་ HTTP 409.
+4. ལས་ Torii + SDK དྲན་ཐོ་ཚུ་ , དང་ `connect.manifest_mismatch_total` ལས་ ལས་
+   ཊེ་ལི་མི་ཊི་ ཌེཤ་བོརཌ།
+5. མཐར་ཕྱིན་ = གྱལ་རིམ་ཡར་འཕར་མེད་པར་བཀག་འགོག་དང་ དངུལ་ཁུག་གིས་ བརྗེ་སོར་འདི་བཀྲམ་སྟོན་འབདཝ་ཨིན།
+   ཊེག་ཊ་ནོ་མི་འཛོལ་བ། (`ConnectError.Authorization.manifestMismatch`).### C4 — ལྡེ་མིག་འཁོར་སྐྱོད་/ ཚྭ་བླུགས།
+༡ ད་ལྟོའི་ཚྭ་ཐོན་རིམ་འདི་ ཊེ་ལི་མི་ཊི་རི་ལས་ཐོ་བཀོད་འབད།
    ```bash
    scripts/swift_status_export.py telemetry --json-out artifacts/connect-chaos/<date>/c4_before.json
    ```
-2. Restart Torii with a new salt (`CONNECT_SALT_VERSION=$((OLD+1))` or update the
-   config map). Keep the wallet offline until the restart completes.
-3. Resume the wallet; the first resume should fail with an invalid-salt error
-   and `connect.queue_dropped_total{reason="salt_version_mismatch"}` increments.
-4. Force the app to drop cached frames by deleting the session directory
-   (`rm -rf ~/.iroha/connect/<sid>` or the platform-specific cache clear), then
-   restart the session with fresh tokens.
-5. Success = telemetry shows the salt bump, the invalid resume event is logged
-   once, and the next session succeeds without manual intervention.
+2. Torii ཚྭ་གསརཔ་ (`CONNECT_SALT_VERSION=$((OLD+1))` ཡང་ན་ དུས་མཐུན་བཟོ་ནི།
+   རིམ་སྒྲིག་ས་ཁྲ་)། ལོག་འགོ་བཙུགས་མ་ཚུགས་ཚུན་ཚོད་ དངུལ་ཁུག་འདི་ ཨོཕ་ལའིན་འདི་བཞག་དགོ།
+༣ དངུལ་ཁུག་འདི་ལོག་སྟེ་འགོ་བཙུགས། ཀླད་ཀོར་གྱི་འཛོལ་བ་དང་གཅིག་ཁར་ མི་ཚེའི་ལོ་རྒྱུས་འགོ་དང་པ་འདི་ འཐུས་ཤོར་བྱུང་དགོ།
+   དང་ `connect.queue_dropped_total{reason="salt_version_mismatch"}` ཡར་སེང་།
+༤ ལཱ་ཡུན་སྣོད་ཐོ་བཏོན་གཏང་ཐོག་ལས་ འདྲ་མཛོད་གཞི་ཁྲམ་ཚུ་བཀོག་བཞག་ནི་ལུ་ གློག་རིམ་འདི་བཙན་ཤེད་འབད།
+   (`rm -rf ~/.iroha/connect/<sid>` ཡང་ན་ སྟེགས་བུ་དམིགས་བསལ་གྱི་འདྲ་མཛོད་གསལ་པོ་) དང་།
+   ཊོ་ཀེན་གསརཔ་ཚུ་དང་གཅིག་ཁར་ ལཱ་ཡུན་འདི་ ལོག་འགོ་བཙུགས།
+༥ མཐར་འཁྱོལ་ = ཊེ་ལི་མི་ཊི་གིས་ ཚྭ་བམ་སྟོན་ཏེ་ ནུས་མེད་ཀྱི་ མི་ཚེའི་བྱུང་རིམ་འདི་ ནང་བསྐྱོད་འབད་ཡོདཔ་ཨིན།
+   ཚར་གཅིག་, དང་ ཤུལ་མའི་དུས་ཚོད་འདི་ ལག་ཐོག་ལས་ བར་འཛུལ་མ་འབད་བར་ མཐར་འཁྱོལ་འབྱུང་འོང་།
 
-### C5 — Attestation / StrongBox failure
-1. Generate an attestation bundle using `scripts/android_keystore_attestation.sh`
-   (set `--inject-failure strongbox-simulated` to flip the signature bit).
-2. Have the wallet attach this bundle via its `ConnectApproval` API; the dApp
-   should validate and reject the payload.
-3. Verify telemetry (`connect.attestation_failed_total`, Swift/Android incident
-   metrics) and ensure the queue dropped the poisoned entry.
-4. Success = rejection is isolated to the bad approval, queues stay healthy,
-   and the attestation log is stored with the drill evidence.
+### C5 — བདེན་དཔང་ / StrongBox འཐུས་ཤོར་
+1. `scripts/android_keystore_attestation.sh` ལག་ལེན་འཐབ་སྟེ་ བདེན་དཔང་བང་སྒྲིག་བཟོ་ནི།
+   (མིང་རྟགས་བིཊི་འདི་ གཡོག་བཀོལ་ནིའི་དོན་ལུ་ `--inject-failure strongbox-simulated` གཞི་སྒྲིག་འབད།)
+2. དངུལ་ཁུག་འདི་ `ConnectApproval` API བརྒྱུད་དེ་ བང་རིམ་འདི་ མཉམ་སྦྲགས་འབད་བཅུག། ཌི་ཨེ་པི་
+   བདེན་དཔྱད་འབད་དེ་ འབབ་ཁུངས་འདི་ ངོས་ལེན་མ་འབད་བར་བཞག་དགོ།
+3. ཊེ་ལི་མི་ཊི་རི་ (`connect.attestation_failed_total`, སུའིཕཊི་/ཨེན་ཌོའིཌ་བྱུང་རྐྱེན་ བདེན་དཔྱད་འབད།
+   metrics) དང་ གྱལ་རིམ་གྱིས་ དུག་ཅན་གྱི་འཛུལ་སྒོ་འདི་ བཀོག་བཞག་ཡོདཔ་ངེས་གཏན་བཟོ།
+༤ མཐར་འཁྱོལ་ = ཆ་འཇོག་ངན་པ་ལུ་བཀག་ཆ་འབད་ནི་འདི་ ཟུར་ཐོ་ཚུ་ གསོ་བའི་ཐོག་ལུ་སྡོད་དོ་ཡོདཔ་ཨིན།
+   དང་ བདེན་ཁུངས་དྲན་དེབ་འདི་ དམག་སྦྱོང་སྒྲུབ་བྱེད་དང་གཅིག་ཁར་ གསོག་འཇོག་འབད་ཡོདཔ་ཨིན།
 
-## Evidence Checklist
-- `artifacts/connect-chaos/<date>/c*_metrics.json` exports from
+## བདེན་དཔང་དཔྱད་གཞི།
+- `artifacts/connect-chaos/<date>/c*_metrics.json` ལས་ཕྱིར་འདྲེན་འབདཝ་ཨིན།
   `scripts/swift_status_export.py telemetry`.
-- CLI outputs (`c*_queue.txt`) from `iroha connect queue inspect`.
-- SDK + Torii logs with timestamps and SID hashes.
-- Dashboard screenshots with annotations for each scenario.
-- PagerDuty / incident IDs if Sev 1/2 alerts fired.
+- CLI ཐོན་འབྲས་ (`c*_queue.txt`) ལས་ `iroha connect queue inspect`.
+- ཨེསི་ཌི་ཀེ་ + Torii དུས་ཚོད་མཚོན་རྟགས་དང་ ཨེསི་ཨའི་ཌི་ཧ་ཤེ་ཚུ་དང་གཅིག་ཁར་ དྲན་ཐོ་ཚུ།
+- གནས་སྟངས་རེ་རེ་གི་དོན་ལུ་ ཌེཤ་བོརཌི་གསལ་གཞི་པར་བཏབ་ནི།
+- PagerDuty / བྱུང་རྐྱེན་ IDs ཚུ་ Sev1/2 ཉེན་བརྡ་ཚུ་ བཏོན་བཏང་པ་ཅིན་.
 
-Completing the full matrix once per quarter satisfies the roadmap gate and
-shows that Swift/Android/JS Connect implementations respond deterministically
-across the highest-risk failure modes.
+བཞི་ཆ་རེ་ལུ་ཚར་གཅིག་ མེ་ཊིགསི་ཆ་ཚང་མཇུག་བསྡུ་མི་འདི་གིས་ ལམ་གྱི་སྒོ་ར་འདི་ གྲུབ་ཚུགསཔ་ཨིན།
+Swift/Android/JS མཐུད་སྦྱོར་ཚུ་གིས་ མཐུད་ལམ་གྱི་ལག་ལེན་ཚུ་གིས་ གཏན་འབེབས་སྦེ་ ལན་རྐྱབ་ཡོདཔ་སྟོནམ་ཨིན།
+ཉེན་ཁ་མཐོ་ཤོས་འཐུས་ཤོར་ཐབས་ལམ་ཚུལ།

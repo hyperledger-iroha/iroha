@@ -4,62 +4,60 @@ direction: ltr
 source: docs/portal/docs/devportal/preview-feedback/w0/summary.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: preview-feedback-w0-summary
-title: Resumen de feedback de mitad de W0
-sidebar_label: Feedback W0 (mitad)
-description: Puntos de control, hallazgos y acciones de mitad de ola para la ola de preview de mantenedores core.
+identifiant : aperçu-feedback-w0-summary
+titre : Résumé des commentaires de la mitad de W0
+sidebar_label : Commentaires W0 (mitad)
+description: Points de contrôle, hallazgos et actions de mitad de ola para la ola de preview de mantenedores core.
 ---
 
-| Item | Detalles |
+| Article | Détails |
 | --- | --- |
-| Ola | W0 - Mantenedores core |
-| Fecha del resumen | 2025-03-27 |
-| Ventana de revision | 2025-03-25 -> 2025-04-08 |
-| Participantes | docs-core-01, sdk-rust-01, sdk-js-01, sorafs-ops-01, observability-01 |
-| Tag de artefacto | `preview-2025-03-24` |
+| Ola | W0 - Noyau Mantenedores |
+| Fecha del CV | 2025-03-27 |
+| Ventana de révision | 2025-03-25 -> 2025-04-08 |
+| Participants | docs-core-01, sdk-rust-01, sdk-js-01, sorafs-ops-01, observabilité-01 |
+| Étiquette d'artefact | `preview-2025-03-24` |
 
-## Destacados
+## Descados
 
-1. **Flujo de checksum** - Todos los revisores confirmaron que `scripts/preview_verify.sh`
-   tuvo exito contra el par descriptor/archivo compartido. No se requirieron
-   overrides manuales.
-2. **Feedback de navegacion** - Se registraron dos problemas menores de orden del sidebar
-   (`docs-preview/w0 #1-#2`). Ambos se asignaron a Docs/DevRel y no bloquean la
+1. **Flujo de checksum** - Tous les réviseurs confirment que `scripts/preview_verify.sh`
+   tuvo exito contra el par descriptor/archivo compartimento. Non requis
+   remplace les manuels.
+2. **Feedback de navigation** - Vous enregistrez deux problèmes mineurs dans l'ordre de la barre latérale
+   (`docs-preview/w0 #1-#2`). Ambos est attribué à Docs/DevRel et ne bloque pas le
    ola.
-3. **Paridad de runbooks de SoraFS** - sorafs-ops-01 pidio enlaces cruzados mas claros
-   entre `sorafs/orchestrator-ops` y `sorafs/multi-source-rollout`. Se abrio un
-   issue de seguimiento; se atendera antes de W1.
-4. **Revision de telemetria** - observability-01 confirmo que `docs.preview.integrity`,
-   `TryItProxyErrors` y los logs del proxy Try-it se mantuvieron en verde; no se
-   dispararon alertas.
+3. **Parité des runbooks de SoraFS** - sorafs-ops-01 pidio enlace cruzados mas claros
+   entre `sorafs/orchestrator-ops` et `sorafs/multi-source-rollout`. Se ouvrir un
+   issue de seguimiento; il sera présent avant la W1.
+4. **Révision de télémétrie** - observabilité-01 confirme que `docs.preview.integrity`,
+   `TryItProxyErrors` et les journaux du proxy Essayez-le en vert ; non
+   alertes disparates.
 
-## Acciones
-
-| ID | Descripcion | Responsable | Estado |
+## Actions| ID | Description | Responsable | État |
 | --- | --- | --- | --- |
-| W0-A1 | Reordenar entradas del sidebar del devportal para destacar docs enfocados en reviewers (`preview-invite-*` agrupados). | Docs-core-01 | Completado - el sidebar ahora lista los docs de reviewers de forma contigua (`docs/portal/sidebars.js`). |
-| W0-A2 | Agregar enlace cruzado explicito entre `sorafs/orchestrator-ops` y `sorafs/multi-source-rollout`. | Sorafs-ops-01 | Completado - cada runbook ahora enlaza al otro para que los operadores vean ambas guias durante rollouts. |
-| W0-A3 | Compartir snapshots de telemetria + paquete de queries con el tracker de gobernanza. | Observability-01 | Completado - paquete adjunto a `DOCS-SORA-Preview-W0`. |
+| W0-A1 | Réorganisez les entrées de la barre latérale du portail de développement pour que les documents soient mis en évidence et les réviseurs (`preview-invite-*` agrégés). | Docs-core-01 | Complété - la barre latérale répertorie maintenant les documents des réviseurs de forme continue (`docs/portal/sidebars.js`). |
+| W0-A2 | Ajouter le lien croisé explicitement entre `sorafs/orchestrator-ops` et `sorafs/multi-source-rollout`. | Sorafs-ops-01 | Terminé - chaque runbook est maintenant affiché à l'autre pour que les opérateurs puissent apporter des conseils lors des déploiements. |
+| W0-A3 | Partagez des instantanés de télémétrie + des paquets de requêtes avec le tracker de gouvernance. | Observabilité-01 | Complété - paquet complémentaire au `DOCS-SORA-Preview-W0`. |
 
-## Resumen de cierre (2025-04-08)
+## Résumé de carrière (2025-04-08)
 
-- Los cinco revisores confirmaron la finalizacion, limpiaron builds locales y salieron de la
-  ventana de preview; las revocaciones de acceso quedaron registradas en `DOCS-SORA-Preview-W0`.
-- No hubo incidentes ni alertas durante la ola; los dashboards de telemetria se mantuvieron
-  en verde todo el periodo.
-- Las acciones de navegacion + enlaces cruzados (W0-A1/A2) estan implementadas y reflejadas en
-  los docs de arriba; la evidencia de telemetria (W0-A3) esta adjunta al tracker.
-- Paquete de evidencia archivado: screenshots de telemetria, acuses de invitacion y este
-  resumen estan enlazados desde el issue del tracker.
+- Les cinq réviseurs confirment la finalisation, limpiaron builds locales et salieron de la
+  fenêtre d'aperçu ; les révocations d'accès quedaron enregistrées en `DOCS-SORA-Preview-W0`.
+- Aucun incident hubo ni alerte pendant la journée ; les tableaux de bord de télémétrie se mantuvieron
+  en vert toute la période.
+- Les actions de navigation + liens croisés (W0-A1/A2) sont mises en œuvre et réfléchies
+  les documents de arriba ; la preuve de télémétrie (W0-A3) est ajoutée au tracker.
+- Paquet de preuves archivées : captures d'écran de télémétrie, accusés d'invitation et este
+  reprendre estan enlazados depuis le numéro du tracker.
 
-## Siguientes pasos
+## Suivant pasos- Implémenter les éléments d'action de W0 avant d'ouvrir W1.
+- Obtenir une approbation légale et un emplacement de staging pour le proxy, puis suivre les étapes de
+  contrôle en amont de l'ola des partenaires détaillé dans le [flux d'invitation d'aperçu] (../../preview-invite-flow.md).
 
-- Implementar los action items de W0 antes de abrir W1.
-- Obtener aprobacion legal y un slot de staging para el proxy, luego seguir los pasos de
-  preflight de la ola de partners detallados en el [preview invite flow](../../preview-invite-flow.md).
-
-_Este resumen esta enlazado desde el [preview invite tracker](../../preview-invite-tracker.md) para
-mantener el roadmap DOCS-SORA trazable._
+_Ce résumé est affiché à partir du [traqueur d'invitation d'aperçu](../../preview-invite-tracker.md) pour
+maintenir la feuille de route DOCS-SORA tratable._

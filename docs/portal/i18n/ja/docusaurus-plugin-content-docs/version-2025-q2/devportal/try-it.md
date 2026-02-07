@@ -4,60 +4,62 @@ direction: ltr
 source: docs/portal/docs/devportal/try-it.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Try It sandbox
+# サンドボックスを試してみる
 
-The developer portal ships an optional “Try it” console so you can call Torii
-endpoints without leaving the documentation. The console relays requests
-through the bundled proxy so browsers can bypass CORS limits while still
-enforcing rate limits and authentication.
+開発者ポータルにはオプションの「Try it」コンソールが同梱されているため、Torii を呼び出すことができます。
+ドキュメントを離れることなくエンドポイントを確認できます。コンソールはリクエストを中継します
+バンドルされたプロキシを経由するため、ブラウザは CORS 制限を回避できます。
+レート制限と認証を強制します。
 
-## Prerequisites
+## 前提条件
 
-- Node.js 18.18 or newer (matches the portal build requirements)
-- Network access to a Torii staging environment
-- A bearer token that can call the Torii routes you plan to exercise
+- Node.js 18.18 以降 (ポータルのビルド要件に一致)
+- Torii ステージング環境へのネットワーク アクセス
+- 実行する予定の Torii ルートを呼び出すことができるベアラー トークン
 
-All proxy configuration is done through environment variables. The table below
-lists the most important knobs:
+すべてのプロキシ構成は環境変数を通じて行われます。下の表
+最も重要なノブをリストします。
 
-| Variable | Purpose | Default |
+|変数 |目的 |デフォルト |
 | --- | --- | --- |
-| `TRYIT_PROXY_TARGET` | Base Torii URL that the proxy forwards requests to | **Required** |
-| `TRYIT_PROXY_LISTEN` | Listen address for local development (format `host:port` or `[ipv6]:port`) | `127.0.0.1:8787` |
-| `TRYIT_PROXY_ALLOWED_ORIGINS` | Comma-separated list of origins that may call the proxy | `http://localhost:3000` |
-| `TRYIT_PROXY_CLIENT_ID` | Identifier placed in `X-TryIt-Client` for every upstream request | `docs-portal` |
-| `TRYIT_PROXY_BEARER` | Default bearer token forwarded to Torii | _empty_ |
-| `TRYIT_PROXY_ALLOW_CLIENT_AUTH` | Allow end users to supply their own token via `X-TryIt-Auth` | `0` |
-| `TRYIT_PROXY_MAX_BODY` | Maximum request body size (bytes) | `1048576` |
-| `TRYIT_PROXY_TIMEOUT_MS` | Upstream timeout in milliseconds | `10000` |
-| `TRYIT_PROXY_RATE_LIMIT` | Requests allowed per rate window per client IP | `60` |
-| `TRYIT_PROXY_RATE_WINDOW_MS` | Sliding window for rate limiting (ms) | `60000` |
-| `TRYIT_PROXY_METRICS_LISTEN` | Optional listen address for the Prometheus-style metrics endpoint (`host:port` or `[ipv6]:port`) | _empty (disabled)_ |
-| `TRYIT_PROXY_METRICS_PATH` | HTTP path served by the metrics endpoint | `/metrics` |
+| `TRYIT_PROXY_TARGET` |ベース Torii プロキシがリクエストを転送する URL | **必須** |
+| `TRYIT_PROXY_LISTEN` |ローカル開発用のリッスン アドレス (形式 `host:port` または `[ipv6]:port`) | `127.0.0.1:8787` |
+| `TRYIT_PROXY_ALLOWED_ORIGINS` |プロキシを呼び出すことができるオリジンのカンマ区切りのリスト | `http://localhost:3000` |
+| `TRYIT_PROXY_CLIENT_ID` |すべてのアップストリーム要求に対して `X-TryIt-Client` に配置される識別子 | `docs-portal` |
+| `TRYIT_PROXY_BEARER` |デフォルトのベアラー トークンが Torii に転送されました | _空_ |
+| `TRYIT_PROXY_ALLOW_CLIENT_AUTH` |エンド ユーザーが `X-TryIt-Auth` 経由で独自のトークンを提供できるようにする | `0` |
+| `TRYIT_PROXY_MAX_BODY` |リクエスト本文の最大サイズ (バイト) | `1048576` |
+| `TRYIT_PROXY_TIMEOUT_MS` |アップストリームのタイムアウト (ミリ秒) | `10000` |
+| `TRYIT_PROXY_RATE_LIMIT` |クライアント IP ごとのレート ウィンドウごとに許可されるリクエスト | `60` |
+| `TRYIT_PROXY_RATE_WINDOW_MS` |レート制限のスライディング ウィンドウ (ミリ秒) | `60000` |
+| `TRYIT_PROXY_METRICS_LISTEN` | Prometheus スタイルのメトリクス エンドポイントのオプションのリッスン アドレス (`host:port` または `[ipv6]:port`) | _空 (無効)_ |
+| `TRYIT_PROXY_METRICS_PATH` |メトリクス エンドポイントによって提供される HTTP パス | `/metrics` |
 
-The proxy also exposes `GET /healthz`, returns structured JSON errors, and
-redacts bearer tokens from log output.
+プロキシはまた、`GET /healthz` を公開し、構造化された JSON エラーを返します。
+ログ出力からベアラー トークンを編集します。
 
-Enable `TRYIT_PROXY_ALLOW_CLIENT_AUTH=1` when exposing the proxy to docs users so the Swagger and
-RapiDoc panels can forward user-supplied bearer tokens. The proxy still enforces rate limits,
-redacts credentials, and records whether a request used the default token or a per-request override.
-Set `TRYIT_PROXY_CLIENT_ID` to the label you want sent as `X-TryIt-Client`
-(defaults to `docs-portal`). The proxy trims and validates caller-supplied
-`X-TryIt-Client` values, falling back to this default so staging gateways can
-audit provenance without correlating browser metadata.
+プロキシをドキュメント ユーザーに公開するときに `TRYIT_PROXY_ALLOW_CLIENT_AUTH=1` を有効にすると、Swagger と
+RapiDoc パネルは、ユーザーが指定したベアラー トークンを転送できます。プロキシは引き続きレート制限を適用します。
+資格情報を編集し、リクエストでデフォルトのトークンが使用されたか、リクエストごとのオーバーライドが使用されたかを記録します。
+`TRYIT_PROXY_CLIENT_ID` を、`X-TryIt-Client` として送信するラベルに設定します。
+(デフォルトは `docs-portal`)。プロキシは、呼び出し元が指定した値をトリミングして検証します。
+`X-TryIt-Client` 値。このデフォルトにフォールバックするため、ステージング ゲートウェイは
+ブラウザーのメタデータを関連付けることなく来歴を監査します。
 
-## Start the proxy locally
+## プロキシをローカルで開始する
 
-Install dependencies the first time you set up the portal:
+ポータルを初めてセットアップするときに依存関係をインストールします。
 
 ```bash
 cd docs/portal
 npm install
 ```
 
-Run the proxy and point it at your Torii instance:
+プロキシを実行し、Torii インスタンスをポイントします。
 
 ```bash
 export TRYIT_PROXY_TARGET="https://torii.devnet.sora.example"
@@ -67,20 +69,20 @@ export TRYIT_PROXY_BEARER="Bearer eyJhbGciOi..."
 npm run tryit-proxy
 ```
 
-The script logs the bound address and forwards requests from `/proxy/*` to the
-configured Torii origin.
+スクリプトはバインドされたアドレスをログに記録し、`/proxy/*` からのリクエストを
+設定された Torii 原点。
 
-Before binding the socket the script validates that
-`static/openapi/torii.json` matches the digest recorded in
-`static/openapi/manifest.json`. If the files drift, the command exits with an
-error and instructs you to run `npm run sync-openapi -- --latest`. Export
-`TRYIT_PROXY_ALLOW_STALE_SPEC=1` only for emergency overrides; the proxy will
-log a warning and continue so you can recover during maintenance windows.
+ソケットをバインドする前に、スクリプトは次のことを検証します。
+`static/openapi/torii.json` は、に記録されたダイジェストと一致します。
+`static/openapi/manifest.json`。ファイルがドリフトしている場合、コマンドは次のメッセージを表示して終了します。
+エラーが発生し、`npm run sync-openapi -- --latest` を実行するように指示されます。エクスポート
+`TRYIT_PROXY_ALLOW_STALE_SPEC=1` は緊急オーバーライドの場合のみ。代理人は
+警告をログに記録して続行すると、メンテナンス期間中に回復できるようになります。
 
-## Wire the portal widgets
+## ポータル ウィジェットを接続する
 
-When you build or serve the developer portal, set the URL that the widgets
-should use for the proxy:
+開発者ポータルを構築または提供するときに、ウィジェットがアクセスする URL を設定します。
+プロキシに使用する必要があります:
 
 ```bash
 export TRYIT_PROXY_PUBLIC_URL="http://localhost:8787"
@@ -88,48 +90,46 @@ export TRYIT_PROXY_DEFAULT_BEARER="Bearer eyJhbGciOi..." # Optional
 npm run start
 ```
 
-The following components read these values from `docusaurus.config.js`:
+次のコンポーネントは、`docusaurus.config.js` からこれらの値を読み取ります。
 
-- **Swagger UI** — rendered at `/reference/torii-swagger`; pre-authorises the
-  bearer scheme when a token is present, tags requests with `X-TryIt-Client`,
-  injects `X-TryIt-Auth`, and rewrites calls through the proxy when
-  `TRYIT_PROXY_PUBLIC_URL` is set.
-- **RapiDoc** — rendered at `/reference/torii-rapidoc`; mirrors the token field,
-  reuses the same headers as the Swagger panel, and targets the proxy
-  automatically when the URL is configured.
-- **Try it console** — embedded on the API overview page; lets you send custom
-  requests, view headers, and inspect response bodies.
+- **Swagger UI** — `/reference/torii-swagger` でレンダリングされます。を事前に承認します
+  トークンが存在する場合のベアラー スキームは、リクエストに `X-TryIt-Client` をタグ付けします。
+  `X-TryIt-Auth` を挿入し、次の場合にプロキシ経由で呼び出しを書き換えます。
+  `TRYIT_PROXY_PUBLIC_URL`が設定されます。
+- **RapiDoc** — `/reference/torii-rapidoc` でレンダリングされます。トークンフィールドを反映し、
+  Swagger パネルと同じヘッダーを再利用し、プロキシをターゲットにします
+  URL が設定されると自動的に実行されます。
+- **Try it コンソール** — API 概要ページに埋め込まれています。カスタムを送信できます
+  リクエスト、ヘッダーの表示、応答本文の検査を行います。
 
-Both panels surface a **snapshot selector** that reads
-`docs/portal/static/openapi/versions.json`. Populate that index with
-`npm run sync-openapi -- --version=<label> --mirror=current --latest` so
-reviewers can jump between historical specs, see the recorded SHA-256 digest,
-and confirm whether a release snapshot carries a signed manifest before using
-the interactive widgets.
+どちらのパネルにも **スナップショット セレクター** が表示されます。
+`docs/portal/static/openapi/versions.json`。そのインデックスに次のものを入力します
+`npm run sync-openapi -- --version=<label> --mirror=current --latest` だから
+レビュアーは過去の仕様間を移動したり、記録された SHA-256 ダイジェストを確認したりできます。
+使用する前に、リリース スナップショットに署名されたマニフェストが含まれているかどうかを確認します。
+インタラクティブなウィジェット。
 
-Changing the token in any widget only affects the current browser session; the
-proxy never persists or logs the supplied token.
+ウィジェット内のトークンを変更すると、現在のブラウザ セッションにのみ影響します。の
+プロキシは、提供されたトークンを永続化したりログに記録したりすることはありません。
 
-## Short-lived OAuth tokens
+## 有効期間の短い OAuth トークン有効期間の長い Torii トークンをレビュー担当者に配布しないようにするには、「Try it」を配線します。
+コンソールから OAuth サーバーに接続します。以下の環境変数が存在する場合
+ポータルはデバイス コード ログイン ウィジェットをレンダリングし、有効期間の短いベアラー トークンを作成します。
+そしてそれらをコンソール フォームに自動的に挿入します。
 
-To avoid distributing long-lived Torii tokens to reviewers, wire the Try it
-console to your OAuth server. When the environment variables below are present
-the portal renders a device-code login widget, mints short-lived bearer tokens,
-and automatically injects them into the console form.
-
-| Variable | Purpose | Default |
+|変数 |目的 |デフォルト |
 | --- | --- | --- |
-| `DOCS_OAUTH_DEVICE_CODE_URL` | OAuth Device Authorization endpoint (`/oauth/device/code`) | _empty (disabled)_ |
-| `DOCS_OAUTH_TOKEN_URL` | Token endpoint that accepts `grant_type=urn:ietf:params:oauth:grant-type:device_code` | _empty_ |
-| `DOCS_OAUTH_CLIENT_ID` | OAuth client identifier registered for the docs preview | _empty_ |
-| `DOCS_OAUTH_SCOPE` | Space-delimited scopes requested during sign-in | `openid profile offline_access` |
-| `DOCS_OAUTH_AUDIENCE` | Optional API audience to bind the token to | _empty_ |
-| `DOCS_OAUTH_POLL_INTERVAL_MS` | Minimum poll interval when waiting for approval (ms) | `5000` (values < 5000 ms are rejected) |
-| `DOCS_OAUTH_DEVICE_CODE_TTL_SECONDS` | Fallback device-code expiration window (seconds) | `600` (must remain between 300 s and 900 s) |
-| `DOCS_OAUTH_TOKEN_TTL_SECONDS` | Fallback access-token lifetime (seconds) | `900` (must remain between 300 s and 900 s) |
-| `DOCS_OAUTH_ALLOW_INSECURE` | Set to `1` for local previews that intentionally skip OAuth enforcement | _unset_ |
+| `DOCS_OAUTH_DEVICE_CODE_URL` | OAuth デバイス認証エンドポイント (`/oauth/device/code`) | _空 (無効)_ |
+| `DOCS_OAUTH_TOKEN_URL` | `grant_type=urn:ietf:params:oauth:grant-type:device_code` | を受け入れるトークン エンドポイント_空_ |
+| `DOCS_OAUTH_CLIENT_ID` |ドキュメント プレビュー用に登録された OAuth クライアント ID | _空_ |
+| `DOCS_OAUTH_SCOPE` |サインイン中に要求されるスペース区切りのスコープ | `openid profile offline_access` |
+| `DOCS_OAUTH_AUDIENCE` |トークンをバインドするオプションの API オーディエンス | _空_ |
+| `DOCS_OAUTH_POLL_INTERVAL_MS` |承認を待機するときの最小ポーリング間隔 (ミリ秒) | `5000` (5000ms 未満の値は拒否されます) |
+| `DOCS_OAUTH_DEVICE_CODE_TTL_SECONDS` |フォールバック デバイス コードの有効期限ウィンドウ (秒) | `600` (300 秒から 900 秒の間でなければなりません) |
+| `DOCS_OAUTH_TOKEN_TTL_SECONDS` |フォールバック アクセス トークンの有効期間 (秒) | `900` (300 秒から 900 秒の間でなければなりません) |
+| `DOCS_OAUTH_ALLOW_INSECURE` | OAuth の適用を意図的にスキップするローカル プレビューの場合は、`1` に設定します。 _設定解除_ |
 
-Example configuration:
+構成例:
 
 ```bash
 export DOCS_OAUTH_DEVICE_CODE_URL="https://auth.dev.sora.example/oauth/device/code"
@@ -141,60 +141,60 @@ export DOCS_OAUTH_AUDIENCE="https://torii.devnet.sora.example"
 export DOCS_OAUTH_POLL_INTERVAL_MS="6000"
 ```
 
-When you run `npm run start` or `npm run build`, the portal embeds these values
-in `docusaurus.config.js`. During local preview the Try it card shows a
-“Sign in with device code” button. Users enter the displayed code on your OAuth
-verification page; once the device flow succeeds the widget:
+`npm run start` または `npm run build` を実行すると、ポータルにこれらの値が埋め込まれます。
+`docusaurus.config.js`で。ローカル プレビュー中に、「試してみる」カードに
+「デバイスコードでサインイン」ボタン。ユーザーは表示されたコードを OAuth に入力します
+確認ページ。デバイス フローがウィジェットに成功すると、次のようになります。
 
-- injects the issued bearer token into the Try it console field,
-- tags requests with the existing `X-TryIt-Client` and `X-TryIt-Auth` headers,
-- displays the remaining lifetime, and
-- automatically clears the token when it expires.
+- 発行されたベアラー トークンを Try it コンソール フィールドに挿入します。
+- 既存の `X-TryIt-Client` および `X-TryIt-Auth` ヘッダーを使用してリクエストをタグ付けします。
+- 残りの寿命を表示します。
+- トークンの有効期限が切れると自動的にトークンをクリアします。
 
-The manual Bearer input remains available—omit the OAuth variables whenever you
-want to force reviewers to paste a temporary token themselves, or export
-`DOCS_OAUTH_ALLOW_INSECURE=1` for isolated local previews where anonymous access
-is acceptable. Builds without OAuth configured now fail fast to satisfy the
-DOCS-1b roadmap gate.
+手動ベアラー入力は引き続き利用可能です。ベアラー入力を行う場合は常に OAuth 変数を省略してください。
+レビュー担当者に自分で一時トークンを貼り付けるか、エクスポートするよう強制したい
+匿名アクセスが行われる分離されたローカル プレビューの場合は `DOCS_OAUTH_ALLOW_INSECURE=1`
+許容されます。 OAuth が構成されていないビルドは、要件を満たすためにすぐに失敗するようになりました。
+DOCS-1b ロードマップ ゲート。
 
-📌 Review the [Security hardening & pen-test checklist](./security-hardening.md)
-before exposing the portal outside the lab; it documents the threat model,
-CSP/Trusted Types profile, and the penetration-test steps that now gate DOCS-1b.
+📌 [セキュリティ強化と侵入テストのチェックリスト](./security-hardening.md) を確認してください。
+ポータルを研究室の外に公開する前に。脅威モデルを文書化します。
+CSP/信頼できるタイプのプロファイル、および DOCS-1b をゲートする侵入テストのステップ。
 
-## Norito-RPC samples
+## Norito-RPC サンプル
 
-Norito-RPC requests share the same proxy and OAuth plumbing as the JSON routes,
-they simply set `Content-Type: application/x-norito` and send the
-pre-encoded Norito payload described in the NRPC specification
-(`docs/source/torii/nrpc_spec.md`).
-The repository ships canonical payloads under `fixtures/norito_rpc/` so portal
-authors, SDK owners, and reviewers can replay the exact bytes that CI uses.
+Norito-RPC リクエストは、JSON ルートと同じプロキシおよび OAuth プラミングを共有します。
+彼らは単に `Content-Type: application/x-norito` を設定し、
+NRPC仕様に記載されている、事前にエンコードされたNoritoペイロード
+(`docs/source/torii/nrpc_spec.md`)。
+リポジトリは `fixtures/norito_rpc/` で正規ペイロードを出荷するため、ポータル
+作成者、SDK 所有者、およびレビュー担当者は、CI が使用する正確なバイトを再生できます。
 
-### Send a Norito payload from the Try It console
+### Try It コンソールから Norito ペイロードを送信します
 
-1. Pick a fixture such as `fixtures/norito_rpc/transfer_asset.norito`. These
-   files are raw Norito envelopes; do **not** base64-encode them.
-2. In Swagger or RapiDoc, locate the NRPC endpoint (for example
-   `POST /v1/pipeline/submit`) and switch the **Content-Type** selector to
-   `application/x-norito`.
-3. Toggle the request body editor to **binary** (Swagger's "File" mode or
-   RapiDoc's "Binary/File" selector) and upload the `.norito` file. The widget
-   streams the bytes through the proxy without alteration.
-4. Submit the request. If Torii returns `X-Iroha-Error-Code: schema_mismatch`,
-   verify that you are calling an endpoint that accepts binary payloads and
-   confirm that the schema hash recorded in `fixtures/norito_rpc/schema_hashes.json`
-   matches the Torii build you are hitting.
+1. `fixtures/norito_rpc/transfer_asset.norito` などのフィクスチャを選択します。これら
+   ファイルは生の Norito エンベロープです。これらを Base64 エンコードしないでください**。
+2. Swagger または RapiDoc で、NRPC エンドポイントを見つけます (たとえば、
+   `POST /v1/pipeline/submit`) を選択し、**Content-Type** セレクターを次のように切り替えます。
+   `application/x-norito`。
+3. リクエスト本文エディターを **バイナリ** (Swagger の「ファイル」モードまたは
+   RapiDoc の「バイナリ/ファイル」セレクター) を使用して、`.norito` ファイルをアップロードします。ウィジェット
+   バイトを変更せずにプロキシ経由でストリーミングします。
+4. リクエストを送信します。 Torii が `X-Iroha-Error-Code: schema_mismatch` を返す場合、
+   バイナリ ペイロードを受け入れるエンドポイントを呼び出していることを確認し、
+   `fixtures/norito_rpc/schema_hashes.json` にスキーマ ハッシュが記録されていることを確認します。
+   ヒットしている Torii ビルドと一致します。
 
-The console keeps the most recent file in memory so you can resubmit the same
-payload while exercising different authorisation tokens or Torii hosts. Adding
-`scripts/run_norito_rpc_fixtures.sh --note "<ticket>"` to your workflow produces
-the evidence bundle referenced in the NRPC-4 adoption plan (log + JSON summary),
-which pairs nicely with screenshotting the Try It response during reviews.
+コンソールは最新のファイルをメモリに保持するため、同じファイルを再送信できます。
+異なる認証トークンまたは Torii ホストを実行する際のペイロード。追加
+ワークフローに `scripts/run_norito_rpc_fixtures.sh --note "<ticket>"` が生成される
+NRPC-4 導入計画で参照されている証拠バンドル (ログ + JSON 概要)、
+これは、レビュー中に Try It 応答のスクリーンショットを撮ることとうまく組み合わせられます。
 
-### CLI example (curl)
+### CLI の例 (カール)
 
-The same fixtures can be replayed outside the portal via `curl`, which is useful
-when validating the proxy or debugging gateway responses:
+同じフィクスチャを `curl` 経由でポータルの外で再生でき、これは便利です
+プロキシを検証するとき、またはゲートウェイ応答をデバッグするとき:
 
 ```bash
 TORII="https://torii.devnet.sora.example"
@@ -206,23 +206,21 @@ curl \
   "${TORII}/v1/pipeline/submit"
 ```
 
-Swap the fixture for any entry listed in `transaction_fixtures.manifest.json`
-or encode your own payload with `cargo xtask norito-rpc-fixtures`. When Torii
-is in canary mode you can point `curl` at the try-it proxy
-(`https://docs.sora.example/proxy/v1/pipeline/submit`) to exercise the same
-infrastructure that the portal widgets use.
+`transaction_fixtures.manifest.json` にリストされているエントリのフィクスチャを交換します。
+または、独自のペイロードを `cargo xtask norito-rpc-fixtures` でエンコードします。 Toriiのとき
+カナリア モードでは、try-it プロキシで `curl` を指定できます。
+(`https://docs.sora.example/proxy/v1/pipeline/submit`) 同じことを実行します
+ポータル ウィジェットが使用するインフラストラクチャ。
 
-## Observability & operations
+## 可観測性と操作すべてのリクエストは、メソッド、パス、オリジン、アップストリーム ステータス、および
+認証ソース (`override`、`default`、または `client`)。トークンは決して
+保存されます - ベアラー ヘッダーと `X-TryIt-Auth` 値の両方が編集される前に編集されます。
+ロギング - これにより、心配することなく stdout を中央コレクタに転送できます。
+秘密が漏れる。
 
-Every request is logged once with method, path, origin, upstream status, and the
-authentication source (`override`, `default`, or `client`). Tokens are never
-stored—both bearer headers and `X-TryIt-Auth` values are redacted before
-logging—so you can forward stdout to a central collector without worrying about
-secrets leaking.
+### ヘルスプローブとアラート
 
-### Health probes & alerting
-
-Run the bundled probe during deployments or on a schedule:
+バンドルされたプローブを展開中またはスケジュールに従って実行します。
 
 ```bash
 # Ensure the proxy responds to /healthz and forwards a sample request.
@@ -231,19 +229,19 @@ TRYIT_PROXY_SAMPLE_PATH="/v1/status" \
 npm run probe:tryit-proxy
 ```
 
-Environment knobs:
+環境ノブ:
 
-- `TRYIT_PROXY_SAMPLE_PATH` — optional Torii route (without `/proxy`) to exercise.
-- `TRYIT_PROXY_SAMPLE_METHOD` — defaults to `GET`; set to `POST` for write routes.
-- `TRYIT_PROXY_PROBE_TOKEN` — injects a temporary bearer token for the sample call.
-- `TRYIT_PROXY_PROBE_TIMEOUT_MS` — overrides the default 5 s timeout.
-- `TRYIT_PROXY_PROBE_METRICS_FILE` — optional Prometheus textfile destination for `probe_success`/`probe_duration_seconds`.
-- `TRYIT_PROXY_PROBE_LABELS` — comma-separated `key=value` pairs appended to the metrics (defaults to `job=tryit-proxy` and `instance=<proxy URL>`).
-- `TRYIT_PROXY_PROBE_METRICS_URL` — optional metrics endpoint URL (for example, `http://localhost:9798/metrics`) that must respond successfully when `TRYIT_PROXY_METRICS_LISTEN` is enabled.
+- `TRYIT_PROXY_SAMPLE_PATH` — 実行するオプションの Torii ルート (`/proxy` なし)。
+- `TRYIT_PROXY_SAMPLE_METHOD` — デフォルトは `GET` です。書き込みルートの場合は `POST` に設定します。
+- `TRYIT_PROXY_PROBE_TOKEN` — サンプル呼び出し用の一時ベアラー トークンを挿入します。
+- `TRYIT_PROXY_PROBE_TIMEOUT_MS` — デフォルトの 5 秒のタイムアウトをオーバーライドします。
+- `TRYIT_PROXY_PROBE_METRICS_FILE` — `probe_success`/`probe_duration_seconds` のオプションの Prometheus テキスト ファイルの宛先。
+- `TRYIT_PROXY_PROBE_LABELS` — メトリックに追加されるコンマ区切りの `key=value` ペア (デフォルトは `job=tryit-proxy` および `instance=<proxy URL>`)。
+- `TRYIT_PROXY_PROBE_METRICS_URL` — `TRYIT_PROXY_METRICS_LISTEN` が有効な場合に正常に応答する必要があるオプションのメトリック エンドポイント URL (`http://localhost:9798/metrics` など)。
 
-Feed the results into a textfile collector by pointing the probe at a writable
-path (for example, `/var/lib/node_exporter/textfile_collector/tryit.prom`) and
-adding any custom labels:
+書き込み可能なファイルにプローブを向けることにより、結果をテキストファイル コレクターにフィードします。
+パス (例: `/var/lib/node_exporter/textfile_collector/tryit.prom`) および
+カスタム ラベルを追加します。
 
 ```bash
 TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" \
@@ -252,17 +250,17 @@ TRYIT_PROXY_PROBE_LABELS="job=tryit-proxy,cluster=prod" \
 npm run probe:tryit-proxy
 ```
 
-The script rewrites the metrics file atomically so your collector always reads a
-complete payload.
+スクリプトはメトリクス ファイルをアトミックに書き換えるため、コレクタは常にメトリクス ファイルを読み取ります。
+完全なペイロード。
 
-When `TRYIT_PROXY_METRICS_LISTEN` is configured, set
-`TRYIT_PROXY_PROBE_METRICS_URL` to the metrics endpoint so the probe fails fast
-if the scrape surface disappears (for example, misconfigured ingress or missing
-firewall rules). A typical production setting is
-`TRYIT_PROXY_PROBE_METRICS_URL="http://127.0.0.1:9798/metrics"`.
+`TRYIT_PROXY_METRICS_LISTEN` が設定されている場合、設定します
+`TRYIT_PROXY_PROBE_METRICS_URL` をメトリクス エンドポイントに送信するため、プローブはすぐに失敗します
+スクレープ サーフェスが消えた場合 (たとえば、入力の構成が間違っていたり、欠落している場合)
+ファイアウォールのルール)。一般的な運用設定は次のとおりです。
+`TRYIT_PROXY_PROBE_METRICS_URL="http://127.0.0.1:9798/metrics"`。
 
-For lightweight alerting, wire the probe into your monitoring stack. A Prometheus
-example that pages after two consecutive failures:
+軽量のアラートを作成するには、プローブを監視スタックに接続します。 Prometheus
+2 回連続して失敗した後のページの例:
 
 ```yaml
 groups:
@@ -279,14 +277,14 @@ groups:
             The try-it proxy at {{ $labels.instance }} is not responding to probe requests.
 ```
 
-### Metrics endpoint & dashboards
+### メトリクスエンドポイントとダッシュボード
 
-Set `TRYIT_PROXY_METRICS_LISTEN=127.0.0.1:9798` (or any host/port pair) before
-starting the proxy to expose a Prometheus-formatted metrics endpoint. The path
-defaults to `/metrics` but can be overridden via
-`TRYIT_PROXY_METRICS_PATH=/custom`. Each scrape returns counters for per-method
-request totals, rate-limit rejections, upstream errors/timeouts, proxy outcomes,
-and latency summaries:
+前に `TRYIT_PROXY_METRICS_LISTEN=127.0.0.1:9798` (または任意のホスト/ポートのペア) を設定します。
+プロキシを開始して、Prometheus 形式のメトリクス エンドポイントを公開します。パス
+デフォルトは `/metrics` ですが、次のようにオーバーライドできます。
+`TRYIT_PROXY_METRICS_PATH=/custom`。各スクレイピングはメソッドごとのカウンターを返します
+リクエストの合計、レート制限の拒否、アップストリームのエラー/タイムアウト、プロキシの結果、
+レイテンシの概要:
 
 ```bash
 export TRYIT_PROXY_METRICS_LISTEN="127.0.0.1:9798"
@@ -297,16 +295,16 @@ tryit_proxy_requests_total{method="GET"} 12
 tryit_proxy_rate_limited_total 1
 ```
 
-Point your Prometheus/OTLP collectors at the metrics endpoint and reuse the
-existing `dashboards/grafana/docs_portal.json` panels so SRE can observe tail
-latencies and rejection spikes without parsing logs. The proxy automatically
-publishes `tryit_proxy_start_timestamp_ms` to help operators detect restarts.
+Prometheus/OTLP コレクターをメトリック エンドポイントにポイントし、
+既存の `dashboards/grafana/docs_portal.json` パネルにより、SRE がテールを観察できるようになります
+ログを解析しないと、レイテンシと拒否のスパイクが発生します。プロキシは自動的に
+オペレータが再起動を検出できるように、`tryit_proxy_start_timestamp_ms` を公開しています。
 
-### Rollback automation
+### ロールバックの自動化
 
-Use the management helper to update or restore the target Torii URL. The script
-stores the previous configuration in `.env.tryit-proxy.bak` so rollbacks are a
-single command.
+管理ヘルパーを使用して、ターゲット Torii URL を更新または復元します。スクリプト
+以前の設定は `.env.tryit-proxy.bak` に保存されるため、ロールバックは
+単一のコマンド。
 
 ```bash
 # Update TRYIT_PROXY_TARGET and back up the previous config.
@@ -316,5 +314,5 @@ npm run manage:tryit-proxy -- update --target https://torii.devnet.sora.example
 npm run manage:tryit-proxy -- rollback
 ```
 
-Override the env file path with `--env` or `TRYIT_PROXY_ENV` if your deployment
-stores configuration elsewhere.
+デプロイメントの場合は、env ファイル パスを `--env` または `TRYIT_PROXY_ENV` でオーバーライドします。
+設定を別の場所に保存します。

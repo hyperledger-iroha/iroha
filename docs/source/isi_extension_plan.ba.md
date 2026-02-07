@@ -7,94 +7,93 @@ generator: scripts/sync_docs_i18n.py
 source_hash: f3502fc6de75095282d44ce778b00d1b0d554773de1861d1b92f7dc573dfafa2
 source_last_modified: "2025-12-29T18:16:35.969398+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# ISI Extension Plan (v1)
+# ИСИ оҙайтыу планы (v1)
 
-This note signs off on the priority order for the new Iroha Special Instructions and captures
-non-negotiable invariants for each instruction ahead of implementation. The ordering matches
-security and operability risk first, UX throughput second.
+Был иҫкәрмә яңы Iroha Махсус инструкциялар һәм тотоу өсөн өҫтөнлөклө бойороҡ тураһында һүҙ бара
+һәр инструкцияны тормошҡа ашырыу алдынан һәр күрһәтмә өсөн һөйләшеүҙәр булмаған инварианттар. Заказ матчтары
+хәүефһеҙлек һәм операция хәүефе беренсе, UX үткәреүсәнлеге икенсе.
 
-## Priority Stack
+## өҫтөнлөклө стека
 
-1. **RotateAccountSignatory** – Required for hygienic key rotation without destructive migrations.
-2. **DeactivateContractInstance** / **RemoveSmartContractBytes** – Provide deterministic contract
-   kill switches and storage reclamation for compromised deployments.
-3. **SetAssetKeyValue** / **RemoveAssetKeyValue** – Extend metadata parity to concrete asset
-   balances so observability tooling can tag holdings.
-4. **BatchMintAsset** / **BatchTransferAsset** – Deterministic fan-out helpers to keep payload size
-   and VM fallback pressure manageable.
+1. **RotateAcfinateSignater** – Гигиеник асҡыс әйләнеше өсөн кәрәк, емерек миграцияларһыҙ.
+2. **Dectective ContractInstance** / **DemoveSmartContractBytes** – Детерминистик килешеп тәьмин итеү
+   үлтерергә коммутатор һәм һаҡлау мелиорация өсөн компромиссированный таратыу.
+3. **SetAssetKeyValue** / **Беренсе активҡа метамағлүмәт паритетын киңәйтеү
+   Баланс шулай күҙәтеүсәнлек инструменттары тег холдингы ала.
+4. **BatchMintAsset** / **BatchTransferAsset** – Детерминистик фан-аут ярҙамсылары файҙалы йөк күләмен һаҡлау өсөн
+   һәм виртуаль fallback баҫым идара итеү.
 
-## Instruction Invariants
+## Инструкция инварианттары
 
 ### SetAssetKeyValue / RemoveAssetKeyValue
-- Reuse the `AssetMetadataKey` namespace (`state.rs`) so canonical WSV keys stay stable.
-- Enforce JSON size and schema limits identically to account metadata helpers.
-- Emit `AssetEvent::MetadataInserted` / `AssetEvent::MetadataRemoved` with the affected `AssetId`.
-- Require the same permission tokens as existing asset metadata edits (definition owner OR
-  `CanModifyAssetMetadata`-style grants).
-- Abort if the asset record is missing (no implicit creation).
+- `AssetMetadataKey` исемдәр киңлеген ҡабатлағыҙ (`state.rs`), шуға күрә канонлы WSV төймәләре тотороҡло ҡала.
+- JSON күләмен һәм схемаһын үтәү өсөн бер үк сикләүҙәр өсөн иҫәп-хисап метамағлүмәт ярҙамсылары.
+- `AssetEvent::MetadataInserted` / `AssetEvent::MetadataRemoved` менән зарарланған `AssetId` менән.
+- Бер үк рөхсәт токендарын ғәмәлдәге актив метамағлүмәттәрҙе мөхәррирләүҙәр кеүек талап итә (билдәләү хужаһы OR .
+  `CanModifyAssetMetadata` стилендәге гранттар).
+- Аборт актив яҙмаһы юҡ икән (йәшерен ижад итмәү).
 
-### RotateAccountSignatory
-- Atomic swap of the signatory in `AccountId` while preserving account metadata and linked
-  resources (assets, triggers, roles, permissions, pending events).
-- Verify the current signatory matches the caller (or delegated authority via explicit token).
-- Reject if the new public key already backs another account in the same domain.
-- Update all canonical keys that embed the account ID and invalidate caches before commit.
-- Emit a dedicated `AccountEvent::SignatoryRotated` with old/new keys for audit trails.
-- Migration scaffold: introduce `AccountLabel` + `AccountRekeyRecord` (see `account::rekey`) so
-  existing accounts can be mapped to stable labels during a rolling upgrade without hash breaks.
+### RotateAcforce signational
+- `AccountId`-та ҡул ҡуйыусының атом алмаштырыуы иҫәп-хисап метамағлүмәттәрен һәм бәйләнгән саҡта
+  ресурстары (активтар, триггерҙар, ролдәр, рөхсәттәр, ваҡиғалар көтөлгән).
+- Хәҙерге ҡул ҡуйыусы шылтыратыусыға тап килгәнен тикшерергә (йәки асыҡтан-асыҡ жетон аша вәкәләттәрҙе тапшырығыҙ).
+- Яңы асыҡ асҡыс шул уҡ өлкәлә икенсе иҫәп яҙмаһын кире ҡайтара икән, кире ҡағығыҙ.
+- Яңыртыу бөтә канон асҡыстары, тип иҫәп-хисап идентификаторы һәм ғәмәлдән сығарылған кэштар ҡылғанға тиклем.
+- Аудит юлдары өсөн иҫке/яңы асҡыстар менән махсус `AccountEvent::SignatoryRotated` бағышланған.
+- Миграция леса: индереү `AccountLabel` + `AccountRekeyRecord` (ҡара: `account::rekey`) шулай
+  ғәмәлдәге иҫәптәрҙе хеш-төркөмһөҙ роллинг яңыртыу ваҡытында тотороҡло ярлыҡтарға картаға төшөрөргә мөмкин.
 
-### DeactivateContractInstance
-- Remove or tombstone the `(namespace, contract_id)` binding while persisting provenance data
-  (who, when, reason code) for troubleshooting.
-- Require the same governance permission set as activation, with policy hooks to disallow
-  deactivation of core system namespaces without elevated approval.
-- Reject when the instance is already inactive to keep event logs deterministic.
-- Emit a `ContractInstanceEvent::Deactivated` that downstream watchers can consume.
-
-### RemoveSmartContractBytes
-- Allow pruning of stored bytecode by `code_hash` only when no manifests or active instances
-  reference the artifact; otherwise fail with a descriptive error.
-- Permission gate mirrors registration (`CanRegisterSmartContractCode`) plus an operator-level
-  guard (e.g., `CanManageSmartContractStorage`).
-- Verify the provided `code_hash` matches the stored body digest just before deletion to avoid
-  stale handles.
-- Emit `ContractCodeEvent::Removed` with hash and caller metadata.
+### Dectentcy ContractInstance
+- йәки ҡәбер ташын сығарыу йәки `(namespace, contract_id)` бәйләү, шул уҡ ваҡытта провенанс мәғлүмәттәрен һаҡлап ҡала
+  (кем, ҡасан, сәбәп код) өсөн проблемаларҙы хәл итеү.
+- Шул уҡ идара итеү рөхсәтен талап итеү, әүҙемләштереү тип аталған, сәйәсәт менән ҡармаҡтар рөхсәт ителмәй
+  ядро системаһы исемдәр киңлеген раҫлауһыҙ деактивациялау.
+- Ҡасан инстанция инде әүҙем түгел, ваҡиғалар журналдарын детерминистик тотоу өсөн кире ҡағыу.
+- `ContractInstanceEvent::Deactivated` Emit, тип ҡуллана ала аҫҡы күҙәтеүселәр.### RemoveSmartContractBytes
+- Һаҡланған байт-кодты `code_hash` тарафынан өҙөү рөхсәт итегеҙ, тик бер ниндәй ҙә асыҡлыҡ йәки әүҙем осраҡтарҙа ғына
+  артефактҡа һылтанма; юғиһә тасуири хата менән уңышһыҙлыҡҡа осрай.
+- Рөхсәт ҡапҡаһы көҙгөһөн теркәү (`CanRegisterSmartContractCode`) плюс оператор кимәлендә
+  һаҡсыһы (мәҫәлән, `CanManageSmartContractStorage` X).
+- Тикшерергә бирелгән `code_hash` тап килә һаҡланған тән distest тик юйыу алдынан ҡотолорға .
+  иҫке тотҡалар.
+- Emit `ContractCodeEvent::Removed` хеш һәм шылтыратыусылар метамағлүмәттәре менән.
 
 ### BatchMintAsset / BatchTransferAsset
-- All-or-nothing semantics: either every tuple succeeds or the instruction aborts without side
-  effects.
-- Input vectors must be deterministically ordered (no implicit sorting) and bounded by config
+- Бөтә-йәки-бер нәмә лә семантика: йә һәр кортеж уңышҡа өлгәшә, йә инструкцияны яҡһыҙ аборттар
+  эффекты.
+- Инпут векторҙары детерминистик тәртипкә килтерелергә тейеш (йәшел булмаған сорттарға бүлергә) һәм конфигурациялау менән сикләнгән
   (`max_batch_isi_items`).
-- Emit per-item asset events so downstream accounting stays consistent; batch context is additive,
-  not a replacement.
-- Permission checks reuse existing single-item logic per target (asset owner, definition owner,
-  or granted capability) before state mutation.
-- Advisory access sets must union all read/write keys to keep optimistic concurrency correct.
+- Эмитем пер-плетка актив ваҡиғалар шулай аҫҡы бухгалтерия эҙмә-эҙлекле ҡала; партия контексы өҫтәмә,
+  алмаштырыу түгел.
+- Рөхсәт тикшерелеүе бер маҡсатҡа булған бер логика булған бер логиканы ҡабаттан ҡуллана (актив хужа, аныҡлау хужаһы,
+  йәки мөмкинлек бирелгән) дәүләт мутацияһы алдынан.
+- Консультатив рөхсәт йыйылмалары тейеш союз бөтә уҡыу/яҙыу асҡыстары оптимистик конкурентлыҡ дөрөҫ тотоу өсөн.
 
-## Implementation Scaffolding
+## Ғәмәлгә ашырыу ҡоролмаһы
 
-- Data model now carries `SetAssetKeyValue` / `RemoveAssetKeyValue` scaffolds for balance metadata
-  edits (`transparent.rs`).
-- Executor visitors expose placeholders that will gate permissions once host wiring lands
+- Мәғлүмәттәр моделе хәҙер `SetAssetKeyValue` / `RemoveAssetKeyValue` скафандрҙар өсөн баланс метамағлүмәттәре йөрөтә.
+  мөхәррирләүҙәр (`transparent.rs`).
+- Башҡарыусылар ҡунаҡтарҙы фашлаусыларҙы фашлай, улар бер тапҡыр рөхсәттәрҙе ҡабул итә.
   (`default/mod.rs`).
-- Rekey prototype types (`account::rekey`) provide a landing zone for rolling migrations.
-- World state includes `account_rekey_records` keyed by `AccountLabel` so we can stage label →
-  signatory migrations without touching the historical `AccountId` encoding.
+- Рейки прототип төрҙәре (`account::rekey`) роллинг миграциялар өсөн десант зонаһын тәьмин итә.
+- Бөтә донъя штат `account_rekey_records` `AccountLabel` kiryed инә, шуға күрә беҙ маркировкалай ала → .
+  тарихи Kotodama кодлауына ҡул ҡуйыусы миграцияларға ҡағыла.
 
-## IVM Syscall Drafting
+## IVM Сыскал проекты
 
-- Host shims for `DeactivateContractInstance` / `RemoveSmartContractBytes` ship as
-  `SYSCALL_DEACTIVATE_CONTRACT_INSTANCE` (0x43) and
-  `SYSCALL_REMOVE_SMART_CONTRACT_BYTES` (0x44), both consuming Norito TLVs that mirror the
-  canonical ISI structs.
-- Extend `abi_syscall_list()` only after host handlers mirror `iroha_core` execution paths to keep
-  ABI hashes stable during development.
-- Update Kotodama lowering once syscall numbers stabilize; add golden coverage for the expanded
-  surface at the same time.
+- `DeactivateContractInstance` өсөн хужа шашкалары / `RemoveSmartContractBytes` судноһы булараҡ
+  `SYSCALL_DEACTIVATE_CONTRACT_INSTANCE` (0х43) һәм
+  `SYSCALL_REMOVE_SMART_CONTRACT_BYTES` (0х44), икеһе лә ҡулланыу Norito TLVs, улар көҙгө
+  канонлы ИСИ структуралары.
+- `abi_syscall_list()` киңәйтеүе тик хужа обрабатывается көҙгө `iroha_core` атылыу юлдарын һаҡлау өсөн
+  АБИ хештары үҫеш ваҡытында тотороҡло.
+- Яңыртыу Kotodama түбәнәйтергә бер тапҡыр syscall һандары тотороҡландырыу; өҫтәү өсөн алтын ҡаплау киңәйтелгән
+  өҫтө бер үк ваҡытта.
 
-## Status
+## Статус
 
-The above ordering and invariants are ready for implementation. Follow-up branches should reference
-this document when wiring execution paths and syscall exposure.
+Үрҙәге тәртип һәм инварианттар тормошҡа ашырыу өсөн әҙер. Эта
+был документ ҡасан проводка башҡарыу юлдары һәм сискалл экспозицияһы.

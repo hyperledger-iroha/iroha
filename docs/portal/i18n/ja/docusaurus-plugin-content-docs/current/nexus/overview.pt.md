@@ -4,57 +4,57 @@ direction: ltr
 source: docs/portal/docs/nexus/overview.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: nexus-overview
-title: Visao geral do Sora Nexus
-description: Resumo de alto nivel da arquitetura do Iroha 3 (Sora Nexus) com apontamentos para os docs canonicos do mono-repo.
+ID: ネクサスの概要
+タイトル: ヴィサオ ジェラル ド ソラ Nexus
+説明: Iroha 3 (Sora Nexus) の高度なアーキテクチャに関するドキュメントは、モノリポジトリを行う canonicos のパラ os ドキュメントに含まれています。
 ---
 
-Nexus (Iroha 3) estende Iroha 2 com execucao multi-lane, espacos de dados escopados por governanca e ferramentas compartilhadas em cada SDK. Esta pagina espelha o novo resumo `docs/source/nexus_overview.md` no mono-repo para que leitores do portal entendam rapidamente como as pecas da arquitetura se encaixam.
+Nexus (Iroha 3) estende Iroha 2 com は、マルチレーンを実行し、SDK のコンパートメントを管理するための管理を実行します。新しいページへのアクセス `docs/source/nexus_overview.md` は、アーキテクチャーの構築と同様に、ポータルの迅速な管理を行うためのモノリポジトリではありません。
 
-## Linhas de release
+## リリースを解除する
 
-- **Iroha 2** - implantacoes auto-hospedadas para consorcios ou redes privadas.
-- **Iroha 3 / Sora Nexus** - a rede publica multi-lane onde operadores registram espacos de dados (DS) e herdam ferramentas compartilhadas de governanca, liquidacao e observabilidade.
-- Ambas as linhas compilam do mesmo workspace (IVM + toolchain Kotodama), entao correcoes de SDK, atualizacoes de ABI e fixtures Norito permanecem portaveis. Operadores baixam o bundle `iroha3-<version>-<os>.tar.zst` para entrar no Nexus; consulte `docs/source/sora_nexus_operator_onboarding.md` para o checklist em tela cheia.
+- **Iroha 2** - インプラントは、コンソルシオスとプライベートの自動病院を提供します。
+- **Iroha 3 / Sora Nexus** - マルチレーン オンデ オペラドールの登録機関であるダドス (DS) と政府機関の監視、液体監視の再発行。
+- 管理ワークスペース (IVM + ツールチェーン Kotodama) をコンパイルするためのアンバス、SDK の修正、ABI フィクスチャ Norito の永久保存。オペレータはバンドル `iroha3-<version>-<os>.tar.zst` パラメータ番号 Nexus; `docs/source/sora_nexus_operator_onboarding.md` のチェックリストを参照してください。
 
-## Blocos de construcao
+## 建設ブロック
 
-| Componente | Resumo | Pontos do portal |
-|-----------|---------|--------------|
-| Espaco de dados (DS) | Dominio de execucao/armazenamento definido pela governanca que possui uma ou mais lanes, declara conjuntos de validadores, classe de privacidade e politica de taxas + DA. | Veja [Nexus spec](./nexus-spec) para o esquema do manifesto. |
-| Lane | Shard deterministico de execucao; emite compromissos que o anel global NPoS ordena. As classes de lane incluem `default_public`, `public_custom`, `private_permissioned` e `hybrid_confidential`. | O [modelo de lane](./nexus-lane-model) captura geometria, prefixos de armazenamento e retencao. |
-| Plano de transicao | Identificadores placeholder, fases de roteamento e empacotamento de perfil duplo acompanham como implantacoes de lane unica evoluem para Nexus. | As [notas de transicao](./nexus-transition-notes) documentam cada fase de migracao. |
-| Space Directory | Contrato de registro que armazena manifestos + versoes de DS. Operadores reconciliam entradas do catalogo com este diretorio antes de entrar. | O rastreador de diffs de manifesto vive em `docs/source/project_tracker/nexus_config_deltas/`. |
-| Catalogo de lanes | A secao `[nexus]` de configuracao mapeia IDs de lane para aliases, politicas de roteamento e limiares de DA. `irohad --sora --config ... --trace-config` imprime o catalogo resolvido para auditorias. | Use `docs/source/sora_nexus_operator_onboarding.md` para o passo a passo de CLI. |
-| Roteador de liquidacao | Orquestrador de transferencia XOR que conecta lanes CBDC privadas com lanes de liquidez publicas. | `docs/source/cbdc_lane_playbook.md` detalha knobs de politica e gates de telemetria. |
-| Telemetria/SLOs | Dashboards + alertas em `dashboards/grafana/nexus_*.json` capturam altura de lanes, backlog de DA, latencia de liquidacao e profundidade da fila de governanca. | O [plano de remediacao de telemetria](./nexus-telemetry-remediation) detalha dashboards, alertas e evidencias de auditoria. |
+|コンポネ |レスモ |ポントス・ド・ポータル |
+|----------|-----------|--------------|
+|エスパコ デ ダドス (DS) |行政執行/政府の明確な統治を行うため、レーン、有効性の確認、プライバシー保護および政治的分類 + DA を宣言します。 | Veja [Nexus 仕様](./nexus-spec) はマニフェストに準拠しています。 |
+|レーン |シャードの実行決定性。世界的なNPoSの秩序を無視して妥協を表明します。レーンのクラスとしては、`default_public`、`public_custom`、`private_permissioned`、`hybrid_confidential` が含まれます。 | O [modelo de LANE](./nexus-lane-model) キャプチャジオメトリア、プレフィックスデアルマゼナメント、保持。 |
+|プラノ デ トランシソン |プレースホルダー、Nexus のパラメータを識別します。 | [notas de transicao](./nexus-transition-notes) documentam cada fase de migracao として。 |
+|宇宙ディレクトリ |アルマゼナマニフェストとDSのバージョンを登録します。オペレーターは、カタログを作成する前に、カタログを作成します。 |マニフェストの差分を保存するためのスレッドは、`docs/source/project_tracker/nexus_config_deltas/` です。 |
+|レーンのカタログ | `[nexus]` は、エイリアス、政治、DA の制限などのマップ ID を設定します。 `irohad --sora --config ... --trace-config` 聴覚的なカタログの解決策。 | CLI ではそのまま `docs/source/sora_nexus_operator_onboarding.md` を使用します。 |
+|ロテドール デ リキッドダソン |転送サービス XOR は、CBDC のプライベート コム レーンと液体パブリック レーンを接続します。 | `docs/source/cbdc_lane_playbook.md` 政治のノブとテレメトリーのゲートの詳細。 |
+|テレメトリア/SLO |ダッシュボード + アラートは、`dashboards/grafana/nexus_*.json` レーンの詳細、DA のバックログ、液体の遅延、および政府の綿密な情報をキャプチャします。 | O [テレメトリア対策計画](./nexus-telemetry-remediation) ダッシュボード、聴覚証拠のアラートの詳細。 |
 
-## Snapshot de rollout
+## ロールアウトのスナップショット
 
-| Fase | Foco | Criterios de saida |
-|-------|-------|---------------|
-| N0 - Beta fechada | Registrar gerenciado pelo conselho (`.sora`), onboarding manual de operadores, catalogo de lanes estatico. | Manifestos de DS assinados + handoffs de governanca ensaiados. |
-| N1 - Lancamento publico | Adiciona sufixos `.nexus`, leiloes, registrar self-service, cabeamento de liquidacao XOR. | Testes de sincronizacao de resolver/gateway, dashboards de reconciliacao de cobranca, exercicios de disputa em mesa. |
-| N2 - Expansao | Introduz `.dao`, APIs de revenda, analitica, portal de disputas, scorecards de stewards. | Artefatos de compliance versionados, toolkit de jury de politica online, relatorios de transparencia do tesouro. |
-| Gate NX-12/13/14 | Motor de compliance, dashboards de telemetria e documentacao devem sair juntos antes de pilotos com parceiros. | [Nexus overview](./nexus-overview) + [Nexus operations](./nexus-operations) publicados, dashboards ligados, motor de politica integrado. |
+|ファセ |フォコ |基準 |
+|------|------|------|
+| N0 - ベータフェチャダ |レジストラ gerenciado pelo conselho (`.sora`)、オンボーディング マニュアル ド オペラドール、カタログ ド レーン エスタティコ。 | DS のシナドス宣言 + 政府への引き継ぎ。 |
+| N1 - ランカメント パブリック | Adiciona sufixos `.nexus`、leiloes、レジストラのセルフサービス、cabeamento de liquidacao XOR。 |リゾルバー/ゲートウェイのテスト、コブランカの調停ダッシュボード、紛争の実行。 |
+| N2 - エクスパンサオ | `.dao`、復讐の API、分析、紛争ポータル、スチュワードのスコアカードの紹介。 |コンプライアンスバージョンの技術、オンラインでの陪審の政治ツールキット、透明性の高い関係性。 |
+|ゲート NX-12/13/14 |モーターのコンプライアンス、ダッシュボードのテレメトリーとドキュメントの開発、安全性、安全性、および安全性を確保します。 | [Nexus 概要](./nexus-overview) + [Nexus 操作](./nexus-operations) パブリックド、ダッシュボード リガド、政治的統合。 |
 
-## Responsabilidades do operador
+## オペレーターには責任があります1. **設定の衛生** - mantenha `config/config.toml` データスペースのカタログと公開情報。 `--trace-config` のチケットをリリースしてください。
+2. **マニフェストのストリーム** - カタログの内容を調整し、最近のスペース ディレクトリの登録番号を確認します。
+3. **Cobertura de telemetria** - SDK 関連の OS ダッシュボード `nexus_lanes.json`、`nexus_settlement.json` を説明します。 PagerDuty は、テレメトリの計画に準拠した修正を行うため、アラートに接続します。
+4. **事件に関する** - [Nexus 作戦](./nexus-operations) は、RCA が緊急事態に対処していることを報告します。
+5. **統治期間** - コンセルホ Nexus の影響を受けるレーンとロールバック トリメストラメンテの指示に参加します (`docs/source/project_tracker/nexus_config_deltas/` 経由のラストリード)。
 
-1. **Higiene de configuracao** - mantenha `config/config.toml` sincronizado com o catalogo publicado de lanes e dataspaces; arquive a saida `--trace-config` em cada ticket de release.
-2. **Rastreamento de manifestos** - reconcilie entradas do catalogo com o bundle mais recente do Space Directory antes de entrar ou atualizar nos.
-3. **Cobertura de telemetria** - exponha os dashboards `nexus_lanes.json`, `nexus_settlement.json` e os dashboards de SDK relacionados; conecte alertas ao PagerDuty e rode revisoes trimestrais conforme o plano de remediacao de telemetria.
-4. **Relato de incidentes** - siga a matriz de severidade em [Nexus operations](./nexus-operations) e entregue RCAs em ate cinco dias uteis.
-5. **Prontidao de governanca** - participe de votos do conselho Nexus que impactam suas lanes e ensaie instrucoes de rollback trimestralmente (rastreadas via `docs/source/project_tracker/nexus_config_deltas/`).
+## ヴェジャ・タンベム
 
-## Veja tambem
-
-- Visao canonica: `docs/source/nexus_overview.md`
-- Especificacao detalhada: [./nexus-spec](./nexus-spec)
-- Geometria de lanes: [./nexus-lane-model](./nexus-lane-model)
-- Plano de transicao: [./nexus-transition-notes](./nexus-transition-notes)
-- Plano de remediacao de telemetria: [./nexus-telemetry-remediation](./nexus-telemetry-remediation)
-- Runbook de operacoes: [./nexus-operations](./nexus-operations)
-- Guia de onboarding de operadores: `docs/source/sora_nexus_operator_onboarding.md`
+- ビザオ カノニカ: `docs/source/nexus_overview.md`
+- 具体的な詳細: [./nexus-spec](./nexus-spec)
+- レーンのジオメトリア: [./nexus-lane-model](./nexus-lane-model)
+- トランジション計画: [./nexus-transition-notes](./nexus-transition-notes)
+- テレメトリの修復計画: [./nexus-telemetry-remediation](./nexus-telemetry-remediation)
+- オペラのランブック: [./nexus-operations](./nexus-operations)
+- オペレーターのオンボーディングに関するガイア: `docs/source/sora_nexus_operator_onboarding.md`

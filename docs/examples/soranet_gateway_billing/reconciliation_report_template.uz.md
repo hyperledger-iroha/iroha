@@ -7,41 +7,42 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 5c10cd7eda24260bfd1319c7b8ac23dba2a1c8a1cb39ea49f0f1a64427ca15db
 source_last_modified: "2025-12-29T18:16:35.086260+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# SoraGlobal Gateway Billing Reconciliation
+# SoraGlobal Gateway hisob-kitoblarni muvofiqlashtirish
 
-- **Window:** `<from>/<to>`
-- **Tenant:** `<tenant-id>`
-- **Catalog Version:** `<catalog-version>`
-- **Usage Snapshot:** `<path or hash>`
-- **Guardrails:** soft cap `<soft-cap-xor> XOR`, hard cap `<hard-cap-xor> XOR`, alert threshold `<alert-threshold>%`
-- **Payer -> Treasury:** `<payer>` -> `<treasury>` in `<asset-definition>`
-- **Total Due:** `<total-xor> XOR` (`<total-micros>` micro-XOR)
+- **Oyna:** `<from>/<to>`
+- **Ijarachi:** `<tenant-id>`
+- **Katalog versiyasi:** `<catalog-version>`
+- **Foydalanish surati:** `<path or hash>`
+- **Qo'riqchilar:** yumshoq qopqoq `<soft-cap-xor> XOR`, qattiq qopqoq `<hard-cap-xor> XOR`, ogohlantirish chegarasi `<alert-threshold>%`
+- **To'lovchi -> G'aznachilik:** `<payer>` -> `<treasury>`, `<asset-definition>`
+- **Toʻlovning umumiy miqdori:** `<total-xor> XOR` (`<total-micros>` micro-XOR)
 
-## Line Item Checks
-- [ ] Usage entries cover only catalog meter ids and valid billing regions
-- [ ] Quantity units match catalog definitions (requests, GiB, ms, etc.)
-- [ ] Region multipliers and discount tiers applied as per catalog
-- [ ] CSV/Parquet exports match the JSON invoice line items
+## Satr elementini tekshirish
+- [ ] Foydalanish yozuvlari faqat katalog hisoblagich identifikatorlari va joriy hisob-kitob hududlarini qamrab oladi
+- [ ] Miqdor birliklari katalog taʼriflariga mos keladi (soʻrovlar, GiB, ms va h.k.)
+- [ ] Katalog bo'yicha qo'llaniladigan mintaqa ko'paytmalari va chegirma darajalari
+- [ ] CSV/Parket eksporti JSON faktura satriga mos keladi
 
-## Guardrail Evaluation
-- [ ] Soft cap alert threshold reached? `<yes/no>` (attach alert evidence if yes)
-- [ ] Hard cap exceeded? `<yes/no>` (if yes, attach override approval)
-- [ ] Minimum invoice floor satisfied
+## Guardrail baholash
+- [ ] Yumshoq qopqoq ogohlantirish chegarasiga yetib keldingizmi? `<yes/no>` (ha bo'lsa, ogohlantirish dalillarini ilova qiling)
+- [ ] Qattiq qopqoq oshib ketdimi? `<yes/no>` (agar shunday bo'lsa, bekor qilishni tasdiqlashni ilova qiling)
+- [ ] Hisob-fakturaning minimal darajasi qoniqtirildi
 
-## Ledger Projection
-- [ ] Transfer batch total equals `total_micros` in invoice
-- [ ] Asset definition matches billing currency
-- [ ] Payer and treasury accounts match tenant and operator of record
-- [ ] Norito/JSON artefacts attached for audit replay
+## Buxgalteriya proyeksiyasi
+- [ ] O'tkazma to'plami jami hisob-fakturadagi `total_micros` ga teng
+- [ ] Obyekt taʼrifi hisob-kitob valyutasiga mos keladi
+- [ ] To'lovchi va g'azna hisoblari ijarachi va operatorga mos keladi
+- [ ] Auditni takrorlash uchun biriktirilgan Norito/JSON artefaktlari
 
-## Dispute/Adjustment Notes
-- Observed variance: `<variance detail>`
-- Proposed adjustment: `<delta and rationale>`
-- Supporting evidence: `<logs/dashboards/alerts>`
+## Bahs/tuzatish bo'yicha eslatmalar
+- Kuzatilgan farq: `<variance detail>`
+- Taklif etilayotgan sozlash: `<delta and rationale>`
+- Qo'llab-quvvatlovchi dalillar: `<logs/dashboards/alerts>`
 
-## Approvals
-- Billing analyst: `<name + signature>`
-- Treasury reviewer: `<name + signature>`
-- Governance packet hash: `<hash/reference>`
+## Tasdiqlashlar
+- Billing tahlilchisi: `<name + signature>`
+- G'aznachilik sharhlovchisi: `<name + signature>`
+- Boshqaruv paketi xeshi: `<hash/reference>`

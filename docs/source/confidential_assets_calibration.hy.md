@@ -7,40 +7,41 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 01bfdc70f601098acaefc60c6a3b4c464218b8c6f01f2f20eb3632994ff7110f
 source_last_modified: "2025-12-29T18:16:35.932211+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Confidential Gas Calibration Baselines
+# Գազի չափորոշման գաղտնի ելակետեր
 
-This ledger tracks the validated outputs of the confidential gas calibration
-benchmarks. Each row documents a release-quality measurement set captured with
-the procedure described in `docs/source/confidential_assets.md#calibration-baselines--acceptance-gates`.
+Այս մատյանը հետևում է գազի գաղտնի տրամաչափման վավերացված արդյունքներին
+հենանիշներ. Յուրաքանչյուր տող փաստաթղթավորում է թողարկման որակի չափման հավաքածու, որը նկարահանվել է
+ընթացակարգը, որը նկարագրված է `docs/source/confidential_assets.md#calibration-baselines--acceptance-gates`-ում:
 
-| Date (UTC) | Commit | Profile | `ns/op` | `gas/op` | `ns/gas` | Notes |
+| Ամսաթիվ (UTC) | Պարտավորել | Անձնագիր | `ns/op` | `gas/op` | `ns/gas` | Ծանոթագրություններ |
 | --- | --- | --- | --- | --- | --- | --- |
-| 2025-10-18 | 3c70a7d3 | baseline-neon | 2.93e5 | 1.57e2 | 1.87e3 | Darwin 25.0.0 arm64e (hostinfo); `cargo bench -p iroha_core --bench isi_gas_calibration -- --sample-size=200 --warm-up-time=5 --save-baseline neon-20251018`; `cargo test -p iroha_core bench_repro -- --ignored`; `cargo bench -p ivm --bench gas_calibration -- --sample-size=200 --warm-up-time=5`; `rustc 1.88.0 (6b00bc3)` |
-| 2026-04-28 | 8ea9b2a7 | baseline-neon-20260428 | 4.29e6 | 1.57e2 | 2.73e4 | Darwin 25.0.0 arm64 (`rustc 1.91.0`). Command: `cargo bench -p iroha_core --bench isi_gas_calibration -- --sample-size=10 --warm-up-time=2 --noplot --save-baseline baseline-neon-20260428`; log at `docs/source/confidential_assets_calibration_neon_20260428.log`. x86_64 parity runs (SIMD-neutral + AVX2) are scheduled for the 2026-03-19 Zurich lab slot; artefacts will land under `artifacts/confidential_assets_calibration/2026-03-x86/` with matching commands and will be merged into the baseline table once captured. |
-| 2026-04-28 | — | baseline-simd-neutral | — | — | — | **Waived** on Apple Silicon—`ring` enforces NEON for the platform ABI, so `RUSTFLAGS="-C target-feature=-neon"` fails before the bench can run (`docs/source/confidential_assets_calibration_simd_neutral_attempt_20260428.log`). Neutral data stays gated on CI host `bench-x86-neon0`. |
-| 2026-04-28 | — | baseline-avx2 | — | — | — | **Deferred** until an x86_64 runner is available. `arch -x86_64` cannot spawn binaries on this machine (“Bad CPU type in executable”; see `docs/source/confidential_assets_calibration_avx2_attempt_20260428.log`). CI host `bench-x86-avx2a` remains the source of record. |
+| 2025-10-18 | 3c70a7d3 | բազային-նեոնային | 2.93e5 | 1.57e2 | 1.87e3 | Darwin 25.0.0 arm64e (hostinfo); `cargo bench -p iroha_core --bench isi_gas_calibration -- --sample-size=200 --warm-up-time=5 --save-baseline neon-20251018`; `cargo test -p iroha_core bench_repro -- --ignored`; `cargo bench -p ivm --bench gas_calibration -- --sample-size=200 --warm-up-time=5`; `rustc 1.88.0 (6b00bc3)` |
+| 2026-04-28 | 8ea9b2a7 | բազային-նեոն-20260428 | 4.29e6 | 1.57e2 | 2.73e4 | Darwin 25.0.0 arm64 (`rustc 1.91.0`): Հրաման՝ `cargo bench -p iroha_core --bench isi_gas_calibration -- --sample-size=10 --warm-up-time=2 --noplot --save-baseline baseline-neon-20260428`; մուտք գործել `docs/source/confidential_assets_calibration_neon_20260428.log`: x86_64 հավասարաչափ գործարկումներ (SIMD-չեզոք + AVX2) նախատեսված են 2026-03-19 Ցյուրիխի լաբորատորիայի համար; Արտեֆակտները կհայտնվեն `artifacts/confidential_assets_calibration/2026-03-x86/`-ի տակ՝ համապատասխան հրամաններով և կմիավորվեն բազային աղյուսակում, երբ նկարվեն: |
+| 2026-04-28 | — | բազային-simd-չեզոք | — | — | — | **Հրաժարվել է** Apple Silicon-ում. `ring`-ը պարտադրում է NEON-ը ABI պլատֆորմի համար, ուստի `RUSTFLAGS="-C target-feature=-neon"`-ը ձախողվում է մինչև նստարանն աշխատի (`docs/source/confidential_assets_calibration_simd_neutral_attempt_20260428.log`): Չեզոք տվյալները պահպանվում են CI հոսթի `bench-x86-neon0`-ում: |
+| 2026-04-28 | — | բազային-avx2 | — | — | — | **Հետաձգվում** մինչև x86_64 վազող հասանելի լինի: `arch -x86_64`-ը չի կարող երկուականներ ստեղծել այս մեքենայի վրա («Վատ պրոցեսորի տեսակը գործարկվող է», տես `docs/source/confidential_assets_calibration_avx2_attempt_20260428.log`): CI հոսթ `bench-x86-avx2a` մնում է ռեկորդային աղբյուր: |
 
-`ns/op` aggregates the median wall-clock per instruction measured by Criterion;
-`gas/op` is the arithmetic mean of the corresponding schedule costs from
-`iroha_core::gas::meter_instruction`; `ns/gas` divides the summed nanoseconds by
-the summed gas across the nine-instruction sample set.
+`ns/op`-ը միավորում է պատի ժամացույցի մեդիանը՝ չափանիշով չափված յուրաքանչյուր հրահանգի համար.
+`gas/op`-ը համապատասխան ժամանակացույցի ծախսերի թվաբանական միջինն է
+`iroha_core::gas::meter_instruction`; `ns/gas`-ը բաժանում է ամփոփված նանովայրկյանները
+ամփոփված գազը ինը հրահանգներից բաղկացած նմուշի հավաքածուում:
 
-*Note.* The current arm64 host does not emit Criterion `raw.csv` summaries out of
-the box; rerun with `CRITERION_OUTPUT_TO=csv` or an upstream fix before tagging a
-release so the artefacts required by the acceptance checklist are attached.
-If `target/criterion/` is still missing after `--save-baseline`, collect the run
-on a Linux host or serialize the console output into the release bundle as a
-temporary stop-gap. For reference, the arm64 console log from the latest run
-lives at `docs/source/confidential_assets_calibration_neon_20251018.log`.
+*Նշում։* Ներկայիս arm64 հոսթը չի թողարկում `raw.csv` չափանիշի ամփոփագրերը
+տուփ; կրկնել `CRITERION_OUTPUT_TO=csv`-ով կամ վերընթաց ուղղումով, նախքան a-ն նշելը
+թողարկել, որպեսզի ընդունման ստուգաթերթով պահանջվող արտեֆակտները կցվեն:
+Եթե `target/criterion/`-ը դեռ բացակայում է `--save-baseline`-ից հետո, հավաքեք վազքը
+Linux հոսթի վրա կամ սերիականացնել կոնսոլի ելքը թողարկման փաթեթի մեջ որպես ա
+ժամանակավոր կանգառ: Տեղեկատվության համար, arm64 կոնսոլի գրանցամատյանը վերջին գործարկումից
+ապրում է `docs/source/confidential_assets_calibration_neon_20251018.log`-ում:
 
-Per-instruction medians from the same run (`cargo bench -p iroha_core --bench isi_gas_calibration`):
+Մեկ հրահանգի միջինները նույն գործարկումից (`cargo bench -p iroha_core --bench isi_gas_calibration`).
 
-| Instruction | median `ns/op` | schedule `gas` | `ns/gas` |
+| Հրահանգ | միջին `ns/op` | ժամանակացույց `gas` | `ns/gas` |
 | --- | --- | --- | --- |
-| RegisterDomain | 3.46e5 | 200 | 1.73e3 |
-| RegisterAccount | 3.15e5 | 200 | 1.58e3 |
+| Գրանցվել Դոմեն | 3.46e5 | 200 | 1.73e3 |
+| ԳրանցվելՀաշիվ | 3.15e5 | 200 | 1.58e3 |
 | RegisterAssetDef | 3.41e5 | 200 | 1.71e3 |
 | SetAccountKV_small | 3.28e5 | 67 | 4.90e3 |
 | GrantAccountRole | 3.33e5 | 96 | 3.47e3 |
@@ -49,14 +50,12 @@ Per-instruction medians from the same run (`cargo bench -p iroha_core --bench is
 | MintAsset | 1.56e5 | 150 | 1.04e3 |
 | TransferAsset | 3.68e5 | 180 | 2.04e3 |
 
-### 2026-04-28 (Apple Silicon, NEON enabled)
+### 2026-04-28 (Apple Silicon, NEON միացված)
 
-Median latencies for the 2026-04-28 refresh (`cargo bench -p iroha_core --bench isi_gas_calibration -- --sample-size=10 --warm-up-time=2 --noplot --save-baseline baseline-neon-20260428`):
-
-| Instruction | median `ns/op` | schedule `gas` | `ns/gas` |
+Միջին ուշացումները 2026-04-28 թարմացման համար (`cargo bench -p iroha_core --bench isi_gas_calibration -- --sample-size=10 --warm-up-time=2 --noplot --save-baseline baseline-neon-20260428`):| Հրահանգ | միջին `ns/op` | ժամանակացույց `gas` | `ns/gas` |
 | --- | --- | --- | --- |
-| RegisterDomain | 8.58e6 | 200 | 4.29e4 |
-| RegisterAccount | 4.40e6 | 200 | 2.20e4 |
+| Գրանցվել Դոմեն | 8.58e6 | 200 | 4.29e4 |
+| Գրանցվել Հաշիվ | 4.40e6 | 200 | 2.20e4 |
 | RegisterAssetDef | 4.23e6 | 200 | 2.12e4 |
 | SetAccountKV_small | 3.79e6 | 67 | 5.66e4 |
 | GrantAccountRole | 3.60e6 | 96 | 3.75e4 |
@@ -65,19 +64,19 @@ Median latencies for the 2026-04-28 refresh (`cargo bench -p iroha_core --bench 
 | MintAsset | 3.92e6 | 150 | 2.61e4 |
 | TransferAsset | 3.59e6 | 180 | 1.99e4 |
 
-`ns/op` and `ns/gas` aggregates in the table above are derived from the sum of
-these medians (total `3.85717e7` ns across the nine-instruction set and 1,413
-gas units).
+Վերոնշյալ աղյուսակում `ns/op` և `ns/gas` ագրեգատները ստացվում են գումարից.
+այս մեդիանները (ընդհանուր `3.85717e7`ns ինը հրահանգների հավաքածուում և 1,413
+գազի ագրեգատներ):
 
-The schedule column is enforced by `gas::tests::calibration_bench_gas_snapshot`
-(total 1,413 gas across the nine-instruction set) and will trip if future patches
-change metering without updating the calibration fixtures.
+Ժամանակացույցի սյունակը պարտադրված է `gas::tests::calibration_bench_gas_snapshot`-ով
+(ընդհանուր 1,413 գազ ամբողջ ինը հրահանգների հավաքածուում) և կկանգնեցվի, եթե ապագա կարկատվեն
+փոխել հաշվառումը` առանց տրամաչափման սարքերը թարմացնելու:
 
-## Commitment Tree Telemetry Evidence (M2.2)
+## Պարտավորությունների ծառի հեռաչափության ապացույց (M2.2)
 
-Per roadmap task **M2.2**, every calibration run must capture the new
-commitment-tree gauges and eviction counters to prove the Merkle frontier stays
-within configured bounds:
+Ըստ ճանապարհային քարտեզի առաջադրանքի **M2.2**, յուրաքանչյուր չափաբերման առաջադրանք պետք է պարունակի նորը
+պարտավորությունների ծառաչափեր և վտարման հաշվիչներ՝ ապացուցելու Մերկլի սահմանի պահպանումը
+կազմաձևված սահմաններում.
 
 - `iroha_confidential_tree_commitments{asset_id}`
 - `iroha_confidential_tree_depth{asset_id}`
@@ -89,44 +88,44 @@ within configured bounds:
 - `iroha_confidential_frontier_evictions_total{asset_id}`
 - `iroha_zk_verifier_cache_events_total{cache,event}`
 
-Record the values immediately before and after the calibration workload. A
-single command per asset is sufficient; example for `xor#wonderland`:
+Գրանցեք արժեքները ստուգաչափման ծանրաբեռնվածությունից անմիջապես առաջ և հետո: Ա
+մեկ ակտիվի մեկ հրամանը բավարար է. օրինակ `xor#wonderland`-ի համար.
 
 ```bash
 curl -s http://127.0.0.1:8180/metrics \
   | rg 'iroha_confidential_(tree_(commitments|depth)|root_history_entries|frontier_(checkpoints|last_checkpoint_height|last_checkpoint_commitments)|root_evictions_total|frontier_evictions_total){asset_id="xor#wonderland"}'
 ```
 
-Attach the raw output (or Prometheus snapshot) to the calibration ticket so the
-governance reviewer can confirm root-history caps and checkpoint intervals are
-honoured. The telemetry guide in `docs/source/telemetry.md#confidential-tree-telemetry-m22`
-expands on alerting expectations and the associated Grafana panels.
+Կցեք չմշակված ելքը (կամ Prometheus լուսանկարը) տրամաչափման տոմսին, որպեսզի
+Կառավարման վերանայողը կարող է հաստատել արմատային պատմության գլխարկները և անցակետերի միջակայքերը
+մեծարված. Հեռաչափության ուղեցույցը `docs/source/telemetry.md#confidential-tree-telemetry-m22`-ում
+ընդլայնում է ահազանգման ակնկալիքները և հարակից Grafana վահանակները:
 
-Include the verifier cache counters in the same scrape so reviewers can confirm
-the miss ratio stayed below the 40 % warning threshold:
+Ներառեք ստուգիչի քեշի հաշվիչները նույն քերծվածքում, որպեսզի վերանայողները կարողանան հաստատել
+բաց թողնված հարաբերակցությունը մնացել է 40% նախազգուշացման շեմից ցածր.
 
 ```bash
 curl -s http://127.0.0.1:8180/metrics \\
   | rg 'iroha_zk_verifier_cache_events_total{cache="vk",event="(hit|miss)"}'
 ```
 
-Document the derived ratio (`miss / (hit + miss)`) inside the calibration note
-to show the SIMD-neutral cost modelling exercises reused warm caches instead of
-thrashing the Halo2 verifier registry.
+Փաստաթղթավորեք ստացված հարաբերակցությունը (`miss / (hit + miss)`) տրամաչափման գրության ներսում
+ցուցադրելու համար SIMD-ի չեզոք արժեքի մոդելավորման վարժությունները, փոխարենը կրկին օգտագործված տաք պահոցներ
+thrashing Halo2 ստուգիչ ռեեստրի.
 
-## Neutral & AVX2 Waiver
+## Չեզոք և AVX2 հրաժարում
 
-SDK Council granted a temporary waiver for the Phase C gate requiring
-`baseline-simd-neutral` and `baseline-avx2` measurements:
+SDK խորհուրդը ժամանակավոր հրաժարում է տվել PhaseC դարպասի համար, որը պահանջում է
+`baseline-simd-neutral` և `baseline-avx2` չափումներ.
 
-- **SIMD-neutral:** On Apple Silicon the `ring` crypto backend enforces NEON for
-  ABI correctness. Disabling the feature (`RUSTFLAGS="-C target-feature=-neon"`)
-  aborts the build before the bench binary is produced (`docs/source/confidential_assets_calibration_simd_neutral_attempt_20260428.log`).
-- **AVX2:** The local toolchain cannot spawn x86_64 binaries (`arch -x86_64 rustc -V`
-  → “Bad CPU type in executable”; see
-  `docs/source/confidential_assets_calibration_avx2_attempt_20260428.log`).
+- **SIMD-չեզոք:** Apple Silicon-ի վրա `ring` կրիպտո ֆոնդը պարտադրում է NEON-ը
+  ABI կոռեկտություն. Գործառույթի անջատում (`RUSTFLAGS="-C target-feature=-neon"`)
+  ընդհատում է կառուցումը նախքան նստարանի երկուականի արտադրությունը (`docs/source/confidential_assets_calibration_simd_neutral_attempt_20260428.log`):
+- **AVX2:** Տեղական գործիքների շղթան չի կարող ստեղծել x86_64 երկուականներ (`arch -x86_64 rustc -V`
+  → «Վատ պրոցեսորի տեսակը գործարկվող է»; տես
+  `docs/source/confidential_assets_calibration_avx2_attempt_20260428.log`):
 
-Until CI hosts `bench-x86-neon0` and `bench-x86-avx2a` are online, the NEON run
-above plus the telemetry evidence satisfy the Phase C acceptance criteria.
-The waiver is recorded in `status.md` and will be revisited once x86 hardware is
-available.
+Քանի դեռ CI հոսթեր `bench-x86-neon0` և `bench-x86-avx2a` առցանց չեն, NEON-ը գործարկվում է
+վերևում գումարած հեռաչափության ապացույցները բավարարում են PhaseC-ի ընդունման չափանիշները:
+Հրաժարումը գրանցված է `status.md`-ում և կվերանայվի, երբ x86 սարքավորումը միանա
+հասանելի.

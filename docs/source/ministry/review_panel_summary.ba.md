@@ -9,19 +9,20 @@ source_last_modified: "2025-12-29T18:16:35.983094+00:00"
 translation_last_reviewed: 2026-02-07
 title: Review Panel Summary Workflow (MINFO-4a)
 summary: Generate the neutral referendum summary with balanced citations, AI manifest references, and volunteer brief coverage.
+translator: machine-google-reviewed
 ---
 
-# Review Panel Summary (MINFO-4a)
+# панель панелендә резюме (МИНФО-4а)
 
-Roadmap item **MINFO-4a — Neutral summary generator** requires a reproducible workflow that turns an accepted agenda proposal, the volunteer brief corpus, and the attested AI moderation manifest into a neutral referendum summary. The deliverable must:
+Юл картаһы пункты **MINFO-4a — Нейтраль резюме генераторы** ҡабул ителгән көн тәртибе тәҡдимен, ирекмәндәр ҡыҫҡа корпусын һәм аттестлы ЯИ модерацияһын нейтраль референдум референдум резюмеһына әйләндергән ҡабатланған эш ағымы талап итә. Тапшырыу тейеш:
 
-- Record the output as a Norito structure (`ReviewPanelSummaryV1`) so governance can archive it alongside manifests and ballots.
-- Lint the source material, failing fast when the review panel does not have balanced support/oppose coverage or when facts are missing citations.
-- Reference the AI manifest and the proposal evidence bundle in every highlight, ensuring the policy jury sees both automated and human context before voting.
+- Norito структураһы (`ReviewPanelSummaryV1`) булараҡ сығышты яҙып алығыҙ, шуға күрә идара итеү уны манифест һәм бюллетендәр менән бергә архивлай ала.
+- Сығанаҡ материалын линт, тиҙ етешһеҙлеккә осрағанда, ҡасан тикшерелгән панель баланслы ярҙам/ҡаршы ҡаплау йәки ҡасан факттар цитаталар юҡ.
+- Һылтанма AI манифест һәм тәҡдим дәлилдәре өйөмө һәр өҫтөнлөк, тәьмин итеү сәйәсәт жюри автоматлаштырылған һәм кеше контексын күрә, тауыш биргәнсе.
 
-## CLI usage
+## CLI ҡулланыу
 
-The workflow ships as part of `cargo xtask`:
+Эш ағымы `cargo xtask` составында:
 
 ```bash
 cargo xtask ministry-panel synthesize \
@@ -32,23 +33,36 @@ cargo xtask ministry-panel synthesize \
 --output artifacts/review_panel/AC-2026-001-RP-2026-05.json
 ```
 
-Required inputs:
+Кәрәкле индереүҙәр:
 
-1. `--proposal` – JSON payload adhering to `AgendaProposalV1`. The helper validates the schema before generating the summary.
-2. `--volunteer` – JSON array of volunteer briefs that follow `docs/source/ministry/volunteer_brief_template.md`. Off-topic entries are ignored automatically.
-3. `--ai-manifest` – Governance-signed `ModerationReproManifestV1` describing the AI committee that screened the content.
-4. `--panel-round` – Identifier for the current review round (`RP-YYYY-##`).
-5. `--output` – Destination file or `-` to stream to stdout. Use `--language` to override the proposal language and `--generated-at` to supply a deterministic Unix timestamp (milliseconds) when backfilling history.
+1. `--proposal` – JSON файҙалы йөкләмәләр үтәгән `AgendaProposalV1`. Ярҙамсы резюме генерациялау алдынан схеманы раҫлай.
+2. `--volunteer` – JSON массив ирекмәндәр брифтары, улар `docs/source/ministry/volunteer_brief_template.md` X. Теманан тыш яҙмалар автоматик рәүештә иғтибарға алынмай.
+.
+4. `--panel-round` – Ағымдағы тикшерелгән тур өсөн идентификатор (`RP-YYYY-##`).
+. Ҡулланыу `--language` тәҡдим теле һәм `--generated-at` өҫтөндә эшләү өсөн детерминистик Unix ваҡыт маркаһы (миллисекундтар) тәьмин итеү өсөн, ҡасан тарихы кире тултырыу.
 
-Once the standalone summary is generated, run the
-[`cargo xtask ministry-panel packet`](referendum_packet.md) helper to assemble
-the complete referendum dossier (`ReferendumPacketV1`). Supplying
-`--summary-out` to the packet command will persist the same summary file while
-embedding it inside the packet object for downstream consumers.
+Бер тапҡыр үҙ аллы резюме генерацияланған, йүгерергә
+[`cargo xtask ministry-panel packet`] (referendum_packet.md) йыйыу өсөн ярҙамсы
+тулы референдум досье (`ReferendumPacketV1`). Тәьмин итеү
+`--summary-out` пакет командаһына шул уҡ резюме файлы һаҡланасаҡ, ә
+уны индереү өсөн пакет объекты өсөн аҫҡы ҡулланыусылар өсөн.
 
-### Automation via `ministry-transparency ingest`
+### автоматлаштырыу аша `ministry-transparency ingest`
 
-Teams that already run `cargo xtask ministry-transparency ingest` for quarterly evidence bundles can now stitch the review panel summary into the same pipeline:
+Командалар, улар инде эшләй ```bash
+cargo xtask ministry-transparency ingest \
+  --quarter 2026-Q4 \
+  --ledger artifacts/ministry/ledger.json \
+  --appeals artifacts/ministry/appeals.json \
+  --denylist artifacts/ministry/denylist.json \
+  --treasury artifacts/ministry/treasury.json \
+  --volunteer artifacts/ministry/volunteer_briefs.json \
+  --panel-proposal artifacts/ministry/proposal_AC-2026-041.json \
+  --panel-ai-manifest artifacts/ministry/ai_manifest.json \
+  --panel-round RP-2026-05 \
+  --panel-summary-out artifacts/ministry/review_panel_summary.json \
+  --output artifacts/ministry/ingest.json
+``` өсөн квартал һайын дәлилдәр өйөмдәре хәҙер панель резюмеһын шул уҡ торбаға тегә ала:
 
 ```bash
 cargo xtask ministry-transparency ingest \
@@ -65,31 +79,29 @@ cargo xtask ministry-transparency ingest \
   --output artifacts/ministry/ingest.json
 ```
 
-All four `--panel-*` flags must be supplied together (and require `--volunteer`). The command emits the review panel summary to `--panel-summary-out`, embeds the parsed payload inside the ingest snapshot, and records a checksum so downstream tooling can attest to the evidence.
+Бөтә дүрт `--panel-*` флагтары бергә тәьмин ителергә тейеш (һәм `--volunteer` талап итә). Команда тикшерелгән панель резюме `--panel-summary-out`, һеңдерелгән файҙалы йөк эсендә ингест снимок, һәм теркәү суммаһы шулай аҫҡы инструменталь раҫлай ала дәлилдәр.
 
-## Linting and failure modes
+## Бәйләнеш һәм етешһеҙлектәр режимдары
 
-`cargo xtask ministry-panel synthesize` enforces the following invariants before writing the summary:
+`cargo xtask ministry-panel synthesize` резюме яҙғанға тиклем түбәндәге инварианттарҙы үтәй:
 
-- **Balanced stances:** at least one support brief and one oppose brief must be present. Missing coverage terminates the run with a descriptive error.
-- **Citation coverage:** highlights are only produced from fact rows that include citations. Missing citations never block the build, but each affected brief is listed under `warnings[]` in the output.
-- **Per-highlight references:** every highlight includes references to (a) the volunteer fact row(s), (b) the AI manifest ID, and (c) the first evidence attachment from the proposal so the packet always links back to the signed artefacts.
+- **Баланслы позициялар:** кәмендә бер ярҙам ҡыҫҡа һәм бер ҡаршы ҡыҫҡа булырға тейеш. Яҡтылыҡ юғалған йүгереүҙе тасуири хата менән туҡтата.
+- **Цитит ҡаплауы:** өҫтөнлөктәре тик факт рәттәрҙән етештерелә, улар цитаталарҙы үҙ эсенә ала. Һуң цитаталар бер ҡасан да блокировка төҙөү, әммә һәр ҡағылған ҡыҫҡаса `warnings[]` буйынса исемлеккә индерелгән етештереү.
+- **Һәр өҫтөнлөклө һылтанмалар:** һәр өҫтөнлөккә һылтанмаларҙы үҙ эсенә ала (а) ирекмәндәр факты рәт (s), (б) AI манифест идентификаторы, һәм (в) тәҡдимдән беренсе дәлилдәр беркетелгән шулай пакет һәр ваҡыт һылтанмалар менән кире ҡул ҡуйылған артефакттар.Әгәр ҙә ниндәй ҙә булһа чек уңышһыҙлыҡҡа осрай, команда нулдән тыш статусы менән сыға һәм проблемалы яҙмала мәрәйҙәр. Уңышлы йүгерә `ReviewPanelSummaryV1` схемаһына тап килгән JSON файлын яҙа һәм идара итеү манифестарында һеңдерелергә мөмкин.
 
-If any check fails, the command exits with a non-zero status and points at the problematic record. Successful runs write a JSON file that matches the `ReviewPanelSummaryV1` schema and can be embedded in governance manifests.
+## Сығыш структураһы
 
-## Output structure
+`ReviewPanelSummaryV1` йәшәй Norito һәм һәр ҡулланыусы өсөн `iroha_data_model` йәшник аша мөмкин. Төп бүлектәрҙә:
 
-`ReviewPanelSummaryV1` lives in `crates/iroha_data_model/src/ministry/mod.rs` and is available to every consumer via the `iroha_data_model` crate. Key sections include:
+- `overview` – Титул, нейтраль дөйөм хөкөм, һәм ҡарар контексты өсөн сәйәсәт присяжныйҙар пакеты.
+- `stance_distribution` – Бер позицияға брифтар һәм факттар рәттәре. Аҫҡа приборҙар таҡталары был уҡыуҙы раҫлау өсөн яҡтыртыу алдынан баҫтырыу.
+- `highlights` – Тулы квалификациялы цитаталар менән бер позицияға ике фактҡа тиклем.
+- `ai_manifest` – Ҡабатлаусанлыҡ манифестынан алынған метамағлүмәттәр экстракцияланған (нисек UUID, йүгерсе версияһы, сиктәр).
+- `volunteer_references` – Пер-ҡыҫҡаса статистика (тел, позиция, рәттәр, рәт-рәттәрҙе цитаталар) аудит өсөн.
+- `warnings` – Ирекле форма линт хәбәрҙәре һүрәтләгән әйберҙәрҙе һүрәтләгән (мәҫәлән, цитаталар юҡ факт рәттәре).
 
-- `overview` – Title, neutral summary sentence, and decision context for the policy jury packet.
-- `stance_distribution` – Count of briefs and fact rows per stance. Downstream dashboards read this to confirm coverage before publishing.
-- `highlights` – Up to two fact summaries per stance with fully qualified citations.
-- `ai_manifest` – Extracted metadata from the reproducibility manifest (manifest UUID, runner version, thresholds).
-- `volunteer_references` – Per-brief statistics (language, stance, rows, cited rows) for audit.
-- `warnings` – Free-form lint messages describing skipped items (e.g., fact rows with missing citations).
+## Миҫал
 
-## Example
+`docs/examples/ministry/review_panel_summary_example.json` ярҙамсы менән етештерелгән тулы өлгө бар. Ул баланслы ярҙам/ҡаршы яҡтыртыу күрһәтә, цитата проводка, асыҡ һылтанмалар, һәм иҫкәрткән ептәр өсөн факт рәттәр, уларҙы пропагандалау мөмкин булмаған өҫтөнлөктәр. Ҡулланғанда, ҡасан оҙайтыу приборҙар таҡтаһы, идара итеү күренә, йәки SDK инструменттар, улар нейтраль резюме ҡулланырға кәрәк.
 
-`docs/examples/ministry/review_panel_summary_example.json` contains a full sample produced with the helper. It demonstrates balanced support/oppose coverage, citation wiring, manifest references, and warning strings for fact rows that could not be promoted to highlights. Use it when extending dashboards, governance manifests, or SDK tooling that need to consume the neutral summary.
-
-> **Tip:** include the generated summary alongside the signed AI manifest and volunteer brief digest in the referendum evidence bundle so policy juries can verify every artifact referenced by the review panel.
+> **Тип:** генерацияланған резюме менән бер рәттән ҡул ҡуйылған манифест һәм ирекмәндәр ҡыҫҡа һеңдерелгән референдум дәлилдәр өйөмөндә үҙ эсенә ала, шулай итеп, сәйәсәт присяжныйҙары һәр артефакт тикшерә ала һылтанма тикшерелгән панель.

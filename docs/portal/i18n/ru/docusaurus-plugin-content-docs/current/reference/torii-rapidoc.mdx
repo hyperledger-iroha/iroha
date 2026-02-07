@@ -4,27 +4,28 @@ direction: ltr
 source: docs/portal/docs/reference/torii-rapidoc.mdx
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-import RapiDocPanel from '@site/src/components/RapiDocPanel.jsx';
+импортируйте RapiDocPanel из @site/src/comComponents/RapiDocPanel.jsx;
 
 # Torii API (RapiDoc)
 
-`RapiDoc` offers a compact, documentation-first rendering of the same Torii
-OpenAPI document. Use it when you need a denser overview or read-only review of
-request/response models.
+`RapiDoc` предлагает компактную, ориентированную на документацию визуализацию того же Torii.
+Документ OpenAPI. Используйте его, когда вам нужен более подробный обзор или обзор, доступный только для чтения.
+модели запрос/ответ.
 
-## Usage tips
+## Советы по использованию
 
-- Enter a bearer token to enable interactive calls. The value is forwarded as an
-  `X-TryIt-Auth` header and normalised by the proxy.
-- Configure `TRYIT_PROXY_PUBLIC_URL` when serving the portal so interactive
-  requests are routed through the staging proxy. The widget warns when the proxy
-  URL is missing.
-- Use the “OpenAPI snapshot” dropdown to load historical specs published by
-  `npm run sync-openapi`; the `Latest (tracked)` option always resolves to
+- Введите токен носителя, чтобы включить интерактивные вызовы. Значение передается как
+  `X-TryIt-Auth` и нормализуется прокси.
+- Настройте `TRYIT_PROXY_PUBLIC_URL` при обслуживании портала в интерактивном режиме.
+  запросы направляются через промежуточный прокси. Виджет предупреждает, когда прокси
+  URL-адрес отсутствует.
+- Используйте раскрывающийся список «OpenAPI snapshot», чтобы загрузить исторические характеристики, опубликованные
+  `npm run sync-openapi`; опция `Latest (tracked)` всегда разрешается в
   `/openapi/torii.json`.
-- Combine with the “[Try it](/api/overview#try-it-sandbox-docs-3)” console when
-  working against staged gateways requiring the proxy.
+- Объедините с консолью «[Попробуйте] (/api/overview#try-it-sandbox-docs-3)», когда
+  работа с поэтапными шлюзами, требующими прокси.
 
-<RapiDocPanel />

@@ -8,169 +8,160 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Preview feedback logging
 sidebar_label: Feedback logging
 description: How DOCS-SORA records invite waves, telemetry events, and feedback digests for the docs portal preview.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-import previewFeedbackSummary from '@site/src/data/previewFeedbackSummary.json';
-
-function FeedbackSummaryTable() {
-  const waves = previewFeedbackSummary?.waves ?? [];
+从'@site/src/data/previewFeedbackSummary.json'导入previewFeedbackSummary；函数反馈汇总表（）{
+  const 波 = PreviewFeedbackSummary?.waves ?? []；
   if (waves.length === 0) {
-    return (
-      <p>
-        No preview feedback entries have been recorded in
-        {' '}
-        <code>{previewFeedbackSummary?.source ?? 'artifacts/docs_portal_preview/feedback_log.json'}</code>
-        .
-      </p>
-    );
+    返回（
+      
+        没有记录任何预览反馈条目
+        {''}
+        {previewFeedbackSummary?.source ?? 'artifacts/docs_portal_preview/feedback_log.json'}
+        。
+      
+    ）；
   }
-  return (
-    <table>
-      <thead>
-        <tr>
-          <th>Wave</th>
-          <th>Status</th>
-          <th>Total events</th>
-          <th>Invites</th>
-          <th>Open invites</th>
-          <th>Acknowledged</th>
-          <th>Revoked</th>
-          <th>Feedback</th>
-          <th>Issues</th>
-          <th>Completion %</th>
-          <th>Ack %</th>
-          <th>Response rate</th>
-          <th>Ack latency (avg h)</th>
-          <th>Feedback latency (avg h)</th>
-          <th>Last event</th>
-          <th>Days since last event</th>
-        </tr>
-      </thead>
-      <tbody>
+  返回（
+    
+      
+        
+          波浪
+          状态
+          事件总数
+          邀请
+          公开邀请
+          已确认
+          已撤销
+          反馈
+          问题
+          完成百分比
+          确认百分比
+          响应率
+          确认延迟（平均小时）
+          反馈延迟（平均小时）
+          最后一个活动
+          自上次活动以来的天数
+        
+      
+      
         {waves.map((wave) => {
-          const feedback = wave.feedbackCount ?? wave.eventCounts?.['feedback-submitted'] ?? 0;
-          const issues = wave.issuesCount ?? wave.eventCounts?.['issue-opened'] ?? 0;
-          const acknowledgements =
-            wave.acknowledgements ?? wave.eventCounts?.acknowledged ?? 0;
-          const revocations =
-            wave.revocations ?? wave.eventCounts?.['access-revoked'] ?? 0;
-          const responseRate =
-            wave.responseRatePercent == null ? '—' : `${wave.responseRatePercent}%`;
-          const completionPercent =
+          常量反馈 = wave.feedbackCount ?? wave.eventCounts?.['反馈已提交'] ?? 0;
+          const issues = wave.issuesCount ?? wave.eventCounts?.['问题已打开'] ?? 0;
+          常量致谢 =
+            波.致谢?? wave.eventCounts？.已确认？？ 0;
+          常量撤销 =
+            波.撤销?? wave.eventCounts？.['访问被撤销'] ?? 0;
+          常量响应率 =
+            wave.responseRatePercent == null ？ '—'：`${wave.responseRatePercent}%`；
+          常量完成百分比 =
             wave.inviteCompletionPercent == null
-              ? '—'
-              : `${wave.inviteCompletionPercent}%`;
-          const ackPercent =
-            wave.ackRatePercent == null ? '—' : `${wave.ackRatePercent}%`;
-          const ackLatency =
-            wave.ackLatencyHoursAvg == null ? '—' : wave.ackLatencyHoursAvg;
-          const feedbackLatency =
-            wave.feedbackLatencyHoursAvg == null ? '—' : wave.feedbackLatencyHoursAvg;
-          return (
-            <tr key={wave.wave}>
-              <td>{wave.wave}</td>
-              <td>{wave.status ?? 'pending'}</td>
-              <td>{wave.totalEvents}</td>
-              <td>{wave.invites?.total ?? 0}</td>
-              <td>{wave.invites?.open ?? 0}</td>
-              <td>{acknowledgements}</td>
-              <td>{revocations}</td>
-              <td>{feedback}</td>
-              <td>{issues}</td>
-              <td>{completionPercent}</td>
-              <td>{ackPercent}</td>
-              <td>{responseRate}</td>
-              <td title={wave.ackLatencyHoursP95 == null ? undefined : `p95 ${wave.ackLatencyHoursP95}h`}>
-                {ackLatency}
-              </td>
-              <td
-                title={
-                  wave.feedbackLatencyHoursP95 == null
-                    ? undefined
-                    : `p95 ${wave.feedbackLatencyHoursP95}h`
-                }
-              >
-                {feedbackLatency}
-              </td>
-              <td>{wave.lastEventTimestamp ?? '—'}</td>
-              <td>{wave.daysSinceLastEvent ?? '—'}</td>
-            </tr>
-          );
-        })}
-      </tbody>
-    </table>
-  );
+              ？ '——'
+              ：`${wave.inviteCompletionPercent}%`；
+          常量确认百分比 =
+            wave.ackRatePercent == null ？ '—'：`${wave.ackRatePercent}%`；
+          常量确认延迟 =
+            wave.ackLatencyHoursAvg == null ？ '—' : wave.ackLatencyHoursAvg;
+          常量反馈延迟 =
+            wave.feedbackLatencyHoursAvg == null ？ '—' : wave.feedbackLatencyHoursAvg;
+          返回（
+            
+              {wave.wave}
+              {wave.status ?? '待处理'}
+              {wave.totalEvents}
+              {wave.invites?.total ?? 0}
+              {wave.invites?.open ?? 0}
+              {致谢}
+              {撤销}
+              {反馈}
+              {问题}
+              {完成百分比}
+              {ackPercent}
+              {responseRate}
+              
+                {确认延迟}
+              
+              
+                {反馈延迟}
+              
+              {wave.lastEventTimestamp ?? '—'}
+              {wave.daysSinceLastEvent ?? '—'}
+            
+          ）；})}
+      
+    
+  ）；
 }
 
-The roadmap calls for verifiable evidence whenever we invite reviewers into the
-docs portal preview. This note explains how to capture that evidence with the
-`preview-feedback-log` helper, how to share the resulting artefacts with
-governance, and where to file digests once a wave closes.
+每当我们邀请审稿人加入时，路线图都要求提供可验证的证据
+文档门户预览。本说明解释了如何使用以下方法捕获证据
+`preview-feedback-log` 帮助程序，如何与以下人员共享生成的工件
+治理，以及浪潮结束后在哪里提交摘要。
 
-## Why we log feedback
+## 为什么我们记录反馈
 
-- **Compliance:** every invite must record who accessed the preview, when they
-  acknowledged the acceptable-use policy, and when their access was revoked.
-- **Telemetry correlation:** the log lets us correlate portal telemetry spikes
-  or Try it traffic with specific invite cohorts.
-- **Governance evidence:** each DOCS-SORA checkpoint needs a machine-readable
-  summary showing invite counts, open reviewers, and the state of outstanding
-  issues.
+- **合规性：** 每个邀请都必须记录谁访问了预览、何时访问
+  承认可接受的使用政策，以及他们的访问权限何时被撤销。
+- **遥测关联：** 日志让我们可以关联门户遥测峰值
+  或尝试特定邀请群体的流量。
+- **治理证据：** 每个 DOCS-SORA 检查点都需要一个机器可读的
+  显示邀请计数、开放审稿人以及杰出状态的摘要
+  问题。
 
-All evidence lives under `artifacts/docs_portal_preview/` so it can be attached
-to the invite wave ticket or governance review without scraping CI logs.
+所有证据均位于 `artifacts/docs_portal_preview/` 下，因此可以附加
+无需抓取 CI 日志即可进行邀请波票或治理审查。
 
-## Live invite summary
+## 直播邀请总结
 
-`docs/portal/scripts/preview-feedback-summary.mjs` ingests the shared log and
-writes `src/data/previewFeedbackSummary.json` during `npm run build`. The table
-below renders that JSON so reviewers can see the current invite footprint
-without running the CLI helper.
+`docs/portal/scripts/preview-feedback-summary.mjs` 摄取共享日志并
+在 `npm run build` 期间写入 `src/data/previewFeedbackSummary.json`。桌子
+下面呈现该 JSON，以便审阅者可以看到当前的邀请足迹
+无需运行 CLI 帮助程序。
 
-<FeedbackSummaryTable />
 
-In addition to the invite totals, the summary now surfaces acknowledgement and
-revocation counts, the derived response rate (feedback submissions divided by
-total invites), and the average latency (with a hoverable p95) between an
-invite and the reviewer’s acknowledgement or feedback submission. The new
-**Completion %** column shows how many invites have been closed (acknowledged or
-revoked), while **Ack %** highlights how many recipients explicitly confirmed
-the acceptable-use steps. These derived percentages—plus the JSON-only
-revocation/issue rates—feed the governance dashboards so reviewers can confirm
-both participation levels and turnaround time without running the CLI helper.
-The **Status** column highlights whether a wave is still
-active (`active`), closed but within the 14-day monitoring window (`closed`), or
-ready for archival (`archived`). The **Days since last event** metric shows how
-long it has been since the final invite/feedback action so councils can spot
-waves that need to be wrapped up or re-engage lingering recipients.
 
-### Wave `preview-20260218` recap
+除了邀请总数之外，摘要现在还显示致谢和
+撤销计数，得出的响应率（反馈提交除以
+总邀请数），以及每次邀请之间的平均延迟（使用可悬停的 p95）
+邀请和审稿人的确认或反馈提交。新的
+**完成%** 列显示已关闭的邀请数量（已确认或已确认）
+撤销），而 **Ack %** 突出显示有多少收件人明确确认
+可接受的使用步骤。这些派生百分比 — 加上仅 JSON
+撤销/问题率——提供给治理仪表板，以便审阅者可以确认
+无需运行 CLI 帮助程序即可实现参与级别和周转时间。
+**状态**列突出显示波浪是否静止
+活跃 (`active`)，关闭但在 14 天监控窗口内 (`closed`)，或
+准备存档 (`archived`)。 **自上次事件以来的天数**指标显示了如何
+距离最后一次邀请/反馈行动已经过去很长时间了，以便议会能够发现
+需要结束或重新吸引挥之不去的接收者的波浪。
 
-- **Scope:** Finance beta, observability ops, SDK partner, and ecosystem advocate reviewers invited on **2026‑02‑18** ahead of the next DOCS-SORA checkpoint.
-- **Metrics:** 4 invites, 4 acknowledgements, 4 revocations, and 4 feedback submissions (`responseRatePercent = 100`) with a single follow-up issue (`DOCS-SORA-Preview-20260218`) filed by the observability cohort.
-- **Evidence:** `artifacts/docs_portal_preview/feedback_log.json` now includes the detailed event timeline for this wave and `artifacts/docs_portal_preview/preview-20260218-summary.json` captures the normalized metrics we attach to governance packets. Regenerating the portal data via `npm run --prefix docs/portal preview:log -- --summary --summary-json` pulls the same numbers into `src/data/previewFeedbackSummary.json`.
-- **Wave helper:** `npm run --prefix docs/portal preview:wave -- --wave preview-20260218 --invite-start 2026-02-18 --invite-end 2026-02-28 --report-date 2026-03-01 --notes "Finance/observability beta wave"` emits the per-wave summary, digest, and refreshed portal data in one step.
-- **Follow-ups:** Observability feedback scoped additional CSP examples for Try it requests; Docs/DevRel are tracking the write-up under `docs/portal/docs/sorafs/observability-plan.md` (§4.2) so the next invite wave can validate the fix. The full recap lives in [`preview-feedback/w3/summary.md`](./preview-feedback/w3/summary.md) with the timeline captured in [`preview-feedback/w3/log.md`](./preview-feedback/w3/log.md).
+### Wave `preview-20260218` 回顾- **范围：** 在下一个 DOCS-SORA 检查点之前于 **2026-02-18** 邀请财务测试版、可观察性操作、SDK 合作伙伴和生态系统倡导者审阅者。
+- **指标：** 4 个邀请、4 个确认、4 个撤销和 4 个反馈提交 (`responseRatePercent = 100`)，以及由可观察性队列提交的单个后续问题 (`DOCS-SORA-Preview-20260218`)。
+- **证据：** `artifacts/docs_portal_preview/feedback_log.json` 现在包括此波的详细事件时间线，`artifacts/docs_portal_preview/preview-20260218-summary.json` 捕获我们附加到治理数据包的标准化指标。通过 `npm run --prefix docs/portal preview:log -- --summary --summary-json` 重新生成门户数据会将相同的数字拉入 `src/data/previewFeedbackSummary.json`。
+- **Wave 助手：** `npm run --prefix docs/portal preview:wave -- --wave preview-20260218 --invite-start 2026-02-18 --invite-end 2026-02-28 --report-date 2026-03-01 --notes "Finance/observability beta wave"` 一步发出每一波摘要、摘要和刷新的门户数据。
+- **后续行动：** 可观察性反馈范围包括尝试请求的其他 CSP 示例； Docs/DevRel 正在跟踪 `docs/portal/docs/sorafs/observability-plan.md` (§4.2) 下的记录，以便下一次邀请波可以验证修复。完整回顾位于 [`preview-feedback/w3/summary.md`](./preview-feedback/w3/summary.md) 中，时间线在 [`preview-feedback/w3/log.md`](./preview-feedback/w3/log.md) 中捕获。
 
-## Event taxonomy
+## 事件分类
 
-| Event | When to record it | Notes |
-| --- | --- | --- |
-| `invite-sent` | Immediately after sending an invite email. | Append one entry per recipient so invite counts stay accurate. |
-| `acknowledged` | When the reviewer confirms they read the security/observability docs and ran the checksum gate. | Optional but recommended for partner cohorts. |
-| `feedback-submitted` | When a reviewer files a finding via the agreed tracker. | Include the issue/link in the `--notes` field. |
-| `issue-opened` | When DOCS-SORA files a follow-up issue derived from feedback. | Helps governance correlate roadmap items to preview feedback. |
-| `access-revoked` | Once the reviewer’s preview window ends or access is revoked early. | Required so the “open recipients” count stays accurate. |
+|活动 |什么时候记录|笔记|
+| ---| ---| ---|
+| `invite-sent` |发送邀请电子邮件后立即。 |为每个收件人附加一个条目，以便邀请计数保持准确。 |
+| `acknowledged` |当审阅者确认他们阅读了安全性/可观察性文档并运行校验和门时。 |可选，但建议合作伙伴群体使用。 |
+| `feedback-submitted` |当审阅者通过商定的跟踪器提交调查结果时。 |在 `--notes` 字段中包含问题/链接。 |
+| `issue-opened` |当 DOCS-SORA 提交来自反馈的后续问题时。 |帮助治理将路线图项目关联起来以预览反馈。 |
+| `access-revoked` |一旦审阅者的预览窗口结束或访问权限被提前撤销。 |必需的，以便“开放收件人”计数保持准确。 |
 
-If you need an additional event, add it to
-`VALID_EVENTS` inside `docs/portal/scripts/preview-feedback-log.mjs` and update
-this table in the same change.
+如果您需要其他活动，请将其添加到
+`VALID_EVENTS` 内部 `docs/portal/scripts/preview-feedback-log.mjs` 并更新
+这个表在同样的变化。
 
-## Logging workflow
+## 日志记录工作流程
 
-The helper behind `npm run preview:log` writes a single JSON log that captures
-all events. Each entry contains the wave label, recipient, event, timestamp, and
-optional notes. Example:
+`npm run preview:log` 背后的帮助程序编写一个捕获的 JSON 日志
+所有事件。每个条目包含波标签、收件人、事件、时间戳和
+可选注释。示例：
 
 ```json
 {
@@ -195,7 +186,7 @@ optional notes. Example:
 }
 ```
 
-Commands:
+命令：
 
 ```bash
 # Append a new event (defaults to artifacts/docs_portal_preview/feedback_log.json)
@@ -225,51 +216,49 @@ npm run --prefix docs/portal preview:digest -- \
   --out artifacts/docs_portal_preview/preview-20260204-digest.md
 ```
 
-Tips:
+温馨提示：
 
-- Place the log under version control when working in a feature branch so other
-  maintainers can review changes. For long-running waves store the log in the
-  governance ticket and attach the final version to the release artefacts.
-- `preview:log` accepts `--log <path>` when you need to log directly inside a
-  SoraFS bundle or CI workspace.
-- Always include a `--notes` hint (issue link, GitHub handle, cohort ID) so the
-  summary is useful during the retrospective.
-- When you need deterministic summary timestamps (for CI or docs snapshots),
-  set `PREVIEW_FEEDBACK_NOW=<iso8601 timestamp>` before running the summary
-  helper. This keeps the `generatedAt`, status, and day counters consistent
-  across rebuilds.
+- 在功能分支中工作时将日志置于版本控制之下，以便其他
+  维护者可以审查更改。对于长时间运行的波形，将日志存储在
+  治理票证并将最终版本附加到发布工件中。
+- 当您需要直接登录时，`preview:log` 接受 `--log <path>`
+  SoraFS 捆绑包或 CI 工作区。
+- 始终包含 `--notes` 提示（问题链接、GitHub 句柄、群组 ID），以便
+  总结在回顾期间很有用。
+- 当您需要确定性摘要时间戳时（对于 CI 或文档快照），
+  在运行摘要之前设置 `PREVIEW_FEEDBACK_NOW=<iso8601 timestamp>`
+  帮手。这使 `generatedAt`、状态和日计数器保持一致
+  跨越重建。
 
-## Summaries, digests, and archives
-
-1. **Per-wave summary:** generate the JSON summary and attach it to the invite
-   ticket together with the raw log. The summary enumerates total invites, open
-   recipients, and feedback counts so governance can confirm we captured every
-   reviewer. The portal build also publishes an aggregate summary at
-   `src/data/previewFeedbackSummary.json` so stakeholders can see the current
-   snapshot without running the CLI.
-2. **Weekly digest:** run `npm run --prefix docs/portal preview:digest -- --wave <label>`
-   to pre-populate the Markdown metrics, then tailor the placeholder sections
-   using the template in
+## 摘要、摘要和档案1. **每波摘要：** 生成 JSON 摘要并将其附加到邀请中
+   票证与原始日志一起。摘要列举了邀请总数、已开放
+   收件人和反馈很重要，因此治理可以确认我们捕获了每一个
+   审稿人。门户构建还在以下位置发布了汇总摘要：
+   `src/data/previewFeedbackSummary.json`，以便利益相关者可以看到当前
+   无需运行 CLI 即可生成快照。
+2. **每周摘要：** 运行 `npm run --prefix docs/portal preview:digest -- --wave <label>`
+   预先填充 Markdown 指标，然后定制占位符部分
+   使用中的模板
    [`docs/examples/docs_preview_feedback_digest.md`](../../../examples/docs_preview_feedback_digest.md)
-   before sharing it with stakeholders. Include at least: wave label, open
-   reviewers, notable findings, and next actions.
-3. **Archival:** move closed-wave logs into
-   `artifacts/docs_portal_preview/archive/<wave>/` and keep only the most recent
-   active wave at the root. This keeps CI artefacts small while preserving the
-   audit trail.
+   在与利益相关者分享之前。至少包括：波标签、开放
+   审稿人、值得注意的发现和下一步行动。
+3. **归档：**将封闭波日志移入
+   `artifacts/docs_portal_preview/archive/<wave>/` 并仅保留最新的
+   根部有源波。这使得 CI 伪影很小，同时保留了
+   审计追踪。
 
-## Linking to the roadmap
+## 链接到路线图
 
-- Reference this document from invite and onboarding playbooks whenever you ask
-  reviewers to file feedback (see
+- 每当您询问时，请参考邀请和入职手册中的此文档
+  审稿人提交反馈（参见
   [`preview-invite-flow`](./preview-invite-flow.md),
-  [`reviewer-onboarding`](./reviewer-onboarding.md), and
-  [`public-preview-invite`](./public-preview-invite.md)).
-- Mention the generated summary in `status.md` when closing a wave so DOCS-SORA
-  roadmap items (e.g., DOCS-1b/2b/3c) can cite the artefact.
-- Store hash digests alongside the summary when uploading to SoraFS so external
-  reviewers can verify the evidence bundle.
+  [`reviewer-onboarding`](./reviewer-onboarding.md)，以及
+  [`public-preview-invite`](./public-preview-invite.md))。
+- 关闭波形时在 `status.md` 中提及生成的摘要，以便 DOCS-SORA
+  路线图项目（例如 DOCS-1b/2b/3c）可以引用工件。
+- 上传到 SoraFS 等外部时，将哈希摘要与摘要一起存储
+  审阅者可以验证证据包。
 
-Keeping the logging workflow codified here unblocks the roadmap requirement to
-“capture feedback/telemetry for governance” and reduces the time spent
-reconstructing invite history at every milestone.
+将日志记录工作流程编码在此处可以解除对路线图要求的阻碍
+“捕获反馈/遥测以进行治理”并减少花费的时间
+在每个里程碑重建邀请历史。

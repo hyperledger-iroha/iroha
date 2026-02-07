@@ -4,101 +4,99 @@ direction: ltr
 source: docs/portal/docs/sorafs/orchestrator-tuning.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: orchestrator-tuning
-title: Rollout и настройка оркестратора
+id: ajuste do orquestrador
+título: Implementação e organização de instalação
 sidebar_label: Настройка оркестратора
-description: Практичные значения по умолчанию, советы по настройке и аудит‑чекпоинты для вывода multi‑source оркестратора в GA.
+description: Практичные значения по умолчанию, советы по настройке и аудит‑чекпоинты para вывода multi-fonte оркестратора в GA.
 ---
 
-:::note Канонический источник
-Отражает `docs/source/sorafs/developer/orchestrator_tuning.md`. Держите обе копии синхронизированными, пока набор наследной документации не будет выведен из эксплуатации.
+:::nota História Canônica
+Verifique `docs/source/sorafs/developer/orchestrator_tuning.md`. Faça cópias da sincronização, pois a documentação não será exibida na configuração.
 :::
 
 # Руководство по rollout и настройке оркестратора
 
-Это руководство опирается на [справочник конфигурации](orchestrator-config.md) и
-[runbook multi-source rollout](multi-source-rollout.md). Оно объясняет,
-как настраивать оркестратор для каждой фазы rollout, как интерпретировать
-артефакты scoreboard и какие сигналы телеметрии должны быть на месте перед
-расширением трафика. Применяйте рекомендации последовательно в CLI, SDK и
+Esta é uma verificação de [configuração de configuração] (orchestrator-config.md) e
+[implementação de várias fontes do runbook](multi-source-rollout.md). Então,
+como usar o organizador para o lançamento de cada etapa, como o interpretador
+placar de arte e sinais de sinal telefônicos são usados ​​no mês passado
+расширением трафика. Recomendações de uso em CLI, SDK e
 автоматизации, чтобы каждый узел следовал одной и той же детерминированной
-политике fetch.
+buscar política.
 
 ## 1. Базовые наборы параметров
 
-Начните с общего шаблона конфигурации и корректируйте небольшой набор ручек по мере
-прогресса rollout. Таблица ниже фиксирует рекомендованные значения для наиболее
-распространённых фаз; параметры, не указанные в таблице, берутся из
-`OrchestratorConfig::default()` и `FetchOptions::default()`.
+Certifique-se de que a configuração e a correção de problemas sejam maiores do que o esperado
+implementação progressiva. Uma nova tabela de recursos recomendada para o naiболее
+распространённых фаз; parâmetros, não usados ​​na tabela, abertos
+`OrchestratorConfig::default()` e `FetchOptions::default()`.
 
-| Фаза | `max_providers` | `fetch.per_chunk_retry_limit` | `fetch.provider_failure_threshold` | `scoreboard.latency_cap_ms` | `scoreboard.telemetry_grace_secs` | Примечания |
-|------|-----------------|-------------------------------|------------------------------------|-----------------------------|------------------------------------|------------|
-| **Lab / CI** | `3` | `2` | `2` | `2500` | `300` | Жёсткий лимит задержки и короткая grace‑окно быстро выявляют шумную телеметрию. Держите retries низкими, чтобы раньше выявлять некорректные манифесты. |
-| **Staging** | `4` | `3` | `3` | `4000` | `600` | Отражает продакшн‑параметры, оставляя запас для экспериментальных peers. |
-| **Canary** | `6` | `3` | `3` | `5000` | `900` | Соответствует значениям по умолчанию; установите `telemetry_region`, чтобы дашборды могли сегментировать canary‑трафик. |
-| **General Availability** | `None` (использовать всех eligible) | `4` | `4` | `5000` | `900` | Увеличьте пороги retry/ошибок, чтобы поглощать транзиентные сбои, при этом аудит продолжает обеспечивать детерминизм. |
+| Faz | `max_providers` | `fetch.per_chunk_retry_limit` | `fetch.provider_failure_threshold` | `scoreboard.latency_cap_ms` | `scoreboard.telemetry_grace_secs` | Nomeação |
+|------|-----------------|------------------------------------------|------------------------------------|-----------------------------|------------------------------------|------------|
+| **Laboratório / CI** | `3` | `2` | `2` | `2500` | `300` | Жёсткий лимит задержки и короткая grace‑окно быстро выявляют шумную телеметрию. Se você tentar novamente, isso será feito por meio de manipulações incorretas. |
+| **Encenação** | `4` | `3` | `3` | `4000` | `600` | Отражает продакшн‑параметры, оставляя запас для экспериментальных peers. |
+| **Canário** | `6` | `3` | `3` | `5000` | `900` | Соответствует значениям по умолчанию; установите `telemetry_region`, este é o segmento canary-traфик. |
+| **Disponibilidade Geral** | `None` (qualquer pessoa elegível) | `4` | `4` | `5000` | `900` | Se você tentar novamente/ошибок, você irá realizar o transporte, antes deste produto de auditoria ser executado детерминизм. |
 
-- `scoreboard.weight_scale` остаётся на дефолтном `10_000`, если только downstream‑система не требует другой целочисленной точности. Увеличение масштаба не меняет порядок провайдеров; оно лишь создаёт более плотное распределение кредитов.
-- При переходе между фазами сохраняйте JSON‑bundle и используйте `--scoreboard-out`, чтобы аудит‑трейл фиксировал точный набор параметров.
+- `scoreboard.weight_scale` остаётся на дефолтном `10_000`, если только downstream‑система не требует другой целочисленной точности. A utilização da máscara não pode ser testada; оно лишь создаёт более плотное распределение кредитов.
+- Ao usar o pacote JSON e usá-lo `--scoreboard-out`, ele é auditado. точный набор параметров.
 
-## 2. Гигиена scoreboard
+## 2. Placar de jogo
 
-Scoreboard объединяет требования манифеста, объявления провайдеров и телеметрию.
-Перед продвижением:
-
-1. **Проверьте свежесть телеметрии.** Убедитесь, что snapshot’ы, указанные в
-   `--telemetry-json`, были сняты в пределах заданного grace‑окна. Записи старше
-   `telemetry_grace_secs` завершатся ошибкой `TelemetryStale { last_updated }`.
-   Рассматривайте это как жёсткую блокировку и обновите экспорт телеметрии прежде чем продолжать.
-2. **Проверьте причины eligibility.** Сохраняйте артефакты через
+Placar объединяет требования манифеста, объявления провайдеров и телеметрию.
+Antes da produção:1. **Proverьте свежесть телеметрии.** Убедитесь, что snapshot'ы, указанные в
+   `--telemetry-json`, foi encontrado no site Grace-окна. Veja a estrela
+   `telemetry_grace_secs` é usado para `TelemetryStale { last_updated }`.
+   Рассматривайте это как жёсткую блокировку e обновите экспорт телеметрии прежде чем продолжать.
+2. **Elegibilidade do contrato de compra.** Contrato de contratação de artefactos
    `--scoreboard-out=/var/lib/sorafs/scoreboards/preflight.json`. Каждая запись
-   содержит блок `eligibility` с точной причиной отказа. Не обходите несоответствия
-   возможностей или истекшие объявления; исправьте исходный payload.
-3. **Проверьте дельты веса.** Сравните поле `normalised_weight` с предыдущим релизом.
-   Сдвиги >10 % должны соответствовать намеренным изменениям объявлений или телеметрии
-   и должны быть отражены в журнале rollout.
-4. **Архивируйте артефакты.** Настройте `scoreboard.persist_path`, чтобы каждый запуск
-   публиковал финальный snapshot scoreboard. Приложите артефакт к релизному досье
-   вместе с манифестом и телеметрическим bundle.
-5. **Фиксируйте доказательства микса провайдеров.** Метаданные `scoreboard.json` _и_
-   соответствующий `summary.json` должны содержать `provider_count`,
-   `gateway_provider_count` и вычисленный label `provider_mix`, чтобы ревьюеры могли
-   доказать, что запуск был `direct-only`, `gateway-only` или `mixed`. Gateway‑снимки
-   должны показывать `provider_count=0` и `provider_mix="gateway-only"`, а смешанные
-   прогоны — ненулевые значения для обеих источников. `cargo xtask sorafs-adoption-check`
-   валидирует эти поля (и падает при несоответствии счётчиков/лейблов), поэтому запускайте
-   его вместе с `ci/check_sorafs_orchestrator_adoption.sh` или своим скриптом захвата,
-   чтобы получить bundle `adoption_report.json`. Когда задействованы Torii gateways,
-   сохраняйте `gateway_manifest_id`/`gateway_manifest_cid` в метаданных scoreboard, чтобы
-   adoption‑gate мог сопоставить envelope манифеста с зафиксированным миксом провайдеров.
+   Instale o bloco `eligibility` para obter o máximo valor. Não há necessidade de se preocupar
+   возможностей или истекшие объявления; distribuir carga útil útil.
+3. **Provерьте дельты веса.** Сравните поле `normalised_weight` com a configuração correta.
+   Сдвиги >10% должны соответствовать намеренным изменениям объявлений или телеметрии
+   e será útil no lançamento do diário.
+4. **Архивируйте артефакты.** Instale `scoreboard.persist_path`, чтобы каждый запуск
+   публиковал финальный placar instantâneo. Explore o artefacto com a entrega confiável
+   вместе с манифестом и телеметрическим pacote.
+5. **Fиксируйте доказательства микса провайдеров.** Метаданные `scoreboard.json` _и_
+   соответствующий `summary.json` e одержать `provider_count`,
+   `gateway_provider_count` e rótulo вычисленный `provider_mix`, чтобы ревьюеры могли
+   Isso é feito por `direct-only`, `gateway-only` ou `mixed`. Gateway‑снимки
+   должны показывать `provider_count=0` e `provider_mix="gateway-only"`, um exemplo
+   programas — não há nenhuma permissão para uma situação histórica. `cargo xtask sorafs-adoption-check`
+   valide esta política (e падает при несоответствии счётчиков/лейблов), поэтому запускайте
+   eu vou usar `ci/check_sorafs_orchestrator_adoption.sh` ou seu script será criado,
+   чтобы получить pacote `adoption_report.json`. Como configurar gateways Torii,
+   сохраняйте `gateway_manifest_id`/`gateway_manifest_cid` no placar metadanных, чтобы
+   Adoption‑gate pode fornecer envelopes com pacotes de confirmação.
 
-Подробные определения полей см. в
-`crates/sorafs_car/src/scoreboard.rs` и структуре CLI summary, выдаваемой
+Подробные определения полей см. em
+`crates/sorafs_car/src/scoreboard.rs` e resumo da estrutura CLI, atualizado
 `sorafs_cli fetch --json-out`.
 
-## Справочник флагов CLI и SDK
+## Справочник флагов CLI e SDK
 
-`sorafs_cli fetch` (см. `crates/sorafs_car/src/bin/sorafs_cli.rs`) и обёртка
-`iroha_cli app sorafs fetch` (`crates/iroha_cli/src/commands/sorafs.rs`) используют
-одну и ту же поверхность конфигурации оркестратора. Используйте следующие флаги
-при сборе evidence или воспроизведении канонических fixtures:
+`sorafs_cli fetch` (com `crates/sorafs_car/src/bin/sorafs_cli.rs`) e desbloqueado
+`iroha_cli app sorafs fetch` (`crates/iroha_cli/src/commands/sorafs.rs`) usado
+одну и ту же поверхность конфигурации оркестратора. Usar bandeiras de segurança
+при сборе evidência или воспроизведении канонических luminárias:
 
-Общая справка по флагам multi-source (держите CLI help и документацию синхронной,
-правя только этот файл):
+Você pode usar o sinalizador multi-fonte (obter ajuda CLI e sincronização de documentação,
+правя только этот файл):- `--max-peers=<count>` ограничивает число elegível-Provaйдеров, проходящих фильтр placar. Faça isso, verifique se você está qualificado para todos os seus fornecedores elegíveis e configure `1` para obter o valor desejado substituto de fonte única. Instale o `maxPeers` no SDK (`SorafsGatewayFetchOptions.maxPeers`, `SorafsGatewayFetchOptions.max_peers`).
+- `--retry-budget=<count>` é testado com limite de novas tentativas por pedaço, por exemplo `FetchOptions`. Use a implementação da tabela de руководства para a recomendação de uso; CLI-Proгоны, собирающие evidencia, должны соответствовать дефолтам SDK para сохранения паритета.
+- `--telemetry-region=<label>` помечает серии Prometheus `sorafs_orchestrator_*` (e OTLP‑реле) лейблом региона/окружения, чтобы дашборды laboratório разделяли, estadiamento, canário e GA‑трафик.
+- `--telemetry-json=<path>` instantâneo instantâneo, colocado no placar. Сохраняйте JSON рядом со scoreboard, чтобы аудиторы могли воспроизвести запуск (e чтобы `cargo xtask sorafs-adoption-check --require-telemetry` доказал, какой captura OTLP‑стрим питал).
+- `--local-proxy-*` (`--local-proxy-mode`, `--local-proxy-norito-spool`, `--local-proxy-kaigi-spool`, `--local-proxy-kaigi-policy`) включают hook’и bridge‑наблюдателя. Ao usar o orquestrador, os chunks são armazenados em proxy Norito/Kaigi, clientes abertos, caches de proteção e salas Kaigi получали те же recibos, что и Rust.
+- `--scoreboard-out=<path>` (опционально с `--scoreboard-now=<unix_secs>`) fornece elegibilidade de snapshot para auditores. Você pode usar o JSON configurado com artefactos telemétricos e manuais, usando um bilhete confiável.
+- `--deny-provider name=ALIAS` / `--boost-provider name=ALIAS:delta` determina a correção de metadados para obter metadados. Utilize esta bandeira para repetição; продакшн‑downgrade должен проходить через governança‑артефакты, чтобы каждый узел применял один и тот же pacote de políticas.
+- `--provider-metrics-out` / `--chunk-receipts-out` сохраняют метрики здоровья по провайдерам и recibos по pedaços из rollout‑checklist; приложите оба артефакта при подаче evidências para adoção.
 
-- `--max-peers=<count>` ограничивает число eligible‑провайдеров, проходящих фильтр scoreboard. Оставьте пустым, чтобы стримить со всех eligible‑провайдеров, и ставьте `1` только при осознанном упражнении single‑source fallback. Отражает ручку `maxPeers` в SDK (`SorafsGatewayFetchOptions.maxPeers`, `SorafsGatewayFetchOptions.max_peers`).
-- `--retry-budget=<count>` прокидывается в лимит retry на chunk, применяемый `FetchOptions`. Используйте таблицу rollout из руководства для рекомендуемых значений; CLI‑прогоны, собирающие evidence, должны соответствовать дефолтам SDK для сохранения паритета.
-- `--telemetry-region=<label>` помечает серии Prometheus `sorafs_orchestrator_*` (и OTLP‑реле) лейблом региона/окружения, чтобы дашборды разделяли lab, staging, canary и GA‑трафик.
-- `--telemetry-json=<path>` инжектит snapshot, указанный в scoreboard. Сохраняйте JSON рядом со scoreboard, чтобы аудиторы могли воспроизвести запуск (и чтобы `cargo xtask sorafs-adoption-check --require-telemetry` доказал, какой OTLP‑стрим питал capture).
-- `--local-proxy-*` (`--local-proxy-mode`, `--local-proxy-norito-spool`, `--local-proxy-kaigi-spool`, `--local-proxy-kaigi-policy`) включают hook’и bridge‑наблюдателя. При включении оркестратор стримит chunks через локальный Norito/Kaigi proxy, чтобы браузерные клиенты, guard caches и Kaigi‑rooms получали те же receipts, что и Rust.
-- `--scoreboard-out=<path>` (опционально с `--scoreboard-now=<unix_secs>`) сохраняет snapshot eligibility для аудиторов. Всегда связывайте сохранённый JSON с артефактами телеметрии и манифеста, указанными в релизном тикете.
-- `--deny-provider name=ALIAS` / `--boost-provider name=ALIAS:delta` применяют детерминированные корректировки поверх metadata объявлений. Используйте эти флаги только для репетиций; продакшн‑downgrade должен проходить через governance‑артефакты, чтобы каждый узел применял один и тот же policy bundle.
-- `--provider-metrics-out` / `--chunk-receipts-out` сохраняют метрики здоровья по провайдерам и receipts по chunks из rollout‑checklist; приложите оба артефакта при подаче evidence по adoption.
-
-Пример (с использованием опубликованного fixture):
+Exemplo (com dispositivo elétrico disponível):
 
 ```bash
 sorafs_cli fetch \
@@ -115,106 +113,102 @@ cargo xtask sorafs-adoption-check \
   --summary artifacts/sorafs_orchestrator/latest/summary.json
 ```
 
-SDK используют ту же конфигурацию через `SorafsGatewayFetchOptions` в Rust‑клиенте
-(`crates/iroha/src/client.rs`), JS‑bindings
-(`javascript/iroha_js/src/sorafs.js`) и Swift SDK
-(`IrohaSwift/Sources/IrohaSwift/SorafsOptions.swift`). Держите эти хелперы
-синхронно с дефолтами CLI, чтобы операторы могли копировать политики в автоматизацию
-без специальных слоёв трансляции.
+O SDK é usado para configurar o `SorafsGatewayFetchOptions` em Rust-клиенте
+(`crates/iroha/src/client.rs`), ligações JS
+(`javascript/iroha_js/src/sorafs.js`) e Swift SDK
+(`IrohaSwift/Sources/IrohaSwift/SorafsOptions.swift`). Deixe seus ajudantes
+sincronizado com a CLI, esses operadores podem copiar políticas automaticamente
+Não há tradução especial.
 
-## 3. Настройка политики fetch
+## 3. Busca política
 
-`FetchOptions` управляет retry, параллелизмом и верификацией. При настройке:
+`FetchOptions` pode tentar novamente, paralisar e verificar. Por exemplo:- **Retentativas:** повышение `per_chunk_retry_limit` выше `4` увеличивает время восстановления,
+  Não há problemas com a máscara. Verifique o `4` como um pote e
+  verifique o número de rotações para o seu trabalho.
+- **Provado:** `provider_failure_threshold` instalado, como provador aberto
+  na primeira sessão. Verifique isso com uma nova tentativa: por que não há sucesso
+  retry para executar o оркестратор seu peer antes de tentar novamente.
+- **Palallелизм:** оставляйте `global_parallel_limit` não definido (`None`), если только конкретная
+  Não é possível usar dias úteis. Isso é bom, убедитесь, что значение
+  ≤ сумме потоковых бюджетов провайдеров, чтобы избежать fome.
+- **Verificações:** `verify_lengths` e `verify_digests` должны оставаться включёнными
+  na produção. A única garantia é que você determinará a quantidade certa de provadores; aberto
+  é um problema no fuzzing‑средах.
 
-- **Retries:** повышение `per_chunk_retry_limit` выше `4` увеличивает время восстановления,
-  но может маскировать проблемы провайдеров. Предпочитайте держать `4` как потолок и
-  полагаться на ротацию провайдеров для выявления слабых.
-- **Порог отказов:** `provider_failure_threshold` определяет, когда провайдер отключается
-  на остаток сессии. Согласуйте это значение с retry‑политикой: порог ниже бюджета
-  retry заставляет оркестратор выгнать peer ещё до исчерпания всех retries.
-- **Параллелизм:** оставляйте `global_parallel_limit` unset (`None`), если только конкретная
-  среда не может насытить объявленные диапазоны. Если задано, убедитесь, что значение
-  ≤ сумме потоковых бюджетов провайдеров, чтобы избежать starvation.
-- **Тогглы верификации:** `verify_lengths` и `verify_digests` должны оставаться включёнными
-  в продакшене. Они гарантируют детерминизм при смешанном составе провайдеров; отключайте
-  их только в изолированных fuzzing‑средах.
+## 4. Estadiamento de transporte e anonimato
 
-## 4. Стадирование транспорта и анонимности
-
-Используйте поля `rollout_phase`, `anonymity_policy` и `transport_policy`, чтобы
+Utilize o `rollout_phase`, `anonymity_policy` e `transport_policy`, чтобы
 описать приватностную позу:
 
-- Предпочитайте `rollout_phase="snnet-5"` и позволяйте дефолтной политике анонимности
-  следовать этапам SNNet-5. Переопределяйте через `anonymity_policy_override` только
-  когда governance выпускает подписанную директиву.
+- Verifique `rollout_phase="snnet-5"` e configure a política anônima
+  следовать этапам SNNet-5. Переопределяйте через `anonymity_policy_override` tolcho
+  A governança corporativa é uma ação direta.
 - Держите `transport_policy="soranet-first"` как базу, пока SNNet-4/5/5a/5b/6a/7/8/12/13 находятся в 🈺
-  (см. `roadmap.md`). Используйте `transport_policy="direct-only"` только для документированных
-  downgrade/комплаенс‑учений и дождитесь ревью PQ‑покрытия перед повышением до
-  `transport_policy="soranet-strict"` — этот режим быстро упадёт, если останутся лишь
-  классические реле.
-- `write_mode="pq-only"` следует применять только когда все write‑пути (SDK, оркестратор,
-  governance‑tooling) способны удовлетворить PQ‑требования. Во время rollout держите
-  `write_mode="allow-downgrade"`, чтобы аварийные реакции могли использовать прямые
+  (veja `roadmap.md`). Use `transport_policy="direct-only"` para documentação
+  downgrade/complаенс‑учений и дождитесь ревью PQ‑покрытия перед повышением до
+  `transport_policy="soranet-strict"` — esta configuração é atualizada, mas não é possível
+  regra clássica.
+- `write_mode="pq-only"` é uma ferramenta de configuração que permite que você escreva (SDK, оркестратор,
+  ferramentas de governança) способны удовлетворить PQ‑требования. No início do lançamento
+  `write_mode="allow-downgrade"`, este recurso pode ser usado para uso
   маршруты, пока телеметрия отмечает downgrade.
-- Выбор guards и staging circuits зависит от каталога SoraNet. Передавайте подписанный
-  snapshot `relay_directory` и сохраняйте `guard_set` cache, чтобы churn guards оставался
-  в согласованном retention‑окне. Отпечаток cache, зафиксированный `sorafs_cli fetch`, входит
-  в evidence rollout.
+- Você pode usar guardas e circuitos de teste no catálogo SoraNet. Передавайте подписанный
+  snapshot `relay_directory` e сохраняйте `guard_set` cache, чтобы churn guards оставался
+  em retenção-окне. Отпечаток cache, зафиксированный `sorafs_cli fetch`, входит
+  в implementação de evidências.
 
 ## 5. Хуки деградации и комплаенса
 
-Два подсистемы оркестратора помогают обеспечить политику без ручного вмешательства:
-
-- **Remediation деградаций** (`downgrade_remediation`): отслеживает события
-  `handshake_downgrade_total` и, после превышения `threshold` в пределах `window_secs`,
-  переводит локальный proxy в `target_mode` (по умолчанию metadata-only). Сохраняйте
+Seu diretor de operação pode usar a política de segurança da sua empresa:- **Remediation деградаций** (`downgrade_remediation`): отслеживает события
+  `handshake_downgrade_total` e, por exemplo, `threshold` no modelo `window_secs`,
+  use o proxy local em `target_mode` (para usar apenas metadados). Sofra
   дефолты (`threshold=3`, `window=300`, `cooldown=900`), если только постмортемы не
-  показывают другой паттерн. Документируйте любые override в журнале rollout и
-  убедитесь, что дашборды отслеживают `sorafs_proxy_downgrade_state`.
-- **Политика комплаенса** (`compliance`): carve‑outs по юрисдикциям и манифестам
-  проходят через списки opt‑out, управляемые governance. Никогда не встраивайте
-  ad‑hoc override в bundle конфигурации; вместо этого запросите подписанное обновление
+  показывают другой паттерн. Документируйте любые override no lançamento do diário e
+  убедитесь, este é o número do `sorafs_proxy_downgrade_state`.
+- **Политика комплаенса** (`compliance`): recortes para юрисдикциям и манифестам
+  проходят через списки opt-out, управляемые governança. Никогда não встраивайте
+  substituição ad-hoc nas configurações do pacote; вместо этого запросите подписанное обновление
   `governance/compliance/soranet_opt_outs.json` и разверните сгенерированный JSON.
 
-Для обеих систем сохраняйте итоговый bundle конфигурации и включайте его в evidence
+Para o melhor sistema, você precisa deste pacote de configurações e включайте его в evidências
 релиза, чтобы аудиторы могли проследить причины дауншифтов.
 
-## 6. Телеметрия и дашборды
+## 6. Telemetria e dados
 
-Перед расширением rollout убедитесь, что следующие сигналы активны в целевой среде:
+Antes do lançamento da expansão ser iniciado, isso será sinalizado como ativado na próxima semana:
 
-- `sorafs_orchestrator_fetch_failures_total{reason="no_healthy_providers"}` —
-  должен быть нулевым после завершения canary.
-- `sorafs_orchestrator_retries_total` и
-  `sorafs_orchestrator_retry_ratio` — должны стабилизироваться ниже 10 % во время canary
-  и оставаться ниже 5 % после GA.
-- `sorafs_orchestrator_policy_events_total` — подтверждает активность ожидаемой стадии
-  rollout (лейбл `stage`) и фиксирует brownouts через `outcome`.
-- `sorafs_orchestrator_pq_candidate_ratio` /
+-`sorafs_orchestrator_fetch_failures_total{reason="no_healthy_providers"}` —
+  должен быть нулевым после завершения canário.
+- `sorafs_orchestrator_retries_total` e
+  `sorafs_orchestrator_retry_ratio` — должны стабилизироваться não 10% no verão canário
+  e não há 5% após GA.
+- `sorafs_orchestrator_policy_events_total` — permite ativar o status do dispositivo
+  rollout (lейбл `stage`) e фиксирует brownouts через `outcome`.
+-`sorafs_orchestrator_pq_candidate_ratio`/
   `sorafs_orchestrator_pq_deficit_ratio` — отслеживают доступность PQ‑реле относительно
   ожиданий политики.
-- Лог‑таргеты `telemetry::sorafs.fetch.*` — должны поступать в общий лог‑агрегатор с
-  сохранёнными запросами для `status=failed`.
+- Log `telemetry::sorafs.fetch.*` — colocado no log principal com
+  Conjunto de proteção para `status=failed`.
 
 Загрузите канонический Grafana‑дашборд из
-`dashboards/grafana/sorafs_fetch_observability.json` (экспортируется в портале под
-**SoraFS → Fetch Observability**), чтобы селекторы регион/manifest, heatmap retries
-по провайдерам, гистограммы задержек chunks и счётчики стагнации соответствовали
-тому, что SRE проверяют во время burn‑in. Подключите правила Alertmanager в
-`dashboards/alerts/sorafs_fetch_rules.yml` и проверьте синтаксис Prometheus через
-`scripts/telemetry/test_sorafs_fetch_alerts.sh` (helper автоматически запускает
-`promtool test rules` локально или в Docker). Для alert hand‑off требуется тот же
-routing‑block, который печатает скрипт, чтобы операторы могли приложить evidence
+`dashboards/grafana/sorafs_fetch_observability.json` (exportado no portal
+**SoraFS → Buscar Observabilidade**), чтобы селекторы região/manifesto, tentativas de mapa de calor
+para provar, os registros contêm pedaços e etapas de configuração
+Então, o SRE foi testado durante o período de burn-in. Use o Alertmanager em
+`dashboards/alerts/sorafs_fetch_rules.yml` e prove a sintaxe Prometheus
+`scripts/telemetry/test_sorafs_fetch_alerts.sh` (ajudante de inicialização automática
+`promtool test rules` local ou em Docker). Para transferência de alerta требуется тот же
+bloco de roteamento, который печатает скрипт, чтобы операторы могли приложить evidência
 к rollout‑тикету.
 
-### Процесс burn-in телеметрии
+### Processar telas de burn-in
 
-Пункт roadmap **SF-6e** требует 30‑дневного burn‑in телеметрии перед переключением
-multi-source оркестратора на GA‑дефолты. Используйте скрипты репозитория, чтобы
+Roteiro de Пункт **SF-6e** требует 30‑дневного burn‑in телеметрии перед переключением
+organizador de múltiplas fontes no GA‑дефолты. Use repositórios de scripts, arquivos
 ежедневно собирать воспроизводимый bundle артефактов на протяжении окна:
 
-1. Запустите `ci/check_sorafs_orchestrator_adoption.sh` с установленными переменными
-   burn‑in. Пример:
+1. Insira `ci/check_sorafs_orchestrator_adoption.sh` nos parâmetros de instalação
+   queimar. Exemplo:
 
    ```bash
    SORAFS_BURN_IN_LABEL=canary-week-1 \
@@ -223,39 +217,37 @@ multi-source оркестратора на GA‑дефолты. Использу
    SORAFS_BURN_IN_DAY=7 \
    SORAFS_BURN_IN_WINDOW_DAYS=30 \
    ci/check_sorafs_orchestrator_adoption.sh
-   ```
-
-   Helper проигрывает `fixtures/sorafs_orchestrator/multi_peer_parity_v1`,
+   ```Auxiliar de programação `fixtures/sorafs_orchestrator/multi_peer_parity_v1`,
    записывает `scoreboard.json`, `summary.json`, `provider_metrics.json`,
-   `chunk_receipts.json` и `adoption_report.json` в
-   `artifacts/sorafs_orchestrator/<timestamp>/`, и проверяет минимальное число
-   eligible‑провайдеров через `cargo xtask sorafs-adoption-check`.
-2. Когда переменные burn‑in присутствуют, скрипт также выпускает `burn_in_note.json`,
-   фиксируя label, индекс дня, id манифеста, источник телеметрии и дайджесты артефактов.
-   Приложите этот JSON к журналу rollout, чтобы было ясно, какая запись закрыла каждый
-   день 30‑дневного окна.
-3. Импортируйте обновлённый Grafana‑дашборд (`dashboards/grafana/sorafs_fetch_observability.json`)
-   в workspace staging/production, пометьте его burn‑in label и убедитесь, что каждый
-   панель отображает выборки для тестируемых manifest/region.
-4. Запускайте `scripts/telemetry/test_sorafs_fetch_alerts.sh` (или `promtool test rules …`)
-   всякий раз при изменении `dashboards/alerts/sorafs_fetch_rules.yml`, чтобы задокументировать
-   соответствие routing alert‑ов метрикам, экспортированным в burn‑in.
-5. Архивируйте снимок дашборда, вывод теста alert‑ов и хвост логов по запросам
-   `telemetry::sorafs.fetch.*` вместе с артефактами оркестратора, чтобы governance могло
-   воспроизвести evidence без обращения к live‑системам.
+   `chunk_receipts.json` e `adoption_report.json` em
+   `artifacts/sorafs_orchestrator/<timestamp>/`, e verifique o tamanho mínimo
+   elegível-provaйдеров через `cargo xtask sorafs-adoption-check`.
+2. Para que o processo de burn-in seja permanente, o script também será exibido `burn_in_note.json`,
+   rótulo de física, dia de índice, fabricante de id, telefones históricos e artesãos de dados.
+   Use este JSON para implementação no diário, é isso que você precisa, como fazer o download do site
+   30 de dezembro de outubro.
+3. Importe o arquivo Grafana‑дашборд (`dashboards/grafana/sorafs_fetch_observability.json`)
+   na preparação/produção do espaço de trabalho, coloque seu rótulo burn-in e убедитесь, что каждый
+   painel foi removido para o manifesto/região de teste.
+4. Selecione `scripts/telemetry/test_sorafs_fetch_alerts.sh` (ou `promtool test rules …`)
+   usando a configuração `dashboards/alerts/sorafs_fetch_rules.yml`, você precisa fazer isso
+   alerta de roteamento compatível com métricas, transferência para burn-in.
+5. Registre o arquivo da sua conta, verifique o alerta e seus registros para confirmação
+   `telemetry::sorafs.fetch.*` é um arquiteto de arquitetura, um líder de governança
+   воспроизвести evidências não são obtidas no live‑системам.
 
-## 7. Чек‑лист rollout
+## 7. Implementação do Чек‑лист
 
-1. Пересоберите scoreboards в CI с кандидатной конфигурацией и сохраните артефакты под VCS.
-2. Запустите детерминированный fetch fixtures в каждом окружении (lab, staging, canary, production)
-   и приложите артефакты `--scoreboard-out` и `--json-out` к записи rollout.
-3. Проверьте телеметрические дашборды совместно с on‑call инженером, убедившись, что все
-   вышеуказанные метрики имеют живые выборки.
-4. Зафиксируйте финальный путь конфигурации (обычно через `iroha_config`) и git‑commit
-   governance‑реестра, использованного для объявлений и комплаенса.
-5. Обновите rollout‑трекер и уведомите команды SDK о новых дефолтах, чтобы клиентские
-   интеграции оставались синхронизированными.
+1. Selecione os placares no CI com a configuração do candidato e proteja os artefatos do VCS.
+2. Запустите детерминированный buscar fixtures em каждом окружении (laboratório, teste, canário, produção)
+   e use os artefatos `--scoreboard-out` e `--json-out` para descrever o lançamento.
+3. Prove o número de horas telefônicas automaticamente com o técnico de plantão, убедившись, что все
+   A métrica вышеуказанные имеют живые выборки.
+4. Verifique a configuração final da configuração (que é `iroha_config`) e git‑commit
+   governança-реестра, использованного для объявлений и комплаенса.
+5. Abra o rollout‑трекер e use os comandos SDK no novo arquivo, чтобы клиентские
+   integração de sincronização.
 
 Следование этому руководству сохраняет развёртывания оркестратора детерминированными и
 аудируемыми, одновременно предоставляя ясные контуры обратной связи для настройки
-retry‑бюджетов, ёмкости провайдеров и приватностной позы.
+tente novamente, tente novamente e verifique as configurações.

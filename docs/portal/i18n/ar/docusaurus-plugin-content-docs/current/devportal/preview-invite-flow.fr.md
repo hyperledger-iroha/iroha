@@ -4,92 +4,94 @@ direction: rtl
 source: docs/portal/docs/devportal/preview-invite-flow.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Flux d'invitation preview
+# معاينة تدفق الدعوة
 
-## Objectif
+## موضوعي
 
-L'element de roadmap **DOCS-SORA** cite l'onboarding des relecteurs et le programme d'invitations preview public comme derniers bloqueurs avant la sortie de beta. Cette page decrit comment ouvrir chaque vague d'invitations, quels artefacts doivent etre livres avant d'envoyer les invites et comment prouver que le flux est auditable. Utilisez-la avec:
+يستشهد عنصر خريطة الطريق **DOCS-SORA** بضم المستشارين ومعاينة برنامج الدعوات العامة كأحدث الحواجز قبل الإصدار التجريبي. تتضمن هذه الصفحة تعليقًا على كل دعوات غامضة، والتي لها تأثيرها ومبالغها قبل إرسال الدعوات والتعليق على أن التدفق قابل للتدقيق. الاستخدام مع:
 
-- [`devportal/reviewer-onboarding`](./reviewer-onboarding.md) pour la gestion par relecteur.
-- [`devportal/preview-integrity-plan`](./preview-integrity-plan.md) pour les garanties de checksum.
-- [`devportal/observability`](./observability.md) pour les exports de telemetrie et hooks d'alerting.
+- [`devportal/reviewer-onboarding`](./reviewer-onboarding.md) للإدارة بواسطة القارئ.
+- [`devportal/preview-integrity-plan`](./preview-integrity-plan.md) لضمانات المجموع الاختباري.
+- [`devportal/observability`](./observability.md) لتصدير أجهزة القياس عن بعد وخطافات التنبيه.
 
-## Plan des vagues
+## خطة الغموض
 
-| Vague | Audience | Criteres d'entree | Criteres de sortie | Notes |
+| غامضة | الجمهور | معايير الدخول | معايير الطلعة | ملاحظات |
 | --- | --- | --- | --- | --- |
-| **W0 - Maintainers core** | Maintainers Docs/SDK validant le contenu jour un. | Equipe GitHub `docs-portal-preview` peuplee, gate checksum `npm run serve` en vert, Alertmanager silencieux 7 jours. | Tous les docs P0 relus, backlog tague, aucun incident bloquant. | Sert a valider le flux; pas d'email d'invitation, seulement partage des artefacts preview. |
-| **W1 - Partners** | Operateurs SoraFS, integrateurs Torii, relecteurs gouvernance sous NDA. | W0 termine, termes juridiques approuves, proxy Try-it en staging. | Sign-off partners collecte (issue ou formulaire signe), telemetrie montre <=10 relecteurs concurrents, pas de regressions securite pendant 14 jours. | Imposer template d'invitation + tickets de demande. |
-| **W2 - Communaute** | Contributeurs selectionnes depuis la liste d'attente communaute. | W1 termine, drills d'incidents repetes, FAQ publique mise a jour. | Feedback digere, >=2 releases doc expediees via pipeline preview sans rollback. | Limiter invites concurrentes (<=25) et batcher chaque semaine. |
+| **W0 - جوهر المشرفين** | مستندات الصيانة/SDK صالحة للمحتوى اليومي. | تجهيز GitHub `docs-portal-preview` peuplee، المجموع الاختباري للبوابة `npm run serve` en vert، Alertmanager silencieux 7 jours. | جميع المستندات P0 relus، العلامات المتراكمة، كل الحوادث كبيرة. | قم بإدخال تدفق صحيح؛ بدون إرسال دعوة عبر البريد الإلكتروني، سيتم مشاركة العناصر فقط من خلال معاينة. |
+| **W1 - الشركاء** | المشغلون SoraFS، المتكاملون Torii، الحكامة على NDA. | W0 termine، termes juridiques approuves، proxy Try-it en Stage. | يقوم شركاء تسجيل الخروج بجمع (إصدار أو توقيع صيغة)، جهاز القياس عن بعد <= 10 وحدات متزامنة، عدم الانحدار الآمن لمدة 14 يومًا. | فرض نموذج دعوة + تذاكر الطلب. |
+| **W2 - التواصل** | يتم اختيار المساهمين من خلال قائمة الحضور المجتمعي. | نهاية W1، تكرار الحوادث، الأسئلة الشائعة العامة خلال اليوم. | ردود الفعل تختلف، >= 2 إصدارات مستندية عاجلة عبر معاينة المسار بدون التراجع. | المحدد يدعو المتزامنين (<= 25) ويجمع كل مرة على حدة. |
 
-Documentez quelle vague est active dans `status.md` et dans le tracker des demandes preview afin que la gouvernance voie le statut d'un coup d'oeil.
+Documentez quelle vague est active dans `status.md` et dans le Tracker desطالبات معاينة حتى تكون الحكومة في حالة انقلاب.
 
-## Checklist preflight
+## قائمة المراجعة المبدئية
 
-Terminez ces actions **avant** de planifier des invitations pour une vague:
+قم بإنهاء هذه الإجراءات **المسبقة** لتخطيط الدعوات بشكل غامض:
 
-1. **Artefacts CI disponibles**
-   - Dernier `docs-portal-preview` + descriptor charge par `.github/workflows/docs-portal-preview.yml`.
-   - Pin SoraFS note dans `docs/portal/docs/devportal/deploy-guide.md` (descriptor de cutover present).
-2. **Application du checksum**
-   - `docs/portal/scripts/serve-verified-preview.mjs` invoque via `npm run serve`.
-   - Instructions `scripts/preview_verify.sh` testees sur macOS + Linux.
-3. **Baseline telemetrie**
-   - `dashboards/grafana/docs_portal.json` montre un trafic Try it sain et l'alerte `docs.preview.integrity` est au vert.
-   - Derniere annexe de `docs/portal/docs/devportal/observability.md` mise a jour avec des liens Grafana.
-4. **Artefacts gouvernance**
-   - Issue du invite tracker prete (une issue par vague).
-   - Template de registre des relecteurs copie (voir [`docs/examples/docs_preview_request_template.md`](../../../examples/docs_preview_request_template.md)).
-   - Approbations legales et SRE requises attachees a l'issue.
+1. **القطع الأثرية المتوفرة في CI**
+   - Dernier `docs-portal-preview` + الواصف المسؤول الاسمي `.github/workflows/docs-portal-preview.yml`.
+   - دبوس SoraFS لاحظ في `docs/portal/docs/devportal/deploy-guide.md` (واصف القطع موجود).
+2. **تطبيق المجموع الاختباري**
+   - استدعاء `docs/portal/scripts/serve-verified-preview.mjs` عبر `npm run serve`.
+   - تعليمات `scripts/preview_verify.sh` تم اختبارها على macOS + Linux.
+3. **القياس عن بعد الأساسي**
+   - `dashboards/grafana/docs_portal.json` قم بمراقبة حركة المرور حاول أن تكون صادقًا وتنبيه `docs.preview.integrity` هو في الاتجاه الصحيح.
+   - آخر ملحق لـ `docs/portal/docs/devportal/observability.md` هو يوم مع الامتيازات Grafana.
+4. **حوكمة المصنوعات اليدوية**
+   - إصدار دعوة تعقب prete (مسألة اسمية غامضة).
+   - نسخة من نموذج تسجيل القراء (العرض [`docs/examples/docs_preview_request_template.md`](../../../examples/docs_preview_request_template.md)).
+   - الموافقات القانونية وSRE تتطلب من الملحقين إصدارًا.
 
-Enregistrez l'achevement du preflight dans le invite tracker avant d'envoyer le moindre email.
+قم بتسجيل إنجاز الاختبار المبدئي في متتبع الدعوة قبل إرسال البريد الإلكتروني الجديد.
 
-## Etapes du flux
+## إيتاب دو فلوكس
 
-1. **Selectionner les candidats**
-   - Tirer depuis la liste d'attente ou la file partners.
-   - S'assurer que chaque candidat a un template de demande complete.
-2. **Approuver l'acces**
-   - Assigner un approbateur a l'issue du invite tracker.
-   - Verifier les prerequis (CLA/contrat, usage acceptable, brief securite).
-3. **Envoyer les invitations**
-   - Completer les placeholders de [`docs/examples/docs_preview_invite_template.md`](../../../examples/docs_preview_invite_template.md) (`<preview_tag>`, `<request_ticket>`, contacts).
-   - Joindre le descriptor + hash d'archive, l'URL de staging Try it et les canaux support.
-   - Stocker l'email final (ou transcript Matrix/Slack) dans l'issue.
-4. **Suivre l'onboarding**
-   - Mettre a jour le invite tracker avec `invite_sent_at`, `expected_exit_at`, et le statut (`pending`, `active`, `complete`, `revoked`).
-   - Lier la demande d'entree du relecteur pour auditabilite.
-5. **Surveiller la telemetrie**
-   - Surveiller `docs.preview.session_active` et les alertes `TryItProxyErrors`.
-   - Ouvrir un incident si la telemetrie devie du baseline et enregistrer le resultat a cote de l'entree d'invitation.
-6. **Collecter le feedback et sortir**
-   - Clore les invitations lorsque le feedback arrive ou que `expected_exit_at` est atteint.
-   - Mettre a jour l'issue de vague avec un court resume (constats, incidents, prochaines actions) avant de passer au cohort suivant.
+1. **اختيار المرشحين**
+   - قم بسحب قائمة الاهتمام أو شركاء الملف.
+   - التأكد من أن كل مرشح لديه نموذج طلب كامل.
+2. **الموافقة على الدخول**
+   - تعيين موافق على إصدار متتبع الدعوة.
+   - التحقق من المتطلبات المسبقة (CLA/العقد، الاستخدام المقبول، الأمان المختصر).
+3. **Envoyer les Invitations**
+   - إكمال العناصر النائبة لـ [`docs/examples/docs_preview_invite_template.md`](../../../examples/docs_preview_invite_template.md) (`<preview_tag>`، `<request_ticket>`، جهات الاتصال).
+   - انضم إلى الواصف + تجزئة الأرشيف وعنوان URL المرحلي وجربه ودعم القنوات.
+   - مخزن البريد الإلكتروني النهائي (أو نسخة Matrix/Slack) في الإصدار.
+4. **المتابعة المستمرة**
+   - قم بمتابعة متتبع الدعوة يوميًا باستخدام `invite_sent_at` و`expected_exit_at` والحالة (`pending` و`active` و`complete` و`revoked`).
+   - طلب إدخال القارئ للتدقيق.
+5. **مراقب القياس عن بعد**
+   - المراقب `docs.preview.session_active` والتنبيهات `TryItProxyErrors`.
+   - افتح حادثة إذا خرج القياس عن بعد من خط الأساس وقم بتسجيل النتيجة في قائمة الدعوة.
+6. **جمع التعليقات وفرزها**
+   - قم بطباعة الدعوات عند وصول التعليقات أو وصول `expected_exit_at`.
+   - Mettre a jour l'issue de vague avec un Court استئناف (إحصاءات، حوادث، إجراءات prochaines) قبل المرور إلى المجموعة التالية.
 
-## Evidence & reporting
+## الأدلة والتقارير
 
-| Artefact | Ou stocker | Cadence de mise a jour |
+| قطعة أثرية | أوو مخزن | إيقاع اليوم |
 | --- | --- | --- |
-| Issue du invite tracker | Projet GitHub `docs-portal-preview` | Mettre a jour apres chaque invite. |
-| Export du roster relecteurs | Registre lie dans `docs/portal/docs/devportal/reviewer-onboarding.md` | Hebdomadaire. |
-| Snapshots telemetrie | `docs/source/sdk/android/readiness/dashboards/<date>/` (reutiliser le bundle telemetrie) | Par vague + apres incidents. |
-| Digest feedback | `docs/portal/docs/devportal/preview-feedback/<wave>/summary.md` (creer un dossier par vague) | Dans les 5 jours suivant la sortie de vague. |
-| Note de reunion gouvernance | `docs/portal/docs/devportal/preview-invite-notes/<date>.md` | A remplir avant chaque sync gouvernance DOCS-SORA. |
+| إصدار متتبع الدعوة | بروجيت جيثب `docs-portal-preview` | Mettre a jour apres chaque دعوة. |
+| تصدير قائمة du relecteurs | قم بالتسجيل في `docs/portal/docs/devportal/reviewer-onboarding.md` | هيبدومادير. |
+| لقطات القياس عن بعد | `docs/source/sdk/android/readiness/dashboards/<date>/` (إعادة استخدام حزمة القياس عن بعد) | حوادث غامضة + ما بعد الحادث. |
+| ملخص ردود الفعل | `docs/portal/docs/devportal/preview-feedback/<wave>/summary.md` (إنشاء ملف بشكل غامض) | في الخمس أيام التالية لنوع غامض. |
+| ملاحظة دي ريونيون الحكم | `docs/portal/docs/devportal/preview-invite-notes/<date>.md` | نموذج لحوكمة المزامنة المتقدمة DOCS-SORA. |
 
-Lancez `cargo xtask docs-preview summary --wave <wave_label> --json artifacts/docs_portal_preview/<wave_label>_summary.json`
-apres chaque batch pour produire un digest lisible par machine. Joignez le JSON rendu a l'issue de vague pour que les relecteurs gouvernance confirment les comptes d'invitations sans rejouer tout le log.
+لانسيز `cargo xtask docs-preview summary --wave <wave_label> --json artifacts/docs_portal_preview/<wave_label>_summary.json`
+بعد كل دفعة، من أجل إنتاج آلة هضم غير مقبولة. يؤدي إضافة ملف JSON إلى إصدار أمر غامض حتى يتمكن الباحثون من التحكم في حسابات الدعوات دون تجديد السجل.
 
-Joignez la liste de preuves a `status.md` a chaque fin de vague afin que l'entree roadmap puisse etre mise a jour rapidement.
+انضم إلى قائمة الاقتراحات إلى `status.md` في كل مرة من الغموض حتى تتمكن من تنفيذ خريطة الطريق الرئيسية بسرعة.
 
-## Criteres de rollback et de pause
+## معايير التراجع والإيقاف المؤقت
 
-Mettez en pause le flux d'invitations (et notifiez la gouvernance) lorsque l'un des cas suivants survient:
+توقف مؤقتًا عن تدفق الدعوات (وإخطار الإدارة) عند بقاء إحدى الحالات التالية:
 
-- Incident proxy Try it ayant necessite un rollback (`npm run manage:tryit-proxy`).
-- Fatigue d'alertes: >3 alert pages pour les endpoints preview-only sur 7 jours.
-- Ecart de conformite: invitation envoyee sans termes signes ou sans enregistrement du template de demande.
-- Risque d'integrite: mismatch de checksum detecte par `scripts/preview_verify.sh`.
+- وكيل الحادث حاول ذلك قبل أن تحتاج إلى التراجع (`npm run manage:tryit-proxy`).
+- تنبيهات التعب: >3 صفحات تنبيه لمعاينة نقاط النهاية لمدة 7 أيام فقط.
+- بطاقة مطابقة: دعوة مبعوث بدون شروط التوقيع أو بدون تسجيل قالب الطلب.
+- خطر التكامل: عدم تطابق المجموع الاختباري المكتشف على `scripts/preview_verify.sh`.
 
-Reprenez uniquement apres avoir documente la remediation dans le invite tracker et confirme que le dashboard telemetrie est stable au moins 48 heures.
+أعد إعداده مرة أخرى بعد توثيق الإصلاح في متتبع الدعوة وتأكد من أن القياس عن بعد للوحة القيادة مستقر على الأقل لمدة 48 ساعة.

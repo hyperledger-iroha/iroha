@@ -2660,17 +2660,17 @@ fn derive_struct_deserialize(
             let __decode_from_slice_impl = if has_decode_from_slice_attr(container_attrs) {
                 let (impl_generics2, ty_generics2, where_clause2) = r#gen.split_for_impl();
                 quote! {
-	                    impl<'a> #impl_generics2 norito::core::DecodeFromSlice<'a> for #ident #ty_generics2 #where_clause2 {
-	                        #[inline]
-	                        fn decode_from_slice(bytes: &'a [u8]) -> ::core::result::Result<(Self, usize), norito::core::Error> {
-	                            let __archived = norito::core::archived_from_slice::<Self>(bytes)?;
-	                            let __archived_bytes = __archived.bytes();
-	                            let _pg = norito::core::PayloadCtxGuard::enter(__archived_bytes);
-	                            let value = <Self as norito::core::NoritoDeserialize>::try_deserialize(__archived.archived())?;
-	                            Ok((value, __archived_bytes.len()))
-	                        }
-	                    }
-	                }
+                    impl<'a> #impl_generics2 norito::core::DecodeFromSlice<'a> for #ident #ty_generics2 #where_clause2 {
+                        #[inline]
+                        fn decode_from_slice(bytes: &'a [u8]) -> ::core::result::Result<(Self, usize), norito::core::Error> {
+                            let __archived = norito::core::archived_from_slice::<Self>(bytes)?;
+                            let __archived_bytes = __archived.bytes();
+                            let _pg = norito::core::PayloadCtxGuard::enter(__archived_bytes);
+                            let value = <Self as norito::core::NoritoDeserialize>::try_deserialize(__archived.archived())?;
+                            Ok((value, __archived_bytes.len()))
+                        }
+                    }
+                }
             } else {
                 quote! {}
             };
@@ -2825,17 +2825,17 @@ fn derive_struct_deserialize(
             let __decode_from_slice_impl = if has_decode_from_slice_attr(container_attrs) {
                 let (impl_generics2, ty_generics2, where_clause2) = r#gen.split_for_impl();
                 quote! {
-	                    impl<'a> #impl_generics2 norito::core::DecodeFromSlice<'a> for #ident #ty_generics2 #where_clause2 {
-	                        #[inline]
-	                        fn decode_from_slice(bytes: &'a [u8]) -> ::core::result::Result<(Self, usize), norito::core::Error> {
-	                            let __archived = norito::core::archived_from_slice::<Self>(bytes)?;
-	                            let __archived_bytes = __archived.bytes();
-	                            let _pg = norito::core::PayloadCtxGuard::enter(__archived_bytes);
-	                            let value = <Self as norito::core::NoritoDeserialize>::try_deserialize(__archived.archived())?;
-	                            Ok((value, __archived_bytes.len()))
-	                        }
-	                    }
-	                }
+                    impl<'a> #impl_generics2 norito::core::DecodeFromSlice<'a> for #ident #ty_generics2 #where_clause2 {
+                        #[inline]
+                        fn decode_from_slice(bytes: &'a [u8]) -> ::core::result::Result<(Self, usize), norito::core::Error> {
+                            let __archived = norito::core::archived_from_slice::<Self>(bytes)?;
+                            let __archived_bytes = __archived.bytes();
+                            let _pg = norito::core::PayloadCtxGuard::enter(__archived_bytes);
+                            let value = <Self as norito::core::NoritoDeserialize>::try_deserialize(__archived.archived())?;
+                            Ok((value, __archived_bytes.len()))
+                        }
+                    }
+                }
             } else {
                 quote! {}
             };
@@ -3869,18 +3869,18 @@ fn derive_enum_deserialize(
     let (_, ty_generics, _) = r#gen.split_for_impl();
     let __decode_from_slice_impl = if has_decode_from_slice_attr(container_attrs) {
         let (impl_generics2, ty_generics2, where_clause2) = r#gen.split_for_impl();
-	        quote! {
-	            impl<'a> #impl_generics2 norito::core::DecodeFromSlice<'a> for #ident #ty_generics2 #where_clause2 {
-	                #[inline]
-	                fn decode_from_slice(bytes: &'a [u8]) -> ::core::result::Result<(Self, usize), norito::core::Error> {
-	                    let __archived = norito::core::archived_from_slice::<Self>(bytes)?;
-	                    let __archived_bytes = __archived.bytes();
-	                    let _pg = norito::core::PayloadCtxGuard::enter(__archived_bytes);
-	                    let value = <Self as norito::core::NoritoDeserialize>::try_deserialize(__archived.archived())?;
-	                    Ok((value, __archived_bytes.len()))
-	                }
-	            }
-	        }
+        quote! {
+            impl<'a> #impl_generics2 norito::core::DecodeFromSlice<'a> for #ident #ty_generics2 #where_clause2 {
+                #[inline]
+                fn decode_from_slice(bytes: &'a [u8]) -> ::core::result::Result<(Self, usize), norito::core::Error> {
+                    let __archived = norito::core::archived_from_slice::<Self>(bytes)?;
+                    let __archived_bytes = __archived.bytes();
+                    let _pg = norito::core::PayloadCtxGuard::enter(__archived_bytes);
+                    let value = <Self as norito::core::NoritoDeserialize>::try_deserialize(__archived.archived())?;
+                    Ok((value, __archived_bytes.len()))
+                }
+            }
+        }
     } else {
         quote! {}
     };

@@ -11,12 +11,13 @@ id: developer-index
 title: SoraFS Developer Guides
 description: Landing page for SoraFS developer documentation, samples, and automation references.
 sidebar_label: Developer Overview
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
+:::注意规范来源
 :::
 
-# SoraFS Developer Guides
+# SoraFS 开发人员指南
 
 ```{toctree}
 :caption: Getting Started

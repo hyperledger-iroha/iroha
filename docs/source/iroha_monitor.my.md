@@ -7,45 +7,46 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 05149d624d680d04433be41a4525538c97bd103ae7f80dda2613a6adb181a93d
 source_last_modified: "2025-12-29T18:16:35.968850+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 # Iroha Monitor
 
-The refactored Iroha monitor pairs a lightweight terminal UI with animated
-festival ASCII art and the traditional Etenraku theme.  It focuses on two
-simple workflows:
+ပြန်လည်ပြုပြင်ထားသော Iroha မော်နီတာသည် ပေါ့ပါးသော terminal UI ကို ကာတွန်းဖြင့် တွဲပေးသည်
+ပွဲတော် ASCII အနုပညာနှင့် ရိုးရာ Etenraku အပြင်အဆင်။  နှစ်ခုကို အဓိကထားတယ်။
+ရိုးရှင်းသော အလုပ်အသွားအလာများ
 
-- **Spawn-lite mode** – start ephemeral status/metrics stubs that mimic peers.
-- **Attach mode** – point the monitor at existing Torii HTTP endpoints.
+- **Spawn-lite မုဒ်** – ရွယ်တူများကို အတုခိုးသည့် ပေါ်ပင်အခြေအနေ/မက်ထရစ်ချလံများကို စတင်ပါ။
+- **ပူးတွဲမုဒ်** – ရှိပြီးသား Torii HTTP အဆုံးမှတ်များတွင် မော်နီတာကို ညွှန်ပါ။
 
-The UI renders three regions on every refresh:
+UI သည် ပြန်လည်ဆန်းသစ်မှုတိုင်းတွင် နယ်ပယ်သုံးခုကို လုပ်ဆောင်ပေးသည်-
 
-1. **Torii skyline header** – animated torii gate, Mt. Fuji, koi waves, and star
-   field that scroll in sync with the refresh cadence.
-2. **Summary strip** – aggregated blocks/transactions/gas plus refresh timing.
-3. **Peer table & festival whispers** – peer rows on the left, rotating event
-   log on the right that captures warnings (timeouts, oversized payloads, etc.).
-4. **Optional gas trend** – enable `--show-gas-trend` to append a sparkline
-   summarising total gas usage across all peers.
+1. **Torii ကောင်းကင်ယံခေါင်းစီး** – ကာတွန်း တိုရီဂိတ်၊ ဖူဂျီတောင်၊ koi လှိုင်းများနှင့် ကြယ်
+   refresh cadence နှင့် ထပ်တူကျသော scroll လုပ်သည့်အကွက်။
+2. **အကျဉ်းချုပ်** – ပေါင်းစည်းထားသော လုပ်ကွက်များ/ငွေပေးငွေယူ/ဓာတ်ငွေ့ နှင့် ပြန်လည်စတင်မည့်အချိန်။
+3. **ရွယ်တူစားပွဲနှင့် တီးတိုးတီးတိုးပွဲ** – ဘယ်ဘက်ရှိ သက်တူရွယ်တူအတန်းများ၊ လှည့်ခြင်းအစီအစဉ်
+   သတိပေးချက်များကို ဖမ်းယူသည့် ညာဘက်တွင် လော့ဂ်အင် (အချိန်ကုန်သွားခြင်း၊ အရွယ်အစားကြီးသော ဝန်ဆောင်ခများ စသည်)။
+4. **ရွေးချယ်နိုင်သော ဓာတ်ငွေ့လမ်းကြောင်း** – မီးတောက်တစ်ခု ထပ်ဖြည့်ရန် `--show-gas-trend` ကို ဖွင့်ပါ
+   ရွယ်တူများအားလုံးတွင် စုစုပေါင်းဓာတ်ငွေ့အသုံးပြုမှု အကျဉ်းချုပ်။
 
-New in this refactor:
+ဤ refactor တွင် အသစ်-
 
-- Animated Japanese-style ASCII scene with koi, torii, and lanterns.
-- Simplified command surface (`--spawn-lite`, `--attach`, `--interval`).
-- Intro banner with optional audio playback of the gagaku theme (external MIDI
-  player or the built-in soft synth when the platform/audio stack supports it).
-- `--no-theme` / `--no-audio` flags for CI or fast smoke runs.
-- Per-peer “mood” column showing the latest warning, commit time, or uptime.
+- koi၊ torii နှင့် မီးအိမ်များဖြင့် လှုပ်ရှားနေသော ဂျပန်စတိုင် ASCII မြင်ကွင်း။
+- ရိုးရှင်းသော အမိန့်ပေးမျက်နှာပြင် (`--spawn-lite`, `--attach`, `--interval`)။
+- gagaku အပြင်အဆင် (ပြင်ပ MIDI
+  ပလပ်ဖောင်း/အသံစဥ်ကို ပံ့ပိုးသောအခါ ပလေယာ သို့မဟုတ် ပျော့ပျောင်းသော Synth ပါ၀င်သည်)။
+- `--no-theme` / `--no-audio` CI သို့မဟုတ် အမြန်မီးခိုးထွက်ခြင်းအတွက် အလံများ။
+- နောက်ဆုံးသတိပေးချက်၊ လုပ်ဆောင်ချိန် သို့မဟုတ် အလုပ်ချိန်ကိုပြသသည့် တစ်ဦးချင်းအလိုက် “စိတ်ခံစားချက်” ကော်လံ။
 
-## Quickstart
+## အမြန်စတင်ပါ။
 
-Build the monitor and run it against the stubbed peers:
+မော်နီတာကို တည်ဆောက်ပြီး ပြတ်ပြတ်သားသား ရွယ်တူများထံ ပြေးပါ။
 
 ```bash
 cargo run -p iroha_monitor -- --spawn-lite --peers 3
 ```
 
-Attach to existing Torii endpoints:
+ရှိပြီးသား Torii အဆုံးမှတ်များသို့ ပူးတွဲပါ-
 
 ```bash
 cargo run -p iroha_monitor -- \
@@ -53,13 +54,13 @@ cargo run -p iroha_monitor -- \
   --interval 500
 ```
 
-CI-friendly invocation (skip intro animation and audio):
+CI-ဖော်ရွေသော ခေါ်ဆိုမှု (နိဒါန်း ကာတွန်းနှင့် အသံကို ကျော်ပါ)
 
 ```bash
 cargo run -p iroha_monitor -- --spawn-lite --no-theme --no-audio
 ```
 
-### CLI flags
+### CLI အလံများ
 
 ```
 --spawn-lite         start local status/metrics stubs (default if no --attach)
@@ -77,56 +78,54 @@ cargo run -p iroha_monitor -- --spawn-lite --no-theme --no-audio
                      cap headless fallback to N frames (0 = unlimited)
 ```
 
-## Theme intro
+## အကြောင်းအရာမိတ်ဆက်
 
-By default, startup plays a short ASCII animation while the Etenraku score
-begins.  Audio selection order:
+မူလအတိုင်း၊ စတင်မှုတွင် Etenraku အမှတ်စဉ်တွင် ASCII ကာတွန်းတိုကို ဖွင့်သည်။
+စတင်သည်။  အသံရွေးချယ်မှု အစီအစဉ်-
 
-1. If `--midi-player` is provided, generate the demo MIDI (or use `--midi-file`)
-   and spawn the command.
-2. Otherwise, on macOS/Windows (or Linux with `--features iroha_monitor/linux-builtin-synth`)
-   render the score with the built-in gagaku soft synth (no external audio
-   assets required).
-3. If audio is disabled or initialization fails, the intro still prints the
-   animation and immediately enters the TUI.
+1. `--midi-player` ကို ပေးထားပါက၊ ဒီမို MIDI ကို ထုတ်လုပ်ပါ (သို့မဟုတ် `--midi-file` ကို အသုံးပြုပါ)
+   အမိန့်ကို မွေးမြူပါ။
+2. မဟုတ်ပါက macOS/Windows (သို့မဟုတ် `--features iroha_monitor/linux-builtin-synth` ဖြင့် Linux)
+   built-in gagaku soft synth ဖြင့် ရမှတ်ကို တင်ဆက်ပါ (ပြင်ပအသံမရှိပါ။
+   ပိုင်ဆိုင်မှု)။
+3. အသံပိတ်ထားပါက သို့မဟုတ် အစပျိုးခြင်း မအောင်မြင်ပါက၊ intro သည် ပရင့်ထုတ်ဆဲဖြစ်သည်။
+   Animation လုပ်ပြီး TUI ထဲကို ချက်ချင်းဝင်ပါ။
 
-The CPAL-powered synth auto-enables on macOS and Windows. On Linux it is
-opt-in to avoid missing ALSA/Pulse headers during workspace builds; enable it
-with `--features iroha_monitor/linux-builtin-synth` if your system provides a
-working audio stack.
+CPAL-powered synth သည် macOS နှင့် Windows တွင် အလိုအလျောက်ဖွင့်ပေးသည်။ Linux တွင်၎င်းရှိသည်။
+အလုပ်ခွင်တည်ဆောက်နေစဉ်အတွင်း ALSA/Pulse ခေါင်းစီးများ ပျောက်ဆုံးခြင်းကို ရှောင်ရှားရန် ရွေးချယ်ပါ။ ၎င်းကိုဖွင့်ပါ။
+သင့်စနစ်က `--features iroha_monitor/linux-builtin-synth` ဖြင့်
+အလုပ်လုပ်သောအသံစည်း။
 
-Use `--no-theme` or `--no-audio` when running in CI or headless shells.
+CI သို့မဟုတ် headless shells များတွင်လည်ပတ်သောအခါ `--no-theme` သို့မဟုတ် `--no-audio` ကိုသုံးပါ။
 
-The soft synth now follows the arrangement captured in *MIDI synth design in
-Rust.pdf*: hichiriki and ryūteki share a heterophonic melody while the shō
-provides the aitake pads described in the document.  The timed note data lives
-in `etenraku.rs`; it powers both the CPAL callback and the generated demo MIDI.
-When audio output is unavailable the monitor skips playback but still renders
-the ASCII animation.
+အပျော့စား synth သည် *MIDI synth ဒီဇိုင်းတွင် ရိုက်ကူးထားသော အစီအစဉ်အတိုင်း လိုက်လုပ်ပါသည်။
+Rust.pdf*: hichiriki နှင့် ryūteki သည် shō စဉ်တွင် ကွဲပြားသော တေးဂီတကို မျှဝေသည်
+စာရွက်စာတမ်းတွင်ဖော်ပြထားသော aitake pads များကိုထောက်ပံ့ပေးသည်။  အချိန်ကိုက်မှတ်စုသည် ဒေတာ အသက်ရှင်နေပါသည်။
+`etenraku.rs` တွင်၊ ၎င်းသည် CPAL ပြန်ခေါ်ခြင်းနှင့် ထုတ်လုပ်ထားသော ဒီမို MIDI နှစ်ခုလုံးကို စွမ်းအားပေးသည်။
+အသံအထွက်ကို မရရှိနိုင်သောအခါတွင် မော်နီတာသည် ပြန်ဖွင့်ခြင်းကို ကျော်သွားသော်လည်း တင်ဆက်နေဆဲဖြစ်သည်။
+ASCII ကာတွန်း။
 
-## UI overview
+## UI ခြုံငုံသုံးသပ်ချက်- **ခေါင်းစီးအနုပညာ** - `AsciiAnimator` ဖြင့် ဖရိန်တစ်ခုစီကို ထုတ်လုပ်သည်။ koi၊ တိုရီမီးအိမ်၊
+  စဉ်ဆက်မပြတ်ရွေ့လျားမှုပေးရန်အတွက် လှိုင်းလုံးများ လွင့်ပျံလာသည်။
+- **အနှစ်ချုပ်အကျဉ်းချုပ်** - အွန်လိုင်းမှရွယ်တူချင်းများ၊ အစီရင်ခံထားသောရွယ်တူအရေအတွက်၊ စုစုပေါင်းပိတ်ဆို့ခြင်းကိုပြသသည်၊
+  အချည်းနှီးမဟုတ်သော ဘလောက်စုစုပေါင်းများ၊ tx အတည်ပြုချက်များ/ငြင်းပယ်မှုများ၊ ဓာတ်ငွေ့အသုံးပြုမှုနှင့် ပြန်လည်ဆန်းသစ်မှုနှုန်း။
+- **ရွယ်တူဇယား** – အမည်များ/အဆုံးမှတ်အတွက် ကော်လံများ၊ လုပ်ကွက်များ၊ အရောင်းအ၀ယ်များ၊ တန်းစီအရွယ်အစား၊
+  ဓာတ်ငွေ့အသုံးပြုမှု၊ တုံ့ပြန်ချိန်နှင့် “စိတ်ခံစားချက်” အရိပ်အမြွက် (သတိပေးချက်များ၊ ကျူးလွန်ချိန်၊ အလုပ်ချိန်)။
+- **ပွဲတော် တီးတိုး** - သတိပေးချက် မှတ်တမ်း (ချိတ်ဆက်မှု အမှားအယွင်းများ၊ ဝန်ဆောင်ခများ
+  ကန့်သတ်ချိုးဖောက်မှုများ၊ နှေးကွေးသော အဆုံးမှတ်များ)။  မက်ဆေ့ဂျ်များကို ပြောင်းပြန်လှန်ထားသည် (အပေါ်တွင် နောက်ဆုံးပေါ်)။
 
-- **Header art** – generated each frame by `AsciiAnimator`; koi, torii lanterns,
-  and waves drift to give continuous motion.
-- **Summary strip** – shows online peers, reported peer count, block totals,
-  non-empty block totals, tx approvals/rejections, gas usage, and refresh rate.
-- **Peer table** – columns for alias/endpoint, blocks, transactions, queue size,
-  gas usage, latency, and a “mood” hint (warnings, commit time, uptime).
-- **Festival whispers** – rolling log of warnings (connection errors, payload
-  limit breaches, slow endpoints).  Messages are reversed (latest on top).
+ကီးဘုတ်ဖြတ်လမ်းများ-
 
-Keyboard shortcuts:
+- `n` / ညာ / အောက် - အာရုံစူးစိုက်မှုကို နောက်ရွယ်တူသို့ ရွှေ့ပါ။
+- `p` / ဘယ် / Up - ယခင်မျိုးတူဆီသို့ အာရုံစူးစိုက်မှုကို ရွှေ့ပါ။
+- `q` / Esc / Ctrl-C – ထွက်ပြီး terminal ကို ပြန်ယူပါ။
 
-- `n` / Right / Down – move focus to the next peer.
-- `p` / Left / Up – move focus to the previous peer.
-- `q` / Esc / Ctrl-C – exit and restore the terminal.
+မော်နီတာသည် အစားထိုး-စခရင်ကြားခံတစ်ခုဖြင့် crossterm + ratatui ကိုအသုံးပြုသည်။ ထွက်လိုက်ပါ။
+ကာဆာကို ပြန်လည်ရယူပြီး မျက်နှာပြင်ကို ရှင်းပေးသည်။
 
-The monitor uses crossterm + ratatui with an alternate-screen buffer; on exit it
-restores the cursor and clears the screen.
+## မီးခိုးစမ်းသပ်မှု
 
-## Smoke tests
-
-The crate ships integration tests that exercise both modes and the HTTP limits:
+မုဒ်များနှင့် HTTP ကန့်သတ်ချက်များ နှစ်မျိုးလုံးကို ကျင့်သုံးသည့် ပေါင်းစပ်စမ်းသပ်မှုများကို သင်္ဘောဖြင့် ပေးပို့သည်-
 
 - `spawn_lite_smoke_renders_frames`
 - `attach_mode_with_stubs_runs_cleanly`
@@ -134,46 +133,46 @@ The crate ships integration tests that exercise both modes and the HTTP limits:
 - `status_limit_warning_is_rendered`
 - `attach_mode_with_slow_peer_renders_multiple_frames`
 
-Run just the monitor tests:
+မော်နီတာ စမ်းသပ်မှုများကိုသာ လုပ်ဆောင်ပါ။
 
 ```bash
 cargo test -p iroha_monitor -- --nocapture
 ```
 
-The workspace has heavier integration tests (`cargo test --workspace`). Running
-the monitor tests separately is still useful for quick validation when you do
-not need the full suite.
+အလုပ်ခွင်တွင် ပိုမိုလေးလံသော ပေါင်းစပ်စစ်ဆေးမှုများ (`cargo test --workspace`) ရှိသည်။ ပြေးသည်။
+မော်နီတာစစ်ဆေးမှုများသည် သီးခြားစီစစ်ဆေးသည့်အခါတွင် မြန်ဆန်စွာအတည်ပြုချက်အတွက် အသုံးဝင်သေးသည်။
+အစုံအလင် မလိုအပ်ပါ။
 
-## Updating screenshots
+## ဖန်သားပြင်ဓာတ်ပုံများကို အပ်ဒိတ်လုပ်နေသည်။
 
-The docs demo now focuses on the torii skyline and peer table.  To refresh the
-assets, run:
+ယခု docs demo သည် torii skyline နှင့် peer table ကိုအာရုံစိုက်ထားသည်။  ပြန်လည်ဆန်းသစ်ရန်
+ပိုင်ဆိုင်မှုများ၊ လည်ပတ်သည်-
 
 ```bash
 make monitor-screenshots
 ```
 
-This wraps `scripts/iroha_monitor_demo.sh` (spawn-lite mode, fixed seed/viewport,
-no intro/audio, dawn palette, art-speed 1, headless cap 24) and writes the
-SVG/ANSI frames plus `manifest.json` and `checksums.json` into
-`docs/source/images/iroha_monitor_demo/`. `make check-iroha-monitor-docs`
-wraps both CI guards (`ci/check_iroha_monitor_assets.sh` and
-`ci/check_iroha_monitor_screenshots.sh`) so generator hashes, manifest fields,
-and checksums stay in sync; the screenshot check also ships as
-`python3 scripts/check_iroha_monitor_screenshots.py`. Pass `--no-fallback` to
-the demo script if you want the capture to fail instead of falling back to the
-baked frames when the monitor output is empty; when fallback is used the raw
-`.ans` files are rewritten with the baked frames so the manifest/checksums stay
-deterministic.
+၎င်းသည် `scripts/iroha_monitor_demo.sh` (spawn-lite mode၊ fixed seed/viewport၊
+မိတ်ဆက်/အသံမရှိ၊ အရုဏ်ဦး ပျဉ်ချပ်၊ အနုပညာ-အမြန်နှုန်း 1၊ ခေါင်းမဲ့ဦးထုပ် 24) နှင့် ရေးသားသည်။
+SVG/ANSI frames အပေါင်း `manifest.json` နှင့် `checksums.json` ထဲသို့
+`docs/source/images/iroha_monitor_demo/`။ `make check-iroha-monitor-docs`
+CI အကာ (`ci/check_iroha_monitor_assets.sh` နှင့်
+`ci/check_iroha_monitor_screenshots.sh`) ထို့ကြောင့် generator hashes၊ manifest fields၊
+နှင့် checksum များသည် ထပ်တူကျနေပါသည်။ စခရင်ရှော့စစ်ဆေးချက်ကိုလည်း ပေးပို့သည်။
+`python3 scripts/check_iroha_monitor_screenshots.py`။ `--no-fallback` ကို ဖြတ်ပါ။
+သရုပ်ပြဇာတ်ညွှန်းကို သင်သည် ဖမ်းယူမှုကို ပြန်ကျသွားမည့်အစား မအောင်မြင်စေလိုလျှင်
+မော်နီတာ၏အထွက်ဗလာဖြစ်နေသောအခါ မီးဖုတ်ထားသောဘောင်များ၊ fallback ကိုအသုံးပြုသောအခါအကြမ်း
+`.ans` ဖိုင်များကို ဖုတ်ထားသောဘောင်များဖြင့် ပြန်လည်ရေးသားထားသောကြောင့် မန်နီးဖက်စ်/ချက်လက်မှတ်များ ဆက်လက်တည်ရှိနေပါသည်။
+အဆုံးအဖြတ်ပေးသည်။
 
-## Deterministic screenshots
+## သတ်မှတ်ပုံစခရင်ပုံများ
 
-The shipped snapshots live in `docs/source/images/iroha_monitor_demo/`:
+ပို့လိုက်သော လျှပ်တစ်ပြက်ပုံများသည် `docs/source/images/iroha_monitor_demo/` တွင် တိုက်ရိုက်ဖြစ်သည်-
 
-![monitor overview](images/iroha_monitor_demo/iroha_monitor_demo_overview.svg)
-![monitor pipeline](images/iroha_monitor_demo/iroha_monitor_demo_pipeline.svg)
+![စောင့်ကြည့်သုံးသပ်ချက်](images/iroha_monitor_demo/iroha_monitor_demo_overview.svg)
+![စောင့်ကြည့်ရေးပိုက်လိုင်း](images/iroha_monitor_demo/iroha_monitor_demo_pipeline.svg)
 
-Reproduce them with a fixed viewport/seed:
+၎င်းတို့ကို ပုံသေ ရှုထောင့်/မျိုးစေ့ဖြင့် မျိုးပွားပါ-
 
 ```bash
 scripts/iroha_monitor_demo.sh \
@@ -182,26 +181,24 @@ scripts/iroha_monitor_demo.sh \
   --seed iroha-monitor-demo
 ```
 
-The capture helper fixes `LANG`/`LC_ALL`/`TERM`, forwards
-`IROHA_MONITOR_DEMO_SEED`, mutes audio, and pins the art theme/speed so the
-frames render identically across platforms. It writes `manifest.json` (generator
-hashes + sizes) and `checksums.json` (SHA-256 digests) under
-`docs/source/images/iroha_monitor_demo/`; CI runs
-`ci/check_iroha_monitor_assets.sh` and `ci/check_iroha_monitor_screenshots.sh`
-to fail when the assets drift from the recorded manifests.
+ဖမ်းယူကူညီသူသည် `LANG`/`LC_ALL`/`TERM` ကို ပြင်ဆင်သည်၊
+`IROHA_MONITOR_DEMO_SEED`၊ အသံပိတ်ပြီး အနုပညာအပြင်အဆင်/အမြန်နှုန်းကို ပင်ထိုးထားသောကြောင့်၊
+ဘောင်များသည် ပလက်ဖောင်းများတစ်လျှောက် တူညီစွာ တင်ဆက်သည်။ `manifest.json` (ဂျင်နရေတာ) ဟုရေးသည်။
+hashes + sizes) နှင့် `checksums.json` (SHA-256 digests) အောက်တွင်
+`docs/source/images/iroha_monitor_demo/`; CI ပြေးသည်။
+`ci/check_iroha_monitor_assets.sh` နှင့် `ci/check_iroha_monitor_screenshots.sh`
+ပိုင်ဆိုင်မှုများသည် မှတ်တမ်းတင်ထားသော သရုပ်ပြမှုမှ ရုန်းထွက်သည့်အခါ ကျရှုံးရန်။
 
-## Troubleshooting
+## ပြသာနာရှာဖွေရှင်းပေးခြင်း- **အသံအထွက်မရှိပါ** - မော်နီတာသည် အသံပိတ်ထားသော ပြန်ဖွင့်ခြင်းသို့ ပြန်သွားပြီး ဆက်လက်လုပ်ဆောင်သည်။
+- **ဦးခေါင်းမပါသော ဆုတ်ခွာသည် စောစောထွက်သည်** – မော်နီတာဦးထုပ်သည် စုံတွဲတစ်တွဲဆီသို့ ဦးခေါင်းမဲ့ပြေးသွားသည်
+  ဒါဇင်ဘောင်များ (မူရင်းအကွာအဝေးတွင် 12 စက္ကန့်ခန့်) မပြောင်းနိုင်သောအခါ
+  terminal ကို raw mode သို့ပြောင်းပါ။ ဆက်လက်လည်ပတ်ရန် `--headless-max-frames 0` ကို ကျော်ပါ။
+  အကန့်အသတ်မရှိ
+- ** လွန်ကဲသောအခြေအနေပေးဆောင်မှုများ** - သက်တူရွယ်တူများ၏ စိတ်ခံစားချက်ကော်လံနှင့် ပွဲတော်မှတ်တမ်း
+  စီစဉ်သတ်မှတ်ထားသော ကန့်သတ်ချက် (`128 KiB`) ဖြင့် `body exceeds …` ကို ပြသပါ။
+- **နှေးကွေးသောရွယ်တူများ** - ဖြစ်ရပ်မှတ်တမ်းသည် အချိန်ကုန်သတိပေးချက်များကို မှတ်တမ်းတင်သည်။ ထိုတူတူကို အာရုံစိုက်ပါ။
+  အတန်းကို မီးမောင်းထိုးပြပါ။
 
-- **No audio output** – the monitor falls back to muted playback and continues.
-- **Headless fallback exits early** – the monitor caps headless runs to a couple
-  dozen frames (about 12 seconds at the default interval) when it cannot switch
-  the terminal into raw mode; pass `--headless-max-frames 0` to keep it running
-  indefinitely.
-- **Oversized status payloads** – the peer’s mood column and the festival log
-  show `body exceeds …` with the configured limit (`128 KiB`).
-- **Slow peers** – the event log records timeout warnings; focus that peer to
-  highlight the row.
-
-Enjoy the festival skyline!  Contributions for additional ASCII motifs or
-metrics panels are welcome—keep them deterministic so clusters render the same
-frame-by-frame regardless of terminal.
+ပွဲတော်ကောင်းကင်ယံကို ခံစားလိုက်ပါ။  အပိုဆောင်း ASCII motifs သို့မဟုတ် ပံ့ပိုးမှုများ
+မက်ထရစ်အကန့်များကို ကြိုဆိုပါသည်—၎င်းတို့ကို အဆုံးအဖြတ်ရှိစေရန် အစုအဝေးများက တူညီစေသည်။
+terminal မသက်ဆိုင်ဘဲ frame-by-frame

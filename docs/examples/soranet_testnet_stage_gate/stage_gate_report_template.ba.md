@@ -7,64 +7,65 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 06dcd662ffb2b22a13d9cd5418f5d2e8e64a4cdadb71a054488ce75b1eb96188
 source_last_modified: "2025-12-29T18:16:35.094764+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# SNNet-10 Stage-Gate Report (T?_→T?_)
+# SNNet-10 Этап-ҡапҡа отчеты (Т?_→Т?_)
 
-> Replace every placeholder (items in angle brackets) before submission. Keep
-> the section headers so governance automation can parse the file.
+> Ҡабул итеү алдынан һәр урынды (элементтар мөйөшлө йәйәләрҙә) алмаштырығыҙ. Һаҡларға
+> бүлек башлыҡтары шулай идара итеү автоматлаштырыу файлды анализлау мөмкин.
 
-## 1. Metadata
+## 1. Метадата
 
-| Field | Value |
-|-------|-------|
-| Promotion | `<T0→T1 or T1→T2>` |
-| Reporting window | `<YYYY-MM-DD → YYYY-MM-DD>` |
-| Relays in scope | `<count + IDs or “see appendix A”>` |
-| Primary contact | `<name/email/Matrix handle>` |
-| Submission archive | `<snnet10-stage-gate-YYYYMMDD.tar.zst>` |
-| Archive SHA-256 | `<sha256:...>` |
+| Ялан | Ҡиммәте |
+|------|-------|
+| Промоушен | `<T0→T1 or T1→T2>` |
+| Отчет тәҙрә | `<YYYY-MM-DD → YYYY-MM-DD>` |
+| Релелар масштабында | `<count + IDs or “see appendix A”>` |
+| Беренсел бәйләнеш | `<name/email/Matrix handle>` |
+| Тапшырыу архивы | `<snnet10-stage-gate-YYYYMMDD.tar.zst>` |
+| Архив ША-256 | I18NI0000007X |
 
-## 2. Metrics summary
+## 2. Метрика резюме
 
-| Metric | Observed | Threshold | Pass? | Source |
-|--------|----------|-----------|-------|--------|
-| Circuit success ratio | `<0.000>` | ≥0.95 | ☐ / ☑ | `reports/metrics-report.json` |
-| Fetch brownout ratio | `<0.000>` | ≤0.01 | ☐ / ☑ | `reports/metrics-report.json` |
-| GAR mix variance | `<+0.0%>` | ≤±10% | ☐ / ☑ | `reports/metrics-report.json` |
-| PoW p95 seconds | `<0.0 s>` | ≤3 s | ☐ / ☑ | `telemetry/pow_window.json` |
-| Latency p95 | `<0 ms>` | <200 ms | ☐ / ☑ | `telemetry/latency_window.json` |
-| PQ ratio (avg) | `<0.00>` | ≥ target | ☐ / ☑ | `telemetry/pq_summary.json` |
+| Метрика | Күҙәтелгән | Эроболь | Үтергә? | Сығанаҡ |
+|-------|----------|------------|-------|---------||
+| Сюжет уңыш нисбәте | `<0.000>` | ≥0,95 | ☐ / ☑ | `reports/metrics-report.json` |
+| Браунут нисбәте | `<0.000>` | ≤0.01 | ☐ / ☑ | I18NI0000011X |
+| GAR ҡатнашмаһы дисперсияһы | I18NI0000012X | ≤±10% | ☐ / ☑ | I18NI0000013X |
+| PoW p95 секунд | I18NI0000014X | ≤3 с | ☐ / ☑ | `telemetry/pow_window.json` |
+| Латентлыҡ p95 | `<0 ms>` | <200 мс | ☐ / ☑ | `telemetry/latency_window.json` |
+| PQ нисбәте (вег) | `<0.00>` | ≥ маҡсат | ☐ / ☑ | `telemetry/pq_summary.json` |
 
-**Narrative:** `<summaries of anomalies, mitigations, overrides>`
+**Хикәйәләү:** `<summaries of anomalies, mitigations, overrides>`
 
-## 3. Drill & incident log
+## 3. Дрель & инциденттар журналы
 
-| Timestamp (UTC) | Region | Type | Alert ID | Mitigation summary |
-|-----------------|--------|------|----------|--------------------|
+| Ваҡыт тамғаһы (UTC) | Төбәк | Тип | Иҫкәртмә идентификаторы | Йомшартыу резюмеһы |
+|---------------|------------------------------|------------------------|
 | `<YYYY-MM-DD HH:MM>` | `<region>` | `Brownout drill` | `<alert://...>` | `<restored anon-guard-pq in 3m12s>` |
 
-## 4. Attachments and hashes
+## 4. Ҡушымталар һәм хеш
 
-| Artefact | Path | SHA-256 |
-|----------|------|---------|
-| Metrics snapshot | `reports/metrics-window.json` | `<sha256>` |
-| Metrics report | `reports/metrics-report.json` | `<sha256>` |
-| Guard rotation transcripts | `evidence/guard_rotation/*.log` | `<sha256>` |
-| Exit bonding manifests | `evidence/exit_bonds/*.to` | `<sha256>` |
-| Drill logs | `evidence/drills/*.md` | `<sha256>` |
-| MASQUE readiness (T1→T2) | `reports/masque-readiness.md` | `<sha256 or n/a>` |
-| Rollback plan (T1→T2) | `reports/downgrade_plan.md` | `<sha256 or n/a>` |
+| Артефакт | Юл | SHA-256 |
+|--------|-------|---------|
+| Метрика снимок | `reports/metrics-window.json` | `<sha256>` |
+| Метрика отчеты | `reports/metrics-report.json` | `<sha256>` |
+| Гвардия әйләнеш стенограммалары | I18NI000000030X | `<sha256>` |
+| Сығыу бәйләнеше күренә | `evidence/exit_bonds/*.to` | `<sha256>` |
+| Дренаж журналдар | `evidence/drills/*.md` | I18NI000000035X |
+| МАСКИЯ әҙерлеге (Т1→Т2) | `reports/masque-readiness.md` | `<sha256 or n/a>` |
+| Rollback планы (Т1→Т2) | `reports/downgrade_plan.md` | `<sha256 or n/a>` |
 
-## 5. Approvals
+## 5. Раҫлаусылар
 
-| Role | Name | Signed (Y/N) | Notes |
-|------|------|--------------|-------|
-| Networking TL | `<name>` | ☐ / ☑ | `<comments>` |
-| Governance rep | `<name>` | ☐ / ☑ | `<comments>` |
-| SRE delegate | `<name>` | ☐ / ☑ | `<comments>` |
+| Роль | Исем | Ҡултамға (Й/Н) | Иҫкәрмәләр |
+|-----|------|--------------|-------|
+| Селтәрле TL | `<name>` | ☐ / ☑ | `<comments>` |
+| Идара итеү реп | `<name>` | ☐ / ☑ | `<comments>` |
+| SRE делегаты | `<name>` | ☐ / ☑ | `<comments>` |
 
-## Appendix A — Relay roster
+## Ҡушымта А — Реле исемлеге
 
 ```
 - relay-id-001 (AS64496, region=SJC)
@@ -72,7 +73,7 @@ translation_last_reviewed: 2026-02-07
 ...
 ```
 
-## Appendix B — Incident summaries
+## Ҡушымта В — Инцидент резюме
 
 ```
 <Detailed context for any incidents or overrides referenced above.>

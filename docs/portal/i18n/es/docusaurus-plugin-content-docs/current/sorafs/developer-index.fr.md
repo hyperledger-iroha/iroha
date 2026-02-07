@@ -4,19 +4,21 @@ direction: ltr
 source: docs/portal/docs/sorafs/developer-index.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: developer-index
-title: Guides de developpeurs SoraFS
-description: Page d'accueil de la documentation developpeur SoraFS, des exemples et des references d'automatisation.
-sidebar_label: Apercu developpeur
+id: índice-desarrollador
+título: Guías de desarrolladores SoraFS
+descripción: Página de acceso a la documentación del desarrollador SoraFS, ejemplos y referencias de automatización.
+sidebar_label: desarrollador de Apercu
 ---
 
-:::note Source canonique
+:::nota Fuente canónica
 :::
 
-# Guides de developpeurs SoraFS
+# Guías de desarrolladores SoraFS
 
 ```{toctree}
 :caption: Demarrage

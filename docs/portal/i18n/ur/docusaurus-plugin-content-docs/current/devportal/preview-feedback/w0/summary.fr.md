@@ -4,61 +4,63 @@ direction: rtl
 source: docs/portal/docs/devportal/preview-feedback/w0/summary.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: preview-feedback-w0-summary
-title: Digest des retours mi-parcours W0
-sidebar_label: Retours W0 (mi-parcours)
-description: Points de controle, constats et actions de mi-parcours pour la vague de preview des maintainers core.
+ID: پیش نظارہ-فیڈ بیک-ڈبلیو 0 سمر
+عنوان: درمیانی مدت کے تاثرات W0 کا ڈائجسٹ
+سائڈبار_لیبل: W0 ریٹرن (درمیانی مدت)
+تفصیل: دیکھ بھال کرنے والوں کے لئے چوکیاں ، نتائج اور درمیانی مدت کے اقدامات کور پیش نظارہ لہر۔
 ---
 
-| Element | Details |
+| عنصر | تفصیلات |
 | --- | --- |
-| Vague | W0 - Maintainers core |
-| Date du digest | 2025-03-27 |
-| Fenetre de review | 2025-03-25 -> 2025-04-08 |
-| Participants | docs-core-01, sdk-rust-01, sdk-js-01, sorafs-ops-01, observability-01 |
-| Tag d'artefact | `preview-2025-03-24` |
+| لہر | W0 - برقرار رکھنے والے کور |
+| ہضم کی تاریخ | 2025-03-27 |
+| جائزہ ونڈو | 2025-03-25-> 2025-04-08 |
+| شرکا | DOCS-CORE-01 ، SDK-RUST-01 ، SDK-JS-01 ، SORAFS-OPS-01 ، مشاہدہ -01 |
+| نمونہ ٹیگ | `preview-2025-03-24` |
 
-## Points saillants
+## جھلکیاں
 
-1. **Workflow de checksum** - Tous les reviewers ont confirme que `scripts/preview_verify.sh`
-   a reussi contre le couple descriptor/archive partage. Aucun override manuel requis.
-2. **Retours de navigation** - Deux problemes mineurs d'ordre du sidebar ont ete signales
-   (`docs-preview/w0 #1-#2`). Les deux sont routes vers Docs/DevRel et ne bloquent pas la
-   vague.
-3. **Parite des runbooks SoraFS** - sorafs-ops-01 a demande des liens croises plus clairs
-   entre `sorafs/orchestrator-ops` et `sorafs/multi-source-rollout`. Issue de suivi ouverte;
-   a traiter avant W1.
-4. **Revue de telemetrie** - observability-01 a confirme que `docs.preview.integrity`,
-   `TryItProxyErrors` et les logs du proxy Try-it sont restes au vert; aucune alerte n'a
-   ete declenchee.
+1. ** چیکسم ورک فلو ** - تمام جائزہ نگاروں نے تصدیق کی ہے کہ `scripts/preview_verify.sh`
+   وضاحتی/آرکائیو شیئرنگ جوڑے کے خلاف کامیاب ہوا۔ دستی اوور رائڈ کی ضرورت نہیں ہے۔
+2. ** نیویگیشن فیڈ بیک ** - سائڈبار کے دو معمولی مسائل کی اطلاع ملی ہے
+   (`docs-preview/w0 #1-#2`)۔ دونوں دستاویزات/ڈیوریل کے راستے ہیں اور اس کو مسدود نہیں کرتے ہیں
+   مبہم
+3. ** رن بکس کی برابری SoraFS **-Sorafs-OPS-01 نے واضح کراس لنکس کی درخواست کی
+   `sorafs/orchestrator-ops` اور `sorafs/multi-source-rollout` کے درمیان۔ فالو اپ مسئلہ کھولیں ؛
+   W1 سے پہلے کارروائی کرنے کے لئے.
+4. ** ٹیلی میٹری کا جائزہ ** - مشاہدہ -01 نے تصدیق کی کہ `docs.preview.integrity` ،
+   `TryItProxyErrors` اور try-it پراکسی لاگز سبز رہے۔ کوئی انتباہ نہیں ہے
+   متحرک کیا گیا ہے۔
 
-## Actions
+## اعمال
 
-| ID | Description | Responsable | Statut |
+| ID | تفصیل | ذمہ دار | حیثیت |
 | --- | --- | --- | --- |
-| W0-A1 | Reordonner les entrees du sidebar du devportal pour mettre en avant les docs pour reviewers (`preview-invite-*` regroupes). | Docs-core-01 | Termine - le sidebar liste maintenant les docs reviewers de facon contigue (`docs/portal/sidebars.js`). |
-| W0-A2 | Ajouter un lien croise explicite entre `sorafs/orchestrator-ops` et `sorafs/multi-source-rollout`. | Sorafs-ops-01 | Termine - chaque runbook pointe desormais vers l'autre pour que les operateurs voient les deux guides pendant les rollouts. |
-| W0-A3 | Partager des snapshots de telemetrie + bundle de requetes avec le tracker de governance. | Observability-01 | Termine - bundle attache a `DOCS-SORA-Preview-W0`. |
+| W0-A1 | جائزہ لینے والوں (`preview-invite-*` ایک ساتھ گروپ کردہ) کے لئے دستاویزات کو اجاگر کرنے کے لئے ڈیورپورل سائڈبار میں اندراجات کو دوبارہ ترتیب دیں۔ | DOCS-CORE-01 | ہو گیا - سائڈبار اب جائزہ لینے والے دستاویزات کی فہرست میں شامل ہے (`docs/portal/sidebars.js`)۔ |
+| W0-A2 | `sorafs/orchestrator-ops` اور `sorafs/multi-source-rollout` کے درمیان ایک واضح کراس لنک شامل کریں۔ | sorafs-ops-01 | ہو گیا - اب ہر رن بک دوسرے کی طرف اشارہ کرتا ہے لہذا آپریٹرز رول آؤٹ کے دوران دونوں گائڈز دیکھتے ہیں۔ |
+| W0-A3 | گورننس ٹریکر کے ساتھ ٹیلی میٹری اسنیپ شاٹس + درخواست کے بنڈل کو شیئر کریں۔ | مشاہدہ -01 | مکمل - `DOCS-SORA-Preview-W0` سے منسلک بنڈل۔ |
 
-## Resume de sortie (2025-04-08)
+## ریلیز کا خلاصہ (2025-04-08)
 
-- Les cinq reviewers ont confirme la fin, purge les builds locaux et quitte la fenetre de
-  preview; les revocations d'acces sont enregistrees dans `DOCS-SORA-Preview-W0`.
-- Aucun incident ni alerte pendant la vague; les dashboards de telemetrie sont restes verts
-  pendant toute la periode.
-- Les actions de navigation + liens croises (W0-A1/A2) sont implementees et refletees dans
-  les docs ci-dessus; la preuve telemetrie (W0-A3) est attachee au tracker.
-- Bundle de preuve archive: screenshots de telemetrie, accuses d'invitation et ce digest
-  sont lies depuis l'issue du tracker.
+- پانچ جائزہ نگاروں نے اختتام کی تصدیق کی ، مقامی تعمیرات کو صاف کیا اور ونڈو چھوڑ دیا۔
+  پیش نظارہ ؛ رسائی کی منسوخی `DOCS-SORA-Preview-W0` میں ریکارڈ کی گئی ہے۔
+- لہر کے دوران کوئی واقعہ یا انتباہات نہیں۔ ٹیلی میٹری ڈیش بورڈز سبز رہے
+  پوری مدت کے دوران
+-نیویگیشن ایکشنز + کراس لنکس (W0-A1/A2) نافذ اور اس کی عکاسی کی جاتی ہے
+  مذکورہ دستاویزات ؛ ٹیلی میٹری پروف (W0-A3) ٹریکر کے ساتھ منسلک ہے۔
+- محفوظ شدہ دستاویزات کا بنڈل: ٹیلی میٹری اسکرین شاٹس ، دعوت نامہ اور یہ ڈائجسٹ
+  ٹریکر کے اختتام کے بعد سے منسلک ہیں۔
 
-## Prochaines etapes
+## اگلے اقدامات
 
-- Implementer les actions W0 avant d'ouvrir W1.
-- Obtenir l'approbation legale et un slot de staging pour le proxy, puis suivre les etapes de
-  preflight de la vague partenaires detaillees dans le [preview invite flow](../../preview-invite-flow.md).
+- W1 کھولنے سے پہلے W0 ایکشن کو نافذ کریں۔
+- پراکسی کے لئے قانونی منظوری اور اسٹیجنگ سلاٹ حاصل کریں ، پھر ان اقدامات پر عمل کریں
+  پارٹنر لہر کا پیش نظارہ [پیش نظارہ انوائٹ فلو] (../../preview-invite-flow.md) میں تفصیل سے۔
 
-_Ce digest est lie depuis le [preview invite tracker](../../preview-invite-tracker.md) pour
-garder le roadmap DOCS-SORA tracable._
+_ یہ ڈائجسٹ [پیش نظارہ انوائٹ ٹریکر] (../../preview-invite-tracker.md) سے منسلک ہے
+روڈ میپ دستاویزات-SORA ٹریس ایبل رکھیں ۔_

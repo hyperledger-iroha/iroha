@@ -4,55 +4,57 @@ direction: ltr
 source: docs/portal/docs/sorafs/chunker-profile-authoring.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: chunker-profile-authoring
-title: Guia de autoria de perfis de chunker da SoraFS
-sidebar_label: Guia de autoria de chunker
-description: Checklist para propor novos perfis e fixtures de chunker da SoraFS.
+ID: チャンカープロファイルオーサリング
+タイトル: SoraFS の自動チャンカーの情報
+サイドバーラベル: チャンカーの自動化ツール
+説明: SoraFS のチャンカーの新しい装備に関するチェックリスト。
 ---
 
-:::note Fonte canonica
-Esta pagina espelha `docs/source/sorafs/chunker_profile_authoring.md`. Mantenha ambas as copias sincronizadas.
+:::note フォンテ カノニカ
+エスタ・ページナ・エスペルハ`docs/source/sorafs/chunker_profile_authoring.md`。マンテンハ・アンバスはコピア・シンクロニザダスとして。
 :::
 
-# Guia de autoria de perfis de chunker da SoraFS
+# SoraFS のチャンカーの自動化のガイア
 
-Este guia explica como propor e publicar novos perfis de chunker para a SoraFS.
-Ele complementa o RFC de arquitetura (SF-1) e a referencia do registro (SF-2a)
-com requisitos concretos de autoria, etapas de validacao e modelos de proposta.
-Para um exemplo canonico, veja
+SoraFS に関する詳細な情報が公開されています。
+RFC アーキテクチャの補完 (SF-1) と登録参照 (SF-2a)
+com requisitos concretos de autoria、etapas de validacao、modelos de proposta。
+カノニコ、ヴェジャの例
 `docs/source/sorafs/proposals/sorafs_sf1_profile_v1.json`
-e o log de dry-run associado em
-`docs/source/sorafs/reports/sf1_determinism.md`.
+予行演習関連のログ
+`docs/source/sorafs/reports/sf1_determinism.md`。
 
-## Visao geral
+## ヴィサオ・ゲラル
 
-Cada perfil que entra no registro deve:
+登録情報の詳細を確認する:
 
-- anunciar parametros CDC deterministicos e configuracoes de multihash identicas entre
-  arquiteturas;
-- entregar fixtures reproduziveis (JSON Rust/Go/TS + corpora fuzz + testemunhas PoR) que
-  os SDKs downstream possam verificar sem tooling sob medida;
-- incluir metadados prontos para governanca (namespace, name, semver) junto com orientacao
-  de rollout e janelas operacionais; e
-- passar pela suite de diff determinista antes da revisao do conselho.
+- マルチハッシュ ID の設定に関する CDC 決定パラメータの発表
+  建築家。
+- entregar フィクスチャの再現 (JSON Rust/Go/TS + corpora fuzz + testemunhas PoR) クエリ
+  os SDK のダウンストリーム possam verificar sem ツールの sob medida。
+- ガバナンカのメタダドス プロントを含める (名前空間、名前、サーバー) junto com orientacao
+  ジャネラス作戦の展開。 e
+- コンセルホの見直しを行う前に、相違点を決定するための一連の情報を確認してください。
 
-Siga a checklist abaixo para preparar uma proposta que atenda a essas regras.
+シンガポールはチェックリストを準備し、事前に準備する必要があります。
 
-## Resumo da carta do registro
+## 登録履歴
 
-Antes de redigir uma proposta, confirme que ela atende a carta do registro aplicada por
+事前登録を行って、申請書を登録するかどうかを確認してください
 `sorafs_manifest::chunker_registry::ensure_charter_compliance()`:
 
-- IDs de perfil sao inteiros positivos que aumentam de forma monotona sem lacunas.
-- O handle canonico (`namespace.name@semver`) deve aparecer na lista de alias e
-  **deve** ser a primeira entrada. Aliases alternativos (ex., `sorafs.sf1@1.0.0`) vem depois.
-- Nenhum alias pode colidir com outro handle canonico ou aparecer mais de uma vez.
-- Aliases devem ser nao vazios e aparados de espacos em branco.
+- ID は、単調な問題を解決するための確実な情報を提供します。
+- O ハンドル canonico (`namespace.name@semver`) は、別名リストを作成します。
+  **最初のエントラーダを開発**してください。エイリアス alternativos (例、`sorafs.sf1@1.0.0`) vem depois。
+- Nenhum の別名 podecolidir com アウトロ ハンドル canonico ou aparecer mais de uma vez です。
+- 別名 devem ser nao vazios e aparados de espacos em branco。
 
-Helpers de CLI:
+CLI のヘルパー:
 
 ```bash
 # Listagem JSON de todos os descritores registrados (ids, handles, aliases, multihash)
@@ -64,74 +66,72 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
 ```
 
 Esses comandos mantem as propostas alinhadas com a carta do registro e fornecem os
-metadados canonicos necessarios nas discussoes de governanca.
+統治の必要性を議論するメタダドス キャノニコス。
 
-## Metadados requeridos
+## メタダドス レケリドス
 
-| Campo | Descricao | Exemplo (`sorafs.sf1@1.0.0`) |
-|-------|-----------|------------------------------|
-| `namespace` | Agrupamento logico para perfis relacionados. | `sorafs` |
-| `name` | Rotulo legivel para humanos. | `sf1` |
-| `semver` | Cadeia de versao semantica para o conjunto de parametros. | `1.0.0` |
-| `profile_id` | Identificador numerico monotono atribuido quando o perfil entra. Reserve o proximo id mas nao reutilize numeros existentes. | `1` |
-| `profile_aliases` | Handles adicionais opcionais (nomes alternativos, abreviacoes) expostos a clientes durante a negociacao. Inclua sempre o handle canonico como primeira entrada. | `["sorafs.sf1@1.0.0"]` |
-| `profile.min_size` | Comprimento minimo do chunk em bytes. | `65536` |
-| `profile.target_size` | Comprimento alvo do chunk em bytes. | `262144` |
-| `profile.max_size` | Comprimento maximo do chunk em bytes. | `524288` |
-| `profile.break_mask` | Mascara adaptativa usada pelo rolling hash (hex). | `0x0000ffff` |
-| `profile.polynomial` | Constante do polinomio gear (hex). | `0x3da3358b4dc173` |
-| `gear_seed` | Seed usada para derivar a tabela gear de 64 KiB. | `sorafs-v1-gear` |
-| `chunk_multihash.code` | Codigo multihash para digests por chunk. | `0x1f` (BLAKE3-256) |
-| `chunk_multihash.digest` | Digest do bundle canonico de fixtures. | `13fa...c482` |
-| `fixtures_root` | Diretorio relativo contendo os fixtures regenerados. | `fixtures/sorafs_chunker/sorafs.sf1@1.0.0/` |
-| `por_seed` | Seed para amostragem PoR deterministica (`splitmix64`). | `0xfeedbeefcafebabe` (exemplo) |
+|カンポ |説明 |例 (`sorafs.sf1@1.0.0`) |
+|------|-----------|----------------------------|
+| `namespace` |適切な関係を実現するためのロジック。 | `sorafs` |
+| `name` |ロトゥーロ・レジベル・パラ・ヒューノス。 | `sf1` |
+| `semver` |パラメトロスと接続されたセマンティカの説明。 | `1.0.0` |
+| `profile_id` |識別子は、モノトーンのアトリビュードと完全なエントラを識別します。近くにあるものを予約し、存在する数を再利用します。 | `1` |
+| `profile_aliases` | adicionais opcionais (nomes alternativos、abreviacoes) expostos a clientes durante a negociacao を処理します。 canonico como primeira entrada のハンドルを含む。 | `["sorafs.sf1@1.0.0"]` |
+| `profile.min_size` |ミニモはバイトをチャンクします。 | `65536` |
+| `profile.target_size` |バイトをすべてチャンク化します。 | `262144` |
+| `profile.max_size` |バイトを最大限にチャンクします。 | `524288` |
+| `profile.break_mask` |マスカラ アダプティバ ウサダ ペロ ローリング ハッシュ (16 進数)。 | `0x0000ffff` |
+| `profile.polynomial` |コンスタンテ ド ポリノミオ ギア (16 進数)。 | `0x3da3358b4dc173` |
+| `gear_seed` |シードusadaパラ派生タベラギア64 KiB。 | `sorafs-v1-gear` |
+| `chunk_multihash.code` | Codigo マルチハッシュパラはチャンクをダイジェストします。 | `0x1f` (ブレイク3-256) |
+| `chunk_multihash.digest` |フィクスチャのカノニコをバンドルするダイジェスト。 | `13fa...c482` |
+| `fixtures_root` | OS フィクスチャの再生に関するディレトリオ。 | `fixtures/sorafs_chunker/sorafs.sf1@1.0.0/` |
+| `por_seed` |シードパラアモスストラジェム PoR 決定論 (`splitmix64`)。 | `0xfeedbeefcafebabe` (例) |
 
-Os metadados devem aparecer tanto no documento de proposta quanto dentro dos fixtures gerados
-para que o registro, o tooling de CLI e a automacao de governanca confirmem os valores sem
-cruzamentos manuais. Em caso de duvida, execute os CLIs de chunk-store e manifest com
-`--json-out=-` para transmitir os metadados calculados para notas de revisao.
+OS メタダドス デベム アパレサー タント ドキュメントなし、プロポスト クアント デントロ ドス フィクスチャ ゲラドス
+CLI のレジストリ、ツール、管理の自動確認、OS の有効性の確認
+クルサメントス・マヌアイス。必要に応じて、OS CLI をチャンクストアとマニフェスト COM で実行します。
+`--json-out=-` 送信時のメタデータ計算の見直しに関する注意事項。
 
-### Pontos de contato de CLI e registro
+### CLI レジストロへの接続
 
-- `sorafs_manifest_chunk_store --profile=<handle>` - reexecutar metadados de chunk,
-  digest do manifest e checks PoR com os parametros propostos.
-- `sorafs_manifest_chunk_store --json-out=-` - transmitir o relatorio do chunk-store para
-  stdout para comparacoes automatizadas.
-- `sorafs_manifest_stub --chunker-profile=<handle>` - confirmar que manifests e planos CAR
-  embutem o handle canonico mais aliases.
-- `sorafs_manifest_stub --plan=-` - reenviar o `chunk_fetch_specs` anterior para
-  verificar offsets/digests apos a mudanca.
+- `sorafs_manifest_chunk_store --profile=<handle>` - チャンクのメタデータを再実行します。
+  ダイジェストはマニフェストを実行して、PoR comos parametros propostos をチェックします。
+- `sorafs_manifest_chunk_store --json-out=-` - チャンクストアパラメタの送信
+  標準出力と自動比較。
+- `sorafs_manifest_stub --chunker-profile=<handle>` - Planos CAR のマニフェストの確認
+  embutem は canonico mais エイリアスを処理します。
+- `sorafs_manifest_stub --plan=-` - 再認識 o `chunk_fetch_specs` 前パラ
+  verificar はムダンカのアポをオフセット/ダイジェストします。必要に応じて、発言コマンド (ダイジェスト、PoR の提起、マニフェストのハッシュ) を登録します。
+OS は、文字通りの再現性を修正します。
 
-Registre a saida dos comandos (digests, raizes PoR, hashes de manifest) na proposta para que
-os revisores possam reproduzi-los literalmente.
+## 決定性と検証のチェックリスト
 
-## Checklist de determinismo e validacao
-
-1. **Regenerar fixtures**
+1. **リジェネレーター設備**
    ```bash
    cargo run --locked -p sorafs_chunker --bin export_vectors \
      --signature-out=fixtures/sorafs_chunker/manifest_signatures.json
    ```
-2. **Executar a suite de paridade** - `cargo test -p sorafs_chunker` e o harness diff
-   cross-language (`crates/sorafs_chunker/tests/vectors.rs`) devem ficar verdes com os
-   novos fixtures no lugar.
-3. **Reexecutar corpora fuzz/back-pressure** - execute `cargo fuzz list` e o harness de
-   streaming (`fuzz/sorafs_chunker`) contra os assets regenerados.
-4. **Verificar testemunhas Proof-of-Retrievability** - execute
-   `sorafs_manifest_chunk_store --por-sample=<n>` usando o perfil proposto e confirme
-   que as raizes correspondem ao manifest de fixtures.
-5. **Dry run de CI** - execute `ci/check_sorafs_fixtures.sh` localmente; o script
-   deve ter sucesso com os novos fixtures e o `manifest_signatures.json` existente.
-6. **Confirmacao cross-runtime** - assegure que os bindings Go/TS consumam o JSON
-   regenerado e emitam limites e digests identicos.
+2. **スイートの実行者** - `cargo test -p sorafs_chunker` ハーネスの差分
+   クロスランゲージ (`crates/sorafs_chunker/tests/vectors.rs`) 開発 ficar verdes com os
+   ノボスの備品にはルーガーはありません。
+3. **コーパス ファズ/バック プレッシャーを再実行** - `cargo fuzz list` e o harness を実行します。
+   ストリーミング (`fuzz/sorafs_chunker`) コントラ OS 資産が再生されます。
+4. **検証テストの取得可能性の証明** - 実行
+   `sorafs_manifest_chunk_store --por-sample=<n>` usando perfil proposto econfirme
+   対応するマニフェスト デ フィクスチャを生成します。
+5. **CI のドライラン** - `ci/check_sorafs_fixtures.sh` ローカルメントを実行します。 o スクリプト
+   開発者は、`manifest_signatures.json` を備えたノボス フィクスチャを成功させました。
+6. **クロスランタイムの確認** - Go/TS コンシューマまたは JSON のキュー OS バインディングを確保する
+   再生と放出の制限とダイジェストは同一です。
 
-Documente os comandos e os digests resultantes na proposta para que o Tooling WG possa
-reexecuta-los sem adivinhacoes.
+ツール WG の提案に従って、OS のコマンドと OS のダイジェスト結果を文書化します。
+sem adivinhacoes を再実行します。
 
-### Confirmacao de manifest / PoR
+### マニフェスト/PoR の確認
 
-Depois de regenerar fixtures, execute o pipeline completo de manifest para garantir que
-metadados CAR e provas PoR continuem consistentes:
+再生フィクスチャの保管、マニフェスト保証を完了するためのパイプラインの実行
+メタダドス CAR とプロバス PoR の継続は次のとおりです。
 
 ```bash
 # Validar metadados de chunk + PoR com o novo perfil
@@ -155,41 +155,41 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
   --plan=chunk_plan.json --json-out=-
 ```
 
-Substitua o arquivo de entrada por qualquer corpus representativo usado nos seus fixtures
-(ex., o stream deterministico de 1 GiB) e anexe os digests resultantes a proposta.
+米国の備品を代表するクアルケール コーパスのデータの置換
+(例、1 GiB のストリーム決定性) 付属の os ダイジェストの結果としてプロポスタが生成されます。
 
-## Modelo de proposta
+## プロポスタのモデル
 
-As propostas sao submetidas como registros Norito `ChunkerProfileProposalV1` registrados em
-`docs/source/sorafs/proposals/`. O template JSON abaixo ilustra o formato esperado
-(substitua seus valores conforme necessario):
+As propostas sao submetidas como registros Norito `ChunkerProfileProposalV1` registraros em
+`docs/source/sorafs/proposals/`。 O テンプレート JSON abaixo illustra または formato esperado
+(必要に応じて代用してください):
 
 
-Forneca um relatorio Markdown correspondente (`determinism_report`) que capture a
-saida dos comandos, digests de chunk e quaisquer desvios encontrados durante a validacao.
+Forneca um relatorio Markdown 通信 (`determinism_report`) のキャプチャ
+一連のコマンドをダイジェストし、有効な期間の内容を確認します。
 
-## Fluxo de governanca
+## フルクソ デ ガバナンカ
 
-1. **Submeter PR com proposta + fixtures.** Inclua os assets gerados, a proposta
-   Norito e atualizacoes em `chunker_registry_data.rs`.
-2. **Revisao do Tooling WG.** Revisores reexecutam a checklist de validacao e confirmam
-   que a proposta segue as regras do registro (sem reutilizacao de id, determinismo satisfeito).
-3. **Envelope do conselho.** Uma vez aprovado, membros do conselho assinam o digest da
-   proposta (`blake3("sorafs-chunker-profile-v1" || canonical_bytes)`) e anexam suas
-   assinaturas ao envelope do perfil armazenado junto aos fixtures.
-4. **Publicacao do registro.** O merge atualiza o registro, docs e fixtures. O CLI
-   default permanece no perfil anterior ate que a governanca declare a migracao pronta.
+1. **Submeter PR com proposta + fixtures.** os 資産 gerados、proposta を含む
+   Norito は `chunker_registry_data.rs` と一致します。
+2. **ツール WG を改訂します。** 検証チェックリストを再実行して確認します。
+   regras do registro (sem reutilizacao de id, determinismoSatisfeito) のように、proposta segue を実行してください。
+3. **Envelope do conselho.** Uma vez aprovado, membros do conselho assinam o Diet da
+   提案書 (`blake3("sorafs-chunker-profile-v1" || canonical_bytes)`) に関する試験
+   assinaturas ao エンベロープは、アルマゼナド ジュント aos フィクスチャを実行します。
+4. **登録を公開します。** 登録、ドキュメント、フィクスチャをマージします。 O CLI
+   デフォルトの永続性は、政府が移行を宣言する前に実行する必要はありません。
 5. **Rastreamento de deprecacao.** Apos a janela de migracao, atualize o registro para
 
-## Dicas de autoria
+## ディカス・デ・オートリア
 
-- Prefira limites pares de potencia de dois para minimizar comportamento de chunking em bordas.
-- Evite mudar o codigo multihash sem coordenar consumidores de manifest e gateway; inclua uma
-  nota operacional quando fizer isso.
-- Mantenha as seeds da tabela gear legiveis para humanos, mas globalmente unicas para simplificar auditorias.
-- Armazene artefatos de benchmarking (ex., comparacoes de throughput) em
-  `docs/source/sorafs/reports/` para referencia futura.
+- Prefira は、大量の処理を最小限に抑え、その可能性を制限します。
+- マニフェストとゲートウェイの管理者を管理するマルチハッシュのコードを作成します。うまを含む
+  操作性のクアンドファイザーはありません。
+- 種子としてのマンテンハは、人間のための合法的手段であり、単純な聴覚のための世界的なユニカスです。
+- ベンチマークのアルマゼント技術 (スループットの比較など)
+  `docs/source/sorafs/reports/` パラリファレンス フューチュラ。
 
-Para expectativas operacionais durante o rollout, consulte o migration ledger
-(`docs/source/sorafs/migration_ledger.md`). Para regras de conformidade em runtime, veja
-`docs/source/sorafs/chunker_conformance.md`.
+ロールアウトの継続的な運用、移行元帳の確認などの期待
+(`docs/source/sorafs/migration_ledger.md`)。ランタイム、ベジャの適合性に関する規則
+`docs/source/sorafs/chunker_conformance.md`。

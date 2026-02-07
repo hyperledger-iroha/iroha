@@ -4,70 +4,70 @@ direction: ltr
 source: docs/portal/docs/nexus/operations.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: nexus-operations
-title: Runbook de operacoes Nexus
-description: Resumo pronto para uso em campo do fluxo de trabalho do operador Nexus, espelhando `docs/source/nexus_operations.md`.
+ID: ネクサスオペレーション
+タイトル: オペラのランブック Nexus
+説明: Resumo pronto para uso em campo do fluxo de trabalho do operador Nexus、espelhando `docs/source/nexus_operations.md`。
 ---
 
-Use esta pagina como irmao de referencia rapida de `docs/source/nexus_operations.md`. Ela destila o checklist operacional, os ganchos de gestao de mudanca e os requisitos de cobertura de telemetria que os operadores Nexus devem seguir.
+`docs/source/nexus_operations.md` を参照してください。チェックリスト操作の目的は、テレメトリアのコベルトゥーラに必要な操作、Nexus 開発者によるムダンカの操作です。
 
-## Lista de ciclo de vida
+## リスト・デ・シクロ・デ・ヴィダ
 
-| Etapa | Acoes | Evidencia |
-|-------|--------|----------|
-| Pre-voo | Verifique hashes/assinaturas de release, confirme `profile = "iroha3"` e prepare templates de configuracao. | Saida de `scripts/select_release_profile.py`, log de checksum, bundle de manifestos assinado. |
-| Alinhamento do catalogo | Atualize o catalogo `[nexus]`, a politica de roteamento e os limiares de DA conforme o manifesto emitido pelo conselho, e entao capture `--trace-config`. | Saida de `irohad --sora --config ... --trace-config` armazenada com o ticket de onboarding. |
-| Smoke e cutover | Execute `irohad --sora --config ... --trace-config`, rode o smoke do CLI (`FindNetworkStatus`), valide exportacoes de telemetria e solicite admissao. | Log de smoke-test + confirmacao do Alertmanager. |
-| Estado estavel | Monitore dashboards/alertas, rode rotacao de chaves conforme a cadencia de governanca e sincronize configs/runbooks quando manifestos mudarem. | Minutas de revisao trimestral, capturas de dashboards, IDs de tickets de rotacao. |
+|エタパ |アコス |証拠 |
+|----------|----------|----------|
+|プレブー |リリースのハッシュ/組み合わせを確認し、`profile = "iroha3"` を確認して、設定用のテンプレートを準備します。 | `scripts/select_release_profile.py` のログ、チェックサムのログ、マニフェストのバンドル。 |
+|アリンハメント ド カタログ | `[nexus]` のカタログ、DA 準拠の政治、マニフェストの提出、ペロコンセルホの政治、`--trace-config` のキャプチャを実現します。 | `irohad --sora --config ... --trace-config` のチケットをオンボーディングで購入できます。 |
+|スモークとカットオーバー | `irohad --sora --config ... --trace-config` を実行し、CLI (`FindNetworkStatus`) を実行し、テレメトリの輸出許可と申請許可を有効にします。 |煙テストのログを作成し、アラートマネージャーを確認します。 |
+|エスタド・エスタベル |ダッシュボード/アラートを監視し、ガバナンスの要綱に従って定期的に行動し、構成/ランブックを確実にマニフェストに同期します。 |トリメストラルの見直し、ダッシュボードのキャプチャ、回転チケットの ID。 |
 
-O onboarding detalhado (substituicao de chaves, templates de roteamento, passos do perfil de release) permanece em `docs/source/sora_nexus_operator_onboarding.md`.
+オンボーディングの詳細 (選手の交代、チームのテンプレート、リリースの実行) は `docs/source/sora_nexus_operator_onboarding.md` で永続的に行われます。
 
-## Gestao de mudanca
+## ゲシュタオ デ ムダンカ
 
-1. **Atualizacoes de release** - acompanhe anuncios em `status.md`/`roadmap.md`; anexe o checklist de onboarding a cada PR de release.
-2. **Mudancas de manifesto de lane** - verifique bundles assinados do Space Directory e arquive-os em `docs/source/project_tracker/nexus_config_deltas/`.
-3. **Deltas de configuracao** - toda mudanca em `config/config.toml` requer um ticket referenciando a lane/data-space. Guarde uma copia redigida da configuracao efetiva quando nos entram ou sao atualizados.
-4. **Treinos de rollback** - ensaie trimestralmente procedimentos de stop/restore/smoke; registre resultados em `docs/source/project_tracker/nexus_config_deltas/<date>-rollback.md`.
-5. **Aprovacoes de compliance** - lanes privadas/CBDC devem obter aval de compliance antes de alterar politica de DA ou knobs de redacao de telemetria (ver `docs/source/cbdc_lane_playbook.md`).
+1. **リリースの概要** - `status.md`/`roadmap.md` の発表;リリースの CADA PR のオンボーディングのチェックリストの別紙。
+2. **Mudancas de Manifesto de LANE** - スペース ディレクトリのアーカイブ ＯＳ EM `docs/source/project_tracker/nexus_config_deltas/` を検証するバンドル。
+3. **設定デルタ** - レーン/データスペースのチケット参照を必要とする `config/config.toml` です。安全な環境を設定し、安全な環境を維持してください。
+4. **ロールバックのトレイノ** - 停止/復元/スモークの手順を実行します。 `docs/source/project_tracker/nexus_config_deltas/<date>-rollback.md` の結果を登録します。
+5. **コンプライアンスの承認** - レーンのプライバシー/CBDC 開発は、コンプライアンスの有効性を確認し、DA およびテレメトリの管理を行います (バージョン `docs/source/cbdc_lane_playbook.md`)。
 
-## Telemetria e SLOs
+## テレメトリアと SLO
 
-- Dashboards: `dashboards/grafana/nexus_lanes.json`, `nexus_settlement.json`, mais visoes especificas de SDK (por exemplo, `android_operator_console.json`).
-- Alertas: `dashboards/alerts/nexus_audit_rules.yml` e regras de transporte Torii/Norito (`dashboards/alerts/torii_norito_rpc_rules.yml`).
-- Metricas a observar:
-  - `nexus_lane_height{lane_id}` - alerta para zero progresso por tres slots.
-  - `nexus_da_backlog_chunks{lane_id}` - alerta acima dos limiares por lane (padrao 64 public / 8 private).
-  - `nexus_settlement_latency_seconds{lane_id}` - alerta quando o P99 excede 900 ms (public) ou 1200 ms (private).
-  - `torii_request_failures_total{scheme="norito_rpc"}` - alerta se a taxa de erro de 5 minutos for >2%.
-  - `telemetry_redaction_override_total` - Sev 2 imediato; garanta que overrides tenham tickets de compliance.
-- Execute o checklist de remediacao de telemetria no [Nexus telemetry remediation plan](./nexus-telemetry-remediation) pelo menos trimestralmente e anexe o formulario preenchido nas notas de revisao operacional.
+- ダッシュボード: `dashboards/grafana/nexus_lanes.json`、`nexus_settlement.json`、SDK 固有の仕様 (例、`android_operator_console.json`)。
+- アラート: `dashboards/alerts/nexus_audit_rules.yml` 輸送規則 Torii/Norito (`dashboards/alerts/torii_norito_rpc_rules.yml`)。
+- 観測者であるメトリカス:
+  - `nexus_lane_height{lane_id}` - ゼロ進行ポート スロットに関するアラート。
+  - `nexus_da_backlog_chunks{lane_id}` - レーンに関する警告 (パブリック 64 / プライベート 8)。
+  - `nexus_settlement_latency_seconds{lane_id}` - アラート クアンド o P99 が 900 ミリ秒 (パブリック) または 1200 ミリ秒 (プライベート) を超えています。
+  - `torii_request_failures_total{scheme="norito_rpc"}` - 2% を超える分類群を 5 分以内に警告します。
+  - `telemetry_redaction_override_total` - セブ 2 即時;ガランタ クエリはテナム チケットのコンプライアンスを無効にします。
+- テレメトリの修復チェックリスト [Nexus テレメトリ修復計画](./nexus-telemetry-remediation) を実行し、修正操作の公式を作成します。
 
-## Matriz de incidentes
+## 事件の発生
 
-| Severidade | Definicao | Resposta |
-|----------|------------|----------|
-| Sev 1 | Violacao de isolamento de data-space, parada de settlement >15 min, ou corrupcao de voto de governanca. | Acione Nexus Primary + Release Engineering + Compliance, congele admissao, colete artefatos, publique comunicados <=60 min, RCA <=5 dias uteis. |
-| Sev 2 | Violacao de SLA de backlog de lane, ponto cego de telemetria >30 min, rollout de manifesto falho. | Acione Nexus Primary + SRE, mitigue <=4 h, registre follow-ups em ate 2 dias uteis. |
-| Sev 3 | Deriva nao bloqueante (docs, alertas). | Registre no tracker e agende a correcao dentro do sprint. |
+|セヴェリダーデ |定義 |レスポスタ |
+|----------|-----------|----------|
+|セクション 1 |データスペースの隔離、決済のパラダ > 15 分、政府の投票を完了します。 | Acione Nexus プライマリ + リリース エンジニアリング + コンプライアンス、登録承認、最新情報の公開、公開コミュニケーション <=60 分、RCA <=5 dias uteis。 |
+|セクション 2 | SLA のバックログのレーン、テレメトリのポントセゴ > 30 分、マニフェスト ファルホのロールアウト。 | Acion Nexus プライマリ + SRE、4 時間以内の緩和、2 日間のフォローアップ登録。 |
+|セクション 3 | Deriva nao bloqueante (ドキュメント、アラート)。 |スプリントを修正する予定のトラッカーを登録しません。 |
 
-Tickets de incidente devem registrar IDs de lane/data-space afetadas, hashes de manifesto, timeline, metricas/logs de suporte e tarefas/owners de follow-up.
+インシデントのチケット、レーン/データスペースのアフェタダ、ハッシュのマニフェスト、タイムライン、メトリクス/ログのサポートおよびタレファ/所有者のフォローアップのレジストラ ID。
 
-## Arquivo de evidencias
+## 証拠の保管
 
-- Armazene bundles/manifestos/exports de telemetria em `artifacts/nexus/<lane>/<date>/`.
-- Mantenha configs redigidas + saida de `--trace-config` para cada release.
-- Anexe minutas do conselho + decisoes assinadas quando mudancas de config ou manifesto ocorrerem.
-- Preserve snapshots semanais de Prometheus relevantes para metricas Nexus por 12 meses.
-- Registre edicoes do runbook em `docs/source/project_tracker/nexus_config_deltas/README.md` para que auditores saibam quando as responsabilidades mudaram.
+- Armazene バンドル/マニフェスト/テレメトリアのエクスポート `artifacts/nexus/<lane>/<date>/`。
+- Mantenha configs redigidas + Saida de `--trace-config` para cada release.
+- コンセルホの議事録を作成し、設定とマニフェストを決定する必要があります。
+- Nexus の 12 メトリクスに関連する Prometheus のスナップショットを保存します。
+- 管理責任者として監査の対象となるランブック `docs/source/project_tracker/nexus_config_deltas/README.md` を実行するための教育を登録します。## 素材関係
 
-## Material relacionado
-
-- Visao geral: [Nexus overview](./nexus-overview)
-- Especificacao: [Nexus spec](./nexus-spec)
-- Geometria de lanes: [Nexus lane model](./nexus-lane-model)
-- Transicao e shims de roteamento: [Nexus transition notes](./nexus-transition-notes)
-- Onboarding de operadores: [Sora Nexus operator onboarding](./nexus-operator-onboarding)
-- Remediacao de telemetria: [Nexus telemetry remediation plan](./nexus-telemetry-remediation)
+- ヴィサオ ジェラル: [Nexus 概要](./nexus-overview)
+- 詳細: [Nexus 仕様](./nexus-spec)
+- レーンのジオメトリア: [Nexus レーン モデル](./nexus-lane-model)
+- 移行と移行: [Nexus 移行メモ](./nexus-transition-notes)
+- オペレーターのオンボーディング: [Sora Nexus オペレーターのオンボーディング](./nexus-operator-onboarding)
+- テレメトリの修復: [Nexus テレメトリ修復計画](./nexus-telemetry-remediation)

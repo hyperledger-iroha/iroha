@@ -4,55 +4,57 @@ direction: rtl
 source: docs/portal/docs/api/overview.mdx
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-import TryItConsole from '@site/src/components/TryItConsole.jsx';
+'@سائٹ/ایس آر سی/اجزاء/tryitconsole.jsx' سے ٹریٹکنسول درآمد کریں۔
 
-# Torii API Overview
+# Torii API جائزہ
 
-The Torii gateway exposes a REST + WebSocket surface for interacting with Iroha
-nodes. The canonical OpenAPI document is generated via:
+Torii گیٹ وے Iroha کے ساتھ بات چیت کرنے کے لئے ایک REST + ویب ساکٹ سطح کو بے نقاب کرتا ہے
+نوڈس کیننیکل OpenAPI دستاویز کے ذریعے تیار کیا گیا ہے:
 
 ```bash
 cargo xtask openapi
 ```
 
-Running the command above writes `docs/portal/static/openapi/torii.json` and
-feeds the `docusaurus-plugin-openapi-docs` integration so this section updates
-automatically. The generator spins up an in-memory Torii router and attempts to
-query its OpenAPI endpoint; if that fails (for example, router initialization
-errors) a deterministic placeholder spec is emitted instead.
+مذکورہ بالا کمانڈ چلانے سے `docs/portal/static/openapi/torii.json` اور لکھتا ہے
+`docusaurus-plugin-openapi-docs` انضمام کو کھانا کھلاتا ہے تاکہ یہ سیکشن تازہ کاری کرے
+خود بخود. جنریٹر ایک میموری Torii روٹر کو گھماتا ہے اور اس کی کوشش کرتا ہے
+اس کے OpenAPI اختتامی نقطہ سے استفسار کریں ؛ اگر یہ ناکام ہوجاتا ہے (مثال کے طور پر ، روٹر ابتدا
+غلطیاں) اس کے بجائے ایک تعی .ن پسند پلیس ہولڈر کی قیاس آرائی خارج ہوتی ہے۔
 
-## Current status
+## موجودہ حیثیت
 
-- **Spec source:** `cargo xtask openapi` queries the Torii router directly; the
-  fallback stub is only emitted when the router fails to expose an OpenAPI
-  document.
-- **Determinism:** JSON output is canonicalised to ensure stable diffing in CI.
-- **Authentication:** The “Try it” sandbox now forwards requests through a
-  constrained staging proxy. Operators must supply a Torii endpoint and bearer
-  token before issuing calls.
-- **Version selector:** Swagger UI, RapiDoc, and the full Torii OpenAPI page
-  expose a dropdown that reads `openapi/versions.json` so you can compare
-  historical snapshots. The `Latest (tracked)` option points to
-  `/openapi/torii.json`, while all other entries load the corresponding
-  `openapi/versions/<version>/torii.json` artifact.
-- **Snapshot workflow:** After running `npm run docs:version -- <label>`, refresh
-  the matching OpenAPI file with `npm run sync-openapi -- --version=<label> --latest`
-  so the dropdown can load both the frozen snapshot and the rolling “Latest” build.
+۔
+  فال بیک اسٹب صرف اس وقت خارج ہوتا ہے جب روٹر OpenAPI کو بے نقاب کرنے میں ناکام ہوجاتا ہے
+  دستاویز۔
+- ** عزم: ** JSON آؤٹ پٹ CI میں مستحکم مختلف کو یقینی بنانے کے لئے کیننیکلائز کیا گیا ہے۔
+- ** توثیق: ** "کوشش کریں" سینڈ باکس اب درخواستوں کو آگے بھیج دیتا ہے
+  مجبوری اسٹیجنگ پراکسی۔ آپریٹرز کو Torii اختتامی نقطہ اور بیئرر فراہم کرنا ہوگا
+  کالز جاری کرنے سے پہلے ٹوکن۔
+- ** ورژن سلیکٹر: ** سویگر UI ، ریپڈوک ، اور مکمل Torii OpenAPI صفحہ
+  ایک ڈراپ ڈاؤن کو بے نقاب کریں جو `openapi/versions.json` پڑھتا ہے تاکہ آپ موازنہ کرسکیں
+  تاریخی سنیپ شاٹس۔ `Latest (tracked)` آپشن کی طرف اشارہ کرتا ہے
+  `/openapi/torii.json` ، جبکہ دیگر تمام اندراجات اسی طرح کو لوڈ کرتی ہیں
+  `openapi/versions/<version>/torii.json` نمونہ۔
+- ** اسنیپ شاٹ ورک فلو: ** چلانے کے بعد `npm run docs:version -- <label>` ، ریفریش
+  `npm run sync-openapi -- --version=<label> --latest` کے ساتھ ملاپ OpenAPI فائل
+  لہذا ڈراپ ڈاؤن دونوں منجمد اسنیپ شاٹ اور رولنگ "تازہ ترین" تعمیر دونوں کو لوڈ کرسکتے ہیں۔
 
-The router-backed extractor now emits the full Torii surface. If you see the
-placeholder stub, treat it as a build-time failure and inspect the Torii
-router startup logs.
+روٹر کی حمایت یافتہ ایکسٹریکٹر اب مکمل Torii سطح کا اخراج کرتا ہے۔ اگر آپ دیکھتے ہیں
+پلیس ہولڈر اسٹب ، اسے بلڈ ٹائم کی ناکامی کے طور پر سلوک کریں اور Torii کا معائنہ کریں
+روٹر اسٹارٹ اپ لاگ۔
 
-## Try it sandbox (DOCS-3)
+## اسے سینڈ باکس (DOCS-3) آزمائیں
 
-The developer portal embeds a small console that relays REST requests through a
-Node-based proxy. The proxy enforces CORS, rate limits, and optional bearer
-tokens so the widget can talk to staging gateways without exposing credentials.
-See `docs/devportal/try-it.md` for the full operator checklist.
+ڈویلپر پورٹل ایک چھوٹا سا کنسول سرایت کرتا ہے جو آرام کی درخواستوں کو ایک کے ذریعے جوڑتا ہے
+نوڈ پر مبنی پراکسی۔ پراکسی CORs ، شرح کی حدود اور اختیاری بیئر کو نافذ کرتا ہے
+ٹوکن تو ویجیٹ اسناد کو بے نقاب کیے بغیر گیٹ ویز کے اسٹیجنگ سے بات کرسکتا ہے۔
+مکمل آپریٹر چیک لسٹ کے لئے `docs/devportal/try-it.md` دیکھیں۔
 
-Start the proxy alongside the Docusaurus dev server:
+Docusaurus دیو سرور کے ساتھ ساتھ پراکسی شروع کریں:
 
 ```bash
 cd docs/portal
@@ -68,15 +70,14 @@ npm run tryit-proxy
 npm run start
 ```
 
-- The proxy listens on `TRYIT_PROXY_LISTEN` (default `127.0.0.1:8787`) and
-  forwards any `/proxy/...` requests to `TRYIT_PROXY_TARGET`.
-- Supply `TRYIT_PROXY_BEARER` for static bearer tokens or let callers provide
-  one per request via the “Bearer token” field.
-- Rate limits default to 60 requests per minute and can be tuned through
-  `TRYIT_PROXY_RATE_LIMIT` / `TRYIT_PROXY_RATE_WINDOW_MS`.
+- پراکسی `TRYIT_PROXY_LISTEN` (پہلے سے طے شدہ `127.0.0.1:8787`) اور پر سنتا ہے
+  کسی بھی `/proxy/...` درخواستوں کو `TRYIT_PROXY_TARGET` پر آگے بھیجتا ہے۔
+- جامد بیئرر ٹوکن کے لئے `TRYIT_PROXY_BEARER` کی فراہمی کریں یا کال کرنے والوں کو فراہم کرنے دیں
+  "بیئرر ٹوکن" فیلڈ کے ذریعہ ایک درخواست۔
+- شرح ڈیفالٹ 60 درخواستوں تک فی منٹ کی حدود اور اس کے ذریعے ٹیون کی جاسکتی ہے
+  `TRYIT_PROXY_RATE_LIMIT` / `TRYIT_PROXY_RATE_WINDOW_MS`۔
 
-> ⚠️ The proxy is intended for staging/demo access. Production deployments
-> should run behind hardened ingress and reuse the same rate limiting policy in
-> front of Torii.
+> ⚠ پراکسی کا مقصد اسٹیج/ڈیمو تک رسائی کے لئے ہے۔ پیداوار کی تعیناتی
+> سخت انجری کے پیچھے بھاگنا چاہئے اور اسی شرح کو محدود کرنے والی پالیسی کو دوبارہ استعمال کرنا چاہئے
+> Torii کے سامنے۔
 
-<TryItConsole />

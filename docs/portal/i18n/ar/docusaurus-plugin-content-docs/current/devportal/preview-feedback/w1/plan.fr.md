@@ -4,68 +4,70 @@ direction: rtl
 source: docs/portal/docs/devportal/preview-feedback/w1/plan.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: preview-feedback-w1-plan
-title: Plan de preflight partenaires W1
-sidebar_label: Plan W1
-description: Taches, responsables et checklist de preuve pour la cohorte de preview partenaires.
+المعرف: معاينة ردود الفعل W1-الخطة
+العنوان: Plan de preflight Partenaires W1
+Sidebar_label: الخطة W1
+الوصف: العلامات والمسؤولون وقائمة المراجعة لمجموعة المعاينة المشتركة.
 ---
 
-| Element | Details |
+| العنصر | التفاصيل |
 | --- | --- |
-| Vague | W1 - Partenaires et integrateurs Torii |
-| Fenetre cible | Q2 2025 semaine 3 |
-| Tag d'artefact (planifie) | `preview-2025-04-12` |
-| Issue tracker | `DOCS-SORA-Preview-W1` |
+| غامضة | W1 - شركاء ومتكاملون Torii |
+| نافذة زجاجية | الربع الثاني من عام 2025، الفصل الثالث |
+| علامة القطع الأثرية (planifie) | `preview-2025-04-12` |
+| تعقب القضية | `DOCS-SORA-Preview-W1` |
 
-## Objectifs
+## الأهداف
 
-1. Obtenir les approbations legales et governance pour les termes de preview partenaires.
-2. Preparer le proxy Try it et les snapshots de telemetrie utilises dans le bundle d'invitation.
-3. Rafraichir l'artefact de preview verifie par checksum et les resultats de probes.
-4. Finaliser le roster des partenaires et les templates de demande avant l'envoi des invitations.
+1. احصل على الموافقات القانونية والحوكمة لشروط المعاينة المشتركة.
+2. قم بإعداد الوكيل جربه واستخدم لقطات القياس عن بعد في حزمة الدعوة.
+3. قم بتحرير معاينة المعاينة من خلال المجموع الاختباري ونتائج التحقيقات.
+4. قم بإنهاء قائمة الشركاء ونماذج الطلب قبل إرسال الدعوات.
 
 ## Decoupage des taches
 
-| ID | Tache | Responsable | Echeance | Statut | Notes |
+| معرف | تاش | مسؤول | الصدى | النظام الأساسي | ملاحظات |
 | --- | --- | --- | --- | --- | --- |
-| W1-P1 | Obtenir l'approbation legale pour l'addendum des termes de preview | Docs/DevRel lead -> Legal | 2025-04-05 | Termine | Ticket legal `DOCS-SORA-Preview-W1-Legal` valide le 2025-04-05; PDF attache au tracker. |
-| W1-P2 | Capturer la fenetre de staging du proxy Try it (2025-04-10) et valider la sante du proxy | Docs/DevRel + Ops | 2025-04-06 | Termine | `npm run manage:tryit-proxy -- --stage preview-w1 --expires-in=21d --target https://tryit-preprod.sora` execute le 2025-04-06; transcription CLI + `.env.tryit-proxy.bak` archivees. |
-| W1-P3 | Construire l'artefact de preview (`preview-2025-04-12`), executer `scripts/preview_verify.sh` + `npm run probe:portal`, archiver descriptor/checksums | Portal TL | 2025-04-08 | Termine | Artefact + logs de verification stockes sous `artifacts/docs_preview/W1/preview-2025-04-12/`; sortie de probe attachee au tracker. |
-| W1-P4 | Revoir les formulaires d'intake partenaires (`DOCS-SORA-Preview-REQ-P01...P08`), confirmer contacts + NDAs | Governance liaison | 2025-04-07 | Termine | Les huit demandes approuvees (les deux dernieres le 2025-04-11); approbations liees dans le tracker. |
-| W1-P5 | Rediger le texte d'invitation (base sur `docs/examples/docs_preview_invite_template.md`), definir `<preview_tag>` et `<request_ticket>` pour chaque partenaire | Docs/DevRel lead | 2025-04-08 | Termine | Brouillon d'invitation envoye le 2025-04-12 15:00 UTC avec les liens d'artefact. |
+| W1-P1 | الحصول على الموافقة القانونية لإضافة شروط المعاينة | Docs/DevRel Lead -> قانوني | 2025-04-05 | ترمين | التذكرة قانونية `DOCS-SORA-Preview-W1-Legal` صالحة لو 2025-04-05؛ إرفاق ملف PDF للتعقب. |
+| W1-P2 | التقط نافذة التدريج للوكيل جربها (10-04-2025) وتحقق من صحة الوكيل | مستندات/DevRel + Ops | 2025-04-06 | ترمين | `npm run manage:tryit-proxy -- --stage preview-w1 --expires-in=21d --target https://tryit-preprod.sora` تنفيذ لو 2025-04-06؛ أرشيفات النسخ CLI + `.env.tryit-proxy.bak`. |
+| W1-P3 | إنشاء المعاينة الفنية (`preview-2025-04-12`)، المنفذ `scripts/preview_verify.sh` + `npm run probe:portal`، واصف الأرشيف/المجاميع الاختبارية | بوابة TL | 2025-04-08 | ترمين | قطعة أثرية + سجلات التحقق من المخزون Sous `artifacts/docs_preview/W1/preview-2025-04-12/`؛ طلعة التحقيق المرفقة إلى جهاز التعقب. |
+| W1-P4 | Revoir les formaires d'intake Partenaires (`DOCS-SORA-Preview-REQ-P01...P08`)، جهات الاتصال المؤكدة + NDAs | الاتصال بالحوكمة | 2025-04-07 | ترمين | الموافقة على طلب الرطوبة (les deux dernieres le 2025-04-11); approbations liees dans le Tracker. |
+| W1-P5 | أعد كتابة نص الدعوة (قاعدة على `docs/examples/docs_preview_invite_template.md`)، وحدد `<preview_tag>` و`<request_ticket>` لكل مشاركة | مستندات/DevRel الرصاص | 2025-04-08 | ترمين | إرسال دعوة إلى 12-04-2025 15:00 بالتوقيت العالمي المنسق مع الامتيازات الفنية. |
 
-## Checklist preflight
+## قائمة المراجعة المبدئية
 
-> Astuce: lancez `scripts/preview_wave_preflight.sh --tag preview-2025-04-12 --base-url https://preview.staging.sora --descriptor artifacts/preview-2025-04-12/descriptor.json --archive artifacts/preview-2025-04-12/docs-portal-preview.tar.zst --tryit-target https://tryit-proxy.staging.sora --output-json artifacts/preview-2025-04-12/preflight-summary.json` pour executer automatiquement les etapes 1-5 (build, verification checksum, probe du portal, link checker, et mise a jour du proxy Try it). Le script enregistre un log JSON a joindre au tracker.
+> السبب: lancez `scripts/preview_wave_preflight.sh --tag preview-2025-04-12 --base-url https://preview.staging.sora --descriptor artifacts/preview-2025-04-12/descriptor.json --archive artifacts/preview-2025-04-12/docs-portal-preview.tar.zst --tryit-target https://tryit-proxy.staging.sora --output-json artifacts/preview-2025-04-12/preflight-summary.json` لتنفيذ الخطوات 1-5 تلقائيًا (الإنشاء، والمجموع الاختباري للتحقق، واختبار البوابة، ومدقق الارتباط، وإعداد يوم الوكيل جربه). يقوم البرنامج النصي بتسجيل سجل JSON وضمه إلى المتتبع.
 
-1. `npm run build` (avec `DOCS_RELEASE_TAG=preview-2025-04-12`) pour regenerer `build/checksums.sha256` et `build/release.json`.
-2. `docs/portal/scripts/preview_verify.sh --build-dir docs/portal/build --descriptor artifacts/<tag>/descriptor.json --archive artifacts/<tag>/docs-portal-preview.tar.zst`.
-3. `PORTAL_BASE_URL=https://preview.staging.sora DOCS_RELEASE_TAG=preview-2025-04-12 npm run probe:portal -- --expect-release=preview-2025-04-12`.
-4. `DOCS_RELEASE_TAG=preview-2025-04-12 npm run check:links` et archiver `build/link-report.json` a cote du descriptor.
-5. `npm run manage:tryit-proxy -- update --target https://tryit-proxy.staging.sora` (ou fournir la cible appropriee via `--tryit-target`); committer le `.env.tryit-proxy` mis a jour et conserver la `.bak` pour rollback.
-6. Mettre a jour l'issue W1 avec les chemins de logs (checksum du descriptor, sortie probe, changement du proxy Try it et snapshots Grafana).
+1. `npm run build` (مع `DOCS_RELEASE_TAG=preview-2025-04-12`) لإعادة إنشاء `build/checksums.sha256` و`build/release.json`.
+2.`docs/portal/scripts/preview_verify.sh --build-dir docs/portal/build --descriptor artifacts/<tag>/descriptor.json --archive artifacts/<tag>/docs-portal-preview.tar.zst`.
+3.`PORTAL_BASE_URL=https://preview.staging.sora DOCS_RELEASE_TAG=preview-2025-04-12 npm run probe:portal -- --expect-release=preview-2025-04-12`.
+4. `DOCS_RELEASE_TAG=preview-2025-04-12 npm run check:links` والأرشيف `build/link-report.json` عبارة عن جزء من الواصف.
+5.`npm run manage:tryit-proxy -- update --target https://tryit-proxy.staging.sora` (أو قم بتوفير الكابل المناسب عبر `--tryit-target`)؛ التزم بـ `.env.tryit-proxy` في اليوم واحتفظ بـ `.bak` للتراجع.
+6. قم بإجراء الإصدار W1 يوميًا باستخدام سلاسل السجلات (المجموع الاختباري للواصف، وفرز المسبار، وتغيير الوكيل، وجرب اللقطات واللقطات Grafana).
 
-## Checklist de preuve
+## قائمة المراجعة المسبقة
 
-- [x] Approbation legale signee (PDF ou lien du ticket) attachee a `DOCS-SORA-Preview-W1`.
-- [x] Screenshots Grafana pour `docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals`.
-- [x] Descriptor et log de checksum `preview-2025-04-12` stockes sous `artifacts/docs_preview/W1/`.
-- [x] Tableau de roster d'invitations avec `invite_sent_at` renseignes (voir le log W1 du tracker).
-- [x] Artefacts de feedback repris dans [`preview-feedback/w1/log.md`](./log.md) avec une ligne par partenaire (mis a jour 2025-04-26 avec roster/telemetria/issues).
+- [x] التوقيع القانوني للموافقة (PDF أو حجز التذكرة) الملحق بـ `DOCS-SORA-Preview-W1`.
+- [x] لقطات الشاشة Grafana لـ `docs.preview.integrity`، `TryItProxyErrors`، `DocsPortal/GatewayRefusals`.
+- [x] الواصف وسجل المجموع الاختباري `preview-2025-04-12` الأسهم الموجودة في `artifacts/docs_preview/W1/`.
+- [x] لوحة قائمة الدعوات مع `invite_sent_at` reenseignes (voir le log W1 du Tracker).
+- [x] ردود الفعل المرتدة في [`preview-feedback/w1/log.md`](./log.md) بخط مشترك (في 26/04/2025 مع القائمة/القياس عن بعد/القضايا).
 
-Mettre a jour ce plan a mesure de l'avancement; le tracker s'y refere pour garder le roadmap auditable.
+Mettre a jour ce Plan a mesure de l'avancement; يشير المتتبع إلى أن خريطة الطريق قابلة للتدقيق.
 
-## Flux de feedback
+## تدفق ردود الفعل
 
-1. Pour chaque reviewer, dupliquer le template dans
-   [`docs/examples/docs_preview_feedback_form.md`](../../../../../examples/docs_preview_feedback_form.md),
-   remplir les metadonnees et stocker la copie complete sous
+1. قم بنسخ القالب في كل مرة
+   [`docs/examples/docs_preview_feedback_form.md`](../../../../../examples/docs_preview_feedback_form.md)،
+   قم باستعادة البيانات واحتفظ بالنسخة كاملة
    `artifacts/docs_preview/W1/preview-2025-04-12/feedback/<partner-id>/`.
-2. Resumer invitations, checkpoints de telemetrie et issues ouvertes dans le log vivant
-   [`preview-feedback/w1/log.md`](./log.md) pour que les reviewers governance puissent rejouer la vague
-   sans quitter le depot.
-3. Quand les exports de knowledge-check ou de sondages arrivent, les joindre dans le chemin d'artefact note dans le log
-   et lier l'issue du tracker.
+2. استئناف الدعوات ونقاط التفتيش للقياس عن بعد والإصدارات الخارجية في سجل الحياة
+   [`preview-feedback/w1/log.md`](./log.md) لكي يتمكن المراجعون من تجديد الغموض
+   بلا إنهاء لو مستودع.
+3. عند وصول صادرات المعرفة أو المسبار، يتم وصلها في شريط المادة الأثرية في السجل
+   ثم قم بإصدار جهاز التعقب.

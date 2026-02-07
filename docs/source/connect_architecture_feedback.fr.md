@@ -6,83 +6,80 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 097ea58d49f48d059cda762cd719bc62f0b2d6f6ddecedef3f9bac030ae46aec
 source_last_modified: "2026-01-03T18:07:58.674563+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-#! Connect Architecture Feedback Checklist
+#! Liste de contrôle des commentaires sur l'architecture Connect
 
-This checklist captures the open questions from the Connect Session Architecture
-strawman that require input from the Android and JavaScript leads before the
-Feb 2026 cross-SDK workshop. Use it to collect comments asynchronously, track
-ownership, and unblock the workshop agenda.
+Cette liste de contrôle capture les questions ouvertes de l'architecture de session Connect.
+homme de paille qui nécessite une entrée des leads Android et JavaScript avant le
+Atelier cross-SDK de février 2026. Utilisez-le pour collecter des commentaires de manière asynchrone, suivre
+l’appropriation et débloquer l’agenda de l’atelier.
 
-> Status / Notes column captured final responses from Android and JS leads as of
-> the Feb 2026 pre-workshop sync; link new follow-up issues inline if decisions
-> evolve.
+> La colonne Statut/Notes a capturé les réponses finales des prospects Android et JS à partir du
+> la synchronisation pré-atelier de février 2026 ; lier les nouveaux problèmes de suivi en ligne si les décisions sont prises
+> évoluer.
 
-## Session Lifecycle & Transport
+## Cycle de vie et transport des sessions
 
-| Topic | Android owner | JS owner | Status / Notes |
-|-------|---------------|----------|----------------|
-| WebSocket reconnect back-off strategy (exponential vs. capped linear) | Android Networking TL | JS Lead | ✅ Agreed on exponential back-off with jitter, capped at 60 s; JS mirrors same constants for browser/node parity. |
-| Offline buffer capacity defaults (current strawman: 32 frames) | Android Networking TL | JS Lead | ✅ Confirmed 32-frame default with config override; Android persists via `ConnectQueueConfig`, JS respects `window.connectQueueMax`. |
-| Push-style reconnect notifications (FCM/APNS vs. polling) | Android Networking TL | JS Lead | ✅ Android will expose optional FCM hook for wallet apps; JS remains polling-based with exponential back-off, noting browser push constraints. |
-| Ping/pong cadence guardrails for mobile clients | Android Networking TL | JS Lead | ✅ Standardised 30 s ping with 3× miss tolerance; Android balances Doze impact, JS clamps to ≥15 s to avoid browser throttling. |
+| Sujet | Propriétaire d'Android | Propriétaire JS | Statut / Remarques |
+|-------|--------------|---------------|----------------|
+| Stratégie d'attente de reconnexion WebSocket (exponentielle ou linéaire plafonnée) | Réseau Android TL | Responsable JS | ✅ Convenu sur un recul exponentiel avec gigue, plafonné à 60 s ; JS reflète les mêmes constantes pour la parité navigateur/nœud. |
+| Valeurs par défaut de la capacité du tampon hors ligne (homme de paille actuel : 32 images) | Réseau Android TL | Responsable JS | ✅ Confirmation par défaut de 32 images avec remplacement de la configuration ; Android persiste via `ConnectQueueConfig`, JS respecte `window.connectQueueMax`. |
+| Notifications de reconnexion de type push (FCM/APNS vs sondage) | Réseau Android TL | Responsable JS | ✅ Android exposera le hook FCM facultatif pour les applications de portefeuille ; JS reste basé sur des sondages avec un recul exponentiel, en tenant compte des contraintes de poussée du navigateur. |
+| Garde-corps de cadence de ping/pong pour clients mobiles | Réseau Android TL | Responsable JS | ✅ Ping standardisé de 30 secondes avec une tolérance d'échec de 3 × ; Android équilibre l'impact de Doze, JS se fixe à ≥ 15 s pour éviter la limitation du navigateur. |
 
-## Encryption & Key Management
+## Chiffrement et gestion des clés
 
-| Topic | Android owner | JS owner | Status / Notes |
-|-------|---------------|----------|----------------|
-| X25519 key storage expectations (StrongBox, WebCrypto secure contexts) | Android Crypto TL | JS Lead | ✅ Android stores X25519 in StrongBox when available (falls back to TEE); JS mandates secure-context WebCrypto for dApps, falling back to the native `iroha_js_host` bridge in Node. |
-| ChaCha20-Poly1305 nonce management sharing across SDKs | Android Crypto TL | JS Lead | ✅ Adopt shared `sequence` counter API with 64-bit wrap guard and shared tests; JS uses BigInt counters to match Rust behaviour. |
-| Hardware-backed attestation payload schema | Android Crypto TL | JS Lead | ✅ Schema finalised: `attestation { platform, evidence_b64, statement_hash }`; JS optional (browser), Node uses HSM plug-in hook. |
-| Recovery flow for lost wallets (key rotation handshake) | Android Crypto TL | JS Lead | ✅ Wallet rotation handshake accepted: dApp issues `rotate` control, wallet replies with new pubkey + signed acknowledgment; JS re-keys WebCrypto material immediately. |
+| Sujet | Propriétaire d'Android | Propriétaire JS | Statut / Remarques |
+|-------|--------------|---------------|----------------|
+| Attentes de stockage des clés X25519 (contextes sécurisés StrongBox, WebCrypto) | Android Crypto TL | Responsable JS | ✅ Android stocke X25519 dans StrongBox lorsqu'il est disponible (revient à TEE) ; JS impose WebCrypto en contexte sécurisé pour les dApps, en revenant au pont natif `iroha_js_host` dans Node. |
+| ChaCha20-Poly1305 partage de gestion des cas occasionnels entre les SDK | Android Crypto TL | Responsable JS | ✅ Adoptez l'API de compteur `sequence` partagée avec Wrap Guard 64 bits et tests partagés ; JS utilise des compteurs BigInt pour correspondre au comportement de Rust. |
+| Schéma de charge utile d'attestation basée sur le matériel | Android Crypto TL | Responsable JS | ✅ Schéma finalisé : `attestation { platform, evidence_b64, statement_hash }` ; JS facultatif (navigateur), Node utilise le hook de plug-in HSM. |
+| Flux de récupération des portefeuilles perdus (poignée de main avec rotation des clés) | Android Crypto TL | Responsable JS | ✅ Poignée de main pour la rotation du portefeuille acceptée : dApp émet le contrôle `rotate`, le portefeuille répond avec une nouvelle clé publique + un accusé de réception signé ; JS ressaisit immédiatement le matériel WebCrypto. |
 
-## Permissions & Proof Bundles
+## Ensembles d'autorisations et de preuves| Sujet | Propriétaire d'Android | Propriétaire JS | Statut / Remarques |
+|-------|--------------|---------------|----------------|
+| Schéma d'autorisation minimum (méthodes/événements/ressources) pour GA | Modèle de données Android TL | Responsable JS | ✅ Référence GA : `methods`, `events`, `resources`, `constraints` ; JS aligne les types TypeScript avec le manifeste Rust. |
+| Charge utile de rejet du portefeuille (`reason_code`, messages localisés) | Réseau Android TL | Responsable JS | ✅ Codes finalisés (`user_declined`, `permissions_mismatch`, `compliance_failed`, `internal_error`) plus `localized_message` en option. |
+| Champs facultatifs de l’ensemble de preuves (pièces jointes de conformité/KYC) | Modèle de données Android TL | Responsable JS | ✅ Tous les SDK acceptent les `attachments[]` (Norito `AttachmentRef`) et `compliance_manifest_id` en option ; aucun changement de comportement n’est requis. |
+| Alignement sur le schéma JSON Norito par rapport aux structures générées par le pont | Modèle de données Android TL | Responsable JS | ✅ Décision : préférer les structures générées par le pont ; Le chemin JSON reste uniquement pour le débogage, JS conserve l'adaptateur `Value`. |
 
-| Topic | Android owner | JS owner | Status / Notes |
-|-------|---------------|----------|----------------|
-| Minimum permission schema (methods/events/resources) for GA | Android Data Model TL | JS Lead | ✅ GA baseline: `methods`, `events`, `resources`, `constraints`; JS aligns TypeScript types with Rust manifest. |
-| Wallet rejection payload (`reason_code`, localized messages) | Android Networking TL | JS Lead | ✅ Codes finalised (`user_declined`, `permissions_mismatch`, `compliance_failed`, `internal_error`) plus optional `localized_message`. |
-| Proof bundle optional fields (compliance/KYC attachments) | Android Data Model TL | JS Lead | ✅ All SDKs accept optional `attachments[]` (Norito `AttachmentRef`) and `compliance_manifest_id`; no behaviour change required. |
-| Alignment on Norito JSON schema vs. bridge-generated structs | Android Data Model TL | JS Lead | ✅ Decision: prefer bridge-generated structs; JSON path remains for debugging only, JS keeps `Value` adapter. |
+## Façades du SDK et forme de l'API
 
-## SDK Facades & API Shape
+| Sujet | Propriétaire d'Android | Propriétaire JS | Statut / Remarques |
+|-------|--------------|---------------|----------------|
+| Parité des interfaces asynchrones de haut niveau (`Flow`, itérateurs asynchrones) | Réseau Android TL | Responsable JS | ✅ Android expose `Flow<ConnectEvent>` ; JS utilise `AsyncIterable<ConnectEvent>` ; les deux correspondent au `ConnectEventKind` partagé. |
+| Mappage de taxonomie des erreurs (`ConnectError`, sous-classes typées) | Réseau Android TL | Responsable JS | ✅ Adoptez l'énumération partagée {`Transport`, `Codec`, `Authorization`, `Timeout`, `QueueOverflow`, `Internal`} avec des détails de charge utile spécifiques à la plate-forme. |
+| Sémantique d'annulation pour les demandes de signalisation en vol | Réseau Android TL | Responsable JS | ✅ Introduction du contrôle `cancelRequest(hash)` ; les deux SDK font apparaître des coroutines/promesses annulables respectant la reconnaissance du portefeuille. |
+| Hooks de télémétrie partagés (événements, dénomination des métriques) | Réseau Android TL | Responsable JS | ✅ Noms des métriques alignés : `connect.queue_depth`, `connect.latency_ms`, `connect.reconnects_total` ; échantillon d’exportateurs documentés. |
 
-| Topic | Android owner | JS owner | Status / Notes |
-|-------|---------------|----------|----------------|
-| High-level async interfaces (`Flow`, async iterators) parity | Android Networking TL | JS Lead | ✅ Android exposes `Flow<ConnectEvent>`; JS uses `AsyncIterable<ConnectEvent>`; both map to shared `ConnectEventKind`. |
-| Error taxonomy mapping (`ConnectError`, typed subclasses) | Android Networking TL | JS Lead | ✅ Adopt shared enum {`Transport`, `Codec`, `Authorization`, `Timeout`, `QueueOverflow`, `Internal`} with platform-specific payload details. |
-| Cancellation semantics for in-flight sign requests | Android Networking TL | JS Lead | ✅ Introduced `cancelRequest(hash)` control; both SDKs surface cancellable coroutines/promises respecting wallet acknowledgment. |
-| Shared telemetry hooks (events, metrics naming) | Android Networking TL | JS Lead | ✅ Metric names aligned: `connect.queue_depth`, `connect.latency_ms`, `connect.reconnects_total`; sample exporters documented. |
+## Persistance et journalisation hors ligne
 
-## Offline Persistence & Journaling
+| Sujet | Propriétaire d'Android | Propriétaire JS | Statut / Remarques |
+|-------|--------------|---------------|----------------|
+| Format de stockage pour les trames en file d'attente (binaire Norito vs JSON) | Modèle de données Android TL | Responsable JS | ✅ Stockez le binaire Norito (`.to`) partout ; JS utilise IndexedDB `ArrayBuffer`. |
+| Politique de conservation des journaux et limites de taille | Réseau Android TL | Responsable JS | ✅ Rétention par défaut 24h et 1Mo par session ; configurable via `ConnectQueueConfig`. |
+| Résolution de conflits lorsque les deux côtés rejouent des images | Réseau Android TL | Responsable JS | ✅ Utilisez `sequence` + `payload_hash` ; doublons ignorés, les conflits déclenchent `ConnectError.Internal` avec événement de télémétrie. |
+| Télémétrie pour la profondeur de la file d'attente et le succès de la relecture | Réseau Android TL | Responsable JS | ✅ Émettre une jauge `connect.queue_depth` et un compteur `connect.replay_success_total` ; les deux SDK se connectent au schéma de télémétrie Norito partagé. |
 
-| Topic | Android owner | JS owner | Status / Notes |
-|-------|---------------|----------|----------------|
-| Storage format for queued frames (binary Norito vs. JSON) | Android Data Model TL | JS Lead | ✅ Store binary Norito (`.to`) everywhere; JS uses IndexedDB `ArrayBuffer`. |
-| Journal retention policy & size caps | Android Networking TL | JS Lead | ✅ Default retention 24 h and 1 MiB per session; configurable via `ConnectQueueConfig`. |
-| Conflict resolution when both sides replay frames | Android Networking TL | JS Lead | ✅ Use `sequence` + `payload_hash`; duplicates ignored, conflicts trigger `ConnectError.Internal` with telemetry event. |
-| Telemetry for queue depth and replay success | Android Networking TL | JS Lead | ✅ Emit `connect.queue_depth` gauge and `connect.replay_success_total` counter; both SDKs hook into shared Norito telemetry schema. |
+## Pointes de mise en œuvre et références- **Appareils Rust Bridge :** `crates/connect_norito_bridge/src/lib.rs` et les tests associés couvrent les chemins d'encodage/décodage canoniques utilisés par chaque SDK.
+- **Explorateur de démonstration Swift :** Exercices `examples/ios/NoritoDemoXcode/NoritoDemoXcodeTests/ConnectViewModelTests.swift` Connectez les flux de session avec des transports simulés.
+- **Swift CI gating :** exécutez `make swift-ci` lors de la mise à jour des artefacts Connect pour valider la parité des appareils, les flux du tableau de bord et les métadonnées Buildkite `ci/xcframework-smoke:<lane>:device_tag` avant de les partager avec d'autres SDK.
+- **Tests d'intégration du SDK JavaScript :** `javascript/iroha_js/test/integrationTorii.test.js` valide les assistants d'état/de session Connect par rapport à Torii.
+- **Remarques sur la résilience du client Android :** `java/iroha_android/README.md:150` documente les expériences de connectivité actuelles qui ont inspiré les valeurs par défaut de file d'attente/back-off.
 
-## Implementation Spikes & References
+## Articles de préparation à l'atelier
 
-- **Rust bridge fixtures:** `crates/connect_norito_bridge/src/lib.rs` and associated tests cover the canonical encode/decode paths used by every SDK.
-- **Swift demo harness:** `examples/ios/NoritoDemoXcode/NoritoDemoXcodeTests/ConnectViewModelTests.swift` exercises Connect session flows with mocked transports.
-- **Swift CI gating:** run `make swift-ci` when updating Connect artifacts to validate fixture parity, dashboard feeds, and Buildkite `ci/xcframework-smoke:<lane>:device_tag` metadata before sharing with other SDKs.
-- **JavaScript SDK integration tests:** `javascript/iroha_js/test/integrationTorii.test.js` validate Connect status/session helpers against Torii.
-- **Android client resilience notes:** `java/iroha_android/README.md:150` documents the current connectivity experiments that inspired the queue/back-off defaults.
+- [x] Android : attribuez une personne responsable à chaque ligne du tableau ci-dessus.
+- [x] JS : attribuez une personne responsable pour chaque ligne du tableau ci-dessus.
+- [x] Collectez des liens vers des pics ou des expériences de mise en œuvre existantes.
+- [x] Planifier un examen préalable aux travaux avant le conseil de février 2026 (réservé pour le 29/01/2026 à 15h00 UTC avec Android TL, JS Lead, Swift Lead).
+- [x] Mettre à jour `docs/source/connect_architecture_strawman.md` avec les réponses acceptées.
 
-## Workshop Prep Items
+## Package de pré-lecture
 
-- [x] Android: assign point person for each table row above.
-- [x] JS: assign point person for each table row above.
-- [x] Collect links to existing implementation spikes or experiments.
-- [x] Schedule pre-work review before Feb 2026 council (Booked for 2026-01-29 15:00 UTC with Android TL, JS Lead, Swift Lead).
-- [x] Update `docs/source/connect_architecture_strawman.md` with accepted answers.
-
-## Pre-read Package
-
-- ✅ Bundle recorded under `artifacts/connect/pre-read/20260129/` (generated via `make docs-html` after refreshing the strawman, SDK guides, and this checklist).
-- 📄 Summary + distribution steps live in `docs/source/project_tracker/connect_architecture_pre_read.md`; include the link in the Feb 2026 workshop invite and in the `#sdk-council` reminder.
-- 🔁 When refreshing the bundle, update the path and hash inside the pre-read note and archive the announcement in `status.md` under the IOS7/AND7 readiness logs.
+- ✅ Bundle enregistré sous `artifacts/connect/pre-read/20260129/` (généré via `make docs-html` après avoir actualisé le Strawman, les guides SDK et cette liste de contrôle).
+- 📄Résumé + étapes de distribution en direct dans `docs/source/project_tracker/connect_architecture_pre_read.md` ; incluez le lien dans l'invitation à l'atelier de février 2026 et dans le rappel `#sdk-council`.
+- 🔁 Lors de l'actualisation du bundle, mettez à jour le chemin et le hachage dans la note de pré-lecture et archivez l'annonce dans `status.md` sous les journaux de préparation IOS7/AND7.

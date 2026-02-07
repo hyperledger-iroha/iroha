@@ -4,49 +4,51 @@ direction: ltr
 source: docs/portal/docs/sorafs/migration-roadmap.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: "Feuille de route de migration SoraFS"
+title: «Фейт маршрута миграции SoraFS»
 ---
 
-> Adapte de [`docs/source/sorafs/migration_roadmap.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/migration_roadmap.md).
+> Адаптируйте [`docs/source/sorafs/migration_roadmap.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/migration_roadmap.md).
 
-# Feuille de route de migration SoraFS (SF-1)
+# Маршрут миграции SoraFS (SF-1)
 
-Ce document operationalise les directives de migration capturees dans
-`docs/source/sorafs_architecture_rfc.md`. Il developpe les livrables SF-1 en
-jalons prets a executer, criteres de passage et checklists des responsables afin
-que les equipes storage, governance, DevRel et SDK coordonnent la transition du
+Документ CE вводит в действие директивы по миграции,
+`docs/source/sorafs_architecture_rfc.md`. Разработайте книги SF-1 ru
+Джалонс претендует на роль исполнителя, критерии прохождения и контрольные списки ответственных лиц в будущем
+что оборудование для хранения, управления, DevRel и SDK координирует переход
 
-La feuille de route est volontairement deterministe: chaque jalon nomme les
-artefacts requis, les invocations de commandes et les etapes d'attestation pour
-que les pipelines downstream produisent des sorties identiques et que la
-governance conserve une trace auditable.
+La Feuille de Route - это добровольное определение: chaque jalon nomme les
+необходимые артефакты, вызовы команд и этапы аттестации для
+que les трубопроводы, расположенные ниже по течению, производят идентичные вылазки и que la
+управление сохраняет следы, подлежащие проверке.
 
-## Vue d'ensemble des jalons
+## Вид ансамбля желонов
 
-| Jalon | Fenetre | Objectifs principaux | Doit livrer | Owners |
+| Джалон | Фенетре | Основные цели | Дойт ливрер | Владельцы |
 |-------|---------|----------------------|-------------|--------|
-| **M1 - Enforcement deterministe** | Semaines 7-12 | Exiger des fixtures signees et preparer les preuves d'alias pendant que les pipelines adoptent les expectation flags. | Verification nightly des fixtures, manifests signes par le conseil, entrees staging du registre d'alias. | Storage, Governance, SDKs |
+| **M1 – Определенное правоприменение** | Семайны 7–12 | Выполните подписание приборов и подготовку псевдонимов, которые конвейеры принимают флаги ожидания. | Ночная проверка светильников, деклараций по совету, входов в регистрацию псевдонимов. | Хранение, управление, SDK |
 
-Le statut des jalons est suivi dans `docs/source/sorafs/migration_ledger.md`. Toutes
-les modifications de cette feuille de route DOIVENT mettre a jour le registre afin
-que governance et release engineering restent synchronises.
+Закон о желтых волосах соответствует `docs/source/sorafs/migration_ledger.md`. все
+Модификации этого маршрута DOIVENT должны быть зарегистрированы позже
+то, что управление и разработка релизов синхронизируются.
 
-## Pistes de travail
+## Трассы труда
 
-### 2. Adoption du pinning deterministe
+### 2. Детерминированное принятие закрепления
 
-| Etape | Jalon | Description | Owner(s) | Sortie |
+| Этап | Джалон | Описание | Владелец(и) | Вылазка |
 |-------|-------|-------------|----------|--------|
-| Repetitions de fixtures | M0 | Dry-runs hebdomadaires comparant les digests locaux de chunks avec `fixtures/sorafs_chunker`. Publier un rapport sous `docs/source/sorafs/reports/`. | Storage Providers | `determinism-<date>.md` avec matrice pass/fail. |
-| Exiger les signatures | M1 | `ci/check_sorafs_fixtures.sh` + `.github/workflows/sorafs-fixtures-nightly.yml` echouent si signatures ou manifests derivent. Les overrides de dev exigent un waiver governance attache au PR. | Tooling WG | Log CI, lien vers ticket de waiver (si applicable). |
-| Expectation flags | M1 | Les pipelines appellent `sorafs_manifest_stub` avec des expectations explicites pour figer les sorties: | Docs CI | Scripts mis a jour referencant les expectation flags (voir bloc de commande ci-dessous). |
-| Pinning registry-first | M2 | `sorafs pin propose` et `sorafs pin approve` enveloppent les soumissions de manifest; le CLI par defaut utilise `--require-registry`. | Governance Ops | Log d'audit du CLI registry, telemetrie des propositions ratees. |
-| Parite observabilite | M3 | Des dashboards Prometheus/Grafana alertent quand les inventaires de chunks divergent des manifests registry; alertes branchees sur l'astreinte ops. | Observability | Lien dashboard, IDs des regles d'alerte, resultats GameDay. |
+| Повторы светильников | М0 | Пробные прогоны, сравниваемые с фрагментами дайджеста с `fixtures/sorafs_chunker`. Публикация раппорта sous `docs/source/sorafs/reports/`. | Поставщики хранилищ | `determinism-<date>.md` с матрицей пройден/не пройден. |
+| Exiger ле подписи | М1 | `ci/check_sorafs_fixtures.sh` + `.github/workflows/sorafs-fixtures-nightly.yml` отображает подписи или производные манифесты. Отказ от атташе по управлению по связям с общественностью отменяет требования разработчиков. | Инструментальная рабочая группа | Журнал CI, залоговое удержание и билет об отказе (если применимо). |
+| Флаги ожидания | М1 | Трубопроводы апеллируют `sorafs_manifest_stub` с явными ожиданиями для рисования вылетов: | Документы КИ | Сценарии не всегда ссылаются на флаги ожидания (voir bloc de commande ci-dessous). |
+| Закрепление реестра в первую очередь | М2 | `sorafs pin propose` и `sorafs pin approve` охватывают манифестные мысли; CLI по умолчанию использует `--require-registry`. | Операции по управлению | Журнал аудита реестра CLI, телеметрия тарифных предложений. |
+| Паритетная наблюдаемость | М3 | Панели мониторинга Prometheus/Grafana предупреждают о появлении фрагментов, отличающихся от реестра манифестов; оповещения филиалов по поводу операций. | Наблюдаемость | Панель управления залогом, идентификаторы правил оповещения, результаты GameDay. |
 
-#### Commande canonique de publication
+#### Каноническое управление публикацией
 
 ```bash
 cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
@@ -60,50 +62,48 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
   --dag-codec=0x71
 ```
 
-Remplacez les valeurs de digest, taille et CID par les references attendues
-recensees dans l'entree du registre de migration pour l'artefact.
+Замените значения дайджеста, хвоста и CID по посещаемым ссылкам.
+рецензенты в регистре миграции для артефактов.
 
-### 3. Transition des alias et communications
-
-| Etape | Jalon | Description | Owner(s) | Sortie |
+### 3. Переход от псевдонимов и коммуникаций| Этап | Джалон | Описание | Владелец(и) | Вылазка |
 |-------|-------|-------------|----------|--------|
-| Preuves d'alias en staging | M1 | Enregistrer les claims d'alias dans le Pin Registry staging et attacher des preuves Merkle aux manifests (`--alias`). | Governance, Docs | Bundle de preuves stocke a cote du manifest + commentaire du registre avec le nom d'alias. |
-| Enforcement des preuves | M2 | Les gateways rejettent les manifests sans headers `Sora-Proof` recents; CI ajoute l'etape `sorafs alias verify` pour recuperer les preuves. | Networking | Patch de config gateway + sortie CI capturant la verification reussie. |
+| Preuves d'alias в постановке | М1 | Регистрация псевдонимов заявок в промежуточном реестре контактов и добавление предварительных манифестов Merkle (`--alias`). | Управление, Документы | Bundle de preuves stocke c Кот-дю-манифест + комментарий к регистрации с псевдонимом. |
+| Принуждение к превентивным мерам | М2 | Шлюзы повторно отправляют файлы манифестов без заголовков `Sora-Proof` последние; CI ajoute l'etape `sorafs alias verify` для восстановления прежних проблем. | Сеть | Исправление конфигурации шлюза + перехват CI для повторной проверки. |
 
-### 4. Communication et audit
+### 4. Коммуникация и аудит
 
-- **Discipline du registre:** chaque changement d'etat (drift de fixtures, soumission registry,
-  activation d'alias) doit ajouter une note datee dans
+- **Дисциплина регистрации:** государственные изменения (дрифт светильников, регистрация турниров,
+  активация псевдонима) сделайте заметку о дате
   `docs/source/sorafs/migration_ledger.md`.
-- **Minutes de gouvernance:** les sessions du conseil approuvant les changements du pin registry ou
-  les politiques d'alias doivent referencer cette feuille de route et le registre.
-- **Comms externes:** DevRel publie des mises a jour a chaque jalon (blog + extrait de changelog)
-  mettant en avant les garanties deterministes et les calendriers d'alias.
+- **Протоколы управления:** заседания совета, утверждающие изменения в реестре контактов или
+  les politiques d'alias doivent referencer cette feuille de router et le registre.
+- **Внешние связи:** Публикация DevRel за один день (блог + дополнительный журнал изменений)
+  Mettant в преддверии детерминированных гарантий и псевдонимных календарей.
 
-## Dependances et risques
+## Зависимости и риски
 
-| Dependance | Impact | Mitigation |
+| Зависимость | Воздействие | смягчение последствий |
 |------------|--------|------------|
-| Disponibilite du contrat Pin Registry | Bloque le rollout M2 pin-first. | Preparer le contrat avant M2 avec des tests de replay; maintenir un fallback envelope jusqu'a stabilite. |
-| Cles de signature du conseil | Requises pour les envelopes de manifest et les approbations registry. | Ceremony de signature documentee dans `docs/source/sorafs/signing_ceremony.md`; rotation avec chevauchement et note dans le registre. |
-| Cadence de release SDK | Les clients doivent honorer les preuves d'alias avant M3. | Aligner les fenetres de release SDK sur les gates des jalons; ajouter des checklists de migration aux templates de release. |
+| Доступность регистрации контактов | Заблокируйте развертывание M2 штифтом вперед. | Подготовка контракта перед M2 с повторными испытаниями; Поддерживайте резервный конверт только в стабильном состоянии. |
+| Подпись к совету | Реквизиты для конвертов манифеста и реестра одобрений. | Церемония подписания документа `docs/source/sorafs/signing_ceremony.md`; ротация с оплатой и примечанием в регистрации. |
+| Частота выпуска SDK | Клиенты должны соблюдать ограничения по псевдониму M3. | Выравнивание окон выпуска SDK по воротам жалюзи; добавление контрольных списков миграции и шаблонов выпуска. |
 
-Les risques residuels et mitigations sont reprennent dans `docs/source/sorafs_architecture_rfc.md`
-et doivent etre recoupes lors des ajustements.
+Риски остатка и смягчения последствий в `docs/source/sorafs_architecture_rfc.md`
+et doivent etre компенсирует сделанные корректировки.
 
-## Checklist des criteres de sortie
+## Контрольный список критериев вылета
 
-| Jalon | Criteres |
+| Джалон | Критерии |
 |-------|----------|
-| M1 | - Job nightly des fixtures vert pendant sept jours consecutifs. <br /> - Preuves d'alias staging verifiees en CI. <br /> - Governance ratifie la politique d'expectation flags. |
+| М1 | - Работа по ночам с подвесными светильниками, сентябрьские дни подряд.  - Preuves d'alias организует проверку в CI.  - Правительство ратифицирует политику ожиданий. |
 
-## Gestion du changement
+## Жест на изменение
 
-1. Proposer des ajustements via PR mettant a jour ce fichier **et**
+1. Предлагающий корректировки посредством связей с общественностью, сделанный a jour ce fichier **et**
    `docs/source/sorafs/migration_ledger.md`.
-2. Lier les minutes de gouvernance et les preuves CI dans la description du PR.
-3. Apres merge, notifier la liste storage + DevRel avec un resume et les actions
-   attendues des operateurs.
+2. Прочитайте минуты управления и ограничения CI в описании PR.
+3. После слияния, уведомление о хранилище списка + DevRel с возобновлением и действиями
+   присутствующие де операторы.
 
-Suivre cette procedure garantit que le rollout SoraFS reste deterministe,
-auditable et transparent entre les equipes participant au lancement Nexus.
+Данная процедура гарантирует, что развертывание SoraFS останется определенным,
+проверяемый и прозрачный для участников оборудования или Nexus.

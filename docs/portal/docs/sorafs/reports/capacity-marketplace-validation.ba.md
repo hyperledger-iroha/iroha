@@ -10,48 +10,49 @@ translation_last_reviewed: 2026-02-07
 title: SoraFS Capacity Marketplace Validation
 tags: [SF-2c, acceptance, checklist]
 summary: Acceptance checklist covering provider onboarding, dispute workflows, and treasury reconciliation gating the SoraFS capacity marketplace general availability.
+translator: machine-google-reviewed
 ---
 
-# SoraFS Capacity Marketplace Validation Checklist
+# I18NT0000000005X ҡәҙерле баҙарҙы раҫлаусы исемлек
 
-**Review window:** 2026-03-18 → 2026-03-24  
-**Programme owners:** Storage Team (`@storage-wg`), Governance Council (`@council`), Treasury Guild (`@treasury`)  
-**Scope:** Provider onboarding pipelines, dispute adjudication flows, and treasury reconciliation processes required for SF-2c GA.
+**Теҙлекте тикшерергә:** 2026-03-18 → 2026-03-24  
+**Программа хужалары:** Һаҡлау командаһы (`@storage-wg`), Идара итеү советы (I18NI0000008X), ҡаҙна гильдияһы (I18NI0000009X)  
+**Сода:** Провайдер onboarding торбалары, бәхәстәр суд ағымы, һәм ҡаҙна ярашыу процестары өсөн кәрәкле SF-2c GA.
 
-The checklist below must be reviewed before enabling the marketplace for external operators. Each row links to deterministic evidence (tests, fixtures, or documentation) that auditors can replay.
+Түбәндәге тикшерелгән исемлек тикшерергә тейеш, тышҡы операторҙар өсөн баҙарға мөмкинлек биргәнсе. Һәр рәт һылтанмалар детерминистик дәлилдәр (һынауҙар, ҡоролма, йәки документация), аудиторҙар ҡабатлай ала.
 
-## Acceptance Checklist
+## Ҡабул итеү тикшерелгән исемлек
 
-### Provider Onboarding
+### Провайдер Онбординг
 
-| Check | Validation | Evidence |
+| Тикшерергә | Валидация | Дәлилдәр |
 |-------|------------|----------|
-| Registry accepts canonical capacity declarations | Integration test exercises `/v1/sorafs/capacity/declare` via the app API, verifying signature handling, metadata capture, and hand-off to the node registry. | `crates/iroha_torii/src/routing.rs:7654` |
-| Smart contract rejects mismatched payloads | Unit test ensures provider IDs and committed GiB fields match the signed declaration before persisting. | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3445` |
-| CLI emits canonical onboarding artefacts | CLI harness writes deterministic Norito/JSON/Base64 outputs and validates round-trips so operators can stage declarations offline. | `crates/sorafs_car/tests/capacity_cli.rs:17` |
-| Operator guide captures admission workflow and governance guardrails | Documentation enumerates declaration schema, policy defaults, and review steps for the council. | `../storage-capacity-marketplace.md` |
+| Реестр канонлы ҡәҙерле декларацияларҙы ҡабул итә | Интеграция тест күнекмәләре `/v1/sorafs/capacity/declare` аша ҡушымта API, тикшерергә ҡултамға менән эш итеү, метамағлүмәттәрҙе тотоу, һәм ҡул-төйөн реестрына ҡул. | I18NI0000011X |
+| Аҡыллы килешәү тап килмәгән файҙалы йөктәрҙе кире ҡаға | Блок һынау тәьмин итеү провайдер идентификаторҙары һәм ҡылған GiB яландарына тап килгән ҡул ҡуйылған декларация ныҡышмалы алдынан. | I18NI0000012X |
+| CLI канонлы onboarding артефакттарын сығара | CLI йүгән яҙа детерминистик I18NT0000000002X/JSON/Base64 сығыштар һәм раҫлай түңәрәк-сәйәхәт, шулай итеп, операторҙар спектакль декларация офлайн. | I18NI0000013X |
+| Оператор етәксеһе ҡабул итеү эш ағымын һәм идара итеү ҡоршауҙарын тота | Документация декларация схемаһын иҫәпләй, сәйәсәт дефолттары, һәм совет өсөн аҙымдарҙы ҡарау. | I18NI0000014X |
 
-### Dispute Resolution
+### Бәхәсле хәл итеү
 
-| Check | Validation | Evidence |
+| Тикшерергә | Валидация | Дәлилдәр |
 |-------|------------|----------|
-| Dispute records persist with canonical payload digest | Unit test registers a dispute, decodes the stored payload, and asserts pending status to guarantee ledger determinism. | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:1835` |
-| CLI dispute generator matches canonical schema | CLI test covers Base64/Norito outputs and JSON summaries for `CapacityDisputeV1`, ensuring evidence bundles hash deterministically. | `crates/sorafs_car/tests/capacity_cli.rs:455` |
-| Replay test proves dispute/penalty determinism | Proof-failure telemetry replayed twice produces identical ledger, credit, and dispute snapshots so slashes are deterministic across peers. | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3430` |
-| Runbook documents escalation and revocation flow | Operations guide captures council workflow, evidence requirements, and rollback procedures. | `../dispute-revocation-runbook.md` |
+| Бәхәс яҙмалары канонлы файҙалы йөкләмәләр менән һаҡлана | Блок тесты бәхәсте теркәй, һаҡланған файҙалы йөктө расшифровкалай, ә статусты көткән раҫлай, уларҙы баш кейеме детерминизмына гарантиялай. | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:1835` |
+| CLI бәхәс генераторы тап килә канон схемаһы | CLI тесты ҡаплай Base64/I18NT000000003X сығыштары һәм JSON резюмелары өсөн I18NI000000016X, дәлилдәр өйөмдәре хеш детерминистик. | `crates/sorafs_car/tests/capacity_cli.rs:455` |
+| Ҡабатлау һынау иҫбатлай бәхәс/штраф детерминизм | Корпус-уңышһыҙлыҡҡа осраған телеметрия ике тапҡыр етештерә бер үк леджер, кредит, һәм бәхәс снимоктары, шуға күрә slashs тиҫтерҙәре буйынса детерминистик. | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3430` |
+| Яҙмышлы документтар эскалация һәм ҡайтарыу ағымы | Операциялар етәкселеге совет эш ағымын, дәлилдәр талаптарын һәм кире ҡағыу процедураларын тота. | `../dispute-revocation-runbook.md` |
 
-### Treasury Reconciliation
+### ҡаҙна ярашыу
 
-| Check | Validation | Evidence |
+| Тикшерергә | Валидация | Дәлилдәр |
 |-------|------------|----------|
-| Ledger accrual matches 30-day soak projection | Soak test spans five providers across 30 settlement windows, diffing ledger entries against the expected payout reference. | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3000` |
-| Ledger export reconciliation recorded nightly | `capacity_reconcile.py` compares fee ledger expectations with executed XOR transfer exports, emits Prometheus metrics, and gates treasury approval via Alertmanager. | `scripts/telemetry/capacity_reconcile.py:1`,`docs/source/sorafs/runbooks/capacity_reconciliation.md:1`,`dashboards/alerts/sorafs_capacity_rules.yml:100` |
-| Billing dashboards surface penalties and accrual telemetry | Grafana import plots GiB·hour accrual, strike counters, and bonded collateral for on-call visibility. | `dashboards/grafana/sorafs_capacity_penalties.json:1` |
-| Published report archives soak methodology and replay commands | Report details soak scope, execution commands, and observability hooks for auditors. | `./sf2c-capacity-soak.md` |
+| көнлөк матчтар 30 көнлөк һыу һибеү проекцияһы | 1990 йылдарҙа был йүнәлештәге эштәрҙең иң мөһимдәренең береһе булып биш провайдер 30 ҡасаба тәҙрәләре аша үтә, уларҙы көтөлгән түләү белешмәһенә ҡаршы леджер яҙмаларын таратты. | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3000` |
+| Клеггер экспорты ярашыуын төндә теркәлгән | `capacity_reconcile.py` гонорарҙарҙы башҡарылған XOR күсермә экспорты менән сағыштыра, I18NT000000000000000 метрикаһын сығара, ә ҡапҡалар ҡаҙна раҫлауы аша Alertmanager аша. | I18NI00000022Х, `docs/source/sorafs/runbooks/capacity_reconciliation.md:1`, `dashboards/alerts/sorafs_capacity_rules.yml:100` |
+| Биллинг приборҙар таҡталары ер өҫтө штрафтары һәм тупланған телеметрия | I18NT000000001X импорт участкалары GiB·our acctrual, забастовка иҫәпләүселәр, һәм облигация залог өсөн шылтыратыуҙа күренеш. | `dashboards/grafana/sorafs_capacity_penalties.json:1` |
+| Баҫылған доклад архивтары методологияһын һәм реплей командаларын һыуыта | Отчет реквизиттары күләмен һеңдерергә, башҡарыу командалары, һәм күҙәтеүсәнлек ҡармаҡтар өсөн аудиторҙар. | `./sf2c-capacity-soak.md` |
 
-## Execution Notes
+## Башҡарма иҫкәрмәләр
 
-Re-run the validation suite before sign-off:
+Ҡабаттан идара итеү валидация пакеты алдынан ҡул ҡуйыу:
 
 ```bash
 cargo test -p iroha_torii --features app_api -- capacity_declaration_handler_accepts_request
@@ -63,20 +64,20 @@ cargo test -p sorafs_car --features cli --test capacity_cli
 python3 scripts/telemetry/capacity_reconcile.py --snapshot <state.json> --ledger <ledger.ndjson> --warn-only
 ```
 
-Operators should regenerate onboarding/dispute request payloads with `sorafs_manifest_stub capacity {declaration,dispute}` and archive the resulting JSON/Norito bytes alongside the governance ticket.
+Операторҙар I18NI000000027X менән onboarding/booking запрос файҙалы йөктәрҙе яңыртырға һәм идара итеү билеттары менән бер рәттән һөҙөмтәлә барлыҡҡа килгән JSON/I18NT00000000004X байттарын архивлау тейеш.
 
-## Sign-off Artefacts
+## Яҙма Артефакттар
 
-| Artefact | Path | blake2b-256 |
-|----------|------|-------------|
-| Provider onboarding approval packet | `docs/examples/sorafs_capacity_marketplace_validation/2026-03-24_onboarding_signoff.md` | `8f41a745d8d94710fe81c07839651520429d4abea5729bc00f8f45bbb11daa4c` |
-| Dispute resolution approval packet | `docs/examples/sorafs_capacity_marketplace_validation/2026-03-24_dispute_signoff.md` | `c3ac3999ef52857170fedb83cddbff7733ef5699f8b38aea2e65ae507a6229f7` |
-| Treasury reconciliation approval packet | `docs/examples/sorafs_capacity_marketplace_validation/2026-03-24_treasury_signoff.md` | `0511aeed1f5607c329428cd49c94d1af51292c85134c10c3330c172b0140e8c6` |
+| Артефакт | Юл | блейк2б-256 |
+|--------|-------|-------------|
+| Провайдер onboarding раҫлау пакеты | `docs/examples/sorafs_capacity_marketplace_validation/2026-03-24_onboarding_signoff.md` | `8f41a745d8d94710fe81c07839651520429d4abea5729bc00f8f45bbb11daa4c` |
+| Бәхәс хәл итеү раҫлау пакеты | I18NI000000030X | `c3ac3999ef52857170fedb83cddbff7733ef5699f8b38aea2e65ae507a6229f7` |
+| Ҡаҙна ярашыу раҫлау пакеты | `docs/examples/sorafs_capacity_marketplace_validation/2026-03-24_treasury_signoff.md` | `0511aeed1f5607c329428cd49c94d1af51292c85134c10c3330c172b0140e8c6` |
 
-Store the signed copies of these artefacts with the release bundle and link them in the governance change record.
+Был артефакттар ҡул ҡуйылған күсермәләрен һаҡлау менән сығарыу өйөмө һәм уларҙы идара итеү үҙгәрештәре яҙмаһында бәйләй.
 
-## Approvals
+## раҫлауҙар
 
-- Storage Team Lead — @storage-tl (2026-03-24)  
-- Governance Council Secretary — @council-sec (2026-03-24)  
-- Treasury Operations Lead — @treasury-ops (2026-03-24)
+- Һаҡлау командаһы етәксеһе — @storage-tl (2026-03-24)  
+- Идара итеү советы секретары — @concil-sec (2026-03-24)  
+- ҡаҙна операциялары ҡурғаш — @treasury-опс (2026-03-24)

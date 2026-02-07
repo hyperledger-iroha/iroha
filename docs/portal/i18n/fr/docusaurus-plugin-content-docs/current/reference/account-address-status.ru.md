@@ -4,17 +4,19 @@ direction: ltr
 source: docs/portal/docs/reference/account-address-status.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: account-address-status
-title: Соответствие адресов аккаунтов
-description: Сводка рабочего процесса ADDR-2 fixture и синхронизации команд SDK.
+identifiant : compte-adresse-statut
+titre : Соответствие адресов аккаунтов
+description : Le processus de développement du luminaire ADDR-2 et la synchronisation du SDK de commande.
 ---
 
-Канонический пакет ADDR-2 (`fixtures/account/address_vectors.json`) включает fixtures IH58 (preferred), compressed (`sora`, second-best; half/full width), multisignature и negative. Каждая поверхность SDK + Torii опирается на один и тот же JSON, чтобы обнаруживать дрейф codec до выхода в прод. Эта страница отражает внутренний статусный бриф (`docs/source/account_address_status.md` в корне репозитория), чтобы читатели портала могли обратиться к workflow без необходимости копаться в mono-repo.
+Le paquet canonique ADDR-2 (`fixtures/account/address_vectors.json`) comprend les appareils IH58 (de préférence), compressé (`sora`, deuxième meilleur ; demi/pleine largeur), multisignature et négatif. Vous pouvez utiliser SDK + Torii pour utiliser Odin et JSON afin d'exploiter votre codec dans votre produit. Cette page indique le statut de l'entreprise (`docs/source/account_address_status.md` dans le référentiel de fichiers), ce que le portail peut utiliser pour le flux de travail Il n'y a aucun moyen de s'acheter en mono-repo.
 
-## Перегенерация или проверка пакета
+## Prégénération ou livraison de paquets
 
 ```bash
 # Refresh the canonical fixture (writes fixtures/account/address_vectors.json)
@@ -24,31 +26,29 @@ cargo xtask address-vectors --out fixtures/account/address_vectors.json
 cargo xtask address-vectors --verify
 ```
 
-Flags:
+Drapeaux :
 
-- `--stdout` — выводит JSON в stdout для ad-hoc проверки.
-- `--out <path>` — записывает в другой путь (например, при локальном сравнении изменений).
-- `--verify` — сравнивает рабочую копию со свежесгенерированным содержимым (нельзя совмещать с `--stdout`).
+- `--stdout` — JSON sur la sortie standard pour des tests ad hoc.
+- `--out <path>` — записывает в другой путь (par exemple, при локальном сравнении изменений).
+- `--verify` — сравнивает рабочую копию со свежесгенерированным содержимым (neльзя совмещать с `--stdout`).
 
-CI workflow **Address Vector Drift** запускает `cargo xtask address-vectors --verify`
-каждый раз, когда меняется fixture, генератор или docs, чтобы немедленно предупредить ревьюеров.
+Flux de travail CI ** Dérive du vecteur d'adresse ** запускает `cargo xtask address-vectors --verify`
+Ici, vous trouverez des appareils, des générateurs ou des documents, qui ne devraient pas prédire les publications.
 
-## Кто использует fixture?
+## Comment utiliser un luminaire ?
 
-| Surface | Validation |
-|---------|------------|
-| Rust data-model | `crates/iroha_data_model/tests/account_address_vectors.rs` |
-| Torii (server) | `crates/iroha_torii/tests/account_address_vectors.rs` |
-| JavaScript SDK | `javascript/iroha_js/test/address.test.js` |
-| Swift SDK | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` |
-| Android SDK | `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java` |
+| Surfaces | Validation |
+|--------------|------------|
+| Modèle de données Rust | `crates/iroha_data_model/tests/account_address_vectors.rs` |
+| Torii (serveur) | `crates/iroha_torii/tests/account_address_vectors.rs` |
+| SDK JavaScript | `javascript/iroha_js/test/address.test.js` |
+| SDK Swift | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` |
+| SDK Android | `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java` |Ce harnais permet d'aller-retour en canonique avec un bateau + IH58 + un code et une vérification, ce code pour le style Norito est adapté au luminaire для négatif кейсов.
 
-Каждый harness выполняет round-trip канонических байт + IH58 + сжатых кодировок и проверяет, что коды ошибок в стиле Norito совпадают с fixture для negative кейсов.
+## Est-il possible d'automatiser ?
 
-## Нужна автоматизация?
-
-Release tooling может автоматизировать обновления fixture через helper
-`scripts/account_fixture_helper.py`, который получает или проверяет канонический пакет без копирования/вставки:
+L'outil de libération peut automatiser la mise à jour du luminaire grâce à l'aide
+`scripts/account_fixture_helper.py`, que vous avez trouvé ou fourni un paquet canonique sans copie/installation :
 
 ```bash
 # Download to a custom path (defaults to fixtures/account/address_vectors.json)
@@ -64,9 +64,9 @@ python3 scripts/account_fixture_helper.py check \
   --metrics-label android
 ```
 
-Helper принимает overrides через `--source` или переменную окружения `IROHA_ACCOUNT_FIXTURE_URL`, чтобы CI джобы SDK могли указывать предпочтительное зеркало. При передаче `--metrics-out` helper записывает `account_address_fixture_check_status{target="…"}` вместе с каноническим SHA-256 digest (`account_address_fixture_remote_info`), чтобы Prometheus textfile collectors и дашборд Grafana `account_address_fixture_status` могли подтвердить синхронизацию каждой поверхности. Настройте алерт, когда target сообщает `0`. Для multi-surface автоматизации используйте wrapper `ci/account_fixture_metrics.sh` (принимает повторяющиеся `--target label=path[::source]`), чтобы on-call команды публиковали единый `.prom` файл для textfile collector node-exporter.
+Helper propose des remplacements pour `--source` ou pour l'option `IROHA_ACCOUNT_FIXTURE_URL`, que le CI du SDK peut utiliser avant l'utilisation. Avant que l'assistant `--metrics-out` n'installe `account_address_fixture_check_status{target="…"}` dans le résumé canonique SHA-256 (`account_address_fixture_remote_info`), vous trouverez les collecteurs de fichiers texte Prometheus et Le bord Grafana `account_address_fixture_status` peut améliorer la synchronisation selon les normes. Alerte, votre cible correspond à `0`. Pour l'automatisation multi-surfaces, utilisez le wrapper `ci/account_fixture_metrics.sh` (pour `--target label=path[::source]`), les commandes d'astreinte publiées `.prom` est destiné au nœud-exportateur de collecteur de fichiers texte.
 
-## Нужен полный бриф?
+## Votre bracelet polaire ?
 
-Полный статус соответствия ADDR-2 (owners, план мониторинга, открытые задачи)
-хранится в `docs/source/account_address_status.md` внутри репозитория вместе с Address Structure RFC (`docs/account_structure.md`). Используйте эту страницу как оперативное напоминание; для глубокой справки обращайтесь к docs репозитория.
+Полный STATUS соответствия ADDR-2 (propriétaires, plan de surveillance, открытые задачи)
+Vous trouverez dans le référentiel `docs/source/account_address_status.md` la structure d'adresse RFC (`docs/account_structure.md`). Utilisez cette section pour les informations opérationnelles ; для глубокой справки обращайтесь к docs репозитория.

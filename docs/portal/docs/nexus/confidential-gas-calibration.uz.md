@@ -10,36 +10,37 @@ translation_last_reviewed: 2026-02-07
 title: Confidential Gas Calibration Ledger
 description: Release-quality measurements backing the confidential gas schedule.
 slug: /nexus/confidential-gas-calibration
+translator: machine-google-reviewed
 ---
 
-# Confidential Gas Calibration Baselines
+# Maxfiy gaz kalibrlash asoslari
 
-This ledger tracks the validated outputs of the confidential gas calibration
-benchmarks. Each row documents a release-quality measurement set captured with
-the procedure described in [Confidential Assets & ZK Transfers](./confidential-assets#calibration-baselines--acceptance-gates).
+Ushbu kitob maxfiy gaz kalibrlashning tasdiqlangan natijalarini kuzatib boradi
+benchmarks. Har bir qatorda suratga olingan reliz sifati o'lchovlari to'plami hujjatlashtirilgan
+[Confidential Assets & ZK Transfers](./confidential-assets#calibration-baselines--acceptance-gates) da tavsiflangan protsedura.
 
-| Date (UTC) | Commit | Profile | `ns/op` | `gas/op` | `ns/gas` | Notes |
+| Sana (UTC) | Majburiyat | Profil | `ns/op` | `gas/op` | `ns/gas` | Eslatmalar |
 | --- | --- | --- | --- | --- | --- | --- |
-| 2025-10-18 | 3c70a7d3 | baseline-neon | 2.93e5 | 1.57e2 | 1.87e3 | Darwin 25.0.0 arm64e (hostinfo); `cargo bench -p iroha_core --bench isi_gas_calibration -- --sample-size=200 --warm-up-time=5 --save-baseline neon-20251018`; `cargo test -p iroha_core bench_repro -- --ignored`; `cargo bench -p ivm --bench gas_calibration -- --sample-size=200 --warm-up-time=5`; `rustc 1.88.0 (6b00bc3)` |
-| 2026-04-12 | pending | baseline-simd-neutral | — | — | — | Scheduled x86_64 neutral run on CI host `bench-x86-neon0`; see ticket GAS-214. Results will be added once the bench window completes (pre-merge checklist targets release 2.1). |
-| 2026-04-13 | pending | baseline-avx2 | — | — | — | Follow-up AVX2 calibration using the same commit/build as the neutral run; requires host `bench-x86-avx2a`. GAS-214 covers both runs with delta comparison against `baseline-neon`. |
+| 2025-10-18 | 3c70a7d3 | asosiy neon | 2.93e5 | 1.57e2 | 1.87e3 | Darvin 25.0.0 arm64e (hostinfo); `cargo bench -p iroha_core --bench isi_gas_calibration -- --sample-size=200 --warm-up-time=5 --save-baseline neon-20251018`; `cargo test -p iroha_core bench_repro -- --ignored`; `cargo bench -p ivm --bench gas_calibration -- --sample-size=200 --warm-up-time=5`; `rustc 1.88.0 (6b00bc3)` |
+| 2026-04-12 | kutilmoqda | bazaviy-simd-neytral | — | — | — | `bench-x86-neon0` CI xostida rejalashtirilgan x86_64 neytral ishlashi; GAS-214 chiptasiga qarang. Natijalar dastgoh oynasi tugagandan so'ng qo'shiladi (birlashtirishdan oldin nazorat ro'yxati maqsadlari 2.1 nashri). |
+| 2026-04-13 | kutilmoqda | baseline-avx2 | — | — | — | Neytral ishga tushirish bilan bir xil majburiyat/qurilishdan foydalangan holda AVX2 kalibrlashni kuzatib boring; `bench-x86-avx2a` xostini talab qiladi. GAS-214 `baseline-neon` bilan delta taqqoslash bilan ikkala yugurishni ham qamrab oladi. |
 
-`ns/op` aggregates the median wall-clock per instruction measured by Criterion;
-`gas/op` is the arithmetic mean of the corresponding schedule costs from
-`iroha_core::gas::meter_instruction`; `ns/gas` divides the summed nanoseconds by
-the summed gas across the nine-instruction sample set.
+`ns/op` mezon bo'yicha o'lchangan har bir ko'rsatma uchun o'rtacha devor soatini jamlaydi;
+`gas/op` - tegishli jadval xarajatlarining o'rtacha arifmetik qiymati
+`iroha_core::gas::meter_instruction`; `ns/gas` yig'ilgan nanosoniyalarni ga ajratadi
+to'qqiz instruktsiyali namunalar to'plami bo'ylab jamlangan gaz.
 
-*Note.* The current arm64 host does not emit Criterion `raw.csv` summaries out of
-the box; rerun with `CRITERION_OUTPUT_TO=csv` or an upstream fix before tagging a
-release so the artefacts required by the acceptance checklist are attached.
-If `target/criterion/` is still missing after `--save-baseline`, collect the run
-on a Linux host or serialize the console output into the release bundle as a
-temporary stop-gap. For reference, the arm64 console log from the latest run
-lives at `docs/source/confidential_assets_calibration_neon_20251018.log`.
+*Eslatma.* Joriy arm64 xosti `raw.csv` mezoni xulosalarini chiqarmaydi
+quti; a teglashdan oldin `CRITERION_OUTPUT_TO=csv` yoki yuqoridagi tuzatish bilan qayta ishga tushiring
+chiqaring, shuning uchun qabul qilish nazorat ro'yxatida talab qilinadigan artefaktlar ilova qilinadi.
+Agar `target/criterion/` `--save-baseline` dan keyin ham yo'qolsa, yugurishni to'plang.
+Linux xostida yoki konsol chiqishini relizlar to'plamiga ketma-ketlashtiring
+vaqtinchalik uzilish. Malumot uchun, so'nggi ishga tushirishdan arm64 konsol jurnali
+`docs/source/confidential_assets_calibration_neon_20251018.log` da yashaydi.
 
-Per-instruction medians from the same run (`cargo bench -p iroha_core --bench isi_gas_calibration`):
+Xuddi shu ishga tushirilgan har bir ko'rsatma medianalari (`cargo bench -p iroha_core --bench isi_gas_calibration`):
 
-| Instruction | median `ns/op` | schedule `gas` | `ns/gas` |
+| Ko'rsatma | median `ns/op` | jadval `gas` | `ns/gas` |
 | --- | --- | --- | --- |
 | RegisterDomain | 3.46e5 | 200 | 1.73e3 |
 | RegisterAccount | 3.15e5 | 200 | 1.58e3 |
@@ -51,6 +52,6 @@ Per-instruction medians from the same run (`cargo bench -p iroha_core --bench is
 | MintAsset | 1.56e5 | 150 | 1.04e3 |
 | TransferAsset | 3.68e5 | 180 | 2.04e3 |
 
-The schedule column is enforced by `gas::tests::calibration_bench_gas_snapshot`
-(total 1,413 gas across the nine-instruction set) and will trip if future patches
-change metering without updating the calibration fixtures.
+Jadval ustuni `gas::tests::calibration_bench_gas_snapshot` tomonidan amalga oshiriladi
+(to'qqizta ko'rsatmalar to'plami bo'ylab jami 1,413 gaz) va agar kelajakda yamoqlar bo'lsa, o'chib ketadi
+kalibrlash moslamalarini yangilamasdan o'lchashni o'zgartirish.

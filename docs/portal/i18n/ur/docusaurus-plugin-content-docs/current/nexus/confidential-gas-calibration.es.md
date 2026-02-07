@@ -4,40 +4,42 @@ direction: rtl
 source: docs/portal/docs/nexus/confidential-gas-calibration.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: Libro mayor de calibracion de gas confidencial
-description: Mediciones de calidad de release que respaldan el calendario de gas confidencial.
-slug: /nexus/confidential-gas-calibration
+عنوان: خفیہ گیس انشانکن لیجر
+تفصیل: خفیہ گیس کیلنڈر کی حمایت کرنے والے معیار کی پیمائش۔
+سلگ: /گٹھ جوڑ /خفیہ گیس-کیلیبریشن
 ---
 
-# Lineas base de calibracion de gas confidencial
+# خفیہ گیس انشانکن بیس لائنز
 
-Este registro rastrea los resultados validados de los benchmarks de calibracion de gas confidencial. Cada fila documenta un conjunto de mediciones de calidad de release capturado con el procedimiento descrito en [Confidential Assets & ZK Transfers](./confidential-assets#calibration-baselines--acceptance-gates).
+یہ رجسٹری خفیہ گیس انشانکن بینچ مارک کے توثیق شدہ نتائج کو ٹریک کرتی ہے۔ ہر صف میں [خفیہ اثاثوں اور زیڈ کے ٹرانسفر] (./confidential-assets#calibration-baselines--acceptance-gates) میں بیان کردہ طریقہ کار کا استعمال کرتے ہوئے رہائی کے معیار کی پیمائش کا ایک مجموعہ دستاویز کیا گیا ہے۔
 
-| Fecha (UTC) | Commit | Perfil | `ns/op` | `gas/op` | `ns/gas` | Notas |
+| تاریخ (UTC) | ارتکاب | پروفائل | `ns/op` | `gas/op` | `ns/gas` | نوٹ |
 | --- | --- | --- | --- | --- | --- | --- |
-| 2025-10-18 | 3c70a7d3 | baseline-neon | 2.93e5 | 1.57e2 | 1.87e3 | Darwin 25.0.0 arm64e (hostinfo); `cargo bench -p iroha_core --bench isi_gas_calibration -- --sample-size=200 --warm-up-time=5 --save-baseline neon-20251018`; `cargo test -p iroha_core bench_repro -- --ignored`; `cargo bench -p ivm --bench gas_calibration -- --sample-size=200 --warm-up-time=5`; `rustc 1.88.0 (6b00bc3)` |
-| 2026-04-12 | pending | baseline-simd-neutral | - | - | - | Ejecucion neutral x86_64 programada en el host CI `bench-x86-neon0`; ver ticket GAS-214. Los resultados se agregaran cuando termine la ventana de bench (la checklist pre-merge apunta al release 2.1). |
-| 2026-04-13 | pending | baseline-avx2 | - | - | - | Calibracion AVX2 posterior usando el mismo commit/build que la corrida neutral; requiere el host `bench-x86-avx2a`. GAS-214 cubre ambas corridas con comparacion de delta contra `baseline-neon`. |
+| 2025-10-18 | 3C70A7D3 | بیس لائن نیون | 2.93E5 | 1.57E2 | 1.87e3 | ڈارون 25.0.0 ARM64E (ہوسٹینفو) ؛ `cargo bench -p iroha_core --bench isi_gas_calibration -- --sample-size=200 --warm-up-time=5 --save-baseline neon-20251018` ؛ `cargo test -p iroha_core bench_repro -- --ignored` ؛ `cargo bench -p ivm --bench gas_calibration -- --sample-size=200 --warm-up-time=5` ؛ `rustc 1.88.0 (6b00bc3)` |
+| 2026-04-12 | زیر التواء | بیس لائن سمڈ غیر جانبدار | - | - | - | غیر جانبدار X86_64 میزبان CI `bench-x86-neon0` پر شیڈول ؛ ٹکٹ GAS-214 دیکھیں۔ جب بینچ ونڈو ختم ہوجائے گی تو نتائج کو شامل کیا جائے گا (پری انکر لسٹ 2.1 کو جاری کرنے کے لئے اشارہ کرتا ہے)۔ |
+| 2026-04-13 | زیر التواء | بیس لائن-ای وی ایکس 2 | - | - | - | غیر جانبدار رن کے طور پر اسی کمٹ/بلڈ کا استعمال کرتے ہوئے اس کے بعد اے وی ایکس 2 انشانکن۔ میزبان `bench-x86-avx2a` کی ضرورت ہے۔ GAS-214 `baseline-neon` کے خلاف ڈیلٹا موازنہ کے ساتھ دونوں رنز کا احاطہ کرتا ہے۔ |
 
-`ns/op` agrega la mediana de tiempo de pared por instruccion medida por Criterion; `gas/op` es la media aritmetica de los costos de schedule correspondientes de `iroha_core::gas::meter_instruction`; `ns/gas` divide los nanosegundos sumados entre el gas sumado en el conjunto de nueve instrucciones.
+`ns/op` معیار کے ذریعہ ماپنے والی ہر ہدایت میں درمیانی دیوار کا وقت شامل کرتا ہے۔ `gas/op` `iroha_core::gas::meter_instruction` کے متعلقہ شیڈول اخراجات کا ریاضی کا مطلب ہے۔ `ns/gas` نے اضافی گیس کے ذریعہ شامل نانو سیکنڈ کو نو ہدایات کے سیٹ میں تقسیم کیا ہے۔
 
-*Nota.* El host arm64 actual no emite resumenes `raw.csv` de Criterion por defecto; vuelve a ejecutar con `CRITERION_OUTPUT_TO=csv` o una correccion upstream antes de etiquetar un release para que los artefactos requeridos por la checklist de aceptacion queden adjuntos. Si `target/criterion/` sigue faltando despues de `--save-baseline`, recolecta la corrida en un host Linux o serializa la salida de consola en el bundle del release como stopgap temporal. Como referencia, el log de consola arm64 de la ultima corrida vive en `docs/source/confidential_assets_calibration_neon_20251018.log`.
+* نوٹ. ریلیز کو ٹیگ کرنے سے پہلے `CRITERION_OUTPUT_TO=csv` یا کسی اپ اسٹریم فکس کے ساتھ دوبارہ چلائیں تاکہ قبولیت چیک لسٹ کے ذریعہ مطلوبہ نمونے منسلک ہوں۔ اگر `target/criterion/` `--save-baseline` کے بعد بھی غائب ہے تو ، لینکس کے میزبان پر رن ​​اکٹھا کریں یا کنسول آؤٹ پٹ کو عارضی اسٹاپ گیپ کے طور پر ریلیز کے بنڈل میں سیریلائز کریں۔ حوالہ کے لئے ، `docs/source/confidential_assets_calibration_neon_20251018.log` پر آخری رن کی زندگی سے ARM64 کنسول لاگ ان ہوتا ہے۔
 
-Medianas por instruccion de la misma corrida (`cargo bench -p iroha_core --bench isi_gas_calibration`):
+ایک ہی رن (`cargo bench -p iroha_core --bench isi_gas_calibration`) کی ہدایت کے مطابق میڈین:
 
-| Instruccion | mediana `ns/op` | schedule `gas` | `ns/gas` |
+| ہدایات | میڈیم `ns/op` | شیڈول `gas` | `ns/gas` |
 | --- | --- | --- | --- |
-| RegisterDomain | 3.46e5 | 200 | 1.73e3 |
-| RegisterAccount | 3.15e5 | 200 | 1.58e3 |
-| RegisterAssetDef | 3.41e5 | 200 | 1.71e3 |
-| SetAccountKV_small | 3.28e5 | 67 | 4.90e3 |
-| GrantAccountRole | 3.33e5 | 96 | 3.47e3 |
-| RevokeAccountRole | 3.12e5 | 96 | 3.25e3 |
-| ExecuteTrigger_empty_args | 1.42e5 | 224 | 6.33e2 |
-| MintAsset | 1.56e5 | 150 | 1.04e3 |
-| TransferAsset | 3.68e5 | 180 | 2.04e3 |
+| رجسٹر ڈومین | 3.46e5 | 200 | 1.73e3 |
+| رجسٹر اکاؤنٹ | 3.15E5 | 200 | 1.58e3 |
+| رجسٹراسیٹ ڈیف | 3.41E5 | 200 | 1.71e3 |
+| setaccountkv_small | 3.28E5 | 67 | 4.90e3 |
+| گرانٹ ایککونٹرول | 3.33E5 | 96 | 3.47E3 |
+| ریووکی کوکونٹرول | 3.12e5 | 96 | 3.25E3 |
+| exectetrigger_empty_args | 1.42E5 | 224 | 6.33e2 |
+| منٹاسیٹ | 1.56e5 | 150 | 1.04E3 |
+| ٹرانسفراسیٹ | 3.68E5 | 180 | 2.04E3 |
 
-La columna de schedule esta impuesta por `gas::tests::calibration_bench_gas_snapshot` (total 1,413 gas en el conjunto de nueve instrucciones) y fallara si parches futuros cambian el metering sin actualizar los fixtures de calibracion.
+شیڈول کالم `gas::tests::calibration_bench_gas_snapshot` (نو انسٹرکشن سیٹ میں کل 1،413 گیس) کے ذریعہ نافذ کیا گیا ہے اور اگر مستقبل کے پیچ انشانکن فکسچر کو اپ ڈیٹ کیے بغیر پیمائش کو تبدیل کرتے ہیں تو ناکام ہوجائیں گے۔

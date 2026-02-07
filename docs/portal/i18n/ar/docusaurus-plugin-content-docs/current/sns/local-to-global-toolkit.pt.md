@@ -4,26 +4,28 @@ direction: rtl
 source: docs/portal/docs/sns/local-to-global-toolkit.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Kit de enderecos Local -> Global
+# Kit de enderecos محلي -> عالمي
 
-Esta pagina espelha `docs/source/sns/local_to_global_toolkit.md` do mono-repo. Ela agrupa os helpers de CLI e runbooks exigidos pelo item de roadmap **ADDR-5c**.
+هذه الصفحة مخصصة `docs/source/sns/local_to_global_toolkit.md` من خلال الريبو الأحادي. تم تجميع مساعدي CLI وكتب التشغيل الرائعة من خلال عنصر خريطة الطريق **ADDR-5c**.
 
-## Visao geral
+## فيساو جيرال
 
-- `scripts/address_local_toolkit.sh` encapsula a CLI `iroha` para produzir:
-  - `audit.json` -- saida estruturada de `iroha tools address audit --format json`.
-  - `normalized.txt` -- literais IH58 (preferido) / compressed (`sora`) (segunda melhor opcao) convertidos para cada selector de dominio Local.
-- Combine o script com o dashboard de ingest de enderecos (`dashboards/grafana/address_ingest.json`)
-  e as regras do Alertmanager (`dashboards/alerts/address_ingest_rules.yml`) para provar que o cutover Local-8 /
-  Local-12 e seguro. Observe os paineis de colisao Local-8 e Local-12 e os alertas
-  `AddressLocal8Resurgence`, `AddressLocal12Collision`, e `AddressInvalidRatioSlo` antes de
-  promover mudancas de manifest.
-- Consulte as [Address Display Guidelines](address-display-guidelines.md) e o
-  [Address Manifest runbook](../../../source/runbooks/address_manifest_ops.md) para contexto de UX e resposta a incidentes.
+- `scripts/address_local_toolkit.sh` مغلف بـ CLI `iroha` للمنتج:
+  - `audit.json`--مؤسسة البناء `iroha tools address audit --format json`.
+  - `normalized.txt` - حرف IH58 (مفضل) / مضغوط (`sora`) (أفضل خيار ثاني) محول لكل محدد نطاق محلي.
+- الجمع بين البرنامج النصي ولوحة التحكم في إدخال enderecos (`dashboards/grafana/address_ingest.json`)
+  كما يتم إصلاح Alertmanager (`dashboards/alerts/address_ingest_rules.yml`) للتأكد من قطع Local-8 /
+  محلي-12 وآمن. راقب آلام القولون Local-8 و Local-12 والتنبيهات
+  `AddressLocal8Resurgence`، `AddressLocal12Collision`، و`AddressInvalidRatioSlo` قبل
+  المروج mudancas دي البيان.
+- راجع كـ [إرشادات عرض العنوان](address-display-guidelines.md) e o
+  [دليل بيان العنوان](../../../source/runbooks/address_manifest_ops.md) لسياق تجربة المستخدم والاستجابة للحوادث.
 
-## Uso
+## أوسو
 
 ```bash
 scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_examples.txt       --output-dir artifacts/address_migration       --network-prefix 753       --format ih58
@@ -31,23 +33,21 @@ scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_exa
 
 Opcoes:
 
-- `--format compressed (`sora`)` para saida `sora...` em vez de IH58.
-- `--no-append-domain` para emitir literais sem dominio.
-- `--audit-only` para pular a etapa de conversao.
-- `--allow-errors` para continuar a varredura quando linhas malformadas aparecerem (igual ao comportamento da CLI).
+- `--format compressed (`sora`)` لـ صيدا `sora...` em vez de IH58.
+- `--no-append-domain` لإصدار أدبي بدون ملكية.
+- `--audit-only` لبدء المحادثة.
+- `--allow-errors` لمواصلة التباين عند ظهور تشوهات الخطوط (مثل سلوك CLI).يستخرج البرنامج النصي طريقتين من الأعمال الفنية في نهاية التنفيذ. Anexe os dois arquivos ao
+تذكرة gestao de mudancas الخاصة بك مع لقطة شاشة Grafana التي لا تتوصل إلى الصفر
+أجهزة الكشف المحلية-8 وصفر الكوليسو المحلية-12 لمدة> = 30 يوما.
 
-O script escreve os caminhos dos artefatos ao final da execucao. Anexe os dois arquivos ao
-seu ticket de gestao de mudancas junto com o screenshot do Grafana que comprove zero
-deteccoes Local-8 e zero colisoes Local-12 por >=30 dias.
+## إنتيجراكاو CI
 
-## Integracao CI
-
-1. Rode o script em um job dedicado e envie as saidas.
-2. Bloqueie merges quando `audit.json` reportar selectores Local (`domain.kind = local12`).
-   no valor padrao `true` (so altere para `false` em clusters dev/test ao diagnosticar
-   regressoes) e adicione
-   `iroha tools address normalize --fail-on-warning --only-local` ao CI para que regressos
+1. قم بالكتابة في وظيفة مخصصة وحسدها كما تقول.
+2. يقوم Bloqueie بدمج محددات تقرير `audit.json` المحلية (`domain.kind = local12`).
+   لا توجد شجاعة في `true` (لذا تم التغيير لـ `false` في مجموعات التطوير/الاختبار للتشخيص
+   التراجعات) والإضافة
+   `iroha tools address normalize --fail-on-warning --only-local` ao CI للتراجع
    falhem antes de chegar a producao.
 
-Veja o documento fonte para mais detalhes, checklists de evidencia e o snippet de
-release notes que voce pode reutilizar ao anunciar o cutover para clientes.
+شاهد الخط المستند لمزيد من التفاصيل وقوائم الأدلة المرجعية ومقتطف من
+ملاحظات الإصدار التي يمكنك إعادة استخدامها أو الإعلان عن التحويل للعملاء.

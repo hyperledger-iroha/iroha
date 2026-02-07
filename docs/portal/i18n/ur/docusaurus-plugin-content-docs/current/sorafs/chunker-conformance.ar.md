@@ -4,57 +4,59 @@ direction: rtl
 source: docs/portal/docs/sorafs/chunker-conformance.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: chunker-conformance
-title: دليل مطابقة chunker في SoraFS
-sidebar_label: مطابقة chunker
-description: متطلبات وتدفقات عمل للحفاظ على ملف chunker الحتمي SF1 عبر fixtures و SDKs.
+ID: chuncer- confonformance
+عنوان: SoraFS میں چنکر مماثل گائیڈ
+سائڈبار_لیبل: ملاپ کا چنکر
+تفصیل: فکسچر اور ایس ڈی کے میں SF1 ڈٹرمینسٹک چنکر فائل کو برقرار رکھنے کے لئے تقاضے اور ورک فلوز۔
 ---
 
-:::note المصدر المعتمد
-تعكس هذه الصفحة `docs/source/sorafs/chunker_conformance.md`. احرص على إبقاء النسختين متزامنتين إلى أن يتم إيقاف الوثائق القديمة.
+::: منظور شدہ ماخذ کو نوٹ کریں
+یہ صفحہ `docs/source/sorafs/chunker_conformance.md` کی عکاسی کرتا ہے۔ اس بات کو یقینی بنائیں کہ پرانی دستاویزات ریٹائر ہونے تک دونوں کاپیاں مطابقت پذیری میں رکھیں۔
 :::
 
-يوثق هذا الدليل المتطلبات التي يجب على كل تطبيق اتباعها للبقاء متوافقاً مع ملف chunker الحتمي في SoraFS (SF1).
-كما يوثق سير إعادة التوليد، وسياسة التوقيع، وخطوات التحقق كي يبقى مستهلكو fixtures عبر SDKs متزامنين.
+یہ گائیڈ ان تقاضوں کی دستاویز کرتا ہے کہ SoraFS (SF1) میں ڈٹرمینسٹک چنکر فائل کے مطابق رہنے کے لئے ہر درخواست پر عمل کرنا چاہئے۔
+اس میں تخلیق نو کے بہاؤ ، دستخط کرنے کی پالیسی ، اور توثیق کے اقدامات کو بھی دستاویز کیا گیا ہے تاکہ ایس ڈی کے میں فکسچر کے صارفین مطابقت پذیری میں رہیں۔
 
-## الملف المعتمد
+## منظور شدہ فائل
 
-- مقبض الملف: `sorafs.sf1@1.0.0` (البديل القديم `sorafs.sf1@1.0.0`)
-- بذرة الإدخال (hex): `0000000000dec0ded`
-- الحجم المستهدف: 262144 bytes (256 KiB)
-- الحجم الأدنى: 65536 bytes (64 KiB)
-- الحجم الأقصى: 524288 bytes (512 KiB)
-- متعدد الحدود المتدحرج: `0x3DA3358B4DC173`
-- بذرة جدول gear: `sorafs-v1-gear`
-- قناع القطع: `0x0000FFFF`
+- فائل ہینڈل: `sorafs.sf1@1.0.0` (پرانا مختلف `sorafs.sf1@1.0.0`)
+- ان پٹ بیج (ہیکس): `0000000000dec0ded`
+- ہدف کا سائز: 262144 بائٹس (256 KIB)
+- کم سے کم سائز: 65536 بائٹس (64 KIB)
+- زیادہ سے زیادہ سائز: 524288 بائٹس (512 KIB)
+- رولنگ متعدد: `0x3DA3358B4DC173`
+- گیئر ٹیبل اسٹب: `sorafs-v1-gear`
+- کلپنگ ماسک: `0x0000FFFF`
 
-التطبيق المرجعي: `sorafs_chunker::chunk_bytes_with_digests_profile`.
-يجب أن ينتج أي تسريع SIMD نفس الحدود والـ digests.
+حوالہ ایپ: `sorafs_chunker::chunk_bytes_with_digests_profile`۔
+کسی بھی سمڈ ایکسلریشن کو ایک ہی حدود اور ہضم پیدا کرنا چاہئے۔
 
-## حزمة fixtures
+## فکسچر پیک
 
-`cargo run --locked -p sorafs_chunker --bin export_vectors` يعيد توليد
-fixtures ويصدر الملفات التالية ضمن `fixtures/sorafs_chunker/`:
+`cargo run --locked -p sorafs_chunker --bin export_vectors` دوبارہ تخلیق کرتا ہے
+فکسچر اور `fixtures/sorafs_chunker/` کے تحت درج ذیل فائلوں کو برآمد کرتا ہے:
 
-- `sf1_profile_v1.{json,rs,ts,go}` — حدود chunk المعتمدة لمستهلكي Rust و TypeScript و Go.
-  يعلن كل ملف المقبض المعتمد كأول إدخال في `profile_aliases`، يتبعه أي بدائل قديمة (مثل
-  `sorafs.sf1@1.0.0` ثم `sorafs.sf1@1.0.0`). يتم فرض الترتيب بواسطة
-  `ensure_charter_compliance` ولا يجب تغييره.
-- `manifest_blake3.json` — manifest تم التحقق منه عبر BLAKE3 ويغطي كل ملفات fixtures.
-- `manifest_signatures.json` — توقيعات المجلس (Ed25519) على digest الخاص بالـ manifest.
-- `sf1_profile_v1_backpressure.json` والـ corpora الخام داخل `fuzz/` —
-  سيناريوهات بث حتمية تُستخدم في اختبارات back-pressure للـ chunker.
+- `sf1_profile_v1.{json,rs,ts,go}` - زنگ ، ٹائپ اسکرپٹ ، اور GO صارفین کے لئے معاونت کی حدود کی تائید۔
+  ہر فائل منظور شدہ ہینڈل کو `profile_aliases` میں پہلی اندراج کے طور پر اعلان کرتی ہے ، اس کے بعد کسی بھی میراثی متبادل (جیسے۔
+  `sorafs.sf1@1.0.0` پھر `sorafs.sf1@1.0.0`)۔ آرڈر نافذ کیا گیا ہے
+  `ensure_charter_compliance` اور اسے تبدیل نہیں کیا جانا چاہئے۔
+- `manifest_blake3.json` - بلیک 3 کے ذریعہ تصدیق شدہ ظاہر اور تمام فکسچر فائلوں کا احاطہ کرتا ہے۔
+- `manifest_signatures.json` - کونسل کے دستخط (ED25519) منشور کے لئے ڈائجسٹ پر۔
+- `sf1_profile_v1_backpressure.json` اور خام کارپورورا interni `fuzz/` -
+  چنکر بیک پریشر ٹیسٹوں میں استعمال ہونے والے تعصب کے نشریاتی منظرنامے۔
 
-### سياسة التوقيع
+### دستخطی پالیسی
 
-يجب أن تشمل إعادة توليد fixtures توقيعاً صالحاً من المجلس. يرفض المولد
-الإخراج غير الموقّع ما لم يتم تمرير `--allow-unsigned` صراحة (مخصص
-للتجارب المحلية فقط). أظرف التوقيع append-only ويتم إزالة التكرارات حسب الموقّع.
+تخلیق نو فکسچر کو کونسل کے ایک درست دستخط شامل کرنا ضروری ہے۔ جنریٹر نے انکار کردیا
+دستخط شدہ آؤٹ پٹ جب تک کہ `--allow-unsigned` واضح طور پر پاس نہ ہوجائے (کسٹم
+صرف مقامی تجربات کے لئے)۔ دستخطی لفافے صرف ضمیمہ اور نقول کو دستخط کنندہ کے ذریعہ ہٹا دیا جاتا ہے۔
 
-لإضافة توقيع من المجلس:
+کونسل سے دستخط شامل کرنے کے لئے:
 
 ```bash
 cargo run --locked -p sorafs_chunker --bin export_vectors \
@@ -62,32 +64,32 @@ cargo run --locked -p sorafs_chunker --bin export_vectors \
   --signature-out=fixtures/sorafs_chunker/manifest_signatures.json
 ```
 
-## التحقق
+## توثیق
 
-يعيد مساعد CI `ci/check_sorafs_fixtures.sh` تشغيل المولد مع
-`--locked`. إذا انحرفت fixtures أو غابت التواقيع، تفشل المهمة. استخدم
-هذا السكربت في workflows الليلية وقبل إرسال تغييرات fixtures.
+CI اسسٹنٹ `ci/check_sorafs_fixtures.sh` جنریٹر کو دوبارہ شروع کرتا ہے
+`--locked`۔ اگر فکسچر اسکیچڈ ہیں یا دستخط غائب ہیں تو ، مشن ناکام ہوجاتا ہے۔ استعمال کریں
+یہ اسکرپٹ رات کے کام کے بہاؤ میں اور فکسچر تبدیلیاں جمع کروانے سے پہلے استعمال ہوتا ہے۔
 
-خطوات التحقق اليدوية:
+دستی توثیق کے اقدامات:
 
-1. شغّل `cargo test -p sorafs_chunker`.
-2. نفّذ `ci/check_sorafs_fixtures.sh` محلياً.
-3. تأكد أن `git status -- fixtures/sorafs_chunker` نظيف.
+1. `cargo test -p sorafs_chunker` کو آن کریں۔
+2. مقامی طور پر `ci/check_sorafs_fixtures.sh` پر عمل کریں۔
+3. اس بات کو یقینی بنائیں کہ `git status -- fixtures/sorafs_chunker` صاف ہے۔
 
-## دليل الترقية
+## اپ گریڈ گائیڈ
 
-عند اقتراح ملف chunker جديد أو تحديث SF1:
+جب نیا چنکر یا SF1 اپ ڈیٹ کی تجویز پیش کرتے ہو:
 
-انظر أيضاً: [`docs/source/sorafs/chunker_profile_authoring.md`](./chunker-profile-authoring.md) لمتطلبات
-البيانات الوصفية وقوالب المقترح وقوائم التحقق.
+یہ بھی ملاحظہ کریں: [`docs/source/sorafs/chunker_profile_authoring.md`] (./chunker-profile-authoring.md) تقاضوں کے لئے
+میٹا ڈیٹا ، پروپوزل ٹیمپلیٹس ، اور چیک لسٹس۔
 
-1. صِغ `ChunkProfileUpgradeProposalV1` (انظر RFC SF-1) بمعلمات جديدة.
-2. أعد توليد fixtures عبر `export_vectors` وسجل digest الجديد للـ manifest.
-3. وقّع الـ manifest بحصة المجلس المطلوبة. يجب إلحاق كل التواقيع بـ `manifest_signatures.json`.
-4. حدّث fixtures الخاصة بـ SDKs المتأثرة (Rust/Go/TS) وتأكد من التكافؤ عبر بيئات التشغيل.
-5. أعد توليد corpora fuzz إذا تغيرت المعلمات.
-6. حدّث هذا الدليل بالمقبض الجديد للملف والبذور وdigest.
-7. قدّم التغيير مع الاختبارات المحدثة وتحديثات roadmap.
+1. فارمیٹ `ChunkProfileUpgradeProposalV1` (RFC SF-1 دیکھیں) نئے پیرامیٹرز کے ساتھ۔
+2. `export_vectors` کے ذریعے فکسچر کو دوبارہ تخلیق کریں اور منشور کے لئے نیا ڈائجسٹ رجسٹر کریں۔
+3. مطلوبہ کونسل کوٹہ کے ساتھ ظاہر پر دستخط کریں۔ تمام دستخطوں کو `manifest_signatures.json` کے ساتھ شامل کیا جانا چاہئے۔
+4. متاثرہ SDKs (زنگ/GO/TS) کے فکسچر کو اپ ڈیٹ کریں اور پورے ماحول میں برابری کو یقینی بنائیں۔
+5. اگر پیرامیٹرز تبدیل ہوجاتے ہیں تو کارپورا فز کو دوبارہ تخلیق کریں۔
+6. اس ڈائرکٹری کو فائل ، بیج اور ڈائجسٹ کے لئے نئے ہینڈل کے ساتھ اپ ڈیٹ کریں۔
+7. تازہ ترین ٹیسٹوں اور روڈ میپ کی تازہ کاریوں کے ساتھ تبدیلی کا تعارف کروائیں۔
 
-التغييرات التي تؤثر على حدود الـ chunk أو الـ digests دون اتباع هذه العملية
-غير صالحة ولا يجب دمجها.
+ایسی تبدیلیاں جو اس عمل کی پیروی کیے بغیر حصہ یا ہضم کی حدود کو متاثر کرتی ہیں
+غلط اور ضم نہیں ہونا چاہئے۔

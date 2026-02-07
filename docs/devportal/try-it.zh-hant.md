@@ -9,32 +9,33 @@ source_last_modified: "2025-12-29T18:16:35.067551+00:00"
 translation_last_reviewed: 2026-02-07
 title: Try It Sandbox Guide
 summary: How to run the Torii staging proxy and developer portal sandbox.
+translator: machine-google-reviewed
 ---
 
-The developer portal ships a “Try it” console for the Torii REST API. This guide
-explains how to launch the supporting proxy and connect the console to a staging
-gateway without exposing credentials.
+開發人員門戶為 Torii REST API 提供了一個“嘗試”控制台。本指南
+解釋如何啟動支持代理並將控制台連接到登台
+網關而不暴露憑據。
 
-## Prerequisites
+## 先決條件
 
-- Iroha repository checkout (workspace root).
-- Node.js 18.18+ (matches the portal baseline).
-- Torii endpoint reachable from your workstation (staging or local).
+- Iroha 存儲庫簽出（工作空間根目錄）。
+- Node.js 18.18+（與門戶基線匹配）。
+- Torii 端點可從您的工作站（臨時或本地）訪問。
 
-## 1. Generate the OpenAPI snapshot (optional)
+## 1. 生成 OpenAPI 快照（可選）
 
-The console reuses the same OpenAPI payload as the portal reference pages. If
-you have changed Torii routes, regenerate the snapshot:
+控制台重複使用與門戶參考頁面相同的 OpenAPI 負載。如果
+您已更改 Torii 路由，請重新生成快照：
 
 ```bash
 cargo xtask openapi
 ```
 
-The task writes `docs/portal/static/openapi/torii.json`.
+該任務寫入 `docs/portal/static/openapi/torii.json`。
 
-## 2. Start the Try It proxy
+## 2. 啟動 Try It 代理
 
-From the repository root:
+從存儲庫根目錄：
 
 ```bash
 cd docs/portal
@@ -48,26 +49,26 @@ export TRYIT_PROXY_LISTEN="127.0.0.1:8787"
 npm run tryit-proxy
 ```
 
-### Environment variables
+### 環境變量
 
-| Variable | Description |
+|變量|描述 |
 |----------|-------------|
-| `TRYIT_PROXY_TARGET` | Torii base URL (required). |
-| `TRYIT_PROXY_ALLOWED_ORIGINS` | Comma-separated list of origins allowed to use the proxy (defaults to `http://localhost:3000`). |
-| `TRYIT_PROXY_BEARER` | Optional default bearer token applied to all proxied requests. |
-| `TRYIT_PROXY_ALLOW_CLIENT_AUTH` | Set to `1` to forward the caller’s `Authorization` header verbatim. |
-| `TRYIT_PROXY_RATE_LIMIT` / `TRYIT_PROXY_RATE_WINDOW_MS` | In-memory rate limiter settings (defaults: 60 requests per 60 s). |
-| `TRYIT_PROXY_MAX_BODY` | Maximum request payload accepted (bytes, default 1 MiB). |
-| `TRYIT_PROXY_TIMEOUT_MS` | Upstream timeout for Torii requests (default 10 000 ms). |
+| `TRYIT_PROXY_TARGET` | Torii 基本 URL（必需）。 |
+| `TRYIT_PROXY_ALLOWED_ORIGINS` |允許使用代理的以逗號分隔的來源列表（默認為 `http://localhost:3000`）。 |
+| `TRYIT_PROXY_BEARER` |可選的默認承載令牌應用於所有代理請求。 |
+| `TRYIT_PROXY_ALLOW_CLIENT_AUTH` |設置為 `1` 以逐字轉發調用者的 `Authorization` 標頭。 |
+| `TRYIT_PROXY_RATE_LIMIT` / `TRYIT_PROXY_RATE_WINDOW_MS` |內存中速率限制器設置（默認值：每 60 秒 60 個請求）。 |
+| `TRYIT_PROXY_MAX_BODY` |接受的最大請求負載（字節，默認 1MiB）。 |
+| `TRYIT_PROXY_TIMEOUT_MS` | Torii 請求的上行超時（默認 10000 毫秒）。 |
 
-The proxy exposes:
+代理暴露：
 
-- `GET /healthz` — readiness check.
-- `/proxy/*` — proxied requests, preserving the path and query string.
+- `GET /healthz` — 準備情況檢查。
+- `/proxy/*` — 代理請求，保留路徑和查詢字符串。
 
-## 3. Launch the portal
+## 3.啟動門戶
 
-In a separate terminal:
+在單獨的終端中：
 
 ```bash
 cd docs/portal
@@ -75,23 +76,23 @@ export TRYIT_PROXY_PUBLIC_URL="http://localhost:8787"
 npm run start
 ```
 
-Visit `http://localhost:3000/api/overview` and use the Try It console. The same
-environment variables configure the Swagger UI and RapiDoc embeds.
+訪問 `http://localhost:3000/api/overview` 並使用 Try It 控制台。一樣的
+環境變量配置 Swagger UI 和 RapiDoc 嵌入。
 
-## 4. Running unit tests
+## 4. 運行單元測試
 
-The proxy exposes a fast Node-based test suite:
+該代理公開了一個快速的基於節點的測試套件：
 
 ```bash
 npm run test:tryit-proxy
 ```
 
-The tests cover address parsing, origin handling, rate limiting, and bearer
-injection.
+測試涵蓋地址解析、來源處理、速率限制和承載
+注射。
 
-## 5. Probe automation & metrics
+## 5. 探測自動化和指標
 
-Use the bundled probe to verify `/healthz` and a sample endpoint:
+使用捆綁探針驗證 `/healthz` 和示例端點：
 
 ```bash
 TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" \
@@ -99,18 +100,18 @@ TRYIT_PROXY_SAMPLE_PATH="/v1/status" \
 npm run probe:tryit-proxy
 ```
 
-Environment knobs:
+環境旋鈕：
 
-- `TRYIT_PROXY_SAMPLE_PATH` — optional Torii route (without `/proxy`) to exercise.
-- `TRYIT_PROXY_SAMPLE_METHOD` — defaults to `GET`; set to `POST` for write routes.
-- `TRYIT_PROXY_PROBE_TOKEN` — injects a temporary bearer token for the sample call.
-- `TRYIT_PROXY_PROBE_TIMEOUT_MS` — overrides the default 5 s timeout.
-- `TRYIT_PROXY_PROBE_METRICS_FILE` — Prometheus textfile destination for `probe_success`/`probe_duration_seconds`.
-- `TRYIT_PROXY_PROBE_LABELS` — comma-separated `key=value` pairs appended to the metrics (defaults to `job=tryit-proxy` and `instance=<proxy URL>`).
+- `TRYIT_PROXY_SAMPLE_PATH` — 可選的 Torii 路線（無 `/proxy`）進行鍛煉。
+- `TRYIT_PROXY_SAMPLE_METHOD` — 默認為 `GET`；設置為 `POST` 用於寫入路由。
+- `TRYIT_PROXY_PROBE_TOKEN` — 為示例調用注入臨時承載令牌。
+- `TRYIT_PROXY_PROBE_TIMEOUT_MS` — 覆蓋默認的 5 秒超時。
+- `TRYIT_PROXY_PROBE_METRICS_FILE` — Prometheus `probe_success`/`probe_duration_seconds` 的文本文件目標。
+- `TRYIT_PROXY_PROBE_LABELS` — 附加到度量的以逗號分隔的 `key=value` 對（默認為 `job=tryit-proxy` 和 `instance=<proxy URL>`）。
 
-When `TRYIT_PROXY_PROBE_METRICS_FILE` is set, the script rewrites the file
-atomically so your node_exporter/textfile collector always sees a complete
-payload. Example:
+當設置 `TRYIT_PROXY_PROBE_METRICS_FILE` 時，腳本重寫文件
+原子地，所以你的node_exporter/textfile收集器總是看到一個完整的
+有效負載。示例：
 
 ```bash
 TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" \
@@ -119,16 +120,16 @@ TRYIT_PROXY_PROBE_LABELS="job=tryit-proxy,cluster=staging" \
 npm run probe:tryit-proxy
 ```
 
-Forward the resulting metrics to Prometheus and reuse the sample alert in the
-developer-portal docs to page when `probe_success` drops to `0`.
+將生成的指標轉發到 Prometheus 並在
+當 `probe_success` 下降到 `0` 時，開發人員門戶文檔頁面。
 
-## 6. Production hardening checklist
+## 6. 生產強化檢查表
 
-Before publishing the proxy beyond local development:
+在本地開發之外發布代理之前：
 
-- Terminate TLS ahead of the proxy (reverse proxy or managed gateway).
-- Configure structured logging and forward to observability pipelines.
-- Rotate bearer tokens and store them in your secrets manager.
-- Monitor the proxy’s `/healthz` endpoint and aggregate latency metrics.
-- Align rate limits with your Torii staging quotas; adjust the `Retry-After`
-  behaviour to communicate throttling to clients.
+- 在代理（反向代理或託管網關）之前終止 TLS。
+- 配置結構化日誌記錄並轉發到可觀察性管道。
+- 輪換不記名令牌並將其存儲在您的秘密管理器中。
+- 監控代理的 `/healthz` 端點和聚合延遲指標。
+- 將速率限制與您的 Torii 暫存配額保持一致；調整`Retry-After`
+  向客戶端傳達限制的行為。

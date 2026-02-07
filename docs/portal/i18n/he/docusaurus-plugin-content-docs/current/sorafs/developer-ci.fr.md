@@ -4,26 +4,28 @@ direction: rtl
 source: docs/portal/docs/sorafs/developer-ci.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
 id: developer-ci
-title: Recettes CI SoraFS
+כותרת: Recettes CI SoraFS
 sidebar_label: Recettes CI
-description: Exécuter le CLI SoraFS dans des pipelines GitHub et GitLab avec signature sans clé.
+תיאור: Exécuter le CLI SoraFS בצינורות GitHub et GitLab עם חתימה ללא כל.
 ---
 
-:::note Source canonique
+:::הערה מקור קנוניק
 :::
 
-# Recettes CI
+# מחזרת CI
 
 Les pipelines SoraFS bénéficient du chunking déterministe, de la signature de manifest et de
-la vérification des proofs. La surface de commandes `sorafs_cli` garde ces étapes portables
+la vérification des הוכחות. La surface de commandes `sorafs_cli` garde ces étapes ניידים
 entre fournisseurs de CI. Cette page met en avant les recettes canoniques et pointe vers des
-modèles prêts à l'emploi.
+מודלים לעיסוקים.
 
-## GitHub Actions (sans clé)
+## פעולות GitHub (ללא אישור)
 
 ```yaml
 name: sorafs-artifacts
@@ -96,10 +98,10 @@ jobs:
           path: artifacts/
 ```
 
-Points clés :
+נקודות חשובות:
 
 - Aucune clé de signature statique n'est stockée ; les jetons OIDC sont obtenus à la demande.
-- Les artefacts (CAR, manifest, bundle, résumés de proofs) sont uploadés pour revue.
+- חפצי אמנות (מכונית, מניפסט, צרור, קורות חיים של הוכחות) שיעלו לריווי.
 - Le job réutilise les mêmes schémas Norito que ceux utilisés lors des rollouts en production.
 
 ## GitLab CI
@@ -136,14 +138,14 @@ sorafs:publish:
       - artifacts/
 ```
 
-- Fournissez `SIGSTORE_ID_TOKEN` via la fédération d'identité de workload GitLab ou un
+- Fournissez `SIGSTORE_ID_TOKEN` דרך la fédération d'identité de workload GitLab ou un
   secret scellé avant d'exécuter l'étape de publish.
-- L'échec de toute étape CLI stoppe le pipeline, préservant des artefacts cohérents.
+- L'échec de toute étape CLI stop le pipeline, שמירה על קוהרים של חפצי אמנות.
 
-## Ressources supplémentaires
+## תוספי משאבים
 
-- Templates end-to-end (inclut des helpers Bash, la configuration d'identité fédérée
-  et des étapes de nettoyage) : `docs/examples/sorafs_ci.md`
-- Référence CLI couvrant chaque option : `docs/source/sorafs_cli.md`
-- Exigences de gouvernance/alias avant soumission :
+- תבניות מקצה לקצה (כולל את העוזרים Bash, la configuration d'identité fédérée
+  et des étapes de nettoyage): `docs/examples/sorafs_ci.md`
+- אפשרות צ'אק של רפרנס CLI: `docs/source/sorafs_cli.md`
+- דרישות ממשלתיות/כינוי avant soumission:
   `docs/source/sorafs/provider_admission_policy.md`

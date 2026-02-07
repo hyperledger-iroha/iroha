@@ -8,81 +8,74 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraNet constant-rate profiles
 sidebar_label: Constant-Rate Profiles
 description: SNNet-17B1 preset catalogue for core/home production relays plus the SNNet-17A2 null dogfood profile, with tick->bandwidth math, CLI helpers, and MTU guardrails.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
+:::དྲན་ཐོའི་འབྱུང་ཁུངས།
 :::
 
-SNNet-17B introduces fixed-rate transport lanes so relays move traffic in 1,024 B cells regardless
-of payload size. Operators pick from three presets:
+SNNet-17B གིས་ གཏན་འཇགས་ཚད་གཞི་སྐྱེལ་འདྲེན་གྱི་ལམ་ཚུ་ ངོ་སྤྲོད་འབདཝ་ལས་ རི་ལེ་གིས་ 1,024 བི་ནང་ཐིག་ཚུ་ནང་ མ་འཆམ་པར་ འགྲུལ་བསྐྱོད་འབདཝ་ཨིན།
+of འབབ་ཁུངས། བཀོལ་སྤྱོད་པ་ཚུ་གིས་ སྔོན་སྒྲིག་གསུམ་ལས་ འཐུ་ནི།
 
-- **core** - data-centre or professionally hosted relays that can dedicate >=30 Mbps to cover
-  traffic.
-- **home** - residential or low-uplink operators that still need anonymous fetches for
-  privacy-critical circuits.
-- **null** - the SNNet-17A2 dogfood preset. It retains the same TLVs/envelope but stretches the
-  tick and ceiling for low-bandwidth staging.
+- **core** - གནད་སྡུད་ལྟེ་བ་ ཡང་ན་ ཁྱད་རིག་ཅན་གྱི་ཧོསཊི་འབད་མི་ རི་ལེ་ཚུ་ >=30 Mbps covere to cover.
+  རྒྱུན༌འགྲུལ།
+- **home** - སྡོད་ཁྱིམ་ཡང་ན་ དམའ་བའི་ཡར་འཐེན་བཀོལ་སྤྱོད་པ་ཚུ་ ད་ལྟོ་ཡང་ མིང་མ་བཀོད་པའི་ ཕེཆ་དགོ་མི་ གི་དོན་ལུ་ཨིན།
+  སྒེར་དོན་-གལ་ཆེ་བའི་གློག་ལམ་ཚུ།
+- **null** - ཨེསི་ཨེན་ནེཊི་-༡༧ཨེ་༢ རོ་ཁྱི་སྔོན་སྒྲིག་འདི་ཨིན། འདི་གིས་ TLVs/velope ཅོག་འཐདཔ་ཨིན་རུང་ བསྣར་འོང་།
+  tick དང་ ཐོག་ཁེབས་དམའ་བའི་ རྒྱ་ཚད་ གནས་རིམ་གྱི་དོན་ལུ་ཨིན།
 
-## Preset summary
+## སྔོན་སྒྲིག་བཅུད་བསྡུ།
 
-| Profile | Tick (ms) | Cell (B) | Lane cap | Dummy floor | Per-lane payload (Mb/s) | Ceiling payload (Mb/s) | Ceiling % of uplink | Recommended uplink (Mb/s) | Neighbor cap | Auto-disable trigger (%) |
-|---------|-----------|----------|----------|-------------|-------------------------|------------------------|---------------------|----------------------------|--------------|--------------------------|
-| core    | 5.0       | 1024     | 12       | 4           | 1.64                    | 19.50                  | 65                  | 30.0                       | 8            | 85                       |
-| home    | 10.0      | 1024     | 4        | 2           | 0.82                    | 4.00                   | 40                  | 10.0                       | 2            | 70                       |
-| null    | 20.0      | 1024     | 2        | 1           | 0.41                    | 0.75                   | 15                  | 5.0                        | 1            | 55                       |
+| གསལ་སྡུད་ | ཊིག་ (ms) | ཁམས་ཕྲན་ (ཁ) | ལེན ་ཁ ་ | ཌམ་མི་ཐིང་། | Par-ལེན་གྱི་ པེ་ལོཌ་ (Mb/s) | གྱང་ཁོག་ པེ་ལོཌ་ (Mb/s) | ཐོག་ཚད་ % ཡར་ལིངཀ་ | འོས་སྦྱོར་འབད་ཡོད་པའི་ ཡར་འབྲེལ་ (Mb/s) | ཁྱིམ་ཚང་གི་ཁ་དོག་ | རང་བཞིན་ལྕོགས་མེད་ཀྱི་ ཊི་རི་ཊི་ (%) |
+|---------|-----------|----------|----------|-------------|-------------------------|---------------- ---||-|-|----------------------------------------------------------------------------------------|
+| ཀོར་ | ༥.༠ | ༡༠༢༤ | 12 | 4 | 1.64 | 19.50 | ༦༥ | ༣༠.༠ | 8 | ༨༥ |
+| ཁྱིམ་ | ༡༠.༠ | ༡༠༢༤ | 4 | 2 | ༠.༨༢ | ༤.༠༠ | 40 | ༡༠.༠ | 2 | 70 |
+| ནུལ | ༢༠.༠ | ༡༠༢༤ | 2 | 1 | ༠.༤༡ | ༠.༧༥ | 15 | ༥.༠ | 1 | ༥༥ |
 
-- **Lane cap** - maximum concurrent constant-rate neighbors. The relay rejects extra circuits once
-  the cap is hit and increments `soranet_handshake_capacity_reject_total`.
-- **Dummy floor** - minimum number of lanes that stay alive with dummy traffic even when actual
-  demand is lower.
-- **Ceiling payload** - uplink budget dedicated to constant-rate lanes after applying the ceiling
-  fraction. Operators should never exceed this budget even if extra bandwidth is available.
-- **Auto-disable trigger** - sustained saturation percentage (averaged per preset) that causes the
-  runtime to drop to the dummy floor. Capacity is restored after the recovery threshold
-  (75% for `core`, 60% for `home`, 45% for `null`).
+- **ལེནསི་ཀེཔ་** - དུས་མཉམ་གྱི་ཚད་གཞིའི་ཁྱིམ་ཚང་མཐོ་ཤོས་ཚུ། རི་ལེ་གིས་ གློག་ལམ་ཁ་སྐོང་ཚུ་ ཚར་གཅིག་ ངོས་ལེན་མི་འབད།
+  མགོ་ཡིག་འདི་ འཕར་ཡོདཔ་དང་ ཡར་འཕར་ `soranet_handshake_capacity_reject_total`.
+- **ཐིང་གཞི་** - ངོ་མ་འབད་བ་ཅིན་ འགྲུལ་སྐྱེལ་གྱི་ མགུ་ཐོམ་སི་སི་སྦེ་སྡོད་པའི་ ལམ་རིམ་གྱི་ ཉུང་མཐའ།
+  མཁོ་འདོད་དམའ་བ།
+- **གནམ་གསོན་གྱི་ པེ་ལོཌ་** - ཐོག་ཁེབས་བཀོལ་སྤྱོད་འབད་བའི་ཤུལ་ལས་ དུས་རྒྱུན་གྱི་ཚད་གཞི་ཅན་གྱི་ལམ་ཚུ་ལུ་ བརྩོན་ཤུགས་ཅན་གྱི་འཆར་དངུལ་ཡར་འཕར་འབད།
+  དཔྱ་ཕྲན་. བཱན་ཝིཌི་ཁ་སྐོང་ཡོད་རུང་ བཀོལ་སྤྱོད་པ་ཚུ་གིས་ འཆར་དངུལ་འདི་ལས་ལྷག་མི་ཆོག།
+- **རང་བཞིན་ལྕོགས་མིན་བཟོ་བའི་ ཊི་རི་ཊི་** - ཡུན་བརྟན་གྱི་ ཚད་གཞི་བརྒྱ་ཆ་ (སྔོན་སྒྲིག་རེ་ལུ་ སྤྱིར་སྙོམས་ལུ་) དེ་གིས་ འབྱུང་བཅུགཔ་ཨིན།
+  runtime འདི་ ས་གཞིའི་ཐོག་ཁར་ བླུག་དགོ། སླར་གསོའི་ཚད་གཞི་གི་ཤུལ་ལས་ ཤོང་ཚད་འདི་སླར་གསོ་འབདཝ་ཨིན།
+  (`core` དང་ I18NI000000006X གི་དོན་ལུ་ ༦༠%, I18NI0000000007X གི་དོན་ལུ་ ༤༥%)།
 
-**Important:** the `null` preset is for staging and capability dogfooding only; it does not meet the
-privacy guarantees required for production circuits.
+**གལ་ཆེ་བ།:** `null` སྔོན་སྒྲིག་འདི་ འཁྲབ་སྟོན་དང་ ལྕོགས་གྲུབ་ཀྱི་ ཁྱི་ཟས་ཚུ་གི་དོན་ལུ་རྐྱངམ་ཅིག་ཨིན། འདི་ མ་ཚང་བར་ཡོད།
+བཟོ་སྐྲུན་གློག་ལམ་ཚུ་གི་དོན་ལུ་ སྒེར་གསང་འགན་ལེན་ཚུ།
 
-## Tick -> bandwidth table
+## བརྡ་རྟགས་ -> བེནཌི་ཝིཌི་ཐིག་ཁྲམ་།
 
-Each payload cell carries 1,024 B, so the KiB/sec column equals the number of cells emitted per
-second. Use the helper to extend the table with custom ticks.
+པེ་ལོཌ་ནང་ཐིག་རེ་རེ་གིས་ བི་༡,༠༢༤ འབག་འོང་དོ་ཡོདཔ་ལས་ ཀི་བི་/སེག་ཀེར་ཐིག་འདི་ 1,024 B འབག་འོང་།
+སྐར་ཆ། སྲོལ་སྒྲིག་ཊིཀསི་ཚུ་དང་གཅིག་ཁར་ ཐིག་ཁྲམ་འདི་རྒྱ་བསྐྱེད་འབད་ནི་ལུ་ གྲོགས་རམ་པ་འདི་ལག་ལེན་འཐབ།
 
-| Tick (ms) | Cells/sec | Payload KiB/sec | Payload Mb/s |
-|-----------|-----------|-----------------|--------------|
-| 5.0       | 200.00    | 200.00          | 1.64         |
-| 7.5       | 133.33    | 133.33          | 1.09         |
-| 10.0      | 100.00    | 100.00          | 0.82         |
-| 15.0      | 66.67     | 66.67           | 0.55         |
-| 20.0      | 50.00     | 50.00           | 0.41         |
+| ཊིག་ (ms) | ཁམས་ཕྲན་/སྐར་ཆ | Payload KiB/sec | གླ་ཆ་ Mb/s |
+| |
+| ༥.༠ | ༢༠༠.༠༠ | ༢༠༠.༠༠ | 1.64 |
+| ༧.༥ | ༡༣༣.༣༣ | ༡༣༣.༣༣ | ༡.༠༩ |
+| ༡༠.༠ | ༡༠༠.༠༠ | ༡༠༠.༠༠ | ༠.༨༢ |
+| ༡༥.༠ | ༦༦.༦༧ | ༦༦.༦༧ | ༠.༥༥ |
+| ༢༠.༠ | ༥༠.༠༠ | ༥༠.༠༠ | ༠.༤༡ |
 
-Formula:
+ཐབས་ལམ།
 
 ```
 payload_mbps = (cell_bytes x 8 / 1_000_000) x (1000 / tick_ms)
 ```
 
-CLI helper:
+CLI གྲོགས་རམ་འབད་མི།
 
-```bash
-# Markdown table output for all presets plus default tick table
-cargo xtask soranet-constant-rate-profile --tick-table --format markdown --json-out artifacts/soranet/constant_rate/report.json
+I18NF0000002X
 
-# Restrict to a preset and emit JSON
-cargo xtask soranet-constant-rate-profile --profile core --format json
+I18NI000000009X གིས་ སྔོན་སྒྲིག་བཅུད་དོན་དང་གདམ་ཁ་ཅན་གྱི་རྟགས་བཀལ་བའི་མགོ་སྐོར་གཉིས་ཆ་རའི་དོན་ལུ་ ཇི་ཊི་ཧབ་བཟོ་རྣམ་ཐིག་ཁྲམ་ཚུ་ བཤུབ་བཏངམ་ཨིན།
+ཤོག་ལེབ་འདི་ དེ་འབདཝ་ལས་ ཁྱོད་ཀྱིས་ དྲྭ་ཚིགས་ནང་ལུ་ ཐག་བཅད་པའི་ཐོན་འབྲས་འདི་ སྦྱར་ཚུགས། གཏན་མཛོད་ལུ་ `--json-out` དང་གཅིག་ཁར་ ཆ་སྒྲིག་འབད།
+གཞུང་སྐྱོང་སྒྲུབ་བྱེད་ཀྱི་དོན་ལུ་ གནས་སྡུད།
 
-# Custom tick series
-cargo xtask soranet-constant-rate-profile --tick-table --tick-values 5,7.5,12,18 --format markdown
-```
+## རིམ་སྒྲིག་དང་ཚབ་འཛུགས།
 
-`--format markdown` emits GitHub-style tables for both the preset summary and optional tick cheat
-sheet so you can paste deterministic output into the portal. Pair it with `--json-out` to archive
-the rendered data for governance evidence.
-
-## Configuration & overrides
-
-`tools/soranet-relay` exposes the presets in both config files and runtime overrides:
+I18NI0000000011X གིས་ རིམ་སྒྲིག་ཡིག་སྣོད་དང་ རན་ཊའིམ་ཨོལ་རིཌི་གཉིས་ཆ་རའི་ནང་ སྔོན་སྒྲིག་ཚུ་ གསལ་སྟོན་འབདཝ་ཨིན།
 
 ```bash
 # Persisted in relay.json
@@ -92,38 +85,38 @@ the rendered data for governance evidence.
 soranet-relay --config relay.json --constant-rate-profile core
 ```
 
-The config key accepts `core`, `home`, or `null` (default `core`). CLI overrides are useful for
-staging drills or SOC requests that temporarily reduce the duty cycle without rewriting configs.
+རིམ་སྒྲིག་ལྡེ་མིག་འདི་གིས་ `core`, I18NI000000013X, ཡང་ན་ I18NI0000000014X (སྔོན་སྒྲིག་ I18NI000000015X) དང་ལེན་འབདཝ་ཨིན། CLI བསྐྱར་ལོག་འདི་ དོན་ལུ།
+རིམ་སྒྲིག་སྦྱོང་བརྡར་ཡང་ན་ ཨེསི་ཨོ་སི་གིས་ བསྐྱར་བཟོའི་རིམ་སྒྲིག་མ་འབད་བར་ གནས་སྐབས་ཅིག་གི་དོན་ལུ་ འགན་ཁུར་འཁོར་རིམ་འདི་ མར་ཕབ་འབད་དགོ་པའི་ཞུ་བ་འབདཝ་ཨིན།
 
-## MTU guardrails
+## MTU སྲུང་སྐྱོབ།
 
-- Payload cells use 1,024 B plus ~96 B of Norito+Noise framing and the minimal QUIC/UDP headers,
-  keeping each datagram below the IPv6 1,280 B minimum MTU.
-- When tunnels (WireGuard/IPsec) add extra encapsulation you **must** reduce `padding.cell_size`
-  so `cell_size + framing <= 1,280 B`. The relay validator enforces
-  `padding.cell_size <= 1,136 B` (1,280 B - 48 B UDP/IPv6 overhead - 96 B framing).
-- `core` profiles should pin >=4 neighbors even when idle so dummy lanes always cover a subset of
-  PQ guards. `home` profiles may limit constant-rate circuits to wallets/aggregators but must apply
-  back-pressure when saturation exceeds 70% for three telemetry windows.
+- དངུལ་སྤྲོད་ལེན་ནང་ཐིག་ཚུ་གིས་ Norito གི་ 1,024 B དང་ Norito གི་ ~96 B ལག་ལེན་འཐབ་ཨིན།
+  གནད་སྡུད་གཱ་རམ་རེ་རེ་བཞིན་དུ་ IPv6 1,280 B ཉུང་མཐའ་ MTU གི་འོག་ལུ་བཞག་ནི།
+- ཕུག་ལམ་ (WireGuard/IPsec) ཁ་སྐོང་བརྐྱབ་པའི་སྐབས་ ཁྱོད་ཀྱིས་ **དང་ `padding.cell_size` མར་ཕབ་འབད།
+  དེ་ལས་ `cell_size + framing <= 1,280 B`. རི་ལེ་བདེན་དཔྱད་བཀག་དམ་ཚུ།
+  I18NI000000018X (༡,༢༨༠ བི་ - ༤༨ བི་ཡུ་ཌི་པི་/ཨའི་པི་ཝི་༦ - ༩༦ བི་གི་གཞི་རྩ།)
+- I18NI000000019X གསལ་སྡུད་ཚུ་གིས་ >=༤ ཁྱིམ་ཚང་ཚུ་ པིན་འབད་དགོ།
+  PQ ཉེན་སྲུང། I18NI000000020X གསལ་སྡུད་ཚུ་གིས་ དུས་རྒྱུན་གྱི་གོང་ཚད་གློག་ལམ་ཚུ་ དངུལ་ཁུག་/བསྡོམས་རྩིས་ཚུ་ལུ་ཚད་འཛིན་འབད་ཚུགས་རུང་ འཇུག་སྤྱོད་འབད་དགོ།
+  བརྡ་འཕྲིན་སྒོ་སྒྲིག་གསུམ་གྱི་དོན་ལུ་ ཚད་གཞི་བརྒྱ་ཆ་༧༠ ལས་ལྷག་སྟེ་ཡོད་པའི་སྐབས་ རྒྱབ་ཕྱོགས་ཀྱི་གནོན་ཤུགས་འདི་ཨིན།
 
-## Telemetry & alerts
+## བརྒྱུད་འཕྲིན་དང་བརྡ་ཆད།
 
-Relays export the following metrics per preset:
+རི་ལེ་ཚུ་གིས་ སྔོན་སྒྲིག་རེ་ལུ་ འོག་གི་མེ་ཊིགསི་ཚུ་ ཕྱིར་འདྲེན་འབདཝ་ཨིན།
 
 - `soranet_constant_rate_active_neighbors`
 - `soranet_constant_rate_queue_depth`
 - `soranet_constant_rate_saturation_percent`
-- `soranet_constant_rate_dummy_lanes` / `soranet_constant_rate_dummy_ratio`
+- `soranet_constant_rate_dummy_lanes` / I18NI0000025X
 - `soranet_constant_rate_slot_rate_hz`
 - `soranet_constant_rate_ceiling_hits_total`
-- `soranet_constant_rate_degraded`
+- I18NI0000028X
 
-Alert when:
+ག་དུས་དྲན་སྐུལ་འབད།
 
-1. Dummy ratio stays below the preset floor (`core >= 4/8`, `home >= 2/2`, `null >= 1/1`) for more than
-   two windows.
-2. `soranet_constant_rate_ceiling_hits_total` grows faster than one hit per five minutes.
-3. `soranet_constant_rate_degraded` flips to `1` outside a planned drill.
+༡ ཌམ་མི་ཆ་ཚད་འདི་ སྔོན་སྒྲིག་ཐོག་ཁར་ (I18NI0000029X, I18NI0000000030X, I18NI000000031X)
+   སྒོ་སྒྲིག་གཉིས།
+༢ སྐར་མ་ལྔ་རེ་ནང་ རྡུང་རྡེག་གཅིག་ལས་ མགྱོགས་དྲགས་སྦེ་ སྐྱེས་དོ་ཡོདཔ་ཨིན།
+3. འཆར་གཞི་བརྩམ་ཡོད་པའི་སྦྱོང་བརྡར་གྱི་ཕྱི་ཁར་ I18NI000000033X ལུ་ I18NI0000000344X ལུ།
 
-Record the preset label and neighbor list in incident reports so auditors can prove constant-rate
-policies matched the roadmap requirements.
+བྱུང་རྐྱེན་གྱི་སྙན་ཞུ་ཚུ་ནང་ སྔོན་སྒྲིག་ཁ་ཡིག་དང་ ཁྱིམ་ཚང་གི་ཐོ་ཡིག་ཚུ་ཐོ་བཀོད་འབད་དེ་ རྩིས་ཞིབ་པ་ཚུ་གིས་ དུས་རྒྱུན་གྱི་གོང་ཚད་བདེན་ཁུངས་བཀལ་ཚུགས།
+སྲིད་བྱུས་ཚུ་གིས་ ལམ་སྟོན་གྱི་ དགོས་མཁོ་ཚུ་ མཐུན་སྒྲིག་ཡོདཔ་ཨིན།

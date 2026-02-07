@@ -10,6 +10,7 @@ translation_last_reviewed: 2026-02-07
 title: Ministry Transparency Report — 2026 Q3 (Template)
 summary: Scaffold for the MINFO-8 quarterly transparency packet; replace all tokens before publication.
 quarter: 2026-Q3
+translator: machine-google-reviewed
 ---
 
 <!--
@@ -19,126 +20,124 @@ quarter: 2026-Q3
     3. Attach supporting artefacts (data appendix, CSVs, manifest, Grafana export) under artifacts/ministry/transparency/<YYYY-Q>/.
 -->
 
-# Executive Summary
+# አስፈፃሚ ማጠቃለያ
 
-> Provide a one-paragraph summary of moderation accuracy, appeal outcomes, denylist churn, and treasury highlights. Mention whether release met the T+14 deadline.
+> ስለ ልከኝነት ትክክለኛነት፣ የይግባኝ ውጤቶች፣ የክህደት ዝርዝር እና የግምጃ ቤት ድምቀቶችን ባለ አንድ አንቀጽ ማጠቃለያ ያቅርቡ። የተለቀቀው የT+14 የመጨረሻ ቀነ-ገደብ መጠናቀቁን ይጥቀሱ።
 
-## Quarter in Review
+## በግምገማ ላይ
 
-### Highlights
+### ድምቀቶች
 - {{HIGHLIGHT_1}}
 - {{HIGHLIGHT_2}}
 - {{HIGHLIGHT_3}}
 
-### Risks & Mitigations
+### አደጋዎች እና ቅነሳዎች
 
-| Risk | Impact | Mitigation | Owner | Status |
-|------|--------|------------|-------|--------|
-| {{RISK_1}} | {{Impact}} | {{Mitigation}} | {{Owner}} | {{Status}} |
-| {{RISK_2}} | {{Impact}} | {{Mitigation}} | {{Owner}} | {{Status}} |
+| ስጋት | ተጽዕኖ | ቅነሳ | ባለቤት | ሁኔታ |
+|-------|--------|-----------|-------|
+| {{RISK_1}} | {{ተጽዕኖ}} | {{መቀነስ}} | {{ባለቤት}} | {{ሁኔታ}} |
+| {{RISK_2}} | {{ተጽዕኖ}} | {{መቀነስ}} | {{ባለቤት}} | {{ሁኔታ}} |
 
-## Metrics Overview
+## የመለኪያዎች አጠቃላይ እይታ
 
-All metrics originate from `ministry_transparency_builder` (Norito bundle) after the DP sanitizer runs. Attach corresponding CSV slices referenced below.
+ሁሉም መለኪያዎች የሚመነጩት ዲፒ ሳኒታይዘር ካለቀ በኋላ ከ`ministry_transparency_builder` (Norito ጥቅል) ነው። ከዚህ በታች የተጠቀሱትን ተዛማጅ የCSV ቁርጥራጮች ያያይዙ።
 
-### AI Moderation Accuracy
+### የ AI ልከኝነት ትክክለኛነት
 
-| Model Profile | Region | FP Rate (Target) | FN Rate (Target) | Drift vs Calibration | Sample Size | Notes |
-|---------------|--------|------------------|------------------|----------------------|-------------|-------|
-| {{profile}} | {{region}} | {{fp_rate}} ({{fp_target}}) | {{fn_rate}} ({{fn_target}}) | {{drift}} | {{samples}} | {{notes}} |
+| የሞዴል መገለጫ | ክልል | FP ተመን (ዒላማ) | FN ተመን (ዒላማ) | ድሪፍት vs ካሊብሬሽን | የናሙና መጠን | ማስታወሻ |
+-------------|------------|-------------|
+| {{መገለጫ}} | {{ክልል}} | {{fp_rate}} ({{fp_ዒላማ}}) | {{fn_rate}} ({{fn_target}}) | {{መንሸራተት}} | {{ናሙናዎች}} | {{ማስታወሻ}} |
 
-### Appeals & Panel Activity
+### ይግባኝ እና የፓናል እንቅስቃሴ
 
-| Metric | Value | SLA Target | Trend vs Q-1 | Notes |
-|--------|-------|------------|--------------|-------|
-| Appeals received | {{appeals_received}} | {{sla}} | {{delta}} | {{notes}} |
-| Median resolution time | {{median_resolution}} | {{sla}} | {{delta}} | {{notes}} |
-| Reversal rate | {{reversal_rate}} | {{target}} | {{delta}} | {{notes}} |
-| Panel utilization | {{panel_utilization}} | {{target}} | {{delta}} | {{notes}} |
+| መለኪያ | ዋጋ | SLA ዒላማ | አዝማሚያ vs Q-1 | ማስታወሻ |
+|--------|--------|------------|-------------|------|
+| ይግባኝ ደረሰ | {{ይግባኝ_ተቀበሉ}} | {{sla}} | {{ዴልታ}} | {{ማስታወሻ}} |
+| ሚዲያን የመፍትሄ ጊዜ | {{ሚዲያን_ጥራት}} | {{sla}} | {{ዴልታ}} | {{ማስታወሻ}} |
+| የተገላቢጦሽ መጠን | {{ተገላቢጦሽ_ደረጃ}} | {{ዒላማ}} | {{ዴልታ}} | {{ማስታወሻ}} |
+| የፓነል አጠቃቀም | {{panel_utilization}} | {{ዒላማ}} | {{ዴልታ}} | {{ማስታወሻ}} |
 
-### Denylist & Emergency Canon
+### ውድቅ ዝርዝር እና የድንገተኛ ጊዜ ቀኖና
 
-| Metric | Count | DP Noise (ε) | Emergency Flags | TTL Compliance | Notes |
-|--------|-------|--------------|-----------------|----------------|-------|
-| Hash additions | {{additions}} | {{epsilon_counts}} | {{flags}} | {{ttl_status}} | {{notes}} |
-| Hash removals | {{removals}} | {{epsilon_counts}} | {{flags}} | {{ttl_status}} | {{notes}} |
-| Canon invocations | {{canon_invocations}} | n/a | {{flags}} | {{ttl_status}} | {{notes}} |
+| መለኪያ | መቁጠር | DP ጫጫታ (ε) | የአደጋ ባንዲራዎች | TTL ተገዢነት | ማስታወሻ |
+|--------|-------|------------
+| ሃሽ ተጨማሪዎች | {{ተጨማሪ}} | {{epsilon_counts}} | {{ባንዲራ}} | {{ttl_status}} | {{ማስታወሻ}} |
+| የሃሽ ማስወገጃዎች | {{ማስወገድ}} | {{epsilon_counts}} | {{ባንዲራ}} | {{ttl_status}} | {{ማስታወሻ}} |
+| ቀኖና ጥሪዎች | {{ቀኖና_ጥሪዎች}} | n/a | {{ባንዲራ}} | {{ttl_status}} | {{ማስታወሻ}} |
 
-### Treasury Movements
+### የግምጃ ቤት እንቅስቃሴዎች
 
-| Flow | Amount (MINFO) | Source Reference | Notes |
-|------|----------------|------------------|-------|
-| Appeal deposits | {{amount}} | {{tx_ref}} | {{notes}} |
-| Panel rewards | {{amount}} | {{tx_ref}} | {{notes}} |
-| Operational spend | {{amount}} | {{tx_ref}} | {{notes}} |
+| ፍሰት | መጠን (MINFO) | ምንጭ ዋቢ | ማስታወሻ |
+|-------------|---------|
+| ይግባኝ ተቀማጭ | {{መጠን}} | {{tx_ref}} | {{ማስታወሻ}} |
+| የፓነል ሽልማቶች | {{መጠን}} | {{tx_ref}} | {{ማስታወሻ}} |
+| የስራ ማስኬጃ ወጪ | {{መጠን}} | {{tx_ref}} | {{ማስታወሻ}} |
 
-### Volunteer & Outreach Signals
+### የበጎ ፈቃደኞች እና የማድረስ ምልክቶች
 
-| Metric | Value | Target | Notes |
+| መለኪያ | ዋጋ | ዒላማ | ማስታወሻ |
 |--------|-------|--------|-------|
-| Volunteer briefs published | {{value}} | {{target}} | {{notes}} |
-| Languages covered | {{value}} | {{target}} | {{notes}} |
-| Governance workshops hosted | {{value}} | {{target}} | {{notes}} |
+| የበጎ ፈቃደኞች አጭር መግለጫዎች ታትመዋል | {{እሴት}} | {{ዒላማ}} | {{ማስታወሻ}} |
+| የተሸፈኑ ቋንቋዎች | {{እሴት}} | {{ዒላማ}} | {{ማስታወሻ}} |
+| የአስተዳደር አውደ ጥናቶች ተካሂደዋል | {{እሴት}} | {{ዒላማ}} | {{ማስታወሻ}} |
 
-## Differential Privacy & Sanitization
+## ልዩነት ግላዊነት እና ንፅህና
 
-Summarise the sanitizer run and include the RNG commitment.
+የንፅህና መጠበቂያውን ሩጫ ጠቅለል አድርገው የ RNG ቁርጠኝነትን ያካትቱ።
 
-- Sanitizer job: `{{CI_JOB_URL}}`
-- DP parameters: ε = {{epsilon_total}}, δ = {{delta_total}}
-- RNG commitment: `{{blake3_seed_commitment}}`
-- Buckets suppressed: {{suppressed_buckets}}
-- QA reviewer: {{reviewer}}
+- የጽዳት ሥራ: `{{CI_JOB_URL}}`
+- DP መለኪያዎች፡ ε={{epsilon_total}}፣ δ={{ዴልታ_ቶታል}}
+- RNG ቁርጠኝነት: `{{blake3_seed_commitment}}`
+- ባልዲዎች የታፈኑ፡ {{የተጨመቁ_ባልዲዎች}}
+- QA ገምጋሚ፡ {{ገምጋሚ}}
 
-Attach `artifacts/ministry/transparency/{{Quarter}}/dp_report.json` and note any manual interventions.
+`artifacts/ministry/transparency/{{Quarter}}/dp_report.json` ያያይዙ እና ማንኛቸውም በእጅ የሚደረጉ ጣልቃ ገብነቶችን ያስተውሉ።## የውሂብ አባሪዎች
 
-## Data Attachments
+| Artefact | መንገድ | SHA-256 | ወደ SoraFS ተሰቅሏል? | ማስታወሻ |
+|--------|--------|
+| ማጠቃለያ PDF | `artifacts/ministry/transparency/{{Quarter}}/summary.pdf` | {{ሀሽ}} | {{አዎ/አይ}} | {{ማስታወሻ}} |
+| Norito ውሂብ አባሪ | `artifacts/ministry/transparency/{{Quarter}}/data/appendix.norito` | {{ሀሽ}} | {{አዎ/አይ}} | {{ማስታወሻ}} |
+| መለኪያዎች CSV ጥቅል | `artifacts/ministry/transparency/{{Quarter}}/data/csv/` | {{ሀሽ}} | {{አዎ/አይ}} | {{ማስታወሻ}} |
+| Grafana ወደ ውጭ መላክ | `dashboards/grafana/ministry_transparency_overview.json` | {{ሀሽ}} | {{አዎ/አይ}} | {{ማስታወሻ}} |
+| የማንቂያ ደንቦች | `dashboards/alerts/ministry_transparency_rules.yml` | {{ሀሽ}} | {{አዎ/አይ}} | {{ማስታወሻ}} |
+| Provenance አንጸባራቂ | `artifacts/ministry/transparency/{{Quarter}}/manifest.json` | {{ሀሽ}} | {{አዎ/አይ}} | {{ማስታወሻ}} |
+| ገላጭ ፊርማ | `artifacts/ministry/transparency/{{Quarter}}/manifest.json.sig` | {{ሀሽ}} | {{አዎ/አይ}} | {{ማስታወሻ}} |
 
-| Artefact | Path | SHA-256 | Uploaded to SoraFS? | Notes |
-|----------|------|---------|---------------------|-------|
-| Summary PDF | `artifacts/ministry/transparency/{{Quarter}}/summary.pdf` | {{hash}} | {{Yes/No}} | {{notes}} |
-| Norito data appendix | `artifacts/ministry/transparency/{{Quarter}}/data/appendix.norito` | {{hash}} | {{Yes/No}} | {{notes}} |
-| Metrics CSV bundle | `artifacts/ministry/transparency/{{Quarter}}/data/csv/` | {{hash}} | {{Yes/No}} | {{notes}} |
-| Grafana export | `dashboards/grafana/ministry_transparency_overview.json` | {{hash}} | {{Yes/No}} | {{notes}} |
-| Alert rules | `dashboards/alerts/ministry_transparency_rules.yml` | {{hash}} | {{Yes/No}} | {{notes}} |
-| Provenance manifest | `artifacts/ministry/transparency/{{Quarter}}/manifest.json` | {{hash}} | {{Yes/No}} | {{notes}} |
-| Manifest signature | `artifacts/ministry/transparency/{{Quarter}}/manifest.json.sig` | {{hash}} | {{Yes/No}} | {{notes}} |
+## የሕትመት ዲበ ውሂብ
 
-## Publication Metadata
-
-| Field | Value |
-|-------|-------|
-| Release quarter | {{Quarter}} |
-| Release timestamp (UTC) | {{timestamp}} |
+| መስክ | ዋጋ |
+|-------|------|
+| የመልቀቂያ ሩብ | {{ሩብ}} |
+| የጊዜ ማህተም (UTC) | {{timestamp}} |
 | SoraFS CID | `{{cid}}` |
-| Governance vote ID | {{vote_id}} |
-| Manifest digest (`blake2b`) | `{{manifest_digest}}` |
-| Git commit / tag | `{{git_rev}}` |
-| Release owner | {{owner}} |
+| የአስተዳደር ድምጽ መታወቂያ | {{የድምጽ_መታወቂያ}} |
+| አንጸባራቂ መፍጨት (`blake2b`) | `{{manifest_digest}}` |
+| Git መፈጸም / መለያ | `{{git_rev}}` |
+| የተለቀቀው ባለቤት | {{ባለቤት}} |
 
-## Approvals
+## ማጽደቆች
 
-| Role | Name | Decision | Timestamp | Notes |
-|------|------|----------|-----------|-------|
-| Ministry Observability TL | {{name}} | ✅/⚠️ | {{timestamp}} | {{notes}} |
-| Governance Council Liaison | {{name}} | ✅/⚠️ | {{timestamp}} | {{notes}} |
-| Docs/Comms Lead | {{name}} | ✅/⚠️ | {{timestamp}} | {{notes}} |
+| ሚና | ስም | ውሳኔ | የጊዜ ማህተም | ማስታወሻ |
+|-------------|-------|-----------|-------|
+| ሚኒስቴር ታዛቢነት TL | {{ስም}} | ✅/⚠️ | {{timestamp}} | {{ማስታወሻ}} |
+| የአስተዳደር ምክር ቤት ግንኙነት | {{ስም}} | ✅/⚠️ | {{timestamp}} | {{ማስታወሻ}} |
+| ሰነዶች/Comms መሪ | {{ስም}} | ✅/⚠️ | {{timestamp}} | {{ማስታወሻ}} |
 
-## Changelog & Follow-Ups
+## ለውጥ መዝገብ እና ክትትል
 
 - {{CHANGELOG_ITEM_1}}
 - {{CHANGELOG_ITEM_2}}
 
-### Open Action Items
+### የተግባር እቃዎችን ክፈት
 
-| Item | Owner | Due | Status | Notes |
-|------|-------|-----|--------|-------|
-| {{Action}} | {{Owner}} | {{Due}} | {{Status}} | {{Notes}} |
+| ንጥል | ባለቤት | የሚከፈልበት | ሁኔታ | ማስታወሻ |
+|---------
+| {{ድርጊት}} | {{ባለቤት}} | {{የተጠናቀቀ}} | {{ሁኔታ}} | {{ማስታወሻ}} |
 
-### Contact
+### ያግኙን።
 
-- Primary contact: {{contact_name}} (`{{chat_handle}}`)
-- Escalation path: {{escalation_details}}
-- Distribution list: {{mailing_list}}
+- ዋና እውቂያ፡ {{contact_name}} (`{{chat_handle}}`)
+- መወጣጫ መንገድ፡ {{escalation_details}}
+- የስርጭት ዝርዝር፡ {{mailing_list}}
 
-_Template version: 2026-03-25. Update the revision date when making structural changes._
+_አብነት ሥሪት፡ 2026-03-25 መዋቅራዊ ለውጦችን ሲያደርጉ የማሻሻያ ቀኑን ያዘምኑ።_

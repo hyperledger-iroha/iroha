@@ -7,184 +7,176 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 3a0c22a213e04a6a8fef94ded6ec0017531737ffd4b9418ec94286bb6759ff8a
 source_last_modified: "2026-01-08T09:53:05.148398+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# FASTPQ Rollout Playbook (Stage 7-3)
+# FASTPQ рулет плейбук (Stage7-3)
 
-This playbook implements the Stage 7-3 roadmap requirement: every fleet upgrade
-that enables FASTPQ GPU execution must attach a reproducible benchmark manifest,
-paired Grafana evidence, and a documented rollback drill. It complements
-`docs/source/fastpq_plan.md` (targets/architecture) and
-`docs/source/fastpq_migration_guide.md` (node-level upgrade steps) by focusing
-on the operator-facing rollout checklist.
+Был плейбук Stage7-3 юл картаһы талаптарын тормошҡа ашыра: һәр автопарк яңыртыу
+был мөмкинлек бирә FASTPQ GPU башҡарыу беркетергә тейеш ҡабатланған эталон манифест,
+парлы Grafana дәлилдәре, һәм документлаштырылған кире ҡайтарыу бурау. Ул тулыландыра .
+`docs/source/fastpq_plan.md` (маҡсаттар/архитектура) һәм
+`docs/source/fastpq_migration_guide.md` (төйөн кимәлендәге яңыртыу аҙымдары) фокуслау юлы менән
+оператор-йөҙөндә тикшерелгән исемлектә.
 
-## Scope & Roles
+## Скап һәм ролдәр
 
-- **Release Engineering / SRE:** own benchmark captures, manifest signing, and
-  dashboard exports prior to rollout approval.
-- **Ops Guild:** runs staged rollouts, records rollback rehearsals, and stores
-  the artefact bundle under `artifacts/fastpq_rollouts/<timestamp>/`.
-- **Governance / Compliance:** verifies that evidence accompanies every change
-  request before the FASTPQ default is toggled for a fleet.
+- **Инженерия сығарыу / SRE:** үҙ эталон тотоу, асыҡ ҡул ҡуйыу, һәм
+  приборҙар таҡтаһы экспорты раҫлау алдынан ролл-аут.
+- **Ops гильдия:** спектакль ролл-ауттары, репетицияларҙы кире ҡайтарыу һәм магазиндар эшләй.
+  `artifacts/fastpq_rollouts/<timestamp>/` буйынса артефакт өйөмө.
+- **Идара итеү / Ҡабул итеү:** дәлилдәрҙе раҫлай, һәр үҙгәреште оҙатып бара
+  FASTPQ ғәҙәттәгесә флот өсөн ҡыҫҡартылғанға тиклем үтенес.
 
-## Evidence Bundle Requirements
+## Дәлилдәр пакет талаптары
 
-Every rollout submission must contain the following artefacts. Attach all files
-to the release/upgrade ticket and keep the bundle in
-`artifacts/fastpq_rollouts/<YYYYMMDD>/<fleet>/<lane>/`.
+Һәр таратыу тапшырыуында түбәндәге артефакттар булырға тейеш. Бөтә файлдарҙы беркетегеҙ
+сығарыу/яңыртыу билеты һәм өйөмөн һаҡлау өсөн .
+`artifacts/fastpq_rollouts/<YYYYMMDD>/<fleet>/<lane>/`.| Артефакт | Маҡсат | Нисек етештерергә |
+|--------|----------|----------------|
+| `fastpq_bench_manifest.json` | 20000 рәтле канонлы эш йөкләмәһе `<1 s` LDE түшәмендә ҡала һәм һәр уралған эталон өсөн хештарҙы теркәй.| Ҡабул итеү Металл/CUDA йүгерә, уларҙы урап, һуңынан Йүгереп:`cargo xtask fastpq-bench-manifest \`XGrafana`  --bench cuda=artifacts/fastpq_benchmarks/<cuda>.json \``  --matrix artifacts/fastpq_benchmarks/matrix/matrix_manifest.json \`Prometheus |
+| Урап сыҡҡан ориентирҙар (`fastpq_metal_bench_*.json`, `fastpq_cuda_bench_*.json`) | Ҡабул итеү хужаһы метамағлүмәттәр, рәт-ҡулланыу дәлилдәре, нуль тултырыу ҡайнар нөктәләре, Посейдон микроэлемент резюмеһы, һәм ядро ​​статистикаһы ҡулланылған приборҙар таҡталары/иҫкәртмәләр.| Run `fastpq_metal_bench` / `fastpq_cuda_bench`, һуңынан сеймал JSON:`python3 scripts/fastpq/wrap_benchmark.py --require-lde-mean-ms 950 --require-poseidon-mean-ms 1000 \` XX`  --poseidon-metrics artifacts/fastpq_rollouts/<stamp>/<fleet>/<lane>/metrics_poseidon.prom \``  fastpq_metal_bench.json artifacts/fastpq_benchmarks/<metal>.json --sign-output`Ҡабатлау өсөн CUDA тотоу (пункт `--row-usage` һәм `--poseidon-metrics` тейешле шаһит/скрап файлдарында). Ярҙамсы фильтрланған `fastpq_poseidon_pipeline_total`/`fastpq_execution_mode_total` өлгөләрен үҙ эсенә ала, шуға күрә WP2-E.6 дәлилдәре Metal һәм CUDA буйынса бер үк. Ҡулланыу `scripts/fastpq/export_poseidon_microbench.py --bundle <bundle>` ҡасан һеҙгә кәрәк автономлы Посейдон микроэлендр резюме (урап йәки сеймал индереүҙәр ярҙам итә). |
+|  |  | **Stage7 этикетка талабы:** `wrap_benchmark.py` хәҙер уңышһыҙлыҡҡа осрай, әгәр һөҙөмтәлә `metadata.labels` бүлеге `device_class` һәм `gpu_kind`. Автоматик асыҡлау уларҙы һығымта яһағанда (мәҫәлән, айырым CI төйөнөнә урағанда), `--label device_class=xeon-rtx-sm80 --label gpu_kind=discrete` кеүек асыҡ өҫтөнлөктәрҙе үтә. |
+|  |  | **Тиҙләтеү телеметрияһы:** урау шулай уҡ `cargo xtask acceleration-state --format json` ғәҙәттәгесә төшөрөп, `<bundle>.accel.json` һәм `<bundle>.accel.prom` уралған эталон эргәһендә яҙа (Prometheus флагы йәки `--skip-acceleration-state` менән өҫтөнлөк бирелә). Ҡабул итеү матрицаһы был файлдарҙы ҡулланып, автопарктар өсөн `acceleration_matrix.{json,md}` төҙөү өсөн ҡулланыла. |
+| Grafana экспорты | Ҡабул итеү телеметрия һәм иҫкәртмә аннотациялар иҫбатлай өсөн таратыу тәҙрәһе.| Экспорт `fastpq-acceleration` приборҙар таҡтаһы:Grafana`  "$GRAFANA_URL/api/dashboards/uid/fastpq-acceleration" \``  | jq '.dashboard' \``  > artifacts/fastpq_rollouts/<stamp>/grafana_fastpq_acceleration.json`Аннотать плата менән идара итеү башланған/туҡтау тапҡыр экспортҡа тиклем. Был йәһәттән автоматик рәүештә `scripts/run_release_pipeline.py --export-fastpq-grafana --grafana-url <URL>` аша автоматик рәүештә эшләй ала (`GRAFANA_TOKEN` аша тәьмин ителгән токен). |
+| Иҫкәртмә снимок | Ҡағиҙәләрҙе тота, тип иҫкәртмә ҡағиҙәләре һаҡлау ролл-аут.| Copy `dashboards/alerts/fastpq_acceleration_rules.yml` (һәм `tests/` ҡоролма) өйөмгә, шуға күрә рецензенттар `promtool test rules …` яңынан эшләй ала. |
+| Rollback бурау журналы | Күрһәтергә, операторҙар репетиция мәжбүр процессор fallback һәм телеметрия таныуҙары.| Процедура ҡулланыу [Rollback Drills](#rollback-drills) һәм һаҡлау консоль журналдар (`rollback_drill.log`) плюс һөҙөмтәлә Prometheus (`metrics_rollback.prom`). || `row_usage/fastpq_row_usage_<date>.json` | Яҙмалар ExecWitness FASTPQ рәт бүленә, тип TF-5 тректар CI һәм приборҙар таҡталарында.| Torii-тан яңы шаһит скачать, уны `iroha_cli audit witness --decode exec.witness` аша decode (факультатив рәүештә `--fastpq-parameter fastpq-lane-balanced` өҫтәп, көтөлгән параметр йыйылмаһын раҫлай; FASTPQ партиялары дефолт аша сығарыла), һәм `row_usage` JSON-ды күсерергә `artifacts/fastpq_rollouts/<stamp>/<fleet>/<lane>/row_usage/`. Һаҡлау файл исемдәре ваҡыт тамғаһы, шулай итеп, рецензенттар уларҙы корреляциялай ала, уларҙы таратыу билеты, һәм эшләй `python3 scripts/fastpq/validate_row_usage_snapshot.py row_usage/*.json` (йәки `make check-fastpq-rollout`) шулай итеп, Stage7-3 ҡапҡаһы раҫлай, һәр партия реклама селектор һаны һәм `transfer_ratio = transfer_rows / total_rows` инвариант дәлилдәрҙе беркеткәнсе. |
 
-| Artefact | Purpose | How to produce |
-|----------|---------|----------------|
-| `fastpq_bench_manifest.json` | Proves that the canonical 20 000-row workload stays under the `<1 s` LDE ceiling and records hashes for every wrapped benchmark.| Capture Metal/CUDA runs, wrap them, then run:<br>`cargo xtask fastpq-bench-manifest \`<br>`  --bench metal=artifacts/fastpq_benchmarks/<metal>.json \`<br>`  --bench cuda=artifacts/fastpq_benchmarks/<cuda>.json \`<br>`  --matrix artifacts/fastpq_benchmarks/matrix/matrix_manifest.json \`<br>`  --signing-key secrets/fastpq_bench.ed25519 \`<br>`  --out artifacts/fastpq_rollouts/<stamp>/fastpq_bench_manifest.json` |
-| Wrapped benchmarks (`fastpq_metal_bench_*.json`, `fastpq_cuda_bench_*.json`) | Capture host metadata, row-usage evidence, zero-fill hotspots, Poseidon microbench summaries, and kernel statistics used by dashboards/alerts.| Run `fastpq_metal_bench` / `fastpq_cuda_bench`, then wrap the raw JSON:<br>`python3 scripts/fastpq/wrap_benchmark.py --require-lde-mean-ms 950 --require-poseidon-mean-ms 1000 \`<br>`  --row-usage artifacts/fastpq_benchmarks/fastpq_row_usage_2025-05-12.json \`<br>`  --poseidon-metrics artifacts/fastpq_rollouts/<stamp>/<fleet>/<lane>/metrics_poseidon.prom \`<br>`  fastpq_metal_bench.json artifacts/fastpq_benchmarks/<metal>.json --sign-output`<br>Repeat for CUDA captures (point `--row-usage` and `--poseidon-metrics` at the relevant witness/scrape files). The helper embeds the filtered `fastpq_poseidon_pipeline_total`/`fastpq_execution_mode_total` samples so WP2-E.6 evidence is identical across Metal and CUDA. Use `scripts/fastpq/export_poseidon_microbench.py --bundle <bundle>` when you need a standalone Poseidon microbench summary (wrapped or raw inputs supported). |
-|  |  | **Stage7 label requirement:** `wrap_benchmark.py` now fails unless the resulting `metadata.labels` section contains both `device_class` and `gpu_kind`. When automatic detection cannot infer them (for example, when wrapping on a detached CI node), pass explicit overrides such as `--label device_class=xeon-rtx-sm80 --label gpu_kind=discrete`. |
-|  |  | **Acceleration telemetry:** the wrapper also captures `cargo xtask acceleration-state --format json` by default, writing `<bundle>.accel.json` and `<bundle>.accel.prom` next to the wrapped benchmark (override with `--accel-*` flags or `--skip-acceleration-state`). The capture matrix uses these files to build `acceleration_matrix.{json,md}` for fleet dashboards. |
-| Grafana export | Proves adoption telemetry and alert annotations for the rollout window.| Export the `fastpq-acceleration` dashboard:<br>`curl -s -H "Authorization: Bearer $GRAFANA_TOKEN" \`<br>`  "$GRAFANA_URL/api/dashboards/uid/fastpq-acceleration" \`<br>`  | jq '.dashboard' \`<br>`  > artifacts/fastpq_rollouts/<stamp>/grafana_fastpq_acceleration.json`<br>Annotate the board with rollout start/stop times before exporting. The release pipeline can do this automatically via `scripts/run_release_pipeline.py --export-fastpq-grafana --grafana-url <URL>` (token supplied via `GRAFANA_TOKEN`). |
-| Alert snapshot | Captures the alert rules that guarded the rollout.| Copy `dashboards/alerts/fastpq_acceleration_rules.yml` (and the `tests/` fixture) into the bundle so reviewers can re-run `promtool test rules …`. |
-| Rollback drill log | Demonstrates that operators rehearsed the forced CPU fallback and telemetry acknowledgements.| Use the procedure in [Rollback Drills](#rollback-drills) and store console logs (`rollback_drill.log`) plus the resulting Prometheus scrape (`metrics_rollback.prom`). |
-| `row_usage/fastpq_row_usage_<date>.json` | Records the ExecWitness FASTPQ row allocation that TF-5 tracks in CI and dashboards.| Download a fresh witness from Torii, decode it via `iroha_cli audit witness --decode exec.witness` (optionally add `--fastpq-parameter fastpq-lane-balanced` to assert the expected parameter set; FASTPQ batches emit by default), and copy the `row_usage` JSON into `artifacts/fastpq_rollouts/<stamp>/<fleet>/<lane>/row_usage/`. Keep filenames timestamped so reviewers can correlate them with the rollout ticket, and run `python3 scripts/fastpq/validate_row_usage_snapshot.py row_usage/*.json` (or `make check-fastpq-rollout`) so the Stage 7-3 gate verifies that every batch advertises the selector counts and `transfer_ratio = transfer_rows / total_rows` invariant before attaching the evidence. |
+> **Кәңәш:** `artifacts/fastpq_rollouts/README.md` X-ға өҫтөнлөк бирелгән исемдәрҙе документлашты
+> схема (`<stamp>/<fleet>/<lane>`) һәм кәрәкле дәлилдәр файлдары. 1990 й.
+> `<stamp>` папкаһы `YYYYMMDDThhmmZ`-ты кодларға тейеш, шуға күрә артефакттар сорттарға бүлергә тейеш.
+> билеттар менән кәңәшләшмәйенсә.
 
-> **Tip:** `artifacts/fastpq_rollouts/README.md` documents the preferred naming
-> scheme (`<stamp>/<fleet>/<lane>`) and the required evidence files. The
-> `<stamp>` folder must encode `YYYYMMDDThhmmZ` so artefacts stay sortable
-> without consulting tickets.
-
-## Evidence Generation Checklist
-
-1. **Capture GPU benchmarks.**
-   - Run the canonical workload (20 000 logical rows, 32 768 padded rows) via
+## Дәлилдәр быуыны тикшерелгән исемлек1. **ГПУ-ны тотоу ориентирҙары.**
+   - Канонлы эш йөкләмәһен (20000 логик рәттәр, 32768 прокладкалы рәттәр) йүгерегеҙ.
      `cargo run -p fastpq_prover --bin fastpq_metal_bench -- --rows 20000 --pretty`.
-   - Wrap the result with `scripts/fastpq/wrap_benchmark.py` using `--row-usage <decoded witness>` so the bundle carries the gadget evidence alongside the GPU telemetry. Pass `--require-lde-mean-ms 950 --require-poseidon-mean-ms 1000 --sign-output` so the wrapper fails fast if either accelerator exceeds the target or if the Poseidon queue/profile telemetry is missing, and to generate the detached signature.
-   - Repeat on the CUDA host so the manifest contains both GPU families.
-   - Do **not** strip the `benchmarks.metal_dispatch_queue` or
-     `benchmarks.zero_fill_hotspots` blocks from the wrapped JSON. The CI gate
-     (`ci/check_fastpq_rollout.sh`) now reads those fields and fails when queue
-     headroom drops below one slot or when any LDE hotspot reports `mean_ms >
-     0.40 ms`, enforcing the Stage 7 telemetry guard automatically.
-2. **Generate the manifest.** Use `cargo xtask fastpq-bench-manifest …` as
-   shown in the table. Store `fastpq_bench_manifest.json` in the rollout bundle.
-3. **Export Grafana.**
-   - Annotate the `FASTPQ Acceleration Overview` board with the rollout window,
-     linking to the relevant Grafana panel IDs.
-   - Export the dashboard JSON via the Grafana API (command above) and include
-     the `annotations` section so reviewers can match adoption curves to the
-     staged rollout.
-4. **Snapshot alerts.** Copy the exact alert rules (`dashboards/alerts/…`) used
-   by the rollout into the bundle. If Prometheus rules were overridden, include
-   the override diff.
-5. **Prometheus/OTEL scrape.** Capture `fastpq_execution_mode_total{device_class="<matrix>"}` from each
-   host (before and after the stage) plus the OTEL counter
-   `fastpq.execution_mode_resolutions_total` and the paired
-   `telemetry::fastpq.execution_mode` log entries. These artefacts prove that
-   GPU adoption is stable and that forced CPU fallbacks still emit telemetry.
-6. **Archive row-usage telemetry.** After decoding the ExecWitness run for the
-   rollout, drop the resulting JSON under `row_usage/` in the bundle. The CI
-   helper (`ci/check_fastpq_row_usage.sh`) compares these snapshots against the
-   canonical baselines, and `ci/check_fastpq_rollout.sh` now requires every
-   bundle to ship at least one `row_usage` file to keep TF-5 evidence attached
-   to the release ticket.
+   - `scripts/fastpq/wrap_benchmark.py` менән һөҙөмтәһен `--row-usage <decoded witness>` ҡулланып урап, шуға күрә өйөм ГПУ телеметрияһы менән бер рәттән гаджет дәлилдәрен йөрөтә. Pass `--require-lde-mean-ms 950 --require-poseidon-mean-ms 1000 --sign-output` шулай урау тиҙ етешһеҙлеккә осрай, әгәр ҙә йәки акселератор маҡсаттан артып китә йәки әгәр Посейдон сираты/профиль телеметрияһы юҡ, һәм генерациялау өсөн айырым ҡултамға.
+   - CUDA хостында ҡабатлау, шуға күрә манифестта ике GPU ғаиләһе лә бар.
+   - **юҡ** `benchmarks.metal_dispatch_queue` йәки
+     `benchmarks.zero_fill_hotspots` блоктар уралған JSON. CI ҡапҡаһы
+     (`ci/check_fastpq_rollout.sh`) хәҙер был өлкәләрҙе уҡый һәм сиратҡа ҡасан уңышһыҙлыҡҡа осрай
+     баш бүлмәһе бер слоттан түбән төшә йәки ҡасан теләһә ниндәй LDE ҡыҙыу нөктәһе хәбәр итә `mean_ms >
+     0.40мс`, Stage7 телеметрия һаҡсыһы автоматик рәүештә үтәү.
+2. **Манизитты генерациялау.** `cargo xtask fastpq-bench-manifest …` X тип ҡулланыу
+   таблицала күрһәтелгән. `fastpq_bench_manifest.json` магазинында йәйелдерелгән өйөмдә.
+3. **Экспорт Grafana.**
+   - Аннотация `FASTPQ Acceleration Overview` платаһы менән йәйелдерелгән тәҙрә,
+     бәйләнеше тейешле Grafana панель идентификаторҙары.
+   - Export панель JSON аша Grafana API (өҫтөндә командование) һәм үҙ эсенә ала
+     `annotations` бүлеге шулай рецензенттар ҡабул итеү ҡойроҡтарына тап килә ала
+     сәхнәләштерелгән йәйелдерелгән.
+4. **Сняпшот иҫкәртмәләр.** Теүәл иҫкәртмә ҡағиҙәләрен күсерергә (`dashboards/alerts/…`) ҡулланылған
+   өйөмгә йәйелдерелгән. Әгәр Prometheus ҡағиҙәләре өҫтөнлөклө булһа, үҙ эсенә ала
+   өҫтөнлөклө дифф.
+5. **Prometheus/OTEL ҡырҡыу.** Һәр береһенән `fastpq_execution_mode_total{device_class="<matrix>"}`
+   хужа (сәхнәнән һуң һәм унан һуң) плюс OTEL счетчигы
+   `fastpq.execution_mode_resolutions_total` һәм парлы
+   `telemetry::fastpq.execution_mode` журнал яҙмалары. Был артефакттар иҫбатлай, тип
+   GPU ҡабул итеү тотороҡло һәм был мәжбүри процессор fallbacks һаман да телеметрия сығара.
+6. **Архив рәт-ҡулланыусы телеметрия.** ExecWitness расшифровка өсөн йүгерә һуң.
+   роллут, һөҙөмтәлә JSON өҫтөндә `row_usage/` өйөмдә төшөрөп. CI
+   ярҙамсы (`ci/check_fastpq_row_usage.sh`) был снимоктарҙы сағыштыра ҡаршы
+   канонлы база линиялары, һәм `ci/check_fastpq_rollout.sh` хәҙер һәр талап итә
+   өйөмө йөк ташыу өсөн кәмендә бер `row_usage` файл һаҡлау өсөн TF-5 дәлилдәр беркетелгән
+   сығарылыш билетына тиклем.
 
-## Staged Rollout Flow
+## Статьялы рулет ағымы
 
-Use three deterministic phases for every fleet. Advance only after the exit
-criteria in each phase are satisfied and documented in the evidence bundle.
+Һәр автопарк өсөн өс детерминистик фаза ҡулланығыҙ. Алданыш сығыуҙан һуң ғына .
+критерийҙары һәр этапта ҡәнәғәт һәм дәлилдәр өйөмөндә документлаштырылған.| Фаза | Скоп | Критерийҙар сығыу | Ҡушымталар |
+|------|-------|----------------|-------------|
+| Пилот (Р1) | 1 контроль-яҫылыҡ + 1 мәғлүмәт-яҫылыҡ төйөнө бер төбәк | `fastpq_execution_mode_total{device_class="<matrix>", backend="metal"}` ≥90% 48h, нуль иҫкәртмәнсе инциденттар, һәм үткән кире ҡайтарыу бураһы. | Ике хужанан да өйөм (эске JSONs, Grafana экспорты менән пилот аннотацияһы, кире ҡайтарыу журналдары). |
+| Пандия (Р2) | ≥50% валидаторҙар плюс кәмендә бер архив һыҙатында кластер | көн буйы GPU башҡарыу, 1-ҙән артыҡ түгел, шпик >10мин, һәм Prometheus иҫәпләүселәр 60-сы йылдар эсендә иҫкәртмәләрҙе иҫбатлай. | Яңыртылған Grafana экспорты күрһәтеү рампа аннотацияһы, Prometheus скреб диффтары, Alertmanager скриншот/лог. |
+| Ғәҙәттәгесә (Р3) | Ҡалған төйөндәр; FASTPQ `iroha_config`-та ғәҙәттәгесә билдәләнгән | Ҡултамғалы эскәмйә манифест + Grafana экспортҡа һылтанма һуңғы ҡабул итеү ҡойроғо, һәм документлаштырылған кире ҡағыу быраулау күрһәтеү конфигурация toggle. | Һуңғы манифест, Grafana JSON, кире ҡайтарыу журналы, билет һылтанма конфиг үҙгәрештәр тикшерергә. |
 
-| Phase | Scope | Exit Criteria | Attachments |
-|-------|-------|---------------|-------------|
-| Pilot (P1) | 1 control-plane + 1 data-plane node per region | `fastpq_execution_mode_total{device_class="<matrix>", backend="metal"}` ≥90% for 48 h, zero Alertmanager incidents, and a passing rollback drill. | Bundle from both hosts (bench JSONs, Grafana export with pilot annotation, rollback logs). |
-| Ramp (P2) | ≥50% of validators plus at least one archival lane per cluster | GPU execution sustained for 5 days, no more than 1 downgrade spike >10 min, and Prometheus counters prove fallbacks alert within 60 s. | Updated Grafana export showing the ramp annotation, Prometheus scrape diffs, Alertmanager screenshot/log. |
-| Default (P3) | Remaining nodes; FASTPQ marked default in `iroha_config` | Signed bench manifest + Grafana export referencing the final adoption curve, and documented rollback drill demonstrating the config toggle. | Final manifest, Grafana JSON, rollback log, ticket reference to config change review. |
+Документ һәр промоушен аҙым ролл-аут билет һәм һылтанма туранан-тура
+`grafana_fastpq_acceleration.json` аннотациялар, шулай итеп, рецензенттар корреляциялана ала
+дәлилдәр менән ваҡыт һыҙығы.
 
-Document each promotion step in the rollout ticket and link directly to the
-`grafana_fastpq_acceleration.json` annotations so reviewers can correlate the
-timeline with the evidence.
+## Rollback бырауҙар
 
-## Rollback Drills
+Һәр спектакль этабы репетицияны үҙ эсенә алырға тейеш:
 
-Every rollout stage must include a rollback rehearsal:
-
-1. Pick one node per cluster and record the current metrics:
+1. Кластерға бер төйөн йыйып, ток метрикаларын теркәгеҙ:
    ```bash
    curl -s http://<host>:8180/metrics | rg 'fastpq_execution_mode_total{device_class'
    ```
-2. Force CPU mode for 10 minutes using either the config knob
-   (`zk.fastpq.execution_mode = "cpu"`) or the environment override:
+2. Көс процессор режимы 10 минут йәки конфигурация ручкаһы ҡулланып
+   (`zk.fastpq.execution_mode = "cpu"`) йәки тирә-яҡ мөхит өҫтөнлөк итә:
    ```bash
    FASTPQ_GPU=cpu irohad --config <path> --genesis-manifest-json <path>
    ```
-3. Confirm the downgrade log
-   (`telemetry::fastpq.execution_mode resolved="cpu" requested="gpu"`) and scrape
-   the Prometheus endpoint again to show the counter increments.
-4. Restore GPU mode, verify that `telemetry::fastpq.execution_mode` now reports
-   `resolved="metal"` (or `resolved="cuda"/"opencl"` for non-Metal lanes),
-   confirm the Prometheus scrape contains both the CPU and GPU samples in
-   `fastpq_execution_mode_total{backend=…}`, and log the elapsed time to
-   detection/cleanup.
-5. Store shell transcripts, metrics, and operator acknowledgements as
-   `rollback_drill.log` and `metrics_rollback.prom` in the rollout bundle. These
-   files must illustrate the full downgrade + restore cycle because
-   `ci/check_fastpq_rollout.sh` now fails whenever the log lacks the GPU
-   recovery line or the metrics snapshot omits either the CPU or GPU counters.
+3. Журналдың түбәнгә-төшөүен раҫлау
+   (`telemetry::fastpq.execution_mode resolved="cpu" requested="gpu"`) һәм ҡырҡыу
+   Prometheus осонда тағы ла күрһәтеү өсөн өҫтәл өҫтәүҙәр.
+4. GPU режимын тергеҙеү, раҫлауынса, `telemetry::fastpq.execution_mode` хәҙер хәбәр итә
+   `resolved="metal"` (йәки металл булмаған һыҙаттар өсөн `resolved="cuda"/"opencl"`),
+   Prometheus скребын раҫлауҙа 2012 йылда процессор һәм GPU өлгөләре лә бар.
+   `fastpq_execution_mode_total{backend=…}` X, һәм үткән ваҡытты логин .
+   асыҡлау/таҙа.
+5. Һаҡлау снаряд стенограммалары, метрика, һәм оператор таныуҙары кеүек
+   `rollback_drill.log` һәм `metrics_rollback.prom` өйөмөндә өйөмдә. Былар
+   файлдар тулы түбәнгәград + тергеҙеү циклын күрһәтергә тейеш, сөнки
+   `ci/check_fastpq_rollout.sh` хәҙер уңышһыҙлыҡҡа осрай, ҡасан да булһа журнал етешмәй GPU .
+   һауығыу һыҙығы йәки метрика снимок йәки процессор йәки GPU иҫәпләүселәре төшөрөп ҡалдыра.
 
-These logs prove that every cluster can degrade gracefully and that SRE teams
-know how to fall back deterministically if GPU drivers or kernels regress.
+Был журналдар иҫбатлай, һәр кластер грациозно деградациялай ала һәм SRE командалары .
+белергә, нисек кире төшөп детерминистик, әгәр GPU драйверҙары йәки ядролар регресс.
 
-## Mixed-mode fallback evidence (WP2-E.6)
+## Ҡатнаш режимда fallback дәлилдәр (WP2-E.6)
 
-Whenever a host needs GPU FFT/LDE but CPU Poseidon hashing (per the Stage 7 <900 ms
-requirement), bundle the following artefacts alongside the standard rollback logs:
-
-1. **Config diff.** Check in (or attach) the host-local override that sets
-   `zk.fastpq.poseidon_mode = "cpu"` (`FASTPQ_POSEIDON_MODE=cpu`) while leaving
-   `zk.fastpq.execution_mode` untouched. Name the patch
+Ҡасан ғына хост кәрәк GPU FFT/LDE, әммә процессор Посейдон хеширование (бер Stage7 <900мс
+талап), стандарт кире ҡағыу журналдары менән бер рәттән түбәндәге артефакттарҙы бәйләп:1. **Конфиг дифф.** Тикшерергә (йәки беркетергә) хост-урындағы өҫтөнлөк, тип ҡуя
+   18NI000000113X (`FASTPQ_POSEIDON_MODE=cpu`) сығып киткәндә
+   `zk.fastpq.execution_mode` тейелмәгән. Исемен патч
    `artifacts/fastpq_rollouts/<stamp>/<fleet>/<lane>/poseidon_fallback.patch`.
-2. **Poseidon counter scrape.**
+2. **Позедон счетчик ҡырҡыу.**
    ```bash
    curl -s http://<host>:8180/metrics \
      | rg 'fastpq_poseidon_pipeline_total{.*device_class="<label>"' \
      > artifacts/fastpq_rollouts/<stamp>/<fleet>/<lane>/metrics_poseidon.prom
    ```
-   The capture must show `path="cpu_forced"` incrementing in lock-step with the
-   GPU FFT/LDE counter for that device-class. Take a second scrape after reverting
-   back to GPU mode so reviewers can see the `path="gpu"` row resume.
+   Ҡулға алыу тейеш күрһәтергә Grafana өҫтәү өсөн блок-аҙым менән
+   GPU FFT/LDE счетчик өсөн, тип ҡоролма-класс. Икенсе ҡырҡып алыу һуң ҡайтҡас
+   Ҡайтып GPU режимы, шулай итеп, рецензенттар күрә ала `path="gpu"` рәт резюме.
 
-   Pass the resulting file to `wrap_benchmark.py --poseidon-metrics …` so the wrapped benchmark records the same counters inside its `poseidon_metrics` section; this keeps Metal and CUDA rollouts on the identical workflow and makes the fallback evidence auditable without opening separate scrape files.
-3. **Log excerpt.** Copy the `telemetry::fastpq.poseidon` entries that prove the
-   resolver flipped to CPU (`cpu_forced`) into
-   `poseidon_fallback.log`, keeping timestamps so Alertmanager timelines can be
-   correlated with the config change.
+   Һөҙөмтәлә барлыҡҡа килгән файл `wrap_benchmark.py --poseidon-metrics …` тиклем, шулай итеп, уралған эталон яҙмалары шул уҡ счетчиктар эсендә уның `poseidon_metrics` бүлеге; был һаҡлай Metal һәм CUDA ролл-ауттар өҫтөндә бер үк эш ағымы һәм айырым ҡырҡып файлдар асмайынса, fallback дәлилдәр аудит.
+3. **Журнал өҙөк.** күсермә `telemetry::fastpq.poseidon` яҙмалар, тип иҫбатлай
+   18NI000000122X 1800-гә тиклем процессорға әйләндерелә.
+   `poseidon_fallback.log`, ваҡыт маркаларын һаҡлау, шуға күрә Alertmanager ваҡыт графиктары булыуы мөмкин
+   конфиг үҙгәреше менән бәйле.
 
-CI enforces the queue/zero-fill checks today; once the mixed-mode gate lands,
-`ci/check_fastpq_rollout.sh` will also insist that any bundle containing
-`poseidon_fallback.patch` ships the matching `metrics_poseidon.prom` snapshot.
-Following this workflow keeps the WP2-E.6 fallback policy auditable and tied to
-the same evidence collectors used during the default-on rollout.
+CI сират/нуль-тулы тикшерелеүҙәрҙе үтәй бөгөн; бер тапҡыр ҡатнаш режимлы ҡапҡа ерҙәре,
+`ci/check_fastpq_rollout.sh` шулай уҡ ныҡышмаясаҡ, тип теләһә ниндәй өйөм составында
+`poseidon_fallback.patch` тап килгән `metrics_poseidon.prom` снимоктарын суднолар.
+Был эш ағымынан һуң WP2-E.6 сәйәсәтен аудитлы һәм бәйләнгән fallback сәйәсәтен һаҡлай.
+шул уҡ дәлилдәр йыйыусылар ҡулланылған ваҡытта ғәҙәттәгесә-ролировка.
 
-## Reporting & Automation
+## Отчет & Автоматлаштырыу
 
-- Attach the entire `artifacts/fastpq_rollouts/<stamp>/` directory to the
-  release ticket and reference it from `status.md` once the rollout closes.
-- Run `dashboards/alerts/tests/fastpq_acceleration_rules.test.yml` (via
-  `promtool`) inside CI to ensure alert bundles bundled with the rollout still
-  compile.
-- Validate the bundle with `ci/check_fastpq_rollout.sh` (or
-  `make check-fastpq-rollout`) and pass `FASTPQ_ROLLOUT_BUNDLE=<path>` when you
-  want to target a single rollout. CI invokes the same script via
-  `.github/workflows/fastpq-rollout.yml`, so missing artefacts fail fast before a
-  release ticket can close. The release pipeline can archive validated bundles
-  alongside the signed manifests by passing
-  `--fastpq-rollout-bundle artifacts/fastpq_rollouts/<stamp>/<fleet>/<lane>` to
-  `scripts/run_release_pipeline.py`; the helper reruns
-  `ci/check_fastpq_rollout.sh` (unless `--skip-fastpq-rollout-check` is set) and
-  copies the directory tree into `artifacts/releases/<version>/fastpq_rollouts/…`.
-  As part of this gate the script enforces the Stage 7 queue-depth and zero-fill
-  budgets by reading `benchmarks.metal_dispatch_queue` and
-  `benchmarks.zero_fill_hotspots` out of each `metal` bench JSON.
+- Бөтә `artifacts/fastpq_rollouts/<stamp>/` каталогын беркетергә
+  релиз билет һәм уны һылтанма `status.md` бер тапҡыр ролл-аут ябыла.
+- Йүгереп `dashboards/alerts/tests/fastpq_acceleration_rules.test.yml` (аҫта
+  `promtool`) эсендә CI тәьмин итеү өсөн иҫкәртмә өйөмдәре менән йыйылған ролл-аут һаман да
+  компиляция.
+- `ci/check_fastpq_rollout.sh` менән өйөмөн раҫлағыҙ (йәки
+  `make check-fastpq-rollout`) һәм үткән `FASTPQ_ROLLOUT_BUNDLE=<path>`, ҡасан һеҙ
+  теләйем, бер генә ролл-аут маҡсатлы. CI аша шул уҡ сценарийҙы саҡыра
+  `.github/workflows/fastpq-rollout.yml`, шуға күрә юғалған артефакттар тиҙ уңышһыҙлыҡҡа осрағанға тиклем
+  релиз билет ябыла ала. Релиз торбаһы архив раҫланған өйөмдәр ала
+  ҡултамғалы манифестар менән бер рәттән үтеп, үтеп,
+  `--fastpq-rollout-bundle artifacts/fastpq_rollouts/<stamp>/<fleet>/<lane>` тиклем
+  `scripts/run_release_pipeline.py` X; ярҙамсы ҡабаттан эшләй
+  `ci/check_fastpq_rollout.sh` (әгәр `--skip-fastpq-rollout-check` X булмаһа) һәм
+  каталог ағасын `artifacts/releases/<version>/fastpq_rollouts/…`-ға күсерә.
+  Был ҡапҡа өлөшө булараҡ, сценарий Stage7 сират-тәрәнлек һәм нуль-тулы үтәй.
+  бюджеттар `benchmarks.metal_dispatch_queue` һәм
+  `benchmarks.zero_fill_hotspots` һәр `metal` эскәмйәһе JSON.
 
-By following this playbook we can demonstrate deterministic adoption, provide a
-single evidence bundle per rollout, and keep rollback drills audited alongside
-the signed benchmark manifests.
+Был playbook-ты үтәп, беҙ детерминистик ҡабул итеүҙе күрһәтә алабыҙ, тәьмин итәбеҙ
+бер дәлилдәр өйөмө өсөн бер ролл-аут, һәм һаҡлау өҫтөндә ҡасып йөрөү күнекмәләре менән бергә аудит
+ҡул ҡуйылған эталон манифестар.

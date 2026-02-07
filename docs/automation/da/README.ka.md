@@ -7,62 +7,63 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 8757f0bf8699b532ece29437af953353526b3201b4b129ebec7d6bf5d224f038
 source_last_modified: "2025-12-29T18:16:35.061402+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Data-Availability Threat-Model Automation (DA-1)
+# მონაცემთა ხელმისაწვდომობის საფრთხის მოდელის ავტომატიზაცია (DA-1)
 
-Roadmap item DA-1 and `status.md` call for a deterministic automation loop that
-produces the Norito PDP/PoTR threat-model summaries surfaced in
-`docs/source/da/threat_model.md` and the Docusaurus mirror. This directory
-captures the artefacts referenced by:
+საგზაო რუკის პუნქტი DA-1 და `status.md` მოითხოვს დეტერმინისტულ ავტომატიზაციის ციკლს, რომელიც
+აწარმოებს Norito PDP/PoTR საფრთხის მოდელის შეჯამებებს, რომლებიც გამოჩნდა
+`docs/source/da/threat_model.md` და Docusaurus სარკე. ეს დირექტორია
+აღბეჭდავს არტეფაქტებს, რომლებიც მითითებულია:
 
 - `cargo xtask da-threat-model-report [--out <path|->] [--seed <u64|0xhex>] [--config <path>]`
 - `.github/workflows/da-threat-model-nightly.yml`
-- `make docs-da-threat-model` (which runs `scripts/docs/render_da_threat_model_tables.py`)
+- `make docs-da-threat-model` (რომელიც მუშაობს `scripts/docs/render_da_threat_model_tables.py`)
 - `cargo xtask da-commitment-reconcile --receipt <path> --block <path> [--json-out <path|->]`
 - `cargo xtask da-privilege-audit --config <torii.toml> [--extra-path <path> ...] [--json-out <path|->]`
 
-## Flow
+## ნაკადი
 
-1. **Generate the report**
+1. ** შექმენით ანგარიში **
    ```bash
    cargo xtask da-threat-model-report \
      --config configs/da/threat_model.toml \
      --out artifacts/da/threat_model_report.json
    ```
-   The JSON summary records the simulated replication failure rate, chunker
-   thresholds, and any policy violations detected by the PDP/PoTR harness in
+   JSON რეზიუმე აღრიცხავს იმიტირებული რეპლიკაციის წარუმატებლობის სიჩქარეს, ცუნკერს
+   ზღვრები და ნებისმიერი პოლიტიკის დარღვევა, რომელიც აღმოჩენილია PDP/PoTR აღმართის მიერ
    `integration_tests/src/da/pdp_potr.rs`.
-2. **Render the Markdown tables**
+2. ** Markdown ცხრილების რენდირება **
    ```bash
    make docs-da-threat-model
    ```
-   This runs `scripts/docs/render_da_threat_model_tables.py` to rewrite
-   `docs/source/da/threat_model.md` and `docs/portal/docs/da/threat-model.md`.
-3. **Archive the artefact** by copying the JSON report (and optional CLI log) to
-   `docs/automation/da/reports/<timestamp>-threat_model_report.json`. When
-   governance decisions rely on a specific run, include the git commit hash and
-   simulator seed in a sibling `<timestamp>-metadata.md`.
+   ეს გადის `scripts/docs/render_da_threat_model_tables.py` გადასაწერად
+   `docs/source/da/threat_model.md` და `docs/portal/docs/da/threat-model.md`.
+3. **არტეფაქტის დაარქივება** JSON ანგარიშის (და სურვილისამებრ CLI ჟურნალის) კოპირებით
+   `docs/automation/da/reports/<timestamp>-threat_model_report.json`. როცა
+   მმართველობითი გადაწყვეტილებები ეყრდნობა კონკრეტულ გაშვებას, მოიცავს git commit ჰეშს და
+   სიმულატორის თესლი ძმა `<timestamp>-metadata.md`-ში.
 
-## Evidence Expectations
+## მტკიცებულების მოლოდინი
 
-- JSON files should remain <100 KiB so they can live in git. Larger execution
-  traces belong in external storage—reference their signed hash in the metadata
-  note if needed.
-- Each archived file must list the seed, config path, and simulator version so
-  reruns can be reproduced exactly when auditing DA release gates.
-- Link back to the archived file from `status.md` or the roadmap entry whenever
-  the DA-1 acceptance criteria advance, ensuring reviewers can verify the
-  baseline without rerunning the harness.
+- JSON ფაილები უნდა დარჩეს <100 KiB, რათა მათ შეძლონ git-ში ცხოვრება. უფრო დიდი აღსრულება
+  კვალი მიეკუთვნება გარე მეხსიერებას - მიუთითეთ მათი ხელმოწერილი ჰეში მეტამონაცემებში
+  საჭიროების შემთხვევაში შენიშვნა.
+- თითოეულ დაარქივებულ ფაილში უნდა იყოს მითითებული თესლი, კონფიგურაციის გზა და სიმულატორის ვერსია
+  გამეორებები შეიძლება განმეორდეს ზუსტად DA გამოშვების კარიბჭის აუდიტის დროს.
+- დააბრუნეთ დაარქივებული ფაილი `status.md`-დან ან საგზაო რუქის ჩანაწერიდან, როდესაც
+  DA-1 მიღების კრიტერიუმები წინ მიიწევს, რაც უზრუნველყოფს მიმომხილველებს გადაამოწმონ
+  საწყისი ხაზი აღკაზმულობის ხელახალი გაშვების გარეშე.
 
-## Commitment Reconciliation (Sequencer Omission)
+## ვალდებულების შეჯერება (სექვენერის გამოტოვება)
 
-Use `cargo xtask da-commitment-reconcile` to compare DA ingest receipts against
-DA commitment records, catching sequencer omission or tampering:
+გამოიყენეთ `cargo xtask da-commitment-reconcile` DA ingest ქვითრების შესადარებლად
+DA ვალდებულების ჩანაწერები, სეკვენსერის გამოტოვების დაჭერა ან ხელყოფა:
 
 ```bash
 cargo xtask da-commitment-reconcile \
@@ -71,19 +72,19 @@ cargo xtask da-commitment-reconcile \
   --json-out artifacts/da/commitment_reconciliation.json
 ```
 
-- Accepts receipts in Norito or JSON form and commitments from
-  `SignedBlockWire`, `.norito`, or JSON bundles.
-- Fails when any ticket is missing from the block log or when hashes diverge;
-  `--allow-unexpected` ignores block-only tickets when you intentionally scope
-  the receipt set.
-- Attach the emitted JSON to governance packets/Alertmanager for omission
-  alerts; defaults to `artifacts/da/commitment_reconciliation.json`.
+- იღებს ქვითრებს Norito ან JSON ფორმაში და ვალდებულებებს
+  `SignedBlockWire`, `.norito` ან JSON პაკეტები.
+- წარუმატებელია, როდესაც რომელიმე ბილეთი აკლია ბლოკის ჟურნალს ან როდესაც ჰეშები განსხვავდება;
+  `--allow-unexpected` უგულებელყოფს მხოლოდ ბლოკირებულ ბილეთებს, როდესაც თქვენ განზრახ ახორციელებთ ფარგლებს
+  ქვითრის ნაკრები.
+- მიამაგრეთ გამოშვებული JSON მართვის პაკეტებს/Alertmanager-ს გამოტოვებისთვის
+  გაფრთხილებები; ნაგულისხმევად არის `artifacts/da/commitment_reconciliation.json`.
 
-## Privilege Audit (Quarterly Access Review)
+## პრივილეგიის აუდიტი (კვარტალური წვდომის მიმოხილვა)
 
-Use `cargo xtask da-privilege-audit` to scan the DA manifest/replay directories
-(plus optional extra paths) for missing, non-directory, or world-writable
-entries:
+გამოიყენეთ `cargo xtask da-privilege-audit` DA manifest/replay დირექტორიების სკანირებისთვის
+(პლუს სურვილისამებრ დამატებითი ბილიკები) გამოტოვებული, არასაცნობარო ან მსოფლიო ჩასაწერად
+ჩანაწერები:
 
 ```bash
 cargo xtask da-privilege-audit \
@@ -92,9 +93,9 @@ cargo xtask da-privilege-audit \
   --json-out artifacts/da/privilege_audit.json
 ```
 
-- Reads the DA ingest paths from the provided Torii config and inspects Unix
-  permissions where available.
-- Flags missing/not-a-directory/world-writable paths and returns a non-zero exit
-  code when issues are present.
-- Sign and attach the JSON bundle (`artifacts/da/privilege_audit.json` by
-  default) to quarterly access-review packets and dashboards.
+- კითხულობს DA შიგთავსის ბილიკებს მოწოდებული Torii კონფიგურაციიდან და ამოწმებს Unix-ს
+  ნებართვები, სადაც შესაძლებელია.
+- მიუთითებს დაკარგული/არ არის დირექტორია/მსოფლიო-დასაწერი ბილიკები და აბრუნებს არა-ნულოვან გასასვლელს
+  კოდი, როდესაც პრობლემები არსებობს.
+- მოაწერეთ ხელი და მიამაგრეთ JSON პაკეტი (`artifacts/da/privilege_audit.json` by
+  ნაგულისხმევი) პაკეტებისა და დაფების კვარტალური წვდომა-მიმოხილვა.

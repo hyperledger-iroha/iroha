@@ -4,20 +4,22 @@ direction: rtl
 source: docs/portal/docs/devportal/preview-host-exposure.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Guia de exposicion del host de preview
+# دليل عرض مضيف المعاينة
 
-El roadmap DOCS-SORA exige que cada preview publico use el mismo bundle verificado por checksum que los revisores prueban localmente. Usa este runbook despues de completar el onboarding de revisores (y el ticket de aprobacion de invitaciones) para poner en linea el host de preview beta.
+تتطلب خريطة الطريق DOCS-SORA أن تقوم كل معاينة عامة باستخدام نفس الحزمة التي تم التحقق منها من خلال المجموع الاختباري الذي تم اختباره محليًا. يتم استخدام هذا الدليل بعد إكمال إعداد المراجعين (وتذكرة الموافقة على الدعوات) لبدء تشغيل مضيف المعاينة التجريبي عبر الإنترنت.
 
-## Requisitos previos
+## المتطلبات السابقة
 
-- Ola de onboarding de revisores aprobada y registrada en el tracker de preview.
-- Ultimo build del portal presente en `docs/portal/build/` y checksum verificado (`build/checksums.sha256`).
-- Credenciales de preview SoraFS (URL de Torii, autoridad, llave privada, epoch enviado) almacenadas en variables de entorno o en un config JSON como [`docs/examples/sorafs_preview_publish.json`](../../../examples/sorafs_preview_publish.json).
-- Ticket de cambio DNS abierto con el hostname deseado (`docs-preview.sora.link`, `docs.iroha.tech`, etc.) mas contactos on-call.
+- قم بإعداد التحديثات المعتمدة والتسجيل في متتبع المعاينة.
+- تم إنشاء البوابة الأخيرة في `docs/portal/build/` وتم التحقق من المجموع الاختباري (`build/checksums.sha256`).
+- اعتمادات معاينة SoraFS (URL لـ Torii، تلقائي، مفتاح خاص، عصر مرسل) مخزنة في متغيرات Entorno أو في تكوين JSON مثل [`docs/examples/sorafs_preview_publish.json`](../../../examples/sorafs_preview_publish.json).
+- تذكرة تغيير DNS مفتوحة مع اسم المضيف المطلوب (`docs-preview.sora.link`، `docs.iroha.tech`، وما إلى ذلك) مع جهات الاتصال عند الطلب.
 
-## Paso 1 - Construir y verificar el bundle
+## الخطوة 1 - إنشاء الحزمة والتحقق منها
 
 ```bash
 cd docs/portal
@@ -27,11 +29,11 @@ npm run build
 ./scripts/preview_verify.sh --build-dir build
 ```
 
-El script de verificacion se niega a continuar cuando el manifiesto de checksum falta o fue manipulado, manteniendo auditado cada artefacto de preview.
+لن يستمر نص التحقق في الاستمرار عندما يكون بيان المجموع الاختباري خاطئًا أو تم التلاعب به، مع الاستمرار في تدقيقه كل معاينة مصطنعة.
 
-## Paso 2 - Empaquetar los artefactos SoraFS
+## باسو 2 - تعبئة القطع الأثرية SoraFS
 
-Convierte el sitio estatico en un par CAR/manifest determinista. `ARTIFACT_DIR` por defecto es `docs/portal/artifacts/`.
+تحويل الموقع الثابت إلى مستوى سيارة/بيان محدد. `ARTIFACT_DIR` بسبب الخلل `docs/portal/artifacts/`.
 
 ```bash
 ./scripts/sorafs-pin-release.sh       --alias docs-preview.sora       --alias-namespace docs       --alias-name preview       --pin-label docs-preview       --skip-submit
@@ -39,43 +41,43 @@ Convierte el sitio estatico en un par CAR/manifest determinista. `ARTIFACT_DIR` 
 node scripts/generate-preview-descriptor.mjs       --manifest artifacts/checksums.sha256       --archive artifacts/sorafs/portal.tar.gz       --out artifacts/sorafs/preview-descriptor.json
 ```
 
-Adjunta `portal.car`, `portal.manifest.*`, el descriptor y el manifiesto de checksum al ticket de la ola de preview.
+ملحق `portal.car`، `portal.manifest.*`، الواصف وبيان المجموع الاختباري لبطاقة المعاينة.
 
-## Paso 3 - Publicar el alias de preview
+## الخطوة 3 - نشر الاسم المستعار للمعاينة
 
-Repite el helper de pin **sin** `--skip-submit` cuando estes listo para exponer el host. Proporciona el config JSON o flags CLI explicitos:
+كرر مساعد الدبوس **الخطيئة** `--skip-submit` عندما تكون هذه القائمة لتوضيح المضيف. دعم التكوين JSON أو علامات CLI الواضحة:
 
 ```bash
 ./scripts/sorafs-pin-release.sh       --alias docs-preview.sora       --alias-namespace docs       --alias-name preview       --pin-label docs-preview       --config ~/secrets/sorafs_preview_publish.json
 ```
 
-El comando escribe `portal.pin.report.json`, `portal.manifest.submit.summary.json` y `portal.submit.response.json`, que deben viajar con el bundle de evidencia de invitaciones.
+يكتب الأمر `portal.pin.report.json` و`portal.manifest.submit.summary.json` و`portal.submit.response.json`، والذي يجب أن يسافر مع حزمة أدلة الدعوات.
 
-## Paso 4 - Generar el plan de corte DNS
+## الخطوة 4 - إنشاء خطة قص DNS
 
 ```bash
 node scripts/generate-dns-cutover-plan.mjs       --dns-hostname docs.iroha.tech       --dns-zone sora.link       --dns-change-ticket DOCS-SORA-Preview       --dns-cutover-window "2026-03-05 18:00Z"       --dns-ops-contact "pagerduty:sre-docs"       --manifest artifacts/sorafs/portal.manifest.to       --cache-purge-endpoint https://cache.api/purge       --cache-purge-auth-env CACHE_PURGE_TOKEN       --out artifacts/sorafs/portal.dns-cutover.json
 ```
 
-Comparte el JSON resultante con Ops para que el cambio DNS referencie el digest del manifiesto exacto. Cuando reutilices un descriptor anterior como fuente de rollback, agrega `--previous-dns-plan path/to/previous.json`.
+قم بمقارنة ملف JSON الناتج مع العمليات حتى يشير تغيير DNS إلى ملخص البيان الدقيق. عند إعادة استخدام واصف سابق مثل التراجع، قم بإضافة `--previous-dns-plan path/to/previous.json`.
 
-## Paso 5 - Probar el host desplegado
+## الخطوة 5 - هزيمة المضيف
 
 ```bash
 npm run probe:portal --       --base-url=https://docs-preview.sora.link       --expect-release="$DOCS_RELEASE_TAG"
 ```
 
-El probe confirma el tag de release servido, headers CSP y metadatos de firma. Repite el comando desde dos regiones (o adjunta la salida de curl) para que los auditores vean que el edge cache esta caliente.
+يؤكد المسبار علامة إصدار الخادم ورؤوس CSP وبيانات الشركة. كرر الأمر من المنطقتين (أو قم بإضافة لفة اللف) حتى يرى المدققون أن ذاكرة التخزين المؤقت الحافة دافئة.
 
-## Bundle de evidencia
+## حزمة الأدلة
 
-Incluye los siguientes artefactos en el ticket de la ola de preview y referencialos en el email de invitacion:
+قم بتضمين العناصر التالية في تذكرة المعاينة والمراجع في رسالة البريد الإلكتروني للدعوة:
 
-| Artefacto | Proposito |
-|----------|-----------|
-| `build/checksums.sha256` | Demuestra que el bundle coincide con el build de CI. |
-| `artifacts/sorafs/portal.tar.gz` + `portal.manifest.to` | Payload canonico SoraFS + manifiesto. |
-| `portal.pin.report.json`, `portal.manifest.submit.summary.json`, `portal.submit.response.json` | Muestra que el envio del manifiesto + el alias binding se completaron. |
-| `artifacts/sorafs/portal.dns-cutover.json` | Metadatos DNS (ticket, ventana, contactos), resumen de promocion de ruta (`Sora-Route-Binding`), el puntero `route_plan` (plan JSON + plantillas de header), info de purge de cache e instrucciones de rollback para Ops. |
-| `artifacts/sorafs/preview-descriptor.json` | Descriptor firmado que enlaza el archive + checksum. |
-| Salida de `probe` | Confirma que el host en vivo anuncia el tag de release esperado. |
+| قطعة أثرية | اقتراح |
+|----------|----------|
+| `build/checksums.sha256` | Demuestra أن الحزمة تتزامن مع بناء CI. |
+| `artifacts/sorafs/portal.tar.gz` + `portal.manifest.to` | الحمولة النافعة canonico SoraFS + توضح ذلك. |
+| `portal.pin.report.json`، `portal.manifest.submit.summary.json`، `portal.submit.response.json` | يُشار إلى أن إرسال البيان + الرابط الاسمي المستعار قد اكتمل. |
+| `artifacts/sorafs/portal.dns-cutover.json` | بيانات تعريف DNS (التذكرة، النافذة، جهات الاتصال)، استئناف الترويج للمسار (`Sora-Route-Binding`)، المنفذ `route_plan` (خطة JSON + مجموعات الرأس)، معلومات تنظيف ذاكرة التخزين المؤقت وتعليمات التراجع لـ Ops. |
+| `artifacts/sorafs/preview-descriptor.json` | واصف ثابت يقوم بتعبئة الأرشيف + المجموع الاختباري. |
+| ساليدا دي `probe` | تأكد من أن المضيف في الحياة سيعلن عن علامة الإصدار المتوقعة. |

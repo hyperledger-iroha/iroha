@@ -7,72 +7,73 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 71baf5d038cbe6518fd294fcc1b279dff8aaf092e4a83f6159b699a378e51467
 source_last_modified: "2025-12-29T18:16:34.772429+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Contributing Guide
+# የአስተዋጽኦ መመሪያ
 
-Thank you for taking the time to contribute to Iroha 2!
+ለIroha 2 ለማበርከት ጊዜ ስለወሰዱ እናመሰግናለን!
 
-Please read this guide to learn how you can contribute and which guidelines we expect you to follow. This includes the guidelines about code and documentation as well as our conventions regarding git workflow.
+እባኮትን እንዴት ማበርከት እንደሚችሉ እና የትኞቹን መመሪያዎች እንዲከተሉ እንደምንጠብቅ ለማወቅ ይህንን መመሪያ ያንብቡ። ይህ ስለ ኮድ እና ሰነዶች መመሪያዎችን እንዲሁም የጊት የስራ ፍሰትን በተመለከተ የእኛን የአውራጃ ስብሰባዎች ያካትታል።
 
-Reading these guidelines will save you time later.
+እነዚህን መመሪያዎች ማንበብ በኋላ ጊዜ ይቆጥብልዎታል.
 
-## How Can I Contribute?
+## እንዴት ማበርከት እችላለሁ?
 
-There are a lot of ways you could contribute to our project:
+ለፕሮጀክታችን አስተዋፅኦ ማድረግ የሚችሉባቸው ብዙ መንገዶች አሉ፡-
 
-- Report [bugs](#reporting-bugs) and [vulnerabilities](#reporting-vulnerabilities)
-- [Suggest improvements](#suggesting-improvements) and implement them
-- [Ask questions](#asking-questions) and engage with the community
+- ሪፖርት ያድርጉ [ሳንካዎች](#reporting-bugs) እና [ተጋላጭነት](#reporting-vulnerabilities)
+- [ማሻሻያዎችን ጠቁም](#suggesting-improvements) እና ተግባራዊ ያድርጉ
+- [ጥያቄዎችን ይጠይቁ](#asking-questions) እና ከማህበረሰቡ ጋር ይሳተፉ
 
-New to our project? [Make your first contribution](#your-first-code-contribution)!
+ለፕሮጀክታችን አዲስ ነገር አለ? [የመጀመሪያውን አስተዋጽዖ ያድርጉ](#your-first-code-contribution)!
 
 ### TL;DR
 
-- Find [ZenHub](https://app.zenhub.com/workspaces/iroha-v2-60ddb820813b9100181fc060/board?repos=181739240).
-- Fork [Iroha](https://github.com/hyperledger-iroha/iroha/tree/main).
-- Fix your issue of choice.
-- Ensure you follow our [style guides](#style-guides) for code and documentation.
-- Write [tests](https://doc.rust-lang.org/cargo/commands/cargo-test.html). Ensure they all pass (`cargo test --workspace`). If you touch the SM cryptography stack, also run `cargo test -p iroha_crypto --features "sm sm_proptest"` to execute the optional fuzz/property harness.
-  - Note: Tests that exercise the IVM executor will automatically synthesize a minimal, deterministic executor bytecode if `defaults/executor.to` is not present. No pre-step is required to run tests. To generate the canonical bytecode for parity, you can run:
+- [ZenHub] (https://app.zenhub.com/workspaces/iroha-v2-60ddb820813b9100181fc060/board?repos=181739240) ያግኙ።
+- ሹካ [Iroha](https://github.com/hyperledger-iroha/iroha/tree/main)።
+- የመረጡትን ጉዳይ ያስተካክሉ።
+- ለኮድ እና ለሰነድ የእኛን [የቅጥ መመሪያዎች](#style-guides) መከተልዎን ያረጋግጡ።
+- ጻፍ [ሙከራዎች] (https://doc.rust-lang.org/cargo/commands/cargo-test.html). ሁሉም ማለፋቸውን ያረጋግጡ (`cargo test --workspace`)። የኤስ ኤም ክሪፕቶግራፊ ቁልልን ከነካክ፣ እንዲሁም `cargo test -p iroha_crypto --features "sm sm_proptest"`ን አስኪ አማራጭ ፉዝ/ንብረት ማሰሪያን ለማስፈጸም።
+  - ማሳሰቢያ፡ የIVM ፈጻሚን የሚለማመዱ ሙከራዎች `defaults/executor.to` ከሌለ በትንሹ የሚወስን ፈጻሚ ባይት ኮድ በራስ ሰር ያዋህዳሉ። ሙከራዎችን ለማካሄድ ምንም ቅድመ-ደረጃ አያስፈልግም. ለፓሪቲ ቀኖናዊ ባይትኮድ ለማመንጨት የሚከተሉትን ማድረግ ይችላሉ፡-
     - `cargo run --manifest-path scripts/generate_executor_to/Cargo.toml`
     - `cargo run --manifest-path scripts/regenerate_codec_samples/Cargo.toml`
-- If you change derive/proc-macro crates, run the trybuild UI suites via
-  `make check-proc-macro-ui` (or
-  `PROC_MACRO_UI_CRATES="crate1 crate2" make check-proc-macro-ui`) and refresh
-  `.stderr` fixtures when diagnostics change to keep messages stable.
-- Run `make dev-workflow` (wrapper around `scripts/dev_workflow.sh`) to execute fmt/clippy/build/test with `--locked` plus `swift test`; expect `cargo test --workspace` to take hours and use `--skip-tests` only for quick local loops. See `docs/source/dev_workflow.md` for the full runbook.
-- Enforce guardrails with `make check-agents-guardrails` to block `Cargo.lock` edits and new workspace crates, `make check-dependency-discipline` to fail on new dependencies unless explicitly allowed, and `make check-missing-docs` to prevent new `#[allow(missing_docs)]` shims, missing crate-level docs on touched crates, or new public items without doc comments (the guard refreshes `docs/source/agents/missing_docs_inventory.{json,md}` via `scripts/inventory_missing_docs.py`). Add `make check-tests-guard` so changed functions fail unless unit tests reference them (inline `#[cfg(test)]`/`#[test]` blocks or crate `tests/`; existing coverage counts) and `make check-docs-tests-metrics` so roadmap changes are paired with docs, tests, and metrics/dashboards. Keep TODO enforcement via `make check-todo-guard` so TODO markers are not dropped without accompanying docs/tests. `make check-env-config-surface` regenerates the env-toggle inventory and now fails when new **production** env shims appear relative to `AGENTS_BASE_REF`; set `ENV_CONFIG_GUARD_ALLOW=1` only after documenting intentional additions in the migration tracker. `make check-serde-guard` refreshes the serde inventory and fails on stale snapshots or new production `serde`/`serde_json` hits; set `SERDE_GUARD_ALLOW=1` only with an approved migration plan. Keep large deferrals visible via TODO breadcrumbs and follow-up tickets instead of deferring silently. Run `make check-std-only` to catch `no_std`/`wasm32` cfgs and `make check-status-sync` to ensure `roadmap.md` open items remain open-only and that roadmap/status changes land together; set `STATUS_SYNC_ALLOW_UNPAIRED=1` only for rare status-only typo fixes after pinning `AGENTS_BASE_REF`. For a single invocation, use `make agents-preflight` to run all guardrails together.
-- Run local serialization guards before pushing: `make guards`.
-  - This denies direct `serde_json` in production code, disallows new direct serde deps outside allowlist, and prevents ad‑hoc AoS/NCB helpers outside `crates/norito`.
-- Optionally dry-run Norito feature matrix locally: `make norito-matrix` (uses a fast subset).
-  - For full coverage, run `scripts/run_norito_feature_matrix.sh` without `--fast`.
-  - To include a downstream smoke per combo (default crate `iroha_data_model`): `make norito-matrix-downstream` or `scripts/run_norito_feature_matrix.sh --fast --downstream [crate]`.
-- For proc-macro crates, add a `trybuild` UI harness (`tests/ui.rs` + `tests/ui/pass`/`tests/ui/fail`) and commit `.stderr` diagnostics for the failing cases. Keep diagnostics stable and non-panicking; refresh fixtures with `TRYBUILD=overwrite cargo test -p <crate> -F trybuild-tests` and guard them with `cfg(all(feature = "trybuild-tests", not(coverage)))`.
-- Perform pre-commit routine like formatting & artifacts regeneration (see [`pre-commit.sample`](./hooks/pre-commit.sample))
-- With the `upstream` set to track [Hyperledger Iroha repository](https://github.com/hyperledger-iroha/iroha), `git pull -r upstream main`, `git commit -s`, `git push <your-fork>`, and [create a pull request](https://github.com/hyperledger-iroha/iroha/compare) to the `main` branch. Ensure it follows the [pull request guidelines](#pull-request-etiquette).
+- ዴሪቭ/ፕሮክ-ማክሮ ሳጥኖችን ከቀየሩ፣ trybuild UI suites ን በ በኩል ያሂዱ
+  `make check-proc-macro-ui` (ወይም
+  `PROC_MACRO_UI_CRATES="crate1 crate2" make check-proc-macro-ui`) እና አድስ
+  `.stderr` መጫዎቻዎች መልእክቶች እንዲረጋጉ ምርመራዎች ሲቀየሩ።
+- fmt/clippy/build/test with `--locked` plus `swift test` ለማስፈጸም `make dev-workflow` (በ `scripts/dev_workflow.sh` ዙሪያ መጠቅለያ) ያሂዱ; `cargo test --workspace` ሰዓታትን እንዲወስድ እና `--skip-tests` ለፈጣን የአካባቢ ዑደቶች ብቻ እንዲጠቀም ይጠብቁ። ለሙሉ runbook `docs/source/dev_workflow.md` ይመልከቱ።
+- `make check-agents-guardrails` የ `Cargo.lock` አርትዖቶችን እና አዲስ የስራ ቦታ ሳጥኖችን ለማገድ፣ `make check-dependency-discipline` በአዳዲስ ጥገኞች ላይ በግልፅ ካልተፈቀደ በቀር እንዳይሳካ እና `make check-missing-docs` በ `make check-missing-docs` ላይ የሚጠፋውን አዲስ I18NI04X30001 ሳጥኖች፣ ወይም አዲስ ይፋዊ እቃዎች ያለ ዶክ አስተያየት (ጠባቂው `docs/source/agents/missing_docs_inventory.{json,md}` በ `scripts/inventory_missing_docs.py` ያድሳል)። `make check-tests-guard` ጨምር ስለዚህ የተቀየረው ተግባር አይሳካም አሀድ ካልፈተነ በስተቀር (የመስመር ውስጥ `#[cfg(test)]`/`#[test]` ብሎኮች ወይም crate `tests/`፤ ነባር የሽፋን ብዛት) እና `make check-docs-tests-metrics` እና `make check-docs-tests-metrics` ከተደረጉ ለውጦች ጋር የተጣመሩ ናቸው መለኪያዎች / ዳሽቦርዶች. የ TODO ማስፈጸሚያን በI18NI0000142X ያቆዩ ስለዚህ የTODO ማርከሮች ያለ ሰነዶች/ሙከራዎች አይጣሉም። `make check-env-config-surface` env-toggle inventory ያድሳል እና አዲስ ** ምርት ** env shims ከ `AGENTS_BASE_REF` ጋር ሲታዩ አሁን አይሳካም; `ENV_CONFIG_GUARD_ALLOW=1` አዘጋጅ በስደት መከታተያ ውስጥ ሆን ተብሎ የተደረጉ ተጨማሪዎችን ከሰነድ በኋላ ብቻ። `make check-serde-guard` የሴሬድ ክምችትን ያድሳል እና በቆዩ ቅጽበተ-ፎቶዎች ወይም አዲስ ምርት `serde`/`serde_json` hits; `SERDE_GUARD_ALLOW=1` ከጸደቀ የፍልሰት እቅድ ጋር ብቻ አዘጋጅ። በጸጥታ ከማዘግየት ይልቅ በTODO የዳቦ ፍርፋሪ እና የክትትል ትኬቶች በኩል ትልልቅ ማስተላለፎች እንዲታዩ ያድርጉ። `make check-std-only`ን ያሂዱ `no_std`/`wasm32` cfgs እና I18NI0000153X ክፍት እቃዎች ክፍት-ብቻ ሆነው እንዲቀጥሉ እና የመንገድ ካርታ/ሁኔታ በአንድነት መሬት እንደሚቀየር ለማረጋገጥ; `STATUS_SYNC_ALLOW_UNPAIRED=1` አቀናብር ለብርቅ ሁኔታ-ብቻ የትየባ ጥገናዎች `AGENTS_BASE_REF` ከተሰካ በኋላ። ለአንድ ጥሪ፣ ሁሉንም የጥበቃ መንገዶችን አንድ ላይ ለማሄድ `make agents-preflight` ይጠቀሙ።
+- ከመግፋቱ በፊት የአካባቢያዊ ተከታታይ ጥበቃዎችን ያሂዱ: `make guards`.
+  - ይህ በቀጥታ `serde_json`ን በምርት ኮድ ይከለክላል፣ ከተፈቀደ ዝርዝር ውጭ አዲስ የቀጥታ ሰርዴ ዴፕን ይከለክላል እና ከ`crates/norito` ውጭ የአድሆክ AoS/NCB ረዳቶችን ይከላከላል።
+- እንደ አማራጭ ደረቅ-አሂድ I18NT0000003X ባህሪ ማትሪክስ በአካባቢው: `make norito-matrix` (ፈጣን ንዑስ ስብስብ ይጠቀማል).
+  - ለሙሉ ሽፋን `scripts/run_norito_feature_matrix.sh` ያለ `--fast` ያሂዱ።
+  - በአንድ ጥምር የታችኛው ተፋሰስ ጭስ ለማካተት (ነባሪ crate `iroha_data_model`): `make norito-matrix-downstream` ወይም `scripts/run_norito_feature_matrix.sh --fast --downstream [crate]`.
+- ለፕሮክ-ማክሮ ሣጥኖች `trybuild` UI harness (`tests/ui.rs` + I18NI0000169X/`tests/ui/fail`) ይጨምሩ እና ላልተሳኩ ጉዳዮች `.stderr` ምርመራ ያድርጉ። ዲያግኖስቲክስ የተረጋጋ እና የማይደናገጥ ያድርጉ; መገልገያዎችን በ `TRYBUILD=overwrite cargo test -p <crate> -F trybuild-tests` ያድሱ እና በ `cfg(all(feature = "trybuild-tests", not(coverage)))` ይጠብቋቸው።
+- እንደ ቅርጸት እና ቅርሶች ዳግም መወለድ ያሉ የቅድመ-ይግባኝ ተግባሮችን ያከናውኑ ([`pre-commit.sample`](./hooks/pre-commit.sample ይመልከቱ))
+- ለመከታተል ከ `upstream` ጋር [Hyperledger Iroha ማከማቻ](https://github.com/hyperledger-iroha/iroha) ፣ `git pull -r upstream main` ፣ `git commit -s` ፣ I01000000177X ፣ I0100000177X ፣I01000000177X ፣I0100000177 ጥያቄ](https://github.com/hyperledger-iroha/iroha/compare) ወደ I18NI0000179X ቅርንጫፍ። [የመጎተት ጥያቄ መመሪያዎች](#pull-request-etiquette) መከተሉን ያረጋግጡ።
 
-### AGENTS workflow quickstart
+### ወኪሎች የስራ ፍሰት ፈጣን ጅምር
 
-- Run `make dev-workflow` (wrapper around `scripts/dev_workflow.sh`, documented in `docs/source/dev_workflow.md`). It wraps `cargo fmt --all`, `cargo clippy --workspace --all-targets --locked -- -D warnings`, `cargo build/test --workspace --locked` (tests can take several hours), and `swift test`.
-- Use `scripts/dev_workflow.sh --skip-tests` or `--skip-swift` for faster iterations; rerun the full sequence before opening a pull request.
-- Guardrails: avoid touching `Cargo.lock`, adding new workspace members, introducing new dependencies, adding new `#[allow(missing_docs)]` shims, omitting crate-level docs, skipping tests when changing functions, dropping TODO markers without docs/tests, or reintroducing `no_std`/`wasm32` cfgs without approval. Run `make check-agents-guardrails` (or `AGENTS_BASE_REF=origin/main bash ci/check_agents_guardrails.sh`) plus `make check-dependency-discipline`, `make check-missing-docs` (refreshes `docs/source/agents/missing_docs_inventory.{json,md}`), `make check-tests-guard` (fails when production functions change without unit-test evidence—either tests change in the diff or existing tests must reference the function), `make check-docs-tests-metrics` (fails when roadmap changes lack docs/tests/metrics updates), `make check-todo-guard`, `make check-env-config-surface` (fails on stale inventories or new production env toggles; override with `ENV_CONFIG_GUARD_ALLOW=1` only after updating docs), and `make check-serde-guard` (fails on stale serde inventories or new production serde hits; override with `SERDE_GUARD_ALLOW=1` only with an approved migration plan) locally for early signal, `make check-std-only` for the std-only guard, and keep `roadmap.md`/`status.md` in sync with `make check-status-sync` (set `STATUS_SYNC_ALLOW_UNPAIRED=1` only for rare status-only typo fixes after pinning `AGENTS_BASE_REF`). Use `make agents-preflight` if you want a single command to run all guards before opening a PR.
+- `make dev-workflow` (በ `scripts/dev_workflow.sh` ዙሪያ መጠቅለያ ፣ በ `docs/source/dev_workflow.md` ውስጥ የተመዘገበ) ያሂዱ። `cargo fmt --all`፣ `cargo clippy --workspace --all-targets --locked -- -D warnings`፣ `cargo build/test --workspace --locked` (ፈተናዎች ብዙ ሰአታት ሊወስዱ ይችላሉ) እና `swift test` ይጠቀልላል።
+- ለፈጣን ድግግሞሽ `scripts/dev_workflow.sh --skip-tests` ወይም I18NI0000188X ይጠቀሙ; የመጎተት ጥያቄን ከመክፈትዎ በፊት ሙሉውን ቅደም ተከተል እንደገና ያስጀምሩ።
+- የጥበቃ መንገዶች፡- `Cargo.lock`ን ከመንካት ይቆጠቡ፣ አዲስ የስራ ቦታ አባላትን ከመጨመር፣ አዲስ ጥገኛዎችን ከማስተዋወቅ፣ አዲስ `#[allow(missing_docs)]` ሺምስ መጨመር፣ የክሬት ደረጃ ሰነዶችን መተው፣ ተግባራትን ሲቀይሩ ፈተናዎችን መዝለል፣ የ TODO ምልክቶችን ያለ ሰነዶች/ሙከራዎች መጣል ወይም እንደገና ማስተዋወቅ `no_std`/`wasm32` cfgs ያለፈቃድ። `make check-agents-guardrails` (ወይም `AGENTS_BASE_REF=origin/main bash ci/check_agents_guardrails.sh`) ሲደመር I18NI0000195X፣ `make check-missing-docs` (`docs/source/agents/missing_docs_inventory.{json,md}` ያድሳል)፣ `docs/source/agents/missing_docs_inventory.{json,md}`ን ያሂዱ፣ I18NI000000197Xን ያካሂዱ፣ I18NI000000197Xን ያካሂዱ፣ I18NI000000197Xን ያካሂዱ - ያለ አሃድ ውስጥ የሙከራ ተግባራት ሲቀየሩ አይሳካም። ተግባሩን ማጣቀስ አለበት)፣ `make check-docs-tests-metrics` (የመንገድ ካርታ ለውጦች ሰነዶች/ሙከራዎች/ሜትሪክስ ማሻሻያዎች ሲጎድሉ ይከሽፋል)፣ `make check-todo-guard`፣ `make check-env-config-surface` (ያረጁ ኢንቬንቶሪዎች ወይም አዲስ የምርት env መቀያየሪያዎች ላይ አልተሳካም)፣ በI182NI020000000000000000000000000 `make check-serde-guard` (ያረጁ ሰርዴ ኢንቬንቶሪዎች ወይም አዲስ የምርት serde hits ላይ አልተሳካም፤ በ`SERDE_GUARD_ALLOW=1` በተፈቀደ የፍልሰት ዕቅድ ብቻ መሻር) በአገር ውስጥ ለቅድመ ምልክት፣ `make check-std-only` ለstd-ብቻ ጥበቃ እና አቆይ። `roadmap.md`/`status.md` ከ `make check-status-sync` ጋር በማመሳሰል (`STATUS_SYNC_ALLOW_UNPAIRED=1` ለ ብርቅዬ ሁኔታ ብቻ `AGENTS_BASE_REF` አዘጋጅ)። PR ከመክፈትዎ በፊት ሁሉንም ጠባቂዎች ለማሄድ አንድ ነጠላ ትእዛዝ ከፈለጉ `make agents-preflight` ይጠቀሙ።
 
-### Reporting Bugs
+### ሳንካዎችን ሪፖርት ማድረግ
 
-A *bug* is an error, design flaw, failure or fault in Iroha that causes it to produce an incorrect, unexpected, or unintended result or behaviour.
+*ስህተት* በIroha ውስጥ ያለ ስህተት፣ የንድፍ ጉድለት፣ ውድቀት ወይም ጥፋት ሲሆን ይህም የተሳሳተ፣ ያልተጠበቀ ወይም ያልታሰበ ውጤት ወይም ባህሪ እንዲያመጣ ያደርገዋል።
 
-We track Iroha bugs via [GitHub Issues](https://github.com/hyperledger-iroha/iroha/issues?q=is%3Aopen+is%3Aissue+label%3ABug) labeled with the `Bug` tag.
+የIroha ሳንካዎችን በ[GitHub ጉዳዮች](https://github.com/hyperledger-iroha/iroha/issues?q=is%3Aopen+is%3Aissue+label%3ABug) በ`Bug` መለያ እንከታተላለን።
 
-When you create a new issue, there is a template for you to fill in. Here's the checklist of what you should do when you are reporting bugs:
-- [ ] Add the `Bug` tag
-- [ ] Explain the issue
-- [ ] Provide a minimum working example
-- [ ] Attach a screenshot
+አዲስ እትም ሲፈጥሩ የሚሞሉበት አብነት አለ። ስህተቶችን ሲዘግቡ ማድረግ ያለብዎትን ዝርዝር እነሆ፡-
+- [ ] የ `Bug` መለያ ያክሉ
+- [ ] ጉዳዩን አብራራ
+- [ ] አነስተኛ የሥራ ምሳሌ ያቅርቡ
+- [ ] ቅጽበታዊ ገጽ እይታን ያያይዙ
 
-<details> <summary>Minimum working example</summary>
+<ዝርዝሮች> <ማጠቃለያ>ዝቅተኛው የስራ ምሳሌ</ ማጠቃለያ>
 
-For each bug, you should provide a [minimum working example](https://en.wikipedia.org/wiki/Minimal_working_example). For example:
+ለእያንዳንዱ ሳንካ፣ [ቢያንስ የስራ ምሳሌ](https://en.wikipedia.org/wiki/Minimal_working_example) ማቅረብ አለቦት። ለምሳሌ፡-
 
 ```
 # Minting negative Assets with value spec `Numeric`.
@@ -98,30 +99,30 @@ not to be able to mint negative values
 </details>
 
 ---
-**Note:** Issues such as outdated documentation, insufficient documentation, or feature requests should use the `Documentation` or `Enhancement` labels. They are not bugs.
+**ማስታወሻ፡** እንደ ጊዜው ያለፈበት ሰነድ፣ በቂ ያልሆነ ሰነድ ወይም የባህሪ ጥያቄዎች ያሉ ጉዳዮች የ`Documentation` ወይም `Enhancement` መለያዎችን መጠቀም አለባቸው። ትኋኖች አይደሉም።
 
 ---
 
-### Reporting Vulnerabilities
+### ተጋላጭነቶችን ሪፖርት ማድረግ
 
-While we are proactive in preventing security problems, it is possible that you might come across a security vulnerability before we do.
+የደህንነት ችግሮችን በመከላከል ረገድ ንቁ ብንሆንም፣ ከማድረጋችን በፊት የደህንነት ተጋላጭነት ሊያጋጥሙዎት ይችላሉ።
 
-- Before the First Major Release (2.0) all vulnerabilities are considered bugs, so feel free to submit them as bugs [following the instructions above](#reporting-bugs).
-- After the First Major Release, use our [bug bounty program](https://hackerone.com/hyperledger) to submit vulnerabilities and get your reward.
+- ከመጀመሪያው ዋና ዋና መለቀቅ (2.0) በፊት ሁሉም ተጋላጭነቶች እንደ ስህተት ይቆጠራሉ፣ ስለዚህ እንደ ስህተት (ከላይ ያለውን መመሪያ በመከተል) (#reporting-bugs) ለማቅረብ ነፃነት ይሰማዎ።
+- ከመጀመሪያው ዋና መለቀቅ በኋላ፣ ተጋላጭነቶችን ለማስገባት እና ሽልማት ለማግኘት የእኛን [bug bounty program](https://hackerone.com/hyperledger) ይጠቀሙ።
 
-:exclamation: To minimize the damage caused by an unpatched security vulnerability, you should disclose the vulnerability directly to Hyperledger as soon as possible and **avoid disclosing the same vulnerability publicly** for a reasonable period of time.
+: ቃለ አጋኖ፡ ባልተሸፈነ የደህንነት ተጋላጭነት የሚደርሰውን ጉዳት ለመቀነስ ተጋላጭነቱን በተቻለ ፍጥነት ለHyperledger መግለፅ እና **ተመሳሳዩን ተጋላጭነት ለምክንያታዊ ጊዜ በይፋ ከመግለጽ መቆጠብ**።
 
-If you have any questions regarding our handling of security vulnerabilities, please feel free to contact any of the currently active maintainers in Rocket.Chat private messages.
+የእኛን የደህንነት ተጋላጭነቶች አያያዝ በተመለከተ ማንኛቸውም ጥያቄዎች ካሉዎት፣ እባክዎን በRocket.Chat የግል መልእክቶች ውስጥ ካሉት በአሁኑ ጊዜ ንቁ ጠባቂዎችን ለማነጋገር ነፃነት ይሰማዎ።
 
-### Suggesting Improvements
+### ማሻሻያዎችን ይጠቁማል
 
-Create [an issue](https://github.com/hyperledger-iroha/iroha/issues/new) on GitHub with the appropriate tags (`Optimization`, `Enhancement`) and describe the improvement you are suggesting. You may leave this idea for us or someone else to develop, or you may implement it yourself.
+በ GitHub ላይ [ችግር](https://github.com/hyperledger-iroha/iroha/issues/new) ፍጠር ተገቢ መለያዎች (`Optimization`፣ `Enhancement`) እና እየጠቆምክ ያለውን መሻሻል ግለጽ። ይህንን ሃሳብ ለእኛ ወይም ለሌላ ሰው እንድናዳብር ትተውት ወይም እርስዎ እራስዎ ተግባራዊ ሊያደርጉት ይችላሉ።
 
-If you intend to implement the suggestion yourself, do the following:
+ጥቆማውን እራስዎ ለመተግበር ካሰቡ የሚከተሉትን ያድርጉ።
 
-1. Assign the issue you created to yourself **before** you start working on it.
-2. Work on the feature you suggested and follow our [guidelines for code and documentation](#style-guides).
-3. When you are ready to open a pull request, make sure you follow the [pull request guidelines](#pull-request-etiquette) and mark it as implementing the previously created issue:
+1. የፈጠርከውን ችግር *በእሱ ላይ መስራት ከመጀመርህ በፊት* ስጥ።
+2. እርስዎ ባቀረቡት ባህሪ ላይ ይስሩ እና የእኛን [የኮድ እና ሰነዶች መመሪያ](#style-guides) ይከተሉ።
+3. የመጎተት ጥያቄን ለመክፈት ዝግጁ በሚሆኑበት ጊዜ [የጎትታ ጥያቄ መመሪያዎችን](#pull-request-etiquette) መከተልዎን ያረጋግጡ እና ቀደም ሲል የተፈጠረውን ችግር እንደመተግበር ምልክት ያድርጉበት፡
 
    ```
    feat: Description of the feature
@@ -131,157 +132,153 @@ If you intend to implement the suggestion yourself, do the following:
    Closes #1234
    ```
 
-4. If your change requires an API change, use the `api-changes` tag.
+4. የእርስዎ ለውጥ የኤፒአይ ለውጥ የሚፈልግ ከሆነ፣ የ`api-changes` መለያን ይጠቀሙ።
 
-   **Note:** features that require API changes may take longer to implement and approve as they require Iroha library makers to update their code.
+   **ማስታወሻ፡** የ API ለውጦችን የሚሹ ባህሪያት Iroha ላይብረሪ ሰሪዎች ኮዳቸውን እንዲያዘምኑ ስለሚፈልጉ ለመተግበር እና ለማጽደቅ ብዙ ጊዜ ሊወስዱ ይችላሉ።###ጥያቄዎች
 
-### Asking Questions
+ጥያቄ ስህተት ወይም ባህሪ ወይም የማመቻቸት ጥያቄ ያልሆነ ማንኛውም ውይይት ነው።
 
-A question is any discussion that is neither a bug nor a feature or optimization request.
+<ዝርዝሮች> <ማጠቃለያ> ጥያቄን እንዴት እጠይቃለሁ? </ ማጠቃለያ>
 
-<details> <summary> How do I ask a question? </summary>
+እባክዎን ጥያቄዎችዎን ወደ [የእኛ ፈጣን መልእክት መላላኪያ መድረክ](#contact) ይለጥፉ ይህም ሰራተኞች እና የማህበረሰቡ አባላት በጊዜው እንዲረዱዎት።
 
-Please post your questions to [one of our instant messaging platforms](#contact) so that the staff and members of the community could help you in a timely manner.
-
-You, as part of the aforementioned community, should consider helping others too. If you decide to help, please do so in a [respectful manner](CODE_OF_CONDUCT.md).
+እርስዎ ከላይ የተጠቀሰው ማህበረሰብ አካል እንደመሆናችሁ መጠን ሌሎችን ለመርዳት ማሰብ አለባችሁ። ለመርዳት ከወሰኑ፣ እባክዎን [በአክብሮት](CODE_OF_CONDUCT.md) ያድርጉት።
 
 </details>
 
-## Your First Code Contribution
+## የእርስዎ የመጀመሪያ ኮድ አስተዋጽዖ
 
-1. Find a beginner-friendly issue among issues with the [good-first-issue](https://github.com/hyperledger-iroha/iroha/labels/good%20first%20issue) label.
-2. Make sure that no one else is working on the issues you have chosen by checking that it is not assigned to anybody.
-3. Assign the issue to yourself so that others can see that someone is working on it.
-4. Read our [Rust Style Guide](#rust-style-guide) before you start writing code.
-5. When you are ready to commit your changes, read the [pull request guidelines](#pull-request-etiquette).
+1. በ[ጥሩ-የመጀመሪያ-ጉዳይ](https://github.com/hyperledger-iroha/iroha/labels/good%20first%20issue) መለያ ጉዳዮች መካከል ለጀማሪ ተስማሚ የሆነ ጉዳይ ያግኙ።
+2. ለማንም ያልተመደበ መሆኑን በማጣራት በመረጧቸው ጉዳዮች ላይ ማንም እየሰራ እንዳልሆነ ያረጋግጡ።
+3. አንድ ሰው በእሱ ላይ እየሰራ መሆኑን ሌሎች እንዲያዩ ጉዳዩን ለራስዎ ይመድቡ።
+4. ኮድ መጻፍ ከመጀመርዎ በፊት የእኛን [የዝገት ስታይል መመሪያ](#rust-style-guide) ያንብቡ።
+5. ለውጦችዎን ለማድረግ ዝግጁ ሲሆኑ [የመጎተት ጥያቄ መመሪያዎችን](#pull-request-etiquette) ያንብቡ።
 
-## Pull Request Etiquette
+## የመጎተት ጥያቄ ስነምግባር
 
-Please [fork](https://docs.github.com/en/get-started/quickstart/fork-a-repo) the [repository](https://github.com/hyperledger-iroha/iroha/tree/main) and [create a feature branch](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/creating-and-deleting-branches-within-your-repository) for your contributions. When working with **PRs from forks**, check [this manual](https://help.github.com/articles/checking-out-pull-requests-locally).
+እባክዎን [ሹካ](I18NU0000068X) [ማከማቻ](https://github.com/hyperledger-iroha/iroha/tree/main) እና [የባህሪ ቅርንጫፍ ይፍጠሩ](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/creating-and-deleting-branches-within-your-repository) ለእርስዎ አስተዋፅዖ። ከ ** PRs ከሹካዎች** ጋር ሲሰሩ [ይህን መመሪያ](https://help.github.com/articles/checking-out-pull-requests-locally) ይመልከቱ።
 
-#### Working on code contribution:
-- Follow the [Rust Style Guide](#rust-style-guide) and the [Documentation Style Guide](#documentation-style-guide).
-- Ensure that the code you've written is covered by tests. If you fixed a bug, please turn the minimum working example that reproduces the bug into a test.
-- When touching derive/proc-macro crates, run `make check-proc-macro-ui` (or
-  filter with `PROC_MACRO_UI_CRATES="crate1 crate2"`) so trybuild UI fixtures
-  stay in sync and diagnostics remain stable.
-- Document new public APIs (crate-level `//!` and `///` on new items), and run
-  `make check-missing-docs` to verify the guardrail. Call out the docs/tests you
-  added in your pull request description.
+#### በኮድ አስተዋፅዖ ላይ በመስራት ላይ፡-
+- [የዝገት ስታይል መመሪያ](#rust-style-guide) እና [የሰነድ ዘይቤ መመሪያ](#documentation-style-guide) ተከተል።
+- የጻፍከው ኮድ በፈተና የተሸፈነ መሆኑን ያረጋግጡ። ሳንካ ካስተካከሉ፣እባኮትን አነስተኛውን የስራ ምሳሌ ወደ ፈተና ይቀይሩት።
+- ዴሪቭ/ፕሮክ-ማክሮ ሳጥኖችን ሲነኩ `make check-proc-macro-ui` (ወይም) ያሂዱ።
+  ማጣሪያ በ`PROC_MACRO_UI_CRATES="crate1 crate2"`) ስለዚህ የዩአይ መገልገያዎችን ይሞክሩ
+  በማመሳሰል ውስጥ ይቆዩ እና ምርመራዎች የተረጋጋ እንደሆኑ ይቆያሉ።
+- አዲስ ይፋዊ ኤፒአይዎችን (የክሬት ደረጃ `//!` እና `///` በአዲስ ንጥሎች ላይ) እና አሂድ
+  `make check-missing-docs` የጥበቃ ሀዲዱን ለማረጋገጥ። ዶክመንቶችን ይደውሉ/ይፈትኑሃል
+  በመጎተት ጥያቄ መግለጫዎ ውስጥ ተጨምሯል።
 
-#### Committing your work:
-- Follow the [Git Style Guide](#git-workflow).
-- Squash your commits [either before](https://www.git-tower.com/learn/git/faq/git-squash/) or [during the merge](https://rietta.com/blog/github-merge-types/).
-- If during the preparation of your pull request your branch got out of date, rebase it locally with `git pull --rebase upstream main`. Alternatively, you may use the drop-down menu for the `Update branch` button and choose the `Update with rebase` option.
+### ስራህን በመፈጸም ላይ፡-
+- [Git Style Guide](#git-workflow) ተከተል።
+- ድርጊቶችዎን ያጥፉ (ከዚህ በፊት) (https://www.git-tower.com/learn/git/faq/git-squash/) ወይም [በውህደቱ ወቅት] (https://rietta.com/blog/github-merge-types/)።
+- የፍላጎት ጥያቄዎ በሚዘጋጅበት ወቅት ቅርንጫፍዎ ጊዜው ያለፈበት ከሆነ፣ በ `git pull --rebase upstream main` እንደገና ያዋቅሩት። በአማራጭ፣ ተቆልቋይ ሜኑ ለ`Update branch` ቁልፍ መጠቀም እና የ `Update with rebase` አማራጭን መምረጥ ትችላለህ።
 
-  In the interest of making this process easier for everyone, try not to have more than a handful of commits for a pull request, and avoid re-using feature branches.
+  ይህንን ሂደት ለሁሉም ሰው ቀላል ለማድረግ ፍላጎት ፣ ለጎትት ጥያቄ ከአንድ እፍኝ በላይ ላለማድረግ ይሞክሩ እና የባህሪ ቅርንጫፎችን እንደገና ከመጠቀም ይቆጠቡ።
 
-#### Creating a pull request:
-- Use an appropriate pull request description by following the guidance in the [Pull Request Etiquette](#pull-request-etiquette) section. Avoid deviating from these guidelines if possible.
-- Add an appropriately formatted [pull request title](#pull-request-titles).
-- If you feel like your code isn't ready to merge, but you want the maintainers to look through it, create a draft pull request.
+#### የመሳብ ጥያቄ መፍጠር፡-
+- በ[Pull Request Etiquette](#pull-request-etiquette) ክፍል ውስጥ ያለውን መመሪያ በመከተል ተገቢውን የመጎተት ጥያቄ መግለጫ ይጠቀሙ። ከተቻለ ከእነዚህ መመሪያዎች ማፈንገጥን ያስወግዱ።
+- በአግባቡ የተቀረጸ [የመጎተት ጥያቄ ርዕስ](#pull-request-titles) ያክሉ።
+- ኮድዎ ለመዋሃድ ዝግጁ እንዳልሆነ ከተሰማዎት ግን ጠባቂዎቹ እንዲመለከቱት ከፈለጉ ረቂቅ የመሳብ ጥያቄ ይፍጠሩ።
 
-#### Merging your work:
-- A pull request must pass all automated checks before being merged. At a minimum, the code must be formatted, passing all tests, as well as having no outstanding `clippy` lints.
-- A pull request cannot be merged without two approving reviews from the active maintainers.
-- Each pull request will automatically notify the code owners. An up to date list of current maintainers can be found in [MAINTAINERS.md](MAINTAINERS.md).
+#### ስራዎን በማዋሃድ;
+- የመሳብ ጥያቄ ከመዋሃዱ በፊት ሁሉንም አውቶማቲክ ቼኮች ማለፍ አለበት። ቢያንስ፣ ኮዱ መቀረፅ አለበት፣ ሁሉንም ፈተናዎች በማለፍ፣ እንዲሁም ምንም የላቀ `clippy` ሊንት የለውም።
+- የመሳብ ጥያቄ ከንቁ ጠባቂዎች ሁለት ማረጋገጫዎች ከሌለ ሊዋሃድ አይችልም።
+- እያንዳንዱ የመሳብ ጥያቄ የኮድ ባለቤቶችን በራስ-ሰር ያሳውቃል። የዘመኑ ጠባቂዎች ዝርዝር በ[MAINTAINERS.md](MAINTAINERS.md) ውስጥ ይገኛል።
 
-#### Review etiquette:
-- Do not resolve a conversation on your own. Let the reviewer make a decision.
-- Acknowledge review comments and engage with the reviewer (agree, disagree, clarify, explain, etc.). Do not ignore comments.
-- For simple code change suggestions, if you apply them directly, you can resolve the conversation.
-- Avoid overwriting your previous commits when pushing new changes. It obfuscates what changed since the last review and forces the reviewer to start from scratch. Commits are squashed before merging automatically.
+#### ሥነ-ምግባርን ይገምግሙ፡-
+- ውይይትን በራስዎ አይፍቱ። ገምጋሚው ውሳኔ ይስጥ።
+- የግምገማ አስተያየቶችን እውቅና ይስጡ እና ከገምጋሚው ጋር ይሳተፉ (እስማማለሁ፣ አልስማማም፣ ግልጽ ማድረግ፣ ማስረዳት፣ ወዘተ)። አስተያየቶችን ችላ አትበል።
+- ለቀላል የኮድ ለውጥ ጥቆማዎች በቀጥታ ከተጠቀሙባቸው ውይይቱን መፍታት ይችላሉ።
+- አዳዲስ ለውጦችን በሚገፋፉበት ጊዜ የቀደመውን ቃልዎን ከመፃፍ ይቆጠቡ። ካለፈው ግምገማ በኋላ የተለወጠውን ነገር ያደበዝዛል እና ገምጋሚው ከባዶ እንዲጀምር ያስገድደዋል። ኮሚቶች በራስ-ሰር ከመዋሃዳቸው በፊት ይጨመቃሉ።
 
-### Pull Request Titles
+### የጥያቄ ርዕሶችን ይጎትቱ
 
-We parse the titles of all the merged pull requests to generate changelogs. We also check that the title follows the convention via the *`check-PR-title`* check.
+የለውጥ መዝገቦችን ለማመንጨት ሁሉንም የተዋሃዱ የመሳብ ጥያቄዎችን ርዕስ እንተነተናል። እንዲሁም ርዕሱ ኮንቬንሽኑን የሚከተል መሆኑን በ *`check-PR-title`* ቼክ እናረጋግጣለን።
 
-To pass the *`check-PR-title`* check, the pull request title must adhere to the following guidelines:
+የ*`check-PR-title`* ቼክን ለማለፍ የፑል መጠየቂያ ርዕስ የሚከተሉትን መመሪያዎች ማክበር አለበት፡
 
-<details> <summary> Expand to read the detailed title guidelines</summary>
+<ዝርዝሮች> <ማጠቃለያ> ዝርዝር ርዕስ መመሪያዎችን ለማንበብ ዘርጋ</ ማጠቃለያ>
 
-1. Follow the [conventional commits](https://www.conventionalcommits.org/en/v1.0.0/#commit-message-with-multi-paragraph-body-and-multiple-footers) format.
+1. [የተለመደ ግዴታዎች](https://www.conventionalcommits.org/en/v1.0.0/#commit-message-with-multi-paragraph-body-and-multiple-footers) ቅርጸትን ተከተል።
 
-2. If the pull request has a single commit, the PR title should be the same as the commit message.
-
-</details>
-
-### Git Workflow
-
-- [Fork](https://docs.github.com/en/get-started/quickstart/fork-a-repo) the [repository](https://github.com/hyperledger-iroha/iroha/tree/main) and [create a feature branch](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/creating-and-deleting-branches-within-your-repository) for your contributions.
-- [Configure the remote](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/working-with-forks/configuring-a-remote-repository-for-a-fork) to sync your fork with the [Hyperledger Iroha repository](https://github.com/hyperledger-iroha/iroha/tree/main).
-- Use the [Git Rebase Workflow](https://git-rebase.io/). Avoid using `git pull`. Use `git pull --rebase` instead.
-- Use the provided [git hooks](./hooks/) to ease the development process.
-
-Follow these commit guidelines:
-
-- **Sign-off every commit**. If you don't, [DCO](https://github.com/apps/dco) will not let you merge.
-
-  Use `git commit -s` to automatically add `Signed-off-by: $NAME <$EMAIL>` as the final line of your commit message. Your name and email should be the same as specified in your GitHub account.
-
-  We also encourage you to sign your commits with GPG key using `git commit -sS` ([learn more](https://docs.github.com/en/authentication/managing-commit-signature-verification/signing-commits)).
-
-  You may use [the `commit-msg` hook](./hooks/) to automatically sign-off your commits.
-
-- Commit messages must follow [conventional commits](https://www.conventionalcommits.org/en/v1.0.0/#commit-message-with-multi-paragraph-body-and-multiple-footers) and the same naming schema as for [pull request titles](#pull-request-titles). This means:
-  - **Use present tense** ("Add feature", not "Added feature")
-  - **Use imperative mood** ("Deploy to docker..." not "Deploys to docker...")
-- Write a meaningful commit message.
-- Try keeping a commit message short.
-- If you need to have a longer commit message:
-  - Limit the first line of your commit message to 50 characters or less.
-  - The first line of your commit message should contain the summary of the work you've done. If you need more than one line, leave a blank line between each paragraph and describe your changes in the middle. The last line must be the sign-off.
-- If you modify the Schema (check by generating the schema with `kagami schema` and diff), you should make all changes to the schema in a separate commit with the message `[schema]`.
-- Try to stick to one commit per meaningful change.
-  - If you fixed several issues in one PR, give them separate commits.
-  - As mentioned previously, changes to the `schema` and the API should be done in appropriate commits separate from the rest of your work.
-  - Add tests for functionality in the same commit as that functionality.
-
-## Tests and Benchmarks
-
-- To run the source-code based tests, execute [`cargo test`](https://doc.rust-lang.org/cargo/commands/cargo-test.html) in the Iroha root. Note that this is a long process.
-- To run benchmarks, execute [`cargo bench`](https://doc.rust-lang.org/cargo/commands/cargo-bench.html) from the Iroha root. To help debug benchmark outputs, set the `debug_assertions` environment variable like so: `RUSTFLAGS="--cfg debug_assertions" cargo bench`.
-- If you are working on a particular component, be mindful that when you run `cargo test` in a [workspace](https://doc.rust-lang.org/cargo/reference/workspaces.html), it will only run the tests for that workspace, which usually doesn't include any [integration tests](https://www.testingxperts.com/blog/what-is-integration-testing).
-- If you want to test your changes on a minimal network, the provided [`docker-compose.yml`](defaults/docker-compose.yml) creates a network of 4 Iroha peers in docker containers that can be used to test consensus and asset propagation-related logic. We recommend interacting with that network using either [`iroha-python`](https://github.com/hyperledger-iroha/iroha-python), or the included Iroha client CLI.
-- Do not remove failing tests. Even tests that are ignored will be run in our pipeline eventually.
-- If possible, please benchmark your code both before and after making your changes, as a significant performance regression can break existing users' installations.
-
-### Serialization guard checks
-
-Run `make guards` to validate repository policies locally:
-
-- Deny-list direct `serde_json` in production sources (prefer `norito::json`).
-- Forbid direct `serde`/`serde_json` dependencies/imports outside the allowlist.
-- Prevent reintroduction of ad‑hoc AoS/NCB helpers outside `crates/norito`.
-
-### Debugging tests
-
-<details> <summary> Expand to learn how to change the log level or write logs to a JSON.</summary>
-
-If one of your tests is failing, you may want to decrease the maximum logging level. By default, Iroha only logs `INFO` level messages, but retains the ability to produce both `DEBUG` and `TRACE` level logs. This setting can be changed either using the `LOG_LEVEL` environment variable for code-based tests, or using the `/configuration` endpoint on one of the peers in a deployed network.
-
-While logs printed in the `stdout` are sufficient, you may find it more convenient to produce `json`-formatted logs into a separate file and parse them using either [node-bunyan](https://www.npmjs.com/package/bunyan) or [rust-bunyan](https://crates.io/crates/bunyan).
-
-Set the `LOG_FILE_PATH` environment variable to an appropriate location to store the logs and parse them using the above packages.
+2. የመጎተት ጥያቄው አንድ ቃል ብቻ ከሆነ፣የPR ርዕስ ከተግባር መልእክት ጋር ተመሳሳይ መሆን አለበት።
 
 </details>
 
-### Debugging using tokio console
+### Git የስራ ፍሰት
 
-<details> <summary> Expand to learn how to compile Iroha with tokio console support.</summary>
+- [ፎርክ](I18NU0000081X) [ማጠራቀሚያ](https://github.com/hyperledger-iroha/iroha/tree/main) እና [የባህሪ ቅርንጫፍ ፍጠር](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/creating-and-deleting-branches-within-your-repository) ለእርስዎ አስተዋጽዖ።
+ሹካዎን ከ[I18NT0000002X Iroha ማከማቻ](https://github.com/hyperledger-iroha/iroha/tree/main) ጋር ለማመሳሰል [የርቀት መቆጣጠሪያውን ያዋቅሩ](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/working-with-forks/configuring-a-remote-repository-for-a-fork)።
+- [Git Rebase Workflow](https://git-rebase.io/) ተጠቀም። `git pull` ከመጠቀም ይቆጠቡ። በምትኩ `git pull --rebase` ይጠቀሙ።
+- የእድገት ሂደቱን ለማቃለል የቀረበውን [git hooks](./hooks/) ይጠቀሙ።
 
-Sometimes it might be helpful for debugging to analyze tokio tasks using [tokio-console](https://github.com/tokio-rs/console).
+እነዚህን የቃል መመሪያዎች ይከተሉ፡-
 
-In this case you should compile Iroha with support of tokio console like that:
+- ** እያንዳንዱን ቃል ይውጡ ***። ካላደረጉ፣ [DCO](https://github.com/apps/dco) እንዲዋሃዱ አይፈቅድልዎም።
+
+  `git commit -s`ን በራስ ሰር ለማከል `Signed-off-by: $NAME <$EMAIL>`ን እንደ የቃል ቃልዎ የመጨረሻ መስመር ይጠቀሙ። የእርስዎ ስም እና ኢሜይል በ GitHub መለያዎ ላይ ከተጠቀሰው ጋር አንድ አይነት መሆን አለበት።
+
+  እንዲሁም `git commit -sS` ([የበለጠ ለመረዳት](https://docs.github.com/en/authentication/managing-commit-signature-verification/signing-commits) በመጠቀም ቃል ኪዳንዎን በጂፒጂ ቁልፍ እንዲፈርሙ እናበረታታዎታለን።
+
+  ግዴታዎችን በራስ ሰር ለማቋረጥ [`commit-msg` hook](./hooks/) መጠቀም ይችላሉ።
+
+- መልእክቶችን አስገባ [የተለመደ ግዴታዎች](https://www.conventionalcommits.org/en/v1.0.0/#commit-message-with-multi-paragraph-body-and-multiple-footers) እና እንደ [የመጎተት መጠየቂያ ርዕሶች](I18NU0000092X) ተመሳሳይ የስያሜ እቅድ መከተል አለባቸው። ይህ ማለት፡-
+  - **አሁን ያለውን ጊዜ ተጠቀም** ("ባህሪ አክል" ሳይሆን "የተጨመረ ባህሪ")
+  - **አስገዳጅ ስሜትን ተጠቀም** ("ወደ ዶክከር አሰማር..." ሳይሆን "ወደ ዶክከር ያሰማራል...")
+- ትርጉም ያለው ቃል ኪዳን ይጻፉ።
+- የቃል ቃልን አጭር ለማድረግ ይሞክሩ።
+- ረዘም ያለ የቃል መልእክት እንዲኖርዎት ከፈለጉ፡-
+  - የመልእክትዎን የመጀመሪያ መስመር በ 50 ቁምፊዎች ወይም ከዚያ በታች ይገድቡ።
+  - የቃል ኪዳንዎ የመጀመሪያ መስመር የሰሩት ስራ ማጠቃለያ መያዝ አለበት። ከአንድ በላይ መስመር ከፈለጉ በእያንዳንዱ አንቀጽ መካከል ባዶ መስመር ይተዉ እና ለውጦቹን በመሃል ይግለጹ። የመጨረሻው መስመር መውጫ መሆን አለበት.
+- መርሃግብሩን ካሻሻሉ (እቅዱን በ `kagami schema` እና diff በማመንጨት ያረጋግጡ) ሁሉንም ለውጦች በ `[schema]` መልእክት በተለየ ቃል ማድረግ አለብዎት ።
+- ትርጉም ባለው ለውጥ አንድ ቃል ለመከተል ይሞክሩ።
+  - በአንድ PR ውስጥ ብዙ ጉዳዮችን ካስተካከሉ የተለየ ቃል ይስጧቸው።
+  - ቀደም ሲል እንደተገለፀው በ `schema` እና በኤፒአይ ላይ የተደረጉ ለውጦች ከቀሪው ስራዎ ተለይተው በተገቢው ቁርጠኝነት መከናወን አለባቸው።
+  - ከተግባራዊነቱ ጋር በተመሳሳይ ቃል ለተግባራዊነት ሙከራዎችን ያክሉ።
+
+## ሙከራዎች እና መመዘኛዎች
+
+- የምንጭ-ኮድ ሙከራዎችን ለማስኬድ፣ [`cargo test`](https://doc.rust-lang.org/cargo/commands/cargo-test.html) በIroha ስር ያስፈጽሙ። ይህ ረጅም ሂደት መሆኑን ልብ ይበሉ.
+- መለኪያዎችን ለማስኬድ [`cargo bench`](https://doc.rust-lang.org/cargo/commands/cargo-bench.html) ከ Iroha ስር ያስፈጽሙ። የቤንችማርክ ውጽዓቶችን ለማረም የ`debug_assertions` አካባቢን እንደዚሁ ያዘጋጁ፡ `RUSTFLAGS="--cfg debug_assertions" cargo bench`።
+- በአንድ የተወሰነ አካል ላይ እየሰሩ ከሆነ, `cargo test` ን በ [የስራ ቦታ] (https://doc.rust-lang.org/cargo/reference/workspaces.html) ውስጥ ሲያሄዱ, ለዚያ የስራ ቦታ ሙከራዎችን ብቻ እንደሚያካሂድ ያስታውሱ, ይህም አብዛኛውን ጊዜ ምንም [የውህደት ሙከራዎች] (https://www.testingxperts.com/blog/what-is-integration-testing) አያካትትም.
+- ለውጦችዎን በትንሹ አውታረ መረብ ላይ መሞከር ከፈለጉ የቀረበው [`docker-compose.yml`](I18NU0000097X) የ 4 Iroha እኩዮችን በዶክ ኮንቴይነሮች ውስጥ መግባባትን እና ከንብረት ስርጭት ጋር የተያያዘ አመክንዮ ይፈጥራል። [`iroha-python`](https://github.com/hyperledger-iroha/iroha-python) ወይም የተካተተውን Iroha ደንበኛ CLIን በመጠቀም ከዚያ አውታረ መረብ ጋር መስተጋብር እንዲፈጥሩ እንመክራለን።
+- ያልተሳኩ ሙከራዎችን አያስወግዱ. ችላ የተባሉ ፈተናዎች እንኳን በመጨረሻ በእኛ ቧንቧ ውስጥ ይከናወናሉ.
+- ከተቻለ ለውጦችዎን ከማድረግዎ በፊት እና በኋላ ኮድዎን ያመልክቱ ፣ ምክንያቱም ጉልህ የሆነ የአፈፃፀም ውድቀት የነባር ተጠቃሚዎችን ጭነቶች ሊሰብር ይችላል።
+
+### ተከታታይ ጠባቂ ቼኮች
+
+የማጠራቀሚያ ፖሊሲዎችን በአገር ውስጥ ለማረጋገጥ `make guards`ን ያሂዱ፡
+
+- በቀጥታ መካድ-ዝርዝር I18NI0000247X በምርት ምንጮች (`norito::json` ይመርጣል)።
+- በቀጥታ I18NI0000249X/`serde_json` ጥገኞችን/ማስመጣቶችን ከተፈቀደ ዝርዝር ውስጥ ከልክል።
+- ከ`crates/norito` ውጭ የአድሆክ AoS/NCB ረዳቶችን እንደገና እንዳይገቡ መከላከል።
+
+### የማረም ሙከራዎች
+
+<ዝርዝሮች> <ማጠቃለያ> የምዝግብ ማስታወሻ ደረጃን እንዴት መቀየር እንደሚችሉ ለማወቅ ወይም መዝገቦችን ወደ JSON ለመጻፍ ዘርጋ።</ ማጠቃለያ>
+
+ከፈተናዎችዎ አንዱ ካልተሳካ፣ ከፍተኛውን የምዝግብ ማስታወሻ ደረጃ መቀነስ ይፈልጉ ይሆናል። በነባሪ፣ Iroha የ`INFO` ደረጃ መልዕክቶችን ብቻ ይመዘግባል፣ነገር ግን ሁለቱንም የ`DEBUG` እና `TRACE` ደረጃ ምዝግብ ማስታወሻዎችን የማምረት ችሎታ አለው። ይህ ቅንብር በኮድ ላይ ለተመሰረቱ ሙከራዎች የ`LOG_LEVEL` አካባቢ ተለዋዋጭን በመጠቀም ወይም በተዘረጋ አውታረ መረብ ውስጥ ካሉ እኩዮቹ በአንዱ ላይ የ `/configuration` የመጨረሻ ነጥብን በመጠቀም ሊቀየር ይችላል።በ `stdout` ውስጥ የታተሙ ምዝግብ ማስታወሻዎች በቂ ሲሆኑ፣ `json`-የተቀረጹ ምዝግብ ማስታወሻዎችን ወደ ተለየ ፋይል ለማምረት እና ሁለቱንም [node-bunyan](https://www.npmjs.com/package/bunyan) ወይም [ዝገት-ቡንያን](0XNUMX) በመጠቀም መተንተን የበለጠ አመቺ ሆኖ ሊያገኙት ይችላሉ።
+
+ምዝግብ ማስታወሻዎቹን ለማከማቸት እና ከላይ ያሉትን ጥቅሎች በመጠቀም ለመተንተን የ `LOG_FILE_PATH` አካባቢ ተለዋዋጭ ወደ ተገቢ ቦታ ያቀናብሩ።
+
+</details>
+
+### የቶኪዮ ኮንሶል በመጠቀም ማረም
+
+<ዝርዝሮች> <ማጠቃለያ> Irohaን በቶኪዮ ኮንሶል ድጋፍ እንዴት ማጠናቀር እንደሚቻል ለማወቅ ዘርጋ።</summary>
+
+አንዳንድ ጊዜ [tokio-console](https://github.com/tokio-rs/console) በመጠቀም የቶኪዮ ተግባራትን ለመተንተን ለማረም ጠቃሚ ሊሆን ይችላል።
+
+በዚህ አጋጣሚ Iroha ከቶኪዮ ኮንሶል ድጋፍ ጋር ማጠናቀር አለቦት፡
 
 ```bash
 RUSTFLAGS="--cfg tokio_unstable" cargo build --features tokio-console
 ```
 
-Port for tokio console can by configured through `LOG_TOKIO_CONSOLE_ADDR` configuration parameter (or environment variable).
-Using tokio console require log level to be `TRACE`, can be enabled through configuration parameter or environment variable `LOG_LEVEL`.
+የቶኪዮ ኮንሶል ወደብ በ`LOG_TOKIO_CONSOLE_ADDR` የውቅረት መለኪያ (ወይም የአካባቢ ተለዋዋጭ) በኩል ሊዋቀር ይችላል።
+ቶኪዮ ኮንሶል ለመጠቀም የምዝግብ ማስታወሻ ደረጃን ይፈልጋል `TRACE`፣በውቅረት መለኪያ ወይም በአከባቢው ተለዋዋጭ I18NI0000262X ሊነቃ ይችላል።
 
-Example of running Iroha with tokio console support using `scripts/test_env.sh`:
+Irohaን ከቶኪዮ ኮንሶል ድጋፍ `scripts/test_env.sh` በመጠቀም የማስኬድ ምሳሌ፡
 
 ```bash
 # 1. Compile Iroha
@@ -294,27 +291,27 @@ tokio-console http://127.0.0.1:5555
 
 </details>
 
-### Profiling
+### መገለጫ
 
-<details> <summary> Expand to learn how to profile Iroha. </summary>
+<ዝርዝር> <ማጠቃለያ> Iroha እንዴት ፕሮፋይል እንደሚደረግ ለማወቅ ዘርጋ። </ ማጠቃለያ>
 
-To optimize performance it's useful to profile Iroha.
+አፈጻጸምን ለማመቻቸት Iroha ፕሮፋይል ማድረግ ጠቃሚ ነው።
 
-Profiling builds currently require a nightly toolchain. To prepare one, compile Iroha with the `profiling` profile and feature using `cargo +nightly`:
+የመገለጫ ግንባታዎች በአሁኑ ጊዜ የምሽት የመሳሪያ ሰንሰለት ያስፈልጋቸዋል። አንዱን ለማዘጋጀት Irohaን ከ`profiling` መገለጫ እና ባህሪ ጋር `cargo +nightly` በመጠቀም ያሰባስቡ፡
 
 ```bash
 RUSTFLAGS="-C force-frame-pointers=on" cargo +nightly -Z build-std build --target your-desired-target --profile profiling --features profiling
 ```
 
-Then start Iroha and attach profiler of your choice to the Iroha pid.
+ከዚያ Iroha ይጀምሩ እና የመረጡትን ፕሮፋይል ከ Iroha ፒዲ ጋር አያይዘው።
 
-Alternatively it's possible to build Iroha inside docker with profiler support and profile Iroha this way.
+በአማራጭ Iroha በፕሮፋይለር ድጋፍ እና ፕሮፋይል I18NT0000029X ውስጠ-ዶከር መገንባት ይቻላል።
 
 ```bash
 docker build -f Dockerfile.glibc --build-arg="PROFILE=profiling" --build-arg='RUSTFLAGS=-C force-frame-pointers=on' --build-arg='FEATURES=profiling' --build-arg='CARGOFLAGS=-Z build-std' -t iroha:profiling .
 ```
 
-E.g. using perf (available only on linux):
+ለምሳሌ. perf በመጠቀም (በሊኑክስ ላይ ብቻ ይገኛል)
 
 ```bash
 # to capture profile
@@ -323,15 +320,15 @@ sudo perf record -g -p <PID>
 sudo perf report
 ```
 
-To be able to observe profile of the executor during Iroha profiling, executor should be compiled without stripping symbols.
-It can be done by running:
+በIroha ፕሮፋይል ወቅት የፈጻሚውን ፕሮፋይል ለመከታተል፣ ፈጻሚው ሳይነጠቅ ምልክቶችን ማጠናቀር አለበት።
+በመሮጥ ሊከናወን ይችላል-
 
 ```bash
 # compile executor without optimizations
 cargo run --bin kagami -- ivm build ./path/to/executor --out-file executor.to
 ```
 
-With profiling feature enabled Iroha exposes endpoint to scrap pprof profiles:
+የመገለጫ ባህሪን በነቃ I18NT0000031X የመጨረሻ ነጥቡን ለ ppprof መገለጫዎች ያጋልጣል፡
 
 ```bash
 # profile Iroha for 30 seconds and download the profile data
@@ -342,92 +339,92 @@ go tool pprof -web profile.pb
 
 </details>
 
-## Style Guides
+## የቅጥ መመሪያዎች
 
-Please follow these guidelines when you make code contributions to our project:
+ለፕሮጀክታችን የኮድ አስተዋጾ ሲያደርጉ እባክዎ እነዚህን መመሪያዎች ይከተሉ፡-
 
-### Git Style Guide
+### Git ስታይል መመሪያ
 
-:book: [Read git guidelines](#git-workflow)
+መጽሐፍ: [git መመሪያዎችን ያንብቡ](#git-workflow)
 
-### Rust Style Guide
+### የዝገት ዘይቤ መመሪያ
 
-<details> <summary> :book: Read code guidelines</summary>
+<ዝርዝር> <ማጠቃለያ> :መጽሐፍ፡ የኮድ መመሪያዎችን ያንብቡ</ ማጠቃለያ >
 
-- Use `cargo fmt --all` (edition 2024) to format code.
+- ኮድ ለመቅረጽ `cargo fmt --all` (እትም 2024) ይጠቀሙ።
 
-Code guidelines:
+የኮድ መመሪያዎች፡-
 
-- Unless otherwise specified, refer to [Rust best practices](https://github.com/mre/idiomatic-rust).
-- Use the `mod.rs` style. [Self-named modules](https://rust-lang.github.io/rust-clippy/master/) will not pass static analysis, except as [`trybuild`](https://crates.io/crates/trybuild) tests.
-- Use a domain-first modules structure.
+- በሌላ መልኩ ካልተገለጸ በቀር፣ [ዝገት ምርጥ ልምዶችን](https://github.com/mre/idiomatic-rust) ይመልከቱ።
+- የ `mod.rs` ዘይቤን ይጠቀሙ። [በራስ የተሰየሙ ሞጁሎች](https://rust-lang.github.io/rust-clippy/master/) እንደ [`trybuild`](https://crates.io/crates/trybuild) ሙከራዎች ካልሆነ በስተቀር የማይንቀሳቀስ ትንታኔን አያልፍም።
+- የጎራ-የመጀመሪያ ሞጁሎችን መዋቅር ይጠቀሙ።
 
-  Example: don't do `constants::logger`. Instead, invert the hierarchy, putting the object for which it is used first: `iroha_logger::constants`.
-- Use [`expect`](https://learning-rust.github.io/docs/unwrap-and-expect/) with an explicit error message or proof of infallibility instead of `unwrap`.
-- Never ignore an error. If you can't `panic` and can't recover, it at least needs to be recorded in the log.
-- Prefer to return a `Result` instead of `panic!`.
-- Group related functionality spatially, preferably inside appropriate modules.
+  ምሳሌ፡ `constants::logger` አታድርጉ። በምትኩ፣ ተዋረድን ገልብጥ፣ የሚገለገልበትን ዕቃ አስቀድመህ፡ `iroha_logger::constants`።
+- [`expect`](https://learning-rust.github.io/docs/unwrap-and-expect/) ከ `unwrap` ይልቅ ግልጽ በሆነ የስህተት መልእክት ወይም ያለመሳሳት ማረጋገጫ ይጠቀሙ።
+- ስህተትን በጭራሽ ችላ አትበል። `panic` ካልቻሉ እና ማገገም ካልቻሉ ቢያንስ በምዝግብ ማስታወሻው ውስጥ መመዝገብ አለበት።
+- ከ `panic!` ይልቅ `Result` መመለስን እመርጣለሁ።
+- ከቡድን ጋር የተዛመደ ተግባር ከቦታ ፣ በተለይም በተገቢው ሞጁሎች ውስጥ።
 
-  For example, instead of having a block with `struct` definitions and then `impl`s for each individual struct, it is better to have the `impl`s related to that `struct` next to it.
-- Declare before implementation: `use` statements and constants at the top, unit tests at the bottom.
-- Try to avoid `use` statements if the imported name is used only once. This makes moving your code into a different file easier.
-- Do not silence `clippy` lints indiscriminately. If you do, explain your reasoning with a comment (or `expect` message).
-- Prefer  `#[outer_attribute]` to `#![inner_attribute]` if either is available.
-- If your function doesn't mutate any of its inputs (and it shouldn't mutate anything else), mark it as `#[must_use]`.
-- Avoid `Box<dyn Error>` if possible (we prefer strong typing).
-- If your function is a getter/setter, mark it `#[inline]`.
-- If your function is a constructor (i.e., it's creating a new value from the input parameters and calls `default()`), mark it `#[inline]`.
-- Avoid tying your code to concrete data structures; `rustc` is smart enough to turn a `Vec<InstructionExpr>` into `impl IntoIterator<Item = InstructionExpr>` and vice versa when it needs to.
+  ለምሳሌ፣ ከ `struct` ፍቺዎች እና ከዚያም `impl`s ለእያንዳንዱ ግለሰብ መዋቅር ብሎክ ከመያዝ፣ከዚያ `struct` ጋር የሚዛመዱ I18NI0000278X ዎች ከጎኑ ቢኖሩት ይሻላል።
+- ከመተግበሩ በፊት ይግለጹ: `use` መግለጫዎች እና ቋሚዎች ከላይ, ከታች የክፍል ሙከራዎች.
+- የመጣው ስም አንድ ጊዜ ብቻ ጥቅም ላይ ከዋለ `use` መግለጫዎችን ለማስወገድ ይሞክሩ። ይህ ኮድዎን ወደ ሌላ ፋይል ማዛወር ቀላል ያደርገዋል።
+- `clippy` lints ያለአንዳች ልዩነት ዝም አያድርጉ። ካደረክ፣ ምክንያትህን በአስተያየት (ወይም `expect` መልእክት) አስረዳ።
+- አንዱ ካለ `#[outer_attribute]` ወደ `#![inner_attribute]` ይምረጡ።
+- የእርስዎ ተግባር ማንኛውንም ግብዓቱን ካልቀየረ (እና ሌላ ማንኛውንም ነገር መለወጥ የለበትም) እንደ `#[must_use]` ምልክት ያድርጉበት።
+- ከተቻለ `Box<dyn Error>` ያስወግዱ (ጠንካራ መተየብ እንመርጣለን)።
+- ተግባርዎ ገተር/አቀናባሪ ከሆነ `#[inline]` ምልክት ያድርጉበት።
+- የእርስዎ ተግባር ገንቢ ከሆነ (ማለትም ከግቤት መለኪያዎች አዲስ እሴት እየፈጠረ እና `default()` ይደውሉ) `#[inline]` ምልክት ያድርጉበት።
+- ኮድዎን ከኮንክሪት መረጃ መዋቅሮች ጋር ከማያያዝ ይቆጠቡ; `rustc` አንድ `Vec<InstructionExpr>` ወደ `impl IntoIterator<Item = InstructionExpr>` እና በተገላቢጦሽ ሲፈልግ ለመቀየር በቂ ብልህ ነው።
 
-Naming guidelines:
-- Use only full words in *public* structure, variable, method, trait, constant, and module names. However, abbreviations are allowed if:
-  - The name is local (e.g. closure arguments).
-  - The name is abbreviated by Rust convention (e.g. `len`, `typ`).
-  - The name is an accepted abbreviation (e.g. `tx`, `wsv` etc); see the [project glossary](https://docs.iroha.tech/reference/glossary.html) for canonical abbreviations.
-  - The full name would have been shadowed by a local variable (e.g. `msg <- message`).
-  - The full name would have made the code cumbersome with more than 5-6 words in it (e.g. `WorldStateViewReceiverTrait -> WSVRecvTrait`).
-- If you change naming conventions, make sure that the new name that you've chosen is _much_ clearer than what we had before.
+የስም መመሪያዎች፡-
+- በ *ህዝባዊ* መዋቅር፣ ተለዋዋጭ፣ ዘዴ፣ ባህሪ፣ ቋሚ እና ሞጁል ስሞች ውስጥ ሙሉ ቃላትን ብቻ ተጠቀም። ሆኖም፣ አህጽሮተ ቃላት የሚፈቀዱት ከሆነ፡-
+  - ስሙ አካባቢያዊ ነው (ለምሳሌ የመዝጊያ ክርክሮች)።
+  - ስሙ በሩስት ኮንቬንሽን (ለምሳሌ `len`፣ `typ`) አህጽሮታል።
+  - ስሙ ተቀባይነት ያለው ምህጻረ ቃል ነው (ለምሳሌ `tx`, `wsv` ወዘተ); [የፕሮጀክት መዝገበ ቃላት](https://docs.iroha.tech/reference/glossary.html) ለቀኖናዊ አህጽሮተ ቃላት ይመልከቱ።
+  - ሙሉው ስም በአካባቢያዊ ተለዋዋጭ (ለምሳሌ `msg <- message`) ይጨልም ነበር።
+  - ሙሉ ስሙ በውስጡ ከ5-6 ቃላት በላይ (ለምሳሌ `WorldStateViewReceiverTrait -> WSVRecvTrait`) ኮዱን አስቸጋሪ ያደርገዋል።
+- የስያሜ ስምምነቶችን ከቀየሩ አዲሱ የመረጡት ስም ከዚህ በፊት ከነበረው የበለጠ _ይበልጥ ግልጽ መሆኑን ያረጋግጡ።
 
-Comment guidelines:
-- When writing non-doc comments, instead of describing *what* your function does, try to explain *why* it does something in a particular way. This will save you and the reviewer time.
-- You may leave `TODO` markers in code as long as you reference an issue that you created for it. Not creating an issue means it doesn't get merged.
+የአስተያየት መመሪያዎች፡-
+- የሰነድ ያልሆኑ አስተያየቶችን በሚጽፉበት ጊዜ, ተግባርዎ * ምን እንደሚሰራ ከመግለጽ ይልቅ አንድን ነገር በተለየ መንገድ ለምን እንደሚሰራ ለማስረዳት ይሞክሩ. ይህ እርስዎን እና የገምጋሚውን ጊዜ ይቆጥባል።
+- የፈጠርከውን ችግር እስካልጠቀስክ ድረስ `TODO` ማርከሮችን በኮድ ውስጥ መተው ትችላለህ። ጉዳይ አለመፍጠር ማለት አይዋሃድም ማለት ነው።
 
-We use pinned dependencies. Follow these guidelines for versioning:
+የተጣበቁ ጥገኞችን እንጠቀማለን. ለማተም የሚከተሉትን መመሪያዎች ይከተሉ፡-
 
-- If your work depends on a particular crate, see if it wasn't already installed using [`cargo tree`](https://doc.rust-lang.org/cargo/commands/cargo-tree.html) (use `bat` or `grep`), and try to use that version, instead of the latest version.
-- Use the full version "X.Y.Z" in `Cargo.toml`.
-- Provide version bumps in a separate PR.
-
-</details>
-
-### Documentation Style Guide
-
-<details> <summary> :book: Read documentation guidelines</summary>
-
-
-- Use the [`Rust Docs`](https://doc.rust-lang.org/cargo/commands/cargo-doc.html) format.
-- Prefer the single-line comment syntax. Use `///` above inline modules and `//!` for file-based modules.
-- If you can link to a structure/module/function's docs, do it.
-- If you can provide an example of usage, do it. This [is also a test](https://doc.rust-lang.org/rustdoc/documentation-tests.html).
-- If a function can error or panic, avoid modal verbs. Example: `Fails if disk IO fails` instead of `Can possibly fail, if disk IO happens to fail`.
-- If a function can error or panic for more than one reason, use a bulleted list of failure conditions, with the appropriate `Error` variants (if any).
-- Functions *do* things. Use imperative mood.
-- Structures *are* things. Get to the point. For example `Log level for reloading from the environment` is better than `This struct encapsulates the idea of logging levels, and is used for reloading from the environment`.
-- Structures have fields, which also *are* things.
-- Modules *contain* things, and we know that. Get to the point. Example: use `Logger-related traits.` instead of `Module which contains logger-related logic`.
-
+- ስራዎ በአንድ የተወሰነ ሳጥን ላይ የሚመረኮዝ ከሆነ [`cargo tree`](https://doc.rust-lang.org/cargo/commands/cargo-tree.html) (`bat` ወይም `bat` ወይም `grep` ተጠቀም) አልተጫነም እንደሆነ ይመልከቱ እና ያንን ስሪት ለመጠቀም ይሞክሩ፣ የቅርብ ጊዜው ስሪት።
+- ሙሉውን ስሪት "X.Y.Z" በ `Cargo.toml` ይጠቀሙ.
+- በተለየ PR ውስጥ የስሪት እብጠቶችን ያቅርቡ።
 
 </details>
 
-## Contact
+### የሰነድ ዘይቤ መመሪያ
 
-Our community members are active at:
+<ዝርዝር> <ማጠቃለያ> :መጽሐፍ፡ የሰነድ መመሪያዎችን ያንብቡ</summary>
 
-| Service       | Link                                                               |
-|---------------|--------------------------------------------------------------------|
-| StackOverflow | https://stackoverflow.com/questions/tagged/hyperledger-iroha       |
-| Mailing List  | https://lists.lfdecentralizedtrust.org/g/iroha                     |
-| Telegram      | https://t.me/hyperledgeriroha                                      |
-| Discord       | https://discord.com/channels/905194001349627914/905205848547155968 |
+
+- የ [`Rust Docs`](https://doc.rust-lang.org/cargo/commands/cargo-doc.html) ቅርጸት ይጠቀሙ።
+- የነጠላ መስመር አስተያየት አገባብ ይምረጡ። `///` ከመስመር ሞጁሎች በላይ እና `//!` ፋይል ላይ ለተመሰረቱ ሞጁሎች ተጠቀም።
+- ወደ መዋቅር/ሞዱል/ተግባር ሰነዶች ማገናኘት ከቻሉ ያድርጉት።
+- የአጠቃቀም ምሳሌ ማቅረብ ከቻሉ ያድርጉት። ይህ [እንዲሁም ፈተና ነው](https://doc.rust-lang.org/rustdoc/documentation-tests.html)።
+- አንድ ተግባር ሊሳሳት ወይም ሊደነግጥ የሚችል ከሆነ፣ የሞዳል ግሦችን ያስወግዱ። ምሳሌ፡- ከ`Can possibly fail, if disk IO happens to fail` ይልቅ `Fails if disk IO fails`።
+- አንድ ተግባር ከአንድ በላይ በሆነ ምክንያት ሊሳሳት ወይም ሊደነግጥ ከቻለ፣ ከተገቢው `Error` ተለዋጮች (ካለ) ነጥበ ምልክት የተደረገባቸው የውድቀት ሁኔታዎች ዝርዝር ይጠቀሙ።
+- ተግባራት * ነገሮችን ያደርጋሉ። የግድ ስሜትን ተጠቀም።
+- መዋቅሮች * ነገሮች ናቸው. ወደ ነጥቡ ግባ። ለምሳሌ `Log level for reloading from the environment` ከ `This struct encapsulates the idea of logging levels, and is used for reloading from the environment` የተሻለ ነው።
+- መዋቅሮች ሜዳዎች አሏቸው, እነሱም * ነገሮች ናቸው.
+- ሞጁሎች * ነገሮችን ይይዛሉ, እና ያንን እናውቃለን. ወደ ነጥቡ ግባ። ምሳሌ፡ ከ`Module which contains logger-related logic` ይልቅ `Logger-related traits.` ይጠቀሙ።
+
+
+</details>
+
+## ተገናኝ
+
+የእኛ የማህበረሰቡ አባላት በሚከተለው ላይ ንቁ ተሳትፎ ያደርጋሉ፡-
+
+| አገልግሎት | አገናኝ |
+|--------------------|
+| StackOverflow | https://stackoverflow.com/questions/tagged/hyperledger-iroha |
+| የደብዳቤ መላኪያ ዝርዝር | https://lists.lfdecentralizedtrust.org/g/iroha |
+| ቴሌግራም | https://t.me/hyperledgeriroha |
+| አለመግባባት | https://discord.com/channels/905194001349627914/905205848547155968 |
 
 ---

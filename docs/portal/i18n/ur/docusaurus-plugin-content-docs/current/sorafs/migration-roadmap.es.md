@@ -4,14 +4,16 @@ direction: rtl
 source: docs/portal/docs/sorafs/migration-roadmap.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: "Hoja de ruta de migración de SoraFS"
+عنوان: "SoraFS ہجرت روڈ میپ"
 ---
 
-> Adaptado de [`docs/source/sorafs/migration_roadmap.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/migration_roadmap.md).
+> [`docs/source/sorafs/migration_roadmap.md`] (https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/migration_roadmap.md) سے موافقت پذیر۔
 
-# Hoja de ruta de migración de SoraFS (SF-1)
+#SoraFS ہجرت روڈ میپ (SF-1)
 
-Este documento no aplica a la primera release. No hay migraciones pendientes; se mantiene reservado para futuras actualizaciones.
+یہ دستاویز پہلی ریلیز پر لاگو نہیں ہوتی ہے۔ ہجرت کا کوئی زیر التوا نہیں ہے۔ یہ مستقبل کی تازہ کاریوں کے لئے مخصوص ہے۔

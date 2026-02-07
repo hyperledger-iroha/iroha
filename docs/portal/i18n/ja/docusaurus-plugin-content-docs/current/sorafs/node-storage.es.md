@@ -4,43 +4,45 @@ direction: ltr
 source: docs/portal/docs/sorafs/node-storage.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: node-storage
-title: Diseño de almacenamiento del nodo SoraFS
-sidebar_label: Diseño de almacenamiento del nodo
-description: Arquitectura de almacenamiento, cuotas y hooks del ciclo de vida para nodos Torii que alojan datos de SoraFS.
+ID: ノードストレージ
+タイトル: ディセーニョ デ アルマセナミエント デル ノード SoraFS
+サイドバー_ラベル: アルマセナミエント デル ノドのディセーニョ
+説明: アルマセナミエントの建築物、Torii と SoraFS の接続部分のフックを作成します。
 ---
 
-:::note Fuente canónica
-Esta página refleja `docs/source/sorafs/sorafs_node_storage.md`. Mantén ambas copias sincronizadas hasta que el conjunto de documentación Sphinx heredado se retire.
+:::メモ フエンテ カノニカ
+`docs/source/sorafs/sorafs_node_storage.md` のページを参照してください。スフィンクスの引退を記念して、記録を作成する必要があります。
 :::
 
-## Diseño de almacenamiento del nodo SoraFS (Borrador)
+## ディセーニョ デ アルマセナミエント デル ノード SoraFS (ボラドール)
 
-Esta nota refina cómo un nodo Iroha (Torii) puede optar por la capa de
-availability de datos de SoraFS y dedicar una parte del disco local para
-almacenar y servir chunks. Complementa la especificación de discovery
-`sorafs_node_client_protocol.md` y el trabajo de fixtures SF-1b al detallar la
-arquitectura del lado de storage, controles de recursos y plomería de
-configuración que deben aterrizar en el nodo y en las rutas del gateway.
-Las prácticas operativas viven en el
-[Runbook de operaciones de nodo](./node-operations).
+Iroha (Torii) は、自分の能力を最大限に発揮するための情報を提供します
+SoraFS のデータの入手可能性とディスコ ローカル パラメタの提供
+アルマセナルとサーバルのチャンク。発見の特定性を補完する
+`sorafs_node_client_protocol.md` SF-1b の詳細なフィクスチャーの管理
+ストレージの建築、再帰操作とプロメリアの制御
+ゲートウェイのエンドポイントやノードの構成を変更します。
+生きたオペラの実践
+[ノードの運用手順書](./node-operations)。
 
-### Objetivos
+### オブジェクト
 
-- Permitir que cualquier validador o proceso auxiliar de Iroha exponga disco
-  ocioso como proveedor SoraFS sin afectar las responsabilidades del ledger.
-- Mantener el módulo de almacenamiento determinista y guiado por Norito:
-  manifests, planes de chunk, raíces Proof-of-Retrievability (PoR) y adverts de
-  proveedor son la fuente de verdad.
-- Impone cuotas definidas por el operador para que un nodo no agote sus propios
-  recursos al aceptar demasiadas solicitudes de pin o fetch.
-- Exponer salud/telemetría (muestreo PoR, latencia de fetch de chunks, presión
-  de disco) hacia gobernanza y clientes.
+- Iroha exponga ディスコの手続きを許可します。
+  ocioso como proveedor SoraFS sin afectar las responsabilidades del 元帳。
+- Norito による決定とガイドの管理方法:
+  マニフェスト、プレーンのチャンク、レイス Proof-of-Retrievability (PoR) および広告
+  プルードール・ソン・ラ・フェンテ・デ・ベルダド。
+- オペラ座の決定を無効にすることは、私たちの計画を無視することです
+  ピンを取得するためのさまざまな要求を再帰的に受け入れます。
+- エクスポナー サルード/テレメトリア (PoR の検査、チャンクのフェッチの遅延、プレシオン)
+  デ・ディスコ）ハシア・ゴベルナンザと顧客。
 
-### Arquitectura de alto nivel
+### アルトニベル建築
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -69,29 +71,29 @@ Las prácticas operativas viven en el
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
-Módulos clave:
+モドゥロ・クラーベ:
 
-- **Gateway**: expone endpoints HTTP Norito para propuestas de pin, solicitudes
-  de fetch de chunks, muestreo PoR y telemetría. Valida payloads Norito y
-  enruta las solicitudes hacia el chunk store. Reusa el stack HTTP de Torii
-  para evitar un nuevo daemon.
-- **Pin Registry**: estado de pin de manifests rastreado en `iroha_data_model::sorafs`
-  e `iroha_core`. Cuando se acepta un manifest, el registro almacena el digest
-  del manifest, digest del plan de chunk, raíz PoR y flags de capacidad del
-  proveedor.
-- **Chunk Storage**: implementación `ChunkStore` respaldada por disco que ingiere
-  manifests firmados, materializa planes de chunk usando `ChunkProfile::DEFAULT`
-  y persiste chunks bajo un layout determinista. Cada chunk se asocia con un
-  fingerprint de contenido y metadatos PoR para que el muestreo pueda revalidar
-  sin releer el archivo completo.
-- **Quota/Scheduler**: impone límites configurados por el operador (bytes máximos
-  de disco, pines pendientes máximos, fetches paralelos máximos, TTL de chunk)
-  y coordina IO para que las tareas del ledger no se queden sin recursos. El
-  scheduler también sirve pruebas PoR y solicitudes de muestreo con CPU acotada.
+- **ゲートウェイ**: エンドポイントの HTTP Norito の要求、要求を説明します
+  チャンクを取得し、PoR とテレメトリを測定します。検証ペイロード Norito y
+  enruta las solicitudes ハシアエルチャンクストア。 Torii のスタック HTTP
+  ヌエボ デーモンのパラ エビタール。
+- **ピン レジストリ**: `iroha_data_model::sorafs` の rastreado マニフェストのピン
+  e `iroha_core`。マニフェストを受け入れ、ダイジェストを登録します
+  マニフェスト、ダイジェスト、プラン、チャンク、PoR およびフラグの容量デル
+  証明者。
+- **チャンク ストレージ**: `ChunkStore` ディスコ クエリの実装
+  マニフェスト フィルマド、マテリザ プレーン デ チャンク ウサンド `ChunkProfile::DEFAULT`
+  レイアウトを決定せずにチャンクを永続化します。 Cada chunk se asocia con un
+  PoR に関する情報とメタデータの指紋
+  罪は完全にアーカイブされます。
+- **クォータ/スケジューラ**: オペランドの設定を制限します (最大バイト数)
+  デ ディスコ、パインズ ペンディエンテス マキシモス、フェッチ パラレロス マキシモス、TTL デ チャンク)
+  y 座標 IO パラケラスタレアスデル台帳は、再帰的な罪を犯しません。エル
+  スケジューラは、CPU に関する問題についての優先的な要求を実行します。
 
-### Configuración
+### 構成
 
-Agrega una nueva sección a `iroha_config`:
+`iroha_config` の新しいセクションの合計:
 
 ```toml
 [sorafs.storage]
@@ -109,40 +111,38 @@ adverts:
   topics = ["sorafs.sf1.primary:global"]
 ```
 
-- `enabled`: toggle de participación. Cuando está en false el gateway responde
-  503 para endpoints de storage y el nodo no se anuncia en discovery.
-- `data_dir`: directorio raíz para datos de chunk, árboles PoR y telemetría de
-  fetch. El default es `<iroha.data_dir>/sorafs`.
-- `max_capacity_bytes`: límite duro para datos de chunks fijados. Una tarea de
-  fondo rechaza nuevos pins cuando se alcanza el límite.
-- `max_parallel_fetches`: tope de concurrencia impuesto por el scheduler para
-  equilibrar ancho de banda/IO de disco con la carga del validador.
-- `max_pins`: número máximo de pins de manifest que acepta el nodo antes de
-  aplicar eviction/back pressure.
-- `por_sample_interval_secs`: cadencia para trabajos automáticos de muestreo
-  PoR. Cada trabajo muestrea `N` hojas (configurable por manifest) y emite
-  eventos de telemetría. La gobernanza puede escalar `N` de forma determinista
-  estableciendo la clave de metadata `profile.sample_multiplier` (entero `1-4`).
-  El valor puede ser un número/string único o un objeto con overrides por perfil,
-  por ejemplo `{"default":2,"sorafs.sf2@1.0.0":3}`.
-- `adverts`: estructura usada por el generador de adverts para completar campos
-  `ProviderAdvertV1` (stake pointer, hints de QoS, topics). Si se omite el
-  nodo usa defaults del registro de gobernanza.
+- `enabled`: 参加を切り替えます。ゲートウェイが誤って応答した場合
+  503 パラエンドポイントのストレージとノードの検出を通知します。
+- `data_dir`: チャンク、テレメトリのデータ管理ディレクトリ
+  取ってくる。デフォルトは `<iroha.data_dir>/sorafs` です。
+- `max_capacity_bytes`: チャンクの期間は限られています。うなたれで
+  ヌエボスのピンは、アルカンサ エル リミテに保存されます。
+- `max_parallel_fetches`: スケジューラ パラメータに関する同意事項の説明
+  平衡アンチョ・デ・バンダ/IOデ・ディスコ・コン・ラ・カルガ・デル・バリダドール。
+- `max_pins`: マニフェストの最大数のピンが受け入れられるかどうかを確認します
+  アプリカーエビクション/バックプレッシャー。
+- `por_sample_interval_secs`: 自動音楽のカデンシア
+  PoR。 Cada trabajo muestrea `N` hojas (マニフェストごとに構成可能) を発行します
+  テレメトリのイベント。 La gobernanza puede escalar `N` deforma determinista
+  メタデータ `profile.sample_multiplier` (エンテロ `1-4`) を確立します。
+  El valor puede ser un número/string único o un objeto con は perfil をオーバーライドします。
+  例 `{"default":2,"sorafs.sf2@1.0.0":3}`。
+- `adverts`: 完全なキャンペーンに基づく広告の構造
+  `ProviderAdvertV1` (ステーク ポインター、QoS のヒント、トピック)。シセオミテエル
+  nodo usa はデフォルトのレジストリ デ ゴベルナンザを設定します。
 
-Plomería de configuración:
+構成プロメリア:- `[sorafs.storage]` は `iroha_config` と `SorafsStorage` を定義します。
+  構成ノードのアーカイブです。
+- `iroha_core` y `iroha_torii` ストレージの構成を変更しました
+  ビルダーとゲートウェイとチャンク ストアとアランク。
+- 開発/テスト (`SORAFS_STORAGE_*`、`SORAFS_STORAGE_PIN_*`) に関するオーバーライドが存在します。
+  設定のアーカイブに関する詳細な製品の設計。
 
-- `[sorafs.storage]` se define en `iroha_config` como `SorafsStorage` y se carga
-  desde el archivo de config del nodo.
-- `iroha_core` y `iroha_torii` pasan la configuración de storage hacia el
-  builder del gateway y el chunk store en el arranque.
-- Existen overrides para dev/test (`SORAFS_STORAGE_*`, `SORAFS_STORAGE_PIN_*`), pero
-  los despliegues de producción deben basarse en el archivo de configuración.
+### CLI の活用法
 
-### Utilidades de CLI
-
-Mientras la superficie HTTP de Torii se termina de cablear, el crate
-`sorafs_node` incluye una CLI liviana para que los operadores puedan
-automatizar drills de ingestión/exportación contra el backend persistente.【crates/sorafs_node/src/bin/sorafs-node.rs:1】
+Torii ケーブル、電子箱の最上位 HTTP の管理
+`sorafs_node` には、CLI リビアナ パラ ケ ロス オペラドール プエダンが含まれます
+自動バックエンド永続的な取り込み/エクスポートのドリル。【crates/sorafs_node/src/bin/sorafs-node.rs:1】
 
 ```bash
 cargo run -p sorafs_node --bin sorafs-node ingest \
@@ -152,119 +152,115 @@ cargo run -p sorafs_node --bin sorafs-node ingest \
   --plan-json-out ./plan.json
 ```
 
-- `ingest` espera un manifest `.to` codificado en Norito y los bytes de payload
-  correspondientes. Reconstruye el plan de chunk a partir del perfil de
-  chunking del manifest, impone paridad de digests, persiste archivos de chunk,
-  y opcionalmente emite un blob JSON `chunk_fetch_specs` para que herramientas
-  downstream validen el layout.
-- `export` acepta un ID de manifest y escribe el manifest/payload almacenado en
-  disco (con plan JSON opcional) para que los fixtures sigan siendo reproducibles
-  entre entornos.
+- `ingest` マニフェストの説明 `.to` Norito ペイロードのバイト数が失われています
+  特派員。部分的な部分の計画を再構築する
+  マニフェストのチャンク化、ダイジェストのパリダーの無効化、チャンクのアーカイブの永続化、
+  BLOB の JSON `chunk_fetch_specs` を発行するオプションがあります。
+  ダウンストリームの有効な EL レイアウト。
+- `export` マニフェスト/ペイロードの ID を受け入れます
+  ディスコ (オプションの JSON プラン) パラケロスの試合、シガン、シエンドの再現可能
+  アントレ・エントルノス。
 
-Ambos comandos imprimen un resumen Norito JSON a stdout, facilitando el uso en
-scripts. La CLI está cubierta por una prueba de integración para asegurar que
-manifests y payloads se reconstituyen correctamente antes de que lleguen las
-APIs de Torii.【crates/sorafs_node/tests/cli.rs:1】
+アンボスコマンドは再開を妨げます Norito JSON の標準出力、簡単な使用
+スクリプト。安全な環境での統合のための CLI の開発
+マニフェストとペイロードを再構成して、問題が発生する前に修正する
+Torii の API。【crates/sorafs_node/tests/cli.rs:1】
 
-> Paridad HTTP
+> パリダッドHTTP
 >
-> El gateway Torii ahora expone helpers de solo lectura respaldados por el mismo
+> ゲートウェイ Torii アホラ expone ヘルパー デ ソロ講義レスパルダードス ポル ミスモ
 > `NodeHandle`:
 >
-> - `GET /v1/sorafs/storage/manifest/{manifest_id_hex}` — devuelve el manifest
->   Norito almacenado (base64) junto con digest/metadata.【crates/iroha_torii/src/sorafs/api.rs:1207】
-> - `GET /v1/sorafs/storage/plan/{manifest_id_hex}` — devuelve el plan de chunk
->   determinista JSON (`chunk_fetch_specs`) para tooling downstream.【crates/iroha_torii/src/sorafs/api.rs:1259】
+> - `GET /v1/sorafs/storage/manifest/{manifest_id_hex}` — 開発マニフェスト
+> Norito アルマセナド (base64) ジュント コン ダイジェスト/メタデータ。【crates/iroha_torii/src/sorafs/api.rs:1207】
+> - `GET /v1/sorafs/storage/plan/{manifest_id_hex}` — チャンクの開発計画
+> determinista JSON (`chunk_fetch_specs`) パラツールのダウンストリーム。【crates/iroha_torii/src/sorafs/api.rs:1259】
 >
-> Estos endpoints reflejan la salida del CLI para que los pipelines puedan
-> pasar de scripts locales a probes HTTP sin cambiar parsers.【crates/iroha_torii/src/sorafs/api.rs:1207】【crates/iroha_torii/src/sorafs/api.rs:1259】
+> Estos エンドポイント reflejan la salida del CLI パラ ケ ロス パイプライン プエダン
+> スクリプトのロケールとプローブの HTTP 罪のカンビアパーサーのパス。【crates/iroha_torii/src/sorafs/api.rs:1207】【crates/iroha_torii/src/sorafs/api.rs:1259】
 
-### Ciclo de vida del nodo
-
-1. **Arranque**:
-   - Si el almacenamiento está habilitado el nodo inicializa el chunk store con
-     el directorio y capacidad configurados. Esto incluye verificar o crear la
-     base de datos de manifests PoR y reproducir manifests fijados para calentar
-     caches.
-   - Registrar rutas del gateway SoraFS (endpoints Norito JSON POST/GET para pin,
-     fetch, muestreo PoR, telemetría).
-   - Lanzar el worker de muestreo PoR y el monitor de cuotas.
-2. **Discovery / Adverts**:
-   - Generar documentos `ProviderAdvertV1` usando la capacidad/salud actual,
-     firmarlos con la clave aprobada por el consejo y publicarlos vía discovery.
-     Usa la nueva lista `profile_aliases` para que los handles canónicos y
-3. **Flujo de pin**:
-   - El gateway recibe un manifest firmado (incluyendo plan de chunk, raíz PoR,
-     firmas del consejo). Valida la lista de alias (`sorafs.sf1@1.0.0` requerido)
-     y asegura que el plan de chunk coincide con la metadata del manifest.
-   - Verifica cuotas. Si capacidad/límites de pins se excederían responde con un
-     error de política (Norito estructurado).
-   - Streamea datos de chunk hacia `ChunkStore`, verificando digests durante la
-     ingestión. Actualiza árboles PoR y almacena metadata del manifest en el
-     registro.
-4. **Flujo de fetch**:
-   - Sirve solicitudes de rango de chunk desde disco. El scheduler impone
+### シクロ デ ヴィーダ デル ノド1. **アランク**:
+   - 初期のチャンク ストア コンストラクションを利用できるようになりました。
+     ディレクトリと容量の設定。 Esto には認証情報が含まれます
+     ベース・デ・データ・マニフェスト PoR y reproducir マニフェスト・フィジャドス・パラ・カレンダー
+     キャッシュ。
+   - レジストラー デル ゲートウェイ SoraFS (エンドポイント Norito JSON POST/GET パラ ピン、
+     フェッチ、ムエストレオ PoR、テレメトリア）。
+   - 管理者は警察の監視を担当します。
+2. **発見/広告**:
+   - 一般文書 `ProviderAdvertV1` usando la capacidad/salud 実際、
+     発見により、企業はクラーベの方針を決定し、公開されます。
+     米国の新しいリスト `profile_aliases` は、CANONICOS Y を処理します
+3. **フルホ デ ピン**:
+   - マニフェスト ファームのゲートウェイ レシピ (チャンクの計画、PoR の作成を含む)
+     フィルマス・デル・コンセホ）。別名リストの有効性 (`sorafs.sf1@1.0.0` 要求)
+     マニフェストのメタデータとチャンクの一致を確認できます。
+   - ベリフィカ・クオタス。安全性の制限/制限は、安全性を超えて応答する必要があります
+     政治エラー (Norito 構造体)。
+   - 大量のデータのストリーム `ChunkStore`、検証はデュランテ ラをダイジェストします
+     摂取。マニフェストとアルマセナのメタデータを実際に作成する
+     レジストロ。
+4. **フェッチのフルホ**:
+   - ディスコやランゴ、チャンクなどのソリチュードを提供します。エルスケジューラインポーネ
      `max_parallel_fetches` y devuelve `429` cuando está saturado.
-   - Emite telemetría estructurada (Norito JSON) con latencia, bytes servidos y
-     conteos de error para monitoreo downstream.
-5. **Muestreo PoR**:
-   - El worker selecciona manifests proporcionalmente al peso (por ejemplo, bytes
-     almacenados) y ejecuta muestreo determinista usando el árbol PoR del chunk store.
-   - Persiste resultados para auditorías de gobernanza e incluye resúmenes en
-     adverts de proveedor / endpoints de telemetría.
-6. **Expulsión / cumplimiento de cuotas**:
-   - Cuando se alcanza la capacidad el nodo rechaza nuevos pins por defecto.
-     Opcionalmente, los operadores pueden configurar políticas de expulsión
-     (por ejemplo, TTL, LRU) una vez que el modelo de gobernanza se acuerde; por
-     ahora el diseño asume cuotas estrictas y operaciones de unpin iniciadas por
-     el operador.
+   - テレメトリ構造体 (Norito JSON) をレイテンシア、バイト サービスに出力します。
+     ダウンストリーム監視時のエラー状態を監視します。
+5. **ムエストレオ PoR**:
+   - 労働者の選択は比例ペソを示します (バイト数、バイト数)
+     アルマセナドス) y ejecuta muestreo determinista usando el árbol PoR del chunk ストア。
+   - 継続的な結果を含む聴取結果を保持します。
+     証明者の広告/テレメトリのエンドポイント。
+6. **追放/強制退去**:
+   - クアンド・セ・アルカンサ・ラ・キャパシダード・エル・ノード・レチャザ・ヌエボス・ピンズ・ポー・ディフェクト。
+     追放の政治を構成するロス・オペラドールのオプション
+     (サンプル、TTL、LRU) 安全なモデルを確認できます。ポル
+     アホラ エル ディセーニョは、規制を解除して操作を行う必要があります。
+     エル・オペラドール。
 
-### Declaración de capacidad e integración de scheduling
+### 容量の宣言とスケジュールの統合の宣言
 
-- Torii ahora retransmite actualizaciones de `CapacityDeclarationRecord` desde
-  `/v1/sorafs/capacity/declare` hacia el `CapacityManager` embebido, de modo que
-  cada nodo construye una vista en memoria de sus asignaciones comprometidas de
-  chunker y lane. El manager expone snapshots de solo lectura para telemetría
-  (`GET /v1/sorafs/capacity/state`) y aplica reservas por perfil o lane antes de
+- Torii アホラは、`CapacityDeclarationRecord` の実際の再送信を行います
+  `/v1/sorafs/capacity/declare` ハシア エル `CapacityManager` 埋め込み、モード変更
+  メモリア デ サス アサインナシオンのコンプロメティダを構築するためのノード
+  チャンカーとレーン。マネージャーがテレメトリーでの単独講義のスナップショットを公開
+  (`GET /v1/sorafs/capacity/state`) 事前にレーンを予約する必要があります
   aceptar nuevos pedidos.【crates/sorafs_node/src/capacity.rs:1】【crates/sorafs_node/src/lib.rs:60】
-- El endpoint `/v1/sorafs/capacity/schedule` acepta payloads `ReplicationOrderV1`
-  emitidos por gobernanza. Cuando la orden apunta al proveedor local el manager
-  revisa scheduling duplicado, verifica capacidad de chunker/lane, reserva la
-  franja y devuelve un `ReplicationPlan` describiendo la capacidad restante para
-  que las herramientas de orquestación continúen la ingestión. Las órdenes para
+- El エンドポイント `/v1/sorafs/capacity/schedule` アセプタ ペイロード `ReplicationOrderV1`
+  エミディドス・ポル・ゴベルナンザ。クアンド・ラ・オルデン・アプンタ・アル・プロヴェードル・ローカル・エル・マネージャー
+  再スケジュールの重複、チャンカー/レーンの容量確認、予約ラ
+  フランジャとデブエルブ UN `ReplicationPlan` の容量制限に関する説明
+  継続的に摂取を続けてください。ラス オーデネス パラ
   otros proveedores se reconocen con una respuesta `ignored` para facilitar flujos
-  multi-operador.【crates/iroha_torii/src/routing.rs:4845】
-- Hooks de completitud (por ejemplo, disparados tras el éxito de la ingestión)
-  llaman a `POST /v1/sorafs/capacity/complete` para liberar reservas vía
-  `CapacityManager::complete_order`. La respuesta incluye un snapshot
-  `ReplicationRelease` (totales restantes, residuales de chunker/lane) para que
-  las herramientas de orquestación puedan encolar la siguiente orden sin polling.
-  Trabajo futuro cableará esto al pipeline del chunk store una vez que la
-  lógica de ingestión aterrice.【crates/iroha_torii/src/routing.rs:4885】【crates/sorafs_node/src/capacity.rs:90】
+  マルチオペレーター.【crates/iroha_torii/src/routing.rs:4845】
+- 完全なフック (完全なフック、摂取時のディスパラドス)
+  ラマン `POST /v1/sorafs/capacity/complete` パラ リベラル リザーバス ヴィア
+  `CapacityManager::complete_order`。スナップショットを含むレスペスタ
+  `ReplicationRelease` (チャンカー/レーンの残りの合計、残差) パラメータ
+  ラス・ヘルラミエンタス・デ・オルケスタシオン・プエダン・エンコラー・ラ・シギエンテ・オルデン罪世論調査。
+  Trabajo futuro ケーブルのパイプライン デル チャンク ストア ウナ ベス ケ ラ
+  テラスでの摂取ロジック。【crates/iroha_torii/src/routing.rs:4885】【crates/sorafs_node/src/capacity.rs:90】
 - El `TelemetryAccumulator` embebido puede mutarse mediante
-  `NodeHandle::update_telemetry`, permitiendo que workers en segundo plano
-  registren muestras de PoR/uptime y eventualmente deriven payloads canónicos
-  `CapacityTelemetryV1` sin tocar internos del scheduler.【crates/sorafs_node/src/lib.rs:142】【crates/sorafs_node/src/telemetry.rs:1】
+  `NodeHandle::update_telemetry`、労働者と安全計画を許可する
+  PoR/稼働時間と最終的な派生ペイロードの正規記録を登録します
+  `CapacityTelemetryV1` 内部スケジューラに対するものです。【crates/sorafs_node/src/lib.rs:142】【crates/sorafs_node/src/telemetry.rs:1】
 
-### Integraciones y trabajo futuro
-
-- **Governanza**: extender `sorafs_pin_registry_tracker.md` con telemetría de
-  storage (tasa de éxito PoR, utilización de disco). Las políticas de admisión
-  pueden requerir capacidad mínima o tasa mínima de éxito PoR antes de aceptar
-  adverts.
-- **SDKs de cliente**: exponer la nueva configuración de storage (límites de
-  disco, alias) para que herramientas de gestión puedan bootstrapear nodos
-  programáticamente.
-- **Telemetría**: integrar con el stack de métricas existente (Prometheus /
-  OpenTelemetry) para que las métricas de storage aparezcan en dashboards de
-  observabilidad.
-- **Seguridad**: ejecutar el módulo de storage en un pool dedicado de tareas
-  async con back-pressure y considerar sandboxing de lecturas de chunks vía
+### インテグラシオネスとトラバホの未来- **ガバナンザ**: テレメトリ用エクステンダー `sorafs_pin_registry_tracker.md`
+  ストレージ (PoR の保存、ディスコの利用)。ラス・ポリティクス・デ・アドミシオン
+  安全性を確保するために必要な容量を最小限に抑えることができます。
+  広告。
+- **クライアントの SDK**: ストレージの新しい構成の説明者 (制限事項)
+  ディスコ、別名) プエダン ブートストラップ ノードス パラ ケ ヘラミエンタス デ ジェスティオン
+  プログラム。
+- **テレメトリア**: メトリカスが存在する積分制御スタック (Prometheus /
+  OpenTelemetry) ダッシュボードのストレージ管理に関するパラメタ
+  観察可能です。
+- **Seguridad**: プールのストレージモジュールの取り出し
+  非同期バックプレッシャーとチャンクの講義のサンドボックス化を考慮
   io_uring o pools acotados de tokio para evitar que clientes maliciosos agoten
-  recursos.
+  再帰的。
 
-Este diseño mantiene el módulo de almacenamiento opcional y determinista a la
-vez que otorga a los operadores los knobs necesarios para participar en la capa
-SoraFS de data availability. Implementarlo implicará cambios en `iroha_config`,
-`iroha_core`, `iroha_torii` y el gateway Norito, además del tooling de adverts
-de proveedor.
+必要に応じて決定的な方法を選択して、マンティエンを選択します。
+ロス・オペラドーレス・ロス・ノブズ・ニーセサリオス・パラ・キャパを実行する必要があります
+SoraFS データの可用性。 `iroha_config` でのカンビオの実装、
+`iroha_core`、`iroha_torii` およびゲートウェイ Norito、広告ツールの利用
+証明者。

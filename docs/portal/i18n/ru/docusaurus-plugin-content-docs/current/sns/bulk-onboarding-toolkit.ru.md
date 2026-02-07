@@ -4,48 +4,50 @@ direction: ltr
 source: docs/portal/docs/sns/bulk-onboarding-toolkit.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 :::note Канонический источник
-Эта страница отражает `docs/source/sns/bulk_onboarding_toolkit.md`, чтобы внешние
-операторы видели те же рекомендации SN-3b без клонирования репозитория.
+На этой странице отражено `docs/source/sns/bulk_onboarding_toolkit.md`, внешнее
+операторы рассмотрели те же рекомендации SN-3b без клонирования репозитория.
 :::
 
-# SNS Bulk Onboarding Toolkit (SN-3b)
+# Набор инструментов для массовой адаптации SNS (SN-3b)
 
-**Ссылка roadmap:** SN-3b "Bulk onboarding tooling"  
+**Ссылка:** SN-3b "Инструменты для массового внедрения"  
 **Артефакты:** `scripts/sns_bulk_onboard.py`, `scripts/tests/test_sns_bulk_onboard.py`,
 `docs/portal/scripts/sns_bulk_release.sh`
 
-Крупные registrars часто заранее подготавливают сотни регистраций `.sora` или
-`.nexus` с одинаковыми одобрениями управления и settlement rails. Ручная сборка
-JSON payloads или повторный запуск CLI не масштабируются, поэтому SN-3b поставляет
-детерминированный CSV-to-Norito builder, который готовит структуры
-`RegisterNameRequestV1` для Torii или CLI. Хелпер заранее валидирует каждую строку,
-выдает агрегированный manifest и опциональный построчный JSON, и может отправлять
-payloads автоматически, записывая структурированные receipts для аудитов.
+Крупные регистраторы часто заранее подготавливают стоимость регистраций `.sora` или
+`.nexus` одинаковыми одобрениями управления и расчетных рельсов. Ручная сборка
+Полезные данные JSON или повторный запуск CLI не масштабируются, поэтому используется SN-3b.
+определённый конструктор CSV-to-Norito, который готовит структуру
+`RegisterNameRequestV1` для Torii или CLI. Хелпер заранее валидирует каждый текст,
+выдает агрегированный манифест и опциональный построчный JSON, и может отправить
+полезные нагрузки автоматически, запись структурированных квитанций для аудитов.
 
 ## 1. Схема CSV
 
-Парсер требует следующую строку заголовка (порядок гибкий):
+Парсеру требуется такой формат заголовка (порядок гибкий):
 
 | Колонка | Обязательно | Описание |
 |---------|-------------|----------|
-| `label` | Да | Запрошенная метка (допускается mixed case; инструмент нормализует по Norm v1 и UTS-46). |
-| `suffix_id` | Да | Числовой идентификатор суффикса (десятичный или `0x` hex). |
-| `owner` | Да | Строка AccountId (IH58 literal; optional @domain hint) владельца регистрации. |
+| `label` | Да | Запрошенная метка (допускается смешанный случай; инструмент нормализует по Норме v1 и УТС-46). |
+| `suffix_id` | Да | Суффикс числового идентификатора (десятичный или `0x` hex). |
+| `owner` | Да | Строка AccountId (литерал IH58; необязательная подсказка @domain) регистрация владельца. |
 | `term_years` | Да | Целое число `1..=255`. |
-| `payment_asset_id` | Да | Актив settlement (например `xor#sora`). |
-| `payment_gross` / `payment_net` | Да | Беззнаковые целые, представляющие единицы актива. |
-| `settlement_tx` | Да | JSON значение или строка, описывающая платежную транзакцию или hash. |
+| `payment_asset_id` | Да | Активный расчет (например, `xor#sora`). |
+| `payment_gross` / `payment_net` | Да | Беззнаковые целые, представляющие собой важные активы. |
+| `settlement_tx` | Да | JSON-значение или строка, описывающая платежную транзакцию или хеш. |
 | `payment_payer` | Да | AccountId, авторизовавший платеж. |
-| `payment_signature` | Да | JSON или строка с доказательством подписи steward или treasury. |
-| `controllers` | Optional | Список адресов controller, разделенный `;` или `,`. По умолчанию `[owner]`. |
-| `metadata` | Optional | Inline JSON или `@path/to/file.json` с resolver hints, TXT записями и т. д. По умолчанию `{}`. |
-| `governance` | Optional | Inline JSON или `@path` на `GovernanceHookV1`. `--require-governance` делает колонку обязательной. |
+| `payment_signature` | Да | JSON или строка с доказательством предоставляется управляющему или казначейству. |
+| `controllers` | Необязательно | Список адресов контроллера, разделенный `;` или `,`. По умолчанию `[owner]`. |
+| `metadata` | Необязательно | Встроенный JSON или `@path/to/file.json` с подсказками преобразователя, записями TXT и т. д. д. По умолчанию `{}`. |
+| `governance` | Необязательно | Встроенный JSON или `@path` на `GovernanceHookV1`. `--require-governance` делаю колонку обязательно. |
 
 Любая колонка может ссылаться на внешний файл, если добавить `@` в начале значения.
-Пути разрешаются относительно файла CSV.
+Пути разрешают относительно файла CSV.
 
 ## 2. Запуск хелпера
 
@@ -57,14 +59,14 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
 
 Ключевые опции:
 
-- `--require-governance` отклоняет строки без governance hook (полезно для
-  premium аукционов или reserved assignments).
-- `--default-controllers {owner,none}` решает, будут ли пустые controller ячейки
-  падать обратно на owner.
-- `--controllers-column`, `--metadata-column`, и `--governance-column` позволяют
-  переименовать опциональные колонки при работе с upstream exports.
+- `--require-governance` отклоняет строки без крючка управления (полезно для
+  премиальные аукционы или зарезервированные уступки).
+- `--default-controllers {owner,none}` решает, будут ли пустые ячейки контроллера
+  падать обратно на хозяина.
+- `--controllers-column`, `--metadata-column`, и `--governance-column` разрешают
+  переименовать опциональные колонки при работе с добычей экспорта.
 
-В случае успеха скрипт пишет агрегированный manifest:
+В случае успеха скрипт записывает агрегированный манифест:
 
 ```json
 {
@@ -101,8 +103,8 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
 }
 ```
 
-Если указан `--ndjson`, каждый `RegisterNameRequestV1` также записывается как
-однострочный JSON документ, чтобы автоматизация могла стримить запросы прямо в
+Если указано `--ndjson`, каждый `RegisterNameRequestV1` также записывается как
+однострочный документ JSON, чтобы автоматизация могла стримить запрос прямо в
 Torii:
 
 ```bash
@@ -113,14 +115,12 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
          -d "$payload" \
          https://torii.sora.net/v1/sns/registrations
   done
-```
+```## 3. Автоматизированные отправки
 
-## 3. Автоматизированные отправки
-
-### 3.1 Режим Torii REST
+###3.1 Режим Torii REST
 
 Укажите `--submit-torii-url` и либо `--submit-token`, либо `--submit-token-file`,
-чтобы отправлять каждую запись manifest напрямую в Torii:
+чтобы отправить каждую запись манифеста напрямую в Torii:
 
 ```bash
 python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json \
@@ -131,17 +131,17 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- Хелпер делает один `POST /v1/sns/registrations` на запрос и останавливается при
-  первой HTTP ошибке. Ответы добавляются в лог как NDJSON записи.
+- Помощник делает один `POST /v1/sns/registrations` на запрос и останавливается при
+  HTTP первые деньги. Ответы включаются в регистрацию, как записано NDJSON.
 - `--poll-status` повторно запрашивает `/v1/sns/registrations/{selector}` после
-  каждой отправки (до `--poll-attempts`, по умолчанию 5), чтобы подтвердить
-  видимость записи. Укажите `--suffix-map` (JSON маппинг `suffix_id` в значения
-  "suffix"), чтобы инструмент мог вывести `{label}.{suffix}` для polling.
+  каждое отправление (до `--poll-attempts`, по умолчанию 5), чтобы проверить
+  видимость записи. Укажите `--suffix-map` (JSON-сопоставление `suffix_id` в значениях
+  "суффикс"), чтобы инструмент мог вывести `{label}.{suffix}` для опроса.
 - Настройки: `--submit-timeout`, `--poll-attempts`, и `--poll-interval`.
 
-### 3.2 Режим iroha CLI
+###3.2 Режим ироха CLI
 
-Чтобы прогнать каждую запись manifest через CLI, задайте путь к бинарнику:
+Чтобы прогнать каждую запись манифеста через CLI, задайте путь к бинарнику:
 
 ```bash
 python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json \
@@ -151,18 +151,18 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- Controllers должны быть `Account` entries (`controller_type.kind = "Account"`),
-  потому что CLI сейчас поддерживает только account-based controllers.
-- Metadata и governance blobs пишутся во временные файлы на каждый запрос и
+- Контроллеры должны быть записи `Account` (`controller_type.kind = "Account"`),
+  потому что CLI сейчас поддерживает только контроллеры на основе учетных записей.
+- Метаданные и объекты управления создаются во временных файлах при каждом запросе и
   передаются в `iroha sns register --metadata-json ... --governance-json ...`.
-- Stdout/stderr и коды выхода CLI логируются; ненулевые коды прерывают запуск.
+- Stdout/stderr и коды вывода CLI регистрируются; ненулевые коды прерывают запуск.
 
-Оба режима отправки можно запускать вместе (Torii и CLI) для перекрестной проверки
-registrar deployments или репетиций fallback путей.
+Оба режима данных можно запускать вместе (Torii и CLI) для перекрестной проверки.
+резервные способы развертывания регистратора или повторения.
 
-### 3.3 Квитанции отправки
+### 3.3 Квитанции сообщений
 
-При `--submission-log <path>` скрипт добавляет NDJSON записи:
+При `--submission-log <path>` в скрипте добавления NDJSON записано:
 
 ```json
 {"timestamp":"2026-03-30T07:22:04.123Z","mode":"torii","index":12,"selector":"1:alpha","status":200,"success":true,"detail":"..."}
@@ -170,17 +170,17 @@ registrar deployments или репетиций fallback путей.
 {"timestamp":"2026-03-30T07:22:06.789Z","mode":"cli","index":12,"selector":"1:alpha","status":0,"success":true,"detail":"Registration accepted"}
 ```
 
-Успешные ответы Torii включают структурированные поля из `NameRecordV1` или
-`RegisterNameResponseV1` (например `record_status`, `record_pricing_class`,
-`record_owner`, `record_expires_at_ms`, `registry_event_version`, `suffix_id`,
-`label`), чтобы дашборды и отчеты управления могли парсить лог без свободного
-текста. Прикрепите этот лог к registrar тикетам вместе с manifest для
+Успешные ответы Torii включают структурные поля из `NameRecordV1` или
+`RegisterNameResponseV1` (например, `record_status`, `record_pricing_class`,
+И18НИ00000082Х, И18НИ00000083Х, И18НИ00000084Х, И18НИ00000085Х,
+`label`), чтобы дашборды и отчеты управления можно было парсить регистрацию бесплатно
+текст. Прикрепите этот журнал к билетам регистратора вместе с манифестом для
 воспроизводимого доказательства.
 
 ## 4. Автоматизация релизов портала
 
-CI и portal jobs вызывают `docs/portal/scripts/sns_bulk_release.sh`, который
-оборачивает хелпер и сохраняет артефакты под `artifacts/sns/releases/<timestamp>/`:
+CI и портал вакансий звонит `docs/portal/scripts/sns_bulk_release.sh`, который
+оборачивает помощник и сохраняет документы под `artifacts/sns/releases/<timestamp>/`:
 
 ```bash
 docs/portal/scripts/sns_bulk_release.sh \
@@ -196,20 +196,20 @@ docs/portal/scripts/sns_bulk_release.sh \
 Скрипт:
 
 1. Создает `registrations.manifest.json`, `registrations.ndjson` и копирует
-   исходный CSV в директорию релиза.
-2. Отправляет manifest через Torii и/или CLI (при настройке), записывая
+   исходный CSV в каталоге релиза.
+2. Отправляет манифест через Torii и/или CLI (при настройке), записья.
    `submissions.log` со структурированными квитанциями выше.
 3. Формирует `summary.json` с описанием релиза (пути, Torii URL, путь CLI,
-   timestamp), чтобы автоматизация портала могла загрузить bundle в хранилище
+   временная метка), чтобы портал автоматизации мог загрузить пакет в хранилище.
    артефактов.
-4. Генерирует `metrics.prom` (override через `--metrics`) с Prometheus-совместимыми
-   счетчиками для общего числа запросов, распределения суффиксов, сумм по активам
-   и результатов отправки. Summary JSON ссылается на этот файл.
+4. Генерирует `metrics.prom` (переопределение через `--metrics`) с Prometheus-совместимыми.
+   счетчиками для общих чисел запросов, распределением суффиксов, сумм по активам
+   и результаты отправки. Сводка JSON ссылается на этот файл.
 
-Workflows просто архивируют директорию релиза как единый артефакт, содержащий
+Рабочие процессы просто архивируют каталог релиза как единый, дублированный документ.
 все необходимое для аудита.
 
-## 5. Телеметрия и дашборды
+##5. Телеметрия и дашборды
 
 Файл метрик, сгенерированный `sns_bulk_release.sh`, содержит следующие серии:
 
@@ -220,39 +220,37 @@ sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="all"} 120
 sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="1"} 118
 sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="xor#sora"} 28800
 sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",success="true"} 118
-```
-
-Передайте `metrics.prom` в Prometheus sidecar (например через Promtail или batch
-importer), чтобы registrars, stewards и governance peers видели согласованный
-прогресс bulk процессов. Дашборд Grafana
+```Передайте `metrics.prom` в коляску Prometheus (например, через Promtail или пакетную обработку).
+импортер), чтобы регистраторы, распорядители и коллеги по управлению рассмотрели соглашение
+прогресс объемных технологий. Дашборд Grafana
 `dashboards/grafana/sns_bulk_release.json` визуализирует те же данные: количество
-по суффиксам, объем платежей и соотношение успешных/неуспешных отправок. Дашборд
-фильтруется по `release`, чтобы аудиторы могли изучить один CSV прогон.
+по суффиксам, объему денежных средств и конвертам денежных/неускоренных отправлений. Дашборд
+фильтруется по `release`, чтобы аудиторы могли изучить один CSV-прогон.
 
-## 6. Валидация и режимы отказа
+## 6. Проверка и отказ в режимах
 
-- **Label canonicalisation:** входы нормализуются Python IDNA + lowercase и
-  фильтрами символов Norm v1. Невалидные метки быстро падают до сетевых вызовов.
-- **Numeric guardrails:** suffix ids, term years, и pricing hints должны быть в
-  пределах `u16` и `u8`. Поля платежей принимают десятичные или hex числа до
+- **Канонизация меток:** входные данные нормализуются Python IDNA + строчные буквы и
+  фильтрами-символами Норма v1. Недействительные метки быстро падают до сетевых вызовов.
+– **Цифровые ограничения:** идентификаторы суффиксов, годы семестра и подсказки по ценам должны быть в
+  внутри `u16` и `u8`. Поля денежных средств принимают десятичные или шестнадцатеричные числа.
   `i64::MAX`.
-- **Metadata/governance parsing:** inline JSON парсится напрямую; ссылки на файлы
-  разрешаются относительно CSV. Metadata не-объект приводит к ошибке валидации.
-- **Controllers:** пустые ячейки соблюдают `--default-controllers`. Указывайте
-  явные списки controllers (например `ih58...;ih58...`) при делегировании не-owner.
+- **Разбор метаданных/управления:** встроенный JSON парсится напрямую; ссылки на файлы
+  CSV разрешены. Отсутствие метаданных приводит к необходимости проверки.
+- **Контроллеры:** пустые ячейки соблюдают `--default-controllers`. Указывайте
+  явные назначенные контроллеры (например, `ih58...;ih58...`) при делегировании невладельцем.
 
 Ошибки сообщаются с контекстными номерами строк (например
 `error: row 12 term_years must be between 1 and 255`). Скрипт выходит с кодом `1`
 при ошибках валидации и `2`, если путь CSV отсутствует.
 
-## 7. Тестирование и происхождение
+## 7. Тестирование и регистрация
 
-- `python3 -m pytest scripts/tests/test_sns_bulk_onboard.py` покрывает CSV парсинг,
-  вывод NDJSON, enforcement governance и пути отправки через CLI или Torii.
-- Хелпер написан на чистом Python (без дополнительных зависимостей) и работает
+- `python3 -m pytest scripts/tests/test_sns_bulk_onboard.py` раскрывает синтаксический анализ CSV,
+  вывод NDJSON, управление исполнением и путь отправки данных через CLI или Torii.
+- Хелпер написан на чистом Python (без дополнительных зависимостей) и работает.
   везде, где доступен `python3`. История коммитов отслеживается рядом с CLI в
-  основном репозитории для воспроизводимости.
+  в основном репозитории для воспроизводимости.
 
-Для продакшн запусков прикладывайте сгенерированный manifest и NDJSON bundle к
-registrar тикету, чтобы stewards могли воспроизвести точные payloads, отправленные
+Для продакшн-запусков используйте сгенерированный манифест и пакет NDJSON.
+регистратор билетов, чтобы стюарды могли воспроизвести точные полезные нагрузки, отправленные
 в Torii.

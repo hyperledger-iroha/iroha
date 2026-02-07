@@ -4,42 +4,40 @@ direction: rtl
 source: docs/portal/docs/norito/overview.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Resumen de Norito
+# السيرة الذاتية لـ Norito
 
-Norito es la capa de serializacion binaria utilizada en todo Iroha: define como se codifican las estructuras de datos en la red, se persisten en disco y se intercambian entre contratos y hosts. Cada crate del workspace depende de Norito en lugar de `serde` para que los peers en hardware diferente produzcan bytes identicos.
+Norito هو طريقة التسلسل الثنائي المستخدمة في كل شيء Iroha: تحديد كيفية تشفير هياكل البيانات باللون الأحمر، والاستمرار في الديسكو، والتبادل بين العقود والمضيفين. تعتمد كل علبة مساحة العمل على Norito ومكان `serde` حتى يتمكن أقرانهم من الأجهزة من إنتاج وحدات بايت متطابقة مختلفة.
 
-Este resumen sintetiza las piezas centrales y enlaza a las referencias canonicas.
+ستستأنف هذه السيرة الذاتية بمزامنة الأجزاء المركزية ومراجعة المراجع القانونية.
 
 ## Arquitectura de un vistazo
 
-- **Cabecera + payload** - Cada mensaje Norito comienza con una cabecera de negociacion de features (flags, checksum) seguida del payload sin envolver. Los layouts empaquetados y la compresion se negocian mediante bits de la cabecera.
-- **Codificacion determinista** - `norito::codec::{Encode, Decode}` implementan la codificacion base. El mismo layout se reutiliza al envolver payloads en cabeceras para que el hashing y la firma se mantengan deterministas.
-- **Esquema + derives** - `norito_derive` genera implementaciones de `Encode`, `Decode` y `IntoSchema`. Los structs/secuencias empaquetados estan habilitados por defecto y documentados en `norito.md`.
-- **Registro multicodec** - Los identificadores de hashes, tipos de clave y descriptores de payload viven en `norito::multicodec`. La tabla autorizada se mantiene en `multicodec.md`.
+- **الكابينة + الحمولة** - كل رسالة Norito تبدأ بسؤال تداول الميزات (الأعلام، المجموع الاختباري) تتبع الحمولة دون أن تحيط بها. يتم تنفيذ التخطيطات المعبأة والضغط عبر أجزاء من الرأس.
+- **تحديد الترميز** - `norito::codec::{Encode, Decode}` يقوم بتنفيذ قاعدة الترميز. يتم إعادة استخدام نفس التخطيط ليشمل الحمولات الصافية ويرأسها بحيث تحافظ التجزئة والشركة على المحددات.
+- **Esquema + derives** - `norito_derive` هي أنواع تنفيذ `Encode` و`Decode` و`IntoSchema`. الهياكل/الملفات المجمعة مؤهلة بسبب العيوب وموثقة في `norito.md`.
+- **تسجيل الترميز المتعدد** - يتم تنشيط معرفات التجزئة وأنواع المفاتيح وواصفات الحمولة في `norito::multicodec`. يتم الحفاظ على اللوحة تلقائيًا في `multicodec.md`.
 
-## Herramientas
-
-| Tarea | Comando / API | Notas |
+## هيرامينتاس| تاريا | كوماندوز / API | نوتاس |
 | --- | --- | --- |
-| Inspeccionar cabecera/secciones | `ivm_tool inspect <file>.to` | Muestra la version de ABI, flags y entrypoints. |
-| Codificar/decodificar en Rust | `norito::codec::{Encode, Decode}` | Implementado para todos los tipos principales del data model. |
-| Interop JSON | `norito::json::{to_json_pretty, from_json}` | JSON determinista respaldado por valores Norito. |
-| Generar docs/especificaciones | `norito.md`, `multicodec.md` | Documentacion fuente de verdad en la raiz del repo. |
+| Inspeccionar cabecera/secciones | `ivm_tool inspect <file>.to` | يعرض إصدار ABI والأعلام ونقاط الدخول. |
+| التشفير/فك التشفير في الصدأ | `norito::codec::{Encode, Decode}` | تم تنفيذه لجميع أنواع نماذج البيانات الأساسية. |
+| التشغيل المتداخل JSON | `norito::json::{to_json_pretty, from_json}` | تم تحديد JSON حسب القيم Norito. |
+| المستندات العامة/المواصفات | `norito.md`، `multicodec.md` | التوثيق ينبع من الحقيقة في مصدر الريبو. |
 
-## Flujo de trabajo de desarrollo
+## تدفق العمل في التطوير
 
-1. **Agregar derives** - Prefiere `#[derive(Encode, Decode, IntoSchema)]` para nuevas estructuras de datos. Evita serializadores escritos a mano salvo que sea absolutamente necesario.
-2. **Validar layouts empaquetados** - Usa `cargo test -p norito` (y la matriz de features empaquetadas en `scripts/run_norito_feature_matrix.sh`) para asegurar que los nuevos layouts se mantengan estables.
-3. **Regenerar docs** - Cuando cambie la codificacion, actualiza `norito.md` y la tabla multicodec, luego refresca las paginas del portal (`/reference/norito-codec` y este resumen).
-4. **Mantener pruebas Norito-first** - Las pruebas de integracion deben usar los helpers JSON de Norito en lugar de `serde_json` para ejercitar las mismas rutas que produccion.
+1. **مشتقات مجمعة** - اختر `#[derive(Encode, Decode, IntoSchema)]` لهياكل البيانات الجديدة. تجنب كتابة المسلسلات يدويًا مما هو ضروري تمامًا.
+2. **التخطيطات الصحيحة المُعبأة** - الولايات المتحدة الأمريكية `cargo test -p norito` (ومصفوفة الميزات المُعبأة في `scripts/run_norito_feature_matrix.sh`) لضمان الحفاظ على التخطيطات الجديدة.
+3. **تجديد المستندات** - عندما تقوم بتغيير الترميز، وتحديث `norito.md` وجدول الترميز المتعدد، قم بتحديث صفحات البوابة الإلكترونية (`/reference/norito-codec` واستأنفها).
+4. **الصيانة الاختبارية Norito-first** - تتطلب اختبارات التكامل استخدام المساعدين JSON de Norito في مكان `serde_json` لتشغيل نفس المسارات التي يتم إنتاجها.
 
-## Enlaces rapidos
+## ينير السريع- المواصفات: [`norito.md`](https://github.com/hyperledger-iroha/iroha/blob/master/norito.md)
+- الترميز المتعدد المخصص: [`multicodec.md`](https://github.com/hyperledger-iroha/iroha/blob/master/multicodec.md)
+- مميزات مصفوفة النص: `scripts/run_norito_feature_matrix.sh`
+- نماذج التخطيط المعبأة: `crates/norito/tests/`
 
-- Especificacion: [`norito.md`](https://github.com/hyperledger-iroha/iroha/blob/master/norito.md)
-- Asignaciones multicodec: [`multicodec.md`](https://github.com/hyperledger-iroha/iroha/blob/master/multicodec.md)
-- Script de matriz de features: `scripts/run_norito_feature_matrix.sh`
-- Ejemplos de layout empaquetado: `crates/norito/tests/`
-
-Acompana este resumen con la guia de inicio rapido (`/norito/getting-started`) para un recorrido practico de compilar y ejecutar bytecode que usa payloads Norito.
+يرافق هذا الاستئناف دليل البدء السريع (`/norito/getting-started`) لإعادة التدريب العملي على تجميع وتنفيذ الكود الثانوي الذي يستخدم الحمولات Norito.

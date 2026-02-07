@@ -7,48 +7,49 @@ generator: scripts/sync_docs_i18n.py
 source_hash: c56bacde8ee42c2427d06038a3a6ca65035d4055c42f6e5ded7e54b33c1fe921
 source_last_modified: "2025-12-29T18:16:35.060432+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Documentation Automation Baselines
+# Documentation Automation အခြေခံများ
 
-This directory captures the automation surfaces that roadmap items such as
-AND5/AND6 (Android Developer Experience + Release Readiness) and DA-1
-(Data-Availability threat-model automation) refer to when they call for
-auditable documentation evidence. Staging the command references and expected
-artefacts in-tree keeps the prerequisites for compliance reviews available even
-when CI pipelines or dashboards are offline.
+ဤလမ်းညွှန်သည် လမ်းပြမြေပုံကဲ့သို့သော အရာများဖြစ်သည့် အလိုအလျောက်စနစ်မျက်နှာပြင်များကို ဖမ်းယူသည်။
+AND5/AND6 (Android Developer Experience + Release Ready) နှင့် DA-1
+(Data-Availability threat-model automation) ခေါ်သောအခါတွင် ရည်ညွှန်းသည်။
+စာရင်းစစ်နိုင်သော စာရွက်စာတမ်းအထောက်အထားများ။ အမိန့်တော် ကိုးကားချက် မျှော်မှန်းချက်များကို အဆင့်မြှင့်တင်ခြင်း။
+သစ်ပင်တွင်ရှိသော ပစ္စည်းများသည် လိုက်နာမှုပြန်လည်သုံးသပ်ခြင်းအတွက် လိုအပ်ချက်များကိုပင် သိမ်းဆည်းထားသည်။
+CI ပိုက်လိုင်းများ သို့မဟုတ် ဒက်ရှ်ဘုတ်များ အော့ဖ်လိုင်းဖြစ်နေသည့်အခါ။
 
-## Directory Layout
+## လမ်းညွှန်လက်ကွက်
 
-| Path | Purpose |
-|------|---------|
-| `docs/automation/android/` | Android documentation and localization automation baselines (AND5), including i18n stub sync logs, parity summaries, and SDK publishing evidence required before AND6 sign-off. |
-| `docs/automation/da/` | Data-Availability threat-model automation outputs referenced by `cargo xtask da-threat-model-report` and the nightly docs refresh. |
+| မဂ် | ရည်ရွယ်ချက် |
+|--------|---------|
+| `docs/automation/android/` | i18n ဆောင်းပါးတိုစင့်ခ်မှတ်တမ်းများ၊ သာတူညီမျှအနှစ်ချုပ်များနှင့် SDK အကောင့်ဖွင့်ခြင်းမပြုမီ လိုအပ်သည့် အထောက်အထားများအပါအဝင် Android စာရွက်စာတမ်းနှင့် ဒေသသတ်မှတ်ခြင်း အလိုအလျောက်လုပ်ဆောင်ခြင်းအခြေခံများ (AND5)။ |
+| `docs/automation/da/` | `cargo xtask da-threat-model-report` မှ ကိုးကားထားသော Data-Availability ခြိမ်းခြောက်မှု-မော်ဒယ် အလိုအလျောက်စနစ် ရလဒ်များနှင့် ညစဉ် docs ပြန်လည်ဆန်းသစ်ခြင်း။ |
 
-Each subdirectory documents the commands that produce the evidence along with
-the file layout we expect to check in (usually JSON summaries, run logs, or
-manifests). Teams drop new artefacts under the respective folder whenever an
-automation run materially changes the published docs, then link to the commit
-from the relevant status/roadmap entry.
+လမ်းကြောင်းခွဲတစ်ခုစီသည် အထောက်အထားများနှင့်အတူ ထုတ်ပေးသည့် အမိန့်များကို မှတ်တမ်းတင်ထားသည်။
+ကျွန်ုပ်တို့စစ်ဆေးရန်မျှော်လင့်ထားသော ဖိုင်အပြင်အဆင် (များသောအားဖြင့် JSON အနှစ်ချုပ်များ၊ မှတ်တမ်းများကို ဖွင့်ခြင်း သို့မဟုတ်
+ထင်ရှားသည်)။ အဖွဲ့များသည် သက်ဆိုင်ရာ ဖိုင်တွဲအောက်တွင် အရာဝတ္ထုအသစ်များကို အချိန်တိုင်း ချပေးသည်။
+အလိုအလျောက်စနစ်ဖြင့် လုပ်ဆောင်ခြင်းသည် ထုတ်ဝေထားသော စာရွက်စာတမ်းများကို ရုပ်လုံးပြောင်းစေပြီး ကွန်မန့်သို့ ချိတ်ဆက်ပါ။
+သက်ဆိုင်ရာ အခြေအနေ/လမ်းပြမြေပုံ ဝင်ရောက်မှုမှ။
 
-## Usage
+##အသုံးပြုမှု
 
-1. **Run the automation** using the commands described in the subdirectory
-   README (for example, `ci/check_android_fixtures.sh` or
-   `cargo xtask da-threat-model-report`).
-2. **Copy the resulting JSON/log artefacts** from `artifacts/…` into the
-   matching `docs/automation/<program>/…` folder with an ISO-8601 timestamp in
-   the filename so auditors can correlate the evidence with governance minutes.
-3. **Reference the commit** in `status.md`/`roadmap.md` when closing a roadmap
-   gate so reviewers can confirm the automation baseline used for that decision.
-4. **Keep the files lightweight**. The expectation is structured metadata,
-   manifests, or summaries—not bulk binary blobs. Larger dumps should stay in
-   object storage with the signed reference recorded here.
+1. ** အလိုအလျောက်စနစ်** ကို လမ်းကြောင်းခွဲတွင် ဖော်ပြထားသော ညွှန်ကြားချက်များကို အသုံးပြု၍ လုပ်ဆောင်ပါ။
+   README (ဥပမာ၊ `ci/check_android_fixtures.sh` သို့မဟုတ်
+   `cargo xtask da-threat-model-report`)။
+2. ** `artifacts/…` မှ ရရှိလာသော JSON/log artefacts** ကို ကူးယူပါ။
+   ISO-8601 အချိန်တံဆိပ်တုံးဖြင့် `docs/automation/<program>/…` ဖိုင်တွဲနှင့် ကိုက်ညီသည်
+   စာရင်းစစ်များသည် အထောက်အထားများကို အုပ်ချုပ်မှုမိနစ်များနှင့် ဆက်စပ်နိုင်စေရန် ဖိုင်အမည်။
+3. လမ်းပြမြေပုံကိုပိတ်သောအခါတွင် `status.md`/`roadmap.md` တွင် **ကတိက၀တ်ကို ကိုးကားပါ
+   ထိုဆုံးဖြတ်ချက်အတွက် အသုံးပြုသည့် အလိုအလျောက်စနစ်အခြေခံကို ပြန်လည်သုံးသပ်သူများသည် အတည်ပြုနိုင်စေရန် ဂိတ်တံခါးဖြစ်သည်။
+4. **ဖိုင်များကို ပေါ့ပါးစွာထားပါ**။ မျှော်မှန်းချက်သည် စနစ်တကျ မက်တာဒေတာ၊
+   သရုပ်ဖော်ခြင်း သို့မဟုတ် အနှစ်ချုပ်များ — အစုလိုက် ဒွိဘလောက်များ မဟုတ်ပါ။ ပိုကြီးတဲ့ အမှိုက်ပုံကြီးထဲမှာပဲ နေရမယ်။
+   ဤနေရာတွင် မှတ်တမ်းတင်ထားသော လက်မှတ်ရေးထိုးထားသော အကိုးအကားဖြင့် အရာဝတ္ထုသိုလှောင်မှု။
 
-By centralising these automation notes we unblock the “docs/automation baselines
-available for audit” prerequisite that AND6 calls out and give the DA threat
-model flow a deterministic home for the nightly reports and manual spot checks.
+ဤအလိုအလျောက်လုပ်ဆောင်ခြင်းမှတ်စုများကို ဗဟိုချုပ်ကိုင်ခြင်းဖြင့် ကျွန်ုပ်တို့သည် “docs/automation baselines များကို ပိတ်ဆို့ထားခြင်းဖြစ်သည်။
+စာရင်းစစ်အတွက် ရနိုင်သည်" AND6 မှ ခေါ်ဆိုပြီး DA ခြိမ်းခြောက်မှုကို ပေးသည့် ကြိုတင်လိုအပ်ချက်
+မော်ဒယ်သည် ညစဉ်ညတိုင်း အစီရင်ခံချက်များနှင့် လက်စွဲအကွက်စစ်ဆေးမှုများအတွက် အဆုံးအဖြတ်ပေးသည့် အိမ်ဖြစ်သည်။

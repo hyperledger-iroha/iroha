@@ -7,30 +7,31 @@ generator: scripts/sync_docs_i18n.py
 source_hash: a1a6bcc6bca3d7f70b82e35734b71d706ac46d8dc9c728351fabbd8a61dd3f31
 source_last_modified: "2026-01-05T09:28:12.003461+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Connect Session Architecture Strawman (Swift / Android / JS)
+# የክፍለ-ጊዜ አርክቴክቸር ስትራውማን (ስዊፍት / አንድሮይድ / ጄኤስ) ያገናኙ
 
-This strawman proposal outlines the shared design for Nexus Connect workflows
-across the Swift, Android, and JavaScript SDKs. It is intended to support the
-Feb 2026 cross-SDK workshop and capture open questions before implementation.
+ይህ የስትሮውማን ፕሮፖዛል ለNexus Connect የስራ ፍሰቶች የጋራ ንድፍ ይዘረዝራል።
+በስዊፍት፣ አንድሮይድ እና ጃቫስክሪፕት ኤስዲኬዎች ላይ። ለመደገፍ የታሰበ ነው።
+ፌብሩዋሪ 2026 የኤስዲኬ አቋራጭ አውደ ጥናት እና ከመተግበሩ በፊት ክፍት ጥያቄዎችን ይያዙ።
 
-> Last updated: 2026-01-29  
-> Authors: Swift SDK Lead, Android Networking TL, JS Lead  
-> Status: Draft for council review (threat model + data retention alignment added 2026-03-12)
+> መጨረሻ የዘመነው: 2026-01-29  
+> ደራሲያን፡ ስዊፍት ኤስዲኬ መሪ፣ አንድሮይድ ኔትዎርኪንግ ቲኤልኤል፣ ጄኤስ መሪ  
+> ሁኔታ፡ የምክር ቤት ግምገማ ረቂቅ (አስጊ ሞዴል + የውሂብ ማቆየት አሰላለፍ 2026-03-12 ታክሏል)
 
-## Goals
+# ግቦች
 
-1. Align wallet ↔ dApp session lifecycle, including connection bootstrapping,
-   approvals, signing requests, and teardown.
-2. Define the Norito envelope schema (open/approve/sign/control) shared by all
-   SDKs and ensure parity with `connect_norito_bridge`.
-3. Split responsibilities between transport (WebSocket/WebRTC), encryption
-   (Norito Connect frames + key exchange), and application layers (SDK facades).
-4. Ensure deterministic behaviour across desktop/mobile platforms, including
-   offline buffering and reconnection.
+1. የኪስ ቦርሳውን አሰልፍ ↔ dApp ክፍለ ጊዜ የህይወት ዑደት፣ የግንኙነት ማስነሻን ጨምሮ፣
+   ማጽደቅ፣ መጠይቆችን መፈረም እና ማፍረስ።
+2. በሁሉም የሚጋራውን የNorito ኤንቨሎፕ ንድፍ (ክፍት/ማጽደቅ/ምልክት/ቁጥጥር) ይግለጹ።
+   ኤስዲኬዎች እና ከ`connect_norito_bridge` ጋር እኩልነት ያረጋግጡ።
+3. በትራንስፖርት (WebSocket/WebRTC) መካከል የተከፋፈሉ ኃላፊነቶች፣ ምስጠራ
+   (Norito ክፈፎች አገናኝ + ቁልፍ ልውውጥ) እና የመተግበሪያ ንብርብሮች (ኤስዲኬ የፊት ገጽታዎች)።
+4. በመላ ዴስክቶፕ/ሞባይል መድረኮች ላይ የመወሰን ባህሪን ያረጋግጡ፣ ጨምሮ
+   ከመስመር ውጭ ማቋት እና እንደገና መገናኘት።
 
-## Session Lifecycle (High-Level)
+## የክፍለ ጊዜ የህይወት ዑደት (ከፍተኛ ደረጃ)
 
 ```
 ┌────────────┐      ┌─────────────┐      ┌────────────┐
@@ -56,363 +57,342 @@ Feb 2026 cross-SDK workshop and capture open questions before implementation.
       │ 6. control frames for reject/close, error propagation, heartbeats.
 ```
 
-## Envelope/Norito Schema
+## ኤንቨሎፕ/Norito እቅድ
 
-All SDKs MUST use the canonical Norito schema defined in `connect_norito_bridge`:
+ሁሉም ኤስዲኬዎች በ`connect_norito_bridge` ውስጥ የተገለጸውን ቀኖናዊ Norito መርሐግብር መጠቀም አለባቸው፡
 
-- `EnvelopeV1` (open / approve / sign / control)
-- `ConnectFrameV1` (ciphertext frames w/ AEAD payload)
-- Control codes:
-  - `open_ext` (metadata, permissions)
-  - `approve_ext` (account, permissions, proofs, signature)
-  - `reject`, `close`, `ping/pong`, `error`
+- `EnvelopeV1` (ክፍት / ማጽደቅ / ምልክት / ቁጥጥር)
+- `ConnectFrameV1` (የምስጢር ጽሁፍ ፍሬሞች ከ AEAD ጭነት)
+- የቁጥጥር ኮዶች;
+  - `open_ext` (ሜታዳታ፣ ፈቃዶች)
+  - `approve_ext` (መለያ፣ ፍቃዶች፣ ማረጋገጫዎች፣ ፊርማ)
+  - `reject`፣ `close`፣ `ping/pong`፣ `error`
 
-Swift previously shipped placeholder JSON encoders (`ConnectCodec.swift`). As of Apr 2026 the SDK
-always uses the Norito bridge and fails closed when the XCFramework is missing, but this strawman
-still captures the mandate that led to the bridge integration:
+ስዊፍት ከዚህ ቀደም የተላከ ቦታ ያዥ JSON ኢንኮደሮች (`ConnectCodec.swift`)። ከኤፕሪል 2026 ጀምሮ ኤስዲኬ
+ሁልጊዜ የNorito ድልድይ ይጠቀማል እና XCFramework ሲጠፋ አይዘጋም ፣ ግን ይህ ገለባ
+አሁንም ወደ ድልድዩ ውህደት እንዲመራ ያደረገውን ስልጣን ይይዛል፡-
 
-| Function | Description | Status |
-|----------|-------------|--------|
-| `connect_norito_encode_control_open_ext` | dApp open frame | Implemented in bridge |
-| `connect_norito_encode_control_approve_ext` | Wallet approval | Implemented |
-| `connect_norito_encode_envelope_sign_request_tx/raw` | Sign requests | Implemented |
-| `connect_norito_encode_envelope_sign_result_ok/err` | Sign results | Implemented |
-| `connect_norito_decode_*` | Parsing for wallets/dApps | Implemented |
+| ተግባር | መግለጫ | ሁኔታ |
+|-------|------------|----|
+| `connect_norito_encode_control_open_ext` | dApp ክፍት ፍሬም | በድልድይ ውስጥ የተተገበረ |
+| `connect_norito_encode_control_approve_ext` | የኪስ ቦርሳ ተቀባይነት | ተተግብሯል |
+| `connect_norito_encode_envelope_sign_request_tx/raw` | ጥያቄዎችን ይፈርሙ | ተተግብሯል |
+| `connect_norito_encode_envelope_sign_result_ok/err` | ውጤት ይፈርሙ | ተተግብሯል |
+| `connect_norito_decode_*` | ለኪስ ቦርሳ/ዲአፕ መተንተን | ተተግብሯል |
 
-### Required Work
+### የሚፈለግ ስራ
 
-- Swift: Replace placeholder `ConnectCodec` JSON helpers with bridge calls and surface
-  typed wrappers (`ConnectFrame`, `ConnectEnvelope`) using the shared Norito types. ✅ (Apr 2026)
-- Android/JS: Ensure the same wrappers exist; align error codes and metadata keys.
-- Shared: Document encryption (X25519 key exchange, AEAD) with consistent key derivation
-  per Norito spec, and provide sample integration tests using the Rust bridge.
+- ስዊፍት፡ ቦታ ያዥ `ConnectCodec` JSON ረዳቶችን በድልድይ ጥሪዎች እና በገጽታ ይተኩ
+  የተተየቡ መጠቅለያዎች (`ConnectFrame`, `ConnectEnvelope`) የተጋሩ Norito አይነቶችን በመጠቀም። ✅ (ኤፕሪል 2026)
+- አንድሮይድ/JS: ተመሳሳይ መጠቅለያዎች መኖራቸውን ያረጋግጡ; የስህተት ኮዶችን እና የሜታዳታ ቁልፎችን አሰልፍ።
+- የተጋራ፡ የሰነድ ምስጠራ (X25519 ቁልፍ ልውውጥ፣ AEAD) ከተከታታይ የቁልፍ አመጣጥ ጋር
+  በ Norito spec፣ እና የዛገቱን ድልድይ በመጠቀም የናሙና ውህደት ሙከራዎችን ያቅርቡ።
 
-## Transport Contract
+## የትራንስፖርት ውል- ዋና መጓጓዣ፡ WebSocket (`/v1/connect/ws?sid=<session_id>`)።
+- አማራጭ የወደፊት፡ WebRTC (TBD) - ከመጀመሪያው strawman ወሰን ውጭ።
+- ስትራቴጂን እንደገና ማገናኘት፡ ገላጭ የኋላ መጥፋት ከሙሉ ጅረት ጋር (ቤዝ 5s፣ max 60s); የተጋሩ ቋሚዎች በስዊፍት፣ አንድሮይድ እና ጄኤስ ላይ ስለዚህ ሙከራዎች ሊተነበይ የሚችል ሆኖ ይቆያሉ።
+- ፒንግ/pong cadence: እንደገና ከመገናኘትዎ በፊት 30 ዎቹ የልብ ምት ለሦስት ያመለጡ pongs በመቻቻል; JS የአሳሽ ስሮትሊንግ ህጎችን ለማርካት ትንሹን ክፍተት ወደ 15 ሴ.
+- መንጠቆዎችን ይግፉ፡ የአንድሮይድ ቦርሳ ኤስዲኬ ለመቀስቀስ አማራጭ የFCM ውህደትን ያጋልጣል፣ JS ደግሞ በምርጫ ላይ የተመሰረተ ሆኖ ይቆያል (ለአሳሽ የግፋ ፍቃዶች የተመዘገቡ ገደቦች)።
+- የኤስዲኬ ኃላፊነቶች፡-
+  - የፒንግ/ፖንግ የልብ ምቶች ይንከባከቡ (በሞባይል ላይ ባትሪዎችን ከማፍሰስ ይቆጠቡ)።
+  - ከመስመር ውጭ ሲሆኑ ወጪ ክፈፎችን አቆይ (የታሰረ ወረፋ፣ ለdApp የቀጠለ)።
+- የክስተት ዥረት ኤፒአይ ያቅርቡ (Swift Combine `AsyncStream`፣ አንድሮይድ ፍሰት፣ JS ያልተመሳሰለ ኢተር)።
+- የገጽታ መንጠቆዎችን እንደገና ያገናኙ እና በእጅ እንደገና እንዲመዘገቡ ይፍቀዱ።
+- ቴሌሜትሪ ማሻሻያ፡ የክፍለ-ደረጃ ቆጣሪዎችን ብቻ ልቀቁ (`sid` ሃሽ፣ አቅጣጫ፣
+  ተከታታይ መስኮት, የወረፋ ጥልቀት) በ Connect telemetry ውስጥ ከተመዘገቡ ጨዎች ጋር
+  መመሪያ; ራስጌ/ቁልፎች በምዝግብ ማስታወሻዎች ወይም ሕብረቁምፊዎች ማረም በፍፁም መታየት የለባቸውም።
 
-- Primary transport: WebSocket (`/v1/connect/ws?sid=<session_id>`).
-- Optional future: WebRTC (TBD) – out of scope for initial strawman.
-- Reconnect strategy: exponential back-off with full jitter (base 5 s, max 60 s); shared constants across Swift, Android, and JS so retries remain predictable.
-- Ping/pong cadence: 30 s heartbeat with tolerance for three missed pongs before reconnect; JS clamps minimum interval to 15 s to satisfy browser throttling rules.
-- Push hooks: Android wallet SDK exposes optional FCM integration for wake-ups, while JS stays polling-based (documented limitations for browser push permissions).
-- SDK responsibilities:
-  - Maintain ping/pong heartbeats (avoid draining batteries on mobile).
-  - Buffer outgoing frames when offline (bounded queue, persisted for dApp).
-- Provide event stream API (Swift Combine `AsyncStream`, Android Flow, JS async iter).
-- Surface reconnect hooks and allow manual re-subscribe.
-- Telemetry redaction: only emit session-level counters (`sid` hash, direction,
-  sequence window, queue depth) with salts documented in the Connect telemetry
-  guide; headers/keys must never appear in logs or debug strings.
+## ምስጠራ እና ቁልፍ አስተዳደር
 
-## Encryption & Key Management
+### የክፍለ ጊዜ መለያዎች እና ጨዎች
 
-### Session identifiers & salts
+- `sid` ከ `BLAKE2b-256("iroha-connect|sid|" || chain_id || app_ephemeral_pk || nonce16)` የተገኘ ባለ 32-ባይት መለያ ነው።  
+  DApps ወደ `/v1/connect/session` ከመደወል በፊት ያሰሉት; የኪስ ቦርሳዎች በ`approve` ክፈፎች ውስጥ ያስተጋባሉ ስለዚህም ሁለቱም ወገኖች ቁልፍ መጽሔቶችን እና ቴሌሜትሪዎችን በተከታታይ ማድረግ ይችላሉ።
+- ኤስዲኬዎች ከአስተናጋጁ መድረክ በተሰበሰበው ኢንትሮፒ ላይ እንዳይተማመኑ ያው ጨው እያንዳንዱን የቁልፍ ማግኛ ደረጃ ይመገባል።
 
-- `sid` is a 32-byte identifier derived from `BLAKE2b-256("iroha-connect|sid|" || chain_id || app_ephemeral_pk || nonce16)`.  
-  DApps compute it before calling `/v1/connect/session`; wallets echo it in `approve` frames so both sides can key journals and telemetry consistently.
-- The same salt feeds every key-derivation step so SDKs never rely on entropy harvested from the host platform.
+### የኢፌመር ቁልፍ አያያዝ
 
-### Ephemeral key handling
-
-- Every session uses fresh X25519 key material.  
-  Swift stores it in the Keychain/Secure Enclave via `ConnectCrypto`, Android wallets default to StrongBox (falling back to TEE-backed keystores), and JS requires a secure-context WebCrypto instance or the native `iroha_js_host` plug-in.
-- Open frames include the dApp ephemeral public key plus an optional attestation bundle. Wallet approvals return the wallet public key and any hardware attestation needed for compliance flows.
-- Attestation payloads follow the accepted schema:  
+- እያንዳንዱ ክፍለ ጊዜ ትኩስ X25519 ቁልፍ ቁሳቁስ ይጠቀማል።  
+  ስዊፍት በ Keychain/Secure Enclave በ`ConnectCrypto`፣የአንድሮይድ የኪስ ቦርሳ ነባሪ ወደ StrongBox (ወደ TEE የሚደገፉ የቁልፍ ማከማቻዎች መመለስ) እና JS ደህንነቱ የተጠበቀ አውድ WebCrypto ምሳሌ ወይም ቤተኛ `iroha_js_host` plug-in ያስፈልገዋል።
+- ክፍት ፍሬሞች የdApp ጊዜያዊ ህዝባዊ ቁልፍ እና አማራጭ የማረጋገጫ ቅርቅብ ያካትታሉ። የኪስ ቦርሳ ማፅደቆች የኪስ ቦርሳውን የህዝብ ቁልፍ እና ማንኛውም የሃርድዌር ማረጋገጫ ለተገዢነት ፍሰቶች ይመለሳሉ።
+- የማረጋገጫ ጭነቶች ተቀባይነት ያለውን እቅድ ይከተላሉ፡-  
   `attestation { platform, evidence_b64, statement_hash }`.  
-  Browsers may omit the block; native wallets include it whenever hardware-backed keys are in use.
+  አሳሾች እገዳውን ሊተዉት ይችላሉ; በሃርድዌር የተደገፉ ቁልፎች ጥቅም ላይ በሚውሉበት ጊዜ ሁሉ ቤተኛ የኪስ ቦርሳዎች ያካትቱታል።
 
-### Directional keys & AEAD
+### አቅጣጫ ቁልፎች እና AEAD
 
-- Shared secrets are expanded with HKDF-SHA256 (via the Rust bridge helpers) and domain-separated info strings:
-  - `iroha-connect|k_app` → app→wallet traffic.
-  - `iroha-connect|k_wallet` → wallet→app traffic.
-- AEAD is ChaCha20-Poly1305 for the v1 envelope (`connect_norito_bridge` exposes helpers on every platform).  
-  Associated data equals `("connect:v1", sid, dir, seq_le, kind=ciphertext)` so tampering on headers is detected.
-- Nonces are derived from the 64-bit sequence counter (`nonce[0..4]=0`, `nonce[4..12]=seq_le`). Shared helper tests ensure BigInt/UInt conversions behave identically across SDKs.
+- የተጋሩ ሚስጥሮች በHKDF-SHA256 (በ Rust bridge ረዳቶች በኩል) እና በጎራ-የተለያዩ የመረጃ ሕብረቁምፊዎች ተዘርግተዋል፡
+  - `iroha-connect|k_app` → መተግበሪያ → የኪስ ቦርሳ ትራፊክ።
+  - `iroha-connect|k_wallet` → ቦርሳ → የመተግበሪያ ትራፊክ።
+- AEAD ለv1 ፖስታ ChaCha20-Poly1305 ነው (`connect_norito_bridge` ረዳቶችን በእያንዳንዱ መድረክ ላይ ያጋልጣል)።  
+  ተያያዥነት ያለው መረጃ ከ `("connect:v1", sid, dir, seq_le, kind=ciphertext)` ጋር እኩል ነው ስለዚህ ራስጌዎችን መጣስ ተገኝቷል።
+- ኖንስ ከ64-ቢት ተከታታይ ቆጣሪ (`nonce[0..4]=0`፣ `nonce[4..12]=seq_le`) የተገኙ ናቸው። የጋራ አጋዥ ሙከራዎች የBigInt/UInt ልወጣዎች በኤስዲኬዎች ላይ ተመሳሳይ ባህሪ እንዳላቸው ያረጋግጣሉ።
 
-### Rotation & recovery handshake
+### ማሽከርከር እና መልሶ ማግኛ እጅ መጨባበጥ- መሽከርከር እንደ አማራጭ ሆኖ ይቆያል ነገር ግን ፕሮቶኮሉ ይገለጻል: dApps `Control::RotateKeys` ፍሬም ያወጣል ተከታታይ ቆጣሪዎች ወደ ጥቅል ጠባቂው ሲቃረቡ, የኪስ ቦርሳዎች በአዲሱ የህዝብ ቁልፍ እና የተፈረመ እውቅና ይሰጣሉ, እና ሁለቱም ወገኖች ክፍለ ጊዜውን ሳይዘጉ ወዲያውኑ አዲስ የአቅጣጫ ቁልፎችን ያገኛሉ.
+- የኪስ ቦርሳ ቁልፍ መጥፋት ተመሳሳዩን የእጅ መጨባበጥ እና በ `resume` መቆጣጠሪያ አማካኝነት dApps የጡረታ ቁልፉን ያነጣጠረ የተሸጎጠ ምስጢራዊ ጽሑፍን እንዲያጸዳ ያነሳሳል።
 
-- Rotation remains optional but the protocol is defined: dApps emit a `Control::RotateKeys` frame when sequence counters approach the wrap guard, wallets respond with the new public key plus a signed acknowledgement, and both sides immediately derive new directional keys without closing the session.
-- Wallet-side key loss triggers the same handshake followed by a `resume` control so dApps know to flush cached ciphertext that targeted the retired key.
+ለታሪካዊ የ CryptoKit ውድቀት `docs/connect_swift_ios.md` ይመልከቱ; Kotlin እና JS ተዛማጅ ማጣቀሻዎች በ `docs/connect_kotlin_ws*.md` ስር አላቸው።
 
-For historic CryptoKit fallbacks see `docs/connect_swift_ios.md`; Kotlin and JS have matching references under `docs/connect_kotlin_ws*.md`.
+## ፈቃዶች እና ማረጋገጫዎች
 
-## Permissions & Proofs
+- የፈቃድ መግለጫዎች በድልድዩ ወደ ውጭ በሚላከው የጋራ Norito መዋቅር በኩል ክብ ጉዞ ማድረግ አለባቸው።  
+  መስኮች፡
+  - `methods` — ግሶች (`sign_transaction`፣ `sign_raw`፣ `submit_proof`፣ …)።  
+  - `events` — dApp እንዲያያይዝ ተፈቅዶለታል።  
+  - `resources` — አማራጭ መለያ/ንብረት ማጣሪያዎች የኪስ ቦርሳዎች መዳረሻን ሊወስኑ ይችላሉ።  
+  - `constraints` — የሰንሰለት መታወቂያ፣ ቲቲኤል፣ ወይም ብጁ የፖሊሲ ቁልፎች ከመፈረምዎ በፊት ቦርሳው የሚያስፈጽመው።
+- ተገዢ ሜታዳታ ከፈቃዶች ጋር አብሮ ይሄዳል፡-
+  - አማራጭ `attachments[]` የ Norito ተያያዥ ማጣቀሻዎችን (KYC ጥቅሎች፣ የቁጥጥር ደረሰኞች) ይይዛል።  
+  - `compliance_manifest_id` ኦፕሬተሮች ፕሮቬንሽን ኦዲት ማድረግ እንዲችሉ ጥያቄውን ከዚህ ቀደም ከፀደቀ ማኒፌክት ጋር ያገናኛል።
+- የኪስ ቦርሳ ምላሾች የተስማሙትን ኮዶች ይጠቀማሉ፡-
+  - `user_declined`፣ `permissions_mismatch`፣ `compliance_failed`፣ `internal_error`።  
+  እያንዳንዳቸው `localized_message` ለUI ፍንጮች እና በማሽን ሊነበብ የሚችል `reason_code` ሊይዙ ይችላሉ።
+- የማጽደቂያ ክፈፎች የተመረጠው መለያ/ተቆጣጣሪ፣ የፈቃድ ማሚቶ፣ የማረጋገጫ ጥቅል (ZK ማረጋገጫ ወይም ማረጋገጫ) እና ማንኛውም የመመሪያ መቀያየርን (ለምሳሌ፣ `offline_queue_enabled`) ያካትታሉ።  
+  ውድቅ ማድረጉ ከባዶ `proof` ጋር ተመሳሳይ ንድፍ ያንፀባርቃል ግን አሁንም `sid` ለኦዲትነት ይቀዳል።
 
-- Permission manifests must round-trip through the shared Norito struct exported by the bridge.  
-  Fields:
-  - `methods` — verbs (`sign_transaction`, `sign_raw`, `submit_proof`, …).  
-  - `events` — subscriptions the dApp is allowed to attach to.  
-  - `resources` — optional account/asset filters so wallets can scope access.  
-  - `constraints` — chain ID, TTL, or custom policy knobs that the wallet enforces before signing.
-- Compliance metadata rides alongside permissions:
-  - Optional `attachments[]` contain Norito attachment references (KYC bundles, regulator receipts).  
-  - `compliance_manifest_id` ties the request to a previously approved manifest so operators can audit provenance.
-- Wallet responses use the agreed codes:
-  - `user_declined`, `permissions_mismatch`, `compliance_failed`, `internal_error`.  
-  Each may carry a `localized_message` for UI hints plus a machine-readable `reason_code`.
-- Approval frames include the selected account/controller, permission echo, proof bundle (ZK proof or attestation), and any policy toggles (e.g., `offline_queue_enabled`).  
-  Rejections mirror the same schema with empty `proof` but still record the `sid` for auditability.
+## የኤስዲኬ የፊት ገጽታዎች
 
-## SDK Facades
+| ኤስዲኬ | የታቀደው API | ማስታወሻ |
+|-------------|------|
+| ስዊፍት | `ConnectClient`፣ `ConnectSession`፣ `ConnectRequest`፣ `ConnectApproval` | ቦታ ያዢዎችን በተተየቡ መጠቅለያዎች + በተመሳሰሉ ዥረቶች ይተኩ። |
+| አንድሮይድ | Kotlin coroutines + የታሸጉ ክፍሎች ለክፈፎች | ለተንቀሳቃሽነት ከስዊፍት መዋቅር ጋር አሰልፍ። |
+| JS | Async iterators + TypeScript ennums ለክፈፍ አይነቶች | ለቅርቅብ ተስማሚ ኤስዲኬ (አሳሽ/መስቀለኛ መንገድ) ያቅርቡ። |
 
-| SDK | Proposed API | Notes |
-|-----|--------------|-------|
-| Swift | `ConnectClient`, `ConnectSession`, `ConnectRequest`, `ConnectApproval` | Replace placeholders with typed wrappers + async streams. |
-| Android | Kotlin coroutines + sealed classes for frames | Align with Swift structure for portability. |
-| JS | Async iterators + TypeScript enums for frame kinds | Provide bundler-friendly SDK (browser/node). |
-
-### Common behaviours
-
-- `ConnectSession` orchestrates lifecycle:
-  1. Establish WebSocket, perform handshake.
-  2. Exchange open/approve frames.
-  3. Handle sign requests/responses.
-  4. Emit events to application layer.
-- Provide high-level helpers:
+### የተለመዱ ባህሪያት- `ConnectSession` የሕይወት ዑደት ያቀናጃል፡-
+  1. WebSocket አቋቁመው፣መጨባበጥ ያከናውኑ።
+  2. ክፍት/ማጽደቂያ ፍሬሞችን መለዋወጥ።
+  3. የምልክት ጥያቄዎችን/ምላሾችን ይያዙ።
+  4. ክስተቶችን ወደ ትግበራ ንብርብር ያውጡ።
+- ከፍተኛ ደረጃ ረዳቶችን ያቅርቡ;
   - `requestSignature(tx, metadata)`
   - `approveSession(account, permissions)`
   - `reject(reason)`
-  - `cancelRequest(hash)` – emits a control frame acknowledged by the wallet.
-- Error handling: map Norito error codes to SDK-specific errors; include
-  domain-specific codes for UI using the shared taxonomy (`Transport`, `Codec`, `Authorization`, `Timeout`, `QueueOverflow`, `Internal`). Swift's baseline implementation + telemetry guide lives in [`connect_error_taxonomy.md`](connect_error_taxonomy.md) and is the reference for Android/JS parity.
-- Emit telemetry hooks for queue depth, reconnect counts, and request latency (`connect.queue_depth`, `connect.reconnects_total`, `connect.latency_ms`).
+  - `cancelRequest(hash)` - በኪስ ቦርሳ እውቅና ያለው የቁጥጥር ፍሬም ያወጣል።
+- የስህተት አያያዝ፡ ካርታ Norito የስህተት ኮዶች ወደ ኤስዲኬ-ተኮር ስህተቶች; ማካተት
+  የጋራ ታክሶኖሚ (`Transport`፣ `Codec`፣ `Authorization`፣ `Timeout`፣ `QueueOverflow`፣ Norito፣ `Transport`፣ `Authorization`፣ `QueueOverflow`፣ Norito የስዊፍት መነሻ አተገባበር + የቴሌሜትሪ መመሪያ በ[`connect_error_taxonomy.md`](connect_error_taxonomy.md) ውስጥ ይኖራል እና የአንድሮይድ/JS እኩልነት ዋቢ ነው።
+- ለወረፋ ጥልቀት የቴሌሜትሪ መንጠቆዎችን ያመርቱ፣ ቆጠራዎችን እንደገና ያገናኙ እና የቆይታ ጊዜ ይጠይቁ (`connect.queue_depth`፣ `connect.reconnects_total`፣ `connect.latency_ms`)።
  
-## Sequence Numbers & Flow Control
+## ተከታታይ ቁጥሮች እና ፍሰት መቆጣጠሪያ
 
-- Each direction keeps a dedicated 64-bit `sequence` counter that starts at zero when the session opens. The shared helper types clamp increments and trigger a `ConnectError.sequenceOverflow` + key-rotation handshake well before the counter would wrap.
-- Nonces and associated data reference the sequence number, so duplicates can be rejected without parsing payloads. SDKs must store `{sid, dir, seq, payload_hash}` in their journals to make deduplication deterministic across reconnects.
-- Wallets advertise back-pressure via a logical window (`FlowControl` control frames). DApps dequeue only when a window token is available; wallets emit new tokens after processing ciphertext to keep pipelines bounded.
-- Resume negotiation is explicit: both sides emit `Control::Resume { seq_app_max, seq_wallet_max, queue_depths }` after reconnecting so observers can verify how much data was re-sent and whether journals contain gaps.
-- Conflicts (e.g., two payloads with the same `(sid, dir, seq)` but different hashes) escalate to `ConnectError.Internal` and force a new `sid` to avoid silent divergence.
+- እያንዳንዱ አቅጣጫ ክፍለ-ጊዜው ሲከፈት በዜሮ የሚጀምር 64-ቢት `sequence` ቆጣሪ ያቆያል። የተጋሩ አጋዥ ዓይነቶች ቆጣሪው ከመጠቅለሉ በፊት የመጨመሪያ ጭማሪ እና የ `ConnectError.sequenceOverflow` + ቁልፍ መጨባበጥ ያስነሳሉ።
+- Nonces እና ተያያዥነት ያለው ውሂብ የተከታታይ ቁጥሩን ያመለክታሉ፣ ስለዚህ የተባዙት ጭነቶች ሳይተነተኑ ውድቅ ሊደረጉ ይችላሉ። ኤስዲኬዎች በዳግም ግንኙነቶች ላይ መደራረብን የሚወስን ለማድረግ `{sid, dir, seq, payload_hash}`ን በመጽሔቶቻቸው ውስጥ ማከማቸት አለባቸው።
+- የኪስ ቦርሳዎች የኋላ ግፊትን በሎጂካዊ መስኮት (`FlowControl` የቁጥጥር ፍሬሞች) ያስተዋውቃሉ። DApps የመስኮት ማስመሰያ ሲገኝ ብቻ ነው የሚያወጣው። የኪስ ቦርሳዎች የቧንቧ መስመሮችን ውሱን ለማድረግ የምስጢር ጽሑፍን ከተሰራ በኋላ አዲስ ምልክቶችን ይለቃሉ።
+- ከቆመበት ድርድር ግልጽ ነው፡ ሁለቱም ወገኖች እንደገና ከተገናኙ በኋላ `Control::Resume { seq_app_max, seq_wallet_max, queue_depths }` ይለቃሉ ስለዚህ ታዛቢዎች ምን ያህል ውሂብ እንደገና እንደተላከ እና መጽሔቶች ክፍተቶችን እንደያዙ ማረጋገጥ ይችላሉ።
+- ግጭቶች (ለምሳሌ፣ ሁለት ተከፋይ ተመሳሳይ `(sid, dir, seq)` ግን የተለያዩ ሃሽ) ወደ `ConnectError.Internal` በማደግ ፀጥ ያለ ልዩነትን ለማስወገድ አዲስ `sid` ያስገድዳል።
 
-## Threat model and data retention alignment
+## አስጊ ሞዴል እና የውሂብ ማቆየት አሰላለፍ- ** የገጽታ ገፅታዎች ከግምት ውስጥ ይገባሉ፡** WebSocket ትራንስፖርት፣ Norito ድልድይ ኢንኮድ/መግለጫ፣
+  የመጽሔት ጽናት፣ የቴሌሜትሪ ላኪዎች፣ እና መተግበሪያን የሚመለከቱ መልሶ ጥሪዎች።
+- ** ዋና ግቦች:** የክፍለ ጊዜ ሚስጥሮችን ይጠብቁ (X25519 ቁልፎች ፣ የተገኙ የ AEAD ቁልፎች ፣
+  ምንም / ተከታታይ ቆጣሪዎች) በሎግ / ቴሌሜትሪ ውስጥ መፍሰስ ፣ እንደገና ማጫወትን ይከላከሉ እና
+  ጥቃቶችን ዝቅ ማድረግ እና መጽሔቶችን እና ያልተለመዱ ሪፖርቶችን ማቆየት።
+- ** ማቃለያዎች የተስተካከሉ: ***
+  - መጽሔቶች የጽሑፍ ጽሑፍን ብቻ ይይዛሉ; የተከማቸ ዲበ ውሂብ በሃሽ፣ ርዝመት የተገደበ ነው።
+    መስኮች፣ የጊዜ ማህተሞች እና ተከታታይ ቁጥሮች።
+  - የቴሌሜትሪ ክፍያ ጭነቶች ማንኛውንም የራስጌ/የጭነት ጭነት ይዘት ያስተካክላል እና ብቻ ያካትታል
+    የ `sid` እና የድምር ቆጣሪዎች የጨው ሃሽ; የማሻሻያ ማረጋገጫ ዝርዝር ተጋርቷል።
+    በኤስዲኬዎች መካከል ለኦዲት እኩልነት።
+  - የክፍለ-ጊዜ ምዝግብ ማስታወሻዎች ዞረው በነባሪነት ከ7 ቀናት በኋላ ያረጁ ናቸው። የኪስ ቦርሳዎች ያጋልጣሉ
+    የ `connectLogRetentionDays` ቁልፍ (ኤስዲኬ ነባሪ 7) እና ባህሪውን ይመዝግቡ
+    ስለዚህ የቁጥጥር ስርጭቶች ጥብቅ መስኮቶችን ሊሰኩ ይችላሉ.
+  - ድልድይ ኤፒአይ አላግባብ መጠቀም (የጎደሉ ማሰሪያዎች፣ የተበላሸ ምስጥር ጽሑፍ፣ ልክ ያልሆነ ቅደም ተከተል)
+    ጥሬ ጭነት ወይም ቁልፎችን ሳያስተጋባ የተተየቡ ስህተቶችን ይመልሳል።
 
-- **Surfaces considered:** WebSocket transport, Norito bridge encode/decode,
-  journal persistence, telemetry exporters, and app-facing callbacks.
-- **Primary goals:** protect session secrets (X25519 keys, derived AEAD keys,
-  nonce/sequence counters) from leaks in logs/telemetry, prevent replay and
-  downgrade attacks, and bound retention of journals and anomaly reports.
-- **Mitigations codified:**
-  - Journals carry ciphertext only; metadata stored is limited to hashes, length
-    fields, timestamps, and sequence numbers.
-  - Telemetry payloads redacts any header/payload content and includes only
-    salted hashes of `sid` plus aggregate counters; redaction checklist shared
-    between SDKs for audit parity.
-  - Session logs are rotated and age out after 7 days by default. Wallets expose
-    a `connectLogRetentionDays` knob (SDK default 7) and document the behaviour
-    so regulated deployments can pin stricter windows.
-  - Bridge API misuse (missing bindings, corrupt ciphertext, invalid sequence)
-    returns typed errors without echoing raw payloads or keys.
+በግምገማ በመጠባበቅ ላይ ያሉ ጥያቄዎች በ`docs/source/sdk/swift/connect_workshop.md` ውስጥ ክትትል ይደረግባቸዋል
+እና በካውንስሉ ደቂቃዎች ውስጥ መፍትሄ ያገኛል; አንዴ ከተዘጋ ገለባው ይሆናል።
+ከረቂቅ ወደ ተቀባይነት አደገ።
 
-Pending questions from review are tracked in `docs/source/sdk/swift/connect_workshop.md`
-and will be resolved in the council minutes; once closed the strawman will be
-promoted from draft to accepted.
+## ከመስመር ውጭ ማቋት እና እንደገና ማገናኘት።
 
-## Offline Buffering & Reconnections
+### የጋዜጠኝነት ውል
 
-### Journaling contract
-
-Every SDK maintains an append-only journal per session so the dApp and wallet
-can queue frames while offline, resume without data loss, and provide evidence
-for telemetry. The contract mirrors the Norito bridge types so the same byte
-representation survives across the mobile/JS stacks.
-
-- Journals live under a hashed session identifier (`sha256(sid)`), producing two
-  files per session: `app_to_wallet.queue` and `wallet_to_app.queue`. Swift uses
-  a sandboxed file wrapper, Android stores the files via `Room`/`FileChannel`,
-  and JS writes to IndexedDB; all formats are binary and endian-stable.
-- Each record serialises as `ConnectJournalRecordV1`:
-  - `direction: u8` (`0 = app→wallet`, `1 = wallet→app`)
+እያንዳንዱ ኤስዲኬ በአንድ ክፍለ ጊዜ አባሪ-ብቻ መጽሔት ይይዛል ስለዚህ dApp እና ቦርሳ
+ከመስመር ውጭ ሆነው ፍሬሞችን ወረፋ ማድረግ፣ ያለመረጃ መጥፋት ከቆመበት መቀጠል እና ማስረጃ ማቅረብ ይችላል።
+ለቴሌሜትሪ. ኮንትራቱ የ Norito ድልድይ ዓይነቶችን ተመሳሳይ ባይት ያንጸባርቃል
+ውክልና በሞባይል/JS ቁልል ላይ ይኖራል።- መጽሔቶች ሁለት በማምረት በተጨናነቀ ክፍለ ጊዜ መለያ (`sha256(sid)`) ይኖራሉ።
+  ፋይሎች በአንድ ክፍለ ጊዜ፡ `app_to_wallet.queue` እና `wallet_to_app.queue`። ስዊፍት ይጠቀማል
+  ማጠሪያ ያለው የፋይል መጠቅለያ፣ አንድሮይድ ፋይሎቹን በ`Room`/`FileChannel`፣
+  እና JS ወደ IndexedDB ይጽፋል; ሁሉም ቅርጸቶች ሁለትዮሽ እና endian-stable ናቸው።
+- እያንዳንዱ መዝገብ እንደ `ConnectJournalRecordV1` ሆኖ ይሠራል።
+  - `direction: u8` (`0 = app→wallet`፣ `1 = wallet→app`)
   - `sequence: u64`
-  - `payload_hash: [u8; 32]` (Blake3 of ciphertext + headers)
+  - `payload_hash: [u8; 32]` (Blake3 የምስጥር ጽሑፍ + ራስጌዎች)
   - `ciphertext_len: u32`
   - `received_at_ms: u64`
   - `expires_at_ms: u64`
-  - `ciphertext: [u8; ciphertext_len]` (exact Norito frame already AEAD-wrapped)
-- Journals store ciphertext verbatim. We never re-encrypt the payload; AEAD
-  headers already authenticate direction keys, so persistence reduces to
-  fsyncing the appended record.
-- A `ConnectQueueState` struct in memory mirrors the file metadata (depth,
-  bytes used, oldest/newest seq). It feeds the telemetry exporters and the
-  `FlowControl` helper.
-- Journals cap at 32 frames / 1 MiB by default; hitting the cap evicts the
-  oldest entries (`reason=overflow`). `ConnectFeatureConfig.max_queue_len`
-  overrides these defaults per deployment.
-- Journals retain data for 24 h (`expires_at_ms`). Background GC removes stale
-  segments eagerly so the on-disk footprint stays bounded.
-- Crash safety: append, fsync, and update the memory mirror _before_ notifying
-  the caller. On startup, SDKs scan the directory, validate record checksums,
-  and rebuild `ConnectQueueState`. Corruption causes the offending record to be
-  skipped, flagged via telemetry, and optionally quarantined for support dumps.
-- Because ciphertext already satisfies the Norito privacy envelope, the only
-  additional metadata recorded is the hashed session id. Apps wanting extra
-  privacy can opt into `telemetry_opt_in = false`, which stores journals but
-  redacts queue-depth exports and disables sharing hashed `sid` in logs.
-- SDKs expose `ConnectQueueObserver` so wallets/dApps can inspect queue depth,
-  drains, and GC outcomes; this hook feeds status UIs without parsing logs.
+  - `ciphertext: [u8; ciphertext_len]` (ትክክለኛ Norito ፍሬም አስቀድሞ AEAD-የታሸገ)
+- መጽሔቶች የጽሑፍ ጽሑፍን በቃላት ያከማቻሉ። ክፍያውን በፍፁም አናመሰጥርም; መኢአድ
+  ራስጌዎች የአቅጣጫ ቁልፎችን አስቀድመው ያረጋግጣሉ፣ ስለዚህ ጽናት ወደ ይቀንሳል
+  የተገጠመውን መዝገብ በማመሳሰል ላይ.
+- A `ConnectQueueState` ውቅር በማህደረ ትውስታ ውስጥ የፋይሉን ሜታዳታ ያንጸባርቃል (ጥልቀት፣
+  ጥቅም ላይ የዋለ ባይት፣ ጥንታዊ/አዲሱ ተከታታይ)። የቴሌሜትሪ ላኪዎችን እና የ
+  `FlowControl` አጋዥ።
+- መጽሔቶች በ 32 ክፈፎች / 1ሚቢ በነባሪ; ባርኔጣውን በመምታት ያስወጣል
+  በጣም የቆዩ ግቤቶች (`reason=overflow`)። `ConnectFeatureConfig.max_queue_len`
+  በየማሰማራቱ እነዚህን ነባሪዎች ይሽራል።
+- መጽሔቶች ለ 24h (`expires_at_ms`) መረጃን ይይዛሉ. ዳራ GC የቆየን ያስወግዳል
+  ክፍልፋዮች በጉጉት ስለዚህ በዲስክ ላይ ያለው አሻራ እንደታሰረ ይቆያል።
+- የብልሽት ደህንነት፡ ከማስታወሻ _በፊት_ማስታወሻውን ማያያዝ፣ ማመሳሰል እና ማዘመን
+  ደዋዩ. ሲጀመር ኤስዲኬዎች ማውጫውን ይቃኛሉ፣ የመዝገብ ፍተሻዎችን ያረጋግጣሉ፣
+  እና `ConnectQueueState` እንደገና ይገንቡ. ሙስና የወንጀል ሪከርድ እንዲሆን ያደርጋል
+  ተዘለለ፣ በቴሌሜትሪ ተጠቁሟል፣ እና እንደ አማራጭ ለድጋፍ ማጠራቀሚያዎች ተገልሏል።
+- ምክንያቱም የምስጢር ጽሁፍ የNorito የግላዊነት ኤንቨሎፕን ስለሚያረካ፣ ብቸኛው
+  ተጨማሪ ሜታዳታ የተመዘገበው የተጠለፈ ክፍለ ጊዜ መታወቂያ ነው። መተግበሪያዎች ተጨማሪ ይፈልጋሉ
+  ግላዊነት መጽሔቶችን የሚያከማች ግን ወደ `telemetry_opt_in = false` መርጦ መግባት ይችላል።
+  ወረፋ-ጥልቀት ወደ ውጭ መላክን ያስተካክላል እና hashed `sid` በምዝግብ ማስታወሻዎች ውስጥ ማጋራትን ያሰናክላል።
+- ኤስዲኬዎች `ConnectQueueObserver` ያጋልጣሉ ስለዚህም የኪስ ቦርሳ/ዲአፕ የወረፋ ጥልቀትን መመርመር ይችላል፣
+  የፍሳሽ ማስወገጃዎች እና የጂ.ሲ.ሲ ውጤቶች; ይህ መንጠቆ የምዝግብ ማስታወሻዎችን ሳይተነተን የሁኔታ UIዎችን ይመገባል።
 
-### Replay & resume semantics
+### እንደገና አጫውት እና የትርጓሜ ትምህርትን ከቀጠለ
 
-1. When reconnecting, SDKs emit `Control::Resume` with `{seq_app_max,
-   seq_wallet_max, queued_app, queued_wallet, journal_hash}`. The hash is the
-   Blake3 digest of the append-only journal so mismatched peers can detect drift.
-2. The receiving peer compares the resume payload with its state, requests
-   retransmission when gaps exist, and acknowledges replayed frames via
+1. ዳግም ሲገናኙ ኤስዲኬዎች `Control::Resume` በ `{seq_app_max፣
+   seq_wallet_max፣ queued_app፣ queued_wallet፣ journal_hash}`። ሃሽው የ
+   ብሌክ 3 ዲጀስት አባሪ-ብቻ ጆርናል ስለዚህ ያልተዛመደ እኩዮች ተንሳፋፊን መለየት ይችላሉ።
+2. ተቀባይ እኩያ ከቆመበት ቀጥል ክፍያን ከግዛቱ፣ ከጥያቄዎች ጋር ያወዳድራል።
+   ክፍተቶች ሲኖሩ እንደገና ማስተላለፍ እና በድጋሚ የተጫወቱ ፍሬሞችን በ በኩል እውቅና ይሰጣል
    `Control::ResumeAck`.
-3. Replayed frames always respect insertion order (`sequence` then write-time).
-   Wallet SDKs MUST apply back-pressure by issuing `FlowControl` tokens (also
-   journaled) so dApps cannot flood the queue while offline.
-4. Journals store ciphertext verbatim, so replay simply pumps the recorded bytes
-   back through the transport and decoder. No per-SDK re-encoding is allowed.
+3. ድጋሚ የተጫወቱት ክፈፎች ሁልጊዜ የማስገባት ትዕዛዝን ያከብራሉ (`sequence` ከዚያም የመፃፍ ጊዜ)።
+   የኪስ ቦርሳ ኤስዲኬዎች `FlowControl` ቶከኖችን በማውጣት የኋላ-ግፊት መተግበር አለባቸው (እንዲሁም
+   journaled) ስለዚህ dApps ከመስመር ውጭ ሆኖ ወረፋውን ሊያጥለቀልቅ አይችልም።
+4. ጆርናሎች የምስጢር ጽሁፍን በቃላት ያከማቻሉ፣ ስለዚህ በድጋሚ አጫውት የተቀዳውን ባይት በቀላሉ ይጭናል።
+   በትራንስፖርት እና ዲኮደር በኩል ወደ ኋላ. ምንም በኤስዲኬ ዳግም ኮድ ማድረግ አይፈቀድም።
 
-### Reconnection flow
+### የመልሶ ማገናኘት ፍሰት1. ትራንስፖርት ዌብሶኬትን እንደገና ያቋቁማል እና አዲስ የፒንግ ክፍተትን ይደራደራሉ።
+2. dApp ከኪስ ቦርሳ የሚመጣውን የኋላ ግፊት በማክበር የተደረደሩ ፍሬሞችን በቅደም ተከተል ይደግማል
+   (`ConnectSession.nextControlFrame()` `FlowControl` ማስመሰያዎች ያወጣል።)
+3. Wallet የታሸጉ ውጤቶችን ዲክሪፕት ያደርጋል፣ ተከታታይ ነጠላነትን ያረጋግጣል፣ እና
+   በመጠባበቅ ላይ ያሉ ማፅደቅ/ውጤቶችን እንደገና ማጫወት።
+4. ሁለቱም ወገኖች `resume` ቁጥጥር `seq_app_max`፣ `seq_wallet_max`፣
+   እና ለቴሌሜትሪ ወረፋ ጥልቀት.
+5. የተባዙ ክፈፎች (ተዛማጆች `sequence` + `payload_hash`) እውቅና ተሰጥቷቸዋል እና ይጣላሉ; ግጭቶች `ConnectError.Internal` ያሳድጋሉ እና የግዳጅ ክፍለ-ጊዜን እንደገና ያስጀምሩ።
 
-1. Transport re-establishes WebSocket and negotiates new ping interval.
-2. dApp replays queued frames in order, respecting back-pressure from wallet
-   (`ConnectSession.nextControlFrame()` yields `FlowControl` tokens).
-3. Wallet decrypts buffered results, verifies sequence monotonicity, and
-   replays pending approvals/results.
-4. Both sides emit a `resume` control summarising `seq_app_max`, `seq_wallet_max`,
-   and queue depths for telemetry.
-5. Duplicate frames (matching `sequence` + `payload_hash`) are acknowledged and dropped; conflicts raise `ConnectError.Internal` and trigger a forced session restart.
+### አለመሳካት ሁነታዎች
 
-### Failure modes
+- ክፍለ-ጊዜው የቆየ ነው ተብሎ የሚታሰብ ከሆነ (`offline_timeout_ms`፣ ነባሪ 5 ደቂቃዎች)
+  የታሸጉ ክፈፎች ይጸዳሉ እና ኤስዲኬው `ConnectError.sessionExpired` ከፍ ያደርገዋል።
+- የመጽሔት ብልሹነት ከሆነ ኤስዲኬዎች አንድ ነጠላ Norito ዲኮድ መጠገን ይሞክራሉ። ላይ
+  አለመሳካት መጽሔቱን ጥለው `connect.queue_repair_failed` ቴሌሜትሪ ይለቃሉ።
+- ተከታታይ አለመዛመድ `ConnectError.replayDetected` ያስነሳል እና አዲስ ያስገድዳል
+  መጨባበጥ (ከአዲስ `sid` ጋር እንደገና ይጀምራል)።
 
-- If the session is considered stale (`offline_timeout_ms`, default 5 minutes),
-  buffered frames are purged and the SDK raises `ConnectError.sessionExpired`.
-- In case of journal corruption, SDKs attempt a single Norito decode repair; on
-  failure they drop the journal and emit `connect.queue_repair_failed` telemetry.
-- Sequence mismatch triggers `ConnectError.replayDetected` and forces a fresh
-  handshake (session restart with new `sid`).
+### ከመስመር ውጭ ማቋቋሚያ እቅድ እና የኦፕሬተር መቆጣጠሪያዎች
 
-### Offline buffering plan & operator controls
+ዎርክሾፑ ሊደርስ የሚችለው በሰነድ የተደገፈ እቅድ ስለሚያስፈልገው እያንዳንዱ ኤስዲኬ ተመሳሳይ ነው።
+ከመስመር ውጭ ባህሪ፣የማስተካከያ ፍሰት እና የማስረጃ ቦታዎች። ከታች ያለው እቅድ ነው
+በስዊፍት (`ConnectSessionDiagnostics`)፣ አንድሮይድ ላይ የተለመደ
+(`ConnectDiagnosticsSnapshot`)፣ እና JS (`ConnectQueueInspector`)።
 
-The workshop deliverable requires a documented plan so every SDK ships the same
-offline behaviour, remediation flow, and evidence surfaces. The plan below is
-common across Swift (`ConnectSessionDiagnostics`), Android
-(`ConnectDiagnosticsSnapshot`), and JS (`ConnectQueueInspector`).
+| ግዛት | ቀስቅሴ | ራስ-ሰር ምላሽ | በእጅ መሻር | ቴሌሜትሪ ባንዲራ |
+|-------|---------|
+| `Healthy` | የወረፋ አጠቃቀም  5/ደቂቃ | አዲስ የምልክት ጥያቄዎችን ባለበት አቁም፣ የፍሰት መቆጣጠሪያ ቶከኖችን በግማሽ ተመን ልቀቁ | መተግበሪያዎች `clearOfflineQueue(.app|.wallet)` ሊደውሉ ይችላሉ; ኤስዲኬ እንደገና-hydrates ሁኔታ ከአቻ አንድ ጊዜ በመስመር ላይ | `connect.queue_state=\"throttled\"`, `connect.queue_watermark` መለኪያ |
+| `Quarantined` | አጠቃቀም ≥ `disk_watermark_drop` (ነባሪ 85%)፣ ሙስና ሁለት ጊዜ ተገኝቷል ወይም `offline_timeout_ms` አልፏል | ማቋት ያቁሙ፣ `ConnectError.QueueQuarantined` ያሳድጉ፣ ከዋኝ እውቅና ያስፈልገዋል | `ConnectSessionDiagnostics.forceReset()` ጥቅል ወደ ውጭ ከላከ በኋላ መጽሔቶችን ይሰርዛል | `connect.queue_state=\"quarantined\"`, `connect.queue_quarantine_total` ቆጣሪ |- ገደቦች በ`ConnectFeatureConfig` (`disk_watermark_warn`፣
+  `disk_watermark_drop`፣ `max_disk_bytes`፣ `offline_timeout_ms`)። አስተናጋጅ ሲሆኑ
+  እሴት ይተዋል፣ ኤስዲኬዎች ወደ ነባሪያቸው ይመለሳሉ እና እንዲዋቀሩ ማስጠንቀቂያ ይመዝገቡ
+  ከቴሌሜትሪ ኦዲት ማድረግ ይቻላል.
+- ኤስዲኬዎች `ConnectQueueObserver` እና የምርመራ አጋሮችን ያጋልጣሉ፡-
+  - ስዊፍት፡ `ConnectSessionDiagnostics.snapshot()` `{ግዛት፣ ጥልቀት፣ ባይት፣
+    ምክንያት}` and `exportJournalBundle(url:)` ለድጋፍ ሁለቱንም ወረፋዎች ቀጥሏል።
+  - አንድሮይድ: `ConnectDiagnostics.snapshot()` + `exportJournalBundle(path)`.
+  - JS: `ConnectQueueInspector.read()` ተመሳሳዩን መዋቅር እና የብሎብ እጀታ ይመልሳል
+    ያ የዩአይ ኮድ ወደ Torii የድጋፍ መሳሪያዎች መስቀል ይችላል።
+- አንድ መተግበሪያ `offline_queue_enabled=false` ሲቀያየር ኤስዲኬዎች ወዲያውኑ ይደርቃሉ እና
+  ሁለቱንም መጽሔቶች ያጽዱ፣ ግዛቱን እንደ `Disabled` ምልክት ያድርጉ እና ተርሚናል ይልቀቁ
+  የቴሌሜትሪ ክስተት. ተጠቃሚው ፊት ለፊት ያለው ምርጫ በNorito ውስጥ ተንጸባርቋል
+  የማጽደቅ ፍሬም እኩዮች የታሰሩ ክፈፎችን ከቆመበት መቀጠል እንደሚችሉ እንዲያውቁ።
+- ኦፕሬተሮች `connect queue inspect --sid <sid>` (የ CLI መጠቅለያ በኤስዲኬ ዙሪያ ያካሂዳሉ
+  ምርመራዎች) በሁከት ፈተናዎች ወቅት; ይህ ትዕዛዝ የስቴት ሽግግሮችን ያትማል,
+  የውሃ ማርክ ታሪክ እና የአስተዳደር ግምገማዎች በዚህ ላይ እንዳይመሰኩ ማስረጃውን ከቆመበት ይቀጥሉ
+  መድረክ-ተኮር መሣሪያ።
 
-| State | Trigger | Automatic response | Manual override | Telemetry flag |
-|-------|---------|--------------------|-----------------|----------------|
-| `Healthy` | Queue usage < `disk_watermark_warn` (default 60 %) and `ttl_ok` | None | N/A | `connect.queue_state=\"healthy\"` |
-| `Throttled` | Usage ≥ `disk_watermark_warn` or retries > 5/min | Pause new sign requests, emit flow-control tokens at half rate | Apps may call `clearOfflineQueue(.app|.wallet)`; SDK re-hydrates state from peer once online | `connect.queue_state=\"throttled\"`, `connect.queue_watermark` gauge |
-| `Quarantined` | Usage ≥ `disk_watermark_drop` (default 85 %), corruption detected twice, or `offline_timeout_ms` exceeded | Stop buffering, raise `ConnectError.QueueQuarantined`, require operator acknowledgement | `ConnectSessionDiagnostics.forceReset()` deletes journals after exporting bundle | `connect.queue_state=\"quarantined\"`, `connect.queue_quarantine_total` counter |
+### የማስረጃ ጥቅል የስራ ፍሰት
 
-- Thresholds live in `ConnectFeatureConfig` (`disk_watermark_warn`,
-  `disk_watermark_drop`, `max_disk_bytes`, `offline_timeout_ms`). When a host
-  omits a value, SDKs fall back to their defaults and log a warning so configs
-  can be audited from telemetry.
-- SDKs expose `ConnectQueueObserver` plus diagnostics helpers:
-  - Swift: `ConnectSessionDiagnostics.snapshot()` yields `{state, depth, bytes,
-    reason}` and `exportJournalBundle(url:)` persists both queues for support.
-  - Android: `ConnectDiagnostics.snapshot()` + `exportJournalBundle(path)`.
-  - JS: `ConnectQueueInspector.read()` returns the same struct and a blob handle
-    that UI code can upload to Torii support tools.
-- When an app toggles `offline_queue_enabled=false`, SDKs immediately drain and
-  purge both journals, mark the state as `Disabled`, and emit a terminal
-  telemetry event. The user-facing preference is mirrored in the Norito
-  approval frame so peers know whether they can resume buffered frames.
-- Operators run `connect queue inspect --sid <sid>` (CLI wrapper around the SDK
-  diagnostics) during chaos tests; this command prints the state transitions,
-  watermark history, and resume evidence so governance reviews do not depend on
-  platform-specific tooling.
+የድጋፍ እና የታዛዥነት ቡድኖች ኦዲት በሚደረግበት ጊዜ በወሳኝ ማስረጃዎች ላይ ይመረኮዛሉ
+ከመስመር ውጭ ባህሪ. ስለዚህ እያንዳንዱ ኤስዲኬ ተመሳሳይ ባለ ሶስት ደረጃ ወደ ውጭ መላክን ተግባራዊ ያደርጋል፡
 
-### Evidence bundle workflow
+1. `exportJournalBundle(..)` ይጽፋል `{app_to_wallet,wallet_to_app}.queue` ሲደመር
+   አንጸባራቂ የግንባታ ሃሽን፣ የባህሪ ባንዲራዎችን እና የዲስክ የውሃ ምልክቶችን የሚገልጽ ነው።
+2. `exportQueueMetrics(..)` የመጨረሻዎቹን 1000 የቴሌሜትሪ ናሙናዎችን በማውጣት ዳሽቦርድ
+   ከመስመር ውጭ እንደገና ሊገነባ ይችላል. ናሙናዎች የ hashed ክፍለ ጊዜ መታወቂያው በሚኖርበት ጊዜ ያካትታሉ
+   ተጠቃሚ መርጦ ገብቷል።
+3. የCLI አጋዥ ሁለቱንም ኤክስፖርት ያደርጋል እና የተፈረመ Norito ሜታዳታ ፋይል ያያይዛል።
+   (`ConnectQueueEvidenceV1`) ስለዚህ Torii ኢንጌስት ጥቅሉን በSoraFS ውስጥ ማስቀመጥ ይችላል።
 
-Support and compliance teams rely on deterministic evidence when auditing
-offline behaviour. Each SDK therefore implements the same three-step export:
+ማረጋገጥን ያልቻሉ ቅርቅቦች በ`connect.evidence_invalid` ውድቅ ተደርገዋል።
+ቴሌሜትሪ የኤስዲኬ ቡድን ላኪውን ማባዛትና ማስተካከል ይችላል።
 
-1. `exportJournalBundle(..)` writes `{app_to_wallet,wallet_to_app}.queue` plus a
-   manifest describing the build hash, feature flags, and disk watermarks.
-2. `exportQueueMetrics(..)` emits the last 1 000 telemetry samples so dashboards
-   can be reconstructed offline. Samples include the hashed session id when the
-   user opted in.
-3. The CLI helper zips both exports and attaches a signed Norito metadata file
-   (`ConnectQueueEvidenceV1`) so Torii ingest can archive the bundle in SoraFS.
+## ቴሌሜትሪ እና ዲያግኖስቲክስ- Norito JSON ክስተቶችን በተጋሩ ክፍት ቴሌሜትሪ ላኪዎች አሳትት። አስገዳጅ መለኪያዎች፡-
+  - `connect.queue_depth{direction}` (መለኪያ) በ `ConnectQueueState` ይመገባል።
+  - `connect.queue_bytes{direction}` (መለኪያ) በዲስክ የተደገፈ አሻራ።
+  - `connect.queue_dropped_total{reason}` (መቁጠሪያ) ለ `overflow|ttl|repair`.
+  - `connect.offline_flush_total{direction}` (ቆጣሪ) ወረፋ ሲጨምር ይጨምራል
+    ያለ ማጓጓዣ ፍሳሽ; አለመሳካቶች መጨመር `connect.offline_flush_failed`.
+  - `connect.replay_success_total`/`connect.replay_error_total`።
+  - `connect.resume_latency_ms` ሂስቶግራም (በዳግም ግንኙነት እና በቋሚ መካከል ያለው ጊዜ
+    ግዛት) በተጨማሪም `connect.resume_attempts_total`.
+  - `connect.session_duration_ms` ሂስቶግራም (በተጠናቀቀ ክፍለ ጊዜ)።
+  - `connect.error` የተዋቀሩ ክስተቶች ከ `code`፣ `fatal`፣ `telemetry_profile` ጋር።
+- ላኪዎች `{platform, sdk_version, feature_hash}` መለያዎችን ማያያዝ አለባቸው
+  ዳሽቦርዶች በኤስዲኬ ግንባታ ሊከፋፈሉ ይችላሉ። የ hashed `sid` አማራጭ እና ብቻ ነው።
+  የቴሌሜትሪ መርጦ መግባቱ እውነት ሲሆን የሚወጣው።
+- የኤስዲኬ-ደረጃ መንጠቆዎች ተመሳሳይ ክስተቶችን በማሳየት መተግበሪያዎች የበለጠ ዝርዝር ጉዳዮችን ወደ ውጭ መላክ ይችላሉ፡
+  - ስዊፍት: `ConnectSession.addObserver(_:) -> ConnectEvent`.
+  - አንድሮይድ: `Flow<ConnectEvent>`.
+  - JS: አስምር ተደጋጋሚ ወይም መልሶ ጥሪ።
+- CI gating፡ ስዊፍት ስራዎች `make swift-ci` ይሰራሉ፣ አንድሮይድ `./gradlew sdkConnectCi` ይጠቀማል፣
+  እና JS `npm run test:connect` ያስኬዳል ስለዚህ ቴሌሜትሪ/ዳሽቦርዶች ከዚህ በፊት አረንጓዴ ሆነው ይቆያሉ
+  የግንኙነት ለውጦችን በማዋሃድ.
+- የተዋቀሩ ምዝግቦች ሃሽ `sid`፣ `seq`፣ `queue_depth`፣ እና `sid_epoch` ያካትታሉ።
+  ኦፕሬተሮች የደንበኛ ጉዳዮችን ማዛመድ እንዲችሉ እሴቶች። ጥገና ያልተሳካላቸው መጽሔቶች ይለቃሉ
+  `connect.queue_repair_failed{reason}` ክስተቶች እና አማራጭ የብልሽት መጣያ መንገድ።
 
-Bundles that fail validation are rejected with `connect.evidence_invalid`
-telemetry so the SDK team can reproduce and patch the exporter.
+### የቴሌሜትሪ መንጠቆዎች እና የአስተዳደር ማስረጃዎች
 
-## Telemetry & Diagnostics
+- `connect.queue_state` እንደ የመንገድ ካርታ ስጋት አመልካች በእጥፍ ይጨምራል። ዳሽቦርዶች ቡድን
+  በ `{platform, sdk_version}` እና በግዛት ውስጥ ጊዜን ያቅርቡ ስለዚህ አስተዳደር ናሙና ሊሆን ይችላል።
+  የታቀዱ ልቀቶችን ከማጽደቁ በፊት ወርሃዊ የመሰርሰሪያ ማስረጃ።
+- `connect.queue_watermark` እና `connect.queue_bytes` የግንኙነት ስጋት ነጥብ ይመገባሉ።
+  (`risk.connect.offline_buffer`)፣ በላይ ሲሆን በራስ ሰር ወደ SRE ገፆች የሚያደርገው
+  5% የክፍለ-ጊዜዎች>10ደቂቃዎች በ`Throttled` ያሳልፋሉ።
+- ላኪዎች ለእያንዳንዱ ክስተት `feature_hash` በማያያዝ የኦዲተር መጠቀሚያ ማረጋገጥ ይችላል
+  የNorito ኮዴክ + ከመስመር ውጭ እቅድ ከተገመገመው ግንባታ ጋር እንደሚመሳሰል። ኤስዲኬ CI አልተሳካም።
+  ቴሌሜትሪ ያልታወቀ ሃሽ ሲዘግብ ፈጣን።
+- የ strawman አሁንም ማስፈራሪያ-ሞዴል አባሪ ያስፈልገዋል; መለኪያዎች ሲበልጡ
+  የመመሪያ ገደቦች፣ ኤስዲኬዎች የ `connect.policy_violation` ክስተቶችን ያጠቃልላሉ
+  የሚያስከፋ sid (hashed)፣ ሁኔታ እና የተስተካከለ እርምጃ (`drain|purge|quarantine`)።
+- ማስረጃ በ`exportQueueMetrics` መሬቶች በተመሳሳይ SoraFS የስም ቦታ
+  እንደ Connect runbook artefacts ስለዚህ የምክር ቤት ገምጋሚዎች እያንዳንዱን ልምምድ መከታተል ይችላሉ።
+  የውስጥ መዝገቦችን ሳይጠይቁ ወደ ልዩ የቴሌሜትሪ ናሙናዎች ይመለሱ።
 
-- Emit Norito JSON events via shared OpenTelemetry exporters. Mandatory metrics:
-  - `connect.queue_depth{direction}` (gauge) fed by `ConnectQueueState`.
-  - `connect.queue_bytes{direction}` (gauge) for disk-backed footprint.
-  - `connect.queue_dropped_total{reason}` (counter) for `overflow|ttl|repair`.
-  - `connect.offline_flush_total{direction}` (counter) increments when queues
-    drain without transport; failures increment `connect.offline_flush_failed`.
-  - `connect.replay_success_total`/`connect.replay_error_total`.
-  - `connect.resume_latency_ms` histogram (time between reconnect and steady
-    state) plus `connect.resume_attempts_total`.
-  - `connect.session_duration_ms` histogram (per completed session).
-  - `connect.error` structured events with `code`, `fatal`, `telemetry_profile`.
-- Exporters MUST attach `{platform, sdk_version, feature_hash}` labels so
-  dashboards can split by SDK build. The hashed `sid` is optional and only
-  emitted when telemetry opt-in is true.
-- SDK-level hooks surface the same events so apps can export more detail:
-  - Swift: `ConnectSession.addObserver(_:) -> ConnectEvent`.
-  - Android: `Flow<ConnectEvent>`.
-  - JS: async iterator or callback.
-- CI gating: Swift jobs run `make swift-ci`, Android uses `./gradlew sdkConnectCi`,
-  and JS runs `npm run test:connect` so telemetry/dashboards remain green before
-  merging Connect changes.
-- Structured logs include the hashed `sid`, `seq`, `queue_depth`, and `sid_epoch`
-  values so operators can correlate client issues. Journals that fail repair emit
-  `connect.queue_repair_failed{reason}` events plus an optional crash dump path.
+## የፍሬም ባለቤትነት እና ኃላፊነቶች| ፍሬም / መቆጣጠሪያ | ባለቤት | የቅደም ተከተል ጎራ | ጆርናል ቀጠለ? | ቴሌሜትሪ መለያዎች | ማስታወሻ |
+|--------------|-------------|
+| `Control::Open` | dApp | `seq_app` | ✅ (`app_to_wallet`) | `event=open` | ሜታዳታ + የፈቃድ ቢትማፕ ይይዛል; የኪስ ቦርሳዎች ከጥያቄዎች በፊት የቅርብ ጊዜውን ክፍት ይደግማሉ። |
+| `Control::Approve` | ቦርሳ | `seq_wallet` | ✅ (`wallet_to_app`) | `event=approve` | መለያ፣ ማረጋገጫዎች፣ ፊርማዎችን ያካትታል። የዲበ ውሂብ ስሪት ጭማሪዎች እዚህ ተመዝግበዋል። |
+| `Control::Reject` | ቦርሳ | `seq_wallet` | ✅ | `event=reject`, `reason` | አማራጭ አካባቢያዊ መልእክት; dApp በመጠባበቅ ላይ ያሉ የምልክት ጥያቄዎችን ይጥላል። |
+| `Control::Close` (init) | dApp | `seq_app` | ✅ | `event=close`, `initiator=app` | Wallet በራሱ `Close` እውቅና ይሰጣል። |
+| `Control::Close` (አክ) | ቦርሳ | `seq_wallet` | ✅ | `event=close`, `initiator=wallet` | ማፍረስን ያረጋግጣል; ሁለቱም ወገኖች ፍሬሙን ከቀጠሉ GC መጽሔቶችን ያስወግዳል። |
+| `SignRequest` | dApp | `seq_app` | ✅ | `event=sign_request`, `payload_hash` | የግጭት ማወቂያን መልሶ ለማጫወት የተመዘገበ የክፍያ ጭነት ሃሽ። |
+| `SignResult` | ቦርሳ | `seq_wallet` | ✅ | `event=sign_result`, `status=ok|err` | የተፈረመ ባይት BLAKE3 ሃሽ; አለመሳካቶች `ConnectError.Signing` ያሳድጋሉ። |
+| `Control::Error` | የኪስ ቦርሳ (አብዛኛው) / dApp (መጓጓዣ) | ተዛማጅ የባለቤት ጎራ | ✅ | `event=error`, `code` | ገዳይ ስህተቶች የክፍለ-ጊዜው ዳግም መጀመርን ያስገድዳሉ; የቴሌሜትሪ ምልክቶች `fatal=true`። |
+| `Control::RotateKeys` | ቦርሳ | `seq_wallet` | ✅ | `event=rotate_keys`, `reason` | አዲስ አቅጣጫ ቁልፎችን ያስታውቃል; dApp በ`RotateKeysAck` (በመተግበሪያው በኩል የተጻፈ) ምላሽ ይሰጣል። |
+| `Control::Resume` / `ResumeAck` | ሁለቱም | የአካባቢ ብቻ | ✅ | `event=resume`, `direction=app|wallet` | የወረፋ ጥልቀት + ተከታታይ ሁኔታን ያጠቃልላል; ሃሽድ ጆርናል የምግብ መፈጨትን ይረዳል። |
 
-### Telemetry hooks & governance evidence
+- የአቅጣጫ የምስጢር ቁልፎች በእያንዳንዱ ሚና ሲሜትሪክ ይቀራሉ (`app→wallet`፣ `wallet→app`)።
+  የWallet ማሽከርከር ሀሳቦች የሚተዋወቁት በ`Control::RotateKeys` እና በdApps በኩል ነው።
+  `Control::RotateKeysAck` በማውጣት እውቅና መስጠት; ሁለቱም ክፈፎች ዲስክን መምታት አለባቸው
+  ክፍተቶችን እንደገና ለማጫወት ቁልፎችን ከመቀያየር በፊት።
+- የዲበ ውሂብ አባሪ (አዶዎች፣ የተተረጎሙ ስሞች፣ የተሟሉ ማረጋገጫዎች) የተፈረመው በ
+  የኪስ ቦርሳውን እና የተሸጎጠ በ dApp; ዝማኔዎች ከ ጋር አዲስ የማጽደቅ ፍሬም ያስፈልጋቸዋል
+  `metadata_version` ጨምሯል።
+- ከላይ ያለው የባለቤትነት ማትሪክስ ከኤስዲኬ ሰነዶች ከ CLI/web/automation ተጠቅሷል
+  ደንበኞች ተመሳሳይ ውል እና የመሳሪያ ነባሪዎች ይከተላሉ.
 
-- `connect.queue_state` doubles as the roadmap risk indicator. Dashboards group
-  by `{platform, sdk_version}` and render time-in-state so governance can sample
-  monthly drill evidence before approving staged rollouts.
-- `connect.queue_watermark` and `connect.queue_bytes` feed the Connect risk score
-  (`risk.connect.offline_buffer`), which automatically pages SRE when more than
-  5 % of sessions spend >10 minutes in `Throttled`.
-- Exporters attach `feature_hash` to every event so auditor tooling can confirm
-  that the Norito codec + offline plan match the reviewed build. SDK CI fails
-  fast when telemetry reports an unknown hash.
-- The strawman still requires a threat-model appendix; when metrics exceed the
-  policy thresholds, SDKs emit `connect.policy_violation` events summarising the
-  offending sid (hashed), state, and resolved action (`drain|purge|quarantine`).
-- Evidence captured via `exportQueueMetrics` lands in the same SoraFS namespace
-  as the Connect runbook artefacts so council reviewers can trace every drill
-  back to specific telemetry samples without requesting internal logs.
+## ክፍት ጥያቄዎች
 
-## Frame Ownership & Responsibilities
+1. **የክፍለ ጊዜ ግኝት**፡ እንደ WalletConnect ያለ የQR ኮድ/ከባንድ ውጪ መጨባበጥ እንፈልጋለን? (የወደፊት ሥራ)
+2. ** ብዙ ምልክት ***: ባለብዙ ምልክት ማጽደቆች እንዴት ይወከላሉ? (ብዙ ፊርማዎችን ለመደገፍ የምልክት ውጤቱን ዘርጋ።)
+3. ** ተገዢነት ***: ቁጥጥር የሚደረግባቸው ፍሰቶች (በመንገድ ካርታ) የትኞቹ መስኮች ግዴታ ናቸው? (የታዛዥ ቡድን መመሪያን ይጠብቁ።)
+4. **ኤስዲኬ ማሸግ**፡ የተጋራ ኮድ (ለምሳሌ፣ Norito Connect codecs) ወደ ፕላትፎርም ማቋረጫ ሣጥን ውስጥ እናስገባን? (ቲቢዲ)
 
-| Frame / Control | Owner | Sequence domain | Journal persisted? | Telemetry labels | Notes |
-|-----------------|-------|-----------------|--------------------|------------------|-------|
-| `Control::Open` | dApp | `seq_app` | ✅ (`app_to_wallet`) | `event=open` | Carries metadata + permission bitmap; wallets replay the latest open before prompts. |
-| `Control::Approve` | Wallet | `seq_wallet` | ✅ (`wallet_to_app`) | `event=approve` | Includes account, proofs, signatures. Metadata version increments recorded here. |
-| `Control::Reject` | Wallet | `seq_wallet` | ✅ | `event=reject`, `reason` | Optional localized message; dApp drops pending sign requests. |
-| `Control::Close` (init) | dApp | `seq_app` | ✅ | `event=close`, `initiator=app` | Wallet acknowledges with its own `Close`. |
-| `Control::Close` (ack) | Wallet | `seq_wallet` | ✅ | `event=close`, `initiator=wallet` | Confirms teardown; GC removes journals once both sides persist the frame. |
-| `SignRequest` | dApp | `seq_app` | ✅ | `event=sign_request`, `payload_hash` | Payload hash recorded for replay conflict detection. |
-| `SignResult` | Wallet | `seq_wallet` | ✅ | `event=sign_result`, `status=ok|err` | Includes BLAKE3 hash of signed bytes; failures raise `ConnectError.Signing`. |
-| `Control::Error` | Wallet (most) / dApp (transport) | matching owner domain | ✅ | `event=error`, `code` | Fatal errors force session restart; telemetry marks `fatal=true`. |
-| `Control::RotateKeys` | Wallet | `seq_wallet` | ✅ | `event=rotate_keys`, `reason` | Announces new direction keys; dApp replies with `RotateKeysAck` (journaled on app side). |
-| `Control::Resume` / `ResumeAck` | Both | local domain only | ✅ | `event=resume`, `direction=app|wallet` | Summarises queue depth + seq state; hashed journal digest aids diagnosis. |
-
-- Directional cipher keys remain symmetric per role (`app→wallet`, `wallet→app`).
-  Wallet rotation proposals are advertised via `Control::RotateKeys`, and dApps
-  acknowledge by emitting `Control::RotateKeysAck`; both frames must hit disk
-  before keys swap to avoid replay gaps.
-- Metadata attachment (icons, localized names, compliance proofs) is signed by
-  the wallet and cached by the dApp; updates require a fresh approval frame with
-  incremented `metadata_version`.
-- Ownership matrix above is referenced from SDK docs so CLI/web/automation
-  clients follow the same contract and instrumentation defaults.
-
-## Open Questions
-
-1. **Session discovery**: Do we need QR codes / out-of-band handshake like WalletConnect? (Future work.)
-2. **Multisig**: How are multi-sign approvals represented? (Extend sign result to support multiple signatures.)
-3. **Compliance**: Which fields are mandatory for regulated flows (per roadmap)? (Await compliance team guidance.)
-4. **SDK packaging**: Should we factor shared code (e.g., Norito Connect codecs) into a cross-platform crate? (TBD.)
-
-## Next Steps
-
-- Circulate this strawman to the SDK council (Feb 2026 meeting).
-- Collect feedback on open questions and update doc accordingly.
-- Schedule implementation breakdown per SDK (Swift IOS7, Android AND7, JS Connect milestones).
-- Track progress via roadmap hot list; update `status.md` once strawman is ratified.
+## ቀጣይ እርምጃዎች- ይህንን ገለባ ወደ ኤስዲኬ ምክር ቤት ያሰራጩ (የካቲት 2026 ስብሰባ)።
+- በክፍት ጥያቄዎች ላይ ግብረ መልስ ይሰብስቡ እና በዚህ መሠረት ሰነድ ያዘምኑ።
+- በአንድ ኤስዲኬ (Swift IOS7፣ አንድሮይድ AND7፣ JS Connect ችካሎች) የትግበራ ዝርዝሮችን መርሐግብር አስይዝ።
+- በመንገድ ካርታ ትኩስ ዝርዝር በኩል እድገትን ይከታተሉ; strawman አንዴ ከፀደቀ `status.md` ያዘምኑ።

@@ -7,50 +7,50 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 6742d2b87b8fbbc1493c5ae2704147b0f8d5d23af78004c2c9a112fe881efb11
 source_last_modified: "2025-12-29T18:16:35.937402+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% SM2/SM3/SM4 Export-Control Statement Template
-% Hyperledger Iroha Compliance Working Group
+% SM2/SM3/SM4 Eksport-nazorat bayonnomasi shabloni
+% Hyperledger Iroha Muvofiqlik ishchi guruhi
 % 2026-05-06
 
-# Usage
+# Foydalanish
 
-Embed this statement in release notes, manifests, or legal correspondence when
-distributing SM-enabled artefacts. Update the placeholders to match the release,
-jurisdiction, and applicable license exceptions. Retain a signed copy with the
-release checklist.
+Bu bayonotni reliz eslatmalariga, manifestlarga yoki yuridik yozishmalarga kiriting
+SM-ni qo'llab-quvvatlaydigan artefaktlarni tarqatish. Relizga mos keladigan joy egalarini yangilang,
+yurisdiktsiya va tegishli litsenziya istisnolari. Imzolangan nusxasini bilan saqlang
+nazorat ro'yxatini chiqarish.
 
-# Statement
+# Bayonot
 
-> **Product:** Hyperledger Iroha {{ RELEASE_VERSION }} (`{{ ARTEFACT_ID }}`)
+> **Mahsulot:** Hyperledger Iroha {{ RELEASE_VERSION }} (`{{ ARTEFACT_ID }}`)
 >
-> **Algorithms Included:** SM2 digital signature, SM3 hashing, SM4 symmetric
-> encryption (GCM/CCM)
+> **Kumlatilgan algoritmlar:** SM2 raqamli imzo, SM3 xeshlash, SM4 simmetrik
+> shifrlash (GCM/CCM)
 >
-> **Export Classification:** United States EAR Category 5, Part 2 (5D002.c.1);
-> European Union Regulation 2021/821 Annex 1, 5D002.
+> **Eksport tasnifi:** Amerika Qo‘shma Shtatlari EAR toifasi 5, 2-qism (5D002.c.1);
+> Yevropa Ittifoqi reglamenti 2021/821 1-ilova, 5D002.
 >
-> **License Exception(s):** {{ LICENSE_EXCEPTION }} (e.g., ENC §740.17(b)(2),
-> TSU §740.13 for source distribution).
+> **Litsenziyadan istisno(lar):** {{ LICENSE_EXCEPTION }} (masalan, ENC §740.17(b)(2),
+> Manba tarqatish uchun TSU §740.13).
 >
-> **Distribution Scope:** {{ DISTRIBUTION_SCOPE }} (e.g., “Global, excluding
-> embargoed territories listed in 15 CFR 746”).
+> **Tarqatish doirasi:** {{ DISTRIBUTION_SCOPE }} (masalan, “Global, bundan mustasno”
+> 15 CFR 746da sanab o'tilgan embargo qilingan hududlar").
 >
-> **Operator Obligations:** Recipients must comply with applicable export,
-> import, and usage regulations. Deployments within the People’s Republic of
-> China require product and usage filings with the State Cryptography
-> Administration and adherence to mainland data residency requirements.
+> **Operator majburiyatlari:** Qabul qiluvchilar tegishli eksportga rioya qilishlari kerak,
+> import va foydalanish qoidalari. Xalq Respublikasi hududida joylashtirish
+> Xitoy Davlat kriptografiyasi bilan mahsulot va foydalanish hujjatlarini talab qiladi
+> Ma'muriyat va materik ma'lumotlari rezidentligi talablariga rioya qilish.
 >
-> **Contact:** {{ LEGAL_CONTACT_NAME }} — {{ LEGAL_CONTACT_EMAIL }} /
+> **Aloqa:** {{ LEGAL_CONTACT_NAME }} — {{ LEGAL_CONTACT_EMAIL }} /
 > {{ LEGAL_CONTACT_PHONE }}
 >
-> This statement accompanies the cryptography compliance checklist and filing
-> templates provided in `docs/source/crypto/sm_compliance_brief.md`. Retain this
-> document and associated filings for a minimum of three years.
+> Ushbu bayonot kriptografiyaga muvofiqlikni tekshirish ro'yxati va topshirish bilan birga keladi
+> `docs/source/crypto/sm_compliance_brief.md` da taqdim etilgan andozalar. Buni saqlang
+> kamida uch yil davomida hujjat va tegishli hujjatlar.
 
-# Signature
+#Imzo
 
-- Authorised representative: ________________________
-- Title: ________________________
-- Date: ________________________
-
+- Vakolatli vakil: ________________________
+- Sarlavha: ___________________________________
+- Sana: ___________________________________

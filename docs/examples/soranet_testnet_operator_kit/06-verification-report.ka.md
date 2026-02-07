@@ -7,46 +7,47 @@ generator: scripts/sync_docs_i18n.py
 source_hash: bf489427d0eba2beebfdefc44092730c3963cbd77e83669853f4e9681ac9fd2d
 source_last_modified: "2025-12-29T18:16:35.092552+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-## Operator Verification Report (Phase T0)
+## ოპერატორის დადასტურების ანგარიში (ფაზა T0)
 
-- Operator name: ______________________
-- Relay descriptor ID: ______________________
-- Submission date (UTC): ___________________
-- Contact email / matrix: ___________________
+- ოპერატორის სახელი: _____________________
+- რელეს აღმწერის ID: _____________________
+- წარდგენის თარიღი (UTC): __________________
+- საკონტაქტო ელფოსტა / მატრიცა: __________________
 
-### Checklist Summary
+### საკონტროლო სიის შეჯამება
 
-| Item | Completed (Y/N) | Notes |
+| ნივთი | დასრულებული (Y/N) | შენიშვნები |
 |------|-----------------|-------|
-| Hardware & network validated | | |
-| Compliance block applied | | |
-| Admission envelope verified | | |
-| Guard rotation smoke test | | |
-| Telemetry scraped & dashboards live | | |
-| Brownout drill executed | | |
-| PoW ticket success within target | | |
+| აპარატურა და ქსელი დადასტურებულია | | |
+| გამოყენებულია შესაბამისობის ბლოკი | | |
+| მისაღები კონვერტი დამოწმებულია | | |
+| მცველის ბრუნვის კვამლის ტესტი | | |
+| ტელემეტრია დაფქული და დაფები პირდაპირ ეთერში | | |
+| Brownout საბურღი შესრულებულია | | |
+| PoW ბილეთის წარმატება სამიზნე | | |
 
 ### Metrics Snapshot
 
-- PQ ratio (`sorafs_orchestrator_pq_ratio`): ________
-- Downgrade count last 24h: ________
-- Average circuit RTT (p95): ________ ms
-- PoW median solve time: ________ ms
+- PQ თანაფარდობა (`sorafs_orchestrator_pq_ratio`): ________
+- ბოლო 24 საათის დაქვეითების რაოდენობა: ________
+- საშუალო წრედის RTT (p95): ________ ms
+- PoW მედიანური ამოხსნის დრო: ________ ms
 
-### Attachments
+### დანართები
 
-Please attach:
+გთხოვთ დაურთოთ:
 
-1. Relay support bundle hash (`sha256`): __________________________
-2. Dashboard screenshots (PQ ratio, circuit success, PoW histogram).
-3. Signed drill bundle (`drills-signed.json` + signer public key hex and attachments).
-4. SNNet-10 metrics report (`cargo xtask soranet-testnet-metrics --input <snapshot> --out metrics-report.json`).
+1. სარელეო მხარდაჭერის ნაკრების ჰეში (`sha256`): __________________________
+2. დაფის ეკრანის ანაბეჭდები (PQ თანაფარდობა, მიკროსქემის წარმატება, PoW ჰისტოგრამა).
+3. ხელმოწერილი საბურღი პაკეტი (`drills-signed.json` + ხელმომწერი საჯარო გასაღები თექვსმეტობითი და დანართები).
+4. SNNet-10 მეტრიკის ანგარიში (`cargo xtask soranet-testnet-metrics --input <snapshot> --out metrics-report.json`).
 
-### Operator Signature
+### ოპერატორის ხელმოწერა
 
-I certify the above information is accurate and all required steps have been
-completed.
+ვადასტურებ, რომ ზემოაღნიშნული ინფორმაცია ზუსტია და ყველა საჭირო ნაბიჯი განხორციელდა
+დასრულდა.
 
-Signature: _________________________  Date: ___________________
+ხელმოწერა: ________________________ თარიღი: ___________________

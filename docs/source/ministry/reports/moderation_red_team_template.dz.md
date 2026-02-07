@@ -9,74 +9,75 @@ source_last_modified: "2025-12-29T18:16:35.982646+00:00"
 translation_last_reviewed: 2026-02-07
 title: Red-Team Drill Report Template
 summary: Copy this file for every MINFO-9 drill to capture metadata, evidence, and remediation actions.
+translator: machine-google-reviewed
 ---
 
-> **How to use:** duplicate this template to `docs/source/ministry/reports/<YYYY-MM>-mod-red-team-<scenario>.md` immediately after each drill. Keep filenames lowercase, hyphenated, and aligned with the drill ID logged in Alertmanager.
+> *ག་དེ་སྦེ་ལག་ལེན་འཐབ་ནི་ཨིན་ན་:* དམག་སྦྱོང་རེ་རེ་གི་ཤུལ་ལས་ དེ་འཕྲོ་ལས་ `docs/source/ministry/reports/<YYYY-MM>-mod-red-team-<scenario>.md` ལུ་ ཊེམ་པེལེཊི་འདི་འདྲ་བཤུས་རྐྱབ། ཡིག་སྣོད་ཀྱི་མིང་ཚུ་ ཡིག་ཆུང་དང་ སྦྲེལ་རྟགས་ཅན་ དེ་ལས་ ཉེན་བརྡ་ནང་ ནང་བསྐྱོད་འབད་ཡོད་པའི་ དམག་སྦྱོང་ཨའི་ཌི་དང་གཅིག་ཁར་ ཕྲང་སྒྲིག་འབད་བཞག་དགོ།
 
-# Red-Team Drill Report — `<SCENARIO NAME>`
+# རེད-སྡེ་ཚན་དྲིལ་སྙན་ཞུ་ — `<SCENARIO NAME>`
 
-- **Drill ID:** `<YYYYMMDD>-<scenario>`
-- **Date & window:** `<YYYY-MM-DD HH:MMZ – HH:MMZ>`
-- **Scenario class:** `smuggling | bribery | gateway | ...`
-- **Operators:** `<names / handles>`
-- **Dashboards frozen from commit:** `<git SHA>`
-- **Evidence bundle:** `artifacts/ministry/red-team/<YYYY-MM>/<scenario>/`
-- **SoraFS CID (optional):** `<cid>`  
-- **Related roadmap items:** `MINFO-9`, plus any linked tickets.
+- **དྲོལ་ཨའི་ཌི་:** `<YYYYMMDD>-<scenario>`
+- **ཚེས་གྲངས་དང་སྒོ་སྒྲིག་:** `<YYYY-MM-DD HH:MMZ – HH:MMZ>`
+- **གནས་རིམ།:** `smuggling | bribery | gateway | ...`
+- **བཀོལ་སྤྱོད་པ་:** `<names / handles>`
+- **བཀོད་སྒྲིག་ཚུ་ ཁས་བླངས་ལས་ འཁྱེག་བཞག་ཡོདཔ།:** `<git SHA>`
+- **གསལ་སྟོན་གྱི་བང་སྒྲིལ།:** `artifacts/ministry/red-team/<YYYY-MM>/<scenario>/`
+- **SoraFS སི་ཨའི་ཌི་ (གདམ་ཁ་):** `<cid>`  
+- **འབྲེལ་ཡོད། ལམ་གྱི་ས་ཁྲ་:** `MINFO-9`, དང་འབྲེལ་མཐུད་ཅན་གྱི་ཤོག་འཛིན་གང་རུང་།
 
-## 1. Objectives & Entry Conditions
+## 1. དམིགས་ཡུལ་དང་འཛུལ་ཞུགས་ཆ་རྐྱེན་།
 
-- **Primary objectives**
+- **གཞི་རིམ་དམིགས་ཡུལ་**།
   - `<e.g. Verify denylist TTL enforcement under smuggling attack>`
-- **Prerequisites confirmed**
-  - `emergency_canon_policy.md` version `<tag>`
-  - `dashboards/grafana/ministry_moderation_overview.json` digest `<sha256>`
-  - Override authority on-call: `<name>`
+- **སྔོན་འགྲོའི་ཆ་རྐྱེན་བདེན་དཔང་འབད་ཡོདཔ།*
+  - `emergency_canon_policy.md` ཐོན་རིམ་ `<tag>`
+  - `dashboards/grafana/ministry_moderation_overview.json` བཞུ་ནི་ `<sha256>`
+  - དབང་འཛིན་ལུ་བཀག་ཆ་འབད་ནི་: `<name>`
 
-## 2. Execution Timeline
+## 2. བཀོལ་བའི་དུས་ཚོད།
 
-| Timestamp (UTC) | Actor | Action / Command | Result / Notes |
-|-----------------|-------|------------------|----------------|
+| དུས་ཚོད་མཚོན་རྟགས་ (ཡུ་ཊི་སི) | འཁྲབ་རྩེདཔ་ | བྱ་བ་ / བརྡ་བཀོད་ | གྲུབ་འབྲས། / དྲན་ཐོ། |
+|------------------------------------------------------------------ |------------------------------------------------------------------------------------------------------------------------------------------------------------------------ ------------
 |  |  |  |  |
 
-> Include Torii request IDs, chunk hashes, override approvals, and Alertmanager links.
+> Torii ཞུ་བ་ IDs, chak hashes དང་ ཆ་འཇོག་ཚུ་བཀག་ཆ་ དེ་ལས་ དྲན་ཚད་ཅན་གྱི་འབྲེལ་ལམ་ཚུ་ཚུདཔ་ཨིན།
 
-## 3. Observations & Metrics
+## 3. ལྟ་རྟོག དང་ཚད་གཞི།
 
-| Metric | Target | Observed | Pass/Fail | Notes |
-|--------|--------|----------|-----------|-------|
-| Alert response latency | `<X> min` | `<Y> min` | ✅/⚠️ |  |
-| Moderation detection rate | `>= <value>` |  |  |  |
-| Gateway anomaly detection | `Alert fired` |  |  |  |
+| མེ་ཊིག་ | དམིགས་ཚད་ | བལྟ་རྟོག་འབད་ཡོདཔ། | Pass/fail | དྲན་ཐོ། |
+|----------------------------------------------------------------------------------------------- |
+| ཉེན་བརྡ་ལན་འདེབས་ཀྱི་ འཕྲོ་མཐུད་ | `<X> min` | `<Y> min` | ✅/⚠️ |  |
+| བར་མཚམས་བརྟག་དཔྱད་ཚད་གཞི། | `>= <value>` |  |  |  |
+| སྒོ་སྒྲིག་མ་འདྲཝ་བརྟག་དཔྱད། | `Alert fired` |  |  |  |
 
 - `Grafana export:` `artifacts/.../dashboards/ministry_moderation_overview.json`
 - `Alert bundle:` `artifacts/.../alerts/ministry_moderation_rules.yml`
 - `Norito manifests:` `<path>`
 
-## 4. Findings & Remediation
+## 4. ཐོང་དོན་དང་བཅོལ་བ།
 
-| Severity | Finding | Owner | Target Date | Status / Link |
+| ཚབས་ཆེན། | འཚོལ་བ། | ཇོ་བདག་ | དམིགས་གཏད་ཚེས་གྲངས་ | གནས་ཚད་ / འབྲེལ་མཐུད། |
 |----------|---------|-------|-------------|---------------|
-| High |  |  |  |  |
+| མཐོ་ཚད་ |  |  |  |  |
 
-Document how calibration manifests, denylist policies, or SDK/tooling must change. Link to GitHub/Jira issues and note blocked/unblocked states.
+ཚད་འཇལ་གྱི་ གསལ་སྟོན་ཚུ་ ག་དེ་སྦེ་ གསལ་སྟོན་འབདཝ་ཨིན་ན་ ཐོ་ཡིག་མེད་པའི་སྲིད་བྱུས་ ཡང་ན་ ཨེསི་ཌི་ཀེ་/ ལག་ཆས་ཚུ་ བསྒྱུར་བཅོས་འབད་དགོཔ་ཨིན། གིཊི་ཧབ་/ཇི་ར་གི་གནད་དོན་ཚུ་དང་ དྲན་ཐོ་དང་དྲན་ཐོ་བཀག་ཆ་/བཀག་ཆ་མེད་པའི་གནས་སྟངས་ཚུ་ལུ་འབྲེལ་མཐུད་འབད།
 
-## 5. Governance & Approvals
+## 5. གཞུང་སྐྱོང་དང་ཆ་འཇོག།
 
-- **Incident commander sign-off:** `<name / timestamp>`
-- **Governance council review date:** `<meeting id>`
-- **Follow-up checklist:** `[ ] status.md updated`, `[ ] roadmap row updated`, `[ ] transparency packet annotated`
+- **རྐྱེན་ངན་དམག་དཔོན་གྱིས་མིང་རྟགས་བཀོད་ཡོདཔ།:** `<name / timestamp>`
+- **གཞུང་སྐྱོང་ཚོགས་སྡེའི་བསྐྱར་ཞིབ་ཚེས་གྲངས་:** `<meeting id>`
+- **རྗེས་སུ་འབྲང་བའི་ཐོ་ཡིག་:** `[ ] status.md updated`, `[ ] roadmap row updated`, `[ ] transparency packet annotated`
 
-## 6. Attachments
+## 6. མཐུད་པ།
 
-- `[ ] CLI logbook (`logs/<file>.md`)`
+- `[ ] CLI logbook (`logs/.md`)`
 - `[ ] Dashboard JSON export`
 - `[ ] Alertmanager history`
 - `[ ] SoraFS manifest / CAR`
 - `[ ] Override audit log`
 
-Mark each attachment with `[x]` once uploaded to the evidence bundle and SoraFS snapshot.
+མཉམ་སྦྲགས་རེ་རེ་བཞིན་དུ་ `[x]` དང་ སྒྲུབ་བྱེད་ཀྱི་བང་རིམ་དང་ SoraFS པར་ལེན་ལུ་ ཚར་གཅིག་ སྐྱེལ་བཙུགས་འབད་དགོ།
 
 ---
 
-_Last updated: {{ date | default("2026-02-20") }}_
+_མཇུག་དུས་མཐུན་བཟོ་ཡོདཔ་: { ཚེས་གྲངས་ | སྔོན་སྒྲིག་("2026-02-20") }}_

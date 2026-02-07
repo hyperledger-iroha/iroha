@@ -11,53 +11,54 @@ id: privacy-metrics-pipeline
 title: SoraNet Privacy Metrics Pipeline (SNNet-8)
 sidebar_label: Privacy Metrics Pipeline
 description: Privacy-preserving telemetry collection for SoraNet relays and orchestrators.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
+:::དྲན་ཐོའི་འབྱུང་ཁུངས།
 :::
 
-# SoraNet Privacy Metrics Pipeline
+# སོ་ར་ནེཊ་སྒེར་གྱི་མེ་ཊིག་པའིཔ་ལའིལ།
 
-SNNet-8 introduces a privacy-aware telemetry surface for the relay runtime. The
-relay now aggregates handshake and circuit events into minute-sized buckets and
-exports only coarse Prometheus counters, keeping individual circuits
-unlinkable while giving operators actionable visibility.
+ཨེསི་ཨེན་ནེཊི་-༨ གིས་ རི་ལེ་རཱན་ཊའིམ་གྱི་དོན་ལུ་ སྒེར་གསང་-ཤེས་རྟོགས་ཀྱི་ ཁ་ཐོག་ཅིག་ ངོ་སྤྲོད་འབདཝ་ཨིན། ཚིག༌ཕྲད
+ད་ལྟ་ relay གིས་ ལགཔ་འཐུད་དང་ གློག་ལམ་བྱུང་རིམ་ཚུ་ སྐར་མའི་ཚད་ཀྱི་ བཱ་ཀེཊི་ཚུ་ནང་ བསྡུ་སྒྲིག་འབདཝ་ཨིན།
+ཕྱིར་འདྲེན་འདི་ Prometheus གྱངས་ཁ་རྐྱངམ་ཅིག།
+བཀོལ་སྤྱོད་པ་ཚུ་ལུ་ ལག་ལེན་འཐབ་བཏུབ་པའི་མཐོང་སྣང་བྱིན་པའི་སྐབས་ འབྲེལ་མཐུད་མ་འབད་བས།
 
-## Aggregator Overview
+## བསྡུ་སྒྲིག་པ་སྤྱིར་བཏང་།
 
-- The runtime implementation lives in `tools/soranet-relay/src/privacy.rs` as
+- རན་ཊའི་ལག་ལེན་གྱི་ ས་གཞིའི་ `tools/soranet-relay/src/privacy.rs` ནང་།
   `PrivacyAggregator`.
-- Buckets are keyed by wall-clock minute (`bucket_secs`, default 60 seconds) and
-  stored in a bounded ring (`max_completed_buckets`, default 120). Collector
-  shares keep their own bounded backlog (`max_share_lag_buckets`, default 12)
-  so stale Prio windows are flushed as suppressed buckets rather than leaking
-  memory or masking stuck collectors.
-- `RelayConfig::privacy` maps straight into `PrivacyConfig`, exposing tuning
-  knobs (`bucket_secs`, `min_handshakes`, `flush_delay_buckets`,
+- བཱ་ཀེཊི་ཚུ་ གྱང་ཁོག་-ཆུ་ཚོད་སྐར་མ་ (`bucket_secs`, སྔོན་སྒྲིག་སྐར་ཆ་༦༠) གིས་ ལྡེ་མིག་བཀོད་དེ་ཡོདཔ་ཨིན།
+  མཐའ་མཚམས་ཅན་གྱི་སྒོར་རིམ་ནང་གསོག་འཇོག་འབད་ཡོདཔ་ཨིན་ (`max_completed_buckets`, སྔོན་སྒྲིག་༡༢༠)། སྤུངས་འཛོམས་འབད་མི།
+  བགོ་བཤའ་ཚུ་གིས་ ཁོང་རའི་མཐའ་མཚམས་ཀྱི་རྒྱབ་ལོག་ (`max_share_lag_buckets`, སྔོན་སྒྲིག་༡༢) བཞགཔ་ཨིན།
+  དེ་འབདཝ་ལས་ Prio སྒོ་སྒྲིག་ཚུ་ ཆུ་འཛག་འབད་ནི་ལས་ བཀག་ཆ་འབད་ཡོད་པའི་ བཱ་ཀེཊི་སྦེ་ ཕུངམ་སྦེ་ ཕུལཝ་ཨིན།
+  དྲན་ཚད་ཡང་ན་ ཁ་བསྡམ་བཞག་མི་ བསྡུ་སྒྲིག་འབད་མི་ཚུ་ཨིན།
+- I18NI000000029X I18NI000000030X, གསལ་སྟོན་སྒྲིག་བཀོད་ཀྱི་ས་ཁྲ་ཚུ་ ཕྲང་ཏང་ཏ་འབདཝ་ཨིན།
+  མཛུབ་མོ་ (`bucket_secs`, I18NI000000032X, I18NI000000033X,
   `force_flush_buckets`, `max_completed_buckets`, `max_share_lag_buckets`,
-  `expected_shares`). The production runtime keeps the defaults while SNNet-8a
-  introduces secure aggregation thresholds.
-- Runtime modules record events through typed helpers:
-  `record_circuit_accepted`, `record_circuit_rejected`, `record_throttle`,
+  `expected_shares`). བཟོ་བསྐྲུན་རན་ཊའིམ་འདི་གིས་ སྔོན་སྒྲིག་ཚུ་ ཨེསི་ཨེན་ནེཊི་-༨ཨེ་ལུ་བཞགཔ་ཨིན།
+  ངོ་སྤྲོད་འབདཝ་ཨིན། ཉེན་སྲུང་བསྡོམས་རྩིས་ཚད་གཞི་ཚུ་ཨིན།
+- ཡིག་དཔར་རྐྱབས་ཡོད་པའི་གྲོགས་རམ་ཚུ་བརྒྱུད་དེ་ རཱན་ཊའིམ་ཚད་གཞི་ཚུ་གིས་ བྱུང་ལས་ཚུ་ ཐོ་བཀོད་འབདཝ་ཨིན།
+  `record_circuit_accepted`, `record_circuit_rejected`, I18NI000000040X,
   `record_throttle_cooldown`, `record_capacity_reject`, `record_active_sample`,
-  `record_verified_bytes`, and `record_gar_category`.
+  `record_verified_bytes`, དང་ I18NI0000045X.
 
-## Relay Admin Endpoint
+## བརྒྱུད་འཕྲིན་བདག་སྐྱོང་མཐའ་འཁོར།
 
-Operators can poll the relay's admin listener for raw observations via
-`GET /privacy/events`. The endpoint returns newline-delimited JSON
-(`application/x-ndjson`) containing `SoranetPrivacyEventV1` payloads mirrored
-from the internal `PrivacyEventBuffer`. The buffer retains the newest events up
-to `privacy.event_buffer_capacity` entries (default 4 096) and is drained on
-read, so scrapers should poll frequently enough to avoid gaps. Events cover the
-same handshake, throttle, verified bandwidth, active circuit, and GAR signals
-that power the Prometheus counters, allowing downstream collectors to archive
-privacy-safe breadcrumbs or feed secure aggregation workflows.
+བཀོལ་སྤྱོད་པ་ཚུ་གིས་ རི་ལེ་གི་བདག་སྐྱོང་ཉན་མི་འདི་ བལྟ་བརྟོག་འབད་ནི་གི་དོན་ལུ་ ཚོགས་རྒྱན་བཙུགས་ཚུགས།
+`GET /privacy/events`. མཐའ་ཐིག་དེ་གིས་ གྲལ་ཐིག་གསརཔ་ ཚད་བཟུང་འབད་མི་ JSON སླར་ལོག་འབདཝ་ཨིན།
+(`application/x-ndjson`) ཡོད་པའི་ `SoranetPrivacyEventV1` ཡོད་པའི་ པེ་ལོཌ་ཚུ་ མེ་ལོང་ནང་ བཀོད་དེ་ཡོདཔ་ཨིན།
+ནང་འཁོད་ `PrivacyEventBuffer`. བཱ་ཕར་གྱིས་ བྱུང་ལས་གསརཔ་ཚུ་ ཡར་སེང་འབདཝ་ཨིན།
+ལས་ `privacy.event_buffer_capacity` ཐོ་བཀོད་ཚུ་ (སྔོན་སྒྲིག་༤༠༩༦) དང་ ༢༠༡༦ ལུ་ ཆུ་བཏོན་ཡོདཔ་ཨིན།
+read, དེ་འབདཝ་ལས་ བརྡ་རྟགས་བཀོད་མི་ཚུ་གིས་ བར་སྟོང་ལས་ བཀག་ཐབས་ལུ་ འཕྲལ་འཕྲལ་སྦེ་ར་ འོས་འདེམས་འཐབ་དགོ། བྱུང་ལས་ཚུ་གིས་ ཁྱབ་ཚུགས།
+ལག་བཟོས་དང་ ཐོར་གཏད་ བདེན་དཔྱད་འབད་ཡོད་པའི་ བེན་ཝིཌ་ ཤུགས་ལྡན་གློག་ལམ་ དེ་ལས་ ཇི་ཨར་བརྡ་རྟགས་ཚུ།
+འདི་གིས་ Prometheus གྱངས་ཁ་བརྐྱབ་མི་ཚུ་ གཏན་མཛོད་འབད་བཅུགཔ་ཨིན།
+སྒེར་དོན་ཉེན་སྲུང་གི་ བག་ལེབ་ཡང་ན་ ཉེན་སྲུང་ཅན་གྱི་ བསྡུ་སྒྲིག་ལཱ་གི་རྒྱུན་རིམ་ཚུ་ ལྟོ་བྱིན་ནི།
 
-## Relay Configuration
+## བརྒྱུད་འཕྲིན་རིམ་སྒྲིག་།
 
-Operators adjust privacy telemetry cadences in the relay configuration file via
-the `privacy` section:
+བཀོལ་སྤྱོད་པ་ཚུ་གིས་ རི་ལེ་རིམ་སྒྲིག་ཡིག་སྣོད་ནང་ སྒེར་གསང་བརྒྱུད་འཕྲིན་གྱི་ ཚད་ཚུ་ བརྒྱུད་དེ་ བདེ་སྒྲིག་འབདཝ་ཨིན།
+the `privacy` དབྱེ་ཚན་:
 
 ```json
 {
@@ -75,133 +76,131 @@ the `privacy` section:
 }
 ```
 
-Field defaults match the SNNet-8 spec and are validated at load time:
+ས་སྒོ་སྔོན་སྒྲིག་ཚུ་ ཨེསི་ཨེན་ནེཊི་-༨ ཁྱད་ཚད་དང་མཐུན་སྒྲིག་འབད་ཡོདཔ་དང་ མངོན་གསལ་དུས་ཚོད་ལུ་བདེན་དཔྱད་འབདཝ་ཨིན།
 
-| Field | Description | Default |
-|-------|-------------|---------|
-| `bucket_secs` | Width of each aggregation window (seconds). | `60` |
-| `min_handshakes` | Minimum contributor count before a bucket can emit counters. | `12` |
-| `flush_delay_buckets` | Completed buckets to wait before attempting a flush. | `1` |
-| `force_flush_buckets` | Maximum age before we emit a suppressed bucket. | `6` |
-| `max_completed_buckets` | Retained bucket backlog (prevents unbounded memory). | `120` |
-| `max_share_lag_buckets` | Retention window for collector shares before suppression. | `12` |
-| `expected_shares` | Prio collector shares required before combining. | `2` |
-| `event_buffer_capacity` | NDJSON event backlog for the admin stream. | `4096` |
+| ཕིལཌ་ | འགྲེལ་བཤད་ | སྔོན་སྒྲིག་ |
+|----------------------------|-------------|
+| I18NI0000002X | བསྡོམས་རྩིས་སྒོ་སྒྲིག་རེ་རེ་གི་རྒྱ་ཚད།(སྐར་ཆ།) | I18NI0000003X |
+| `min_handshakes` | བཱ་ཀེཊི་གིས་ གྱངས་ཁ་ཆུང་བའི་ ཕན་འདེབས་འབད་མི་ གྱངས་ཁ་འདི་ གྱངས་ཁ་བརྐྱབ་མི་ཚུགས། | I18NI0000005X |
+| I18NI0000005X | ཆུ་བཤལ་མ་འབད་བའི་ཧེ་མ་ བསྒུག་སྡོད་ནིའི་དོན་ལུ་ བཱ་ཀེཊ་ཚུ་ མཇུག་བསྡུ་ཡོདཔ་ཨིན། | I18NI0000007X |
+| I18NI0000008X | ང་བཅས་ཀྱིས་ བཀག་ཆ་འབད་མི་ བཱ་ཀེཊ་ཅིག་ མ་བཏོན་པའི་ཧེ་མ་ ལོ་ཚད་མཐོ་ཤོས་ཅིག་ཨིན། | `6` |
+| `max_completed_buckets` | བཀག་བཞག་ཡོད་པའི་ བཱ་ཀེཊི་རྒྱབ་ལོག་ (ཚད་མེད་དྲན་ཚད་སྔོན་བཀག་འབདཝ་ཨིན།)། | `120` |
+| `max_share_lag_buckets` | བཀག་འཛིན་མ་འབད་བའི་ཧེ་མ་ བསྡུ་ལེན་འབད་མི་བགོ་བཤའ་ཚུ་གི་དོན་ལུ་ བཀག་བཞག་སྒོ་སྒྲིག་། | `12` |
+| `expected_shares` | མཉམ་སྡེབ་མ་འབད་བའི་ཧེ་མ་ Prio བསྡུ་སྒྲིག་འབད་མི་བགོ་བཤའ་ཚུ། | `2` |
+| I18NI0000006X | བདག་སྐྱོང་རྒྱུན་ལམ་གྱི་དོན་ལུ་ NDJSON བྱུང་ལས་རྒྱབ་ལོག་། | `4096` |
 
-Setting `force_flush_buckets` lower than `flush_delay_buckets`, zeroing the
-thresholds, or disabling the retention guard now fails validation to avoid
-deployments that would leak per-relay telemetry.
+I18NI000000068X ལས་ I18NI000000069X ལས་དམའ་བ་ ཀླད་ཀོར་འབད་དོ།
+ཐེ་རེསི་ཚུ་ཡང་ན་ བཀག་བཞག་མི་སྲུང་སྐྱོབ་འདི་ ལྕོགས་མིན་བཟོ་མི་འདི་གིས་ ད་ལྟོ་ བདེན་དཔྱད་འབད་མ་ཚུགསཔ་ཨིན།
+བརྡ་སྤྲོད་རེ་ལུ་ བརྒྱུད་འཕྲིན་བཏང་ནིའི་ བཀྲམ་སྤེལ་ཚུ།
 
-The `event_buffer_capacity` limit also bounds `/admin/privacy/events`, ensuring
-scrapers cannot fall behind indefinitely.
+I18NI000000070X ཚད་གཞི་འདི་ཡང་ I18NI0000000071X གིས་ ངེས་གཏན་བཟོཝ་ཨིན།
+བརྡ་རྟགས་ཚུ་ དུས་ཡུན་མེད་པར་ རྒྱབ་ལས་ལྷོདཔ་ཨིན།
 
-## Prio collector shares
+## སྔོན་འགྲོའི་བསྡུ་རུབ་ཀྱི་བགོ་བཤད།
 
-SNNet-8a deploys dual collectors that emit secret-shared Prio buckets. The
-orchestrator now parses the `/privacy/events` NDJSON stream for both
-`SoranetPrivacyEventV1` entries and `SoranetPrivacyPrioShareV1` shares,
-forwarding them into `SoranetSecureAggregator::ingest_prio_share`. Buckets emit
-once `PrivacyBucketConfig::expected_shares` contributions arrive, mirroring the
-relay behaviour. Shares are validated for bucket alignment and histogram shape
-before being combined into `SoranetPrivacyBucketMetricsV1`. If the combined
-handshake count falls below `min_contributors`, the bucket is exported as
-`suppressed`, mirroring the behaviour of the in-relay aggregator. Suppressed
-windows now emit a `suppression_reason` label so operators can distinguish
-between `insufficient_contributors`, `collector_suppressed`,
-`collector_window_elapsed`, and `forced_flush_window_elapsed` scenarios when
-diagnosing telemetry gaps. The `collector_window_elapsed` reason also fires
-when Prio shares linger past `max_share_lag_buckets`, making stuck collectors
-visible without leaving stale accumulators in memory.
+SNNet-8a གིས་ གསང་བའི་ཐོག་ལས་ བརྗེ་སོར་འབད་མི་ Prio buckets བཏོན་མི་ བསྡུ་སྒྲིག་འབད་མི་གཉིས་བཀྲམ་སྤེལ་འབདཝ་ཨིན། ཚིག༌ཕྲད
+ད་ལྟ་ ཨོར་ཀེཊ་ཊར་གྱིས་ `/privacy/events` NDJSON རྒྱུན་ལམ་འདི་ གཉིས་ཆ་རའི་དོན་ལུ་ དབྱེ་དཔྱད་འབདཝ་ཨིན།
+I18NI000000073X ཐོ་བཀོད་དང་ `SoranetPrivacyPrioShareV1` བགོ་བཤའ་ཚུ་།
+དེ་ཚུ་ `SoranetSecureAggregator::ingest_prio_share` ནང་ལུ་བཙུགས་དགོ། བཱ་ཀེཊི་ཚུ་ བཏོནམ་ཨིན།
+ཚར་ཅིག་ `PrivacyBucketConfig::expected_shares` ཕན་འདེབས་ཚུ་ལྷོད་ཞིནམ་ལས་ མེ་ལོང་ 1000 ལུ།
+རི་ལེ་སྤྱོད་ལམ། བགོ་བཤའ་ཚུ་ བཱ་ཀེཊི་ཕྲང་སྒྲིག་དང་ ཧིསི་ཊོ་གཱརམ་དབྱིབས་ཀྱི་དོན་ལུ་ བདེན་དཔྱད་འབད་ཡོདཔ་ཨིན།
+`SoranetPrivacyBucketMetricsV1` ནང་མཉམ་སྡེབ་མ་འབད་བའི་ཧེ་མ་. མཉམ་སྡེབ་འབད་བ་ཅིན།
+ལག་པའི་གྱངས་ཁ་ I18NI000000078X ལས་དམའ་བ་ཨིན།
+`suppressed`, ནང་ཁུལ་གྱི་བསྡོམས་རྩིས་ཀྱི་སྤྱོད་ལམ་ལུ་མེ་ལོང་བཟོཝ་ཨིན། དབང་བསྒྱུར་འབད་ཡོདཔ།
+ཝིན་ཌོ་ཚུ་གིས་ ད་ལྟོ་ `suppression_reason` ཁ་ཡིག་ཅིག་ བཏོནམ་ཨིནམ་ལས་ བཀོལ་སྤྱོད་པ་ཚུ་གིས་ དབྱེ་བ་ཕྱེ་ཚུགས།
+བར་གྱི་ I18NI0000081X, `collector_suppressed`,
+`collector_window_elapsed`, དང་ `forced_flush_window_elapsed` གི་གནས་སྟངས་ཚུ་གསུངས།
+ཊེ་ལི་མི་ཊི་རི་གི་བར་སྟོང་བརྟག་དཔྱད་འབད་ནི། `collector_window_elapsed` རྒྱུ་མཚན་ཡང་འཕེལ།
+Prio གིས་ `max_share_lag_buckets` ལས་བརྒལ་བའི་སྐབས།
+དྲན་ཚད་ནང་ བསྡུ་གསོག་འབད་མི་ བསྡུ་གསོག་འབད་མི་ཚུ་ མ་བཞག་པར་ མཐོང་ནི།
 
-## Torii Ingestion Endpoints
+## Torii བཙག་འཐུའི་མཐའ་འཁོར།
 
-Torii now exposes two telemetry-gated HTTP endpoints so relays and collectors
-can forward observations without embedding a bespoke transport:
+I18NT000000015X ད་ལྟ་ ཊེ་ལི་མི་ཊི་ གྷི་ཊི་ ཨེཆ་ཊི་ཊི་པི་ མཐའ་མཚམས་གཉིས་ གསལ་སྟོན་འབད་ཡོདཔ་ལས་ རི་ལེ་དང་ བསྡུ་ལེན་འབད་མི་ཚུ་ གསལ་སྟོན་འབདཝ་ཨིན།
+བལྟ་རྟོག་ཚུ་ མ་བཙུགས་པར་ བལྟ་བརྟོག་ཚུ་ འགོ་འདྲེན་འཐབ་ཚུགས།
 
-- `POST /v1/soranet/privacy/event` accepts a
-  `RecordSoranetPrivacyEventDto` payload. The body wraps a
-  `SoranetPrivacyEventV1` plus an optional `source` label. Torii validates the
-  request against the active telemetry profile, records the event, and responds
-  with HTTP `202 Accepted` alongside a Norito JSON envelope containing the
-  computed bucket window (`bucket_start_unix`, `bucket_duration_secs`) and the
-  relay mode.
-- `POST /v1/soranet/privacy/share` accepts a `RecordSoranetPrivacyShareDto`
-  payload. The body carries a `SoranetPrivacyPrioShareV1` and an optional
-  `forwarded_by` hint so operators can audit collector flows. Successful
-  submissions return HTTP `202 Accepted` with a Norito JSON envelope summarising
-  the collector, bucket window, and suppression hint; validation failures map to
-  a telemetry `Conversion` response to preserve deterministic error handling
-  across collectors. The orchestrator’s event loop now emits these shares as it
-  polls relays, keeping Torii’s Prio accumulator in sync with on-relay buckets.
+- I18NI000000087X དང་ལེན་འབདཝ་ཨིན།
+  I18NI0000008X དངུལ་སྤྲོད་བླངས། གཟུགས་པོ་དེ་གིས་ བརྐྱེན།
+  `SoranetPrivacyEventV1` དང་ གདམ་ཁའི་ `source` ཁ་ཡིག་ཅིག། Torii གིས་ འདི་བདེན་དཔང་འབདཝ་ཨིན།
+  ཤུགས་ལྡན་གྱི་བརྡ་འཕྲིན་གསལ་སྡུད་ལུ་རྒྱབ་འགལ་འབད་མི་ཞུ་བ་དང་ བྱུང་ལས་ཐོ་བཀོད་འབད་ནི་ དེ་ལས་ ལན་ཚུ་ལན་འདེབས་འབདཝ་ཨིན།
+  དང་བཅས་ HTTP `202 Accepted` Norito JSON ཡིག་ཤུབས་དེ་ཡོད་པའི་ ཡིག་ཤུབས་དེ་ཡོད་པའི་ དེ་དང་གཅིག་ཁར་ཡོདཔ་ཨིན།
+  རྩིས་སྟོན་འབད་ཡོད་པའི་ བཱ་ཀེཊི་སྒོ་སྒྲིག་ (I18NI0000092X, `bucket_duration_secs`) དང་
+  རི་ལེ་ཐབས་ལམ།
+- `POST /v1/soranet/privacy/share` གིས་ `RecordSoranetPrivacyShareDto` ཅིག་དང་ལེན་འབདཝ་ཨིན།
+  པེ་ལོཌ་. གཟུགས་པོ་འདི་ `SoranetPrivacyPrioShareV1` དང་གདམ་ཁ་ཅན་གྱི་གདམ་ཁ་ཅན།
+  I18NI000000097X གིས་ བཀོལ་སྤྱོད་པ་ཚུ་གིས་ བསྡུ་ལེན་འབད་མི་ཚུ་ རྩིས་ཞིབ་འབད་ཚུགས། མཐར༌འཁྱོལ༌ཅན
+  ཞུ་ཡིག་ཚུ་གིས་ ཨེཆ་ཊི་ཊི་པི་ I18NI0000098X འདི་ Norito དང་གཅིག་ཁར་ བཅུད་བསྡུ་སྟེ་ བཅུད་བསྡུ་སྟེ་ཡོདཔ་ཨིན།
+  བསྡུ་གསོག་འབད་མི་ བཱ་ཀེཊི་སྒོ་སྒྲིག་དང་ བཀག་འཛིན་གྱི་ བརྡ་སྟོན་ཚུ་ཨིན། བདེན་དཔྱད་འཐུས་ཤོར་ཚུ་ ས་ཁྲ་ ལུ།
+  a telemetry I18NI0000009X ཉམས་སྲུང་འབད་ནིའི་དོན་ལུ་ ལན་འདེབས་འབད་ནི།
+  བསྡུ་སྒྲིག་འབད་མི་ཚུའི་ནང་། རོལ་དབྱངས་ཚོགས་པ་གིས་ ད་ལྟོ་ བགོ་བཤའ་འདི་ཚུ་ བཏོནམ་ཨིན།
+  འོས་བསྡུའི་བརྒྱུད་འཕྲིན་ཚུ་ Torii གི་ Prieo བསྡུ་གསོག་འབད་མི་འདི་ རི་ལེ་བཱ་ཀེཊ་ཨོན་དང་གཅིག་ཁར་ མཉམ་མཐུན་འབད་དེ་ བཞག་ཡོདཔ་ཨིན།
 
-Both endpoints honour the telemetry profile: they emit `503 Service
-Unavailable` when metrics are disabled. Clients may send either Norito binary
-(`application/x.norito`) or Norito JSON (`application/x.norito+json`) bodies;
-the server automatically negotiates the format via the standard Torii
-extractors.
+མཐའ་མའི་གཉིས་ཆ་ར་གིས་ ཊེ་ལི་མི་ཊི་རི་གི་གསལ་སྡུད་ལུ་ གུས་ཞབས་འབདཝ་ཨིན།
+མེ་ཊིགསི་ཚུ་ལྕོགས་མིན་བཟོ་བའི་སྐབས། མཁོ་སྤྲོད་འབད་མི་ཚུ་གིས་ I18NT0000012X གཉིས་ལྡན་གཏང་ཚུགས།
+(`application/x.norito`) ཡང་ན་ Norito JSON (I18NI000001010101010101013);
+སར་བར་འདི་གིས་ རང་བཞིན་གྱིས་ ཚད་ལྡན་ I18NT0000018X བརྒྱུད་དེ་ རྩ་སྒྲིག་འདི་གྲོས་བསྟུན་འབདཝ་ཨིན།
+ཐོན་ཁུངས་ཚུ།
 
-## Prometheus Metrics
+## I18NT0000002X མེ་ཊིཀསི།
 
-Each exported bucket carries `mode` (`entry`, `middle`, `exit`) and
-`bucket_start` labels. The following metric families are emitted:
+ཕྱིར་ཚོང་འཐབ་མི་ བཱ་ཀེཊ་རེ་རེ་གིས་ `mode` (`entry`, `middle`, `exit`) དང་།
+`bucket_start` ཁ་ཡིག་ཚུ། གཤམ་གསལ་གྱི་མེ་ཊིག་བཟའ་ཚང་ཚུ་
 
-| Metric | Description |
-|--------|-------------|
-| `soranet_privacy_circuit_events_total{kind}` | Handshake taxonomy with `kind={accepted,pow_rejected,downgrade,timeout,other_failure,capacity_reject}`. |
-| `soranet_privacy_throttles_total{scope}` | Throttle counters with `scope={congestion,cooldown,emergency,remote_quota,descriptor_quota,descriptor_replay}`. |
-| `soranet_privacy_throttle_cooldown_millis_{sum,count}` | Aggregated cooldown durations contributed by throttled handshakes. |
-| `soranet_privacy_verified_bytes_total` | Verified bandwidth from blinded measurement proofs. |
-| `soranet_privacy_active_circuits_{avg,max}` | Mean and peak active circuits per bucket. |
-| `soranet_privacy_rtt_millis{percentile}` | RTT percentile estimates (`p50`, `p90`, `p99`). |
-| `soranet_privacy_gar_reports_total{category_hash}` | Hashed Governance Action Report counters keyed by category digest. |
-| `soranet_privacy_bucket_suppressed` | Buckets withheld because the contributor threshold was not met. |
-| `soranet_privacy_pending_collectors{mode}` | Collector share accumulators pending combination, grouped by relay mode. |
-| `soranet_privacy_suppression_total{reason}` | Suppressed bucket counters with `reason={insufficient_contributors,collector_suppressed,collector_window_elapsed,forced_flush_window_elapsed}` so dashboards can attribute privacy gaps. |
-| `soranet_privacy_snapshot_suppression_ratio` | Last drain’s suppressed/drained ratio (0–1), useful for alert budgets. |
-| `soranet_privacy_last_poll_unixtime` | UNIX timestamp of the most recent successful poll (drives the collector-idle alert). |
-| `soranet_privacy_collector_enabled` | Gauge that flips to `0` when the privacy collector is disabled or fails to start (drives the collector-disabled alert). |
-| `soranet_privacy_poll_errors_total{provider}` | Polling failures grouped by relay alias (increments on decode errors, HTTP failures, or unexpected status codes). |
+| མེ་ཊིག་ | འགྲེལ་བཤད་ |
+|---------------------------------------------------------------------- |
+| `soranet_privacy_circuit_events_total{kind}` | ལག་ཤེད་ཀྱི་དབྱེ་ཁག་ `kind={accepted,pow_rejected,downgrade,timeout,other_failure,capacity_reject}`. |
+| `soranet_privacy_throttles_total{scope}` | `scope={congestion,cooldown,emergency,remote_quota,descriptor_quota,descriptor_replay}` དང་བཅས་པའི་ཐོརོ་ཊལ་ཀའུན་ཊི། |
+| `soranet_privacy_throttle_cooldown_millis_{sum,count}` | བསྡུ་སྒྲིག་ཅན་གྱི་བསིལ་དྲོད་ཀྱི་དུས་ཡུན་འདི་གིས་ ལགཔ་འཐུད་པའི་ཐོག་ལས་ ཕན་ཐོག་ཡོདཔ་ཨིན། |
+| `soranet_privacy_verified_bytes_total` | མིག་མེད་པའི་འཇལ་ཚད་བདེན་ཁུངས་ཚུ་ལས་ བདེན་དཔྱད་འབད་ཡོད་པའི་ བཱན་ཌི་ཝིཌ། |
+| `soranet_privacy_active_circuits_{avg,max}` | བཱ་ཀེཊི་རེ་ལུ་ དོན་དག་དང་ མཐོ་ཚད་ ཤུགས་ལྡན་གློག་ལམ་ཚུ། |
+| `soranet_privacy_rtt_millis{percentile}` | RTT% ཚོད་དཔག་ (`p50`, `p90`, `p99`). |
+| `soranet_privacy_gar_reports_total{category_hash}` | Hashed Governance Action Reports count of དབྱེ་ཁག་འཇུ་ཅོ་གིས་ བསྒྲིགས་ཡོདཔ། |
+| `soranet_privacy_bucket_suppressed` | ཕན་འདེབས་འབད་མི་གི་ཚད་གཞི་འདི་ མ་ཚང་མི་ལུ་བརྟེན་ བཱ་ཀེཊ་ཚུ་ བཀག་བཞག་ནུག། |
+| `soranet_privacy_pending_collectors{mode}` | བསྡུ་སྒྲིག་འབད་མི་གིས་ བསྡུ་གསོག་འབད་མི་ཚུ་ མཉམ་སྡེབ་འབད་དེ་ རི་ལེ་ཐབས་ལམ་གྱིས་ སྡེ་ཚན་བཟོཝ་ཨིན། |
+| `soranet_privacy_suppression_total{reason}` | `reason={insufficient_contributors,collector_suppressed,collector_window_elapsed,forced_flush_window_elapsed}` ཡོད་པའི་ བཀག་འཛིན་འབད་ཡོད་པའི་ བཱ་ཀེཊ་གྱངས་ཁ་ཚུ་གིས་ སྒེར་གྱི་བར་སྟོང་ཚུ་ ཆེད་བརྗོད་འབད་ཚུགས། |
+| `soranet_privacy_snapshot_suppression_ratio` | མཐའ་མའི་ཆུ་གཡུར་གྱི་བཀག་ཆ་/ཆུ་བཏོན་པའི་ཆ་ཚད་ (༠–༡) གིས་ ཉེན་བརྡ་གི་འཆར་དངུལ་ལུ་ ཕན་ཐོགས་ཡོདཔ་ཨིན། |
+| `soranet_privacy_last_poll_unixtime` | འཕྲལ་ཁམས་ཀྱི་ མཐར་འཁྱོལ་ཅན་གྱི་འོས་བསྡུའི་ UNIX གི་དུས་ཚོད་ (བསྡུ་སྒྲིག་འབད་མི་-ལཱ་མེད་ཉེན་བརྡ་འདི་ བཏང་ཡོདཔ་ཨིན།) |
+| `soranet_privacy_collector_enabled` | སྒེར་དོན་བསྡུ་ལེན་པ་ལྕོགས་མིན་བཟོ་ཡོདཔ་ ཡང་ན་ འགོ་བཙུགས་མ་ཚུགས་པའི་སྐབས་ `0` ལུ་ fips ཚད་འཇལ་ (བསྡུ་སྒྲིག་འབད་མི་-ལྕོགས་མིན་བཟོ་ཡོད་པའི་ཉེན་བརྡ་འདི་ བཏངམ་ཨིན།) |
+| `soranet_privacy_poll_errors_total{provider}` | རི་ལེ་ཨེ་ལི་ཡ་གིས་སྡེ་ཚན་བཟོ་ཡོད་མི་ པོ་ལིང་འཐུས་ཤོར་ཚུ་ (ཌི་ཀོཌི་འཛོལ་བ་ཚུ་གུ་ཡར་སེང་དང་ ཨེཆ་ཊི་ཊི་པི་འཐུས་ཤོར་ ཡང་ན་ རེ་བ་མེད་པའི་གནས་རིམ་ཨང་རྟགས་ཚུ་)། |
 
-Buckets without observations stay silent, keeping dashboards tidy without
-fabricating zero-filled windows.
+བལྟ་བརྟོག་མེད་པའི་བཱ་ཀེཊ་ཚུ་ ཁུ་སིམ་སིམ་སྦེ་སྡོད་ཞིནམ་ལས་ ཌེཤ་བོརཌ་ཚུ་ གཙང་སྦྲ་མེད་པར་བཞག་དོ་ཡོདཔ་ཨིན།
+ཀླད་ཀོར་གྱིས་བཀང་ཡོད་པའི་སྒོ་སྒྲིག་ཚུ་བཟོ་བསྐྲུན་འབད་ནི།
 
-## Operational Guidance
+### ལས་དོན་ལམ་སྟོན།
 
-1. **Dashboards** – chart the metrics above grouped by `mode` and `window_start`.
-   Highlight missing windows to surface collector or relay issues. Use
-   `soranet_privacy_suppression_total{reason}` to distinguish contributor
-   shortfalls from collector-driven suppression when triaging gaps. The Grafana
-   asset now ships a dedicated **“Suppression Reasons (5m)”** panel fed by those
-   counters plus a **“Suppressed Bucket %”** stat that computes
-   `sum(soranet_privacy_bucket_suppressed) / count(...)` per selection so
-   operators can spot budget breaches at a glance. The **Collector Share
-   Backlog** series (`soranet_privacy_pending_collectors`) and the **Snapshot
-   Suppression Ratio** stat highlight stuck collectors and budget drift during
-   automated runs.
-2. **Alerting** – drive alarms from privacy-safe counters: PoW reject spikes,
-   cooldown frequency, RTT drift, and capacity rejects. Because counters are
-   monotonic within each bucket, straightforward rate-based rules work well.
-3. **Incident response** – rely on aggregated data first. When deeper debugging
-   is necessary, request relays to replay bucket snapshots or inspect blinded
-   measurement proofs instead of harvesting raw traffic logs.
-4. **Retention** – scrape often enough to avoid exceeding
-   `max_completed_buckets`. Exporters should treat the Prometheus output as the
-   canonical source and drop local buckets once forwarded.
+1. **ཌེཤ་བོརཌི་** – I18NI000000128X དང་ I18NI000000129X གིས་སྡེ་ཚན་བཟོ་ཡོད་པའི་མེ་ཊིགསི་ཚུ་ ཐིག་ཁྲམ་ནང་བཏོན།
+   ཁ་ཐོག་བསྡུ་སྒྲིག་འབད་མི་ཡང་ན་ བརྒྱུད་འཕྲིན་གྱི་གནད་དོན་ཚུ་ལུ་ སྒོ་སྒྲིག་མེད་མི་ཚུ་ འོད་རྟགས་བཀལ་ནི། ལག་ལེན་འཐབ་ནི
+   `soranet_privacy_suppression_total{reason}` ཕན་འདེབས་བྱེད་པ།
+   བསྡུ་སྒྲིག་འབད་མི་གིས་ བཀག་ཆ་འབད་མི་ལས་ མ་ཤོང་མི། Grafana
+   ད་ལྟ་ རྒྱུ་དངོས་ **“Supples རྒྱུ་མཚན་ (5m)”** དེ་དག་གིས་ ཕིཌ་ ལུ་ ཕིཌ་ ཕུལ་ཡོདཔ་ཨིན།
+   གྱངས་ཁ་བརྐྱབ་མི་ བཱ་ཀེཊ་ %”** གནས་སྡུད་རྩིས་སྟོན་འབད་མི་ ** “Suppleded bucket བཀོད།
+   I18NI000000131X སེལ་འཐུ་རེའི་དོན་ལུ་དེ་སྦེ་ཨིན།
+   བཀོལ་སྤྱོད་པ་ཚུ་གིས་ འཆར་དངུལ་གྱི་ བརྡལ་བཤིག་ཚུ་ བལྟ་སྟེ་ བལྟ་ཚུགས། The **བསྡུ་སྒྲིག་འབད་མི་བགོ་བཤའ་།
+   རྒྱབ་ལོག་** རིམ་སྒྲིག་ (`soranet_privacy_pending_collectors`) དང་ **Snapsot ཚུ།
+   བཀག་འཛིན་ཆ་ཚད་** གནས་རིམ་འོད་རྟགས་བཀག་ཆ་འབད་མི་དང་ འཆར་དངུལ་གྱི་ གཡོ་འགུལ་ཚུ་ དུས་ཚོད་ཀྱི་སྐབས་ལུ་ཨིན།
+   རང་བཞིན་གྱིས་གཡོག་བཀོལ།
+2. **སྒེར་གྱི་ཉེན་སྲུང་འགག་པ་ཚུ་ལས་ཉེན་བརྡའི་ཉེན་བརྡ་ཚུ་བཏང་ནི།
+   colredown བསྐྱར་འབྱུང་དང་ RTT droigt དང་ ལྕོགས་གྲུབ་བཀག་ཆ་འབདཝ་ཨིན། ག་ཅི་འབད་ཟེར་བ་ཅིན་ གྱངས་ཁ་འདི་ཨིན།
+   བཱ་ཀེཊ་རེ་རེ་གི་ནང་འཁོད་ལུ་ མོ་ནོ་ཊོ་ནིག་གིས་ ཚད་གཞི་ལུ་གཞི་བཞག་སྟེ་ ལམ་ལུགས་ཚུ་ ལེགས་ཤོམ་སྦེ་ལཱ་འབདཝ་ཨིན།
+3. **Incident respent** – དང་པ་ བསྡོམས་རྩིས་གནས་སྡུད་ལུ་བརྟེན་དགོ། གཏིང་ཟབ ་ཟབ་པའི་སྐབས།
+   འདི་ དགོས་མཁོ་,
+   འགྲུལ་སྐྱོད་ཀྱི་དྲན་ཐོ་ཚུ་ བསྡུ་བསྒྱོམ་འབད་ནིའི་ཚབ་ལུ་ འཇལ་ཚད་ཀྱི་བདེན་ཁུངས།
+4. **ཉེར་མཁོའི་བརྡུང་རྫོབ་འདི་རྒྱུན་ཆད་མེད་པར་མི་འདོད།
+   `max_completed_buckets`. ཕྱིར་འདྲེན་འབད་མི་ཚུ་གིས་ I18NT0000003X ཐོན་འབྲས་འདི་ བཟུམ་སྦེ་བརྩི་དགོ།
+   ཚད་ལྡན་གྱི་འབྱུང་ཁུངས་དང་ ཉེ་གནས་ཀྱི་བཱ་ཀེཊི་ཚུ་ ཚར་གཅིག་གདོང་བསྐྱོད་འབད་ཚརཝ་ཨིན།
 
-## Suppression Analytics & Automated Runs
+## དཀའ་སྤྱད་དབྱེ་དཔྱད་དང་རང་འགུལ་གཡོག་བཀོལ།SNNet-8 རང་བཞིན་བསྡུ་སྒྲིག་ཚུ་སྡོད་ཡོདཔ་སྦེ་སྟོན་ནིའི་དོན་ལུ་ ངོས་ལེན་གྱི་ཧིང་ཚུ།
+འཕྲོད་བསྟེན་དང་ བཀག་འཛིན་འདི་ སྲིད་བྱུས་ཀྱི་ མཐའ་མཚམས་ (≤10% རེ་ལུ་ buckets) ལུ།
+སྐར་མ་ ༣༠ གི་སྒོ་སྒྲིག་གང་རུང་ཅིག་གུ་ རི་ལེ་)། ད་ལྟ་སྒོ་དེ་དེ་ཡིད་ཚིམ་པར་བྱེད་དགོས།
+ཤིང་དང་གཅིག་ཁར་གྲུ་ཚུ། བཀོལ་སྤྱོད་པ་ཚུ་གིས་ བདུན་ཕྲག་རེ་ནང་ ཆོ་ག་ཚུ་ནང་ གློག་ཐག་བཏང་དགོ། གསརཔ་འདི།
+I18NT000000007X བཀག་འཛིན་པེ་ནཱལ་ཚུ་གིས་ འོག་གི་ PromQL གི་ ཆ་ཤས་ཚུ་ མེ་ལོང་སྦེ་ འབོད་བརྡ་བྱིནམ་ཨིན།
+སྡེ་ཚན་ཚུ་ ལག་ཐོག་ལས་ འདྲི་དཔྱད་ཚུ་ལུ་ ལོག་མ་འགྱོ་བའི་ཧེ་མ་ མཐོང་སྣང་ཚུ་ ཡོདཔ་ཨིན།
 
-SNNet-8 acceptance hinges on demonstrating that automated collectors stay
-healthy and that suppression stays within policy bounds (≤10% of buckets per
-relay over any 30 minute window). The tooling needed to satisfy that gate now
-ships with the tree; operators must wire it into their weekly rituals. The new
-Grafana suppression panels mirror the PromQL snippets below, giving on-call
-teams live visibility before they need to fall back to manual queries.
+### བཀག་འཛིན་བསྐྱར་ཞིབ་ཀྱི་ PromQL གི་བཟོ་བཀོད།
 
-### PromQL recipes for suppression review
-
-Operators should keep the following PromQL helpers handy; both are referenced
-in the shared Grafana dashboard (`dashboards/grafana/soranet_privacy_metrics.json`)
-and Alertmanager rules:
+བཀོལ་སྤྱོད་པ་ཚུ་གིས་ འོག་གི་ PromQL གྲོགས་རམ་པ་ཚུ་ ལག་ལེན་འཐབ་བཏུབ་སྦེ་བཞག་དགོ། གཉིས་ཆ་ར་ གཞི་བསྟུན་འབད་ཡོདཔ་ཨིན།
+བརྗེ་སོར་འབད་ཡོད་པའི་ Grafana བརྡ་བཀོད་ (`dashboards/grafana/soranet_privacy_metrics.json`) ནང་།
+དང་ དྲན་ཚད་ཀྱི་ལམ་ལུགས་:
 
 ```promql
 /* Suppression ratio per relay mode (30 minute window) */
@@ -225,81 +224,70 @@ clamp_min(
 )
 ```
 
-Use the ratio output to confirm the **“Suppressed Bucket %”** stat remains below
-the policy budget; wire the spike detector into Alertmanager for fast feedback
-when contributor counts dip unexpectedly.
+**Supplesed Bucket %”** གནས་རིམ་འདི་ འོག་ལུ་ལུས་ཡོདཔ་ངེས་གཏན་བཟོ་ནི་ལུ་ ཆ་ཚད་ཨའུཊི་པུཊི་ལག་ལེན་འཐབ།
+སྲིད་བྱུས་འཆར་དངུལ་འདི་; མགྱོགས་མྱུར་བསམ་འཆར་གྱི་དོན་ལུ་ དྲན་ཚོར་འཕྲུལ་ཆས་ནང་ གློག་ཐག་འདི་ གློག་ཐག་བཏང་།
+ཕན་འདེབས་འབད་མི་གིས་ རེ་བ་མེད་པར་ རྩིས་རྐྱབ་པའི་སྐབས་ལུ།
 
-### Offline bucket report CLI
+### ཕྱིར་གཏོང་བཱ་ཀེཊི་སྙན་ཞུ། CLI
 
-The workspace exposes `cargo xtask soranet-privacy-report` for one-off NDJSON
-captures. Point it at one or more relay admin exports:
+ལཱ་གི་ས་སྒོ་འདི་གིས་ NDJSON གཅིག་གི་དོན་ལུ་ `cargo xtask soranet-privacy-report` གསལ་སྟོན་འབདཝ་ཨིན།
+འཛིན་བཟུང་ཚུ། རི་ལེ་བདག་སྐྱོང་ཕྱིར་འདྲེན་གཅིག་ཡང་ན་དེ་ལས་མངམ་ལུ་ས་སྟོན།
 
-```bash
-cargo xtask soranet-privacy-report \
-  --input artifacts/sorafs_privacy/relay-a.ndjson \
-  --input artifacts/sorafs_privacy/relay-b.ndjson \
-  --json-out artifacts/sorafs_privacy/relay_summary.json
-```
+I18NF0000022X
 
-The helper streams the capture through `SoranetSecureAggregator`, prints a
-suppression summary to stdout, and optionally writes a structured JSON report
-via `--json-out <path|->`. It honours the same knobs as the live collector
-(`--bucket-secs`, `--min-contributors`, `--expected-shares`, etc.), letting
-operators replay historical captures under different thresholds when triaging
-an issue. Attach the JSON alongside Grafana screenshots so the SNNet-8
-suppression analytics gate remains auditable.
+གྲོགས་རམ་པ་འདི་གིས་ `SoranetSecureAggregator` བརྒྱུད་དེ་ པར་ལེན་འདི་ པར་སྐྲུན་འབདཝ་ཨིན།
+བཅུད་དོན་འདི་ stdout ལུ་མར་ཕབ་འབདཝ་ཨིནམ་དང་ གདམ་ཁ་ཅན་སྦེ་ གཞི་བཀོད་འབད་ཡོད་པའི་ JSON སྙན་ཞུ་ཅིག་བྲིས།
+བརྒྱུད་དེ་ `--json-out <path|->`. འདི་གིས་ མི་ཚེ་བསྡུ་གསོག་འབད་མི་དང་ གཟེངས་བསྟོད་ལུ་ གུས་བཏུད་འབདཝ་ཨིན།
+(`--bucket-secs`, `--min-contributors`, I18NI000000140X, ལ་སོགས་པ།)
+བཀོལ་སྤྱོད་པ་ཚུ་ ཚོད་བརྟག་འབད་བའི་སྐབས་ ཐེབས་ཐིག་སོ་སོ་གི་འོག་ལུ་ བྱུང་རབས་བཟུང་ནི་ཚུ་ སླར་གཏང་འབདཝ་ཨིན།
+གནད་དོན་ཅིག། GrafanaXhots དང་མཉམ་པའི་ JSON མཉམ་སྦྲགས་འབད་དེ་ དེ་འབདཝ་ལས་ SNNet-8 འདི་ཨིན།
+བཀག་འཛིན་དབྱེ་དཔྱད་ཀྱི་སྒོ་ར་འདི་ རྩིས་ཞིབ་འབད་ཚུགསཔ་སྦེ་རང་ ལུས་ཡོདཔ་ཨིན།
 
-### First automated run checklist
+### རང་བཞིན་གཡོག་བཀོལ་ཐོ་ཡིག་འབྲི་བ།
 
-Governance still requires proving that the first automation run met the
-suppression budget. The helper now accepts `--max-suppression-ratio <0-1>` so
-CI or operators can fail fast whenever suppressed buckets exceed the allowed
-window (default 10%) or when no buckets are present yet. Recommended flow:
+གཞུང་གིས་ འཕྲུལ་ཆས་འགོ་དང་པ་འདི་ གྲུབ་ཡོདཔ་སྦེ་ བདེན་ཁུངས་བཀལ་དགོཔ་ཨིན།
+སྔོན་འགྲོའི་སྔོན་འགྲོ། ད་ལྟ་རོགས་སྐྱོར་འདི་ངོས་ལེན་བྱེད་ཀྱི་ཡོད། `--max-suppression-ratio <0-1>` སོ།
+སི་ཨའི་ ཡང་ན་ བཀོལ་སྤྱོད་པ་ཚུ་གིས་ ཆོག་ཡིག་ཚུ་ འབད་ཆོག་པའི་ བཱ་ཀེཊི་ཚུ་ ལས་བརྒལ་བའི་སྐབས་ མགྱོགས་དྲགས་སྦེ་ འཐུས་ཤོར་འབྱུང་ཚུགས།
+ཝིན་ཌོ་ (སྔོན་སྒྲིག་ ༡༠%) ཡང་ན་ བཱ་ཀེཊི་ཚུ་ད་ལྟོ་ཡང་མེད་པའི་སྐབས་ལུ་ཨིན། གྲོས་འཆར་གྱི་བཞུར་གྲངས།
 
-1. Export NDJSON from the relay admin endpoint(s) plus the orchestrator’s
-   `/v1/soranet/privacy/event|share` stream into
+1. རི་ལེ་བདག་སྐྱོང་མཇུག་པོ་(ཚུ་)དང་ སྙན་ཆའི་སྡེ་ཚན་ནང་ལས་ NDJSON ཕྱིར་འདྲེན་འབད།
+   `/v1/soranet/privacy/event|share` རྒྱུན་ལམ་ནང་།
    `artifacts/sorafs_privacy/<relay>.ndjson`.
-2. Run the helper with the policy budget:
+༢ གྲོགས་རམ་འབད་མི་འདི་ སྲིད་བྱུས་འཆར་དངུལ་ནང་ གཡོག་བཀོལ།
 
-   ```bash
-   cargo xtask soranet-privacy-report \
-     --input artifacts/sorafs_privacy/relay-a.ndjson \
-     --input artifacts/sorafs_privacy/relay-b.ndjson \
-     --json-out artifacts/sorafs_privacy/relay_summary.json \
-     --max-suppression-ratio 0.10
-   ```
+   I18NF0000023X
 
-   The command prints the observed ratio and exits non-zero when the budget is
-   exceeded **or** when no buckets are ready, signalling that telemetry has not
-   yet been produced for the run. Live metrics should show
-   `soranet_privacy_pending_collectors` draining toward zero and
-   `soranet_privacy_snapshot_suppression_ratio` staying under the same budget
-   while the run executes.
-3. Archive the JSON output and CLI log with the SNNet-8 evidence bundle before
-   flipping the transport default so reviewers can replay the exact artefacts.
+   བརྡ་བཀོད་ཀྱིས་ བལྟ་རྟོག་འབད་ཡོད་པའི་ཆ་ཚད་འདི་དཔར་བསྐྲུན་འབདཝ་ཨིནམ་དང་ འཆར་དངུལ་འདི་ ཨིན་པའི་སྐབས་ ཀླད་ཀོར་མེན་པའི་ཕྱིར་འཐོན་འབདཝ་ཨིན།
+   ལས་ལྷག་སྟེ་ཡོད་པའི་ **ཡང་ན་** བཱ་ཀེཊི་ཚུ་གྲ་སྒྲིག་མེད་པའི་སྐབས་ ཊེ་ལི་མི་ཊི་མེནམ་སྦེ་སྟོནམ་ཨིན།
+   དེ་འབདཝ་ད་ རྒྱུག་འགྲན་གྱི་དོན་ལུ་ བཟོ་བསྐྲུན་འབད་ཡོདཔ་ཨིན། དངོས་པོའི་མེ་ཊིག་ཚུ་སྟོན་དགོ།
+   I18NI000000144X ཀླད་ཀོར་དང་ ཕྱོགས་ལུ་ཆུ་བཏོན་དོ་ཡོདཔ་ཨིན།
+   `soranet_privacy_snapshot_suppression_ratio` འཆར་དངུལ་གཅིག་པའི་འོག་སྡོད་ཡོད།
+   གཡོག་བཀོལ་མི་འདི་ ལག་ལེན་འཐབ་ཨིན།
+༣༽ ཧེ་མ་ SNNet-8 སྒྲུབ་བྱེད་བང་སྒྲིག་དང་གཅིག་ཁར་ JSON ཐོན་འབྲས་དང་ CLI དྲན་ཐོ་ཚུ་ གཏན་མཛོད་འབད།
+   སྐྱེལ་འདྲེན་གྱི་སྔོན་སྒྲིག་འདི་ བསྐྱར་ཞིབ་འབད་མི་ཚུ་གིས་ ཅ་ཆས་ངོ་མ་ཚུ་ ལོག་རྩེད་ཚུགས།
 
-## Next Steps (SNNet-8a)
+## ཤུལ་མམ་གྱི་རིམ་པ་ (SNNet-8a)
 
-- Integrate the dual Prio collectors, wiring their share ingestion into the
-  runtime so relays and collectors emit consistent `SoranetPrivacyBucketMetricsV1`
-  payloads. *(Done — see `ingest_privacy_payload` in
-  `crates/sorafs_orchestrator/src/lib.rs` and accompanying tests.)*
-- Publish the shared Prometheus dashboard JSON and alert rules covering
-  suppression gaps, collector health, and anonymity brownouts. *(Done — see
+- གཉིས་ལྡན་ Prio བསྡུ་སྒྲིག་འབད་མི་ཚུ་ མཉམ་སྡེབ་འབད་དེ་ བགོ་བཤའ་བཙུགས་ནིའི་ སྨན་ཁབ་འདི་ ༡ ༡ ལུ་བསྒྱུར་བཅོས་འབད་ནི།
+  རན་ཊའིམ་ དེ་ རི་ལེ་ དང་ བསྡུ་སྒྲིག་པ་ཚུ་གིས་ `SoranetPrivacyBucketMetricsV1` རིམ་མཐུན་བཏོནམ་ཨིན།
+  པེ་ལོཌ་ཚུ། *(Done — I18NI0000147X ནང་བལྟ།
+  `crates/sorafs_orchestrator/src/lib.rs` དང་མཉམ་སྦྲེལ་བརྟག་དཔྱད་ཚུ་)*
+- བརྗེ་སོར་འབད་ཡོད་པའི་ Prometheus ཌེཤ་བོརཌ་ཇེ་ཨེསི་ཨོ་ཨེན་དང་ ཉེན་བརྡ་ལམ་ལུགས་ཚུ་ གསལ་སྟོན་འབདཝ་ཨིན།
+  བཀག་འཛིན་གྱི་ བར་སྟོང་དང་ བསྡུ་སྒྲིག་འབད་མི་གསོ་བའི་ དེ་ལས་ མིང་མ་བཀོད་པའི་ བཱརའོན་ཨའུཊ་ཚུ། *(Done — བལྟ།
   `dashboards/grafana/soranet_privacy_metrics.json`,
   `dashboards/alerts/soranet_privacy_rules.yml`,
-  `dashboards/alerts/soranet_policy_rules.yml`, and validation fixtures.)*
-- Produce the differential-privacy calibration artefacts described in
-  `privacy_metrics_dp.md`, including reproducible notebooks and governance
-  digests. *(Done — notebook + artefacts generated by
-  `scripts/telemetry/run_privacy_dp.py`; CI wrapper
-  `scripts/telemetry/run_privacy_dp_notebook.sh` executes the notebook via the
-  `.github/workflows/release-pipeline.yml` workflow; governance digest filed in
+  `dashboards/alerts/soranet_policy_rules.yml`, དང་བདེན་དཔྱད་སྒྲིག་ཆས།
+- ༢༠༠༦ ལུ་གསལ་བཀོད་འབད་ཡོད་པའི་ ཁྱད་པར་སྒེར་གྱི་ཚད་འཇལ་ཆས་ཚུ་བཀོད།
+  `privacy_metrics_dp.md`, བསྐྱར་བཟོ་འབད་བཏུབ་པའི་དྲན་དེབ་དང་ གཞུང་སྐྱོང་ཚུ་རྩིས་ཏེ་ཨིན།
+  ཟས་འཇུ་ནི། *(Done — དྲན་དེབ་ + ཅ་མཛོད་ཚུ།
+  `scripts/telemetry/run_privacy_dp.py`; CI བསྡམས་པ།
+  `scripts/telemetry/run_privacy_dp_notebook.sh` བརྒྱུད་དེ་ དྲན་དེབ་འདི་ལག་ལེན་འཐབ་ཨིན།
+  `.github/workflows/release-pipeline.yml` ལཱ་གི་རྒྱུན་རིམ་; སྤྱི་ལོ ༢༠༡༡ ལོར་བཙུགས་ཡོད།
   `docs/source/status/soranet_privacy_dp_digest.md`.)*
 
-The current release delivers the SNNet-8 foundation: deterministic,
-privacy-safe telemetry that slots directly into existing Prometheus scrapers
-and dashboards. Differential privacy calibration artefacts are in place, the
-release pipeline workflow keeps the notebook outputs fresh, and the remaining
-work focuses on monitoring the first automated run plus extending suppression
-alert analytics.
+ད་ལྟའི་གསར་བཏོན་འདི་གིས་ SNNet-8 གཞི་རྟེན་འདི་ གཏན་འབེབས་བཟོ་ནི།
+སྒེར་གསང་སྲུང་སྐྱོབ་ཀྱི་ བརྒྱུད་འཕྲིན་འདི་ ཐད་ཀར་དུ་ ད་ལྟོ་ཡོད་པའི་ I18NT0000005X བརྡ་རྟགས་ཚུ་ནང་ བཀྲམ་སྟོན་འབདཝ་ཨིན།
+དང་ ཌེཤ་བོརཌ་ཚུ། ཁྱད་པར་ཅན་གྱི་སྒེར་དོན་ཚད་འཇལ་གྱི་ཅ་ཆས་ཚུ་ ས་སྒོ་ནང་ཡོདཔ་ཨིན།
+གསར་བཏོན་འབད་མི་ པའིཔ་ལའིན་ལཱ་གི་རྒྱུན་རིམ་འདི་གིས་ དྲན་དེབ་འདི་ གསརཔ་སྦེ་བཞགཔ་ཨིནམ་དང་ ལྷག་ལུས་ཚུ།
+ལས་ཀའི་གཙོ་བོར་འདི་ རང་བཞིན་གྱིས་གཡོག་བཀོལ་མི་དང་པ་ དང་ རྒྱ་བསྐྱེད་རྒྱ་བསྐྱེད་རྒྱ་བསྐྱེད་འབད་ནི་ལུ་གཙོ་བོར་བཏོནམ་ཨིན།
+ཉེན་བརྡའི་དབྱེ་ཞིབ།

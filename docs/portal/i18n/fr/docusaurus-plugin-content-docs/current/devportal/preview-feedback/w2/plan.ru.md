@@ -4,46 +4,45 @@ direction: ltr
 source: docs/portal/docs/devportal/preview-feedback/w2/plan.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: preview-feedback-w2-plan
-title: План community intake W2
-sidebar_label: План W2
-description: Intake, одобрения и чек-лист доказательств для community preview когорты.
+identifiant : aperçu-feedback-w2-plan
+titre : Planifier l'admission communautaire W2
+sidebar_label : Plan W2
+description : Admission, одобрения и чек-list доказательств для community preview когорты.
 ---
 
-| Пункт | Детали |
+| Пункт | Détails |
 | --- | --- |
-| Волна | W2 - community reviewers |
-| Целевое окно | Q3 2025 неделя 1 (предварительно) |
-| Тег артефакта (план) | `preview-2025-06-15` |
-| Трекер | `DOCS-SORA-Preview-W2` |
+| Volna | W2 - réviseurs de la communauté |
+| Целевое окно | T3 2025 pas 1 (prévu) |
+| Objets d'art (plan) | `preview-2025-06-15` |
+| Trekker | `DOCS-SORA-Preview-W2` |
 
-## Цели
+## Celi
 
-1. Определить критерии community intake и workflow vetting.
-2. Получить governance-одобрение для предложенного roster и acceptable-use addendum.
-3. Обновить checksum-верифицированный preview-артефакт и телеметрический bundle под новое окно.
-4. Подготовить Try it proxy и dashboards до отправки приглашений.
+1. Évaluez les critères d'admission de la communauté et la vérification des flux de travail.
+2. Publier la liste de gouvernance et l'addendum d'utilisation acceptable.
+3. Ouvrir l'aperçu de l'image de vérification de la somme de contrôle et l'ensemble télémétrique à ce moment-là.
+4. Ajouter Essayez-le proxy et tableaux de bord pour l'installation.
 
-## Разбивка задач
-
-| ID | Задача | Владелец | Срок | Статус | Примечания |
+## Разбивка задач| ID | Задача | Владелец | Срок | Statut | Première |
 | --- | --- | --- | --- | --- | --- |
-| W2-P1 | Подготовить критерии community intake (eligibility, max slots, требования CoC) и разослать в governance | Docs/DevRel lead | 2025-05-15 | ✅ Завершено | Политика intake смержена в `DOCS-SORA-Preview-W2` и одобрена на совете 2025-05-20. |
-| W2-P2 | Обновить request template вопросами для community (motivation, availability, localization needs) | Docs-core-01 | 2025-05-18 | ✅ Завершено | `docs/examples/docs_preview_request_template.md` теперь включает раздел Community и указан в intake форме. |
-| W2-P3 | Получить governance-одобрение плана intake (голосование + протокол) | Governance liaison | 2025-05-22 | ✅ Завершено | Голосование прошло единогласно 2025-05-20; протокол и roll call связаны в `DOCS-SORA-Preview-W2`. |
-| W2-P4 | Запланировать staging Try it proxy + телеметрию для окна W2 (`preview-2025-06-15`) | Docs/DevRel + Ops | 2025-06-05 | ✅ Завершено | Change ticket `OPS-TRYIT-188` одобрен и выполнен 2025-06-09 02:00-04:00 UTC; Grafana скриншоты сохранены с тикетом. |
-| W2-P5 | Собрать/проверить новый preview artefact tag (`preview-2025-06-15`) и архивировать descriptor/checksum/probe logs | Portal TL | 2025-06-07 | ✅ Завершено | `scripts/preview_wave_preflight.sh --tag preview-2025-06-15 ...` выполнен 2025-06-10; outputs сохранены в `artifacts/docs_preview/W2/preview-2025-06-15/`. |
-| W2-P6 | Сформировать roster community приглашений (<=25 reviewers, staged batches) с контактами, одобренными governance | Community manager | 2025-06-10 | ✅ Завершено | Первая когорта из 8 community reviewers одобрена; IDs `DOCS-SORA-Preview-REQ-C01...C08` записаны в трекере. |
+| W2-P1 | Ajouter des critères d'admission à la communauté (éligibilité, nombre maximum d'emplacements, certification CoC) et définir la gouvernance | Responsable Docs/DevRel | 2025-05-15 | ✅ Завершено | L'admission politique s'est déroulée dans le `DOCS-SORA-Preview-W2` et s'est déroulée le 20/05/2025. |
+| W2-P2 | Créer un modèle de demande pour la communauté (motivation, disponibilité, besoins de localisation) | Docs-core-01 | 2025-05-18 | ✅ Завершено | `docs/examples/docs_preview_request_template.md` vous trouverez la Communauté et votre formulaire d'admission. |
+| W2-P3 | Получить gouvernance-одобрение плана admission (голосование + протокол) | Liaison gouvernance | 2025-05-22 | ✅ Завершено | L'événement a eu lieu le 20/05/2025 ; Le protocole et l'appel sont effectués sur `DOCS-SORA-Preview-W2`. |
+| W2-P4 | Planifier la mise en scène Essayez-le proxy + télémètre pour W2 (`preview-2025-06-15`) | Docs/DevRel + Ops | 2025-06-05 | ✅ Завершено | Changer le ticket `OPS-TRYIT-188` одобрен и выполнен 2025-06-09 02:00-04:00 UTC ; Grafana les écrans sont connectés au ticket. |
+| W2-P5 | Ajouter/améliorer la nouvelle balise d'artefact d'aperçu (`preview-2025-06-15`) et archiver les journaux de descripteur/somme de contrôle/sonde | Portail TL | 2025-06-07 | ✅ Завершено | `scripts/preview_wave_preflight.sh --tag preview-2025-06-15 ...` publié le 10/06/2025 ; sorties сохранены в `artifacts/docs_preview/W2/preview-2025-06-15/`. || W2-P6 | Former la communauté de liste (<=25 évaluateurs, lots par étapes) avec les contacts et la gouvernance | Gestionnaire de communauté | 2025-06-10 | ✅ Завершено | Первая когорта из 8 évaluateurs de la communauté одобрена; IDs `DOCS-SORA-Preview-REQ-C01...C08` записаны в трекере. |
 
-## Чек-лист доказательств
+## Liste de contrôle des documents
 
-- [x] Запись governance approval (заметки встречи + ссылка на голосование) приложена к `DOCS-SORA-Preview-W2`.
-- [x] Обновленный request template закоммичен под `docs/examples/`.
-- [x] Descriptor `preview-2025-06-15`, checksum log, probe output, link report и Try it proxy transcript сохранены в `artifacts/docs_preview/W2/`.
-- [x] Grafana screenshots (`docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals`) сняты для окна preflight W2.
-- [x] Таблица roster приглашений с reviewer IDs, request tickets и timestamps одобрений заполнена до отправки (см. секцию W2 в трекере).
+- [x] Afficher l'approbation de la gouvernance (заметки встречи + ссылка на голосование) приложена к `DOCS-SORA-Preview-W2`.
+- [x] Le modèle de demande Обновленный закоммичен под `docs/examples/`.
+- [x] Descripteur `preview-2025-06-15`, journal de somme de contrôle, sortie de sonde, rapport de lien et essayez-le, transcription proxy dans `artifacts/docs_preview/W2/`.
+- [x] Captures d'écran Grafana (`docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals`) pour le contrôle en amont W2.
+- [x] La liste des listes contient les identifiants des réviseurs, les demandes de tickets et les horodatages pour les opérations (dans la section W2 du voyage).
 
-Держите этот план актуальным; трекер ссылается на него, чтобы roadmap DOCS-SORA видел, что осталось до рассылки W2 приглашений.
+Vérifiez ce plan actuel ; Le treker s'est penché sur la feuille de route DOCS-SORA, qui est en cours d'exécution pour l'utilisation de W2.

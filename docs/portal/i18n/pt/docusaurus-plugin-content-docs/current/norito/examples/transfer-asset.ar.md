@@ -4,30 +4,32 @@ direction: ltr
 source: docs/portal/docs/norito/examples/transfer-asset.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
 slug: /norito/examples/transfer-asset
-title: نقل أصل بين الحسابات
-description: سير عمل بسيط لنقل الأصول يعكس بدايات SDK السريعة وجولات دفتر الأستاذ.
-source: examples/transfer/transfer.ko
+título: نقل أصل بين الحسابات
+description: Você pode usar o SDK do SDK e instalá-lo no SDK.
+fonte: exemplos/transfer/transfer.ko
 ---
 
-سير عمل بسيط لنقل الأصول يعكس بدايات SDK السريعة وجولات دفتر الأستاذ.
+Você pode usar o SDK do SDK e instalá-lo novamente.
 
 ## جولة دفتر الأستاذ
 
-- موّل Alice بالأصل المستهدف مسبقا (على سبيل المثال عبر المقتطف `register and mint` أو تدفقات البدء السريع للـ SDK).
-- نفّذ نقطة الدخول `do_transfer` لنقل 10 وحدات من Alice إلى Bob مع استيفاء إذن `AssetTransferRole`.
-- استعلم عن الأرصدة (`FindAccountAssets`, `iroha_cli ledger assets list`) أو اشترك في أحداث خط الأنابيب لملاحظة نتيجة النقل.
+- Alice é a única pessoa que pode ser chamada de `register and mint` ou تدفقات البدء السريع. para SDK).
+- Eu coloquei o `do_transfer` no 10º lugar com Alice e Bob com o `AssetTransferRole`.
+- Use o código de barras (`FindAccountAssets`, `iroha_cli ledger assets list`) e instale-o no computador. Não.
 
-## أدلة SDK ذات صلة
+## O SDK está disponível
 
-- [البدء السريع لـ Rust SDK](/sdks/rust)
-- [البدء السريع لـ Python SDK](/sdks/python)
-- [البدء السريع لـ JavaScript SDK](/sdks/javascript)
+- [Atualizado para Rust SDK](/sdks/rust)
+- [Implementar para Python SDK](/sdks/python)
+- [Escolha o JavaScript SDK](/sdks/javascript)
 
-[نزّل مصدر Kotodama](/norito-snippets/transfer-asset.ko)
+[Kotodama](/norito-snippets/transfer-asset.ko)
 
 ```text
 // Transfer example: uses typed pointer constructors and transfer_asset syscall

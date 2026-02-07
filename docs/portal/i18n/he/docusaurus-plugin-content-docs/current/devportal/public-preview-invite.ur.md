@@ -4,6 +4,8 @@ direction: rtl
 source: docs/portal/docs/devportal/public-preview-invite.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 # پبلک پریویو دعوتی پلے بک
@@ -19,16 +21,16 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 ## لانچ گیٹ چیک لسٹ
 
-کوئی بھی دعوت بھیجنے سے پہلے یہ کام مکمل کریں:
+‏
 
 1. تازہ ترین preview artifacts CI میں اپلوڈ ہوں (`docs-portal-preview`,
-   checksum manifest, descriptor, SoraFS bundle)۔
+   מניפסט checksum, descriptor, SoraFS חבילה).
 2. `npm run --prefix docs/portal serve` (checksum-gated) اسی tag پر ٹیسٹ کیا گیا ہو۔
 3. ریویور آن بورڈنگ ٹکٹس approve ہوں اور invite wave سے لنک ہوں۔
-4. سیکیورٹی، observability، اور incident ڈاکس validate ہوں
+4. תצפיות, תקרית או תקרית תקף
    ([`security-hardening`](./security-hardening.md),
    [`observability`](./observability.md),
-   [`incident-runbooks`](./incident-runbooks.md))۔
+   [`incident-runbooks`](./incident-runbooks.md)).
 5. feedback فارم یا issue template تیار ہو (severity، reproduction steps، screenshots، اور environment info کے فیلڈز شامل ہوں)۔
 6. اعلان کی کاپی Docs/DevRel + Governance نے ریویو کی ہو۔
 
@@ -39,7 +41,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 1. **Verified artifacts** — SoraFS manifest/plan یا GitHub artefact کے لنکس دیں،
    ساتھ میں checksum manifest اور descriptor بھی دیں۔ verification کمانڈ واضح طور پر لکھیں تاکہ
    ریویورز site لانچ کرنے سے پہلے اسے چلا سکیں۔
-2. **Serve instructions** — checksum-gated preview کمانڈ شامل کریں:
+2. **הוראות הגשה** — תצוגה מקדימה של בדיקת סכום.
 
    ```bash
    DOCS_RELEASE_TAG=preview-<stamp> npm run --prefix docs/portal serve
@@ -80,16 +82,14 @@ generator: docs/portal/scripts/sync-i18n.mjs
      --out artifacts/sorafs/preview-descriptor.json
    ```
 
-   pin script `portal.car`, `portal.manifest.*`, `portal.pin.proposal.json`,
+   סקריפט סיכה `portal.car`, `portal.manifest.*`, `portal.pin.proposal.json`,
    اور `portal.dns-cutover.json` کو `artifacts/sorafs/` میں لکھتا ہے۔ ان فائلوں کو invite wave
    کے ساتھ attach کریں تاکہ ہر ریویور وہی bits verify کر سکے۔
 
 2. **Preview alias publish کریں:** کمانڈ کو `--skip-submit` کے بغیر دوبارہ چلائیں
    (`TORII_URL`, `AUTHORITY`, `PRIVATE_KEY[_FILE]` اور governance-issued alias proof فراہم کریں)۔
    اسکرپٹ `docs-preview.sora` پر manifest bind کرے گا اور evidence bundle کے لئے
-   `portal.manifest.submit.summary.json` اور `portal.pin.report.json` نکالے گا۔
-
-3. **Deployment probe کریں:** invites بھیجنے سے پہلے alias resolve ہونا اور checksum کا tag سے match ہونا
+   `portal.manifest.submit.summary.json` اور `portal.pin.report.json` نکالے گا۔3. **Deployment probe کریں:** invites بھیجنے سے پہلے alias resolve ہونا اور checksum کا tag سے match ہونا
    یقینی بنائیں۔
 
    ```bash
@@ -103,18 +103,18 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 ## کمیونیکیشن ٹائم لائن
 
-| دن | ایکشن | Owner |
+| دن | ایکشن | בעלים |
 | --- | --- | --- |
 | D-3 | دعوتی کاپی finalize کرنا، artifacts refresh کرنا، verification کا dry-run | Docs/DevRel |
-| D-2 | Governance sign-off + change ticket | Docs/DevRel + Governance |
+| D-2 | אישור ממשל + שינוי כרטיס | Docs/DevRel + ממשל |
 | D-1 | template کے ذریعے دعوتیں بھیجیں، tracker میں recipient list اپ ڈیٹ کریں | Docs/DevRel |
-| D | kickoff call / office hours، telemetry dashboards مانیٹر کریں | Docs/DevRel + On-call |
+| ד | kickoff call / office hours، telemetry dashboards مانیٹر کریں | Docs/DevRel + כוננות |
 | D+7 | midpoint feedback digest، blocking issues کی triage | Docs/DevRel |
 | D+14 | wave بند کریں، عارضی رسائی revoke کریں، `status.md` میں خلاصہ شائع کریں | Docs/DevRel |
 
-## Access tracking اور telemetry
+## גישה למעקב או טלמטריה
 
-1. ہر recipient، invite timestamp، اور revocation date کو preview feedback logger کے ساتھ ریکارڈ کریں
+9
    (دیکھیں [`preview-feedback-log`](./preview-feedback-log)) تاکہ ہر wave ایک ہی evidence trail شیئر کرے:
 
    ```bash
@@ -126,8 +126,8 @@ generator: docs/portal/scripts/sync-i18n.mjs
      --notes "wave-01 seed"
    ```
 
-   Supported events ہیں `invite-sent`, `acknowledged`, `feedback-submitted`,
-   `issue-opened`, اور `access-revoked`۔ log ڈیفالٹ طور پر
+   אירועים נתמכים `invite-sent`, `acknowledged`, `feedback-submitted`,
+   `issue-opened`, אוור `access-revoked`. log ڈیفالٹ طور پر
    `artifacts/docs_portal_preview/feedback_log.json` میں موجود ہے؛ اسے invite wave ٹکٹ کے ساتھ
    consent forms سمیت attach کریں۔ close-out نوٹ سے پہلے summary helper استعمال کریں تاکہ
    ایک auditable roll-up تیار ہو:
@@ -138,18 +138,18 @@ generator: docs/portal/scripts/sync-i18n.mjs
    ```
 
    summary JSON ہر wave کے invites، کھلے recipients، feedback counts، اور حالیہ ترین event کے
-   timestamp کو enumerate کرتا ہے۔ helper
+   timestamp کو enumerate کرتا ہے۔ עוזר
    [`scripts/preview-feedback-log.mjs`](../../scripts/preview-feedback-log.mjs)
    پر مبنی ہے، اس لئے وہی workflow لوکل یا CI میں چل سکتا ہے۔ recap شائع کرتے وقت
    [`docs/examples/docs_preview_feedback_digest.md`](../../../examples/docs_preview_feedback_digest.md)
    والا digest template استعمال کریں۔
-2. telemetry dashboards کو wave میں استعمال ہونے والے `DOCS_RELEASE_TAG` کے ساتھ tag کریں تاکہ
+2. לוחות מחוונים של טלמטריה.
    spikes کو invite cohorts سے correlate کیا جا سکے۔
-3. deploy کے بعد `npm run probe:portal -- --expect-release=<tag>` چلائیں تاکہ preview environment
+3. לפרוס את סביבת התצוגה המקדימה של `npm run probe:portal -- --expect-release=<tag>`
    درست release metadata advertise کرے۔
 4. کسی بھی incident کو runbook template میں capture کریں اور اسے cohort سے link کریں۔
 
-## Feedback اور close-out
+## משוב או סגירה
 
 1. feedback کو shared doc یا issue board میں جمع کریں۔ items کو `docs-preview/<wave>` سے tag کریں تاکہ
    roadmap owners انہیں آسانی سے query کر سکیں۔

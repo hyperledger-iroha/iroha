@@ -7,48 +7,49 @@ generator: scripts/sync_docs_i18n.py
 source_hash: c56bacde8ee42c2427d06038a3a6ca65035d4055c42f6e5ded7e54b33c1fe921
 source_last_modified: "2025-12-29T18:16:35.060432+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Documentation Automation Baselines
+# 文檔自動化基線
 
-This directory captures the automation surfaces that roadmap items such as
-AND5/AND6 (Android Developer Experience + Release Readiness) and DA-1
-(Data-Availability threat-model automation) refer to when they call for
-auditable documentation evidence. Staging the command references and expected
-artefacts in-tree keeps the prerequisites for compliance reviews available even
-when CI pipelines or dashboards are offline.
+該目錄捕獲路線圖項目的自動化表面，例如
+AND5/AND6（Android 開發者體驗 + 發布準備）和 DA-1
+（數據可用性威脅模型自動化）指的是當他們要求
+可審計的文件證據。暫存命令參考和預期
+artefacts in-tree 甚至可以保留合規審查的先決條件
+當 CI 管道或儀表板離線時。
 
-## Directory Layout
+## 目錄佈局
 
-| Path | Purpose |
+|路徑|目的|
 |------|---------|
-| `docs/automation/android/` | Android documentation and localization automation baselines (AND5), including i18n stub sync logs, parity summaries, and SDK publishing evidence required before AND6 sign-off. |
-| `docs/automation/da/` | Data-Availability threat-model automation outputs referenced by `cargo xtask da-threat-model-report` and the nightly docs refresh. |
+| `docs/automation/android/` | Android 文檔和本地化自動化基線 (AND5)，包括 AND6 簽署之前所需的 i18n 存根同步日誌、奇偶校驗摘要和 SDK 發布證據。 |
+| `docs/automation/da/` | `cargo xtask da-threat-model-report` 和夜間文檔刷新引用的數據可用性威脅模型自動化輸出。 |
 
-Each subdirectory documents the commands that produce the evidence along with
-the file layout we expect to check in (usually JSON summaries, run logs, or
-manifests). Teams drop new artefacts under the respective folder whenever an
-automation run materially changes the published docs, then link to the commit
-from the relevant status/roadmap entry.
+每個子目錄都記錄了產生證據的命令以及
+我們希望簽入的文件佈局（通常是 JSON 摘要、運行日誌或
+體現）。每當
+自動化運行實質上更改了已發布的文檔，然後鏈接到提交
+來自相關狀態/路線圖條目。
 
-## Usage
+## 用法
 
-1. **Run the automation** using the commands described in the subdirectory
-   README (for example, `ci/check_android_fixtures.sh` or
-   `cargo xtask da-threat-model-report`).
-2. **Copy the resulting JSON/log artefacts** from `artifacts/…` into the
-   matching `docs/automation/<program>/…` folder with an ISO-8601 timestamp in
-   the filename so auditors can correlate the evidence with governance minutes.
-3. **Reference the commit** in `status.md`/`roadmap.md` when closing a roadmap
-   gate so reviewers can confirm the automation baseline used for that decision.
-4. **Keep the files lightweight**. The expectation is structured metadata,
-   manifests, or summaries—not bulk binary blobs. Larger dumps should stay in
-   object storage with the signed reference recorded here.
+1. **使用子目錄中描述的命令運行自動化**
+   自述文件（例如，`ci/check_android_fixtures.sh` 或
+   `cargo xtask da-threat-model-report`）。
+2. **將生成的 JSON/日誌工件**從 `artifacts/…` 複製到
+   將 `docs/automation/<program>/…` 文件夾與 ISO-8601 時間戳相匹配
+   文件名，以便審計員可以將證據與治理會議記錄關聯起來。
+3. **關閉路線圖時參考 `status.md`/`roadmap.md` 中的提交**
+   門，以便審核者可以確認用於該決策的自動化基線。
+4. **保持文件輕量級**。期望是結構化元數據，
+   清單或摘要，而不是批量二進制 blob。較大的垃圾場應保留在
+   帶有此處記錄的簽名引用的對象存儲。
 
-By centralising these automation notes we unblock the “docs/automation baselines
-available for audit” prerequisite that AND6 calls out and give the DA threat
-model flow a deterministic home for the nightly reports and manual spot checks.
+通過集中這些自動化註釋，我們解鎖了“文檔/自動化基線”
+AND6 提出並發出 DA 威脅的先決條件“可供審計”
+模型流是夜間報告和手動抽查的確定性主頁。

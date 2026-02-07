@@ -7,18 +7,19 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 168513edcb6624ab76275b01aaaf6ab9dee310b9d6f5a2960504a9545801c511
 source_last_modified: "2026-01-28T13:08:23.284550+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Kotodama Examples Overview
+# Kotodama དཔེར་བརྗོད།
 
-This page shows concise Kotodama examples and how they map to IVM syscalls and pointer‑ABI arguments. See also:
-- `examples/` for runnable sources
-- `docs/source/ivm_syscalls.md` for the canonical syscall ABI
-- `kotodama_grammar.md` for the full language specification
+ཤོག་ལེབ་འདི་གིས་ དཔེ་ཚུ་ བསྡུ་སྒྲིག་འབད་དེ་ Kotodama དང་ དེ་ཚུ་གིས་ IVM syscalls དང་ དཔག་བྱེད་-ABI སྒྲུབ་རྟགས་ཚུ་ལུ་ ག་དེ་སྦེ་ སབ་ཁྲ་བཟོཝ་ཨིན། ད་དུང་གཟིགས།
+- གཡོག་བཀོལ་བཏུབ་པའི་འབྱུང་ཁུངས་ཚུ་གི་དོན་ལུ་ `examples/`
+- Kotodama འདི་ ཀེ་ནོ་ནིག་སི་ཀཱལ་ ABI གི་དོན་ལུ་ཨིན།
+- སྐད་ཡིག་ཆ་ཚང་གསལ་བཀོད་ཀྱི་དོན་ལུ་ `kotodama_grammar.md`
 
-## Hello + Account Detail
+## ཧེ་ལོ་ + རྩིས་ཁྲའི་ཁ་གསལ།
 
-Source: `examples/hello/hello.ko`
+ཡོང་ཁུངས།： 18NI0000024X
 
 ```
 seiyaku Hello {
@@ -34,13 +35,13 @@ seiyaku Hello {
 }
 ```
 
-Mapping (pointer‑ABI):
-- `authority()` → `SCALL 0xA4` (host writes `&AccountId` into `r10`)
-- `set_account_detail(a, k, v)` → move `r10=&AccountId`, `r11=&Name`, `r12=&Json`, then `SCALL 0x1A`
+ས་ཁྲ་ (pointer‑ABI):
+- `authority()` → `SCALL 0xA4` (ཧོསཊི་ཧོསཊི་ཨའི་༡༨ཨེན་ཨའི་༠༠༠༠༠༠༢༧ཨེགསི་འདི་ ཨའི་༡༨ཨེན་ཨའི་༠༠༠༠༠༠༠༢༨ ཨེགསི་ནང་བྲིས།)
+- `set_account_detail(a, k, v)` → `r10=&AccountId`, `r11=&Name`, Kotodama, དེ་ལས་ `SCALL 0x1A`,
 
-## Asset Transfer
+## བརྗེ་སོར།
 
-Source: `examples/transfer/transfer.ko`
+ཡོང་ཁུངས།： 18NI0000034X
 
 ```
 seiyaku TransferDemo {
@@ -55,12 +56,12 @@ seiyaku TransferDemo {
 }
 ```
 
-Mapping (pointer‑ABI):
-- `transfer_asset(from, to, def, amt)` → `r10=&AccountId(from)`, `r11=&AccountId(to)`, `r12=&AssetDefinitionId(def)`, `r13=amount`, then `SCALL 0x24`
+ས་ཁྲ་ (pointer‑ABI):
+→ `r10=&AccountId(from)`, `r11=&AccountId(to)`, `r12=&AssetDefinitionId(def)`, Kotodama, དེ་ལས་ `SCALL 0x24`, དེ་ལས་ `SCALL 0x24`, དེ་ལས་ `SCALL 0x24`,
 
-## NFT Create + Transfer
+## NFT གསར་བསྐྲུན་ + སྤོ་བཤུད།
 
-Source: `examples/nft/nft.ko`
+ཡོང་ཁུངས།： `examples/nft/nft.ko`
 
 ```
 seiyaku NftDemo {
@@ -79,16 +80,16 @@ seiyaku NftDemo {
 }
 ```
 
-Mapping (pointer‑ABI):
+ས་ཁྲ་ (pointer‑ABI):
 - `nft_mint_asset(id, owner)` → `r10=&NftId`, `r11=&AccountId(owner)`, `SCALL 0x25`
-- `nft_transfer_asset(from, id, to)` → `r10=&AccountId(from)`, `r11=&NftId`, `r12=&AccountId(to)`, `SCALL 0x26`
+- `nft_transfer_asset(from, id, to)` → `r10=&AccountId(from)`, Kotodama, Kotodama, Norito, Kotodama,
 
-## Pointer Norito Helpers
+## ས་ཚིགས་ Norito རོགས་སྐྱོར།
 
-Pointer-valued durable state requires converting typed TLVs to and from the
-`NoritoBytes` envelope that hosts persist. Kotodama now wires these helpers
-directly through the compiler so builders can use pointer defaults and map
-lookups without manual FFI glue:
+དཔག་བྱེད་-གནས་གོང་ཐུབ་པའི་གནས་ལུགས་འདི་གིས་ ཡིག་དཔར་རྐྱབས་ཡོད་པའི་ཊི་ཨེལ་ཝི་ཚུ་ དང་ལས་ གཞི་བསྒྱུར་འབད་དགོཔ་ཨིན།
+`NoritoBytes` ཧོསིཊི་ཚུ་ རྟག་བརྟན་བཟོ་མི་ ཡིག་ཤུབས་ཁ་ཕྱེ་ཡོདཔ། Kotodama ད་ལྟ་རོགས་སྐྱོར་འདི་དག་ལ་གློག་ཐག་གཏོང་བ།
+ཐད་ཀར་དུ་ བསྡུ་སྒྲིག་འབད་མི་བརྒྱུད་དེ་ བཟོ་བསྐྲུན་པ་ཚུ་གིས་ དཔག་བྱེད་སྔོན་སྒྲིག་དང་ སབ་ཁྲ་ཚུ་ལག་ལེན་འཐབ་ཚུགས།
+ལག་དེབ་མེད་པའི་ FFI འབྱར་རྫས་མེད་པའི་བལྟ་སྟངས།
 
 ```
 seiyaku PointerDemo {
@@ -107,21 +108,21 @@ seiyaku PointerDemo {
 }
 ```
 
-Lowering:
+དམའ་བ།
 
-- Pointer defaults emit `POINTER_TO_NORITO` after publishing the typed TLV, so
-  the host receives a canonical `NoritoBytes` payload for storage.
-- Reads perform the reverse operation with `POINTER_FROM_NORITO`, supplying the
-  expected pointer type id in `r11`.
-- Both paths automatically publish literal TLVs into the INPUT region, allowing
-  contracts to mix string literals and runtime pointers transparently.
+- ས་ཚིགས་སྔོན་སྒྲིག་ཚུ་གིས་ Kotodama འདི་ཡིག་དཔར་རྐྱབས་ཞིནམ་ལས་ ཡིག་དཔར་རྐྱབས་ཡོད་པའི་ཊི་ཨེལ་ཝི་དཔར་བསྐྲུན་འབད་བའི་ཤུལ་ལས་ བཏོན་གཏང་།
+  ཧོསིཊི་གིས་ གསོག་འཇོག་གི་དོན་ལུ་ ཀེ་ནོ་ནིག་ `NoritoBytes` པེ་ལོཌི་ཐོབ་ཨིན།
+- ལྷག་མི་ཚུ་གིས་ `POINTER_FROM_NORITO` དང་གཅིག་ཁར་ ལོག་སྤྱོད་འབད་ཞིནམ་ལས་ བཀྲམ་སྤེལ་འབད་ཡོདཔ་ཨིན།
+  Kotodama ནང་ རེ་བ་སྐྱེད་པའི་ དཔག་བྱེད་ id .
+- འགྲུལ་ལམ་གཉིས་ཆ་རང་ རང་བཞིན་གྱིས་ ཊི་ཨེལ་ཝི་ཚུ་ ཨའི་ཨེན་པི་ཡུ་ཊི་ ལུང་ཕྱོགས་ནང་ དཔར་བསྐྲུན་འབད་དེ་ འབད་བཅུགཔ་ཨིན།
+  ཡིག་རྒྱུན་ཡིག་འབྲུ་ཚུ་དང་ རན་ཊའིམ་དཔག་ཚད་ཚུ་ དྭངས་གསལ་སྦེ་ སླ་བསྲེ་རྐྱབ་ནི་ལུ་ གན་རྒྱ་བཟོཝ་ཨིན།
 
-See `crates/ivm/tests/kotodama_pointer_args.rs` for a runtime regression that
-exercises the round-trip against the `MockWorldStateView`.
+རན་ཊའིམ་རི་གེ་རེ་ཤཱན་གྱི་དོན་ལུ་ `ADDI` ལུ་བལྟ།
+སྦྱོང་བརྡར་ཚུ་ `MockWorldStateView` ལུ་འགོག་པའི་སྐོར་རིམ་ཅིག་ཨིན།
 
-## Deterministic Map Iteration (design)
+## གཏན་འབེབས་སབ་ཁྲ་བསྐྱར་ཟློས་ (བཟོ་བཀོད།)
 
-Deterministic map for‑each requires a bound. Multi-entry iteration requires a state map; the compiler accepts `.take(n)` or a declared maximum length.
+རེ་རེ་བཞིན་གྱི་ གཏན་འབེབས་སབ་ཁྲ་ལུ་ མཐའ་མཚམས་དགོཔ་ཨིན། སྣ་མང་ཐོ་བཀོད་ལུ་ མངའ་སྡེའི་སབ་ཁྲ་དགོཔ་ཨིན། བསྡུ་སྒྲིག་འབད་མི་འདི་གིས་ `.take(n)` དང་ ཡང་ན་ གསལ་བསྒྲགས་འབད་ཡོད་པའི་རིང་ཚད་མཐོ་ཤོས་ཅིག་ ངོས་ལེན་འབདཝ་ཨིན།
 
 ```
 // design example (iteration requires bounds and state storage)
@@ -136,21 +137,21 @@ fn sum_first_two() -> int {
 }
 ```
 
-Semantics:
-- Iteration set is a snapshot at loop entry; order is lexicographic by Norito bytes of the key.
-- Structural mutations to `M` in the loop trap with `E_ITER_MUTATION`.
-- Without a bound the compiler emits `E_UNBOUNDED_ITERATION`.
+ཡིག་བརྡ།
+- བསྐྱར་ལོག་ཆ་ཚན་འདི་ བསྐྱར་ལོག་ཐོ་བཀོད་ནང་ པར་ཆས་ཨིན། གོ་རིམ་འདི་ ལྡེ་མིག་གི་ Norito བཱའིཊི་གིས་ ཚིག་མཛོད་ཨིན།
+- `M` ལུ་ བཀོད་རིས་འགྱུར་བཅོས་འདི་ `E_ITER_MUTATION` དང་ཅིག་ཁར་ ལུབ་ཀྱི་ལྕགས་ཐག་ནང་།
+- མ་བསྡམས་མི་གིས་ བསྡུ་སྒྲིག་འབད་མི་འདི་གིས་ `E_UNBOUNDED_ITERATION` བཏོནམ་ཨིན།
 
-## Compiler/host internals (Rust, not Kotodama source)
+## བསྡུ་སྒྲིག་འབད་མི་/ཧོསིཊི་ནང་ཁུངས།
 
-The snippets below live on the Rust side of the toolchain. They illustrate compiler helpers and VM lowering mechanics and are **not** valid Kotodama `.ko` source.
+འོག་ལུ་ཡོད་པའི་ བརྡ་རྟགས་ཚུ་ ལག་ཆས་གཙོ་བོ་གི་ རཱསི་ཕྱོགས་ལུ་ སྡོདཔ་ཨིན། དེ་ཚུ་གིས་ བསྡུ་སྒྲིག་འབད་མི་གྲོགས་རམ་པ་དང་ ཝི་ཨེམ་གྱི་འཕྲུལ་རིག་ཚུ་མར་ཕབ་འབད་མི་ པར་རིས་ཚུ་ པར་རིས་བཀོད་ཡོདཔ་དང་ **not** ནུས་ཅན་ Kotodama `.ko` འབྱུང་ཁུངས་ཨིན།
 
-## Wide Opcode Chunked Frame Updates
+## རྒྱ་ཚད་ཀྱི་ཨོ་པི་ཀོཌ་ ཆུང་བའི་གཞི་ཁྲམ་དུས་མཐུན།
 
-Kotodama’s wide opcode helpers target the 8-bit operand layout used by the IVM
-wide encoding. Loads and stores that move 128-bit values reuse the third operand
-slot for the high register, so the base register must already hold the final
-address. Adjust the base with an `ADDI` before issuing the load/store:
+Kotodama གི་རྒྱ་ཆེ་བའི་ཨོ་པི་ཀོཌི་གྲོགས་རམ་པ་ཚུ་ IVM གིས་ལག་ལེན་འཐབ་མི་ 8-bit operand བཀོད་སྒྲིག་འདི་དམིགས་གཏད་བསྐྱེདཔ་ཨིན།
+རྒྱ་ཆེ་བའི་ཨེན་ཀོ་ཌིང་། ༡༢༨-བིཊི་གནས་གོང་ཚུ་སྤོ་བཤུད་འབད་མི་ མངོན་གསལ་དང་གསོག་འཇོག་ཚུ་ བཀོལ་སྤྱོད་གསུམ་པ་དེ་ ལོག་ལག་ལེན་འཐབ།
+ཐོ་བཀོད་མཐོ་བའི་དོན་ལུ་ བཤུད་བརྙན་འབདཝ་ལས་ གཞི་རྟེན་ཐོ་བཀོད་འདི་གིས་ ཧེ་མ་ལས་རང་ མཐའ་མཇུག་འདི་ བཟུང་དགོ།
+ཁ༌འབྱང། མངོན་གསལ་/ཚོང་ཁང་འདི་མ་བྱིན་པའི་ཧེ་མ་ `ADDI` དང་གཅིག་ཁར་གཞི་རྟེན་འདི་བདེ་སྒྲིག་འབད།
 
 ```
 use ivm::kotodama::wide::{encode_addi_checked, encode_load128, encode_store128};
@@ -160,40 +161,38 @@ fn emit_store_pair(base: u8, lo: u8, hi: u8) -> [u32; 2] {
     let store = encode_store128(base, lo, hi);
     [adjust, store]
 }
-```
+```ཆ་སྒྲིག་འབད་ཡོད་པའི་གཞི་ཁྲམ་དུས་མཐུན་ཚུ་གིས་ གཞི་རྟེན་འདི་ བཱའིཊི་༡༦ གི་རིམ་པ་ནང་ གོང་འཕེལ་བཏང་སྟེ་ ཐོ་བཀོད་འབད་ནི་ལུ་ ངེས་གཏན་བཟོ་ཡི།
+ཆ་གཅིག་ `STORE128` གིས་ དགོས་མཁོའི་ ཕྲང་སྒྲིག་མཚམས་ཐིག་གུ་ ས་གཞི་ཚུ་ བཟོ་ཡོདཔ་ཨིན། དེ་བཟུམ་སྦེ་
+དཔེ་རིས་འདི་ `LOAD128` ལུ་འཇུག་སྤྱོད་འབདཝ་ཨིན། རེ་བ་ཡོད་པའི་ stride དང་མཉམ་དུ་ `ADDI` འདི་ ཧེ་མ་ལས་ ཧེ་མ་ལས་ བཏོནམ་ཨིན།
+མངོན་གསལ་རེ་རེ་གིས་ འགྲོ་ཡུལ་མཐོ་བའི་ཐོ་བཀོད་འདི་ ཨོ་པི་རན་ཌི་གསུམ་པ་ལུ་ མཐུད་དེ་བཞགཔ་ཨིན།
+ཝི་ཨེམ་དང་མཐུན་སྒྲིག་འབད་དེ་ `VMError::MisalignedAccess` དང་ཅིག་ཁར་ མགུ་ཐོམ་སི་སི་གི་ཁ་བྱང་ཚུ།
+སྤྱོད་ལམ་འདི་ `crates/ivm/tests/wide_memory128.rs` ནང་ལུ་ལག་ལེན་འཐབ་ཡོདཔ་ཨིན།
 
-Chunked frame updates advance the base in 16-byte steps, ensuring the register
-pair committed by `STORE128` lands on the required alignment boundary. The same
-pattern applies to `LOAD128`; issuing an `ADDI` with the desired stride before
-each load keeps the high destination register bound to the third operand slot.
-Misaligned addresses trap with `VMError::MisalignedAccess`, matching the VM
-behaviour exercised in `crates/ivm/tests/wide_memory128.rs`.
+འ་ནི་ ༡༢༨ བིཊ་གི་གྲོགས་རམ་པ་ཚུ་ བཏོན་ཚུགས་པའི་ ལས་རིམ་ཚུ་ ཝེག་ཊར་གྱི་ ལྕོགས་གྲུབ་ཁྱབ་བསྒྲགས་འབད་དགོ།
+Kotodama བསྡུ་སྒྲིག་འབད་མི་འདི་གིས་ `VECTOR` ཐབས་ལམ་འདི་ རང་བཞིན་གྱིས་ ལྕོགས་ཅན་བཟོཝ་ཨིན།
+`LOAD128`/`STORE128` དང་། the VM དང་མཉམ་དུ།
+`VMError::VectorExtensionDisabled` ལས་རིམ་ཅིག་གིས་ དེ་ཚུ་ལག་ལེན་འཐབ་ནི་གི་དཔའ་བཅམ་པ་ཅིན།
+བིཊི་ཆ་ཚན་མེད་པར་།
 
-Programs that emit these 128-bit helpers must advertise vector capability.
-The Kotodama compiler enables the `VECTOR` mode bit automatically whenever
-`LOAD128`/`STORE128` appear; the VM traps with
-`VMError::VectorExtensionDisabled` if a program attempts to execute them
-without that bit set.
+## རྒྱ་ཚད་གནས་སྟངས་ཀྱི་ཡན་ལག་མཐོ་བ།
 
-## Wide Conditional Branch Lowering
+Kotodama གིས་ `if`/`else` ཡང་ན་ བཱའིཊི་ཀོཌི་རྒྱ་ཆེཝ་སྦེ་ བཏོནམ་ཨིན།
+defy `BNE cond, zero, +2` རིམ་པ་དེ་གི་ཤུལ་ལས་ `JAL` གི་བཀོད་རྒྱ་ཆ་གཅིག་ཡོདཔ་ཨིན།
 
-When Kotodama lowers an `if`/`else` or ternary branch to wide bytecode it emits a
-fixed `BNE cond, zero, +2` sequence followed by a pair of `JAL` instructions:
+1. ཐུང་ངུ་ `BNE` གིས་ ༨-བིཊི་འཕྲལ་འཕྲལ་གྱི་ལམ་ཁར་ ཆ་རྐྱེན་ཅན་གྱི་ཡན་ལག་འདི་བཞགཔ་ཨིན།
+   མཆོང་ལྡིང་ཐོག་ལས་ `JAL`.
+2. `JAL` གིས་ Kotodama བཀག་ཆ་ལུ་དམིགས་གཏད་བསྐྱེདཔ་ཨིན།
+   རྫུས་མ)།
+3. `JAL` འདི་ `then` སྡེབ་ཚན་ལུ་མཆོང་ (གནས་སྟངས་དེ་ཡོད་པའི་སྐབས་ལེན་ཡོད།
+   ངོ་མ)།
 
-1. The short `BNE` keeps the conditional branch within the 8-bit immediate lane
-   by jumping over the fallthrough `JAL`.
-2. The first `JAL` targets the `else` block (executed when the condition is
-   false).
-3. The second `JAL` jumps to the `then` block (taken when the condition is
-   true).
+དཔེ་རིས་འདི་གིས་ གནས་སྟངས་ཞིབ་དཔྱད་འདི་ ནམ་ཡང་ ཨོཕ་སེཊི་སྦོམ་ཚུ་ ཨིན་ཀོཌི་དགོཔ་མི་དགོ།
+bay ±127 མིང་ཚིག་ཚུ་ ད་ལྟོ་ཡང་ `then` གི་དོན་ལུ་ གཟུགས་སྦོམ་ལུ་རྒྱབ་སྐྱོར་འབད་བའི་སྐབས་ཨིན།
+དང་ `else` རྒྱ་ཆེ་བའི་`JAL` རོགས་རམ་བརྒྱུད་དེ་བཀག་ཡོད། མཐོང
+`crates/ivm/tests/kotodama.rs::branch_lowering_uses_short_bne_and_dual_jal` 2022
+གོ་རིམ་ནང་བསྡམ་བཞག་མི་ འགྱུར་ལྡོག་བརྟག་དཔྱད།
 
-This pattern guarantees the condition check never needs to encode offsets larger
-than ±127 words while still supporting arbitrarily large bodies for the `then`
-and `else` blocks via the wide `JAL` helper. See
-`crates/ivm/tests/kotodama.rs::branch_lowering_uses_short_bne_and_dual_jal` for
-the regression test that locks in the sequence.
-
-### Example Lowering
+###དཔེར་བརྗོད།
 
 ```
 fn branch(b: bool) -> int {
@@ -201,8 +200,8 @@ fn branch(b: bool) -> int {
 }
 ```
 
-Compiles to the following wide instruction skeleton (register numbers and
-absolute offsets depend on the enclosing function):
+གཤམ་གསལ་གྱི་རྒྱ་ཆེ་བའི་བཀོད་རྒྱ་ཀེང་རུས་ལུ་བསྡུ་སྒྲིག་འབད། (ཐོ་བཀོད་ཨང་གྲངས་དང་ཨང་ཡིག་བཀོད་ནི།
+ཆ་ཚང་ཨོཕ་སེཊི་ཚུ་ ཨེན་ཀ་སི་ལས་འགན་ལུ་རག་ལསཔ་ཨིན།
 
 ```
 BNE cond_reg, x0, +2    # skip the fallthrough jump when the condition is true
@@ -210,6 +209,6 @@ JAL x0, else_offset     # execute when the condition is false
 JAL x0, then_offset     # execute when the condition is true
 ```
 
-Subsequent instructions materialise the constants and write the return value.
-Because the `BNE` jumps over the first `JAL`, the conditional offset is always
-`+2` words, keeping the branch within range even when the block bodies expand.
+ཤུལ་མམ་གྱི་བཀོད་རྒྱ་ཚུ་གིས་ རྟག་བརྟན་ཚུ་ དངོས་གྲུབ་འབད་དེ་ ལོག་གནས་གོང་འདི་བྲིས།
+ག་ཅི་འབད་ཟེར་བ་ཅིན་ `BNE` འདི་ `JAL` དང་པ་གུ་ལས་ མཆོངས་འགྱོཝ་ལས་ གནས་སྟངས་ཀྱི་ཨོཕ་སེཊི་འདི་ ཨ་རྟག་ར་ཨིན།
+`+2` ཚིག་ཚུ་ བཀག་ཆ་གཟུགས་ཚུ་རྒྱ་སྐྱེད་འགྱོ་བའི་སྐབས་ལུ་ཡང་ ཡན་ལག་འདི་ ཁྱབ་ཚད་ནང་འཁོད་ལུ་བཞག་དགོ།

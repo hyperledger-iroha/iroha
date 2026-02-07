@@ -7,217 +7,197 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 7c8262bacbb15b83bd70c824990e4948832418b59f184bca353eee899e44f4d4
 source_last_modified: "2025-12-29T18:16:35.960562+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Fraud Monitoring System
+# 欺詐監控系統
 
-This document captures the reference design for the shared fraud monitoring capability that will accompany the core ledger. The goal is to provide payment service providers (PSPs) with high-quality risk signals for every transaction while keeping custody, privacy, and policy decisions under the control of designated operators outside the settlement engine.
+本文檔介紹了核心賬本所附帶的共享欺詐監控功能的參考設計。目標是為支付服務提供商（PSP）的每筆交易提供高質量的風險信號，同時將託管、隱私和政策決策保持在結算引擎之外的指定運營商的控制之下。
 
-## Goals and Success Criteria
-- Deliver real-time fraud risk assessments (<120 ms 95p, <40 ms median) for every payment touching the settlement engine.
-- Preserve user privacy by ensuring the central service never processes personally identifiable information (PII) and only ingests pseudonymous identifiers and behavioral telemetry.
-- Support multi-PSP environments where each provider keeps operational autonomy but can query shared intelligence.
-- Adapt continuously to new attack patterns via supervised and unsupervised models without introducing non-deterministic ledger behavior.
-- Provide auditable decision traces for regulators and independent reviewers without exposing sensitive wallets or counterparties.
+## 目標和成功標準
+- 為涉及結算引擎的每筆付款提供實時欺詐風險評估（<120 毫秒 95p，<40 毫秒中位數）。
+- 通過確保中央服務永遠不會處理個人身份信息 (PII) 並且僅獲取假名標識符和行為遙測來保護用戶隱私。
+- 支持多 PSP 環境，其中每個提供商保持運營自主權，但可以查詢共享情報。
+- 通過監督和無監督模型不斷適應新的攻擊模式，而不引入非確定性賬本行為。
+- 為監管機構和獨立審查者提供可審計的決策跟踪，而不會暴露敏感的錢包或交易對手。
 
-## Scope
-- **In-scope:** Transaction risk scoring, behavioral analytics, cross-PSP correlation, anomaly alerting, governance hooks, and PSP integration APIs.
-- **Out-of-scope:** Direct enforcement (remain PSP responsibility), sanctions screening (handled by existing compliance pipelines), and identity proofing (alias management covers this).
+## 範圍
+- **範圍內：** 交易風險評分、行為分析、跨 PSP 關聯、異常警報、治理掛鉤和 PSP 集成 API。
+- **超出範圍：** 直接執行（仍由 PSP 負責）、制裁篩選（由現有合規管道處理）和身份證明（別名管理涵蓋此內容）。
 
-## Functional Requirements
-1. **Transaction Scoring API**: Synchronous API that PSPs call before forwarding a payment to the settlement engine, returning a risk score, categorical verdict, and reasoning features.
-2. **Event Ingestion**: Stream of settlement outcomes, wallet lifecycle events, device fingerprints, and PSP-level fraud feedback for continuous learning.
-3. **Model Lifecycle Management**: Versioned models with offline training, shadow deployment, staged rollout, and rollback support. Deterministic fallback heuristic must exist for every feature.
-4. **Feedback Loop**: PSPs must be able to submit confirmed fraud cases, false positives, and remediation notes. System aligns feedback with risk features and updates analytics.
-5. **Privacy Controls**: All data stored and transmitted must be alias-based. Any request containing raw identity metadata is rejected and logged.
-6. **Governance Reporting**: Scheduled exports of aggregated metrics (detections per PSP, typologies, response latency) plus ad-hoc investigation APIs for authorized auditors.
-7. **Resilience**: Active-active deployment across at least two facilities with automatic queue draining and replay. If the service is degraded, PSPs fall back to local rules without blocking the ledger.
+## 功能要求
+1. **交易評分 API**：PSP 在將付款轉發到結算引擎之前調用的同步 API，返回風險評分、分類判決和推理功能。
+2. **事件攝取**：結算結果流、錢包生命週期事件、設備指紋和 PSP 級欺詐反饋，用於持續學習。
+3. **模型生命週期管理**：具有離線訓練、影子部署、分階段部署和回滾支持的版本化模型。每個功能都必須存在確定性回退啟發式。
+4. **反饋循環**：PSP 必須能夠提交已確認的欺詐案例、誤報和補救說明。系統將反饋與風險特徵結合起來並更新分析。
+5. **隱私控制**：所有存儲和傳輸的數據都必須基於別名。任何包含原始身份元數據的請求都會被拒絕並記錄。
+6. **治理報告**：按計劃導出聚合指標（每個 PSP 的檢測、類型、響應延遲）以及授權審計員的臨時調查 API。
+7. **彈性**：跨至少兩個設施的主動-主動部署，具有自動隊列排出和重播功能。如果服務降級，PSP 會退回到本地規則，而不會阻塞賬本。## 非功能性需求
+- **確定性和一致性**：風險評分指導 PSP 決策，但不會改變賬本執行。賬本提交在節點之間保持確定性。
+- **可擴展性**：通過水平擴展和由偽錢包標識符鍵入的消息分區，維持每秒 ≥10k 次風險評估。
+- **可觀察性**：公開每個評分調用的指標（`fraud.scoring_latency_ms`、`fraud.risk_score_distribution`、`fraud.api_error_rate`、`fraud.model_version_active`）和結構化日誌。
+- **安全**：PSP 和中央服務之間的相互 TLS、用於簽署響應信封的硬件安全模塊、防篡改審計跟踪。
+- **合規性**：符合 AML/CFT 要求，提供可配置的保留期限，並與證據保存工作流程集成。
 
-## Non-Functional Requirements
-- **Determinism & Consistency**: Risk scores guide PSP decisions but do not mutate ledger execution. Ledger commits remain deterministic across nodes.
-- **Scalability**: Sustain ≥10k risk evaluations per second with horizontal scaling and message partitioning keyed by pseudo-wallet identifiers.
-- **Observability**: Expose metrics (`fraud.scoring_latency_ms`, `fraud.risk_score_distribution`, `fraud.api_error_rate`, `fraud.model_version_active`) and structured logs for each scoring call.
-- **Security**: Mutual TLS between PSPs and the central service, hardware security modules for signing response envelopes, tamper-evident audit trails.
-- **Compliance**: Align with AML/CFT requirements, provide configurable retention periods, and integrate with evidence preservation workflows.
+## 架構概述
+1. **API網關層**
+  - 通過經過身份驗證的 HTTP/JSON API 接收評分和反饋請求。
+   - 使用 Norito 編解碼器執行架構驗證並強制每個 PSP id 的速率限制。
 
-## Architecture Overview
-1. **API Gateway Layer**
-  - Receives scoring and feedback requests over authenticated HTTP/JSON APIs.
-   - Performs schema validation using Norito codecs and enforces rate limits per PSP id.
+2. **特徵聚合服務**
+   - 將傳入請求與存儲在時間序列特徵存儲中的歷史聚合（速度、地理空間模式、設備使用情況）結合起來。
+   - 使用確定性聚合函數支持可配置的功能窗口（分鐘、小時、天）。
 
-2. **Feature Aggregation Service**
-   - Joins incoming requests with historical aggregates (velocity, geospatial patterns, device usage) stored in a time-series feature store.
-   - Supports configurable feature windows (minutes, hours, days) using deterministic aggregation functions.
+3. **風險引擎**
+   - 執行活動模型管道（梯度增強樹、異常檢測器、規則的集合）。
+   - 包括確定性後備規則集，以保證模型分數不可用時的有限響應。
+   - 發出 `FraudAssessment` 信封，其中包含樂譜、頻段、貢獻功能和模型版本。## 評分模型和啟發式
+- **評分範圍和範圍**：風險評分標準化為 0–1,000。頻段定義為：`0–249`（低）、`250–549`（中）、`550–749`（高）、`750+`（嚴重）。頻段映射到 PSP 的建議操作（自動批准、升級、排隊等待審核、自動拒絕），但執行仍然是 PSP 特定的。
+- **模型合奏**：
+  - 梯度增強決策樹攝取結構化特徵，例如金額、別名/設備速度、商家類別、身份驗證強度、PSP 信任層和跨錢包圖形特徵。
+  - 基於自動編碼器的異常檢測器在時間窗口行為向量上運行（每個別名的花費節奏、設備切換、時間熵）。分數根據最近的 PSP 活動進行校準，以限制漂移。
+  - 確定性策略規則首先執行；它們的輸出作為二進制/連續特徵提供給統計模型，以便集成可以學習交互。
+- **回退啟發式**：當模型執行失敗時，確定性層仍然通過聚合規則懲罰來產生有界分數。每條規則都會貢獻一個可配置的權重，然後將其相加並限制在 0-1,000 範圍內，從而保證最壞情況下的延遲和可解釋性。
+- **延遲預算**：對於 API 網關 + 驗證，評分管道目標 <20 毫秒；對於功能聚合，評分 <30 毫秒（從具有後寫功能的內存緩存提供到持久存儲）；對於集成評估，評分 <40 毫秒。如果 ML 推理超出其預算，確定性回退將在 <10 毫秒內返回，確保總體 P95 保持在 120 毫秒以下。
+ - **延遲預算**：對於 API 網關 + 驗證，評分管道目標 <20 毫秒；對於功能聚合，評分 <30 毫秒（從具有後寫功能的內存緩存提供到持久存儲）；對於集成評估，評分 <40 毫秒。如果 ML 推理超出其預算，確定性回退將在 <10 毫秒內返回，確保總體 P95 保持在 120 毫秒以下。## 內存中功能緩存設計
+- **分片佈局**：特徵存儲通過 64 位別名哈希分片為 `N = 256` 分片。每個分片擁有：
+  - 用於最近事務增量（5 分鐘 + 1 小時窗口）的無鎖環形緩衝區，存儲為數組結構，以最大化緩存行局部性。
+  - 壓縮的 Fenwick 樹（位封裝的 16 位存儲桶）可維持 24 小時/7 天的聚合，無需完全重新計算。
+  - 映射交易對手→滾動統計數據（計數、總和、方差、最後時間戳）的跳跳哈希圖，每個別名上限為 1,024 個條目。
+- **內存駐留**：熱分片保留在 RAM 中。對於過去一小時內活躍度為 1% 的 50 M 別名 Universe，緩存駐留約為 500k 個別名。活動元數據的每個別名約為 320 B，工作集約為 160 MB — 對於現代服務器上的 L3 緩存來說足夠小。
+- **並發性**：讀者通過基於紀元的回收借用不可變的引用；編寫者使用比較和交換附加增量並更新聚合。這可以避免互斥鎖爭用，並保持兩個原子操作+有界指針追逐的熱路徑。
+- **預取**：一旦請求驗證完成，評分工作人員就會為下一個別名分片發出手動 `prefetch_read` 提示，從而將主內存延遲（~80 ns）隱藏在功能聚合後面。
+- **後寫日誌**：每個分片的 WAL 每 50 毫秒（或 4 KB）批量處理增量並刷新到持久存儲。檢查點每 5 分鐘運行一次，以保持恢復邊界嚴格。
 
-3. **Risk Engine**
-   - Executes the active model pipeline (ensemble of gradient boosted trees, anomaly detectors, rules).
-   - Includes a deterministic fallback rule-set to guarantee bounded responses when model scores are unavailable.
-   - Emits `FraudAssessment` envelopes with score, band, contributing features, and model version.
+### 理論延遲分解（Intel Ice Lake 級服務器，3.1 GHz）
+- **分片查找 + 預取**：1 次緩存未命中（~80 ns）加上哈希計算（<10 ns）。
+- **環形緩衝區迭代（32 個條目）**：32 × 2 負載 = 64 負載；使用 32 B 高速緩存行和順序訪問，這停留在 L1 → ~20 ns。
+- **Fenwick 更新（log2 2048 ≈ 11 步）**：11 次指針跳躍；假設一半 L1、一半 L2 命中 → ~30 ns。
+- **Hop-scotch 映射探針（負載因子 0.75，2 個探針）**：2 個緩存行，~2 × 15 ns。
+- **模型特徵組裝**：150 個標量運算（每個<0.1 ns）→ ~15 ns。將這些相加得出每個請求約 160 ns 的計算時間和約 120 ns 的內存停頓（約 0.28 µs）。每個核心有四個並發聚合工作線程，即使在突發負載下，該階段也可以輕鬆滿足 30 毫秒的預算；實際部署應記錄直方圖以進行驗證（通過 `fraud.feature_cache_lookup_ms`）。
+- **功能窗口和聚合**：
+  - 短期（滾動 5 分鐘、1 小時）和長期（24 小時、7 天）窗口跟踪支出速度、設備重用和別名圖度。
+  - 圖形功能（例如，跨別名共享設備、突然扇出、高風險集群中的新交易對手）依賴於定期壓縮的摘要，因此查詢保持在亞毫秒級。
+  - 位置啟發法將粗略的 geobuckets 與歷史行為進行比較，使用基於上限的半正矢風險增量來標記不太可能的跳躍（例如，幾分鐘內的多個遙遠位置）。
+  - 流形檢測器維護入站/出站金額和交易對手的滾動直方圖，以發現混合/翻滾特徵（快速扇入，隨後類似的扇出、循環跳躍序列、短命中介）。
+- **規則目錄（非詳盡）**：
+  - **速度違規**：一系列快速高價值傳輸超過每個別名或每個設備的閾值。
+  - **別名圖異常**：別名與鏈接到已確認的欺詐案例或已知騾子模式的集群進行交互。
+  - **設備重用**：在屬於不同 PSP 用戶群體的別名之間共享設備指紋，無需事先鏈接。
+  - **首次高價值**：新的別名嘗試金額高於 PSP 的典型入門通道。
+  - **身份驗證降級**：交易使用比帳戶基線更弱的因素（例如，從生物識別回退到 PIN），而沒有 PSP 聲明的理由。
+  - **混合/翻滾模式**：Alias 參與高扇入/扇出鏈，具有緊密耦合的時序、重複往返量或短窗口內跨多個別名的循環流。規則使用圖中心性尖峰和流形檢測器來提高分數；嚴重的情況甚至在 ML 輸出之前就箝位到 `high` 頻帶。
+  - **交易黑名單命中**：別名或交易對手出現在通過鏈上治理投票或具有 `sudo` 控制的授權機構（例如監管命令、已確認的欺詐）管理的共享黑名單源上。分數箝位到 `critical` 頻段並發出 `BLACKLIST_MATCH` 原因代碼； PSP 必須記錄覆蓋情況以供審核。
+  - **沙盒簽名不匹配**：PSP 提交使用過時的模型簽名生成的評估；分數升級到 `critical` 並審核掛鉤觸發器。
+- **原因代碼**：每個評估都包含按貢獻權重排名的機器可讀原因代碼（例如，`VELOCITY_BREACH`、`NEW_DEVICE`、`GRAPH_HIGH_RISK`、`AUTH_DOWNGRADE`）。 PSP 可以將這些信息呈現給運營商或錢包以供用戶消息傳遞。- **模型治理**：校準和閾值設置遵循記錄的劇本——每季度審查一次 ROC/PR 曲線，針對標記的欺詐進行回溯測試，挑戰者模型在陰影中運行直至穩定。任何閾值更新都需要雙重批准（欺詐操作+獨立風險）。
 
-## Scoring Models and Heuristics
-- **Score Scale & Bands**: Risk scores are normalized to 0–1,000. Bands are defined as: `0–249` (low), `250–549` (medium), `550–749` (high), `750+` (critical). Bands map to recommended actions for PSPs (auto-approve, step-up, queue-for-review, auto-decline) but enforcement remains PSP-specific.
-- **Model Ensemble**:
-  - Gradient-boosted decision trees ingest structured features such as amount, alias/device velocity, merchant category, authentication strength, PSP trust tier, and cross-wallet graph features.
-  - An autoencoder-based anomaly detector runs on time-windowed behavioural vectors (per-alias spend cadence, device switching, temporal entropy). Scores are calibrated against recent PSP activity to limit drift.
-  - Deterministic policy rules execute first; their outputs feed the statistical models as binary/continuous features so the ensemble can learn interactions.
-- **Fallback Heuristics**: When model execution fails, the deterministic layer still produces a bounded score by aggregating rule penalties. Each rule contributes a configurable weight, summed then clamped to the 0–1,000 scale, guaranteeing worst-case latency and explainability.
-- **Latency Budgeting**: Scoring pipeline targets <20 ms for API gateway + validation, <30 ms for feature aggregation (served from in-memory caches with write-behind to persistent stores), and <40 ms for ensemble evaluation. Deterministic fallback returns within <10 ms if ML inference exceeds its budget, ensuring overall P95 stays under 120 ms.
- - **Latency Budgeting**: Scoring pipeline targets <20 ms for API gateway + validation, <30 ms for feature aggregation (served from in-memory caches with write-behind to persistent stores), and <40 ms for ensemble evaluation. Deterministic fallback returns within <10 ms if ML inference exceeds its budget, ensuring overall P95 stays under 120 ms.
+## 源自治理的黑名單流程
+- **鏈上創作**：黑名單條目通過治理子系統 (`iroha_core::smartcontracts::isi::governance`) 作為 `BlacklistProposal` ISI 引入，列出要阻止的別名、PSP ID 或設備指紋。利益相關者使用標準投票渠道進行投票；一旦達到法定人數，該鏈就會發出一條 `GovernanceEvent::BlacklistUpdated` 記錄，其中包含批准的添加/刪除以及單調遞增的 `blacklist_epoch`。
+- **委派 sudo 路徑**：可以通過 `sudo::Execute` 指令執行緊急操作，該指令發出相同的 `BlacklistUpdated` 事件，但將更改標記為 `origin = Sudo`。這反映了具有明確來源的鏈上歷史，因此審計員可以區分共識投票和委託干預。
+- **分發通道**：FMS 橋接服務訂閱 `LedgerEvent` 流（Norito 編碼）並監視 `BlacklistUpdated` 事件。每個事件都會根據治理 Merkle 證明進行驗證，並在應用之前使用區塊簽名進行驗證。事件是冪等的； FMS 維護最新的 `blacklist_epoch` 以避免重播。
+- **FMS 內的應用程序**：接受更新後，條目將寫入確定性規則存儲（由帶有審核日誌的僅附加存儲支持）。評分引擎會在 30 秒內熱重載黑名單，確保後續評估觸發 `BLACKLIST_MATCH` 規則並鎖定 `critical`。
+- **審核和回滾**：治理可以通過同一管道投票刪除條目。 FMS 保留由 `blacklist_epoch` 標記的歷史快照，以便操作員可以在調查期間回答取證問題或重播過去的決策。
 
-## In-Memory Feature Cache Design
-- **Shard Layout**: Feature stores are sharded by 64-bit alias hash into `N = 256` shards. Each shard owns:
-  - A lock-free ring buffer for recent transaction deltas (5 min + 1 hr windows) stored as struct-of-arrays to maximise cache-line locality.
-  - A compressed Fenwick tree (bit-packed 16-bit buckets) to maintain 24 hr / 7 day aggregates without full recomputation.
-  - A hop-scotch hash map mapping counterparties → rolling stats (count, sum, variance, last timestamp) capped at 1,024 entries per alias.
-- **Memory Residency**: Hot shards stay in RAM. For a 50 M alias universe with 1% active in the last hour, cache residency is ~500k aliases. At ~320 B per alias of active metadata, the working set is ~160 MB—small enough for L3 cache on modern servers.
-- **Concurrency**: Readers borrow immutable references via epoch-based reclamation; writers append deltas and update aggregates using compare-and-swap. This avoids mutex contention and keeps hot paths to two atomic ops + bounded pointer chasing.
-- **Prefetching**: The scoring worker issues manual `prefetch_read` hints for the next alias shard once request validation completes, hiding main-memory latency (~80 ns) behind feature aggregation.
-- **Write-behind Log**: A per-shard WAL batches deltas every 50 ms (or 4 KB) and flushes to the durable store. Checkpoints run every 5 minutes to keep recovery bounds tight.
+4. **學習和分析平台**
+   - 通過僅附加分類賬（例如 Kafka + 對象存儲）接收已確認的欺詐事件、結算結果和 PSP 反饋。
+   - 為數據科學家提供離線筆記本/作業來重新訓練模型。模型工件在升級之前會進行版本控制和簽名。
 
-### Theoretical Latency Breakdown (Intel Ice Lake-class server, 3.1 GHz)
-- **Shard lookup + prefetch**: 1 cache miss (~80 ns) plus hash calculation (<10 ns).
-- **Ring buffer iteration (32 entries)**: 32 × 2 loads = 64 loads; with 32 B cache lines and sequential access this stays in L1 → ~20 ns.
-- **Fenwick updates (log₂ 2048 ≈ 11 steps)**: 11 pointer hops; assuming half L1, half L2 hits → ~30 ns.
-- **Hop-scotch map probe (load factor 0.75, 2 probes)**: 2 cache lines, ~2 × 15 ns.
-- **Model feature assembly**: 150 scalar ops (<0.1 ns each) → ~15 ns.
+5. **治理門戶**
+   - 審核員審查趨勢、搜索歷史評估和導出事件報告的受限界面。
+   - 實施政策檢查，以便調查人員在沒有 PSP 合作的情況下無法深入了解 PII。
 
-Summing these gives ~160 ns of compute and ~120 ns of memory stalls per request (~0.28 µs). With four concurrent aggregation workers per core, the stage easily meets the 30 ms budget even under burst load; actual deployment should record histograms to validate (via `fraud.feature_cache_lookup_ms`).
-- **Feature Windows & Aggregation**:
-  - Short-term (rolling 5 min, 1 hr) and long-term (24 hr, 7 day) windows track spend velocity, device reuse, and alias graph degrees.
-  - Graph features (e.g., shared devices across aliases, sudden fan-out, new counterparties in high-risk clusters) rely on regularly compacted summaries so queries stay sub-millisecond.
-  - Location heuristics compare coarse geobuckets with historical behaviour, flagging improbable jumps (e.g., multiple distant locations within minutes) using a capped Haversine-based risk increment.
-  - Flow-shape detectors maintain rolling histograms of inbound/outbound amounts and counterparties to spot mixing/tumbling signatures (rapid fan-in followed by similar fan-out, cyclical hop sequences, short-lived intermediaries).
-- **Rule Catalogue (non-exhaustive)**:
-  - **Velocity breach**: Rapid series of high-value transfers exceeding per-alias or per-device thresholds.
-  - **Alias graph anomaly**: Alias interacts with a cluster linked to confirmed fraud cases or known mule patterns.
-  - **Device reuse**: Shared device fingerprint across aliases belonging to different PSP user cohorts without prior linkage.
-  - **First-time high-value**: New alias attempting amounts above the PSP’s typical onboarding corridor.
-  - **Authentication downgrade**: Transaction uses weaker factors than the account’s baseline (e.g., fallback from biometric to PIN) without PSP-declared justification.
-  - **Mixing/tumbling pattern**: Alias participates in high fan-in/fan-out chains with tightly coupled timing, repeating round-trip amounts, or circular flows across multiple aliases within short windows. Rule boosts score using graph centrality spikes and flow-shape detectors; severe cases clamp to the `high` band even before ML output.
-  - **Transaction blacklist hit**: Alias or counterparty appears on the shared blacklist feed curated via on-chain governance voting or a delegated authority with `sudo` controls (e.g., regulatory orders, confirmed fraud). Score clamps to the `critical` band and emits `BLACKLIST_MATCH` reason code; PSPs must log overrides for audit.
-  - **Sandbox signature mismatch**: PSP submits an assessment generated with an outdated model signature; score escalates to `critical` and audit hook triggers.
-- **Reason Codes**: Every assessment includes machine-readable reason codes ranked by contribution weight (e.g., `VELOCITY_BREACH`, `NEW_DEVICE`, `GRAPH_HIGH_RISK`, `AUTH_DOWNGRADE`). PSPs can surface these to operators or wallets for user messaging.
-- **Model Governance**: Calibration and threshold setting follow documented playbooks—ROC/PR curves reviewed quarterly, back-testing against labelled fraud, and challenger models run in shadow until stable. Any threshold update requires dual approval (fraud operations + independent risk).
+6. **集成適配器**
+   - 用於 PSP（Rust、Kotlin、Swift、TypeScript）的輕量級 SDK，實現 Norito 請求/響應和本地緩存。
+   - 結算引擎掛鉤（在 `iroha_core` 內），用於在 PSP 轉發交易後檢查時記錄風險評估參考。## 數據流
+1. PSP 向 API 網關進行身份驗證並提交包含以下內容的 `RiskQuery`：
+   - 付款人/收款人的別名標識符、散列設備 ID、交易金額、類別、地理位置粗桶、PSP 置信標誌和最近的會話元數據。
+2. 網關驗證有效負載，豐富 PSP 元數據（許可證層、SLA）和功能聚合隊列。
+3. 特征服務拉取最新聚合，構建模型向量，並將其發送到風險引擎。
+4. 風險引擎評估請求，附加確定性原因代碼，簽署 `FraudAssessment`，並將其返回給 PSP。
+5. PSP 將評估與其本地政策相結合，以批准、拒絕或加強對交易的驗證。
+6. 結果（批准/拒絕、欺詐確認/誤報）異步推送到學習平台以進行持續改進。
+7. 每日批處理匯總治理報告的指標，並將政策警報（例如，不斷增加的社會工程案例）推送到 PSP 儀表板。
 
-## Governance-Sourced Blacklist Flow
-- **On-chain authoring**: Blacklist entries are introduced through the governance subsystem (`iroha_core::smartcontracts::isi::governance`) as a `BlacklistProposal` ISI that lists aliases, PSP ids, or device fingerprints to block. Stakeholders vote using the standard ballot pipeline; once quorum is met, the chain emits a `GovernanceEvent::BlacklistUpdated` record carrying the approved additions/removals plus a monotonically increasing `blacklist_epoch`.
-- **Delegated sudo path**: Emergency actions can be executed via the `sudo::Execute` instruction, which emits the same `BlacklistUpdated` event but flags the change as `origin = Sudo`. This mirrors on-chain history with explicit provenance so auditors can distinguish consensus votes from delegated interventions.
-- **Distribution channel**: The FMS bridge service subscribes to the `LedgerEvent` stream (Norito-encoded) and watches for `BlacklistUpdated` events. Each event is validated against the governance Merkle proof and verified with the block signature before being applied. Events are idempotent; the FMS maintains the latest `blacklist_epoch` to avoid replays.
-- **Application inside FMS**: Once an update is accepted, the entries are written to the deterministic rule store (backed by append-only storage with audit logs). The scoring engine hot-reloads the blacklist within 30 seconds, ensuring subsequent assessments trigger the `BLACKLIST_MATCH` rule and clamp to `critical`.
-- **Audit & rollback**: Governance can vote to remove entries via the same pipeline. The FMS keeps historical snapshots tagged by `blacklist_epoch` so operators can answer forensic questions or replay past decisions during investigations.
+## 與 Iroha 組件集成
+- **核心主機掛鉤**：每當設置 `fraud_monitoring.enabled` 和 `required_minimum_band` 時，事務准入現在都會強制執行 `fraud_assessment_band` 元數據。主機拒絕缺少該字段或攜帶低於配置最小值的頻帶的事務，並在 `missing_assessment_grace_secs` 非零時發出確定性警告（一旦遠程驗證器連接，寬限期將在里程碑 FM-204 中刪除）。評估還必須包括 `fraud_assessment_score_bps`；主持人根據宣布的等級交叉檢查分數（0–249➜低，250–549➜中，550–749➜高，750+➜嚴重，基點值支持最高10000）。配置 `fraud_monitoring.attesters` 時，事務必須附加 Norito 編碼的 `fraud_assessment_envelope` (base64) 和匹配的 `fraud_assessment_digest` (十六進制)。該守護進程確定性地解碼信封，根據證明者註冊表驗證 Ed25519 簽名，重新計算未簽名有效負載的摘要，並拒絕不匹配，因此只有經過證明的評估才能達成共識。
+- **配置**：在 `iroha_config::fraud_monitoring` 下添加風險服務端點、超時和所需評估範圍的配置條目。默認禁用本地開發的強制執行。|關鍵|類型 |默認|筆記|
+  | ---| ---| ---| ---|
+  | `enabled` |布爾 | `false` |准入檢查總開關；如果沒有 `required_minimum_band`，主機會記錄警告並跳過強制執行。 |
+  | `service_endpoints` |數組 | `[]` |欺詐服務基本 URL 的有序列表。確定性地刪除重複項；為即將到來的驗證者保留。 |
+  | `connect_timeout_ms` |持續時間| `500` |連接嘗試中止之前的毫秒數；零值折回到默認值。 |
+  | `request_timeout_ms` |持續時間| `1500` |等待風險服務響應的毫秒數。 |
+  | `missing_assessment_grace_secs` |持續時間| `0` |允許缺失評估的寬限期；非零值會觸發記錄並允許事務的確定性回退。 |
+  | `required_minimum_band` |枚舉（`low`、`medium`、`high`、`critical`）| `null` |設置後，交易必須附加等於或高於此嚴重性範圍的評估；較低的值被拒絕。設置為 `null` 以禁用門控，即使 `enabled` 為 true 也是如此。 |
+  | `attesters` |數組  | `[]` |可選的證明引擎註冊。填充後，信封必須由列出的密鑰之一簽名並包含匹配的摘要。 |
 
-4. **Learning & Analytics Platform**
-   - Receives confirmed fraud events, settlement outcomes, and PSP feedback via an append-only ledger (e.g., Kafka + object storage).
-   - Provides offline notebooks/jobs for data scientists to retrain models. Model artifacts are versioned and signed before promotion.
+- **驗證**：`crates/iroha_core/tests/fraud_monitoring.rs` 中的單元測試涵蓋禁用、缺失和不足的帶路徑； `integration_tests::fraud_monitoring_requires_assessment_bands` 端到端地練習模擬評估流程。
 
-5. **Governance Portal**
-   - Restricted interface for auditors to review trends, search historical assessments, and export incident reports.
-   - Implements policy checks so investigators cannot drill down to PII without PSP cooperation.
+- **遙測**：`iroha_telemetry` 導出面向 PSP 的收集器，捕獲評估計數 (`fraud_psp_assessments_total{tenant,band,lane,subnet}`)、缺失元數據 (`fraud_psp_missing_assessment_total{tenant,lane,subnet,cause}`)、延遲直方圖 (`fraud_psp_latency_ms{tenant,lane,subnet}`)、分數分佈 (`fraud_psp_score_bps{tenant,band,lane,subnet}`)、無效負載(`fraud_psp_invalid_metadata_total{tenant,field,lane,subnet}`)、證明結果 (`fraud_psp_attestation_total{tenant,engine,lane,subnet,status}`) 和結果不匹配 (`fraud_psp_outcome_mismatch_total{tenant,direction,lane,subnet}`)。每筆交易預期的元數據鍵為 `fraud_assessment_band`、`fraud_assessment_tenant`、`fraud_assessment_score_bps`、`fraud_assessment_latency_ms`、證明者信封/摘要對（`fraud_assessment_envelope`、`fraud_assessment_digest`）以及事件後`fraud_assessment_disposition` 標誌（值：`approved`、`declined`、`manual_review`、`confirmed_fraud`、`false_positive`、`chargeback`、`loss`）。
+- **Norito 架構**：為 `RiskQuery`、`FraudAssessment` 和治理報告定義 Norito 類型。提供往返測試以保證編解碼器的穩定性。
 
-6. **Integration Adapters**
-   - Lightweight SDKs for PSPs (Rust, Kotlin, Swift, TypeScript) implementing the Norito requests/responses and local caching.
-   - Settlement engine hook (within `iroha_core`) that records risk assessment references when PSPs forward transactions post-check.
+## 隱私和數據最小化
+- 別名、散列設備 ID 和粗略地理定位桶構成與中央服務共享的整個數據平面。
+- PSP 保留從別名到真實身份的映射；沒有這樣的映射離開它們的邊界。
+- 風險模型僅對假名行為信號以及 PSP 提交的上下文（商戶類別、渠道、身份驗證強度）進行操作。
+- 審核導出已匯總（例如，每天每個 PSP 的計數）。任何深入研究都需要雙重控制和 PSP 端去匿名化。## 操作與部署
+- 將評分平台部署為由不同於中央銀行節點運營商的指定運營商管理的專用子系統。
+- 提供藍/綠環境：`fraud-scoring-prod`、`fraud-scoring-shadow`、`fraud-lab`。
+- 實施自動運行狀況檢查（API 延遲、消息積壓、模型加載成功）。如果運行狀況檢查失敗，PSP SDK 會自動切換到僅限本地模式並通知操作員。
+- 維護保留桶：熱存儲（特徵存儲中 30 天）、溫存儲（對象存儲中 1 年）、冷歸檔（壓縮 5 年）。
 
-## Data Flow
-1. PSP authenticates to the API gateway and submits a `RiskQuery` containing:
-   - Alias identifiers for payer/payee, hashed device id, transaction amount, category, geolocation coarse bucket, PSP confidence flags, and recent session metadata.
-2. Gateway validates payload, enriches with PSP metadata (licence tier, SLA) and queues for feature aggregation.
-3. Feature service pulls the latest aggregates, constructs the model vector, and sends it to the risk engine.
-4. Risk engine evaluates the request, attaches deterministic reason codes, signs the `FraudAssessment`, and returns it to the PSP.
-5. PSP combines the assessment with its local policies to approve, decline, or step-up authenticate the transaction.
-6. Outcome (approved/declined, fraud confirmed/false positive) is pushed asynchronously to the learning platform for continuous improvement.
-7. Daily batch processes roll up metrics for governance reporting and push policy alerts (e.g., rising social-engineering cases) to PSP dashboards.
+## 遙測收集器和儀表板
 
-## Integration with Iroha Components
-- **Core Host Hooks**: Transaction admission now enforces the `fraud_assessment_band` metadata whenever `fraud_monitoring.enabled` and `required_minimum_band` are set. The host rejects transactions missing the field or carrying a band below the configured minimum, and emits a deterministic warning when `missing_assessment_grace_secs` is non-zero (grace window scheduled for removal in milestone FM-204 once the remote verifier is wired). Assessments must also include `fraud_assessment_score_bps`; the host cross-checks the score against the declared band (0–249 ➜ low, 250–549 ➜ medium, 550–749 ➜ high, 750+ ➜ critical, with basis-point values supported up to 10 000). When `fraud_monitoring.attesters` is configured, transactions must attach a Norito-encoded `fraud_assessment_envelope` (base64) and a matching `fraud_assessment_digest` (hex). The daemon deterministically decodes the envelope, verifies the Ed25519 signature against the attester registry, recomputes the digest over the unsigned payload, and rejects mismatches so only attested assessments reach consensus.
-- **Configuration**: Add configuration entries under `iroha_config::fraud_monitoring` for the risk service endpoints, timeouts, and required assessment bands. Defaults disable enforcement for local development.
+### 所需的收集器
 
-  | Key | Type | Default | Notes |
-  | --- | --- | --- | --- |
-  | `enabled` | bool | `false` | Master switch for admission checks; without `required_minimum_band` the host logs a warning and skips enforcement. |
-  | `service_endpoints` | array<URL> | `[]` | Ordered list of fraud service base URLs. Duplicates are removed deterministically; reserved for the upcoming verifier. |
-  | `connect_timeout_ms` | duration | `500` | Milliseconds before connection attempts abort; zero values fold back to the default. |
-  | `request_timeout_ms` | duration | `1500` | Milliseconds to await a response from the risk service. |
-  | `missing_assessment_grace_secs` | duration | `0` | Grace window allowing missing assessments; non-zero values trigger a deterministic fallback that logs and allows the transaction. |
-  | `required_minimum_band` | enum (`low`, `medium`, `high`, `critical`) | `null` | When set, transactions must attach an assessment at or above this severity band; lower values are rejected. Set to `null` to disable gating even if `enabled` is true. |
-  | `attesters` | array<{ engine_id, public_key }> | `[]` | Optional registry of attestation engines. When populated, envelopes must be signed by one of the listed keys and include a matching digest. |
+- **Prometheus scrape**：在運行 PSP 集成配置文件的每個驗證器上啟用 `/metrics`，以便導出 `fraud_psp_*` 系列。默認標籤包括佔位符 `subnet="global"` 和 `lane` ID，因此儀表板可以在多子網路由發布後進行旋轉。
+- **評估總數**：`fraud_psp_assessments_total{tenant,band}` 對每個嚴重級別接受的評估進行計數；如果租戶停止報告 5 分鐘，則會觸發警報。
+- **缺少元數據**：`fraud_psp_missing_assessment_total{tenant,cause}` 將硬拒絕 (`cause="missing"`) 與寬限窗口津貼 (`cause="grace"`) 區分開來。控制重複落入寬限桶的交易。
+- **延遲直方圖**：`fraud_psp_latency_ms_bucket` 跟踪 PSP 報告的評分延遲。目標 20%，則升級。
+- **無效元數據**：`fraud_psp_invalid_metadata_total{field}` 標記 PSP 有效負載回歸（例如，缺少租戶 ID、格式錯誤的配置），以便可以快速推出 SDK 更新。
+- **證明狀態**：`fraud_psp_attestation_total{tenant,engine,status}` 確認信封正在簽名並且摘要匹配。如果任何租戶或引擎的 `status!="verified"` 出現峰值，則發出警報。
 
-- **Validation**: Unit tests in `crates/iroha_core/tests/fraud_monitoring.rs` cover disabled, missing, and insufficient-band paths; `integration_tests::fraud_monitoring_requires_assessment_bands` exercises the mocked-assessment flow end-to-end.
+### 儀表板覆蓋範圍
 
-- **Telemetry**: `iroha_telemetry` exports PSP-facing collectors capturing assessment counts (`fraud_psp_assessments_total{tenant,band,lane,subnet}`), missing metadata (`fraud_psp_missing_assessment_total{tenant,lane,subnet,cause}`), latency histograms (`fraud_psp_latency_ms{tenant,lane,subnet}`), score distributions (`fraud_psp_score_bps{tenant,band,lane,subnet}`), invalid payloads (`fraud_psp_invalid_metadata_total{tenant,field,lane,subnet}`), attestation outcomes (`fraud_psp_attestation_total{tenant,engine,lane,subnet,status}`), and outcome mismatches (`fraud_psp_outcome_mismatch_total{tenant,direction,lane,subnet}`). Metadata keys expected on every transaction are `fraud_assessment_band`, `fraud_assessment_tenant`, `fraud_assessment_score_bps`, `fraud_assessment_latency_ms`, the attester envelope/digest pair (`fraud_assessment_envelope`, `fraud_assessment_digest`), and the post-incident `fraud_assessment_disposition` flag (values: `approved`, `declined`, `manual_review`, `confirmed_fraud`, `false_positive`, `chargeback`, `loss`).
-- **Norito Schema**: Define Norito types for `RiskQuery`, `FraudAssessment`, and governance reports. Provide roundtrip tests to guarantee codec stability.
+- **執行概述**：按每個租戶的頻段劃分的 `fraud_psp_assessments_total` 堆積面積圖，以及總結 P95 延遲和不匹配計數的表格。
+- **操作**：`fraud_psp_latency_ms` 和 `fraud_psp_score_bps` 的直方圖面板以及每週比較，以及 `fraud_psp_missing_assessment_total` 按 `cause` 分割的單統計計數器。
+- **風險監控**：每個租戶的 `fraud_psp_outcome_mismatch_total` 條形圖，列出最近的 `fraud_assessment_disposition=confirmed_fraud` 案例的深入表格，其中 `band` 是 `low` 或 `medium`。
+- **警報規則**：
+  - `rate(fraud_psp_missing_assessment_total{cause="missing"}[5m]) > 0` → 尋呼警報（拒絕 PSP 流量的准入）。
+  - `histogram_quantile(0.95, sum(rate(fraud_psp_latency_ms_bucket[10m])) by (le,tenant)) > 150` → 延遲 SLO 違規。
+  - `sum by (tenant) (rate(fraud_psp_outcome_mismatch_total{direction="missed_fraud"}[1h])) > 0.01` → 模型漂移/政策差距。
 
-## Privacy & Data Minimization
-- Aliases, hashed device IDs, and coarse geolocation buckets form the entire data plane shared with the central service.
-- PSPs retain mapping from aliases to real identities; no such mapping leaves their perimeter.
-- Risk models operate only on pseudonymous behavioral signals plus PSP-submitted context (merchant category, channel, authentication strength).
-- Audit exports are aggregated (e.g., counts per PSP per day). Any drill-down requires dual control and PSP-side de-anonymization.
+### 故障轉移期望- PSP SDK 必須維護兩個活動評分端點，並在檢測到傳輸錯誤或延遲峰值 >200 毫秒後 15 秒內進行故障轉移。賬本最多可容忍 `fraud_monitoring.missing_assessment_grace_secs` 的寬限流量；生產中操作員應將旋鈕保持在<=30秒。
+- 驗證者在回退時記錄 `fraud_psp_missing_assessment_total{cause="grace"}`；如果租戶寬限時間超過 5 分鐘，PSP 必須切換到手動審核，並與共享欺詐運營團隊一起發起 Sev2 事件。
+- 主動-主動部署必須在災難恢復演習期間展示隊列耗盡/重放。重播指標應使 `fraud_psp_latency_ms` P99 的重播窗口時間保持在 400 毫秒以下。
 
-## Operations & Deployment
-- Deploy the scoring platform as a dedicated subsystem managed by an appointed operator distinct from the central bank node operators.
-- Provide blue/green environments: `fraud-scoring-prod`, `fraud-scoring-shadow`, `fraud-lab`.
-- Implement automated health checks (API latency, message backlog, model load success). If health checks fail, PSP SDKs automatically switch to local-only mode and notify operators.
-- Maintain retention buckets: hot storage (30 days in feature store), warm storage (1 year in object storage), cold archive (5 years compressed).
+## PSP 數據共享清單
 
-## Telemetry Collectors & Dashboards
+1. **遙測管道**：公開上面列出的傳遞給分類賬的每筆交易的元數據密鑰；租戶標識符必須是假名的並且範圍僅限於 PSP 合同。
+2. **匿名化**：確認設備哈希、別名標識符和處置在離開 PSP 邊界之前已進行假名化； Norito 元數據中不能嵌入 PII。
+3. **延遲報告**：使用端到端時序（PSP 網關）填充 `fraud_assessment_latency_ms`，以便立即顯示 SLA 回歸。
+4. **結果調節**：一旦欺詐案件得到確認（例如，退款），請更新 `fraud_assessment_disposition`，以保持不匹配指標的準確性。
+5. **故障轉移演習**：使用共享清單每季度進行一次演練 - 驗證自動端點故障轉移，確保寬限窗口日誌記錄，並將演習註釋附加到 `scripts/ci/schedule_fraud_scoring.sh` 提交的後續任務中。
+6. **儀表板驗證**：PSP 運營團隊必須在入職後和每次紅隊練習後檢查 Prometheus 儀表板，以確認指標符合預期的租戶標籤。
 
-### Required collectors
+## 安全考慮
+- 所有響應均使用硬件支持的密鑰進行簽名； PSP 在信任分數之前驗證簽名。
+- 通過別名/設備進行速率限制，以減輕旨在學習模型邊界的探測攻擊。
+- 在評估中嵌入水印，以追踪洩露的響應，而無需公開洩露 PSP 身份。
+- 與安全工作組（里程碑 0）協調進行季度紅隊演習，並將調查結果反饋到路線圖更新中。## 實施階段
+1. **階段 0 – 基礎**
+   - 最終確定 Norito 架構、PSP SDK 腳手架、配置接線和賬本端驗證存根。
+   - 構建涵蓋強制性風險檢查的確定性規則引擎（速度、每個別名對的速度、設備重用）。
+2. **第 1 階段 – 中心得分 MVP**
+   - 部署特徵存儲、評分服務和遙測儀表板。
+   - 將實時評分與有限的 PSP 隊列相結合；捕獲延遲和質量指標。
+3. **第 2 階段 – 高級分析**
+   - 引入異常檢測、基於圖形的鏈接分析和自適應閾值。
+   - 啟動治理門戶和批量報告管道。
+4. **第 3 階段 – 持續學習和自動化**
+   - 自動化模型訓練/驗證管道、添加金絲雀部署並擴展 SDK 覆蓋範圍。
+   - 與跨轄區數據共享協議保持一致，並插入未來的多子網橋。
 
-- **Prometheus scrape**: enable `/metrics` on every validator running the PSP integration profile so `fraud_psp_*` series are exported. Default labels include placeholder `subnet="global"` and `lane` IDs so dashboards can pivot once multi-subnet routing ships.
-- **Assessment totals**: `fraud_psp_assessments_total{tenant,band}` counts accepted assessments per severity band; alerts fire if a tenant stops reporting for 5 minutes.
-- **Missing metadata**: `fraud_psp_missing_assessment_total{tenant,cause}` distinguishes hard rejections (`cause="missing"`) from grace-window allowances (`cause="grace"`). Gate transactions that repeatedly fall into the grace bucket.
-- **Latency histogram**: `fraud_psp_latency_ms_bucket` traces PSP-reported scoring latency. Target <120 ms P95 with alerts at 150 ms.
-- **Score distribution**: `fraud_psp_score_bps_bucket{band}` snapshots risk-score drift; wire percentiles to the governance dashboard.
-- **Outcome mismatches**: `fraud_psp_outcome_mismatch_total{direction}` splits false positives (`direction="false_positive"`) from missed fraud (`"missed_fraud"`). Escalate if either direction deviates >20% from trailing 30-day mean.
-- **Invalid metadata**: `fraud_psp_invalid_metadata_total{field}` flags PSP payload regressions (e.g., missing tenant IDs, malformed dispositions) so SDK updates can be rolled out quickly.
-- **Attestation status**: `fraud_psp_attestation_total{tenant,engine,status}` confirms that envelopes are being signed and digests match. Alert if `status!="verified"` spikes for any tenant or engine.
-
-### Dashboard coverage
-
-- **Executive overview**: stacked area chart of `fraud_psp_assessments_total` by band per tenant, coupled with a table summarising P95 latency and mismatch counts.
-- **Operations**: histogram panels for `fraud_psp_latency_ms` and `fraud_psp_score_bps` with week-over-week comparison, plus single-stat counters for `fraud_psp_missing_assessment_total` split by `cause`.
-- **Risk monitoring**: bar chart of `fraud_psp_outcome_mismatch_total` per tenant, drill-down table listing recent `fraud_assessment_disposition=confirmed_fraud` cases where `band` was `low` or `medium`.
-- **Alert rules**:
-  - `rate(fraud_psp_missing_assessment_total{cause="missing"}[5m]) > 0` → paging alert (admission rejecting PSP traffic).
-  - `histogram_quantile(0.95, sum(rate(fraud_psp_latency_ms_bucket[10m])) by (le,tenant)) > 150` → latency SLO breach.
-  - `sum by (tenant) (rate(fraud_psp_outcome_mismatch_total{direction="missed_fraud"}[1h])) > 0.01` → model drift / policy gap.
-
-### Failover expectations
-
-- PSP SDKs must maintain two active scoring endpoints and fail over within 15 seconds of detecting transport errors or latency spikes >200 ms. The ledger tolerates grace traffic for at most `fraud_monitoring.missing_assessment_grace_secs`; operators should keep the knob at <=30 seconds in production.
-- Validators record `fraud_psp_missing_assessment_total{cause="grace"}` while in fallback; if a tenant stays in grace for >5 minutes, the PSP must switch to manual review and open a Sev2 incident with the shared fraud operations team.
-- Active-active deployments must demonstrate queue drain/replay during disaster recovery drills. Replay metrics should keep `fraud_psp_latency_ms` P99 under 400 ms for the replay window.
-
-## PSP Data-Sharing Checklist
-
-1. **Telemetry plumbing**: expose the metadata keys listed above for every transaction handed to the ledger; tenant identifiers must be pseudonymous and scoped to the PSP contract.
-2. **Anonymisation**: confirm that device hashes, alias identifiers, and dispositions are pseudonymised before leaving the PSP perimeter; no PII can be embedded in Norito metadata.
-3. **Latency reporting**: populate `fraud_assessment_latency_ms` with end-to-end timing (gateway to PSP) so SLA regressions surface immediately.
-4. **Outcome reconciliation**: update `fraud_assessment_disposition` once fraud cases are confirmed (e.g., chargeback posted) to keep mismatch metrics accurate.
-5. **Failover drills**: rehearse quarterly using the shared checklist—verify automatic endpoint failover, ensure grace-window logging, and attach drill notes to the follow-up task filed by `scripts/ci/schedule_fraud_scoring.sh`.
-6. **Dashboard validation**: PSP operations teams must review Prometheus dashboards after onboarding and after every red-team exercise to confirm metrics are flowing with expected tenant labels.
-
-## Security Considerations
-- All responses are signed with hardware-backed keys; PSPs validate signatures before trusting scores.
-- Rate-limit by alias/device to mitigate probing attacks aiming to learn model boundaries.
-- Embed watermarking inside assessments to trace leaked responses without revealing PSP identity publicly.
-- Run quarterly red-team exercises in coordination with the Security WG (Milestone 0) and feed findings into roadmap updates.
-
-## Implementation Phases
-1. **Phase 0 – Foundations**
-   - Finalize Norito schemas, PSP SDK scaffolding, configuration wiring, and ledger-side verification stub.
-   - Build deterministic rule engine covering mandatory risk checks (velocity, velocity per alias pair, device reuse).
-2. **Phase 1 – Central Scoring MVP**
-   - Deploy feature store, scoring service, and telemetry dashboards.
-   - Integrate real-time scoring with a limited PSP cohort; capture latency and quality metrics.
-3. **Phase 2 – Advanced Analytics**
-   - Introduce anomaly detection, graph-based link analysis, and adaptive thresholds.
-   - Launch governance portal and batch reporting pipelines.
-4. **Phase 3 – Continuous Learning & Automation**
-   - Automate model training/validation pipelines, add canary deployments, and expand SDK coverage.
-   - Align with cross-jurisdiction data-sharing agreements and plug into future multi-subnet bridges.
-
-## Open Questions
-- What regulatory body will charter the operator of the fraud service, and how are oversight responsibilities shared?
-- How do PSPs expose end-user challenge flows while maintaining consistent UX across providers?
-- Which privacy-enhancing technologies (e.g., secure enclaves, homomorphic aggregation) should be prioritized once baseline service is stable?
+## 開放問題
+- 哪個監管機構將為欺詐服務運營商頒發特許，以及如何分擔監督責任？
+- PSP 如何暴露最終用戶挑戰流程，同時保持跨提供商的一致用戶體驗？
+- 一旦基線服務穩定，應優先考慮哪些隱私增強技術（例如安全飛地、同態聚合）？

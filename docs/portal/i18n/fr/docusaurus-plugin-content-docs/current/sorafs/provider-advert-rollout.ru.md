@@ -4,135 +4,133 @@ direction: ltr
 source: docs/portal/docs/sorafs/provider-advert-rollout.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: "План rollout и совместимости advert провайдеров SoraFS"
+title: "Déploiement du plan et fournisseurs d'annonces pertinents SoraFS"
 ---
 
-> Адаптировано из [`docs/source/sorafs/provider_advert_rollout.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/provider_advert_rollout.md).
+> Adapté à [`docs/source/sorafs/provider_advert_rollout.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/provider_advert_rollout.md).
 
-# План rollout и совместимости advert провайдеров SoraFS
+# Plan de déploiement et d'annonces publicitaires SoraFS
 
-Этот план координирует переход от permissive advert провайдеров к полностью
-управляемой поверхности `ProviderAdvertV1`, необходимой для multi-source выдачи
-chunks. Он фокусируется на трех deliverables:
+Ce plan prévoit la mise en place de publicités permissives en vue de la réussite
+Prise en charge `ProviderAdvertV1`, idéale pour les appareils multi-sources
+morceaux. Nous nous concentrons sur les trois livrables :
 
 - **Руководство оператора.** Пошаговые действия, которые провайдеры хранения должны
-  выполнить до включения каждого gate.
-- **Покрытие телеметрией.** Дашборды и alerts, которые Observability и Ops используют,
-  чтобы подтвердить, что сеть принимает только совместимые adverts.
-  SDK и tooling могли планировать релизы.
+  выполнить до включения каждого portail.
+- **Покрытие телеметрией.** Дашbordы и alerts, которые Observability и Ops используют,
+  que vous puissiez publier, que vous définissez uniquement les publicités les plus pertinentes.
+  Le SDK et les outils peuvent planifier les versions.
 
-Rollout согласован с вехами SF-2b/2c в
-[roadmap миграции SoraFS](./migration-roadmap) и предполагает, что policy допуска в
-[provider admission policy](./provider-admission-policy) уже действует.
+Déploiement du système avec les véhicules SF-2b/2c
+[Feuille de route pour les migrations SoraFS](./migration-roadmap) et avant l'arrivée de la stratégie
+[Politique d'admission du fournisseur](./provider-admission-policy) уже действует.
 
 ## Таймлайн фаз
 
-| Фаза | Окно (цель) | Поведение | Действия операторов | Фокус наблюдаемости |
+| Faza | Окно (цель) | Поведение | Opérateurs de réception | Focus sur les démos |
 |-------|-----------------|-----------|------------------|-------------------|
 
-## Чеклист оператора
+## Opérateur de contrôle
 
-1. **Инвентаризировать adverts.** Перечислите каждый опубликованный advert и зафиксируйте:
-   - Путь к governing envelope (`defaults/nexus/sorafs_admission/...` или production-эквивалент).
-   - `profile_id` и `profile_aliases` advert.
-   - Список capabilities (ожидается как минимум `torii_gateway` и `chunk_range_fetch`).
-   - Флаг `allow_unknown_capabilities` (обязателен при наличии vendor-reserved TLV).
-2. **Регенерация через provider tooling.**
-   - Пересоберите payload через publisher advert, убедившись в:
-     - `profile_id=sorafs.sf1@1.0.0`
-     - `capability=chunk_range_fetch` с определенным `max_span`
-     - `allow_unknown_capabilities=<true|false>` при наличии GREASE TLV
-   - Проверьте через `/v1/sorafs/providers` и `sorafs_fetch`; предупреждения о
-     неизвестных capabilities нужно триажить.
-3. **Проверка multi-source readiness.**
-   - Выполните `sorafs_fetch` с `--provider-advert=<path>`; CLI теперь падает,
-     когда отсутствует `chunk_range_fetch`, и печатает предупреждения о
-     проигнорированных неизвестных capabilities. Зафиксируйте JSON-отчет и
-     архивируйте его с operations logs.
-4. **Подготовка продлений.**
-   - Отправьте `ProviderAdmissionRenewalV1` envelopes минимум за 30 дней до
-     gateway enforcement (R2). Продления должны сохранять канонический handle и
-     набор capabilities; менять следует только stake, endpoints или metadata.
+1. **Inventaire des annonces.** Ouvrir l'annonce publique et insérer :
+   - Путь к enveloppe de gouvernance (`defaults/nexus/sorafs_admission/...` ou production-эквивалент).
+   - `profile_id` et `profile_aliases` publicité.
+   - Capacités de pointe (elles correspondent au minimum `torii_gateway` et `chunk_range_fetch`).
+   - Indicateur `allow_unknown_capabilities` (identifié par le TLV réservé par le fournisseur).
+2. **Gestion des outils du fournisseur.**
+   - Пересоберите payload через éditeur annonce, убедившись в:
+     -`profile_id=sorafs.sf1@1.0.0`
+     - `capability=chunk_range_fetch` avec `max_span`
+     - `allow_unknown_capabilities=<true|false>` pour la graisse TLV
+   - Vérifiez que `/v1/sorafs/providers` et `sorafs_fetch` ; avant-première
+     Les capacités les plus récentes doivent être triées.
+3. **Préparation multi-sources.**
+   - Выполните `sorafs_fetch` avec `--provider-advert=<path>` ; CLI теперь падает,
+     Je vais résoudre le problème `chunk_range_fetch` et je préviens
+     проигнорированных неизвестных capacités. Supprimer le fichier JSON et
+     ARCHивируйте его с opérations journaux.
+4. **Projet de commande.**
+   - Enveloppes `ProviderAdmissionRenewalV1` minimum de 30 jours
+     application de la passerelle (R2). Produire une poignée canonique et
+     capacités набор; Il s'agit uniquement de enjeux, de points de terminaison ou de métadonnées.
 5. **Коммуникация с зависимыми командами.**
-   - Владельцы SDK должны выпускать версии, которые показывают warnings операторам
-     при отклонении adverts.
-   - DevRel анонсирует каждую фазу; включайте ссылки на dashboards и логику
+   - Les versions SDK doivent être téléchargées pour afficher les avertissements de l'opérateur.
+     при отклонении annonces.
+   - DevRel annonce chaque épisode ; включайте ссылки на tableaux de bord et logique
      порогов ниже.
-6. **Установка dashboards и alerts.**
-   - Импортируйте Grafana export и разместите его в **SoraFS / Provider
-     Rollout** с UID `sorafs-provider-admission`.
-   - Убедитесь, что alert rules направлены в общий канал
-     `sorafs-advert-rollout` в staging и production.
+6. **Tableaux de bord et alertes supplémentaires.**
+   - Importez Grafana et exportez-le vers **SoraFS / Provider
+     Déploiement** avec UID `sorafs-provider-admission`.
+   - Убедитесь, что règles d'alerte направлены в общий canal
+     `sorafs-advert-rollout` dans la mise en scène et la production.
 
-## Телеметрия и дашборды
+## Télémétrie et frontières
 
-Следующие метрики уже доступны через `iroha_telemetry`:
-
-- `torii_sorafs_admission_total{result,reason}` — счетчики принятия, отклонения
-  и warnings. Причины включают `missing_envelope`, `unknown_capability`, `stale` и
+Les mesures suivantes sont disponibles à partir de `iroha_telemetry` :- `torii_sorafs_admission_total{result,reason}` — Prises de courant, ouverture
+  и avertissements. Les prix incluent `missing_envelope`, `unknown_capability`, `stale` et
   `policy_violation`.
 
-Grafana export: [`docs/source/grafana_sorafs_admission.json`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/grafana_sorafs_admission.json).
-Импортируйте файл в общий репозиторий дашбордов (`observability/dashboards`) и
-обновите только UID datasource перед публикацией.
+Exportation Grafana : [`docs/source/grafana_sorafs_admission.json`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/grafana_sorafs_admission.json).
+Importez le fichier dans votre dépôt d'entreprise (`observability/dashboards`) et
+Vérifiez uniquement la source de données UID avant la publication.
 
-Дашборд публикуется в папке Grafana **SoraFS / Provider Rollout** с
-стабильным UID `sorafs-provider-admission`. Alert rules
-`sorafs-admission-warn` (warning) и `sorafs-admission-reject` (critical)
-преднастроены на policy уведомлений `sorafs-advert-rollout`; меняйте контактный
-пункт при изменении списка получателей вместо правки JSON дашборда.
+Le tableau de bord est publié dans le paquet Grafana **SoraFS / Déploiement du fournisseur** avec
+UID stable `sorafs-provider-admission`. Règles d'alerte
+`sorafs-admission-warn` (avertissement) et `sorafs-admission-reject` (critique)
+преднастроены на politique уведомлений `sorafs-advert-rollout` ; меняйте контактный
+Il s'agit d'une étape importante pour les utilisateurs utilisant les paramètres JSON du bord.
 
-Рекомендуемые панели Grafana:
+Panneaux recommandés Grafana :
 
-| Panel | Query | Notes |
+| Panneau | Requête | Remarques |
 |-------|-------|-------|
-| **Admission outcome rate** | `sum by(result)(rate(torii_sorafs_admission_total[5m]))` | Stack chart для визуализации accept vs warn vs reject. Alert при warn > 0.05 * total (warning) или reject > 0 (critical). |
-| **Warning ratio** | `sum(rate(torii_sorafs_admission_total{result="warn"}[5m])) / sum(rate(torii_sorafs_admission_total[5m]))` | Однолинейная timeseries, питающая порог pager (5% warning rate в скользящем 15-минутном окне). |
-| **Rejection reasons** | `sum by(reason)(rate(torii_sorafs_admission_total{result="reject"}[5m]))` | Для triage в runbook; прикрепляйте ссылки на шаги mitigation. |
-| **Refresh debt** | `sum(rate(torii_sorafs_admission_total{reason="stale"}[1h]))` | Указывает на providers, пропустивших refresh deadline; сверяйте с логами discovery cache. |
+| **Taux de résultats d'admission** | `sum by(result)(rate(torii_sorafs_admission_total[5m]))` | Graphique de pile pour la visualisation accepter vs avertir vs rejeter. Alerte par avertissement > 0,05 * total (avertissement) ou rejet > 0 (critique). |
+| **Taux d'avertissement** | `sum(rate(torii_sorafs_admission_total{result="warn"}[5m])) / sum(rate(torii_sorafs_admission_total[5m]))` | Série temporelle complète, un téléavertisseur (taux d'avertissement de 5 % par semaine de 15 minutes). |
+| **Motifs de refus** | `sum by(reason)(rate(torii_sorafs_admission_total{result="reject"}[5m]))` | Pour le tri dans le runbook ; прикрепляйте ссылки на шаги atténuation. |
+| **Rafraîchir la dette** | `sum(rate(torii_sorafs_admission_total{reason="stale"}[1h]))` | Указывает на fournisseurs, пропустивших date limite d'actualisation ; сверяйте с логами cache de découverte. |
 
-CLI артефакты для ручных дашбордов:
+Artefacts CLI pour les vols à bord :
 
-- `sorafs_fetch --provider-metrics-out` пишет счетчики `failures`, `successes` и
-  `disabled` по каждому provider. Импортируйте в ad-hoc dashboards, чтобы
-  мониторить dry-run orchestrator перед переключением production providers.
-- Поля `chunk_retry_rate` и `provider_failure_rate` в JSON-отчете
-  подсвечивают throttling или симптомы stale payloads, которые часто предшествуют
+- `sorafs_fetch --provider-metrics-out` pour les fiches `failures`, `successes` et
+  `disabled` par le fournisseur de téléphone. Importer des tableaux de bord ad hoc, par exemple
+  surveiller l'orchestrateur à sec avant de sélectionner les fournisseurs de production.
+- Pour `chunk_retry_rate` et `provider_failure_rate` dans l'option JSON
+  Il est possible de limiter la limitation ou de signaler des charges utiles obsolètes, ce qui signifie que
   отклонениям admission.
 
-### Раскладка Grafana дашборда
+### Porte-clés Grafana
 
-Observability публикует отдельный board — **SoraFS Provider Admission
-Rollout** (`sorafs-provider-admission`) — в **SoraFS / Provider Rollout**
-со следующими каноническими panel IDs:
+Tableau d'observabilité publié — ** Admission du fournisseur SoraFS
+Déploiement** (`sorafs-provider-admission`) — **SoraFS / Déploiement du fournisseur**
+avec les identifiants de panneau canonique :
 
-- Panel 1 — *Admission outcome rate* (stacked area, единица "ops/min").
-- Panel 2 — *Warning ratio* (single series), выражение
+- Panel 1 — *Taux de résultat d'admission* (zone empilée, единица "ops/min").
+- Panneau 2 — *Taux d'avertissement* (série unique), выражение
   `sum(rate(torii_sorafs_admission_total{result="warn"}[5m])) /
-   sum(rate(torii_sorafs_admission_total[5m]))`.
-- Panel 3 — *Rejection reasons* (time series, сгруппированные по `reason`), сортировка по
+   somme(taux(torii_sorafs_admission_total[5m]))`.
+- Panel 3 — *Motifs de rejet* (séries chronologiques, сгруппированные по `reason`), сортировка по
   `rate(...[5m])`.
-- Panel 4 — *Refresh debt* (stat), отражает запрос из таблицы выше и
-  аннотирован refresh deadline из migration ledger.
+- Panel 4 — *Actualiser la dette* (stat), отражает запрос из таблицы выше и
+  Annulation du délai d'actualisation du grand livre de migration.
 
-Скопируйте (или создайте) JSON skeleton в репозитории инфраструктурных дашбордов
-`observability/dashboards/sorafs_provider_admission.json`, затем обновите только
-UID datasource; panel IDs и alert rules используются в runbooks ниже, поэтому не
-перенумеровывайте их без обновления этой документации.
+Copier (ou télécharger) le squelette JSON dans les référentiels d'infrastructures des pays-bords
+`observability/dashboards/sorafs_provider_admission.json`, veuillez consulter ce dernier
+Source de données UID ; ID de panneau et règles d'alerte utilisés dans les runbooks ici, mais non
+Перенумеровывайте их без обновления этой документации.
 
-Для удобства репозиторий уже содержит reference dashboard definition в
-`docs/source/grafana_sorafs_admission.json`; скопируйте его в вашу Grafana папку,
-если нужен стартовый вариант для локального тестирования.
+Pour créer un référentiel, vous pouvez définir la définition du tableau de bord de référence dans
+`docs/source/grafana_sorafs_admission.json` ; скопируйте его в вашу Grafana папку,
+s'il n'y a pas de variante de démarrage pour le test local.
 
-### Правила алертов Prometheus
-
-Добавьте следующую группу правил в
-`observability/prometheus/sorafs_admission.rules.yml` (создайте файл, если это
-первая группа правил SoraFS) и подключите ее в конфигурации Prometheus.
-Замените `<pagerduty>` на реальный routing label для вашей on-call ротации.
+### Alertes envoyées PrometheusAjoutez le groupe en question à
+`observability/prometheus/sorafs_admission.rules.yml` (vous devez le faire, si c'est le cas)
+(Veuillez consulter le groupe SoraFS) et ajoutez-le à la configuration Prometheus.
+Indiquez `<pagerduty>` sur l'étiquette de routage réelle pour votre rotation d'astreinte.
 
 ```yaml
 groups:
@@ -165,44 +163,44 @@ groups:
             the refresh deadline elapses.
 ```
 
-Запустите `scripts/check_prometheus_rules.sh observability/prometheus/sorafs_admission.rules.yml`
-перед отправкой изменений, чтобы убедиться, что синтаксис проходит
+Postez `scripts/check_prometheus_rules.sh observability/prometheus/sorafs_admission.rules.yml`
+Avant l'ouverture, ce qui se passe, quelle syntaxe se produit
 `promtool check rules`.
 
-## Матрица совместимости
+## La matrice contemporaine
 
-| Характеристики advert | R0 | R1 | R2 | R3 |
+| Caractéristiques annonce | R0 | R1 | R2 | R3 |
 |------------------------|----|----|----|----|
-| `profile_id = sorafs.sf1@1.0.0`, `chunk_range_fetch` присутствует, канонические aliases, `signature_strict=true` | ✅ | ✅ | ✅ | ✅ |
-| Нет capability `chunk_range_fetch` | ⚠️ Warn (ingest + telemetry) | ⚠️ Warn | ❌ Reject (`reason="missing_capability"`) | ❌ Reject |
-| TLV неизвестной capability без `allow_unknown_capabilities=true` | ✅ | ⚠️ Warn (`reason="unknown_capability"`) | ❌ Reject | ❌ Reject |
-| Истекший `refresh_deadline` | ❌ Reject | ❌ Reject | ❌ Reject | ❌ Reject |
-| `signature_strict=false` (diagnostic fixtures) | ✅ (только development) | ⚠️ Warn | ⚠️ Warn | ❌ Reject |
+| `profile_id = sorafs.sf1@1.0.0`, `chunk_range_fetch` присутствует, alias canoniques, `signature_strict=true` | ✅ | ✅ | ✅ | ✅ |
+| Capacité nette `chunk_range_fetch` | ⚠️ Avertir (ingérer + télémétrie) | ⚠️ Avertir | ❌ Rejeter (`reason="missing_capability"`) | ❌ Rejeter |
+| Capacité TLV inégalée sans `allow_unknown_capabilities=true` | ✅ | ⚠️ Avertir (`reason="unknown_capability"`) | ❌ Rejeter | ❌ Rejeter |
+| Produit `refresh_deadline` | ❌ Rejeter | ❌ Rejeter | ❌ Rejeter | ❌ Rejeter |
+| `signature_strict=false` (appareils de diagnostic) | ✅ (développement только) | ⚠️ Avertir | ⚠️ Avertir | ❌ Rejeter |
 
-Все времена указаны в UTC. Даты enforcement отражены в migration ledger и не
-будут изменены без голосования council; любые изменения требуют обновления этого
+Tous les temps sont disponibles en UTC. Les données d'application figurent dans le registre des migrations et non
+будут изменены без голосования conseil; les activités de loisirs et de loisirs
 файла и ledger в одном PR.
 
-> **Примечание по реализации:** R1 вводит серию `result="warn"` в
-> `torii_sorafs_admission_total`. Патч ingestion Torii, добавляющий новый label,
+> **Modification de la réalisation :** R1 correspond à la série `result="warn"` dans
+> `torii_sorafs_admission_total`. Ingestion du patch Torii, nouvelle étiquette,
 > отслеживается вместе с задачами телеметрии SF-2; до его попадания используйте
 
-## Коммуникация и обработка инцидентов
+## Les incidents commerciaux et de surveillance
 
-- **Еженедельная рассылка статуса.** DevRel рассылает краткое резюме метрик
-  admission, текущих warnings и предстоящих deadlines.
-- **Incident response.** Если срабатывают alerts `reject`, on-call инженеры:
-  1. Забирают проблемный advert через discovery Torii (`/v1/sorafs/providers`).
-  2. Повторяют валидацию advert в provider pipeline и сравнивают с
-     `/v1/sorafs/providers`, чтобы воспроизвести ошибку.
-  3. Координируют с провайдером ротацию advert до следующего refresh deadline.
-- **Заморозка изменений.** Никаких изменений schema capabilities в R1/R2, если
-  комитет rollout не одобрит; GREASE испытания проводите только в еженедельное
-  окно обслуживания и фиксируйте в migration ledger.
+- **Statut de statut actuel.** DevRel a défini la mesure du résumé
+  admission, текущих avertissements и предстоящих délais.
+- **Réponse aux incidents.** Si vous signalez les alertes `reject`, les agents de garde :
+  1. Téléchargez l'annonce problématique pour Discovery Torii (`/v1/sorafs/providers`).
+  2. Publier une annonce de validation dans le pipeline du fournisseur et la publier
+     `/v1/sorafs/providers`, que vous avez choisi.
+  3. Coordonner la rotation de l'annonce en fonction de la date limite d'actualisation.
+- **Amélioration des capacités de schéma.** Capacités de schéma améliorées dans R1/R2, etc.
+  Le déploiement du comité n'est pas terminé ; L'épandage de GRAISSE doit être effectué à un moment donné
+  Vous devez également surveiller et fixer le registre des migrations.
 
 ## Ссылки
 
-- [SoraFS Node/Client Protocol](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/sorafs_node_client_protocol.md)
-- [Provider Admission Policy](./provider-admission-policy)
-- [Migration Roadmap](./migration-roadmap)
-- [Provider Advert Multi-Source Extensions](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/provider_advert_multisource.md)
+- [Protocole nœud/client SoraFS](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/sorafs_node_client_protocol.md)
+- [Politique d'admission des fournisseurs](./provider-admission-policy)
+- [Feuille de route de migration](./migration-roadmap)
+- [Extensions multi-sources d'annonce de fournisseur] (https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/provider_advert_multisource.md)

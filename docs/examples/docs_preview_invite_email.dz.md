@@ -7,15 +7,16 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 4e3856058310e40649d5394996b2bcbfde99effb9e706be87f284e1812d5bdbd
 source_last_modified: "2025-12-29T18:16:35.071633+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Docs Portal Preview Invite (Sample Email)
+# ཡིག་ཆ་ཚུ་ དྲྭ་ཐོག་སྔོན་ལྟ་མགྲོན་འབོད་ (དཔེ་ཚད་ཀྱི་འཕྲིན་ཡིག)
 
-Use this sample when drafting the outbound message. It captures the exact copy
-sent to the W2 community reviewers (`preview-2025-06-15`) so future waves can
-mirror the tone, verification guidance, and evidence trail without reverse
-engineering old tickets. Update the artefact links, hashes, request IDs, and
-dates before sending a new invite.
+ཕྱི་ཁའི་འཕྲིན་དོན་འདི་ ཟིན་བྲིས་འབད་བའི་སྐབས་ དཔེ་ཚད་འདི་ལག་ལེན་འཐབ། འདི་གིས་ འདྲ་བཤུས་ངོ་མ་འདི་བཟུང་ཨིན།
+W2 མི་སྡེ་བསྐྱར་ཞིབ་པ་ (`preview-2025-06-15`) ལུ་བཏང་ཡོདཔ་ལས་ མ་འོངས་པའི་རླབས་ཚུ་འབད་ཚུགས།
+སྒྲ་སྐད་དང་བདེན་དཔྱད་ལམ་སྟོན་ དེ་ལས་ སྒྲུབ་བྱེད་ཀྱི་ལམ་འདི་ ཕྱིར་ལོག་མེད་པར་ མེ་ལོང་།
+བཟོ་རིག ཤོག་འཛིན་རྙིང་པ་ཚུ། ཅ་རྙིང་འབྲེལ་ལམ་དང་ ཧ་ཤེ་ ཞུ་བ་ཨའི་ཌི་ དེ་ལས་ དང་ དང་ མཉམ་སྦྲགས་ཚུ་ དུས་མཐུན་བཟོ།
+འབོད་བརྡ་གསརཔ་གཏང་པའི་ཧེ་མ།
 
 ```text
 Subject: [DOCS-SORA] docs portal preview preview-2025-06-15 invite for Horizon Wallet

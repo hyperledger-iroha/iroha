@@ -7,57 +7,58 @@ generator: scripts/sync_docs_i18n.py
 source_hash: c9d7b44d46ef97c20058221aedf1f0b4a27ba85d204c3be4fe4933da31d9e207
 source_last_modified: "2025-12-29T18:16:35.160066+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Publishing Checklist
+# Nashr qilish roʻyxati
 
-Use this checklist whenever you update the developer portal. It ensures that the
-CI build, GitHub Pages deployment, and manual smoke tests cover every section
-before a release or roadmap milestone lands.
+Dasturchi portalini yangilaganingizda ushbu nazorat roʻyxatidan foydalaning. ni ta'minlaydi
+CI qurish, GitHub sahifalarini joylashtirish va qo'lda tutun sinovlari har bir bo'limni qamrab oladi
+bir reliz yoki yo'l xaritasi muhim bosqichi qo'nadi oldin.
 
-## 1. Local validation
+## 1. Mahalliy tekshirish
 
-- `npm run sync-openapi -- --version=current --latest` (add one or more
-  `--mirror=<label>` flags when Torii OpenAPI changes for a frozen snapshot).
-- `npm run build` – confirm the `Build on Iroha with confidence` hero copy still
-  appears in `build/index.html`.
-- `./docs/portal/scripts/preview_verify.sh --build-dir build` – verify the
-  checksum manifest (add `--descriptor`/`--archive` when testing downloaded CI
-  artefacts).
-- `npm run serve` – launches the checksum-gated preview helper which verifies
-  the manifest before calling `docusaurus serve`, so reviewers never browse an
-  unsigned snapshot (the `serve:verified` alias remains for explicit calls).
-- Spot-check the markdown you touched via `npm run start` and the live reload
+- `npm run sync-openapi -- --version=current --latest` (bir yoki bir nechta qo'shing
+  Muzlatilgan surat uchun Torii OpenAPI o'zgarganda `--mirror=<label>` bayroqchalari).
+- `npm run build` - `Build on Iroha with confidence` qahramon nusxasini tasdiqlang
+  `build/index.html` da paydo bo'ladi.
+- `./docs/portal/scripts/preview_verify.sh --build-dir build` – tasdiqlang
+  nazorat summasi manifesti (yuklab olingan CIni sinovdan o'tkazishda `--descriptor`/`--archive` qo'shing
+  artefaktlar).
+- `npm run serve` - tekshirish summasi bilan himoyalangan oldindan ko'rish yordamchisini ishga tushiradi.
+  `docusaurus serve` ga qo'ng'iroq qilishdan oldin manifest, shuning uchun sharhlovchilar hech qachon ko'rib chiqmaydi
+  imzosiz surat (`serve:verified` taxallus aniq qo'ng'iroqlar uchun qoladi).
+- `npm run start` va jonli qayta yuklash orqali teggan belgini joyida tekshiring
   server.
 
-## 2. Pull request checks
+## 2. So'rovni tekshirish
 
-- Verify the `docs-portal-build` job succeeded in `.github/workflows/check-docs.yml`.
-- Confirm `ci/check_docs_portal.sh` ran (CI logs show the hero smoke check).
-- Ensure the preview workflow uploaded a manifest (`build/checksums.sha256`) and
-  the preview verification script succeeded (CI logs show the
-  `scripts/preview_verify.sh` output).
-- Add the published preview URL from the GitHub Pages environment to the PR
-  description.
+- `.github/workflows/check-docs.yml` da `docs-portal-build` ishi muvaffaqiyatli bajarilganligini tekshiring.
+- `ci/check_docs_portal.sh` ishlaganligini tasdiqlang (CI jurnallari qahramon tutunini tekshirishni ko'rsatadi).
+- Manifest (`build/checksums.sha256`) yuklanganligini oldindan ko'rish ish jarayonini ta'minlang va
+  oldindan ko‘rishni tekshirish skripti muvaffaqiyatli bo‘ldi (CI jurnallari
+  `scripts/preview_verify.sh` chiqishi).
+- GitHub Pages muhitidan chop etilgan oldindan ko'rish URL manzilini PRga qo'shing
+  tavsifi.
 
-## 3. Section sign-off
+## 3. Bo'limni o'chirish
 
-| Section | Owner | Checklist |
+| Bo'lim | Egasi | Tekshirish ro'yxati |
 |---------|-------|-----------|
-| Homepage | DevRel | Hero copy renders, quickstart cards link to valid routes, CTA buttons resolve. |
-| Norito | Norito WG | Overview and getting-started guides reference the latest CLI flags and Norito schema docs. |
-| SoraFS | Storage Team | Quickstart runs to completion, manifest report fields documented, fetch simulation instructions verified. |
-| SDK guides | SDK leads | Rust/Python/JS guides compile the current examples and link to live repos. |
-| Reference | Docs/DevRel | Index lists the newest specs, Norito codec reference matches `norito.md`. |
-| Preview artifact | Docs/DevRel | `docs-portal-preview` artifact attached to the PR, smoke checks pass, link shared with reviewers. |
-| Security & Try it sandbox | Docs/DevRel · Security | OAuth device-code login configured (`DOCS_OAUTH_*`), `security-hardening.md` checklist executed, CSP/Trusted Types headers verified via `npm run build` or `npm run probe:portal`. |
+| Bosh sahifa | DevRel | Qahramon nusxasi renderlari, tezkor ishga tushirish kartalari joriy marshrutlarga havola, CTA tugmalari hal qiladi. |
+| Norito | Norito WG | Umumiy koʻrinish va ishga tushirish boʻyicha qoʻllanmalar eng soʻnggi CLI bayroqlari va Norito sxema hujjatlariga havola qiladi. |
+| SoraFS | Saqlash jamoasi | Tez boshlash tugagunga qadar ishlaydi, manifest hisobot maydonlari hujjatlashtirilgan, simulyatsiya ko'rsatmalarini olish tasdiqlangan. |
+| SDK qo'llanmalari | SDK yetakchilari | Rust/Python/JS qo'llanmalari joriy misollarni tuzadi va jonli reposlarga havola qiladi. |
+| Malumot | Docs/DevRel | Indeksda eng yangi xususiyatlar ro'yxati keltirilgan, Norito kodek mos yozuvlar `norito.md`. |
+| Artifaktni oldindan ko'rish | Docs/DevRel | PRga biriktirilgan `docs-portal-preview` artefakti, tutun tekshiruvi oʻtishi, havola sharhlovchilar bilan ulashilgan. |
+| Xavfsizlik & Sinab ko'ring sandbox | Docs/DevRel · Xavfsizlik | OAuth qurilma kodiga kirish sozlandi (`DOCS_OAUTH_*`), `security-hardening.md` nazorat roʻyxati bajarildi, CSP/Ishonchli turlar sarlavhalari `npm run build` yoki `npm run probe:portal` orqali tasdiqlandi. |
 
-Mark each row as part of your PR review, or note any follow-up tasks so status
-tracking stays accurate.
+Har bir qatorni PR ko'rib chiqishingizning bir qismi sifatida belgilang yoki har qanday keyingi vazifalarni qayd qiling
+kuzatish aniqligicha qoladi.
 
-## 4. Release notes
+## 4. Chiqarish qaydlari
 
-- Include `https://docs.iroha.tech/` (or the environment URL
-  from the deployment job) in release notes and status updates.
-- Call out any new or changed sections explicitly so downstream teams know where
-  to re-run their own smoke tests.
+- `https://docs.iroha.tech/` (yoki muhit URL manzilini) qo'shing
+  tarqatish ishidan) chiqarish qaydlari va holat yangilanishlarida.
+- Har qanday yangi yoki o'zgartirilgan bo'limlarga aniq qo'ng'iroq qiling, shunda quyi oqim guruhlari qaerdaligini bilishadi
+  o'zlarining tutun sinovlarini qayta o'tkazish uchun.

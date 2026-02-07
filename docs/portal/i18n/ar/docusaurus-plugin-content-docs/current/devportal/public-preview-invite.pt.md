@@ -4,69 +4,71 @@ direction: rtl
 source: docs/portal/docs/devportal/public-preview-invite.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Playbook de convites do preview publico
+# Playbook de convites يقوم بمعاينة الجمهور
 
-## Objetivos do programa
+## أهداف البرنامج
 
-Este playbook explica como anunciar e executar o preview publico assim que o
-workflow de onboarding de revisores estiver ativo. Ele mantem o roadmap DOCS-SORA honesto ao
-garantir que cada convite saia com artefatos verificaveis, orientacao de seguranca e um
-caminho claro de feedback.
+يتم شرح هذا قواعد اللعبة كإعلان وتنفيذ أو معاينة عامة كما هو الحال
+سير العمل في إعداد المراجعين النشطين. اتبع خريطة الطريق DOCS-SORA الصادقة
+نضمن أن كل دعوة تأتي مع التحف التي تم التحقق منها، وتوجيه الأمان والحماية
+كامينيو كلارو دي ردود الفعل.
 
-- **Audiencia:** lista curada de membros da comunidade, partners e maintainers que assinaram a
-  politica de uso aceitavel do preview.
-- **Limites:** tamanho de onda padrao <= 25 revisores, janela de acesso de 14 dias, resposta
-  a incidentes em 24h.
+- **الجمهور:** قائمة بأعضاء المجتمع والشركاء والمشرفين الذين ينضمون إليهم
+  سياسة الاستخدام العادل للمعاينة.
+- **الحدود:** عدد الزيارات <= 25 مراجعة، الوصول خلال 14 يومًا، الرد
+  حوادث م 24 ساعة.
 
-## Checklist de gate de lancamento
+## قائمة التحقق من بوابة الإنطلاق
 
-Complete estas tarefas antes de enviar qualquer convite:
+أكمل هذه المهام قبل إرسال أي دعوة:
 
-1. Ultimos artefatos de preview enviados na CI (`docs-portal-preview`,
-   manifest de checksum, descriptor, bundle SoraFS).
-2. `npm run --prefix docs/portal serve` (gateado por checksum) testado no mesmo tag.
-3. Tickets de onboarding de revisores aprovados e vinculados a onda de convites.
-4. Docs de seguranca, observabilidade e incidentes validados
-   ([`security-hardening`](./security-hardening.md),
-   [`observability`](./observability.md),
+1. آخر معاينة فنية مرسلة إلى CI (`docs-portal-preview`,
+   بيان المجموع الاختباري، الواصف، الحزمة SoraFS).
+2. `npm run --prefix docs/portal serve` (بوابة المجموع الاختباري) تم اختباره بدون علامة mesmo.
+3. تذاكر تأهيل المراجعات المعتمدة والموافقة على المكالمات.
+4. مستندات الأمان وإمكانية الملاحظة والأحداث التي تم التحقق منها
+   ([`security-hardening`](./security-hardening.md)،
+   [`observability`](./observability.md)،
    [`incident-runbooks`](./incident-runbooks.md)).
-5. Formulario de feedback ou template de issue preparado (inclua campos de severidade,
-   passos de reproducao, screenshots e info de ambiente).
-6. Copy do anuncio revisada por Docs/DevRel + Governance.
+5. صيغة الملاحظات أو نموذج الإصدار المُعد (بما في ذلك مجالات الخصوصية،
+   مقاطع إعادة الإنتاج ولقطات الشاشة والمعلومات المحيطة).
+6. انسخ الإعلان المنقح بواسطة Docs/DevRel + Governance.
 
-## Pacote de convite
+##باكوت دي كونفيت
 
-Cada convite deve incluir:
+تتضمن كل دعوة ما يلي:
 
-1. **Artefatos verificados** - Forneca links para o manifest/plan SoraFS ou para os artefatos
-   GitHub, mais o manifest de checksum e o descriptor. Referencie explicitamente o comando
-   de verificacao para que os revisores possam executa-lo antes de subir o site.
-2. **Instrucoes de serve** - Inclua o comando de preview gateado por checksum:
+1. **Artefatos verificados** - الروابط Forneca للبيان/الخطة SoraFS أو للArtefatos
+   GitHub، بالإضافة إلى بيان المجموع الاختباري والواصف. المرجع بوضوح إلى الأمر
+   للتحقق من إمكانية تنفيذ المراجعات قبل فتح الموقع.
+2. **تعليمات الخدمة** - تتضمن أمر المعاينة الموجه من خلال المجموع الاختباري:
 
    ```bash
    DOCS_RELEASE_TAG=preview-<stamp> npm run --prefix docs/portal serve
    ```
 
-3. **Lembretes de seguranca** - Informe que tokens expiram automaticamente, links nao devem ser
-   compartilhados e incidentes devem ser reportados imediatamente.
-4. **Canal de feedback** - Linke o template/formulario e esclareca expectativas de tempo de resposta.
-5. **Datas do programa** - Informe datas de inicio/fim, office hours ou syncs, e a proxima
-   janela de refresh.
+3. **رموز الأمان** - لإعلامك بانتهاء صلاحية الرموز المميزة تلقائيًا، لن يتم تفعيل الروابط
+   يجب أن يتم الإبلاغ عن الأحداث والأحداث على الفور.
+4. **قناة التعليقات** - قم بربط القالب/النموذج وتوضيح التوقعات في وقت الاستجابة.
+5. **بيانات البرنامج** - إبلاغ بيانات البداية/الفيلم وساعات العمل والمزامنة والتقريبية
+   janela defresh.
 
-O email de exemplo em
+البريد الإلكتروني للمثال
 [`docs/examples/docs_preview_invite_template.md`](../../../examples/docs_preview_invite_template.md)
-cobre esses requisitos. Atualize os placeholders (datas, URLs, contatos)
-antes de enviar.
+متطلبات الكوبري. تحقيق العناصر النائبة لنظام التشغيل (البيانات وعناوين URL وجهات الاتصال)
+قبل دي Enviar.
 
-## Expor o host de preview
+## تصدير مضيف المعاينة
 
-So promova o host de preview quando o onboarding estiver completo e o ticket de mudanca estiver
-aprovado. Veja o [guia de exposicao do host de preview](./preview-host-exposure.md) para os passos
-end-to-end de build/publish/verify usados nesta secao.
+لذلك قم بتعزيز مضيف المعاينة عند اكتمال عملية الإعداد وتذكرة التغيير
+com.aprovado. شاهد [دليل العرض الخاص بمضيف المعاينة](./preview-host-exposure.md) لكلمات مرورك
+من النهاية إلى النهاية للإنشاء/النشر/التحقق من المستخدمين هنا.
 
-1. **Build e empacotamento:** Marque o release tag e produza artefatos deterministas.
+1. **البناء والتعبئة:** قم بتمييز علامة الإصدار وإنتاج العناصر المحددة.
 
    ```bash
    cd docs/portal
@@ -85,17 +87,17 @@ end-to-end de build/publish/verify usados nesta secao.
      --out artifacts/sorafs/preview-descriptor.json
    ```
 
-   O script de pin grava `portal.car`, `portal.manifest.*`, `portal.pin.proposal.json`,
-   e `portal.dns-cutover.json` em `artifacts/sorafs/`. Anexe esses arquivos a onda de convites
-   para que cada revisor possa verificar os mesmos bits.
+   يا البرنامج النصي للدبوس Grava `portal.car`، `portal.manifest.*`، `portal.pin.proposal.json`،
+   و`portal.dns-cutover.json` في `artifacts/sorafs/`. قم بإضافة هذه الملفات إلى قائمة المكالمات
+   حتى يتمكن كل مراجع من التحقق من هذه البتات.
 
-2. **Publicar o alias de preview:** Rode o comando sem `--skip-submit`
-   (forneca `TORII_URL`, `AUTHORITY`, `PRIVATE_KEY[_FILE]`, e a prova de alias emitida
-   pela governanca). O script vai amarrar o manifest a `docs-preview.sora` e emitir
-   `portal.manifest.submit.summary.json` mais `portal.pin.report.json` para o bundle de evidencias.
+2. **نشر الاسم المستعار للمعاينة:** ركب الأمر Sem `--skip-submit`
+   (forneca `TORII_URL`، `AUTHORITY`، `PRIVATE_KEY[_FILE]`، وإثبات الاسم المستعار المنبعث
+   بيلا جوفرانكا). البرنامج النصي أو إنشاء ملف `docs-preview.sora` وإصداره
+   `portal.manifest.submit.summary.json` المزيد من `portal.pin.report.json` لحزمة الأدلة.
 
-3. **Testar o deployment:** Confirme que o alias resolve e que o checksum corresponde ao tag
-   antes de enviar convites.
+3. **اختبار النشر:** تأكد من حل الاسم المستعار وأن المجموع الاختباري يتوافق مع العلامة
+   أنتيس دي Enviar convites.
 
    ```bash
    npm run probe:portal -- \
@@ -103,26 +105,26 @@ end-to-end de build/publish/verify usados nesta secao.
      --expect-release="$DOCS_RELEASE_TAG"
    ```
 
-   Mantenha `npm run serve` (`scripts/serve-verified-preview.mjs`) a mao como fallback para
-   que revisores possam subir uma copia local se o edge de preview falhar.
+   Mantenha `npm run serve` (`scripts/serve-verified-preview.mjs`) وماو كبديل احتياطي
+   يمكن للمراجعين إرسال نسخة محلية عند حافة المعاينة.
 
-## Timeline de comunicacao
+## الجدول الزمني للاتصالات
 
-| Dia | Acao | Owner |
+| ضياء | أكاو | المالك |
 | --- | --- | --- |
-| D-3 | Finalizar copy do convite, atualizar artefatos, dry-run de verificacao | Docs/DevRel |
-| D-2 | Sign-off de governanca + ticket de mudanca | Docs/DevRel + Governance |
-| D-1 | Enviar convites usando o template, atualizar tracker com lista de destinatarios | Docs/DevRel |
-| D | Kickoff call / office hours, monitorar dashboards de telemetria | Docs/DevRel + On-call |
-| D+7 | Digest de feedback no meio da onda, triage de issues bloqueantes | Docs/DevRel |
-| D+14 | Fechar a onda, revogar acesso temporario, publicar resumo em `status.md` | Docs/DevRel |
+| د-3 | النسخة النهائية للدعوة، وتحديث القطع الأثرية، والتشغيل الجاف للتحقق | مستندات/ديفريل |
+| د-2 | تسجيل الخروج من الحكم + تذكرة مودانكا | Docs/DevRel + الحوكمة |
+| د-1 | أرسل الدعوة إلى استخدام القالب، وتحديث المتتبع مع قائمة الوجهات | مستندات/ديفريل |
+| د | مكالمة البداية / ساعات العمل، لوحات مراقبة القياس عن بعد | Docs/DevRel + عند الطلب |
+| د+7 | ملخص التعليقات ليس أفضل من أي وقت مضى، فرز المشكلات التراكمية | مستندات/ديفريل |
+| د+14 | قم بالبدء مرة أخرى، واستعادة الوصول المؤقت، ونشر السيرة الذاتية في `status.md` | مستندات/ديفريل |
 
-## Tracking de acesso e telemetria
+## تتبع الوصول والقياس عن بعد
 
-1. Registre cada destinatario, timestamp de convite e data de revogacao com o
-   preview feedback logger (veja
-   [`preview-feedback-log`](./preview-feedback-log)) para que cada onda compartilhe o mesmo
-   rastro de evidencias:
+1. قم بتسجيل كل وجهة، والطابع الزمني للدعوة، وبيانات التجديد مع o
+   معاينة مسجل الملاحظات (veja
+   [`preview-feedback-log`](./preview-feedback-log)) حتى تتمكن من المشاركة في نفس الوقت
+   معلومات عن الأدلة:
 
    ```bash
    # Adicione um novo evento de convite a artifacts/docs_portal_preview/feedback_log.json
@@ -133,42 +135,42 @@ end-to-end de build/publish/verify usados nesta secao.
      --notes "wave-01 seed"
    ```
 
-   Os eventos suportados sao `invite-sent`, `acknowledged`,
-   `feedback-submitted`, `issue-opened`, e `access-revoked`. O log fica em
-   `artifacts/docs_portal_preview/feedback_log.json` por padrao; anexe ao ticket da
-   onda de convites junto com os formularios de consentimento. Use o helper de
-   summary para produzir um roll-up auditavel antes da nota de encerramento:
+   الأحداث المدعومة sao `invite-sent`، `acknowledged`،
+   `feedback-submitted`، `issue-opened`، و`access-revoked`. يا سجل فيكا م
+   `artifacts/docs_portal_preview/feedback_log.json` بواسطة بادراف؛ ملحق ao تذكرة da
+   Onda de convites juto com os صيغ الموافقة. استخدام يا مساعد دي
+   ملخص لإنتاج مراجعة إجمالية قبل ملاحظة التحسين:
 
    ```bash
    npm run --prefix docs/portal preview:summary -- --summary-json \
      > artifacts/docs_portal_preview/preview-20250303-summary.json
    ```
 
-   O summary JSON enumera convites por onda, destinatarios abertos, contagens de
-   feedback e o timestamp do evento mais recente. O helper e apoiado por
-   [`scripts/preview-feedback-log.mjs`](../../scripts/preview-feedback-log.mjs),
-   portanto o mesmo workflow pode rodar localmente ou em CI. Use o template de digest em
+   ملخص JSON enumera convites por onda، destinatarios abertos، contagens de
+   ردود الفعل والطابع الزمني للحدث الأحدث. يا مساعد ه apoiado بور
+   [`scripts/preview-feedback-log.mjs`](../../scripts/preview-feedback-log.mjs)،
+   يمكن نقل أو سير العمل نفسه إلى مكانه أو في CI. استخدم قالب الهضم
    [`docs/examples/docs_preview_feedback_digest.md`](../../../examples/docs_preview_feedback_digest.md)
-   ao publicar o recap da onda.
-2. Tague os dashboards de telemetria com o `DOCS_RELEASE_TAG` usado na onda para que
-   picos possam ser correlacionados com as coortes de convite.
-3. Rode `npm run probe:portal -- --expect-release=<tag>` apos o deploy para confirmar que
-   o ambiente de preview anuncia a metadata correta de release.
-4. Registre qualquer incidente no template do runbook e vincule a coorte.
+   أو نشر أو تلخيص أوندا.
+2. قم بوضع لوحات معلومات القياس عن بعد باستخدام `DOCS_RELEASE_TAG` لتتمكن من ذلك
+   يمكن أن تكون الصور مرتبطة بحفلات الدعوة.
+3. ركب `npm run probe:portal -- --expect-release=<tag>` للنشر لتأكيد ذلك
+   تعلن بيئة المعاينة عن بيانات التعريف الصحيحة للإصدار.
+4. قم بالتسجيل في أي حادثة بدون قالب Runbook أو قم بالتسجيل في Corte.
 
-## Feedback e fechamento
+## ردود الفعل والملاحظات
 
-1. Agregue feedback em um doc compartilhado ou board de issues. Marque os itens com
-   `docs-preview/<wave>` para que os owners do roadmap encontrem facilmente.
-2. Use a saida summary do preview logger para preencher o relatorio da onda, depois
-   resuma a coorte em `status.md` (participantes, principais achados, fixes planejados) e
-   atualize `roadmap.md` se o marco DOCS-SORA mudou.
-3. Siga os passos de offboarding de
-   [`reviewer-onboarding`](./reviewer-onboarding.md): revogue acesso, arquive solicitacoes e
-   agradeca os participantes.
-4. Prepare a proxima onda atualizando artefatos, reexecutando os gates de checksum e
-   atualizando o template de convite com novas datas.
+1. قم بجمع التعليقات في مستند لمشاركته أو في قائمة المشكلات. ماركو أو إس إيتنس كوم
+   `docs-preview/<wave>` لكي يتمكن المالكون من الوصول إلى خريطة الطريق بسهولة.
+2. استخدم ملخصًا لمعاينة المسجل لمعاينة أو الارتباط من هناك، بعد ذلك
+   استئناف الحضور في `status.md` (المشاركين، المبتدئين، إصلاحات التخطيط) e
+   قم بتفعيل `roadmap.md` كما هو موضح في DOCS-SORA.
+3. احصل على تصاريح الخروج من الطائرة
+   [`reviewer-onboarding`](./reviewer-onboarding.md): تجديد الوصول وطلبات التقديم
+   agradeca os المشاركين.
+4. قم بإعداد تقريبي لتحديث العناصر وإعادة تنفيذ بوابات المجموع الاختباري
+   تحديث قالب الدعوة مع بيانات جديدة.
 
-Aplicar este playbook de forma consistente mantem o programa de preview auditable e
-oferece ao Docs/DevRel um caminho repetivel para escalar convites a medida que o portal
-se aproxima de GA.
+تطبيق قواعد اللعبة هذه بشكل متسق مع الحفاظ على برنامج المعاينة القابل للتدقيق
+نقدم إلى Docs/DevRel طريقًا متكررًا لتصعيد الدعوة عبر البوابة
+يقع بالقرب من GA.

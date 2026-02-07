@@ -10,20 +10,21 @@ translation_last_reviewed: 2026-02-07
 title: JavaScript ledger flow recipe
 description: Register an asset, mint, transfer, and query balances with `@iroha2/torii-client`.
 slug: /sdks/recipes/javascript-ledger-flow
+translator: machine-google-reviewed
 ---
 
-import SampleDownload from '@site/src/components/SampleDownload';
+ናሙና አውርድን ከ'@site/src/components/SampleDownload' አስመጣ;
 
-This recipe uses the Node.js `@iroha2/torii-client` and
-`@iroha2/crypto-target-node` packages to reproduce the CLI ledger walkthrough.
+ይህ የምግብ አሰራር Node.js `@iroha2/torii-client` እና ይጠቀማል
+`@iroha2/crypto-target-node` ጥቅሎች የCLI ደብተር መራመጃን ለማባዛት።
 
-<SampleDownload
+<ናሙና አውርድ
   href="/sdk-recipes/javascript/ledger-flow.mjs"
   filename="ledger-flow.mjs"
-  description="Download the exact JavaScript script used in this ledger walkthrough."
+  description="በዚህ መዝገብ ውስጥ ጥቅም ላይ የዋለውን ትክክለኛውን የጃቫ ስክሪፕት ስክሪፕት አውርድ።"
 />
 
-## Prerequisites
+## ቅድመ ሁኔታዎች
 
 ```bash
 npm install @iroha2/torii-client @iroha2/crypto-target-node
@@ -32,7 +33,7 @@ export RECEIVER_ACCOUNT="ih58..."
 export ADMIN_PRIVATE_KEY="802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
 ```
 
-## Example script
+## ምሳሌ ስክሪፕት።
 
 ```ts title="ledger-flow.mjs"
 import {ToriiClient, buildTransaction} from '@iroha2/torii-client';
@@ -75,12 +76,12 @@ for (const asset of balances.items) {
 }
 ```
 
-Run with `node --env-file=.env ledger-flow.mjs` (or export the environment
-variables manually). The log should show the transaction hash (from the receipt
-payload) and the updated receiver balance.
+ከ `node --env-file=.env ledger-flow.mjs` ጋር ያሂዱ (ወይም አካባቢውን ወደ ውጭ ይላኩ
+ተለዋዋጮች በእጅ)። ምዝግብ ማስታወሻው የግብይቱን ሃሽ (ከደረሰኙ) ማሳየት አለበት።
+ክፍያ) እና የተሻሻለው የተቀባዩ ቀሪ ሂሳብ።
 
-## Verify parity
+## ተመሳሳይነት ያረጋግጡ
 
-- Fetch the transaction details via `iroha --config defaults/client.toml transaction get --hash <hash>`.
-- Cross-check balances with `iroha --config defaults/client.toml asset list filter '{"id":"coffee#wonderland##<account>"}'`.
-- Compare the emitted hash with the Rust and Python recipes to ensure SDK parity.
+- የግብይቱን ዝርዝሮች በ `iroha --config defaults/client.toml transaction get --hash <hash>` በኩል ያግኙ።
+- ሂሳቦችን ከ `iroha --config defaults/client.toml asset list filter '{"id":"coffee#wonderland##<account>"}'` ጋር ያረጋግጡ።
+- የኤስዲኬን እኩልነት ለማረጋገጥ የወጣውን ሃሽ ከ Rust እና Python አዘገጃጀት ጋር ያወዳድሩ።

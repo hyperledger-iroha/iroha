@@ -7,94 +7,92 @@ generator: scripts/sync_docs_i18n.py
 source_hash: e7116d28e32d8bd77434edd6767427cc3d2ae0624f4de132b1d0cec3c7d44b86
 source_last_modified: "2025-12-29T18:16:35.938246+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% SM2/SM3/SM4 Product Filing (开发备案) Template
-% Hyperledger Iroha Compliance Working Group
+% SM2/SM3/SM4 የምርት ማቅረቢያ (开发备案) አብነት
+% Hyperledger Iroha ተገዢነት የስራ ቡድን
 % 2026-05-06
 
-# Instructions
+# መመሪያ
 
-Use this template when submitting a *product development filing* to a provincial
-or municipal State Cryptography Administration (SCA) office before distributing
-SM-enabled binaries or source artefacts from within mainland China. Replace the
-placeholders with project-specific details, export the completed form as PDF if
-required, and attach the artefacts referenced in the checklist.
+*የምርት ልማት ፋይል* ወደ ክፍለ ሀገር በሚያስገቡበት ጊዜ ይህንን አብነት ይጠቀሙ
+ወይም የማዘጋጃ ቤት ስቴት ክሪፕቶግራፊ አስተዳደር (SCA) ቢሮ ከማከፋፈሉ በፊት
+በኤስኤም የነቁ ሁለትዮሾች ወይም ከዋናው ቻይና ውስጥ የተገኙ ቅርሶችን ምንጭ። ይተኩ
+ቦታ ያዢዎች በፕሮጀክት-ተኮር ዝርዝሮች፣ ከሆነ የተጠናቀቀውን ቅጽ እንደ ፒዲኤፍ ይላኩ።
+ያስፈልጋል, እና በማረጋገጫ ዝርዝሩ ውስጥ የተጠቀሱትን ቅርሶች ያያይዙ.
 
-# 1. Applicant & Product Summary
+# 1. የአመልካች እና የምርት ማጠቃለያ
 
-| Field | Value |
-|-------|-------|
-| Organisation name | {{ ORGANISATION }} |
-| Registered address | {{ ADDRESS }} |
-| Legal representative | {{ LEGAL_REP }} |
-| Primary contact (name / title / email / phone) | {{ CONTACT }} |
-| Product name | Hyperledger Iroha {{ RELEASE_NAME }} |
-| Product version / build ID | {{ VERSION }} |
-| Filing type | Product development (开发备案) |
-| Filing date | {{ YYYY-MM-DD }} |
+| መስክ | ዋጋ |
+|-------|------|
+| የድርጅት ስም | {{ ድርጅት }} |
+| የተመዘገበ አድራሻ | {{ ADDRESS }} |
+| የህግ ተወካይ | {{ LEGAL_REP }} |
+| ዋና አድራሻ (ስም / ርዕስ / ኢሜል / ስልክ) | {{ እውቂያ }} |
+| የምርት ስም | Hyperledger Iroha {{ RELEASE_NAME }} |
+| የምርት ስሪት / የግንባታ መታወቂያ | {{ VERSION }} |
+| የማቅረቢያ አይነት | የምርት ልማት (开发备案) |
+| የማስረከቢያ ቀን | {{ ዓዓዓ-ወወ-ቀን }} |
 
-# 2. Cryptography Usage Overview
+# 2. ክሪፕቶግራፊ አጠቃቀም አጠቃላይ እይታ
 
-- Supported algorithms: `SM2`, `SM3`, `SM4` (provide usage matrix below).
-- Usage context:
-  | Algorithm | Component | Purpose | Deterministic safeguards |
-  |-----------|-----------|---------|--------------------------|
-  | SM2 | {{ COMPONENT }} | {{ PURPOSE }} | RFC6979 + canonical r∥s enforcement |
-  | SM3 | {{ COMPONENT }} | {{ PURPOSE }} | Deterministic hashing via `Sm3Digest` |
-  | SM4 | {{ COMPONENT }} | {{ PURPOSE }} | AEAD (GCM/CCM) with enforced nonce policy |
-- Non-SM algorithms in build: {{ OTHER_ALGORITHMS }} (for completeness).
+- የሚደገፉ ስልተ ቀመሮች፡- `SM2`፣ `SM3`፣ `SM4` (የአጠቃቀም ማትሪክስ ከዚህ በታች ያቅርቡ)።
+- የአጠቃቀም አውድ፡-
+  | አልጎሪዝም | አካል | ዓላማ | ቆራጥ መከላከያዎች |
+  |-------------|------------|
+  | SM2 | {{ አካል }} | {{ዓላማ}} | RFC6979 + ቀኖናዊ r∥s ማስፈጸሚያ |
+  | SM3 | {{ አካል }} | {{ዓላማ}} | `Sm3Digest` በኩል ቆራጥ hashing |
+  | SM4 | {{ አካል }} | {{ዓላማ}} | AEAD (GCM/CCM) ከማይተገበር ፖሊሲ ጋር |
+- ኤስኤምኤስ ያልሆኑ ስልተ ቀመሮች በግንባታ ላይ፡ {{ OTHER_ALGORITHMS }} (ለሙሉነት)።
 
-# 3. Development & Supply Chain Controls
+# 3. ልማት እና አቅርቦት ሰንሰለት መቆጣጠሪያዎች
 
-- Source code repository: {{ REPOSITORY_URL }}
-- Deterministic build instructions:
+- የምንጭ ኮድ ማከማቻ፡ {{REPOSITORY_URL }}
+- ቆራጥ የግንባታ መመሪያዎች;
   1. `git clone {{ REPOSITORY_URL }} && git checkout {{ COMMIT_SHA }}`
-  2. `cargo build --workspace --locked --release --features "sm sm-ffi-openssl"` (adjust as needed).
-  3. SBOM generated via `cargo auditable` / CycloneDX (`{{ SBOM_PATH }}`).
-- Continuous integration environment summary:
-  | Item | Value |
-  |------|-------|
-  | Build OS / version | {{ BUILD_OS }} |
-  | Compiler toolchain | {{ TOOLCHAIN }} |
-  | OpenSSL / Tongsuo source | {{ OPENSSL_SOURCE }} |
-  | Reproducibility checksum | {{ CHECKSUM }} |
+  2. `cargo build --workspace --locked --release --features "sm sm-ffi-openssl"` (እንደ አስፈላጊነቱ ያስተካክሉ).
+  3. SBOM በ `cargo auditable` / CycloneDX (`{{ SBOM_PATH }}`) የተፈጠረ።
+- ቀጣይነት ያለው ውህደት አካባቢ ማጠቃለያ፡-
+  | ንጥል | ዋጋ |
+  |--------|
+  | የስርዓተ ክወና/ሥሪት | {{ BUILD_OS }} |
+  | የማጠናከሪያ መሳሪያ ሰንሰለት | {{ TOOLCHAIN}} |
+  | OpenSSL/Tongsuo ምንጭ | {{OPENSSL_SOURCE }} |
+  | የመባዛት ማረጋገጫ | {{ CHECKSUM }} |
 
-# 4. Key Management & Security
+# 4. ቁልፍ አስተዳደር እና ደህንነት
 
-- Default enabled SM features: {{ DEFAULTS }} (e.g., verify-only).
-- Configuration flags required for signing: {{ CONFIG_FLAGS }}.
-- Key custody approach:
-  | Item | Details |
-  |------|---------|
-  | Key generation tool | {{ KEY_TOOL }} |
-  | Storage medium | {{ STORAGE_MEDIUM }} |
-  | Backup policy | {{ BACKUP_POLICY }} |
-  | Access controls | {{ ACCESS_CONTROLS }} |
-- Incident response contacts (24/7):
-  | Role | Name | Phone | Email |
-  |------|------|-------|-------|
-  | Crypto lead | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} |
-  | Platform ops | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} |
-  | Legal liaison | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} |
+- ነባሪ የነቁ የኤስኤምኤስ ባህሪያት፡ {{DEFAULTS}} (ለምሳሌ፡ አረጋግጥ-ብቻ)።
+- ለመፈረም የውቅረት ባንዲራዎች ያስፈልጋሉ፡ {{ CONFIG_FLAGS }}።
+- ቁልፍ የጥበቃ ዘዴ;
+  | ንጥል | ዝርዝሮች |
+  |------|--------|
+  | ቁልፍ ማመንጨት መሳሪያ | {{ ቁልፍ_መሳሪያ}} |
+  | ማከማቻ መካከለኛ | {{ STORAGE_መካከለኛ }} |
+  | የመጠባበቂያ ፖሊሲ | {{ ምትኬ_ፖሊሲ}} |
+  | የመዳረሻ መቆጣጠሪያዎች | {{ ACCESS_CONTROLS}} |
+- የአደጋ ምላሽ እውቂያዎች (24/7)፦
+  | ሚና | ስም | ስልክ | ኢሜል |
+  |---------|-------|------|
+  | Crypto እርሳስ | {{ NAME}} | {{ስልክ}} | {{ EMAIL}} |
+  | መድረክ ኦፕስ | {{ NAME}} | {{ስልክ}} | {{ EMAIL}} |
+  | የህግ ግንኙነት | {{ NAME}} | {{ስልክ}} | {{ EMAIL}} |
 
-# 5. Attachments Checklist
+# 5. የአባሪዎች ማረጋገጫ ዝርዝር- [ ] የምንጭ ኮድ ቅጽበታዊ እይታ (`{{ SOURCE_ARCHIVE }}`) እና ሃሽ።
+- [] ቆራጥ የግንባታ ስክሪፕት / የመድገም ማስታወሻዎች።
+- [] SBOM (`{{ SBOM_PATH }}`) እና የጥገኝነት መግለጫ (`Cargo.lock` የጣት አሻራ)።
+- [ ] ቆራጥ የሙከራ ግልባጮች (`scripts/sm_openssl_smoke.sh`፣ `cargo test -p iroha_crypto sm`)።
+- [ ] ቴሌሜትሪ ዳሽቦርድ ወደ ውጭ መላክ የኤስኤምኤስ ታዛቢነትን ያሳያል።
+- [] ወደ ውጭ የመላክ-ቁጥጥር መግለጫ (የተለየ አብነት ይመልከቱ)።
+- [ ] የኦዲት ሪፖርቶች ወይም የሶስተኛ ወገን ግምገማዎች (ቀድሞውኑ ከተጠናቀቁ)።
 
-- [ ] Source code snapshot (`{{ SOURCE_ARCHIVE }}`) and hash.
-- [ ] Deterministic build script / reproducibility notes.
-- [ ] SBOM (`{{ SBOM_PATH }}`) and dependency manifest (`Cargo.lock` fingerprint).
-- [ ] Deterministic test transcripts (`scripts/sm_openssl_smoke.sh`, `cargo test -p iroha_crypto sm`).
-- [ ] Telemetry dashboard export demonstrating SM observability.
-- [ ] Export-control statement (see separate template).
-- [ ] Audit reports or third-party assessments (if already completed).
+# 6. የአመልካች መግለጫ
 
-# 6. Applicant Declaration
+> ከላይ ያለው መረጃ ትክክለኛ መሆኑን አረጋግጣለሁ፣ ይፋ የሆነው
+> ክሪፕቶግራፊክ ተግባራዊነት የሚመለከታቸው የPRC ህጎችን እና ደንቦችን ያከብራል፣
+> እና ድርጅቱ የቀረቡትን ቅርሶች ቢያንስ ቢያንስ እንደሚይዝ
+> ሦስት ዓመታት.
 
-> I confirm that the above information is accurate, that the disclosed
-> cryptographic functionality complies with applicable PRC laws and regulations,
-> and that the organisation will maintain the submitted artefacts for at least
-> three years.
-
-- Signature (legal representative): ________________________
-- Date: ________________________
-
+- ፊርማ (ህጋዊ ተወካይ)፡ ________________________
+- ቀን፡- __________________________________

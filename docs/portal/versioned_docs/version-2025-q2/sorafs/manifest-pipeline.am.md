@@ -7,53 +7,54 @@ generator: scripts/sync_docs_i18n.py
 source_hash: e77b792e19fbfa8e1efeddd042adbe68a48287a582a1be76aa518af7830774e2
 source_last_modified: "2026-01-05T09:28:11.996979+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# SoraFS Chunking → Manifest Pipeline
+# SoraFS Chunking → አንጸባራቂ ቧንቧ
 
-This companion to the quickstart traces the end-to-end pipeline that turns raw
-bytes into Norito manifests suitable for the SoraFS Pin Registry. The content is
-adapted from [`docs/source/sorafs/manifest_pipeline.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/manifest_pipeline.md);
-consult that document for the canonical specification and changelog.
+ይህ የፈጣን ጅምር ጓደኛ ወደ ጥሬ የሚለወጠውን ከጫፍ እስከ ጫፍ ያለውን የቧንቧ መስመር ይከታተላል
+ባይት ወደ I18NT0000000X ለSoraFS ፒን መዝገብ ተስማሚ ያሳያል። ይዘቱ ነው።
+ከ [`docs/source/sorafs/manifest_pipeline.md`] (https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/manifest_pipeline.md) የተስተካከለ;
+ያንን ሰነድ ለቀኖናዊው ዝርዝር መግለጫ እና ለውጥ ሎግ ያማክሩ።
 
-## 1. Chunk deterministically
+## 1. ቁርጥ ቁርጥ ቁርጥ
 
-SoraFS uses the SF-1 (`sorafs.sf1@1.0.0`) profile: a FastCDC-inspired rolling
-hash with a 64 KiB minimum chunk size, 256 KiB target, 512 KiB maximum, and a
-`0x0000ffff` break mask. The profile is registered in
+SoraFS የ SF-1 (`sorafs.sf1@1.0.0`) መገለጫን ይጠቀማል፡ በFastCDC አነሳሽነት የሚሽከረከር
+ሃሽ በትንሹ 64ኪባ ቁራጭ መጠን፣ 256ኪባ ዒላማ፣ ከፍተኛ 512ኪባ እና ሀ
+`0x0000ffff` መስበር ጭንብል። መገለጫው በ ውስጥ ተመዝግቧል
 `sorafs_manifest::chunker_registry`.
 
-### Rust helpers
+### ዝገት ረዳቶች
 
-- `sorafs_car::CarBuildPlan::single_file` – Emits chunk offsets, lengths, and
-  BLAKE3 digests while preparing CAR metadata.
-- `sorafs_car::ChunkStore` – Streams payloads, persists chunk metadata, and
-  derives the 64 KiB / 4 KiB Proof-of-Retrievability (PoR) sampling tree.
-- `sorafs_chunker::chunk_bytes_with_digests` – Library helper behind both CLIs.
+- `sorafs_car::CarBuildPlan::single_file` – የተቆራረጡ ማካካሻዎችን፣ ርዝመቶችን እና
+  CAR ሜታዳታ በማዘጋጀት ላይ እያለ BLAKE3 ይዋጣል።
+- `sorafs_car::ChunkStore` - የሚጫኑ ጭነቶችን ያሰራጫል፣ የተቆራረጠ ሜታዳታ እና
+  64ኪቢ/4ኪቢ መልሶ ማግኘት የሚቻልበትን ማረጋገጫ (PoR) የናሙና ዛፍ ያገኛል።
+- `sorafs_chunker::chunk_bytes_with_digests` - ከሁለቱም CLIዎች በስተጀርባ የቤተ መፃህፍት ረዳት።
 
-### CLI tooling
+### የ CLI መገልገያ
 
 ```bash
 cargo run -p sorafs_chunker --bin sorafs-chunk-dump -- ./payload.bin \
   > chunk-plan.json
 ```
 
-The JSON contains the ordered offsets, lengths, and chunk digests. Persist the
-plan when constructing manifests or orchestrator fetch specifications.
+JSON የታዘዙ ማካካሻዎችን፣ ርዝመቶችን እና ቁርጥራጭ መጭመቂያዎችን ይዟል። በጽናት
+መግለጫዎች ወይም ኦርኬስትራ ማምለጫ ዝርዝሮችን ሲገነቡ እቅድ ያውጡ።
 
-### PoR witnesses
+### የPoR ምስክሮች
 
-`ChunkStore` exposes `--por-proof=<chunk>:<segment>:<leaf>` and
-`--por-sample=<count>` so auditors can request deterministic witness sets. Pair
-those flags with `--por-proof-out` or `--por-sample-out` to record the JSON.
+`ChunkStore` `--por-proof=<chunk>:<segment>:<leaf>` እና
+`--por-sample=<count>` ስለዚህ ኦዲተሮች ቆራጥ የምሥክርነት ስብስቦችን መጠየቅ ይችላሉ። ጥንድ
+JSON ለመቅዳት እነዚያ ባንዲራዎች ከ `--por-proof-out` ወይም I18NI0000019X ጋር።
 
-## 2. Wrap a manifest
+## 2. አንጸባራቂ መጠቅለል
 
-`ManifestBuilder` combines chunk metadata with governance attachments:
+`ManifestBuilder` ቁራጭ ሜታዳታን ከአስተዳደር አባሪዎች ጋር ያጣምራል።
 
-- Root CID (dag-cbor) and CAR commitments.
-- Alias proofs and provider capability claims.
-- Council signatures and optional metadata (e.g., build IDs).
+- Root CID (dag-cbor) እና CAR ቁርጠኝነት።
+- ተለዋጭ ማስረጃዎች እና የአቅራቢዎች ችሎታ ይገባኛል ጥያቄዎች።
+- የምክር ቤት ፊርማዎች እና አማራጭ ሜታዳታ (ለምሳሌ የግንባታ መታወቂያዎች)።
 
 ```bash
 cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
@@ -64,57 +65,57 @@ cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
   --json-out=payload.report.json
 ```
 
-Important outputs:
+ጠቃሚ ውጤቶች፡-
 
-- `payload.manifest` – Norito-encoded manifest bytes.
-- `payload.report.json` – Human/automation readable summary, including
-  `chunk_fetch_specs`, `payload_digest_hex`, CAR digests, and alias metadata.
-- `payload.manifest_signatures.json` – Envelope containing manifest BLAKE3
-  digest, chunk-plan SHA3 digest, and sorted Ed25519 signatures.
+- `payload.manifest` – Norito የተመሰጠረ አንጸባራቂ ባይት።
+- `payload.report.json` - የሰው / አውቶሜትድ ሊነበብ የሚችል ማጠቃለያ, ጨምሮ
+  `chunk_fetch_specs`፣ `payload_digest_hex`፣ CAR መፈጨት እና ቅጽል ሜታዳታ።
+- `payload.manifest_signatures.json` - አንጸባራቂ BLAKE3 የያዘ ፖስታ
+  መፍጨት፣ ቸንክ-ፕላን SHA3 መፍጨት፣ እና የ Ed25519 ፊርማዎችን ደርድር።
 
-Use `--manifest-signatures-in` to verify envelopes supplied by external
-signatories before writing them back out, and `--chunker-profile-id` or
-`--chunker-profile=<handle>` to lock the registry selection.
+በውጫዊ የቀረቡ ኤንቨሎፖችን ለማረጋገጥ `--manifest-signatures-in` ይጠቀሙ
+ፈራሚዎች መልሰው ከመጻፍዎ በፊት, እና `--chunker-profile-id` ወይም
+የመዝገብ ምርጫን ለመቆለፍ `--chunker-profile=<handle>`።
 
-## 3. Publish and pin
+## 3. አትም እና ፒን
 
-1. **Governance submission** – Provide the manifest digest and signature
-   envelope to the council so the pin can be admitted. External auditors should
-   store the chunk-plan SHA3 digest alongside the manifest digest.
-2. **Pin payloads** – Upload the CAR archive (and optional CAR index) referenced
-   in the manifest to the Pin Registry. Ensure the manifest and CAR share the
-   same root CID.
-3. **Record telemetry** – Persist the JSON report, PoR witnesses, and any fetch
-   metrics in release artifacts. These records feed operator dashboards and
-   help reproduce issues without downloading large payloads.
+1. ** የአስተዳደር ግቤት *** - አንጸባራቂውን መፈጨት እና ፊርማ ያቅርቡ
+   ፒኑ እንዲገባ ኤንቨሎፕ ወደ ምክር ቤቱ። የውጭ ኦዲተሮች አለባቸው
+   የ chunk-plan SHA3 መፍጨት ከማንፀባረቂያው መፈጨት ጋር ያከማቹ።
+2. ** የሚጫኑ ጭነቶችን ይሰኩ** - የተጠቀሰውን የCAR ማህደር (እና አማራጭ የCAR ኢንዴክስ) ይስቀሉ
+   በማንፀባረቂያው ውስጥ ወደ ፒን መዝገብ ቤት. አንጸባራቂውን ያረጋግጡ እና CAR ማጋራቱን ያረጋግጡ
+   ተመሳሳይ ስር CID.
+3. ** ቴሌሜትሪ ይቅረጹ *** - የJSON ዘገባን፣ የPoR ምስክሮችን እና ማንኛውንም ማምጣት
+   በመለቀቂያ ቅርሶች ውስጥ መለኪያዎች. እነዚህ መዝገቦች ከዋኝ ዳሽቦርዶች እና
+   ትላልቅ ጭነቶችን ሳያወርዱ ችግሮችን እንደገና ለማራባት ያግዙ።
 
-## 4. Multi-provider fetch simulation
+## 4. ባለብዙ አቅራቢ አስመሳይ
 
-`cargo run -p sorafs_car --bin sorafs_fetch -- --plan=payload.report.json \
-  --provider=alpha=providers/alpha.bin --provider=beta=providers/beta.bin#4@3 \
-  --output=payload.bin --json-out=fetch_report.json`
+`የጭነት ሩጫ -p sorafs_car --bin sorafs_fetch -- --plan=payload.report.json \
+  --አቅራቢ=አልፋ=አቅራቢዎች/አልፋ.ቢን --አቅራቢ=ቤታ=አቅራቢዎች/beta.bin#4@3 \
+  --output=የክፍያ ጭነት.bin --json-out=fetch_report.json`
 
-- `#<concurrency>` increases per-provider parallelism (`#4` above).
-- `@<weight>` tunes scheduling bias; defaults to 1.
-- `--max-peers=<n>` caps the number of providers scheduled for a run when
-  discovery yields more candidates than desired.
-- `--expect-payload-digest` and `--expect-payload-len` guard against silent
-  corruption.
-- `--provider-advert=name=advert.to` verifies provider capabilities before
-  using them in the simulation.
-- `--retry-budget=<n>` overrides the per-chunk retry count (default: 3) so CI
-  can surface regressions faster when testing failure scenarios.
+- `#<concurrency>` በአንድ አቅራቢ ትይዩ ይጨምራል (`#4` ከላይ)።
+- `@<weight>` ዜማዎች መርሐግብር አድልዎ; ነባሪዎች ወደ 1.
+- `--max-peers=<n>` አንድ አሂድ ጊዜ መርሐግብር አቅራቢዎች ብዛት caps
+  ግኝቱ ከተፈለገው በላይ ብዙ እጩዎችን ይሰጣል።
+- `--expect-payload-digest` እና `--expect-payload-len` ከዝምታ ይጠብቁ
+  ሙስና.
+- `--provider-advert=name=advert.to` የአቅራቢውን አቅም ከዚህ በፊት ያረጋግጣል
+  በማስመሰል ውስጥ እነሱን መጠቀም.
+- `--retry-budget=<n>` በእያንዳንዱ-ቻንክ የድጋሚ ሙከራ ቆጠራን ይሽራል (ነባሪ፡ 3) ስለዚህ CI
+  የብልሽት ሁኔታዎችን በሚፈትሽበት ጊዜ ድግግሞሾችን በፍጥነት ማየት ይችላል።
 
-`fetch_report.json` surfaces aggregated metrics (`chunk_retry_total`,
-`provider_failure_rate`, etc.) suitable for CI assertions and observability.
+`fetch_report.json` የወለል ንጣፎች የተዋሃዱ መለኪያዎች (`chunk_retry_total`፣
+`provider_failure_rate`, ወዘተ) ለ CI ማረጋገጫዎች እና ታዛቢነት ተስማሚ.
 
-## 5. Registry updates & governance
+## 5. የመዝገብ ማሻሻያ እና አስተዳደር
 
-When proposing new chunker profiles:
+አዲስ chunker መገለጫዎችን ሲያቀርቡ፡-
 
-1. Author the descriptor in `sorafs_manifest::chunker_registry_data`.
-2. Update `docs/source/sorafs/chunker_registry.md` and related charters.
-3. Regenerate fixtures (`export_vectors`) and capture signed manifests.
-4. Submit the charter compliance report with governance signatures.
+1. ገላጭውን ደራሲ በ `sorafs_manifest::chunker_registry_data`.
+2. `docs/source/sorafs/chunker_registry.md` እና ተዛማጅ ቻርተሮችን ያዘምኑ።
+3. የቤት ዕቃዎችን እንደገና ማመንጨት (`export_vectors`) እና የተፈረሙ መግለጫዎችን ይያዙ።
+4. የቻርተሩን ተገዢነት ሪፖርት ከአስተዳደር ፊርማ ጋር ያቅርቡ.
 
-Automation should prefer canonical handles (`namespace.name@semver`) and fall
+አውቶሜሽን ቀኖናዊ እጀታዎችን (`namespace.name@semver`) እና መውደቅን መምረጥ አለበት።

@@ -8,60 +8,62 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraFS Direct-Mode Fallback Pack (SNNet-5a)
 sidebar_label: Direct-Mode Fallback Pack
 description: Required configuration, compliance checks, and rollout steps when operating SoraFS in direct Torii/QUIC mode during the SNNet-5a transition.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
+:::དྲན་ཐོའི་འབྱུང་ཁུངས།
 :::
 
-SoraNet circuits remain the default transport for SoraFS, but roadmap item **SNNet-5a** requires a regulated fallback so operators can keep deterministic read-access while the anonymity rollout completes. This pack captures the CLI / SDK knobs, configuration profiles, compliance tests, and deployment checklist needed to run SoraFS in direct Torii/QUIC mode without touching the privacy transports.
+SoraNet གློག་ལམ་ཚུ་ SoraFS གི་དོན་ལུ་ སྔོན་སྒྲིག་སྐྱེལ་འདྲེན་སྦེ་ལུསཔ་ཨིན་རུང་ ལམ་སྟོན་གྱི་རྣམ་གྲངས་ **SNet-5a** འདི་ བཀོལ་སྤྱོད་པ་ཚུ་གིས་ མིང་མ་བཀོད་པར་ མཇུག་བསྡུ་བའི་སྐབས་ བཀོལ་སྤྱོད་པ་ཚུ་གིས་ གཏན་འབེབས་ལྷག་ནིའི་འཛུལ་སྤྱོད་འདི་ བཞག་ཚུགས། འ་ནི་ཐུམ་སྒྲིལ་འདི་གིས་ སི་ཨེལ་ཨའི་ / ཨེསི་ཌི་ཀེ་ མཛུབ་གནོན་དང་ རིམ་སྒྲིག་གསལ་སྡུད་ བསྟར་སྤྱོད་བརྟག་དཔྱད་ དེ་ལས་ བཀྲམ་སྤེལ་ཞིབ་དཔྱད་ཐོ་ཡིག་ཚུ་ སྒེར་གསང་སྐྱེལ་འདྲེན་ཚུ་ མ་གཡེང་བར་ Torii/QUIC ཐབས་ལམ་ནང་ གཡོག་བཀོལ་དགོཔ་ཨིན།
 
-The fallback applies to staging and regulated production environments until SNNet-5 through SNNet-9 clear their readiness gates. Keep the artefacts below alongside the usual SoraFS deployment collateral so operators can swap between anonymous and direct modes on demand.
+མེ་ཏོག་འདི་ SNNet-5 ལས་ SNNet-9 ལས་ SNet-9 ལས་ SNet-9 ལས་ SNet-9 ཚུན་ཚོད་ གྲ་སྒྲིག་ཡོད་པའི་སྒོ་ར་ཚུ་ གསལ་ཏོག་ཏོ་མ་འགྱོ་ཚུན་ཚོད་ staging དང་ བཟོ་བསྐྲུན་གྱི་མཐའ་འཁོར་ཚུ་ བཀག་འཛིན་འབདཝ་ཨིན། གཤམ་གསལ་གྱི་ ཅ་ཆས་ཚུ་ སྤྱིར་བཏང་གི་ I18NT0000004X བཀྲམ་སྤེལ་གྱི་ བཀྲམ་སྤེལ་གྱི་ བརྟན་བཞུགས་དང་གཅིག་ཁར་ བཀོལ་སྤྱོད་པ་ཚུ་གིས་ མིང་མེད་དང་ ཐད་ཀར་དུ་ དགོ་འདོད་ཀྱི་ ཐབས་ལམ་ཚུ་གི་བར་ན་ བརྗེ་སོར་འབད་ཚུགས།
 
-## 1. CLI & SDK Flags
+## 1. CLI & SDK རྒྱུ།
 
-- `sorafs_cli fetch --transport-policy=direct-only …` disables relay scheduling and enforces Torii/QUIC transports. CLI help now lists `direct-only` as an accepted value.
-- SDKs must set `OrchestratorConfig::with_transport_policy(TransportPolicy::DirectOnly)` whenever they expose a “direct mode” toggle. The generated bindings in `iroha::ClientOptions` and `iroha_android` forward the same enum.
-- Gateway harnesses (`sorafs_fetch`, Python bindings) can parse the direct-only toggle via the shared Norito JSON helpers so automation receives identical behaviour.
+- I18NI00000000017X རི་ལེ་གི་དུས་ཚོད་བཟོ་ནི་དང་ Torii/QUIC སྐྱེལ་འདྲེན་ཚུ་ ལྕོགས་མིན་བཟོཝ་ཨིན། CLI གྲོགས་རམ་གྱིས་ ངོས་ལེན་འབད་ཡོད་པའི་གནས་གོང་སྦེ་ I18NI0000018X ཐོ་བཀོད་འབདཝ་ཨིན།
+- ཨེསི་ཌི་ཀེ་ཚུ་གིས་ “ཐད་ཀར་ཐབས་ལམ་” བསྒྱུར་བཅོས་འབད་བའི་སྐབས་ `OrchestratorConfig::with_transport_policy(TransportPolicy::DirectOnly)` གཞི་སྒྲིག་འབད་དགོ། I18NI0000000020X དང་ I18NI000000021X ནང་ བཏོན་པའི་བཅིངས་ཚུ་ དེ་བཟུམ་ཅིག་ གདོང་ཁར་འགྱོཝ་ཨིན།
+- གཱེཊ་ཝེ་ ཧར་ནེསི་ (I18NI0000022, Python bindings) གིས་ I18NT0000000000X JSON གྲོགས་རམ་པ་ཚུ་ ཐད་ཀར་དུ་ བསྒྱུར་བཅོས་འབད་ཚུགསཔ་ལས་ འཕྲུལ་ཆས་ཀྱིས་ སྤྱོད་ལམ་གཅིག་མཚུངས་སྦེ་ ཐོབ་ཚུགས།
 
-Document the flag in partner-facing runbooks and wire feature toggles through `iroha_config` rather than environment variables.
+མཐའ་འཁོར་འགྱུར་ཅན་ཚུ་ལས་ I18NI0000023X བརྒྱུད་དེ་ མཉམ་འབྲེལ་གྱི་ རན་དེབ་དང་ གློག་ཐག་ཁྱད་རྣམ་ཚུ་ནང་ དར་ཆ་འདི་ ཡིག་ཐོག་ལུ་བཀོད་དགོ།
 
-## 2. Gateway Policy Profiles
+## 2. གེཊི་ཝེ་སྲིད་བྱུས་གསལ་སྡུད།
 
-Use Norito JSON to persist deterministic orchestrator configuration. The example profile in `docs/examples/sorafs_direct_mode_policy.json` encodes:
+གཏན་འབེབས་བཟོ་ནི་ལུ་ Norito JSON ལག་ལེན་འཐབ། `docs/examples/sorafs_direct_mode_policy.json` ནང་དཔེ་གསལ་སྡུད་འདི་:
 
-- `transport_policy: "direct_only"` — reject providers that only advertise SoraNet relay transports.
-- `max_providers: 2` — cap direct peers to the most reliable Torii/QUIC endpoints. Adjust based on regional compliance allowances.
-- `telemetry_region: "regulated-eu"` — label emitted metrics so telemetry dashboards and audits distinguish fallback runs.
-- Conservative retry budgets (`retry_budget: 2`, `provider_failure_threshold: 3`) to avoid masking misconfigured gateways.
+- `transport_policy: "direct_only"` — SoraNet རི་ལེ་སྐྱེལ་འདྲེན་གྱི་ཁྱབ་བསྒྲགས་འབད་མི་ བྱིན་མི་བྱིན་མི་ཚུ་ ངོས་ལེན་མ་འབད་བར་བཞག།
+- I18NI0000000026X — ཀེབ་ཐད་ཀར་གྱི་མཉམ་རོགས་ བློ་གཏད་ཅན་གྱི་ I18NT000000007X/QUIC མཇུག་བསྡུ། ལུང་ཕྱོགས་བསྟར་སྤྱོད་ཀྱི་འཐུས་ཚུ་ལུ་གཞི་བཞག་སྟེ་ བདེ་སྒྲིག་འབད་ནི།
+- I18NI000000027X — བརྡ་རྟགས་ཚུ་ བཏོན་ཡོདཔ་ལས་ ཊེ་ལི་མི་ཊི་ ཌེཤ་བོརཌི་དང་ རྩིས་ཞིབ་ཚུ་གིས་ ཕོལཀ་བེག་ཚུ་ དབྱེ་བ་ཕྱེ་ཚུགས།
+- རིམ་སྒྲིག་ལོག་སྤྱོད་འབད་མི་ འཛུལ་སྒོ་ཚུ་ ཁ་བསྡམ་ནི་ལས་ བཀག་ཐབས་ལུ་ རྙིང་མའི་ འཆར་དངུལ་ (I18NI0000028X, `provider_failure_threshold: 3`)
 
-Load the JSON through `sorafs_cli fetch --config` (automation) or the SDK bindings (`config_from_json`) before exposing the policy to operators. Persist the scoreboard output (`persist_path`) for audit trails.
+བཀོལ་སྤྱོད་པ་ཚུ་ལུ་ སྲིད་བྱུས་འདི་ གསལ་སྟོན་མ་འབད་བའི་ཧེ་མ་ `sorafs_cli fetch --config` (automation) ཡང་ན་ ཨེསི་ཌི་ཀེ་ བཱའིན་ཌིང་ (I18NI000000031X) བརྒྱུད་དེ་ JSON མངོན་གསལ་འབད། རྩིས་ཞིབ་ལམ་ལུགས་ཚུ་གི་དོན་ལུ་ སྐུགས་ཤོག་ཐོན་འབྲས་ (I18NI0000032X) ལུ་བརྩོན་ཤུགས་འབད།
 
-Gateway-side enforcement knobs are captured in `docs/examples/sorafs_gateway_direct_mode.toml`. The template mirrors the output from `iroha app sorafs gateway direct-mode enable`, disabling envelope/admission checks, wiring rate-limit defaults, and populating the `direct_mode` table with plan-derived hostnames and manifest digests. Replace the placeholder values with your rollout plan before committing the snippet to configuration management.
+འཛུལ་སྒོ་གི་ཕྱོགས་བསྟར་སྤྱོད་ཀྱི་མཛུབ་མོ་ཚུ་ I18NI000000033X ནང་ལུ་བཟུང་ཡོདཔ་ཨིན། ཊེམ་པེལེཊི་འདི་གིས་ `iroha app sorafs gateway direct-mode enable` ལས་ ཐོན་འབྲས་འདི་ ཡིག་ཆ་/འཛུལ་ཞུགས་ཞིབ་དཔྱད་ཚུ་ ལྕོགས་མིན་བཟོ་ནི་ གློག་ཐག་ཚད་ཚད་ཀྱི་སྔོན་སྒྲིག་ དེ་ལས་ འཆར་གཞིའི་གྲུབ་འབྲས་ཡོད་པའི་ ཧོསིཊི་མིང་དང་ གསལ་སྟོན་གྱི་ ཟས་བཅུད་ཚུ་ བཀྲམ་སྟོན་འབདཝ་ཨིན། རིམ་སྒྲིག་འཛིན་སྐྱོང་ལུ་ ཆ་ཚན་འདི་ ཁས་བླངས་མ་འབད་བའི་ཧེ་མ་ ས་གནས་འཛིན་མི་གནས་གོང་ཚུ་ ཁྱོད་རའི་ བཤུད་འཆར་གཞི་དང་གཅིག་ཁར་ ཚབ་བཙུགས།
 
-## 3. Compliance Test Suite
+## 3. མཐུན་པའི་ཚོད་ལྟའི་རྒྱུགས་གཞི།
 
-Direct-mode readiness now includes coverage in both the orchestrator and CLI crates:
+ཐད་ཀར་ཐབས་ལམ་གྱི་གྲ་སྒྲིག་ནང་ ད་ལྟོ་ སྙན་ཆའི་སྡེ་ཚན་དང་ སི་ཨེལ་ཨའི་ ཀེརེཊ་གཉིས་ཆ་རའི་ནང་ ཁྱབ་ཚད་ཚུ་ ཚུདཔ་ཨིན།
 
-- `direct_only_policy_rejects_soranet_only_providers` guarantees that `TransportPolicy::DirectOnly` fails fast when every candidate advert only supports SoraNet relays.【crates/sorafs_orchestrator/src/lib.rs:7238】
-- `direct_only_policy_prefers_direct_transports_when_available` ensures Torii/QUIC transports are used when present and that SoraNet relays are excluded from the session.【crates/sorafs_orchestrator/src/lib.rs:7285】
-- `direct_mode_policy_example_is_valid` parses `docs/examples/sorafs_direct_mode_policy.json` to ensure documentation stays aligned with the helper utilities.【crates/sorafs_orchestrator/src/lib.rs:7509】【docs/examples/sorafs_direct_mode_policy.json:1】
-- `fetch_command_respects_direct_transports` exercises `sorafs_cli fetch --transport-policy=direct-only` against a mocked Torii gateway, providing a smoke test for regulated environments that pin direct transports.【crates/sorafs_car/tests/sorafs_cli.rs:2733】
-- `scripts/sorafs_direct_mode_smoke.sh` wraps the same command with the policy JSON and scoreboard persistence for rollout automation.
+- I18NI000000036X གིས་ I18NI000000037X གིས་ SoraNet relas རྐྱངམ་ཅིག་རྒྱབ་སྐྱོར་འབད་བའི་སྐབས་ I18NI000000037X འདི་མགྱོགས་དྲགས་སྦེ་འཐུས་ཤོར་བྱུང་ཡོདཔ་ངེས་གཏན་བཟོཝ་ཨིན།
+- I18NI000000038X གིས་ I18NT0000008X/QUIC སྐྱེལ་འདྲེན་ཚུ་ ད་ལྟོ་ཡོད་པའི་སྐབས་དང་ SoraNet རི་ལེ་ཚུ་ ལཱ་ཡུན་འདི་ནང་ལས་ ཕྱིར་བཏོན་འབད་ཡོདཔ་ངེས་གཏན་བཟོཝ་ཨིན།
+- I18NI000000039X མིང་དཔྱད་ `docs/examples/sorafs_direct_mode_policy.json` ཡིག་ཆ་ཚུ་ གྲོགས་རམ་གྱི་ལག་ལེན་དང་མཐུན་སྒྲིག་འབད་ཚུགསཔ་བཟོ་ནིའི་དོན་ལུ་ 【ཀརཔ་/ཨེསི་ཨར་སི་/ལིབ་/lib.s:7509】「docs/exples/sorafs_direct_mode_porcy.json:11】
+- I18NI000000041X སྦྱོང་བརྡར། `sorafs_cli fetch --transport-policy=direct-only` གིས་ Torii གི་སྒོ་ཁ་ལུ་འགོག་པའི་ཐོག་ལས་ འགྲུལ་བསྐྱོད་འབད་མི་ བཀག་འཛིན་མཐའ་འཁོར་གྱི་དོན་ལུ་ དུ་ཁའི་བརྟག་དཔྱད་ཅིག་བྱིན་དོ་ཡོདཔ་ཨིན།
+- `scripts/sorafs_direct_mode_smoke.sh` གིས་ JSON སྲིད་བྱུས་དང་ བསྐོར་ཐེངས་རང་བཞིན་གྱི་དོན་ལུ་ བརྡ་བཀོད་གཅིག་མཚུངས་དང་གཅིག་ཁར་ བཀབ་བཞགཔ་ཨིན།
 
-Run the focused suite before publishing updates:
+དུས་མཐུན་ཚུ་དཔར་བསྐྲུན་མ་འབད་བའི་ཧེ་མ་ གཙོ་བོར་བཏོན་ཡོད་པའི་ཁང་མིག་འདི་གཡོག་བཀོལ།
 
 ```bash
 cargo test -p sorafs_orchestrator direct_only_policy
 cargo test -p sorafs_car --features cli fetch_command_respects_direct_transports
 ```
 
-If workspace compilation fails because of upstream changes, record the blocking error in `status.md` and rerun once the dependency catches up.
+ལཱ་གི་ས་སྒོ་ཚུ་ ཡར་འཕེལ་གྱི་བསྒྱུར་བཅོས་ལས་བརྟེན་ཏེ་ འཐུས་ཤོར་བྱུང་པ་ཅིན་ `status.md` ནང་ལུ་ བཀག་ཆ་འབད་བའི་འཛོལ་བ་འདི་ཐོ་བཀོད་འབད་ཞིནམ་ལས་ བརྟེན་པའི་འཛིན་བཟུང་འབད་ཚརཝ་ཅིག་ ལོག་གཡོག་བཀོལ།
 
-## 4. Automated Smoke Runs
+## 4. རང་འཇལ།
 
-CLI coverage alone does not surface environment-specific regressions (e.g., gateway policy drift or manifest mismatches). A dedicated smoke helper lives in `scripts/sorafs_direct_mode_smoke.sh` and wraps `sorafs_cli fetch` with the direct-mode orchestrator policy, scoreboard persistence, and summary capture.
+CLIགི་ཁྱབ་ཚད་འདི་རྐྱངམ་ཅིག་གིས་ མཐའ་འཁོར་གནས་སྟངས་ལུ་དམིགས་བསལ་གྱི་འགྱུར་ལྡོག་ཚུ་ ཁ་ཐོག་ལུ་མི་བཏུབ་པས། ཐ་མག་འཐེན་མི་ཅིག་ I18NI000000045X ནང་ལུ་སྡོད་ཞིནམ་ལས་ I18NI000000046X ནང་ལུ་ ཐད་ཀར་གྱི་སྡེ་ཚན་སྲིད་བྱུས་དང་ སྐུགས་བརྟན་ཏོག་ཏོ་ དེ་ལས་ བཅུད་བསྡུས་འཛིན་བཟུང་ཚུ་ བཏོནམ་ཨིན།
 
-Example usage:
+དཔེར་བརྗོད:
 
 ```bash
 ./scripts/sorafs_direct_mode_smoke.sh \
@@ -69,57 +71,57 @@ Example usage:
   --provider name=gw-regulated,provider-id=001122...,base-url=https://gw.example/direct/,stream-token=BASE64
 ```
 
-- The script respects both CLI flags and key=value config files (see `docs/examples/sorafs_direct_mode_smoke.conf`). Populate the manifest digest and provider advert entries with production values before running.
-- `--policy` defaults to `docs/examples/sorafs_direct_mode_policy.json`, but any orchestrator JSON produced by `sorafs_orchestrator::bindings::config_to_json` can be supplied. The CLI accepts the policy via `--orchestrator-config=PATH`, enabling reproducible runs without hand-tuning flags.
-- When `sorafs_cli` is not on `PATH` the helper builds it from the
-  `sorafs_orchestrator` crate (release profile) so smoke runs exercise the
-  shipping direct-mode plumbing.
-- Outputs:
-  - Assembled payload (`--output`, defaults to `artifacts/sorafs_direct_mode/payload.bin`).
-  - Fetch summary (`--summary`, defaults alongside the payload) containing the telemetry region and provider reports used for rollout evidence.
-  - Scoreboard snapshot persisted to the path declared in the policy JSON (e.g., `fetch_state/direct_mode_scoreboard.json`). Archive this alongside the summary in change tickets.
-- Adoption gate automation: once the fetch completes the helper invokes `cargo xtask sorafs-adoption-check` using the persisted scoreboard and summary paths. The required quorum defaults to the number of providers supplied on the command line; override it with `--min-providers=<n>` when you need a larger sample. Adoption reports are written next to the summary (`--adoption-report=<path>` can set a custom location) and the helper passes `--require-direct-only` by default (matching the fallback) and `--require-telemetry` whenever you supply the matching CLI flag. Use `XTASK_SORAFS_ADOPTION_FLAGS` to forward additional xtask arguments (for example `--allow-single-source` during an approved downgrade so the gate both tolerates and enforces the fallback). Only skip the adoption gate with `--skip-adoption-check` when running local diagnostics; the roadmap requires every regulated direct-mode run to include the adoption report bundle.
+- ཡིག་ཚུགས་འདི་གིས་ སི་ཨེལ་ཨའི་ དར་ཆ་ཚུ་གཉིས་ཆ་ར་ལུ་བརྩི་མཐོང་འབདཝ་ཨིནམ་དང་ ལྡེ་མིག་=གནས་གོང་རིམ་སྒྲིག་ཡིག་སྣོད་ (`docs/examples/sorafs_direct_mode_smoke.conf` ལུ་བལྟ།)། མངོན་གསལ་འབད་མི་ ཟས་བཅུད་དང་ བྱིན་མི་ བརྡ་ཁྱབ་ཐོ་བཀོད་ཚུ་ བཀོལ་སྤྱོད་མ་འབད་བའི་ཧེ་མ་ བཟོ་བསྐྲུན་གནས་གོང་ཚུ་དང་གཅིག་ཁར་ མི་རློབས་བཏོན།
+- `--policy` ལུ་ I18NI000000049X ལུ་སྔོན་སྒྲིག་འབདཝ་ཨིན་རུང་ `sorafs_orchestrator::bindings::config_to_json` གིས་བཟོ་མི་ རོལ་དབྱངས་ཚོགས་པ་ JSON གང་རུང་ཅིག་ བཀྲམ་སྤེལ་འབད་ཚུགས། CLI གིས་ I18NI000000051X བརྒྱུད་དེ་ སྲིད་བྱུས་འདི་ངོས་ལེན་འབདཝ་ཨིནམ་དང་ བསྐྱར་བཟོ་འབད་བཏུབ་པའི་ བསྐྱར་བཟོ་འབད་ཚུགས་པའི་ དར་ཆ་ཚུ་ ལགཔ་གིས་ བསྒྱིར་བའི་ དར་ཆ་མེད་པར་ གཡོག་བཀོལཝ་ཨིན།
+- I18NI000000052X གིས་ I18NI000000053X ལུ་མེད་པའི་སྐབས་ གྲོགས་རམ་པ་གིས་ འདི་ནང་ལས་བཟོ་བསྐྲུན་འབདཝ་ཨིན།
+  `sorafs_orchestrator` cret (བཏོན་པའི་གསལ་སྡུད།) གིས་ ལུས་སྦྱོང་འབདཝ་ཨིན།
+  ཐད་ཀར་ཐབས་ལམ་ཆུ་རྫིང་བསྐྱེལ་འདྲེན་འབད་ནི།
+- ཐོན་འབྲས་ཚུ།
+  - བསྡུ་སྒྲིག་འབད་ཡོད་པའི་ པེ་ལོཌ་ (I18NI0000005X, `artifacts/sorafs_direct_mode/payload.bin` ལུ་སྔོན་སྒྲིག་འབདཝ་ཨིན།)
+  - ཕེཆ་བཅུད་བསྡུས་ (`--summary`, བསྐྱར་སྒྲིག་ཚུ་ པེ་ལོཌ་གི་སྦོ་ལོགས་ཁར་) བརྒྱུད་འཕྲིན་ལུང་ཕྱོགས་དང་ བཀྲམ་སྤེལ་སྒྲུབ་བྱེད་ཀྱི་དོན་ལུ་ལག་ལེན་འཐབ་མི་ བྱིན་མི་སྙན་ཞུ་ཚུ་ཡོདཔ་ཨིན།
+  - སྐུགས་ཚད་ཀྱི་པར་ལེན་འདི་ སྲིད་བྱུས་ནང་གསལ་བསྒྲགས་འབད་མི་འགྲུལ་ལམ་ལུ་གནས་ཏེ་ཡོདཔ་ཨིན། (དཔེར་ན་ `fetch_state/direct_mode_scoreboard.json`) བསྒྱུར་བཅོས་ཀྱི་ཤོག་འཛིན་ཚུ་ནང་ བཅུད་བསྡུས་དང་གཅིག་ཁར་ འདི་གཏན་མཛོད་འབད།
+- ངོས་ལེན་གྱི་སྒོ་ར་རང་བཞིན་: ཕིཊི་གིས་ མཇུག་བསྡུ་ཞིནམ་ལས་ གྲོགས་རམ་པ་དེ་ མཇུག་བསྡུ་ཚར་བའི་ཤུལ་ལུ་ རྟག་བརྟན་གྱི་སྐུགས་དང་ བཅུད་བསྡུས་འགྲུལ་ལམ་ཚུ་ལག་ལེན་འཐབ་སྟེ་ `cargo xtask sorafs-adoption-check` འབོད་བརྡ་འབདཝ་ཨིན། དགོས་མཁོའི་ཚད་གཞི་འདི་ བརྡ་བཀོད་གྲལ་ཐིག་གུ་བཀྲམ་སྤེལ་འབད་ཡོད་པའི་བྱིན་མི་ཚུ་གི་གྱངས་ཁ་ལུ་སྔོན་སྒྲིག་འབདཝ་ཨིན། དཔེ་ཚད་སྦོམ་དགོ་པའི་སྐབས་ `--min-providers=<n>` དང་ཅིག་ཁར་ བཀག་ཆ་འབད། བཅུད་བསྡུས་སྙན་ཞུ་ཚུ་ བཅུད་བསྡུས་ (I18NI0000061X གིས་ སྲོལ་སྒྲིག་གནས་ཁོངས་ཅིག་གཞི་སྒྲིག་འབད་ཚུགསཔ་ཨིན་) དེ་ལས་ གྲོགས་རམ་པ་གིས་ སྔོན་སྒྲིག་(ཕོལ་བཱེཀ་) དང་ I18NI000000063X གིས་ མཐུན་སྒྲིག་སི་ཨེལ་ཨའི་རྒྱལ་དར་བཀྲམ་སྤེལ་འབད་བའི་སྐབས་ སྔོན་སྒྲིག་ (མཐུན་སྒྲིག་) དང་ `--require-telemetry` བརྒྱུད་དེ་འགྱོཝ་ཨིན། I18NI000000064X ལག་ལེན་འཐབ། xtask སྒྲུབ་རྟགས་ཁ་སྐོང་འབད་ནི་ལུ་ (དཔེར་ན་ `--allow-single-source` འདི་ ཆ་འཇོག་འབད་ཡོད་པའི་མར་ཕབ་ཀྱི་སྐབས་ལུ་ཨིནམ་ལས་ སྒོ་ར་འདི་ བཟོད་བསྲན་དང་ བསྟར་སྤྱོད་འབདཝ་ཨིན།) ས་གནས་ཀྱི་ནད་བརྟག་ཚུ་གཡོག་བཀོལ་བའི་སྐབས་ `--skip-adoption-check` དང་ཅིག་ཁར་ ཆ་འཇོག་གི་སྒོ་འདི་རྐྱངམ་ཅིག་ གོམ་འགྱོ་དགོ། ལམ་སྟོན་འདི་གིས་ ཆ་འཇོག་སྙན་ཞུའི་སྙན་ཞུ་འདི་ བཙུགས་ནིའི་དོན་ལུ་ ཁྲིམས་ལུགས་ཐད་ཀར་གྱི་ ཐད་ཀར་ཐབས་ལམ་ག་ར་དགོཔ་ཨིན།
 
-## 5. Rollout Checklist
+## 5. ཐོ་འགོད་ཐོ་ཡིག།
 
-1. **Configuration freeze:** Store the direct-mode JSON profile in your `iroha_config` repository and record the hash in your change ticket.
-2. **Gateway audit:** Confirm Torii endpoints enforce TLS, capability TLVs, and audit logging prior to flipping direct mode. Publish the gateway policy profile to operators.
-3. **Compliance sign-off:** Share the updated playbook with compliance / regulatory reviewers and capture approvals for running outside the anonymity overlay.
-4. **Dry run:** Execute the compliance test suite plus a staging fetch against known-good Torii providers. Archive scoreboard outputs and CLI summaries.
-5. **Production cutover:** Announce the change window, flip `transport_policy` to `direct_only` (if you had opted into `soranet-first`), and monitor the direct-mode dashboards (`sorafs_fetch` latency, provider failure counters). Document the rollback plan so you can return to SoraNet-first once SNNet-4/5/5a/5b/6a/7/8/12/13 graduate in `roadmap.md:532`.
-6. **Post-change review:** Attach scoreboard snapshots, fetch summaries, and monitoring results to the change ticket. Update `status.md` with the effective date and any anomalies.
+1. **རིམ་སྒྲིག་གྱང་ཤུགས་:** ཁྱོད་ཀྱི་ `iroha_config` མཛོད་ཁང་ནང་ ཐད་ཀར་གྱི་ཐབས་ལམ་ JSON གསལ་སྡུད་འདི་ གསོག་འཇོག་འབད་ཞིནམ་ལས་ ཁྱོད་ཀྱི་བསྒྱུར་བཅོས་ཤོག་བྱང་ནང་ ཧ་ཤི་འདི་ཐོ་བཀོད་འབད།
+2. **Gateway རྩིས་ཞིབ་:** I18NT0000010X མཐའ་མཚམས་ཚུ་ TLS དང་ ལྕོགས་གྲུབ་ TLVs དེ་ལས་ ཐད་ཀར་ཐབས་ལམ་སྔོན་སྒྲིག་འབད་བའི་ཧེ་མ་ རྩིས་ཞིབ་དྲན་ཐོ་ཚུ་ བཀག་འཛིན་འབདཝ་ཨིན། བཀོལ་སྤྱོད་པ་ཚུ་ལུ་ སྒོ་སྒྲིག་སྲིད་བྱུས་གསལ་སྡུད་དཔར་བསྐྲུན་འབད་ནི།
+3. **ཀམ་པལ་མིང་རྟགས་བཀོད་ནི།:** དུས་མཐུན་བཟོ་ཡོད་པའི་རྩེད་དེབ་འདི་ བསྟར་སྤྱོད་དང་ ཁྲིམས་ལུགས་བསྐྱར་ཞིབ་པ་ཚུ་ བརྗེ་སོར་འབད་དེ་ མིང་མ་བཀོད་པའི་ བཀབ་བཙུགས་ཀྱི་ཕྱི་ཁར་ གཡོག་བཀོལ་ནིའི་གནང་བ་ཚུ་ བཟུང་དགོ།
+4. **Dry ran:** ཤེས་རྟོགས་ཡོད་པའི་ Torii བྱིན་མི་ཚུ་ལུ་ བསྟར་སྤྱོད་ཀྱི་བརྟག་དཔྱད་ཆ་ཚང་དང་ གནས་རིམ་གྱི་ ཕེཆ་ ལག་ལེན་འཐབ། ཡིག་མཛོད་ཀྱི་སྐུགས་ཐོན་འབྲས་དང་ CLI བཅུད་བསྡུས་ཚུ།
+5. **ཐོན་སྐྱེད་བཀག་ཆ་:** བསྒྱུར་བཅོས་སྒོ་སྒྲིག་འདི་གསལ་བསྒྲགས་འབད་ཞིནམ་ལས་ ཕིལཔ་ I18NI0000068X ལུ་ I18NI000000069X ལུ་ (ཁྱོད་ཀྱིས་ I18NI0000000070X) ལུ་བཙུགས་ཡོདཔ་ཨིན་) དེ་ལས་ ཐད་ཀར་ཐབས་ལམ་གྱི་ བརྡ་བཀོད་ཚུ་ ལྟ་རྟོག་འབད། ཡིག་ཆ་འདི་ ཡིག་ཆ་ ཡིག་ཆ་ ཡིག་ཆ་ དེ་ ཡིག་ཆ་ དེ་ ཁྱོད་ཀྱིས་ ཨེསི་ཨེན་ནེཊི་-༤/༥ ༥ཨེ་/༦བི་/༦ཨེ་/༧/༨/༨/༡༢/༡༣ མཐོ་རིམ་ཤེས་ཚད་ I18NI000000072X ནང་ ལོག་ཐོབ་ཚུགས།
+༦. **པོསཊི་བསྒྱུར་བཅོས་བསྐྱར་ཞིབ་:** མཉམ་སྦྲགས་འབད་ བཅུད་བསྡུས་ཚུ་ འབོར་བསྟུན་འབད་ཚུགསཔ་ དེ་ལས་ བསྒྱུར་བཅོས་ཤོག་བྱང་ལུ་ ལྟ་རྟོག་གྲུབ་འབྲས་ཚུ་ མཉམ་སྦྲགས་འབད། ནུས་སྟོབས་ཅན་གྱི་ཚེས་གྲངས་དང་ མ་འདྲཝ་གང་རུང་དང་གཅིག་ཁར་ `status.md` དུས་མཐུན་བཟོ།
 
-Keep the checklist alongside the `sorafs_node_ops` runbook so operators can rehearse the workflow before a live switchover. When SNNet-5 graduates to GA, retire the fallback after confirming parity in production telemetry.
+བརྟག་ཞིབ་ཐོ་ཡིག་འདི་ `sorafs_node_ops` རན་བུཀ་དང་གཅིག་ཁར་བཞག་སྟེ་ བཀོལ་སྤྱོད་པ་ཚུ་གིས་ ཐད་རི་བ་རི་ སོར་བསྒྱུར་གྱི་ཧེ་མ་ ལཱ་གི་རྒྱུན་རིམ་འདི་ བསྐྱར་སྦྱོང་འབད་ཚུགས། SNNet-5 གིས་ GA ལུ་མཐར་འཁྱོལ་བའི་སྐབས་ བཟོ་བསྐྲུན་གྱི་བརྒྱུད་འཕྲིན་ནང་ འདྲ་མཉམ་གྱི་ ཆ་འཇོག་འབད་བའི་ཤུལ་ལས་ ཕྱིར་ལོག་འདི་ དགོངས་ཞུ་འབད་དགོ།
 
-## 6. Evidence & Adoption Gate Requirements
+## 6. སྒྲུབ་བྱེད་དང་ངོས་ལེན་སྒོ་དགོས་མཁོ།
 
-Direct-mode captures still need to satisfy the SF-6c adoption gate. Bundle the
-scoreboard, summary, manifest envelope, and adoption report for every run so
-`cargo xtask sorafs-adoption-check` can validate the fallback posture. Missing
-fields force the gate to fail, so record the expected metadata in change
-tickets.
+ཐད་ཀར་ཐབས་ལམ་བཟུང་མི་ཚུ་གིས་ ད་ལྟོ་ཡང་ SF-6c ཆ་གནས་ཀྱི་སྒོ་འདི་ བསྒྲུབ་དགོཔ་ཨིན། བསྡམས་ཡོད།
+སྐུདཔ་ བཅུད་བསྡུས་ གསལ་སྟོན་ཡིག་ཤུབས་ དང་ ཆ་འཇོག་སྙན་ཞུ་ རེ་རེ་བཞིན་དེ་སྦེ་ཨིན།
+I18NI000000075X གིས་ ཕོལོ་བེག་གི་གནས་སྟངས་འདི་ བདེན་དཔྱད་འབད་ཚུགས། གར་སོང་མེདཔ
+ས་སྒོ་ཚུ་གིས་ འཛུལ་སྒོ་འདི་ འཐུས་ཤོར་འགྱོ་བཅུག་དོ་ཡོདཔ་ལས་ བསྒྱུར་བཅོས་ཀྱི་ནང་ལུ་ རེ་བ་བསྐྱེད་མི་ མེ་ཊ་ཌེ་ཊ་འདི་ ཐོ་བཀོད་འབདཝ་ཨིན།
+ཤོག་འཛིན་ཚུ།
 
-- **Transport metadata:** `scoreboard.json` must declare
-  `transport_policy="direct_only"` (and flip `transport_policy_override=true`
-  when you forced the downgrade). Keep the paired anonymity policy fields
-  populated even when they inherit defaults so reviewers can see whether you
-  deviated from the staged anonymity plan.
-- **Provider counters:** Gateway-only sessions must persist `provider_count=0`
-  and populate `gateway_provider_count=<n>` with the number of Torii providers
-  used. Avoid hand-editing the JSON—the CLI/SDK already derives the counts and
-  the adoption gate rejects captures that omit the split.
-- **Manifest evidence:** When Torii gateways participate, pass the signed
-  `--gateway-manifest-envelope <path>` (or SDK equivalent) so
-  `gateway_manifest_provided` plus the `gateway_manifest_id`/`gateway_manifest_cid`
-  are recorded in `scoreboard.json`. Ensure `summary.json` carries the matching
-  `manifest_id`/`manifest_cid`; the adoption check fails if either file is
-  missing the pair.
-- **Telemetry expectations:** When telemetry accompanies the capture, run the
-  gate with `--require-telemetry` so the adoption report proves the metrics were
-  emitted. Air-gapped rehearsals can omit the flag, but CI and change tickets
-  should document the absence.
+- **རྒྱུན་འགྲུལ་གྱི་མེ་ཊ་ཌེ་ཊ་:** I18NI000000076X གསལ་བསྒྲགས་འབད་དགོ།
+  I18NI0000007X (དང་ཕིལཔ་ `transport_policy_override=true`
+  ཁྱོད་ཀྱིས་ མར་ཕབ་འདི་ བཀག་ཆ་འབད་བའི་སྐབས།) ཆ་སྒྲིག་འབད་ཡོད་པའི་མིང་མེད་སྲིད་བྱུས་ས་སྒོ་ཚུ་བཞག།
+  མི་རློབས་འདི་ སྔོན་སྒྲིག་ཚུ་ ཤུལ་འཛིན་འབད་དེ་ བསྐྱར་ཞིབ་འབད་མི་ཚུ་གིས་ ཁྱོད་ཨིན་ན་མེན་ན་ བལྟ་ཚུགས།
+  གོ་རིམ་ཅན་གྱི་མིང་མ་བཀོད་པའི་འཆར་གཞི་ལས་ ཕྱི་སོང།
+- **བྱིན་མི་ ཀའུན་ཊར་:** གཱེཊ་ཝེ་རྐྱངམ་གཅིག་ལཱ་ཡུན་ཚུ་ `provider_count=0` གིས་ གནས་དགོཔ་ཨིན།
+  དང་ I18NI0000008000
+  ལག་ལེན་འཐབ་ཡོདཔ། ཇེ་ཨེསི་ཨོ་ཨེན་ ཞུན་དག་འབད་ནི་ལས་ འཛེམ་དགོཔ་ཨིན།
+  ཆ་འཇོག་གི་སྒོ་ར་གིས་ བཀག་ཆ་འབད་མི་འདི་ བཀོ་བཞག་མི་འདི་ འཛིན་བཟུང་འབདཝ་ཨིན།
+- **སྒྲུབ་བྱེད་བཀོལ་སྤྱོད་པ་:** Torii འཛུལ་ཞུགས་འབད་བའི་སྐབས་ མཚན་རྟགས་བཀོད་ཡོདཔ།
+  `--gateway-manifest-envelope <path>` (ཡང་ན་ SDK འདྲ་མཉམ་) S
+  `gateway_manifest_provided` དང་ `gateway_manifest_id`/I18NI0000084X
+  `scoreboard.json` ནང་ཐོ་བཀོད་འབད་ཡོདཔ་ཨིན། མཐུན་སྒྲིག་འབད་མི་ `summary.json` ངེས་ཏིག་བཟོ།
+  `manifest_id`/I18NI000008X; ཡིག་སྣོད་གང་རུང་ཅིག་ཨིན་པ་ཅིན་ ཆ་འཇོག་ཞིབ་དཔྱད་འདི་ འཐུས་ཤོར་འབྱུང་འོང་།
+  ཆ་འདི་ བརླག་སྟོར་ཞུགས་ཡོདཔ།
+- **འཕྲུལ་རིག་གི་རེ་བ་:** བརྡ་འཕྲིན་འདི་དང་གཅིག་ཁར་ འཛིན་བཟུང་འབད་བ་ཅིན་ གཡོག་བཀོལ།
+  འདི་ལྟར་
+  གཞན༌པ༌ རླུང་གིས་ བརྡར་ཤུགས་ཅན་གྱི་ སྦྱོང་བརྡར་ཚུ་གིས་ རྒྱལ་དར་འདི་ བཏོན་བཏང་ཚུགས་ནི་ཨིན་རུང་ CI དང་ ཤོག་འཛིན་ཚུ་ བསྒྱུར་བཅོས་འབད་ཚུགས།
+  ཡིག་ཆ་མེད་མི་འདི་ཡིག་ཆ་བཟོ་དགོ།
 
-Example:
+དཔེ:
 
 ```bash
 cargo xtask sorafs-adoption-check \
@@ -129,9 +131,7 @@ cargo xtask sorafs-adoption-check \
   --require-direct-only \
   --json-out artifacts/sorafs_direct_mode/adoption_report.json \
   --require-telemetry
-```
-
-Attach `adoption_report.json` alongside the scoreboard, summary, manifest
-envelope, and smoke log bundle. These artefacts mirror what the CI adoption job
-(`ci/check_sorafs_orchestrator_adoption.sh`) enforces and keep direct-mode
-downgrades auditable.
+```སྐུགས་ཤོག་དང་ བཅུད་བསྡུས་ དེ་ལས་ གསལ་སྟོན་ I18NI0000000900X མཉམ་སྦྲགས་འབད།
+ཡིག་ཤུབས་དང་ དུ་ཁ་དྲན་ཐོ་བང་ནི། འདི་དག་གིས་ CI བུ་ལོན་གྱི་ལས་ཀ་གང་འདྲ་ཞིག་ལ་མཐོང་།
+(`ci/check_sorafs_orchestrator_adoption.sh`) བསྟར་སྤྱོད་འབད་དེ་ ཐད་ཀར་ཐབས་ལམ་བཞག་དགོ།
+རྩིས་ཞིབ་འབད་ཚུགསཔ་བཟོཝ་ཨིན།

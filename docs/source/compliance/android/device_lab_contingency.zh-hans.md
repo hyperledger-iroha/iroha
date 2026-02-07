@@ -7,18 +7,19 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 4016b82d86dc61a9de5e345950d02aeadf26db4cc26777c60db336c57479ba15
 source_last_modified: "2025-12-29T18:16:35.923121+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Device Lab Contingency Log
+# 设备实验室应急日志
 
-Record every activation of the Android device-lab contingency plan here.
-Include enough detail for compliance reviews and future readiness audits.
+在此记录 Android 设备实验室应急计划的每次激活。
+包含足够的详细信息以供合规性审查和未来的准备审核。
 
-| Date | Trigger | Actions Taken | Follow-ups | Owner |
-|------|---------|---------------|------------|-------|
-| 2026-02-11 | Capacity fell to 78% after Pixel 8 Pro lane outage and delayed Pixel 8a delivery (see `android_strongbox_device_matrix.md`). | Promoted Pixel 7 lane to primary CI target, borrowed shared Pixel 6 fleet, scheduled Firebase Test Lab smoke tests for retail-wallet sample, and engaged external StrongBox lab per AND6 plan. | Replace faulty USB-C hub for Pixel 8 Pro (due 2026-02-15); confirm Pixel 8a arrival and rebaseline capacity report. | Hardware Lab Lead |
-| 2026-02-13 | Pixel 8 Pro hub replaced and Galaxy S24 approved, restoring capacity to 85%. | Returned Pixel 7 lane to secondary, re-enabled `android-strongbox-attestation` Buildkite job with tags `pixel8pro-strongbox-a` and `s24-strongbox-a`, updated readiness matrix + evidence log. | Monitor Pixel 8a delivery ETA (still pending); keep spare hub inventory documented. | Hardware Lab Lead |
+|日期 |触发|采取的行动|后续行动|业主|
+|------|---------|----------------|------------|--------|
+| 2026-02-11 | Pixel8 Pro 通道中断并延迟 Pixel8a 交付后，运力下降至 78%（请参阅 `android_strongbox_device_matrix.md`）。 |将 Pixel7 通道提升为主要 CI 目标，借用共享 Pixel6 车队，安排 Firebase 测试实验室对零售钱包样本进行烟雾测试，并根据 AND6 计划聘请外部 StrongBox 实验室。 |更换 Pixel8 Pro 有故障的 USB-C 集线器（截止日期为 2026 年 2 月 15 日）；确认 Pixel8a 抵达并重新设定容量报告基准。 |硬件实验室负责人 |
+| 2026-02-13 | Pixel8 Pro 集线器更换并获得 GalaxyS24 批准，容量恢复至 85%。 |将 Pixel7 通道返回到辅助通道，重新启用带有标签 `pixel8pro-strongbox-a` 和 `s24-strongbox-a` 的 `android-strongbox-attestation` Buildkite 作业，更新准备矩阵 + 证据日志。 |监控 Pixel8a 交付预计时间（仍在等待中）；记录备用轮毂库存。 |硬件实验室负责人 |

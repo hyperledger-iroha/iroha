@@ -4,30 +4,32 @@ direction: rtl
 source: docs/portal/docs/norito/examples/nft-flow.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-slug: /norito/examples/nft-flow
-title: سك ونقل وحرق NFT
-description: يسرد دورة حياة NFT من البداية إلى النهاية: السك للمالك، النقل، ووسم بيانات التعريف، والحرق.
-source: crates/ivm/docs/examples/12_nft_flow.ko
+سلگ:/نوریٹو/مثالوں/این ایف ٹی فلو
+عنوان: ٹکسال ، منتقلی اور برن این ایف ٹی
+تفصیل: شروع سے ختم ہونے تک کسی این ایف ٹی کے لائف سائیکل کی فہرست: مالک کے لئے ٹکسال ، منتقلی ، میٹا ڈیٹا ٹیگنگ اور جلانے۔
+ماخذ: کریٹس/IVM/دستاویزات/مثالوں/12_NFT_FLOW.KO
 ---
 
-يسرد دورة حياة NFT من البداية إلى النهاية: السك للمالك، النقل، ووسم بيانات التعريف، والحرق.
+اس میں شروع سے ختم ہونے تک کسی این ایف ٹی کے لائف سائیکل کی فہرست دی گئی ہے: مالک کے لئے ٹکسال کرنا ، منتقلی ، میٹا ڈیٹا ٹیگنگ ، اور جلانے۔
 
-## جولة دفتر الأستاذ
+## لیجر ٹور
 
-- تأكد من وجود تعريف NFT (مثل `n0#wonderland`) إلى جانب حسابات المالك/المستلم المستخدمة في المقتطف (`ih58...`, `ih58...`).
-- استدعِ نقطة الدخول `nft_issue_and_transfer` لسك NFT ونقله من Alice إلى Bob وإرفاق علامة بيانات تعريف تصف الإصدار.
-- افحص حالة دفتر NFT باستخدام `iroha_cli ledger nfts list --account <id>` أو مكافئات SDK للتحقق من النقل، ثم أكد إزالة الأصل بعد تنفيذ تعليمة الحرق.
+- اس بات کو یقینی بنائیں کہ این ایف ٹی کی شناخت (جیسے `n0#wonderland`) اسنیپٹ (`ih58...` ، `ih58...`) میں استعمال ہونے والے مالک/وصول کنندہ اکاؤنٹس کے ساتھ موجود ہے۔
+- کال انٹری پوائنٹ `nft_issue_and_transfer` کو این ایف ٹی کی پودینہ پر ، ایلس سے باب میں منتقل کریں ، اور ورژن کی وضاحت کرنے والے میٹا ڈیٹا ٹیگ کو منسلک کریں۔
+- منتقلی کی تصدیق کے ل I `iroha_cli ledger nfts list --account <id>` یا SDK کے مساویوں کا استعمال کرتے ہوئے NFT کتاب کی حیثیت کو چیک کریں ، پھر برن ہدایت پر عمل درآمد کے بعد اثاثہ کو ہٹانے کی تصدیق کریں۔
 
-## أدلة SDK ذات صلة
+## متعلقہ SDK گائیڈز
 
-- [البدء السريع لـ Rust SDK](/sdks/rust)
-- [البدء السريع لـ Python SDK](/sdks/python)
-- [البدء السريع لـ JavaScript SDK](/sdks/javascript)
+- [مورچا SDK کوئیک اسٹارٹ] (/sdks/rust)
+- [ازگر SDK کوئیک اسٹارٹ] (/sdks/python)
+- [جاوا اسکرپٹ SDK کوئیک اسٹارٹ] (/sdks/javascript)
 
-[نزّل مصدر Kotodama](/norito-snippets/nft-flow.ko)
+[ماخذ Kotodama ڈاؤن لوڈ کریں] (/norito-snippets/nft-flow.ko)
 
 ```text
 // Mint an NFT, transfer it, update metadata, and burn it using typed IDs.

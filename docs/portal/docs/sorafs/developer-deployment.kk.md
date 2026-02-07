@@ -11,75 +11,76 @@ id: developer-deployment
 title: SoraFS Deployment Notes
 sidebar_label: Deployment Notes
 description: Checklist for promoting the SoraFS pipeline from CI to production.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
+:::ескерту Канондық дереккөз
 :::
 
-# Deployment Notes
+# Қолдану жазбалары
 
-The SoraFS packaging workflow hardens determinism, so moving from CI to
-production mainly requires operational guardrails. Use this checklist when
-rolling the tooling out to real gateways and storage providers.
+SoraFS қаптамасының жұмыс процесі детерминизмді қатайтады, сондықтан CI-ден ауысады
+өндіріс негізінен операциялық қоршауларды қажет етеді. Қашан осы бақылау тізімін пайдаланыңыз
+құралдарды нақты шлюздерге және сақтау провайдерлеріне тарату.
 
-## Pre-flight
+## Ұшу алдындағы
 
-- **Registry alignment** — confirm chunker profiles and manifests reference the
-  same `namespace.name@semver` tuple (`docs/source/sorafs/chunker_registry.md`).
-- **Admission policy** — review the signed provider adverts and alias proofs
-  needed for `manifest submit` (`docs/source/sorafs/provider_admission_policy.md`).
-- **Pin registry runbook** — keep `docs/source/sorafs/runbooks/pin_registry_ops.md`
-  handy for recovery scenarios (alias rotation, replication failures).
+- **Registry alignment** — chunker профильдері мен манифесттерге сілтемені растау
+  бірдей `namespace.name@semver` кортежі (`docs/source/sorafs/chunker_registry.md`).
+- **Қабылдау саясаты** — қол қойылған провайдердің жарнамалары мен бүркеншік аттың дәлелдерін қарап шығыңыз
+  `manifest submit` (`docs/source/sorafs/provider_admission_policy.md`) үшін қажет.
+- **Pin тізбесі runbook** — `docs/source/sorafs/runbooks/pin_registry_ops.md` сақтаңыз
+  қалпына келтіру сценарийлері үшін ыңғайлы (бүркеншік аттың айналуы, репликация қателері).
 
-## Environment configuration
+## Қоршаған орта конфигурациясы
 
-- Gateways must enable the proof streaming endpoint (`POST /v1/sorafs/proof/stream`)
-  so the CLI can emit telemetry summaries.
-- Configure `sorafs_alias_cache` policy using the defaults in
-  `iroha_config` or the CLI helper (`sorafs_cli manifest submit --alias-*`).
-- Provide stream tokens (or Torii credentials) via a secure secret manager.
-- Enable telemetry exporters (`torii_sorafs_proof_stream_*`,
-  `torii_sorafs_chunk_range_*`) and ship them to your Prometheus/OTel stack.
+- Шлюздер дәлелдеу ағынының соңғы нүктесін қосуы керек (`POST /v1/sorafs/proof/stream`)
+  сондықтан CLI телеметрия қорытындыларын шығара алады.
+- ішіндегі әдепкі параметрлерді пайдаланып `sorafs_alias_cache` саясатын конфигурациялаңыз
+  `iroha_config` немесе CLI көмекшісі (`sorafs_cli manifest submit --alias-*`).
+- Қауіпсіз құпия менеджер арқылы ағындық таңбалауыштарды (немесе Torii тіркелгі деректерін) қамтамасыз етіңіз.
+- Телеметрия экспорттаушыларын қосу (`torii_sorafs_proof_stream_*`,
+  `torii_sorafs_chunk_range_*`) және оларды Prometheus/OTel стекке жіберіңіз.
 
-## Rollout strategy
+## Шығарылым стратегиясы
 
-1. **Blue/green manifests**
-   - Use `manifest submit --summary-out` to archive responses for each rollout.
-   - Keep an eye on `torii_sorafs_gateway_refusals_total` to catch capability
-     mismatches early.
-2. **Proof validation**
-   - Treat failures in `sorafs_cli proof stream` as deployment blockers; latency
-     spikes often indicate provider throttling or misconfigured tiers.
-   - `proof verify` should be part of the post-pin smoke test to ensure the CAR
-     hosted by providers still matches the manifest digest.
-3. **Telemetry dashboards**
-   - Import `docs/examples/sorafs_proof_streaming_dashboard.json` into Grafana.
-   - Layer additional panels for pin registry health
-     (`docs/source/sorafs/runbooks/pin_registry_ops.md`) and chunk range stats.
-4. **Multi-source enablement**
-   - Follow the staged rollout steps in
-     `docs/source/sorafs/runbooks/multi_source_rollout.md` when turning on the
-     orchestrator, and archive the scoreboard/telemetry artefacts for audits.
+1. **Көк/жасыл көріністер**
+   - Әр шығару үшін жауаптарды мұрағаттау үшін `manifest submit --summary-out` пайдаланыңыз.
+   - Мүмкіндіктерді алу үшін `torii_sorafs_gateway_refusals_total` құрылғысын қадағалаңыз
+     ерте сәйкессіздіктер.
+2. **Дәлелді тексеру**
+   - `sorafs_cli proof stream` қателерін орналастыру блокаторлары ретінде қарастырыңыз; кідіріс
+     өсу жиі провайдердің тежеуін немесе дұрыс конфигурацияланбаған деңгейлерді көрсетеді.
+   - `proof verify` CAR сенімділігін қамтамасыз ету үшін түтіннен кейінгі сынақтың бөлігі болуы керек
+     провайдерлер орналастырған әлі де манифест дайджестіне сәйкес келеді.
+3. **Телеметриялық бақылау тақталары**
+   - `docs/examples/sorafs_proof_streaming_dashboard.json` Grafana ішіне импорттаңыз.
+   - PIN тізілімінің денсаулығына арналған қосымша панельдерді орналастырыңыз
+     (`docs/source/sorafs/runbooks/pin_registry_ops.md`) және бөлік ауқымының статистикасы.
+4. **Көп көзді қосу**
+   - Кезеңді шығару қадамдарын орындаңыз
+     `docs/source/sorafs/runbooks/multi_source_rollout.md` қосу кезінде
+     Оркестрге және тексерулер үшін табло/телеметриялық артефактілерді мұрағаттаңыз.
 
-## Incident handling
+## Оқиғаны өңдеу
 
-- Follow the escalation paths in `docs/source/sorafs/runbooks/`:
-  - `sorafs_gateway_operator_playbook.md` for gateway outages and stream-token
-    exhaustion.
-  - `dispute_revocation_runbook.md` when replication disputes occur.
-  - `sorafs_node_ops.md` for node-level maintenance.
-  - `multi_source_rollout.md` for orchestrator overrides, peer blacklisting, and
-    staged rollouts.
-- Record proof failures and latency anomalies in GovernanceLog via the existing
-  PoR tracker APIs so governance can assess provider performance.
+- `docs/source/sorafs/runbooks/` ішіндегі эскалация жолдарын орындаңыз:
+  - `sorafs_gateway_operator_playbook.md` шлюз үзілістері мен ағын белгісі үшін
+    шаршау.
+  - `dispute_revocation_runbook.md` репликация даулары туындаған кезде.
+  - `sorafs_node_ops.md` түйін деңгейінде техникалық қызмет көрсету үшін.
+  - `multi_source_rollout.md` оркестрді қайта анықтауға, тең қара тізімге және
+    кезеңді шығарылымдар.
+- GovernanceLog жүйесінде бар арқылы дәлелдеу сәтсіздіктерін және кешігу ауытқуларын жазыңыз
+  PoR трекер API интерфейстері, сондықтан басқару провайдердің жұмысын бағалай алады.
 
-## Next steps
+## Келесі қадамдар
 
-- Integrate orchestrator automation (`sorafs_car::multi_fetch`) once the
-  multi-source fetch orchestrator (SF-6b) lands.
-- Track PDP/PoTR upgrades under SF-13/SF-14; the CLI and docs will evolve to
-  surface deadlines and tier selection once those proofs stabilize.
+- Оркестрлерді автоматтандыруды (`sorafs_car::multi_fetch`) бір рет біріктіріңіз.
+  көп көзді алу оркестрі (SF-6b) жерлер.
+- SF-13/SF-14 бойынша PDP/PoTR жаңартуларын қадағалау; CLI және құжаттар дамиды
+  осы дәлелдер тұрақтанғаннан кейін беткі мерзімдер және деңгейді таңдау.
 
-By combining these deployment notes with the quickstart and CI recipes, teams
-can move from local experiments to production-grade SoraFS pipelines with a
-repeatable, observable process.
+Осы қолдану жазбаларын жылдам бастау және CI рецептерімен, командалармен біріктіру арқылы
+жергілікті тәжірибелерден SoraFS өндірістік дәрежелі құбыр желілеріне ауыса алады.
+қайталанатын, бақыланатын процесс.

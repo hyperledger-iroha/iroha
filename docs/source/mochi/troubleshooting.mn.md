@@ -7,33 +7,34 @@ generator: scripts/sync_docs_i18n.py
 source_hash: cb67b304bae01fa4a50d25dc9f086811dabfbcb24239b3ec9679338248e18be6
 source_last_modified: "2025-12-29T18:16:35.985892+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# MOCHI Troubleshooting Guide
+# MOCHI алдааг олж засварлах гарын авлага
 
-Use this runbook when local MOCHI clusters refuse to start, get wedged in a
-restart loop, or stop streaming block/event/status updates. It extends the
-roadmap item “Documentation & rollout” by turning the supervisor behaviours in
-`mochi-core` into concrete recovery steps.
+Орон нутгийн MOCHI кластерууд эхлүүлэхээс татгалзах үед энэ runbook-г ашиглана уу
+давталтыг дахин эхлүүлэх эсвэл блок/үйл явдал/статусын шинэчлэлтүүдийг дамжуулахыг зогсоо. Энэ нь сунгаж байна
+Замын зургийн "Баримтжуулалт ба танилцуулга" хэсгийг ахлагчийн зан төлөвийг эргүүлж оруулаарай
+`mochi-core` бетон сэргээх алхам руу.
 
-## 1. First responder checklist
+## 1. Эхний хариулагчийг шалгах хуудас
 
-1. Capture the data root that MOCHI is using. The default follows
-   `$TMPDIR/mochi/<profile-slug>`; custom paths appear in the UI title bar and
-   via `cargo run -p mochi-ui-egui -- --data-root ...`.
-2. Run `./ci/check_mochi.sh` from the workspace root. This validates the core,
-   UI, and integration crates before you begin modifying configs.
-3. Note the preset (`single-peer` or `four-peer-bft`). The generated topology
-   determines how many peer folders/logs you should expect under the data root.
+1. MOCHI-ийн ашиглаж байгаа өгөгдлийн үндэсийг ав. Анхдагч нь дараах болно
+   `$TMPDIR/mochi/<profile-slug>`; өөрчлөн замууд UI гарчгийн мөрөнд гарч ирэх ба
+   `cargo run -p mochi-ui-egui -- --data-root ...`-ээр дамжуулан.
+2. Ажлын талбарын үндэсээс `./ci/check_mochi.sh`-г ажиллуул. Энэ нь цөмийг баталгаажуулж,
+   Тохиргоог өөрчилж эхлэхээс өмнө UI болон нэгтгэх хайрцаг.
+3. Урьдчилсан тохиргоог анхаарна уу (`single-peer` эсвэл `four-peer-bft`). Үүсгэсэн топологи
+   өгөгдлийн үндэс дор хэдэн хавтас/лог байх ёстойг тодорхойлдог.
 
-## 2. Collect logs & telemetry evidence
+## 2. Бүртгэл, телеметрийн нотлох баримт цуглуул
 
-`NetworkPaths::ensure` (see `mochi/mochi-core/src/config.rs`) creates a stable
-layout:
+`NetworkPaths::ensure` (`mochi/mochi-core/src/config.rs`-г үзнэ үү) тогтвортой байдлыг бий болгодог
+зохион байгуулалт:
 
 ```
 <data_root>/<profile>/
@@ -43,28 +44,28 @@ layout:
   snapshots/
 ```
 
-Follow these steps before making changes:
+Өөрчлөлт хийхээсээ өмнө дараах алхмуудыг дагана уу:
 
-- Use the **Logs** tab or open `logs/<alias>.log` directly to capture the last
-  200 lines for each peer. The supervisor tails stdout/stderr/system channels
-  via `PeerLogStream`, so these files match the UI output.
-- Export a snapshot via **Maintenance → Export snapshot** (or call
-  `Supervisor::export_snapshot`). The snapshot bundles storage, configs, and
-  logs into `snapshots/<timestamp>-<label>/`.
-- If the issue involves stream widgets, copy the `ManagedBlockStream`,
-  `ManagedEventStream`, and `ManagedStatusStream` health indicators from the
-  Dashboard. The UI surfaces the last reconnect attempt and error reason; grab
-  a screenshot for the incident record.
+- Сүүлчийн зургийг авахын тулд **Logs** табыг ашиглах эсвэл `logs/<alias>.log`-г нээнэ үү.
+  Үе тэнгийнхэн бүрт 200 мөр. Удирдагч нь stdout/stderr/системийн сувгуудыг хянадаг
+  `PeerLogStream`-ээр дамжуулан эдгээр файлууд UI гаралттай таарч байна.
+- **Засвар үйлчилгээ → Экспортын агшин зуурын зургийг** (эсвэл залгах)-аар экспортлох
+  `Supervisor::export_snapshot`). Хормын хувилбар нь хадгалах, тохиргоо болон
+  `snapshots/<timestamp>-<label>/` руу нэвтэрнэ.
+- Хэрэв асуудал нь урсгалын виджеттэй холбоотой бол `ManagedBlockStream`-г хуулж,
+  `ManagedEventStream`, `ManagedStatusStream` эрүүл мэндийн үзүүлэлтүүд
+  Хяналтын самбар. UI нь хамгийн сүүлд дахин холбогдох оролдлого болон алдааны шалтгааныг харуулж байна; шүүрэх
+  ослын бичлэгийн дэлгэцийн агшин.
 
-## 3. Resolving peer startup issues
+## 3. Үе тэнгийнхэн эхлүүлэх асуудлыг шийдвэрлэх
 
-Most peer launch failures fall into three buckets:
+Ихэнх үе тэнгийн хөөргөх алдаа нь гурван хувингаар хуваагддаг:
 
-### Missing binaries or bad overrides
+### Хоёртын файл дутуу эсвэл буруу дарагдсан
 
-`SupervisorBuilder` shells out to `irohad`, `kagami`, and (future) `iroha_cli`.
-If the UI reports “failed to spawn process” or “permission denied”, point MOCHI
-at known-good binaries:
+`SupervisorBuilder` `irohad`, `kagami`, (ирээдүйд) `iroha_cli` руу чиглэнэ.
+Хэрэв UI "процессыг гаргаж чадсангүй" эсвэл "зөвшөөрөл татгалзсан" гэж мэдэгдвэл MOCHI-г заана уу
+сайн мэддэг хоёртын файлууд дээр:
 
 ```bash
 cargo run -p mochi-ui-egui -- \
@@ -73,96 +74,92 @@ cargo run -p mochi-ui-egui -- \
   --iroha-cli /path/to/iroha_cli
 ```
 
-You can set `MOCHI_IROHAD`, `MOCHI_KAGAMI`, and `MOCHI_IROHA_CLI` to avoid
-typing the flags repeatedly. When debugging bundle builds, compare the
-`BundleConfig` in `mochi/mochi-ui-egui/src/config/` against the paths in
+Та зайлсхийхийн тулд `MOCHI_IROHAD`, `MOCHI_KAGAMI`, `MOCHI_IROHA_CLI`-г тохируулж болно.
+тугуудыг дахин дахин бичих. Багцын бүтцийг дибаг хийхдээ
+`BundleConfig` `mochi/mochi-ui-egui/src/config/` доторх замуудын эсрэг
 `target/mochi-bundle`.
 
-### Port collisions
+### Портын мөргөлдөөн
 
-`PortAllocator` probes the loopback interface before writing configs. If you see
-`failed to allocate Torii port` or `failed to allocate P2P port`, another
-process is already listening on the default range (8080/1337). Relaunch MOCHI
-with explicit bases:
+`PortAllocator` тохиргоо бичихийн өмнө давталтын интерфэйсийг шалгана. Хэрэв та харвал
+`failed to allocate Torii port` эсвэл `failed to allocate P2P port`, өөр
+процесс нь анхдагч муж (8080/1337) дээр аль хэдийн сонсож байна. MOCHI-г дахин ажиллуул
+тодорхой үндэслэлтэй:
 
 ```bash
 cargo run -p mochi-ui-egui -- --torii-start 12000 --p2p-start 19000
 ```
 
-The builder will fan out sequential ports from those bases, so reserve a range
-sized for your preset (`peer_count` peers → `peer_count` ports per transport).
+Барилгачин тэдгээр баазаас дараалсан портуудыг гаргах тул хүрээг нөөцөл
+таны урьдчилан тохируулсан хэмжээтэй (`peer_count` үе тэнгийнхэн → тээвэрлэлт бүрт `peer_count` портууд).
 
-### Genesis and storage corruption
+### Эхлэл ба хадгалалтын завхралХэрэв Kagami нь манифест гаргахаас өмнө гарвал үе тэнгийнхэн нь шууд сүйрнэ. Шалгах
+Өгөгдлийн үндэс дотор `genesis/*.json`/`.toml`. Дахин гүйх
+`--kagami /path/to/kagami` эсвэл **Тохиргоо** харилцах цонхыг баруун хоёртын файл руу чиглүүлнэ үү.
+Хадгалалтын эвдрэлийн хувьд Засвар үйлчилгээний хэсгийн **Арчиж, дахин үүсгэх** хэсгийг ашиглана уу.
+хавтсыг гараар устгахын оронд товчлуур (доор бүрхэгдсэн); энэ нь дахин бүтээдэг
+процессуудыг дахин эхлүүлэхийн өмнө үе тэнгийн лавлахууд болон хормын зургийн үндэс.
 
-If Kagami exits before emitting a manifest, peers will crash immediately. Check
-`genesis/*.json`/`.toml` inside the data root. Re-run with
-`--kagami /path/to/kagami` or point the **Settings** dialog at the right binary.
-For storage corruption, use the Maintenance section’s **Wipe & re-genesis**
-button (covered below) instead of deleting folders by hand; it recreates the
-peer directories and snapshot roots before restarting processes.
+### Автоматаар дахин эхлүүлэх тохируулга
 
-### Tuning automatic restarts
+`[supervisor.restart]` `config/local.toml` (эсвэл CLI тугууд)
+`--restart-mode`, `--restart-max`, `--restart-backoff-ms`) хэр олон удаа
+хянагч амжилтгүй болсон нөхдөө дахин оролдоно. UI хэрэгтэй үед `mode = "never"`-г тохируулна уу
+Эхний эвдрэлийг нэн даруй арилгах, эсвэл `max_restarts`/`backoff_ms` богиносгох
+хурдан бүтэлгүйтэх ёстой CI ажлуудын дахин оролдох цонхыг чангатгах.
 
-`[supervisor.restart]` in `config/local.toml` (or the CLI flags
-`--restart-mode`, `--restart-max`, `--restart-backoff-ms`) control how often the
-supervisor retries failed peers. Set `mode = "never"` when you need the UI to
-surface the first failure immediately, or shorten `max_restarts`/`backoff_ms`
-to tighten the retry window for CI jobs that must fail fast.
+## 4. Үе тэнгийнхнээ аюулгүйгээр дахин тохируулах
 
-## 4. Resetting peers safely
-
-1. Stop the affected peers from the Dashboard or quit the UI. The supervisor
-   refuses to wipe storage while a peer is running (`PeerHandle::wipe_storage`
-   returns `PeerStillRunning`).
-2. Navigate to **Maintenance → Wipe & re-genesis**. MOCHI will:
-   - delete `peers/<alias>/storage`;
-   - rerun Kagami to rebuild configs/genesis under `genesis/`; and
-   - restart peers with the preserved CLI/environment overrides.
-3. If you must do this manually:
+1. Нөлөөлөлд өртсөн үе тэнгийнхнийгээ хяналтын самбараас зогсоох эсвэл UI-г орхи. Удирдагч
+   үе тэнгийнхэн ажиллаж байх үед санах ойг арилгахаас татгалздаг (`PeerHandle::wipe_storage`
+   буцаана `PeerStillRunning`).
+2. **Засвар үйлчилгээ → Арчиж, дахин үүсгэх** руу очно уу. MOCHI хийх болно:
+   - `peers/<alias>/storage` устгах;
+   - `genesis/`-ийн дагуу тохиргоо/үүслийг дахин бүтээхийн тулд Kagami-г дахин ажиллуулна уу; болон
+   - Хадгалсан CLI/орчны хүчингүйд тооцогдох нөхцлүүдийг дахин эхлүүлнэ үү.
+3. Хэрэв та үүнийг гараар хийх шаардлагатай бол:
    ```bash
    cargo run -p mochi-ui-egui -- --data-root /tmp/mochi --profile four-peer-bft --help
    # Note the actual root printed above, then:
    rm -rf /tmp/mochi/four-peer-bft
    ```
-   Afterwards, restart MOCHI so `NetworkPaths::ensure` recreates the tree.
+   Дараа нь MOCHI-г дахин эхлүүлснээр `NetworkPaths::ensure` модыг дахин үүсгэнэ.
 
-Always archive the `snapshots/<timestamp>` folder before wiping, even in local
-development—those bundles capture the precise `irohad` logs and configs needed
-to reproduce bugs.
+`snapshots/<timestamp>` хавтсыг арчихаасаа өмнө локал байсан ч гэсэн үргэлж архивлаарай
+хөгжүүлэлт—эдгээр багцууд нь шаардлагатай `irohad` бүртгэл, тохиргоог яг таг хийдэг.
+алдааг хуулбарлах.
 
-### 4.1 Restoring from snapshots
+### 4.1 Хормын хувилбаруудаас сэргээх
 
-When an experiment corrupts storage or you need to replay a known-good state, use the Maintenance
-dialog’s **Restore snapshot** button (or call `Supervisor::restore_snapshot`) instead of copying
-directories manually. Provide either an absolute path to the bundle or the sanitised folder name
-under `snapshots/`. The supervisor will:
+Туршилт нь санах ойг гэмтээж, эсвэл сайн мэдэгдэж байгаа төлөвийг дахин тоглуулах шаардлагатай бол Засвар үйлчилгээг ашиглана уу
+харилцах цонхны **Хормын хувилбарыг сэргээх** товчийг (эсвэл `Supervisor::restore_snapshot` руу залгана уу) хуулахын оронд
+сангуудыг гараар. Багц руу хүрэх үнэмлэхүй зам эсвэл ариутгасан фолдерын нэрийг оруулна уу
+`snapshots/` доор. Удирдагч нь:
 
-1. stop any running peers;
-2. verify that the snapshot’s `metadata.json` matches the current `chain_id` and peer count;
-3. copy `peers/<alias>/{storage,snapshot,config.toml,latest.log}` back into the active profile; and
-4. restore `genesis/genesis.json` before restarting peers if they were running beforehand.
+1. гүйж буй үе тэнгийнхнийг зогсоох;
+2. агшин зургийн `metadata.json` нь одоогийн `chain_id` болон үе тэнгийн тоотой таарч байгаа эсэхийг шалгах;
+3. `peers/<alias>/{storage,snapshot,config.toml,latest.log}`-г дахин идэвхтэй профайл руу хуулах; болон
+4. Хэрэв үе тэнгийнхэн нь өмнө нь ажиллаж байсан бол дахин эхлүүлэхийн өмнө `genesis/genesis.json`-г сэргээ.
 
-If the snapshot was created for a different preset or chain identifier the restore call returns a
-`SupervisorError::Config` so you can grab a matching bundle instead of silently mixing artefacts.
-Keep at least one fresh snapshot per preset to accelerate recovery drills.
+Хэрэв агшин зуурын зургийг өөр урьдчилан тохируулсан эсвэл гинжин танигчаар үүсгэсэн бол сэргээх дуудлага нь a буцаана
+`SupervisorError::Config`, ингэснээр та олдворуудыг чимээгүй холихын оронд тохирох багцыг авч болно.
+Сэргээх дасгалуудыг хурдасгахын тулд урьдчилсан тохируулга бүрд дор хаяж нэг шинэ агшин агшинд хадгална уу.
 
-## 5. Repairing block/event/status streams
-
-- **Stream stalled but peers healthy.** Check the **Events**/**Blocks** panels
-  for red status bars. Click “Stop” then “Start” to force the managed stream to
-  resubscribe; the supervisor logs every reconnect attempt (with peer alias and
-  error) so you can confirm backoff stages.
-- **Status overlay out of date.** `ManagedStatusStream` polls `/status` every
-  two seconds and marks data stale after `STATUS_POLL_INTERVAL *
-  STATUS_STALE_MULTIPLIER` (default six seconds). If the badge stays red, verify
-  `torii_status_url` in the peer config and ensure the gateway or VPN is not
-  blocking loopback connections.
-- **Event decoding failures.** The UI prints the decode stage (raw bytes,
-  `BlockSummary`, or Norito decode) and the offending transaction hash. Export
-  the event via the clipboard button so you can reproduce the decode in tests
-  (`mochi-core` exposes helper constructors under
+## 5. Блок/үйл явдал/статусын урсгалыг засах- **Цацаа зогссон ч үе тэнгийнхэн нь эрүүл.** **Үйл явдал**/**Блок** самбарыг шалгана уу
+  улаан төлөвийн мөрний хувьд. "Зогс", дараа нь "Эхлүүлэх" дээр дарж удирдаж буй дамжуулалтыг хүчээр хийнэ үү
+  дахин бүртгүүлэх; хянагч дахин холбогдох оролдлого бүрийг бүртгэдэг (үе тэнгийн нэр болон
+  алдаа) тул та буцаах үе шатуудыг баталгаажуулах боломжтой.
+- **Төлөв давхардал хуучирсан.** `ManagedStatusStream` `/status` бүр санал асуулга явуулдаг.
+  хоёр секунд ба `STATUS_POLL_INTERVAL *-ын дараа өгөгдөл хуучирсан гэж тэмдэглэнэ
+  STATUS_STALE_ULTIPLIER` (өгөгдмөл зургаан секунд). Хэрэв тэмдэг улаан хэвээр байвал баталгаажуулна уу
+  `torii_status_url` үе тэнгийн тохиргоонд оруулаад гарц эсвэл VPN байхгүй эсэхийг шалгана уу.
+  давталтын холболтыг хаах.
+- **Үйл явдлын код тайлахад алдаа гарсан.** UI нь код тайлах үе шатыг (түүхий байт,
+  `BlockSummary`, эсвэл Norito тайлах) болон зөрчилтэй гүйлгээний хэш. Экспорт
+  үйл явдлыг санах ойн товчлуураар дамжуулан тохируулснаар та тестийн кодыг тайлах боломжтой
+  (`mochi-core` нь туслах бүтээгчийг доор харуулав
   `mochi/mochi-core/src/torii.rs`).
 
-When streams repeatedly crash, update the issue with the exact peer alias and
-error string (`ToriiErrorKind`) so the roadmap telemetry milestones stay tied
-to concrete evidence.
+Цацалтууд удаа дараа гацах үед асуудлыг яг ижил төстэй нэрээр шинэчилнэ үү
+алдааны мөр (`ToriiErrorKind`) тул замын зураглалын телеметрийн үе шатууд холбоотой хэвээр байна
+тодорхой нотлох баримт.

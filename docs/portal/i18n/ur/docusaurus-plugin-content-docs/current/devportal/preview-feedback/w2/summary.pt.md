@@ -4,41 +4,43 @@ direction: rtl
 source: docs/portal/docs/devportal/preview-feedback/w2/summary.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: preview-feedback-w2-summary
-title: Resumo de feedback e status W2
-sidebar_label: Resumo W2
-description: Resumo ao vivo para a onda de preview comunitaria (W2).
+ID: پیش نظارہ-فیڈ بیک-ڈبلیو 2 سمر
+عنوان: W2 کی حیثیت اور تاثرات کا خلاصہ
+سائڈبار_لیبل: W2 خلاصہ
+تفصیل: کمیونٹی پیش نظارہ لہر (W2) کے لئے براہ راست خلاصہ۔
 ---
 
-| Item | Detalhes |
+| آئٹم | تفصیلات |
 | --- | --- |
-| Onda | W2 - Reviewers comunitarios |
-| Janela de convite | 2025-06-15 -> 2025-06-29 |
-| Tag de artefato | `preview-2025-06-15` |
-| Issue do tracker | `DOCS-SORA-Preview-W2` |
-| Participantes | comm-vol-01...comm-vol-08 |
+| لہر | ڈبلیو 2 - کمیونٹی جائزہ لینے والے |
+| دعوت ونڈو | 2025-06-15-> 2025-06-29 |
+| نمونہ ٹیگ | `preview-2025-06-15` |
+| ٹریکر کا مسئلہ | `DOCS-SORA-Preview-W2` |
+| شرکاء | کام-وول -01 ... کام وول -08 |
 
-## Destaques
+## جھلکیاں
 
-1. **Governanca e tooling** - A politica de intake comunitario foi aprovada por unanimidade em 2025-05-20; o template de solicitacao atualizado com campos de motivacao/fuso horario esta em `docs/examples/docs_preview_request_template.md`.
-2. **Evidencia de preflight** - A mudanca do proxy Try it `OPS-TRYIT-188` rodou em 2025-06-09, dashboards do Grafana capturados, e os outputs de descriptor/checksum/probe de `preview-2025-06-15` arquivados em `artifacts/docs_preview/W2/`.
-3. **Onda de convites** - Oito reviewers comunitarios convidados em 2025-06-15, com acknowledgements registrados na tabela de convites do tracker; todos completaram a verificacao de checksum antes de navegar.
-4. **Feedback** - `docs-preview/w2 #1` (wording de tooltip) e `#2` (ordem do sidebar de localizacao) foram registrados em 2025-06-18 e resolvidos ate 2025-06-21 (Docs-core-04/05); nenhum incidente durante a onda.
+1. ** گورننس اور ٹولنگ **-کمیونٹی کی انٹیک پالیسی کو متفقہ طور پر 2025-05-20 پر منظور کیا گیا تھا۔ حوصلہ افزائی/ٹائم زون فیلڈز کے ساتھ تازہ ترین درخواست ٹیمپلیٹ `docs/examples/docs_preview_request_template.md` میں ہے۔
+2. ** پریفل لائٹ شواہد **-اس کی کوشش کریں `OPS-TRYIT-188` پراکسی تبدیلی 2025-06-09 ، Grafana ڈیش بورڈز پر قبضہ کرلی گئی ، اور `preview-2025-06-15` سے Dealcriptor/چیکم/تحقیقات آؤٹ پٹ `artifacts/docs_preview/W2/` میں محفوظ شدہ ہیں۔
+3. ** دعوت ناموں کی لہر **-آٹھ کمیونٹی جائزہ لینے والوں کو 2025-06-15 پر مدعو کیا گیا ، جس میں ٹریکر کے دعوت نامے کی میز میں رجسٹرڈ اعترافات کے ساتھ۔ ہر ایک نے براؤزنگ سے پہلے چیکسم چیک مکمل کیا۔
+4. ** آراء **-`docs-preview/w2 #1` (ٹول ٹائپ ورڈنگ) اور `#2` (مقام سائڈبار آرڈر) 2025-06-18 پر رجسٹرڈ تھے اور 2025-06-21 (DOCS-04/05) کے ذریعہ حل کیا گیا تھا۔ لہر کے دوران کوئی واقعہ نہیں۔
 
-## Itens de acao
+## ایکشن آئٹمز
 
-| ID | Descricao | Responsavel | Status |
+| ID | تفصیل | ذمہ دار | حیثیت |
 | --- | --- | --- | --- |
-| W2-A1 | Tratar `docs-preview/w2 #1` (wording de tooltip). | Docs-core-04 | Concluido 2025-06-21 |
-| W2-A2 | Tratar `docs-preview/w2 #2` (sidebar de localizacao). | Docs-core-05 | Concluido 2025-06-21 |
-| W2-A3 | Arquivar evidencia de saida + atualizar roadmap/status. | Docs/DevRel lead | Concluido 2025-06-29 |
+| W2-A1 | `docs-preview/w2 #1` (ٹول ٹائپ ورڈنگ) کا علاج کریں۔ | DOCS-CORE-04 | مکمل 2025-06-21 |
+| W2-A2 | `docs-preview/w2 #2` (مقام سائڈبار) کا علاج کریں۔ | DOCS-CORE-05 | مکمل 2025-06-21 |
+| W2-A3 | آرکائیو سے باہر نکلنے کے ثبوت + روڈ میپ/حیثیت کو اپ ڈیٹ کریں۔ | دستاویزات/ڈیوریل لیڈ | مکمل 2025-06-29 |
 
-## Resumo de encerramento (2025-06-29)
+## اختتامی خلاصہ (2025-06-29)
 
-- Todos os oito reviewers comunitarios confirmaram a conclusao e tiveram o acesso de preview revogado; acknowledgements registrados no log de convites do tracker.
-- Os snapshots finais de telemetria (`docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals`) ficaram verdes; logs e transcripts do proxy Try it anexados a `DOCS-SORA-Preview-W2`.
-- Bundle de evidencia (descriptor, checksum log, probe output, link report, screenshots do Grafana, acknowledgements de convite) arquivado em `artifacts/docs_preview/W2/preview-2025-06-15/`.
-- O log de checkpoints W2 do tracker foi atualizado ate o encerramento, garantindo um registro auditavel antes do inicio do planejamento W3.
+- تمام آٹھ کمیونٹی جائزہ نگاروں نے اس نتیجے کی تصدیق کی اور ان کی پیش نظارہ تک رسائی منسوخ کردی۔ ٹریکر کے دعوت نامے لاگ میں درج شدہ اعترافات۔
+- آخری ٹیلی میٹری اسنیپ شاٹس (`docs.preview.integrity` ، `TryItProxyErrors` ، `DocsPortal/GatewayRefusals`) سبز ہوگیا۔ اس کو پراکسی لاگز اور `DOCS-SORA-Preview-W2` سے منسلک ٹرانسکرپٹس آزمائیں۔
+- شواہد کا بنڈل (ڈسکرپٹر ، چیکسم لاگ ، تحقیقات آؤٹ پٹ ، لنک رپورٹ ، Grafana کے اسکرین شاٹس ، دعوت نامہ) `artifacts/docs_preview/W2/preview-2025-06-15/` میں محفوظ شدہ دستاویزات۔
+- W3 کی منصوبہ بندی کے آغاز سے پہلے ایک قابل آڈیبل ریکارڈ کو یقینی بناتے ہوئے ، ٹریکر کا W2 چیک پوائنٹ لاگ کو بند ہونے تک اپ ڈیٹ کیا گیا تھا۔

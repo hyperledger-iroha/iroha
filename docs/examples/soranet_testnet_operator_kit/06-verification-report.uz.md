@@ -7,46 +7,47 @@ generator: scripts/sync_docs_i18n.py
 source_hash: bf489427d0eba2beebfdefc44092730c3963cbd77e83669853f4e9681ac9fd2d
 source_last_modified: "2025-12-29T18:16:35.092552+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-## Operator Verification Report (Phase T0)
+## Operatorni tekshirish hisoboti (T0 fazasi)
 
-- Operator name: ______________________
-- Relay descriptor ID: ______________________
-- Submission date (UTC): ___________________
-- Contact email / matrix: ___________________
+- Operator nomi: ______________________
+- Rele deskriptor identifikatori: ______________________
+- Taqdim etilgan sana (UTC): ___________________
+- Aloqa uchun elektron pochta / matritsa: ___________________
 
-### Checklist Summary
+### Nazorat ro'yxati xulosasi
 
-| Item | Completed (Y/N) | Notes |
+| Element | Tugallandi (Y/N) | Eslatmalar |
 |------|-----------------|-------|
-| Hardware & network validated | | |
-| Compliance block applied | | |
-| Admission envelope verified | | |
-| Guard rotation smoke test | | |
-| Telemetry scraped & dashboards live | | |
-| Brownout drill executed | | |
-| PoW ticket success within target | | |
+| Uskuna va tarmoq tasdiqlangan | | |
+| Muvofiqlik bloki qo'llaniladi | | |
+| Qabul konverti tasdiqlangan | | |
+| Guard aylanish tutun sinovi | | |
+| Telemetriya qirib tashlandi va asboblar paneli jonli | | |
+| Brownout matkap bajarildi | | |
+| maqsad doirasida PoW chipta muvaffaqiyat | | |
 
-### Metrics Snapshot
+### Ko'rsatkichlar surati
 
-- PQ ratio (`sorafs_orchestrator_pq_ratio`): ________
-- Downgrade count last 24h: ________
-- Average circuit RTT (p95): ________ ms
-- PoW median solve time: ________ ms
+- PQ nisbati (`sorafs_orchestrator_pq_ratio`): ________
+- Oxirgi 24 soat ichida pasaytirish soni: ________
+- O'rtacha sxema RTT (p95): ________ ms
+- PoW o'rtacha hal qilish vaqti: ________ ms
 
-### Attachments
+### Qo'shimchalar
 
-Please attach:
+Iltimos, ilova qiling:
 
-1. Relay support bundle hash (`sha256`): __________________________
-2. Dashboard screenshots (PQ ratio, circuit success, PoW histogram).
-3. Signed drill bundle (`drills-signed.json` + signer public key hex and attachments).
-4. SNNet-10 metrics report (`cargo xtask soranet-testnet-metrics --input <snapshot> --out metrics-report.json`).
+1. Relay qo‘llab-quvvatlash to‘plami xesh (`sha256`): __________________________
+2. Boshqaruv paneli skrinshotlari (PQ nisbati, sxema muvaffaqiyati, PoW gistogrammasi).
+3. Imzolangan matkap to'plami (`drills-signed.json` + imzolovchi ochiq kalit olti burchakli va qo'shimchalar).
+4. SNNet-10 ko'rsatkichlari hisoboti (`cargo xtask soranet-testnet-metrics --input <snapshot> --out metrics-report.json`).
 
-### Operator Signature
+### Operator imzosi
 
-I certify the above information is accurate and all required steps have been
-completed.
+Men yuqoridagi maʼlumotlarning toʻgʻriligini va barcha kerakli qadamlar bajarilganligini tasdiqlayman
+yakunlandi.
 
-Signature: _________________________  Date: ___________________
+Imzo: _______________________ Sana: ___________________

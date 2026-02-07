@@ -7,46 +7,47 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 6cd4da7e590d581719ed2607994d7d9eb16d153fbd06f85655d0da37c727853a
 source_last_modified: "2025-12-29T18:16:35.085419+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# SoraNet GAR Intake Template
+# СорНет ГАР ҡабул итеү ҡалыптары
 
-Use this intake form when requesting a GAR action (purge, ttl override, rate
-ceiling, moderation directive, geofence, or legal hold). The submitted form
-should be pinned alongside the `gar_controller` outputs so audit logs and
-receipts cite the same evidence URIs.
+Был формаһында ҡулланыу ҡабул итеү ҡасан һорау GAR ғәмәлдәре (таҡта, ttl өҫтөнлөк, ставкаһы .
+түшәм, сама менән директива, геофенс, йәки законлы тотоу). Тапшырыу формаһы
+тейеш, тип, I18NI000000001X сығыштары менән бергә, шулай аудит журналдары һәм
+квитанциялары ла шул уҡ дәлилдәрҙе УРИ-ларҙы килтерә.
 
-| Field | Value | Notes |
-|-------|-------|-------|
-| Request ID |  | Guardian/ops ticket id. |
-| Requested by |  | Account + contact. |
-| Date/time (UTC) |  | When the action should start. |
-| GAR name |  | e.g., `docs.sora`. |
-| Canonical host |  | e.g., `docs.gw.sora.net`. |
-| Action |  | `ttl_override` / `rate_limit_override` / `purge_static_zone` / `geo_fence` / `legal_hold` / `moderation`. |
-| TTL override (seconds) |  | Required only for `ttl_override`. |
-| Rate ceiling (RPS) |  | Required only for `rate_limit_override`. |
-| Allowed regions |  | ISO region list when requesting `geo_fence`. |
-| Denied regions |  | ISO region list when requesting `geo_fence`. |
-| Moderation slugs |  | Match the GAR moderation directives. |
-| Purge tags |  | Tags that must be purged before serving. |
-| Labels |  | Machine labels (incident id, drill name, pop scope). |
-| Evidence URIs |  | Logs/dashboards/specs backing the request. |
-| Audit URI |  | Per-pop audit URI if different from defaults. |
-| Requested expiry |  | Unix timestamp or RFC3339; leave blank for default. |
-| Reason |  | User-facing explanation; appears in receipts and dashboards. |
-| Approver |  | Guardian/committee approver for the request. |
+| Ялан | Ҡиммәте | Иҫкәрмәләр |
+|------|--------|-------|
+| Ифрат идентификаторы |  | Һаҡсы/оптар билет id. |
+| Һорау |  | Иҫәп + контакт. |
+| Дата/ваҡыт (UTC) |  | Акция башланғанда. |
+| ГАР исеме |  | мәҫәлән, `docs.sora`. |
+| Канонлы хужа |  | мәҫәлән, `docs.gw.sora.net`. |
+| Эш |  | `ttl_override` / I18NI0000005X / I18NI000000006X / I18NI000000007X / I18NI000000008X / I18NI000000009Х. |
+| TTL өҫтөнлөк (секунд) |  | Тик `ttl_override` өсөн генә кәрәк. |
+| Стамба түшәм (РПС) |  | Тик `rate_limit_override` өсөн генә кәрәк. |
+| Рөхсәт ителгән төбәктәр |  | ISO төбәге исемлеге ҡасан һорағанда I18NI000000012X. |
+| Инҡар ителгән төбәктәр |  | ISO төбәге исемлеге ҡасан һорағанда I18NI000000013X. |
+| Модерация слизняктары |  | GAR модерация директиваларын тап килтерегеҙ. |
+| Таҙар тегтары |  | Хеҙмәтләндерер алдынан таҙартырға тейешле тегтар. |
+| Ярлыҡтар |  | Машина ярлыҡтары (инцидент id, быраулау исеме, поп даирәһе). |
+| Дәлилдәр URI |  | Ярмалар/приборҙар таҡталары/машлайҙар запросты нығыта. |
+| Аудит URI |  | Пер-поп аудиты URI, әгәр ҙә ғәҙәттән тыш хәлдәрҙән айырыла. |
+| Һорау срогы |  | Берләшкән ваҡыт маркаһы йәки RFC3339; ғәҙәттәгесә буш ҡалдырырға. |
+| Сәбәбе |  | Ҡулланыусыға ҡараған аңлатма; квитанцияларҙа һәм приборҙар таҡталарында күренә. |
+| Раҫлау |  | Һаҡсы/комитетты раҫлаусы өсөн үтенес. |
 
-### Submission steps
+### тапшырыу аҙымдары
 
-1. Fill the table and attach it to the governance ticket.
-2. Update the GAR controller config (`policies`/`pops`) with matching
-   `labels`/`evidence_uris`/`expires_at_unix`.
-3. Run `cargo xtask soranet-gar-controller ...` to emit events/receipts.
-4. Drop `gar_controller_summary.json`, `gar_reconciliation_report.json`,
-   `gar_metrics.prom`, and `gar_audit_log.jsonl` into the same ticket. The
-   approver confirms the receipt count matches the PoP list before dispatch.
+1. Өҫтәлде тултырып, идара итеү билетына беркетегеҙ.
+2. Яңыртыу GAR контроллер конфиг (I18NI000000014X/I18NI000000015X) тап килтереп .
+   I18NI0000016X/`evidence_uris`/`expires_at_unix` X.
+.
+4. Drop `gar_controller_summary.json`, I18NI000000021X,
+   I18NI00000022Х, һәм I18NI000000023X шул уҡ билетҡа. 1990 й.
+   раҫлаусы раҫлай квитанция һаны тура килә PoP исемлеге диспетчер алдынан.

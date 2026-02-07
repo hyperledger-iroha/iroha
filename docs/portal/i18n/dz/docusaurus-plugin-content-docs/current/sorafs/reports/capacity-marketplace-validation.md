@@ -7,48 +7,50 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraFS Capacity Marketplace Validation
 tags: [SF-2c, acceptance, checklist]
 summary: Acceptance checklist covering provider onboarding, dispute workflows, and treasury reconciliation gating the SoraFS capacity marketplace general availability.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# SoraFS Capacity Marketplace Validation Checklist
+# I18NT0000005X ཤུགས་ཚད་ཁྲོམ་རའི་བདེན་དཔྱད་དཔྱད་གཞི།
 
-**Review window:** 2026-03-18 → 2026-03-24  
-**Programme owners:** Storage Team (`@storage-wg`), Governance Council (`@council`), Treasury Guild (`@treasury`)  
-**Scope:** Provider onboarding pipelines, dispute adjudication flows, and treasury reconciliation processes required for SF-2c GA.
+**བསྐྱར་ཞིབ་སྒོ་སྒྲིག་:** ༢༠༢༦-༠༣-༡༨ → ༢༠༢༦-༠༣-༢༤  
+**ལས་རིམ་གྱི་ཇོ་བདག་:** གསོག་འཇོག་སྡེ་ཚན་ (`@storage-wg`), གཞུང་སྐྱོང་ཚོགས་སྡེ་ (`@council`), དངུལ་རྩིས་ཚོགས་སྡེ་ (I18NI0000000009X)  
+**Scope:** SF-2c GA གི་དོན་ལུ་ དངུལ་ཁང་ནང་ བཀོད་སྒྲིག་འབད་ནིའི་ མདོང་ལམ་དང་ རྩོད་གཞི་གི་ མཐུན་སྒྲིག་བྱ་རིམ་ཚུ་ དགོཔ་ཨིན།
 
-The checklist below must be reviewed before enabling the marketplace for external operators. Each row links to deterministic evidence (tests, fixtures, or documentation) that auditors can replay.
+འོག་གི་ཞིབ་དཔྱད་ཐོ་ཡིག་འདི་ ཕྱི་ཁའི་བཀོལ་སྤྱོད་པ་ཚུ་གི་དོན་ལུ་ ཁྲོམ་ས་འདི་ལྕོགས་ཅན་མ་བཟོ་བའི་ཧེ་མ་ བསྐྱར་ཞིབ་འབད་དགོ། རྩིས་ཞིབ་པ་ཚུ་གིས་ ལོག་སྟེ་རྩེད་ཚུགས་པའི་ གཏན་འབེབས་སྒྲུབ་བྱེད་ ༼བརྟག་དཔྱད་དང་ གཏན་འཇགས་ ཡང་ན་ ཡིག་ཆ་༽ ཚུ་ གྲལ་ཐིག་རེ་རེ་གིས་ འབྲེལ་མཐུད་འབདཝ་ཨིན།
 
-## Acceptance Checklist
+## ངོས་ལེན་ཞིབ་དཔྱད་ཐོ་ཡིག་།
 
-### Provider Onboarding
+### མཁོ་སྤྲོད་འབད་མི།
 
-| Check | Validation | Evidence |
-|-------|------------|----------|
-| Registry accepts canonical capacity declarations | Integration test exercises `/v1/sorafs/capacity/declare` via the app API, verifying signature handling, metadata capture, and hand-off to the node registry. | `crates/iroha_torii/src/routing.rs:7654` |
-| Smart contract rejects mismatched payloads | Unit test ensures provider IDs and committed GiB fields match the signed declaration before persisting. | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3445` |
-| CLI emits canonical onboarding artefacts | CLI harness writes deterministic Norito/JSON/Base64 outputs and validates round-trips so operators can stage declarations offline. | `crates/sorafs_car/tests/capacity_cli.rs:17` |
-| Operator guide captures admission workflow and governance guardrails | Documentation enumerates declaration schema, policy defaults, and review steps for the council. | `../storage-capacity-marketplace.md` |
+| བརྟག་དཔྱད་ | བདེན་དཔྱད་ | སྒྲུབ་བྱེད་ |
+|---------------------------------------------- |
+| ཐོ་བཀོད་འདི་གིས་ ཁྲིམས་ལུགས་ལྕོགས་གྲུབ་གསལ་བསྒྲགས་ཚུ་ ངོས་ལེན་འབདཝ་ཨིན། | མཉམ་བསྡོམས་བརྟག་དཔྱད་སྦྱོང་བརྡར་ I18NI000000010X འདི་ གློག་རིམ་ཨེ་པི་ཨའི་བརྒྱུད་དེ་ མཚན་རྟགས་འཛིན་སྐྱོང་ མེ་ཊ་ཌེ་ཊ་བཟུང་ནི་ དེ་ལས་ མཐུད་མཚམས་ཐོ་བཀོད་ལུ་ ལགཔ་བཀག་བཞག་ཡོདཔ་ཨིན། | `crates/iroha_torii/src/routing.rs:7654` |
+| གན་ཡིག་ཆུང་ཆུང་གིས་ མ་མཐུན་པའི་ དངུལ་སྤྲོད་ལེན་ཚུ་ ངོས་ལེན་མ་འབད་བས། | ཡུ་ནིཊི་བརྟག་དཔྱད་འདི་གིས་ བཀྲམ་སྤེལ་འབད་མི་ཨའི་ཌི་ཚུ་ངེས་གཏན་བཟོཝ་ཨིནམ་དང་ ཇི་བི་ས་སྒོ་ཚུ་ གནས་ཏེ་མ་འགྱོ་བའི་ཧེ་མ་ མཚན་རྟགས་བཀོད་ཡོད་པའི་གསལ་བསྒྲགས་དང་མཐུན་སྒྲིག་འབདཝ་ཨིན། | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3445` |
+| CLI གིས་ ཁྲིམས་མཐུན་གྱི་ བརྡ་རྟགས་ཚུ་ བཏོནམ་ཨིན། | CLI harness གིས་ གཏན་འབེབས་ I18NT0000002X/JSON/Base64 ཐོན་འབྲས་ཚུ་བྲིསཝ་ཨིནམ་དང་ བསྐོར་འགྲུལ་པ་ཚུ་ བདེན་དཔྱད་འབད་དེ་ བཀོལ་སྤྱོད་པ་ཚུ་གིས་ གནས་རིམ་གསལ་བསྒྲགས་འབད་ཚུགས། | `crates/sorafs_car/tests/capacity_cli.rs:17` |
+| བཀོལ་སྤྱོད་ལམ་སྟོན་པ་གིས་ འཛུལ་ཞུགས་ལཱ་གི་རྒྱུན་རིམ་དང་ གཞུང་སྐྱོང་སྲུང་སྐྱོབ་པ་ | ཡིག་ཆ་ཚུ་གིས་ གསལ་བསྒྲགས་ལས་རིམ་དང་ སྲིད་བྱུས་སྔོན་སྒྲིག་ དེ་ལས་ ཚོགས་སྡེ་གི་དོན་ལུ་ བསྐྱར་ཞིབ་ཀྱི་གོ་རིམ་ཚུ་ རྩིས་རྐྱབ་ཨིན། | `../storage-capacity-marketplace.md` |
 
-### Dispute Resolution
+### རྩོད་རྙོགས་སེལ་ཐབས།
 
-| Check | Validation | Evidence |
-|-------|------------|----------|
-| Dispute records persist with canonical payload digest | Unit test registers a dispute, decodes the stored payload, and asserts pending status to guarantee ledger determinism. | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:1835` |
-| CLI dispute generator matches canonical schema | CLI test covers Base64/Norito outputs and JSON summaries for `CapacityDisputeV1`, ensuring evidence bundles hash deterministically. | `crates/sorafs_car/tests/capacity_cli.rs:455` |
-| Replay test proves dispute/penalty determinism | Proof-failure telemetry replayed twice produces identical ledger, credit, and dispute snapshots so slashes are deterministic across peers. | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3430` |
-| Runbook documents escalation and revocation flow | Operations guide captures council workflow, evidence requirements, and rollback procedures. | `../dispute-revocation-runbook.md` |
+| བརྟག་དཔྱད་ | བདེན་དཔྱད་ | སྒྲུབ་བྱེད་ |
+|---------------------------------------------- |
+| ཐག་གཅོད་དྲན་ཐོ་ཚུ་ ཀེ་ནོ་ནིག་པེ་ལོཌ་ཌའི་སའིཌ་དང་གཅིག་ཁར་ གནས་ཏེ་ཡོདཔ་ཨིན། | ཡན་ལག་བརྟག་དཔྱད་ཀྱིས་ རྩོད་རྙོགས་ཐོ་བཀོད་འབདཝ་ཨིནམ་དང་ གསོག་འཇོག་འབད་དེ་ཡོད་པའི་ འབབ་ཁུངས་ཚུ་ བརྡ་རྟགས་བཀོདཔ་ཨིན། | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:1835` |
+| CLI རྩོད་རྙོགས་བཟོ་མི་མཐུན་སྒྲིག་ཚུ་ ཁྲིམས་ལུགས་ལས་རིམ། | CLI བརྟག་དཔྱད་ཀྱིས་ Base64/I18NT0000003X ཐོན་འབྲས་ཚུ་དང་ I18NI0000000016X གི་དོན་ལུ་ JSON བཅུད་བསྡུས་ཚུ་ ཁྱབ་ཚུགསཔ་ཨིནམ་དང་ དེ་གིས་ སྒྲུབ་བྱེད་ཚུ་ ཧེཤ་གཏན་འབེབས་སྦེ་ གཏན་འབེབས་བཟོཝ་ཨིན། | `crates/sorafs_car/tests/capacity_cli.rs:455` |
+| བསྐྱར་རྩེད་བརྟག་དཔྱད་འདི་གིས་ རྩོད་གཞི་/ཉེས་ཆད་གཏན་འབེབས་བཟོ་ནི་ བདེན་ཁུངས་བཀལཝ་ཨིན། | བདེན་ཁུངས་མེད་པའི་བརྡ་འཕྲིན་རིག་པ་འདི་ ལྡུམ་ར་དང་ བཀའ་དྲིན་ དེ་ལས་ རྩོད་བསྡུར་ཚུ་ གཉིས་ལྡབ་སྦེ་བཏོན་ཡོདཔ་དང་ འདི་གིས་ མཉམ་རོགས་ཀྱིས་ མཉམ་རོགས་ཚུ་ནང་ལས་ཕར་ སེམས་ཐག་བཅད་དེ་ཡོདཔ་ཨིན། | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3430` |
+| རན་བུག་ཡིག་ཆ་ཚུ་ ཡར་འཕར་དང་ ཆ་མེད་གཏང་ནིའི་ འཕྲོ་མཐུད། | བཀོལ་སྤྱོད་ལམ་སྟོན་འདི་གིས་ ཚོགས་སྡེའི་ལཱ་གི་རྒྱུན་རིམ་དང་ སྒྲུབ་བྱེད་དགོས་མཁོ་ དེ་ལས་ ལོག་འགྱོ་ནི་གི་བྱ་རིམ་ཚུ་ བཀལཝ་ཨིན། | `../dispute-revocation-runbook.md` |
 
-### Treasury Reconciliation
+### དངུལ་ཁང་གི་མཐུན་སྒྲིལ།
 
-| Check | Validation | Evidence |
-|-------|------------|----------|
-| Ledger accrual matches 30-day soak projection | Soak test spans five providers across 30 settlement windows, diffing ledger entries against the expected payout reference. | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3000` |
-| Ledger export reconciliation recorded nightly | `capacity_reconcile.py` compares fee ledger expectations with executed XOR transfer exports, emits Prometheus metrics, and gates treasury approval via Alertmanager. | `scripts/telemetry/capacity_reconcile.py:1`,`docs/source/sorafs/runbooks/capacity_reconciliation.md:1`,`dashboards/alerts/sorafs_capacity_rules.yml:100` |
-| Billing dashboards surface penalties and accrual telemetry | Grafana import plots GiB·hour accrual, strike counters, and bonded collateral for on-call visibility. | `dashboards/grafana/sorafs_capacity_penalties.json:1` |
-| Published report archives soak methodology and replay commands | Report details soak scope, execution commands, and observability hooks for auditors. | `./sf2c-capacity-soak.md` |
+| བརྟག་དཔྱད་ | བདེན་དཔྱད་ | སྒྲུབ་བྱེད་ |
+|---------------------------------------------- |
+| Ledger amcrual fartes 30 ཉིན་མའི་བཙོ་སྦྱོར་དམིགས་ཚད། | སོ་ཀ་བརྟག་དཔྱད་འདི་གིས་ གཞིས་ཆགས་སྒོ་སྒྲིག་༣༠ གི་ནང་ལུ་ བྱིན་མི་༥ གིས་ རེ་བ་བསྐྱེད་མི་ གླ་ཆ་གཞི་བསྟུན་ལུ་ རྩིས་ཁྲ་ཚུ་ ཁྱབ་སྤེལ་འབདཝ་ཨིན། | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3000` |
+| Ledger ཕྱིར་གཏོང་མཐུན་སྒྲིག་འདི་མཚན་མོ་ཐོ་བཀོད་འབད་ཡོད་པའི་མཐུན་སྒྲིག་འབད་ནི། | I18NI000000021X གིས་ འཐུས་ལེ་ཇར་གྱི་རེ་བ་ཚུ་ ཨེགསི་ཨོ་ཨར་ ཕྱིར་ཚོང་འཐབ་མི་ཚུ་དང་ ག་བསྡུར་རྐྱབ་ཨིན། | `scripts/telemetry/capacity_reconcile.py:1`,I18NI0000023X,`dashboards/alerts/sorafs_capacity_rules.yml:100` |
+| བརྡབ་གསིག་བཀོད་ཁྲམ་ཚུ་ ཁ་ཐོག་གི་ཉེས་ཆད་དང་ བསྡུ་སྒྲིག་འབད་ཡོད་པའི་བརྡ་འཕྲིན་ཚུ། | Grafana ནང་འདྲེན་གྱི་ས་ཆ་ GiB·hour བསྡུ་སྒྲིག་དང་ ངོ་རྒོལ་གྱི་གྱངས་ཁ་ དེ་ལས་ ཁ་པར་ཐོག་ལས་ མཐོང་གསལ་གྱི་དོན་ལུ་ བུན་གཡར་གྱི་ བརྟན་བཞུགས་འབདཝ་ཨིན། | I18NI0000025X |
+| དཔར་བསྐྲུན་འབད་ཡོད་པའི་སྙན་ཞུ་ཡིག་མཛོད་ཚུ་གིས་ ཐབས་ལམ་བཏོན་ནི་དང་ བསྐྱར་རྩེད་བརྡ་བཀོད་ཚུ་ | རྩིས་ཞིབ་པ་ཚུ་གི་དོན་ལུ་ ཁ་གསལ་གྱི་གོ་སྐབས་དང་ ལག་ལེན་འཐབ་ཐངས་བཀོད་རྒྱ་ དེ་ལས་ བལྟ་བརྟོག་འབད་ཚུགས་པའི་ ཧུཀ་ཚུ་ སྙན་ཞུ་འབད། | `./sf2c-capacity-soak.md` |
 
-## Execution Notes
+## བཀོལ་བའི་དྲན་ཐོ།
 
-Re-run the validation suite before sign-off:
+མཚན་རྟགས་མ་བཀོད་པའི་ཧེ་མ་ བདེན་དཔྱད་སྡེ་ཚན་འདི་ ལོག་གཡོག་བཀོལ།
 
 ```bash
 cargo test -p iroha_torii --features app_api -- capacity_declaration_handler_accepts_request
@@ -60,20 +62,20 @@ cargo test -p sorafs_car --features cli --test capacity_cli
 python3 scripts/telemetry/capacity_reconcile.py --snapshot <state.json> --ledger <ledger.ndjson> --warn-only
 ```
 
-Operators should regenerate onboarding/dispute request payloads with `sorafs_manifest_stub capacity {declaration,dispute}` and archive the resulting JSON/Norito bytes alongside the governance ticket.
+བཀོལ་སྤྱོད་པ་ཚུ་གིས་ I18NI000000027X དང་གཅིག་ཁར་ བཀོད་སྒྲིག་/རྩོད་གཞི་ཞུ་བ་ཚུ་ བསྐྱར་བཟོ་འབད་དགོཔ་མ་ཚད་ གཏན་མཛོད་ནང་ གྲུབ་འབྲས་ JSON/I18NT0000000004X བཱའིཊིསི་འདི་ གཞུང་སྐྱོང་ཤོག་བྱང་དང་གཅིག་ཁར་ བསྐྱར་བཟོ་འབད་དགོ།
 
-## Sign-off Artefacts
+## ནང་བསྐྱོད་-ཨོཕ་ཅ་ཆས།
 
-| Artefact | Path | blake2b-256 |
-|----------|------|-------------|
-| Provider onboarding approval packet | `docs/examples/sorafs_capacity_marketplace_validation/2026-03-24_onboarding_signoff.md` | `8f41a745d8d94710fe81c07839651520429d4abea5729bc00f8f45bbb11daa4c` |
-| Dispute resolution approval packet | `docs/examples/sorafs_capacity_marketplace_validation/2026-03-24_dispute_signoff.md` | `c3ac3999ef52857170fedb83cddbff7733ef5699f8b38aea2e65ae507a6229f7` |
-| Treasury reconciliation approval packet | `docs/examples/sorafs_capacity_marketplace_validation/2026-03-24_treasury_signoff.md` | `0511aeed1f5607c329428cd49c94d1af51292c85134c10c3330c172b0140e8c6` |
+| ཅ་ཆས། | ལམ། བེལ་ཀེ་༢བ-༢༥༦ |
+|----------------------------------------|
+| ཆ་འཇོག་ཐུམ་སྒྲིལ་བྱིན་མི། | I18NI0000028X | I18NI0000029X |
+| རྩོད་གཞི་སེལ་འཐུའི་ཆ་འཇོག་ཐུམ་སྒྲིལ་ | `docs/examples/sorafs_capacity_marketplace_validation/2026-03-24_dispute_signoff.md` | I18NI0000031X |
+| དངུལ་ཁང་མཐུན་སྒྲིག་ཆ་འཇོག་ཐུམ་སྒྲིལ་ | I18NI0000032X | I18NI0000033X |
 
-Store the signed copies of these artefacts with the release bundle and link them in the governance change record.
+འ་ནི་ཅ་རྙིང་ཚུ་གི་མིང་རྟགས་བཀོད་ཡོད་པའི་འདྲ་ཚུ་ གསར་བཏོན་འབད་མི་སྡེ་ཚན་དང་གཅིག་ཁར་ གསོག་འཇོག་འབད་དེ་ གཞུང་སྐྱོང་བསྒྱུར་བཅོས་ཀྱི་ ཐོ་བཀོད་ནང་ འབྲེལ་མཐུད་འབད།
 
-## Approvals
+## ཆ་འཇོག་ཚུ།
 
-- Storage Team Lead — @storage-tl (2026-03-24)  
-- Governance Council Secretary — @council-sec (2026-03-24)  
-- Treasury Operations Lead — @treasury-ops (2026-03-24)
+- སྡེ་ཚན་འགོ་ཁྲིད་ — @storage-tl (༢༠༢༦-༠༣-༢༤)  
+- གཞུང་སྐྱོང་ཚོགས་སྡེའི་དྲུང་ཆེན་ — @council-sec (༢༠༢༦-༠༣-༢༤)  
+- དངུལ་ཁང་ལས་དོན་འགོ་ཁྲིད་ — @treasury-ops (2026-03-24)

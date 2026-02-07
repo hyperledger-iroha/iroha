@@ -7,85 +7,87 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Nexus operations runbook
 description: Field-ready summary of the Nexus operator workflow, mirroring `docs/source/nexus_operations.md`.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-Use this page as the quick-reference sibling of
-`docs/source/nexus_operations.md`. It distils the operational checklist, change
-management hooks, and telemetry coverage requirements that Nexus operators must
-follow.
+ཤོག་ལེབ་འདི་ མགྱོགས་མྱུར་གཞི་བསྟུན་སྤུན་ཆ་སྦེ་ལག་ལེན་འཐབ།
+`docs/source/nexus_operations.md`. འདི་གིས་ བཀོལ་སྤྱོད་ཞིབ་དཔྱད་ཐོ་ཡིག་ བསྒྱུར་བཅོས་འབདཝ་ཨིན།
+འཛིན་སྐྱོང་ཧུཀ་དང་ ཊེ་ལི་མི་ཊི་ཁྱབ་ཚད་དགོས་མཁོ། Nexus བཀོལ་སྤྱོད་པ་ཚུ་གིས་དགོ།
+རྗེས་སུ་འབྲང་ནི།
 
-## Lifecycle checklist
+## མི་ཚེའི་འཁོར་རིམ་གྱི་ཐོ་ཡིག།
 
-| Stage | Actions | Evidence |
-|-------|--------|----------|
-| Pre-flight | Verify release hashes/signatures, confirm `profile = "iroha3"`, and prepare config templates. | `scripts/select_release_profile.py` output, checksum log, signed manifest bundle. |
-| Catalog alignment | Update `[nexus]` catalog, routing policy, and DA thresholds per council-issued manifest, then capture `--trace-config`. | `irohad --sora --config … --trace-config` output stored with onboarding ticket. |
-| Smoke & cutover | Run `irohad --sora --config … --trace-config`, execute CLI smoke (`FindNetworkStatus`), validate telemetry exports, and request admission. | Smoke-test log + Alertmanager confirmation. |
-| Steady state | Monitor dashboards/alerts, rotate keys per governance cadence, and sync configs/runbooks whenever manifests change. | Quarterly review minutes, dashboard screenshots, rotation ticket IDs. |
+| གནས་སྟངས། | བྱ་བ་ | སྒྲུབ་བྱེད་ |
+|--------------------------------------- |
+| འཕུར་འགྲུལ་གྱི་སྔོན་ལ། | གསར་བཏོན་ཧེ་ཤེ་/མཚན་རྟགས་ཚུ་བདེན་དཔྱད་འབད་ཞིནམ་ལས་ `profile = "iroha3"` ངེས་དཔྱད་འབད་ཞིནམ་ལས་ རིམ་སྒྲིག་ཊེམ་པེལེཊི་ཚུ་གྲ་སྒྲིག་འབད། | `scripts/select_release_profile.py` ཐོན་འབྲས་, ཞིབ་དཔྱད་གསུམ་དྲན་དེབ་, མཚན་རྟགས་བཀོད་ཡོད་པའི་གསལ་རྟགས་བང་རིམ་། |
+| ཐོ་ཡིག་ཕྲང་སྒྲིག་འབད་ནི། | `[nexus]` ཐོ་གཞུང་དང་ འགྲུལ་ལམ་སྲིད་བྱུས་ དེ་ལས་ ཚོགས་སྡེ་གིས་ གསལ་སྟོན་འབད་མི་ གསལ་སྟོན་རེ་ལུ་ DA གི་ཚད་གཞི་ཚུ་ དུས་མཐུན་བཟོ་ཞིནམ་ལས་ `--trace-config` འཛིན་བཟུང་འབད། | I18NI000000026X ཐོན་འབྲས་འདི་ གུ་བཙུགས་པའི་ཤོག་བྱང་དང་གཅིག་ཁར་ གསོག་འཇོག་འབད་ཡོདཔ། |
+| ཐ་མག་དང་ བཏོག་བཏོགས། | I18NI0000000027X, གཡོག་བཀོལ་བའི་ CLI ཐ་མག་ (I18NI000000028X) གིས་ བརྒྱུད་འཕྲིན་ཕྱིར་གཏོང་ཚུ་ བདེན་དཔྱད་འབད་དེ་ འཛུལ་ཞུགས་ཞུ་བ་འབདཝ་ཨིན། | ཐ་མག་-བརྟག་དཔྱད་དྲན་ཐོ་ + དྲན་ཤེས་བཏོན་མི་བདེན་དཔྱད་འབད་ནི། |
+| གཏན་འཇགས་གནས་སྟངས། | གསལ་སྟོན་འབད་བའི་སྐབས་ མཉམ་མཐུད་རིམ་སྒྲིག་/རན་དེབ་རེ་ལུ་ ལྡེ་མིག་ཚུ་ བསྒྱིར་ནི་ ཌེཤ་བོརཌི་/ཉེན་བརྡ་ཚུ་ ལྟ་རྟོག་འབད། | ཟླཝ་བཞི་པའི་ནང་ བསྐྱར་ཞིབ་སྐར་མ་ ཌེཤ་བོརཌི་གསལ་གཞི་ཚུ་ བསྐོར་འཁོར་གྱི་ཤོག་བྱང་ཨའི་ཌི་ཚུ། |
 
-Detailed onboarding (key replacement, routing templates, release profile steps)
-remain in `docs/source/sora_nexus_operator_onboarding.md`.
+ཁ་གསལ་ཡོད་པའི་ ཨོན་བོང་ཌིང་ (ལྡེ་མིག་ཚབ་བཙུགས་, འགྲུལ་ལམ་ཊེམ་པེལེཊི་, གསལ་སྡུད་རིམ་པ་ གསར་བཏོན་འབད་ནི)།
+ལྷག་ལུས་ I18NI0000029X ནང་།
 
-## Change management
+## འགྱུར་བའི་བདག་འཛིན།
 
-1. **Release updates** – track announcements in `status.md`/`roadmap.md`; attach
-   the onboarding checklist to every release PR.
-2. **Lane manifest changes** – verify signed bundles from the Space Directory and
-   archive them under `docs/source/project_tracker/nexus_config_deltas/`.
-3. **Configuration deltas** – every `config/config.toml` change requires a ticket
-   referencing the lane/data-space. Store a redacted copy of the effective config
-   whenever nodes join or upgrade.
-4. **Rollback drills** – quarterly rehearse stop/restore/smoke procedures; log
-   outcomes under `docs/source/project_tracker/nexus_config_deltas/<date>-rollback.md`.
-5. **Compliance approvals** – private/CBDC lanes must secure compliance sign-off
-   before modifying DA policy or telemetry redaction knobs (see
+1. **གསར་བཏོན་དུས་མཐུན་ཚུ་** – I18NI000000030X/I18NI0000031X ནང་གསལ་བསྒྲགས། སྦྱར༌ནི༌
+   PR གསར་བཏོན་འབད་མི་ག་ར་ལུ་ བཀོད་སྒྲིག་འབད་ཡོད་པའི་ཞིབ་དཔྱད་ཐོ་ཡིག་།
+༢. **ལེནསི་གསལ་སྟོན་བསྒྱུར་བཅོས་** – གནམ་སྟོང་སྣོད་ཐོ་ནང་ལས་ མིང་རྟགས་བཀོད་ཡོད་པའི་བཱན་ཌི་ཚུ་ བདེན་དཔྱད་འབད།
+   གཏན་མཛོད། ཁོང་ཚོ་ `docs/source/project_tracker/nexus_config_deltas/` གི་འོག་ལུ་ཨིན།
+3. **རིམ་སྒྲིག་ཌེལ་ཊས་** – `config/config.toml` བསྒྱུར་བཅོས་རེ་རེ་ལུ་ ཤོག་འཛིན་དགོཔ་ཨིན།
+   ལམ་ཐིག་/གནས་སྡུད་བར་སྟོང་ལུ་གཞི་བསྟུན་འབད་དོ། ནུས་ཅན་རིམ་སྒྲིག་གི་ ལེགས་བཅོས་འབད་ཡོད་པའི་འདྲ་བཤུས་ཅིག་ གསོག་འཇོག་འབད།
+   ག་དེམ་ཅིག་སྦེ་ མཐུད་མཚམས་ཚུ་ མཐུད་/ཡང་ན་ ཡར་འཕེལ་གཏང་ནི།
+4. **རོལ་བོག་སྦྱོང་བརྡར་** – ཟླཝ་གསུམ་གྱི་རིང་ལུ་ བསྐྱར་སྦྱོང་འབད་ནི། ཤིང༌དུམ༌
+   གྲུབ་འབྲས་ `docs/source/project_tracker/nexus_config_deltas/<date>-rollback.md` འོག་ལུ་ཐོན་ཡོདཔ།
+༥. **བཀག་ཆ་གནང་བ་** – སྒེར་གྱི་/སི་བྷི་ཌི་སི་ ལམ་ཚུ་ བསྟར་སྤྱོད་འབད་དགོ་པའི་ བསྟུན་ཏེ་ བརྡ་བཀོད་འབད་དགོ།
+   DA སྲིད་བྱུས་ཡང་ན་ ཊེ་ལི་མི་ཊི་ རི་ཌེག་ཊིག་ མཛུབ་མོ་ཚུ་ ལེགས་བཅོས་མ་འབད་བའི་ཧེ་མ་ (see
    `docs/source/cbdc_lane_playbook.md`).
 
-## Telemetry & SLOs
+## བརྒྱུད་འཕྲིན་དང་ ཨེསི་ཨེལ་ཨོ་ཚུ།
 
-- Dashboards: `dashboards/grafana/nexus_lanes.json`, `nexus_settlement.json`, plus
-  SDK-specific views (e.g., `android_operator_console.json`).
-- Alerts: `dashboards/alerts/nexus_audit_rules.yml` and Torii/Norito transport
-  rules (`dashboards/alerts/torii_norito_rpc_rules.yml`).
-- Metrics to watch:
-  - `nexus_lane_height{lane_id}` – alert on zero progress for three slots.
-  - `nexus_da_backlog_chunks{lane_id}` – alert above lane-specific thresholds
-    (default 64 public / 8 private).
-  - `nexus_settlement_latency_seconds{lane_id}` – alert when P99 exceeds 900 ms
-    (public) or 1200 ms (private).
-  - `torii_request_failures_total{scheme="norito_rpc"}` – alert if 5-minute error
-    ratio >2 %.
-  - `telemetry_redaction_override_total` – Sev 2 immediately; ensure overrides
-    have compliance tickets.
-- Run the telemetry remediation checklist in
-  [Nexus telemetry remediation plan](./nexus-telemetry-remediation) at least
-  quarterly and attach the filled form to operations review notes.
+- ཌེཤ་བོརཌི་: `dashboards/grafana/nexus_lanes.json`, I18NI000000037X, བསྡོམས་འབོར།
+  ཨེསི་ཌི་ཀེ་དམིགས་བསལ་གྱི་མཐོང་སྣང་ (དཔེར་ན་ `android_operator_console.json`)
+- ཉེན་བརྡ་: `dashboards/alerts/nexus_audit_rules.yml` དང་ I18NT000000013X/Norito སྐྱེལ་འདྲེན་
+  ལམ་ལུགས་ (`dashboards/alerts/torii_norito_rpc_rules.yml`).
+- བལྟ་ནིའི་མེ་ཊིགསི་:
+  - `nexus_lane_height{lane_id}` – ས་སྟོང་གསུམ་གྱི་དོན་ལུ་ ཀླད་ཀོར་གྱི་ཡར་འཕེལ་ལུ་ ཉེན་བརྡ་འབད།
+  - `nexus_da_backlog_chunks{lane_id}` – ལམ་གྱི་དམིགས་བསལ་ཚད་གཞི་ཚུ་གི་ལྟག་ལུ་ དྲན་སྐུལ་འབདཝ་ཨིན།
+    (སྔོན་སྒྲིག་ ༦༤ མི་མང་ / ༨ སྒེར་གྱི་)།
+  - `nexus_settlement_latency_seconds{lane_id}` – P99 ལས་ ༩༠༠ms ལས་བརྒལ་བའི་སྐབས་ དྲན་སྐུལ་འབདཝ་ཨིན།
+    (མི་མང་) ཡང་ན་ ༡༢༠༠ms (སྒེར་གཉེར)།
+  - `torii_request_failures_total{scheme="norito_rpc"}` – སྐར་མ་ ༥ གི་འཛོལ་བ་ཨིན་པ་ཅིན་ ཉེན་བརྡ་འབདཝ་ཨིན།
+    ཆ་ཚད་ >2%.
+  - I18NI000000045X – དེ་འཕྲོ་ལས་ སེབ་༢ དང་། ངེས་བརྟན་བྱོས།
+    བསྟར་སྤྱོད་ཀྱི་ཤོག་འཛིན་ཡོད།
+- ཊེ་ལི་མི་ཊི་རི་ བཅོ་ཁ་ཐོ་ཡིག་ ༢༠ ནང་ གཡོག་བཀོལ།
+  [I18NT0000003X བརྒྱུད་འཕྲིན་བཅོས་ཐབས་འཆར་གཞི།](./nexus-telemetry-remediation) ཉུང་མཐར་ཡང་།
+  ཟླཝ་གསུམ་པའི་ནང་ བཀང་ཡོད་པའི་འབྲི་ཤོག་འདི་ ལག་ལེན་བསྐྱར་ཞིབ་ཀྱི་དྲན་ཐོ་ཚུ་ལུ་ མཉམ་སྦྲགས་འབད།
 
-## Incident matrix
+## འཚེར་སྣང་གཅོད།
 
-| Severity | Definition | Response |
-|----------|------------|----------|
-| Sev 1 | Data-space isolation breach, settlement halt >15 min, or governance vote corruption. | Page Nexus Primary + Release Engineering + Compliance, freeze admission, collect artefacts, publish comms ≤60 min, RCA ≤5 business days. |
-| Sev 2 | Lane backlog SLA breach, telemetry blind spot >30 min, failed manifest rollout. | Page Nexus Primary + SRE, mitigate ≤4 h, file follow-ups within 2 business days. |
-| Sev 3 | Non-blocking drift (docs, alerts). | Log in tracker, schedule fix inside the sprint. |
+| ཚབས་ཆེན། | ངེས་ཚིག | ལན་ |
+|------------------------------------------- |
+| སེ་བ༡ | གནས་སྡུད་ས་སྟོང་ཟུར་གནས་འགལ་འཛུགས་ གཞིས་ཆགས་བཀག་ཆ་ >15min ཡང་ན་ གཞུང་སྐྱོང་ནང་ ཚོགས་རྒྱན་བཙུགས་ནི། | ཤོག་ངོས་I18NT0000004X གཞི་རིམ་ + གསར་བཏོན་བཟོ་རིག་ + བསྟུན་ཆོད་ གྱང་ཁོག་ནང་ འཛུལ་ཞུགས་ ཅ་རྙིང་ཚུ་བསྡུ་ལེན་འབད་ནི་ དཔར་བསྐྲུན་ ≤60min, RCA ≤5 ཚོང་འབྲེལ་གྱི་ཉིནམ་ཚུ་ཨིན། |
+| སེབ་༢ | Lane backlog SLA བརྡལ་བཤིག་དང་ >30min, འཐུས་ཤོར་བྱུང་བའི་ གསལ་སྟོན་གྱི་ གསལ་སྟོན་འབད་ཡོདཔ། | ཤོག་ལེབ་ Nexus གཞི་རིམ་ + SRE, ≤4h, ཡིག་སྣོད་རྗེས་སྙེག་ཚུ་ ཚོང་འབྲེལ་ཉིནམ་༢ ཀྱི་ནང་འཁོད་ལུ་ཨིན། |
+| སེ་བ༣ | བཀག་ཆ་མེད་པའི་ ཌིརཕཊི་ (docs, དྲན་སྐུལ་)། | བརྟག་ཞིབ་པ་ནང་ ནང་བསྐྱོད་འབད། ལས་རིམ་ནང་ སི་པིརིན་ནང་ ནང་བསྐྱོད་འབད། |
 
-Incident tickets must record affected lane/data-space IDs, manifest hashes,
-timeline, supporting metrics/logs, and follow-up tasks/owners.
+བྱུང་རྐྱེན་གྱི་ཤོག་འཛིན་ཚུ་གིས་ གནོད་སྐྱོན་ཕོག་ཡོད་པའི་ ལམ་/གནས་སྡུད་བར་སྟོང་ཨའི་ཌི་ཚུ་ ཐོ་བཀོད་འབད་དགོཔ་དང་ ཧ་སི་ཚུ་ གསལ་སྟོན་འབད་དགོ།
+དུས་ཚོད་ཐིག་དང་ མེ་ཊིགསི་/དྲན་ཐོ་ཚུ་རྒྱབ་སྐྱོར་འབད་ནི་དང་ རྗེས་འཇུག་ལས་ཀ་/ཇོ་བདག་ཚུ།
 
-## Evidence archive
+## སྒྲུབ་བྱེད་ཡིག་མཛོད་པ།
 
-- Store bundles/manifests/telemetry exports under `artifacts/nexus/<lane>/<date>/`.
-- Keep redacted configs + `--trace-config` output for each release.
-- Attach council minutes + signed decisions when config or manifest changes land.
-- Preserve weekly Prometheus snapshots relevant to Nexus metrics for 12 months.
-- Record runbook edits in `docs/source/project_tracker/nexus_config_deltas/README.md`
-  so auditors know when responsibilities changed.
+- གསོག་འཇོག་བང་བཀོལ་/མརན/ལྕགས་རིགས་ཕྱིར་འདྲེན་ཚུ་ I18NI000000046X གི་འོག་ལུ་ཨིན།
+- བཏོན་གཏང་མི་རེ་རེ་གི་དོན་ལུ་ I18NI0000004X ཐོན་འབྲས་ཚུ་ བསྐྱར་བཟོ་འབད་ཡོད་པའི་རིམ་སྒྲིག་ཚུ་བཞག།
+- ལྷན་ཚོགས་ཀྱི་སྐར་མ་ + ས་ཆའི་རིམ་སྒྲིག་ཡང་ན་མངོན་གསལ་འབད་བའི་སྐབས་ མཚན་རྟགས་བཀོད་ཡོད་པའི་གྲོས་ཐག་ཚུ་ མཉམ་སྦྲགས་འབད་ནི།
+- བདུན་ཕྲག་རེ་ནང་ I18NT000000000X པར་ལེན་ཚུ་ ཟླཝ་༡༢ གི་རིང་ལུ་ I18NT000000006X metrics དང་འབྲེལ་བའི་པར་ཚུ་ ཉམས་སྲུང་འབད།
+- I18NI0000048X ནང་གི་ རན་དེབ་ཞུན་དག་ཚུ་དྲན་ཐོ།
+  དེ་འབདཝ་ལས་ རྩིས་ཞིབ་པ་ཚུ་གིས་ འགན་ཁུར་ཚུ་ ནམ་ཤེས་དོ་ཡོདཔ་ཨིན་ན་ ཤེས་ཚུགས།
 
-## Related material
+## འབྲེལ་བའི་དངོས་པོ།
 
-- Overview: [Nexus overview](./nexus-overview)
-- Specification: [Nexus spec](./nexus-spec)
-- Lane geometry: [Nexus lane model](./nexus-lane-model)
-- Transition & routing shims: [Nexus transition notes](./nexus-transition-notes)
-- Operator onboarding: [Sora Nexus operator onboarding](./nexus-operator-onboarding)
-- Telemetry remediation: [Nexus telemetry remediation plan](./nexus-telemetry-remediation)
+- སྤྱིར་བཏང་ལྟ་རྟོག: [I18NT0000007X བལྟས་ ](I18NU0000015X)
+- གསལ་བཀོད་: [I18NT0000008X ཁྱད་ཚད་](I18NU0000016X)
+- ལམ་ཐིག་དབྱིབས་རྩིས་: [I18NT0000009X ལམ་ཐིག་དཔེ་སྟོན།](./nexus-lane-model)
+- འགྱུར་བཅོས་དང་ འགྲུལ་ལམ་ ཤིམ་ཚུ་: [Nexus འགྱུར་བའི་དྲན་ཐོ་](./nexus-transition-notes)
+- བཀོལ་སྤྱོད་འབད་མི་ བཀོལ་སྤྱོད་པ་: [སོ་ར་ I18NT0000011X བཀོལ་སྤྱོད་པ་ གུ་བཀོལ་ ](I18NU0000019X)
+- ཊེ་ལི་མི་ཊི་བཅོས་བཅོས་: [I18NT0000012X ཊེ་ལི་མི་ཊི་བཅོས་སྒྲིག་འཆར་གཞི་](./nexus-telemetry-remediation)

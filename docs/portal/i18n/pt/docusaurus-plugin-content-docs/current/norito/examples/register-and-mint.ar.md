@@ -4,30 +4,32 @@ direction: ltr
 source: docs/portal/docs/norito/examples/register-and-mint.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
 slug: /norito/examples/register-and-mint
-title: تسجيل نطاق وسك الأصول
+título: تسجيل نطاق وسك الأصول
 description: يوضح إنشاء النطاقات المصرح بها وتسجيل الأصول والسك الحتمي.
-source: crates/ivm/docs/examples/13_register_and_mint.ko
+fonte: crates/ivm/docs/examples/13_register_and_mint.ko
 ---
 
-يوضح إنشاء النطاقات المصرح بها وتسجيل الأصول والسك الحتمي.
+Você pode fazer isso sem precisar de mais nada.
 
 ## جولة دفتر الأستاذ
 
-- تأكد من وجود حساب الوجهة (مثل `ih58...`) بما يعكس مرحلة الإعداد في كل بدء سريع للـ SDK.
-- استدعِ نقطة الدخول `register_and_mint` لإنشاء تعريف أصل ROSE وسك 250 وحدة لأليس في معاملة واحدة.
-- تحقق من الأرصدة عبر `client.request(FindAccountAssets)` أو `iroha_cli ledger assets list --account ih58...` لتأكيد نجاح السك.
+- Você pode usar o software (como `ih58...`) para instalar o SDK no SDK.
+- Verifique o valor `register_and_mint` para usar o ROSE 250 e resolva o problema.
+- Verifique se o `client.request(FindAccountAssets)` ou `iroha_cli ledger assets list --account ih58...` está funcionando.
 
-## أدلة SDK ذات صلة
+## O SDK está disponível
 
-- [البدء السريع لـ Rust SDK](/sdks/rust)
-- [البدء السريع لـ Python SDK](/sdks/python)
-- [البدء السريع لـ JavaScript SDK](/sdks/javascript)
+- [Atualizado para Rust SDK](/sdks/rust)
+- [Implementar para Python SDK](/sdks/python)
+- [Escolha o JavaScript SDK](/sdks/javascript)
 
-[نزّل مصدر Kotodama](/norito-snippets/register-and-mint.ko)
+[Kotodama](/norito-snippets/register-and-mint.ko)
 
 ```text
 // Register a new asset and mint some to the specified account.

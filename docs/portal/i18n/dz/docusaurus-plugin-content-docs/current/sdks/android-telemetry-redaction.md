@@ -7,323 +7,321 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Android Telemetry Redaction Plan
 sidebar_label: Android Telemetry
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
+:::དྲན་ཐོའི་འབྱུང་ཁུངས།
 :::
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Android Telemetry Redaction Plan (AND7)
+# Android ཊེ་ལི་མི་ཊི་རི་ཌེག་ཊིག་འཆར་གཞི། (AND7)
 
-## Scope
+## གོ་སྐབས
 
-This document captures the proposed telemetry redaction policy and enablement
-artefacts for the Android SDK as required by roadmap item **AND7**. It aligns
-mobile instrumentation with the Rust node baseline while accounting for
-device-specific privacy guarantees. The output serves as the pre-read for the
-February 2026 SRE governance review.
+ཡིག་ཆ་འདི་གིས་ གྲོས་འཆར་བཀོད་མི་ ཊེ་ལི་མི་ཊི་ བསྐྱར་བཟོ་སྲིད་བྱུས་དང་ ལྕོགས་ཅན་བཟོ་ནིའི་ ཡིག་ཆ་ཚུ་ བཀོདཔ་ཨིན།
+ལམ་གྱི་ས་ཁྲ་ཅ་ཆས་ **AND7** གིས་ དགོས་མཁོ་དང་འཁྲིལ་ཏེ་ ཨེན་ཌོརཌ་ཨེསི་ཌི་ཀེ་གི་དོན་ལུ་ ཅ་རྙིང་ཚུ། འདི་ཕྲང་སྒྲིག་འབདཝ་ཨིན།
+རྩིས་ཁྲའི་སྐབས་ རཱསི་ཊི་ ནའུཌ་གཞི་རྟེན་དང་གཅིག་ཁར་ འགྲུལ་འཕྲིན་གྱི་ ལག་ཆས།
+ཐབས་འཕྲུལ་-དམིགས་བསལ་གྱི་སྒེར་གསང་འགན་ལེན་ཚུ། ཐོན་འབྲས་འདི་ སྔོན་སྒྲིག་ལྷག་མི་སྦེ་ལཱ་འབདཝ་ཨིན།
+སྤྱི་ཟླ་༢ པའི་ཚེས་ ༢༠༢༦ SRE གཞུང་སྐྱོང་བསྐྱར་ཞིབ།
 
-Objectives:
+དམིགས་ཡུལ།
 
-- Catalogue every Android-emitted signal that reaches shared observability
-  backends (OpenTelemetry traces, Norito-encoded logs, metrics exports).
-- Classify fields that differ from the Rust baseline and document redaction or
-  retention controls.
-- Outline enablement and testing work so support teams can respond
-  deterministically to redaction-related alerts.
+- བརྗེ་སོར་འབད་བཏུབ་པའི་ཨཱན་ཌྲོའིཌ་ བརྡ་རྟགས་ཆ་མཉམ་ ཐོ་ཡིག་བཀོད།
+  backens (OpenTelemetry traces, I18NT000000003-encoded དྲན་ཐོ་ཚུ་, མེ་ཊིགསི་ཕྱིར་འདྲེན་ཚུ།)
+- རཱསིཊི་གཞི་རིམ་དང་ཡིག་ཆའི་ བསྐྱར་བཟོ་ ཡང་ན་ ལས་ཁྱད་པར་ཡོད་པའི་ས་སྒོ་ཚུ་ དབྱེ་སེལ་འབད།
+  བཀག་འཛིན་ཚད་འཛིན་ཚུ།
+- ཕྱི་ཐིག་ལྕོགས་ཅན་བཟོ་ནི་དང་བརྟག་དཔྱད་འབད་ནིའི་ལཱ་ཚུ་དེ་སྦེ་རྒྱབ་སྐྱོར་སྡེ་ཚན་གྱིས་ལན་བཏབ་ཚུགས།
+  བསྐྱར་བཟོ་དང་འབྲེལ་བའི་ དྲན་སྐུལ་ཚུ་ལུ་ གཏན་འབེབས་བཟོ་ནི།
 
-## Signal Inventory (Draft)
+## བརྡ་རྟགས་ཐོ་གཞུང་ (ཟིན་བྲིས་)
 
-Planned instrumentation grouped by channel. All field names follow the Android
-SDK telemetry schema (`org.hyperledger.iroha.android.telemetry.*`). Optional
-fields are marked with `?`.
+འཆར་གཞི་བརྩམ་ཡོད་པའི་ ལག་ཆས་ཚུ་ རྒྱུན་ལམ་ཐོག་ལས་ སྡེ་ཚན་བཟོ་ཡོདཔ། ས་སྒོའི་མིང་ཆ་མཉམ་ Android གི་རྗེས་སུ་འབྲང་།
+ཨེསི་ཌི་ཀེ་ ཊེ་ལི་མི་ཊི་རི་ ལས་འཆར་ (I18NI0000022X). གདམ་ཁ་ཅན
+ས་སྒོ་ཚུ་ `?` གིས་རྟགས་བཀལ་ཡོདཔ་ཨིན།
 
-| Signal ID | Channel | Key Fields | PII/PHI Classification | Redaction / Retention | Notes |
+| བརྡ་མཚོན་ཨའི་ཌི་ | རྒྱུན་ལམ་ | ལྡེ་མིག་ས་སྒོ་ཚུ་ | PII/PHI དབྱེ་རིམ། | བསྐྱར་བཟོ་ / བདག་འཛིན་ | དྲན་ཐོ། |
 |-----------|---------|------------|------------------------|-----------------------|-------|
-| `android.torii.http.request` | Trace span | `authority_hash`, `route`, `status_code`, `latency_ms` | Authority is public; route contains no secrets | Emit hashed authority (`blake2b_256`) before export; retain for 7 days | Mirrors Rust `torii.http.request`; hashing ensures mobile alias privacy. |
-| `android.torii.http.retry` | Event | `route`, `retry_count`, `error_code`, `backoff_ms` | None | No redaction; retain 30 days | Used for deterministic retry audits; identical to Rust fields. |
-| `android.pending_queue.depth` | Gauge metric | `queue_type`, `depth` | None | No redaction; retain 90 days | Matches Rust `pipeline.pending_queue_depth`. |
-| `android.keystore.attestation.result` | Event | `alias_label`, `security_level`, `attestation_digest`, `device_brand_bucket` | Alias (derived), device metadata | Replace alias with deterministic label, redact brand to enum bucket | Required for AND2 attestation readiness; Rust nodes do not emit device metadata. |
-| `android.keystore.attestation.failure` | Counter | `alias_label`, `failure_reason` | None after alias redaction | No redaction; retain 90 days | Supports chaos drills; alias_label derived from hashed alias. |
-| `android.telemetry.redaction.override` | Event | `override_id`, `actor_role_masked`, `reason`, `expires_at` | Actor role qualifies as operational PII | Field exports masked role category; retain 365 days with audit log | Not present in Rust; operators must file overrides through support. |
-| `android.telemetry.export.status` | Counter | `backend`, `status` | None | No redaction; retain 30 days | Parity with Rust exporter status counters. |
-| `android.telemetry.redaction.failure` | Counter | `signal_id`, `reason` | None | No redaction; retain 30 days | Required to mirror Rust `streaming_privacy_redaction_fail_total`. |
-| `android.telemetry.device_profile` | Gauge | `profile_id`, `sdk_level`, `hardware_tier` | Device metadata | Emit coarse buckets (SDK major, hardware tier); retain 30 days | Enables parity dashboards without exposing OEM specifics. |
-| `android.telemetry.network_context` | Event | `network_type`, `roaming` | Carrier may be PII | Drop `carrier_name` entirely; retain other fields 7 days | `ClientConfig.networkContextProvider` supplies the sanitised snapshot so apps can emit network type + roaming without exposing subscriber data; parity dashboards treat the signal as the mobile analogue to Rust `peer_host`. |
-| `android.telemetry.config.reload` | Event | `source`, `result`, `duration_ms` | None | No redaction; retain 30 days | Mirrors Rust config reload spans. |
-| `android.telemetry.chaos.scenario` | Event | `scenario_id`, `outcome`, `duration_ms`, `device_profile` | Device profile is bucketed | Same as `device_profile`; retain 30 days | Logged during chaos rehearsals required for AND7 readiness. |
-| `android.telemetry.redaction.salt_version` | Gauge | `salt_epoch`, `rotation_id` | None | No redaction; retain 365 days | Tracks Blake2b salt rotation; parity alert when Android hash epoch diverges from Rust nodes. |
-| `android.crash.report.capture` | Event | `crash_id`, `signal`, `process_state`, `has_native_trace`, `anr_watchdog_bucket` | Crash fingerprint + process metadata | Hash `crash_id` with the shared redaction salt, bucket watchdog state, drop stack frames before export; retain 30 days | Enabled automatically when `ClientConfig.Builder.enableCrashTelemetryHandler()` is called; feeds parity dashboards without exposing device-identifying traces. |
-| `android.crash.report.upload` | Counter | `crash_id`, `backend`, `status`, `retry_count` | Crash fingerprint | Reuse hashed `crash_id`, emit status only; retain 30 days | Emit via `ClientConfig.crashTelemetryReporter()` or `CrashTelemetryHandler.recordUpload` so uploads share the same Sigstore/OLTP guarantees as other telemetry. |
+| `android.torii.http.request` | འཚོལ་ཞིབ་དུས་ཡུན་ | I18NI0000000025X, `route`, I18NI000000027X, I18NI000000028X | དབང་ཚད་འདི་ མི་མང་ཨིན། འགྲུལ་ལམ་ནང་གསང་བ་མེད་པ། | ཕྱིར་གཏོང་མ་འབད་བའི་ཧེ་མ་ ཧམ་འཛུལ་གྱི་དབང་ཚད་ (I18NI0000029X) དང་། ཉིན་གྲངས་ ༧ ལུ་བཞག་དགོ། | མེ་ལོང་ རཱསི་ཊི་ `torii.http.request`; hashing གིས་ འགྲུལ་འཕྲིན་གཞན་གྱི་སྒེར་དོན་ཚུ་ ངེས་གཏན་བཟོཝ་ཨིན། |
+| I18NI0000031X | བྱུང་ལས། | `route`, `retry_count`, I18NI000000034X, I18NI000000035X | གང་ཡང་མེད་ | བསྐྱར་བཟོ་མེད། ཉིན་གྲངས་ ༣༠ | ཐག་གཅོད་ཀྱི་རྩིས་ཞིབ་ཚུ་གི་དོན་ལུ་ལག་ལེན་འཐབ་ཡོདཔ། Rust ས་སྒོ་ཚུ་དང་ཅོག་འཐདཔ་ཨིན། |
+| `android.pending_queue.depth` | འཇལ་ཚད་མེ་ཊིག | `queue_type`, `depth` | གང་ཡང་མེད་ | བསྐྱར་བཟོ་མེད། ཉིན་གྲངས་ ༩༠ | རསཊ་ `pipeline.pending_queue_depth` མཐུན་སྒྲིག་འབདཝ་ཨིན། |
+| I18NI0000040X | བྱུང་ལས། | `alias_label`, `security_level`, I18NI000000043X, I18NI000000044X | མིང་གཞན་ (བཏོན་ཡོདཔ་) ཐབས་འཕྲུལ་མེ་ཊ་ཌེ་ཊ་ | གཏན་འབེབས་ཁ་ཡིག་དང་ བཅོས་མའི་བརྡ་རྟགས་འདི་ ཨེ་ནམ་བཱ་ཀེཊ་ལུ་ ཚབ་བཙུགས། | AND2 བདེན་དཔང་གྲ་སྒྲིག་འབད་དགོ་པའི་གྲ་སྒྲིག་འབད་དགོ། རསཊི་མཐུད་མཚམས་ཚུ་གིས་ ཐབས་འཕྲུལ་མེ་ཊ་ཌེ་ཊ་ བཏོན་གཏང་མི་བཏུབ། |
+| `android.keystore.attestation.failure` | ཀའུན་ཊར་ | `alias_label`, `failure_reason` | མིང་གཞན་བསྐྱར་བཟོ་གི་ཤུལ་ལས་ ག་ཡང་མེད། | བསྐྱར་བཟོ་མེད། ཉིན་གྲངས་ ༩༠ | ཟང་ཟིང་སྦྱོང་བརྡར་ཚུ་ལུ་རྒྱབ་སྐྱོར་འབདཝ་ཨིན། alias_label གིས་ མི་ངན་གཞན་ལས་ཐོན་ཡོདཔ། |
+| I18NI0000048X | བྱུང་ལས། | ཨི༡༨ཨེན་ཨའི་༠༠༠༠༠༠༤༩X, I༡༨NI000000050X, I18NI000000051X, I18NI000000052X | འཁྲབ་རྩེདཔ་གི་འགན་ཁུར་འདི་ ལག་ལེན་གྱི་ PII བཟུམ་སྦེ་ འོས་འབབ་ཡོདཔ་ཨིན། ས་སྒོའི་ཕྱིར་གཏོང་ ཁ་བསྡམས་ཡོད་པའི་འགན་ཁུར་གྱི་དབྱེ་བ། རྩིས་ཞིབ་དྲན་དེབ་དང་གཅིག་ཁར་ ཉིནམ་༣༦༥ བཞག་དགོ། | Rust ནང་ལུ་མེད། བཀོལ་སྤྱོད་པ་ཚུ་གིས་ རྒྱབ་སྐྱོར་བརྒྱུད་དེ་ ཚབ་མ་བཙུགས་དགོ། |
+| I18NI0000003X | ཀའུན་ཊར་ | `backend`, I18NI0000005X | གང་ཡང་མེད་ | བསྐྱར་བཟོ་མེད། ཉིན་གྲངས་ ༣༠ | རསཊ་ཕྱིར་འདྲེན་པ་གནས་རིམ་གྱི་གྱངས་ཁ་ཚུ་དང་གཅིག་ཁར་ ཆ་རོགས། |
+| I18NI0000005X | ཀའུན་ཊར་ | `signal_id`, `reason` | གང་ཡང་མེད་ | བསྐྱར་བཟོ་མེད། ཉིན་གྲངས་ ༣༠ | རསཊ་ `streaming_privacy_redaction_fail_total` ལུ་ མེ་མདའ་རྐྱབ་དགོཔ་ཨིན། |
+| `android.telemetry.device_profile` | སྤྱི་ཟླ་༢ པ། I18NI000000061X, `sdk_level`, I18NI000000063X | ཐབས་འཕྲུལ་མེ་ཊ་ཌེ་ཊ་ | བང་རིམ་སྦོམ་ཚུ་ བཏོན་གཏང་། (SDK major, མཐུན་རྐྱེན་རིམ་པ་); ཉིན་གྲངས་ ༣༠ | OEM དམིགས་བསལ་ཚུ་ ཕྱིར་བཏོན་མ་འབད་བར་ འདྲ་མཉམ་གྱི་ ཌེཤ་བོརཌ་ཚུ་ ལྕོགས་ཅན་བཟོཝ་ཨིན། |
+| `android.telemetry.network_context` | བྱུང་ལས། | `network_type`, `roaming` | འབག་མི་འདི་ PII འོང་ནི་མས། | `carrier_name` ཆ་ཚང་བཏང་།; གཞན་ཡང་ ཉིན་གྲངས་ | I18NI000000068X གིས་ གཙང་སྦྲ་ཅན་གྱི་པར་བཏབ་མི་འདི་ བཀྲམ་སྤེལ་འབདཝ་ལས་ གློག་རིམ་ཚུ་གིས་ ཡོངས་འབྲེལ་གྱི་དབྱེ་བ་ + འགྲུལ་བསྐྱོད་འབད་མི་ གནད་སྡུད་ཚུ་ ཕྱིར་བཏོན་མེད་པར་ བཏོན་གཏང་ཚུགས། ཆ་སྙོམས་ཀྱི་ བརྡ་རྟགས་ཚུ་གིས་ བརྡ་མཚོན་འདི་ རསཊ་ I18NI000000069X ལུ་ འགྲུལ་འཕྲིན་གྱི་ འདྲ་མཚུངས་སྦེ་ བརྩི་དོ་ཡོདཔ་ཨིན། |
+| `android.telemetry.config.reload` | བྱུང་ལས། | I18NI0000000071X, I18NI000000072X, I18NI000000073X, . གང་ཡང་མེད་ | བསྐྱར་བཟོ་མེད། ཉིན་གྲངས་ ༣༠ | Mirrors Rust རིམ་སྒྲིག་བསྐྱར་མངོན་གསལ་འབད་ནི་ སྦྱར་སྒམ། |
+| `android.telemetry.chaos.scenario` | བྱུང་ལས། | I18NI0000000000075X, I18NI00000000076X, I18NI0000000077X, I18NI0000000078X | ཐབས་འཕྲུལ་གསལ་སྡུད་འདི་ བཱ་ཀེཊི་འབད་ཡོདཔ་ཨིན། | `device_profile` དང་འདྲ།; ཉིན་གྲངས་ ༣༠ | AND7 གྲ་སྒྲིག་དོན་ལུ་དགོ་པའི་ ཟང་ཟིང་སྦྱོང་བརྡར་གྱི་སྐབས་ལུ་ ནང་བསྐྱོད་འབད་ཡོདཔ། |
+| `android.telemetry.redaction.salt_version` | སྤྱི་ཟླ་༢ པ། `salt_epoch`, I18NI0000082X | གང་ཡང་མེད་ | བསྐྱར་བཟོ་མེད། ཉིན་གྲངས་ ༣༦༥ | Tracks Blake2b ཚྭ་བསྒྱིར་ཚད་; Android hashe epoch གིས་ Rust nodes ལས་ ཁ་སྟོར་འགྱོ་བའི་སྐབས་ འདྲ་མཉམ་གྱི་དྲན་ཤེས། |
+| I18NI0000083X | བྱུང་ལས། | I18NI0000000084X, `signal`, I18NI000000086X, I18NI000000087X, `has_native_trace`, I18NI000000088X | མཛུབ་མོའི་པར་རིས་ + བྱ་རིམ་གྱི་མེ་ཊ་ཌེ་ཊ་ | ཕྱིར་ཚོང་མ་འབད་བའི་ཧེ་མ་ བརྗེ་སོར་འབད་ཡོད་པའི་ ཚྭ་དང་ བཱ་ཀེཊ་བལྟ་རྟོག་གནས་སྟངས་དང་གཅིག་ཁར་ ཧཤ་ `crash_id` དང་གཅིག་ཁར་ བཱ་ཀེཊ་ལྟ་རྟོག་གནས་སྟངས་ཀྱིས་ བརྩེགས་བརྩེགས་གཞི་ཁྲམ་ཚུ་ ཕྱིར་ཚོང་མ་འབད་བའི་ཧེ་མ་ བཀོག་བཞག། ཉིན་གྲངས་ ༣༠ | `ClientConfig.Builder.enableCrashTelemetryHandler()` ཟེར་སླབ་པའི་སྐབས་ རང་བཞིན་གྱིས་ ལྕོགས་ཅན་བཟོཝ་ཨིན། ཐབས་འཕྲུལ་-ངོས་འཛིན་རྗེས་འཇུག་ཚུ་ གསལ་སྟོན་མ་འབད་བར་ ཆ་སྙོམས་ཌེཤ་བོརཌི་ཚུ་ལུ་ ལྟོ་བཏོནམ་ཨིན། |
+| I18NI0000091X | ཀའུན་ཊར་ | `crash_id`, `backend`, I18NI000000094X, I18NI000000095X | མཛུབ་མོའི་པར་རིས། | Reuse hashed `crash_id`, ཕྱིར་འཐེན་གནས་རིམ་རྐྱངམ་གཅིག་; ཉིན་གྲངས་ ༣༠ | Imit འདི་ I18NI000000097X ཡང་ན་ `CrashTelemetryHandler.recordUpload` བརྒྱུད་དེ་ འདྲེན་བྱེད་འདི་གིས་ Sigstore/OLTP གི་འགན་ལེན་འདི་ གཞན་མི་བརྡ་བརྡ་གཞན་བཟུམ་སྦེ་ བརྗེ་སོར་འབད། |
 
-### Implementation Hooks
+### ལག་བསྟར་འབད་ནི།
 
-- `ClientConfig` now threads manifest-derived telemetry data via
-  `setTelemetryOptions(...)`/`setTelemetrySink(...)`, automatically registering
-  `TelemetryObserver` so hashed authorities and salt metrics flow without bespoke observers.
-  See `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ClientConfig.java`
-  and the companion classes under
+- `ClientConfig` ད་ལྟ་ཐགསཔ་ཚུ་ བརྒྱུད་དེ་ཐོན་པའི་ བརྒྱུད་འཕྲིན་གནས་སྡུད་མངོན་གསལ་འབདཝ་ཨིན།
+  `setTelemetryOptions(...)`/I18NI0000010101010, རང་བཞིན་གྱིས་ཐོ་འགོད།
+  `TelemetryObserver` དེ་འབདཝ་ལས་ དབང་འཛིན་དང་ ཚྭ་གི་ཚད་གཞི་ཚུ་ བལྟ་རྟོག་པ་མེད་པར་ འགྱོ་དོ་ཡོདཔ་ཨིན།
+  གཟིགས། `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ClientConfig.java`
+  དང་ འོག་ལུ་ཡོད་པའི་ ཆ་རོགས་འཛིན་གྲྭ།
   `java/iroha_android/src/main/java/org/hyperledger/iroha/android/telemetry/`.
-- Applications can call
-  `ClientConfig.Builder.enableAndroidNetworkContext(android.content.Context)` to register the
-  reflection-based `AndroidNetworkContextProvider`, which queries `ConnectivityManager` at runtime
-  and emits the `android.telemetry.network_context` event without introducing compile-time Android
-  dependencies.
-- Unit tests `TelemetryOptionsTests` and `TelemetryObserverTests`
-  (`java/iroha_android/src/test/java/org/hyperledger/iroha/android/telemetry/`) guard the hashing
-  helpers plus the ClientConfig integration hook so manifest regressions surface immediately.
-- The enablement kit/labs now cite concrete APIs instead of pseudocode, keeping this document and
-  the runbook aligned with the shipping SDK.
+- གློག་རིམ་ཚུ་གིས་ འབོད་བརྡ་གཏང་ཚུགས།
+  `ClientConfig.Builder.enableAndroidNetworkContext(android.content.Context)` འདི་ཐོ་བཀོད་འབད་ནིའི་དོན་ལུ་
+  འོད་འཕྲོ་གཞི་བཞག་པའི་ `AndroidNetworkContextProvider`, དེ་གིས་ གཡོག་བཀོལ་བའི་དུས་ཚོད་ལུ་ `ConnectivityManager` ལུ་ འདྲི་དཔྱད་འབདཝ་ཨིན།
+  དང་ `android.telemetry.network_context` བྱུང་ལས་འདི་ བསྡུ་སྒྲིག་འབད་བའི་དུས་ཚོད་ Android འགོ་མ་བཙུགས་པར་ བཏོནམ་ཨིན།
+  རྟེན་འབྲེལ་ཚུ།
+- ཡུ་ནིཊ་བརྟག་དཔྱད་ `TelemetryOptionsTests` དང་ I18NI000000110X
+  (I18NI000000111X) ཧ་ཤིང་སྲུང་སྐྱོབ་པ།
+  གྲོགས་རམ་པ་ཚུ་དང་ ཀི་ལིནཊི་ཀོན་ཕིག་མཉམ་བསྡོམས་ཧུཀ་གིས་ ཁ་ཐོག་འདི་ དེ་འཕྲོ་ལས་ གསལ་སྟོན་འབདཝ་ཨིན།
+- ལྕོགས་ཅན་གྱི་ཅ་ཆས་/བརྟག་དཔྱད་ཁང་གིས་ ད་ལྟོ་ pseudocode གི་ཚབ་ལུ་ བརྟན་བརྟན་གྱི་APIs ཚུ་ ཡིག་ཆ་འདི་དང་ བཞག་སྟེ་ཡོདཔ་ཨིན།
+  གྲུ་གཟིངས་ SDK དང་ཅིག་ཁར་ ཕྲང་སྒྲིག་འབད་ཡོད་པའི་ རན་དེབ་འདི་ཨིན།
 
-> **Operations note:** the owner/status worksheet lives at
-> `docs/source/sdk/android/readiness/signal_inventory_worksheet.md` and must be
-> updated alongside this table during every AND7 checkpoint.
+> **བཀོལ་སྤྱོད་དྲན་ཐོ།:** ཇོ་བདག་/གནས་རིམ་ལས་ཀའི་ཤོག་བུ།
+> `docs/source/sdk/android/readiness/signal_inventory_worksheet.md` དང་དགོས།
+> ཨེ་ཨེན་ཌི་༧ ཞིབ་དཔྱད་ས་ཚིགས་རེ་རེ་གི་སྐབས་ལུ་ ཐིག་ཁྲམ་འདི་དང་གཅིག་ཁར་ དུས་མཐུན་བཟོ་ཡོདཔ།
 
-## Parity allowlists & schema-diff workflow
+## ཆ་མེད་ཀྱིས་ཐོ་ཡིག་དང་ ལས་འཆར་-དཀའ་ངལ་ཅན་གྱི་ལཱ་གི་རྒྱུན་རིམ།
 
-Governance requires a dual allowlist so Android exports never leak identifiers
-that Rust services intentionally surface. This section mirrors the runbook entry
-(`docs/source/android_runbook.md` §2.3) but keeps the AND7 redaction plan
-self-contained.
+གཞུང་སྐྱོང་ལུ་ ཐོ་ཡིག་གཉིས་ལྡན་ཅིག་དགོཔ་ལས་ ཨེན་ཌོའིཌ་ཕྱིར་ཚོང་འཐབ་མི་ཚུ་ ངོས་འཛིན་འབད་མི་ཚུ་ ནམ་ཡང་མ་འཐོན་པར་ཡོདཔ་ཨིན།
+the Rust ཞབས་ཏོག་ཚུ་ ཤེས་བཞིན་དུ་ ཕྱིར་ཐོན་འབདཝ་ཨིན། དབྱེ་ཚན་འདི་གིས་ རཱན་བུག་ཐོ་བཀོད་འདི་ མེ་ལོང་ནང་བཟོཝ་ཨིན།
+(`docs/source/android_runbook.md` §2.3) ཡིན་ནའང་ AND7 བསྐྱར་བཟོ་འཆར་གཞི་བཞག་ཡོད།
+རང་གིས་རང་ བ ན་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་བ ན་པ།
 
-| Category | Android exporters | Rust services | Validation hook |
-|----------|-------------------|---------------|-----------------|
-| Authority / route context | Hash `authority`/`alias` via Blake2b-256 and drop raw Torii hostnames before export; emit `android.telemetry.redaction.salt_version` to prove salt rotation. | Emit full Torii hostnames and peer IDs for correlation. | Compare `android.torii.http.request` vs `torii.http.request` entries in the latest schema diff under `docs/source/sdk/android/readiness/schema_diffs/`, then run `scripts/telemetry/check_redaction_status.py` to confirm salt epochs. |
-| Device & signer identity | Bucket `hardware_tier`/`device_profile`, hash controller aliases, and never export serial numbers. | Emit validator `peer_id`, controller `public_key`, and queue hashes verbatim. | Align with `docs/source/sdk/mobile_device_profile_alignment.md`, exercise alias hashing tests inside `java/iroha_android/run_tests.sh`, and archive queue-inspector outputs during labs. |
-| Network metadata | Export only `network_type` + `roaming`; drop `carrier_name`. | Retain peer hostname/TLS endpoint metadata. | Store each schema diff in `readiness/schema_diffs/` and alert if Grafana’s “Network Context” widget shows carrier strings. |
-| Override / chaos evidence | Emit `android.telemetry.redaction.override`/`android.telemetry.chaos.scenario` with masked actor roles. | Emit unmasked override approvals; no chaos-specific spans. | Cross-check `docs/source/sdk/android/readiness/and7_operator_enablement.md` after drills to ensure override tokens + chaos artefacts sit alongside the unmasked Rust events. |
+| དབྱེ་ཁག་ | Android ཕྱིར་གཏོང་པ་ | རསཊ་ཞབས་ཏོག་ | བདེན་དཔྱད་ཧུཀ་ |
+|----------------------------------------------------------------- |
+| དབང་འཛིན་ / འགྲུལ་ལམ་སྐབས་དོན། | Hash I18NI000000114X/I18NI000000115X བེལེཀ་༢བི་-༢༥༦ བརྒྱུད་དེ་ ཕྱིར་གཏོང་མ་འབད་བའི་ཧེ་མ་ Torii ཧོསིཊི་མིང་ཚུ་ བཀོ་བཞག། emit `android.telemetry.redaction.salt_version` ཚྭ་བསྒྱིར་བའི་བདེན་པ། | འབྲེལ་མཐུན་གྱི་དོན་ལུ་ Torii ཧོསིཊི་མིང་དང་ མཉམ་རོགས་ཨའི་ཌི་ཚུ་ ཆ་ཚང་འཇལཝ་ཨིན། | I18NI000000000117X vs I18NI000000118X I18NI0000000119X གི་འོག་ལུ་ གསར་ཤོས་ལས་རིམ་གྱི་ཐོ་བཀོད་ཚུ་ནང་ ག་བསྡུར་རྐྱབ་ཞིནམ་ལས་ དེ་ལས་ I18NI00000000120X འདི་ ཚྭ་གི་དུས་ཚད་ཚུ་ ངེས་གཏན་བཟོ་ནི་ལུ་ གཡོག་བཀོལ། |
+| ཐབས་འཕྲུལ་དང་མིང་རྟགས་བཀོད་མི་ངོ་རྟགས། | བཱ་ཀེཊི་ `hardware_tier`/`device_profile`, ཧེཤ་ཚད་འཛིན་གྱི་ བརྡ་རྟགས་ཚུ་ དེ་ལས་ རིམ་ཐོན་ཨང་གྲངས་ཚུ་ ནམ་ཡང་ཕྱིར་འདྲེན་འབད་དགོ། | བདེན་དཔྱད་འབད་མི་ `peer_id` དང་ ཚད་འཛིན་ `public_key`, དེ་ལས་ གྱལ་རིམ་ཚུ་གིས་ verbatim ཚུ་ བཏོན་གཏང་ཡོདཔ་ཨིན། | `docs/source/sdk/mobile_device_profile_alignment.md` དང་ཅིག་ཁར་ ཕྲང་སྒྲིག་འབད་ཞིནམ་ལས་ `java/iroha_android/run_tests.sh` ནང་ལུ་ མིང་གཞན་གྱི་ ཧ་ཤིང་བརྟག་དཔྱད་དང་ བརྟག་དཔྱད་ཁང་གི་སྐབས་ལུ་ གཏན་མཛོད་ཀྱི་ གྱལ་རིམ་ཞིབ་དཔྱད་པ་ཐོན་འབྲས་ཚུ་ སྦྱོང་བརྡར་འབད། |
+| ཡོངས་འབྲེལ་མེ་ཊ་ཌེ་ཊ་ | ཕྱིར་འདྲེན་ `network_type` + `roaming`; `carrier_name`. | པི་ཡར་ཧོསིཊི་མིང་/ཊི་ཨེལ་ཨེསི་ མཐའ་མཚམས་མེ་ཊ་ཌེ་ཊ་བཞག་ནི། | `readiness/schema_diffs/` ནང་ལུ་ ལས་རིམ་གྱི་ཁྱད་པར་རེ་རེ་བཞིན་དུ་ གསོག་འཇོག་འབད་ཞིནམ་ལས་ I18NT000000002X གི་ “Network Context” wigget see carrier ཡིག་རྒྱུན་ཚུ་ཨིན་པ་ཅིན་ དྲན་སྐུལ་འབད་དགོ། |
+| ཀླད་ཀོར་ / ཟང་ཟིང་གི་སྒྲུབ་བྱེད་ | འཁྲབ་རྩེདཔ་གི་འགན་ཁུར་ཚུ་དང་གཅིག་ཁར་ I18NI00000000131X/`android.telemetry.chaos.scenario` འདི་ ཕྱིར་འཐེན་འབདཝ་ཨིན། | ཁ་རས་མེད་པའི་བཀག་སྡོམ་གྱི་གནང་བ་ཚུ་ བཏོན་གཏང་། ཟང་ཟིང་མེད་པའི་དམིགས་བསལ་གྱི་ཚད་གཞི་མེད། | དམག་སྦྱོང་འབད་བའི་ཤུལ་ལས་ `docs/source/sdk/android/readiness/and7_operator_enablement.md` བརྟག་དཔྱད་འབད་དེ་ རྟགས་མཚན་ཚུ་ བཀག་ཆ་འབད་དེ་ རས་ཆ་དང་ ཟིང་འཁྲུག་ཅན་གྱི་ཅ་ཆས་ཚུ་ བཀབ་མ་བཏུབ་པའི་ Rust བྱུང་རིམ་ཚུ་གི་སྦོ་ལོགས་ཁར་ སྡོད་དགོཔ་ཨིན། |
 
-Workflow:
+ལཱ་གི་རྒྱུན་རིམ་:
 
-1. After each manifest/exporter change, run
-   `scripts/telemetry/run_schema_diff.sh --android-config <android.json> --rust-config <rust.json>` and place the JSON under `docs/source/sdk/android/readiness/schema_diffs/`.
-2. Review the diff against the table above. If Android emits a Rust-only field
-   (or vice versa), file an AND7 readiness bug and update both this plan and the
-   runbook.
-3. During weekly ops reviews, execute
+1. གསལ་སྟོན་/ཕྱིར་འདྲེན་པ་རེ་རེའི་རྗེས་སུ་གཡོག་བཀོལ།
+   I18NI000000134X དང་ `docs/source/sdk/android/readiness/schema_diffs/` འོག་ལུ་ JSON བཙུགས།
+2. གོང་འཁོད་ཀྱི་ཐིག་ཁྲམ་གྱི་རྒྱབ་འགལ་གྱི་ཁྱད་པར་བསྐྱར་ཞིབ་འབད། གལ་སྲིད་ Android གིས་ Rust-རྐྱངམ་ཅིག་ས་སྒོ་ཅིག་བཏོན་པ་ཅིན།
+   (ཡང་ན་ འོས་ཤོག་འཕེན་ནི།) AND7 གྲ་སྒྲིག་འཛོལ་བ་ཕུལ་ཏེ་ འཆར་གཞི་འདི་དང་ དུས་མཐུན་བཟོ་ནི།
+   བང་དེབ་.
+3. བདུན་ཕྲག་རེའི་བསྐྱར་ཞིབ་སྐབས་ བཀོལ་སྤྱོད་འབད་ནི།
    `scripts/telemetry/check_redaction_status.py --status-url https://android-telemetry-stg/api/redaction/status`
-   and log the salt epoch plus schema-diff timestamp in the readiness worksheet.
-4. Record any deviations in `docs/source/sdk/android/readiness/signal_inventory_worksheet.md`
-   so governance packets capture parity decisions.
+   དང་ གྲ་སྒྲིག་ལཱ་ཤོག་ནང་ ཚྭ་དུས་ཀྱི་ པཱསི་པཱལ་སི་ ལས་འཆར་-ཁྱད་པར་ཅན་གྱི་དུས་ཚོད་མཚོན་རྟགས་འདི་ དྲན་ཐོ་བཀོད།
+༤ `docs/source/sdk/android/readiness/signal_inventory_worksheet.md` ནང་ ཐ་དད་གང་རུང་ཐོ་བཀོད་འབད།
+   དེ་འབདཝ་ལས་ གཞུང་སྐྱོང་སྦུང་ཚན་ཚུ་གིས་ འདྲ་མཉམ་གྱི་གྲོས་ཐག་བཅད་མི་ཚུ་ བཟུང་ཚུགས།
 
-> **Schema reference:** canonical field identifiers originate from
-> `android_telemetry_redaction.proto` (materialised during the Android SDK build
-> alongside the Norito descriptors). The schema exposes the `authority_hash`,
-> `alias_label`, `attestation_digest`, `device_brand_bucket`, and
-> `actor_role_masked` fields now used across the SDK and telemetry exporters.
+> **Schema གཞི་བསྟུན་:** ཀེ་ནོ་ནིག་ས་སྒོ་ངོས་འཛིན་འབད་མི་ཚུ་ ལས་འབྱུངམ་ཨིན།
+> `android_telemetry_redaction.proto` (Android SDK བཟོ་བསྐྲུན།
+> མཉམ་དུ་ I18NT0000004X འགྲེལ་བཤད་)། ལས་འཆར་འདི་གིས་ `authority_hash`, གསལ་སྟོན་འབདཝ་ཨིན།
+> `alias_label`, `attestation_digest`, I18NI000000142X, དང་།
+> `actor_role_masked` ད་ལྟོ་ ཨེསི་ཌི་ཀེ་དང་ ཊེ་ལི་མི་ཊི་ཕྱིར་ཚོང་པ་ཚུ་གི་ཐོག་ལས་ ལག་ལེན་འཐབ་ཨིན།
 
-`authority_hash` is a fixed 32-byte digest of the Torii authority value recorded
-in the proto. `attestation_digest` captures the canonical attestation statement
-fingerprint, while `device_brand_bucket` maps the raw Android brand string onto
-the approved enum (`generic`, `oem`, `enterprise`). `actor_role_masked` carries
-the redaction override actor category (`support`, `sre`, `audit`) instead of the
-raw user identifier.
+I18NI00000000144X ནི་ Torii ཐོ་བཀོད་འབད་ཡོད་པའི་ Torii གི་གཏན་བཟོས་-བཱའིཊི་བཞུ་ཚུགས།
+འདྲ་པར་ནང་། `attestation_digest` གིས་ ཀེ་ནོ་ནིག་བདེན་དཔང་གསལ་བཤད་ཀྱི་ གསལ་བཤད་འདི་ བཟུང་དོ་ཡོདཔ་ཨིན།
+མཛུབ་མོ་གི་པར་རིས། `device_brand_bucket`
+ཆ་འཇོག་གྲུབ་པའི་ཨེ་ནམ་ (`generic`, I18NI000000148X, `enterprise`). `actor_role_masked` འབག་ཤོག།
+བསྐྱར་བཟོ་འདི་ འཁྲབ་རྩེདཔ་དབྱེ་རིམ་ (`support`, `sre`, I18NI000000153X) དེ་གི་ཚབ་ལུ་ཨིན།
+ལག་ལེན་པའི་ངོས་འཛིན་པ་ རྙིང།
 
-### Crash Telemetry Export Alignment
+### གློག་འཕྲིན་ཕྱིར་གཏོང་ཕྲང་སྒྲིག།ད་ལྟོ་ ཀྲེག་ཊི་ ཊེ་ལི་མི་ཊི་ཕྱིར་ཚོང་པ་དང་ འབྱུང་ཁུངས་ཚུ་ གཅིག་མཚུངས་སྦེ་ བརྗེ་སོར་འབདཝ་ཨིན།
+འདི་གི་སྐོར་ལས་ གཞུང་སྐྱོང་རྗེས་འཇུག་འདི་ སྒོ་བསྡམ་ནི།
+ཕྱིར་ཚོང་འཐབ་མི་ཚུ་ འདྲ་བཤུས་རྐྱབ་མི། བརྡབ་འཁྲུག་འཛིན་མི་གིས་ `android.crash.report.capture` ལུ་འཇལཝ་ཨིན།
+ཧན་ཤི་ཤེཌ་ `crash_id` (Blake2b-256 བསྐྱར་བཟོ་ཚྭ་འདི་ཧེ་མ་ལས་ཧེ་མ་ལས་རང་ བཙོག་པ་ཅན་གྱི་ཚྭ་ལག་ལེན་འཐབ་སྟེ་ བྱུང་ཡོདཔ།
+ལས་སྦྱོར་གནས་སྟངས་ཀྱི་བཱ་ཀེཊི་ཚུ་ `android.telemetry.redaction.salt_version` གིས་ བརྟག་ཞིབ་འབད་ཡོདཔ།
+དང་ གཙང་སྦྲ་འཕྲོད་བསྟེན་གྱི་ ANR བལྟ་རྟོགས་ མེ་ཊ་ཌེ་ཊ་. བརྩེགས་བརྩེགས་རྗེས་འདེད་ཚུ་ ཐབས་འཕྲུལ་ནང་ལུསཔ་ཨིནམ་དང་རྐྱངམ་ཅིག་ཨིན།
+I18NI000000157X དང་ `anr_watchdog_bucket` གི་ས་ཁོངས་ཚུ་ནང་ བཅུད་བསྡུས་འབད་ཡོདཔ་ཨིན།
+ཕྱིར་འདྲེན་འབདཝ་ལས་ PII ཡང་ན་ OEM ཡིག་རྒྱུན་ཚུ་གིས་ ཐབས་འཕྲུལ་འདི་མི་བཞག།
 
-Crash telemetry now shares the same OpenTelemetry exporters and provenance
-pipeline as the Torii networking signals, closing the governance follow-up about
-duplicate exporters. The crash handler feeds the `android.crash.report.capture`
-event with a hashed `crash_id` (Blake2b-256 using the redaction salt already
-tracked by `android.telemetry.redaction.salt_version`), process-state buckets,
-and sanitized ANR watchdog metadata. Stack traces remain on-device and are only
-summarised into the `has_native_trace` and `anr_watchdog_bucket` fields before
-export so no PII or OEM strings leave the device.
+བརྡབ་འཁྲུག་ཅིག་སྐྱེལ་བཙུགས་འབད་མི་འདི་གིས་ `android.crash.report.upload` གྱངས་ཁ་བརྐྱབ་མི་ གྱངས་ཁ་ཐོ་བཀོད་འདི་གསར་བསྐྲུན་འབདཝ་ཨིན།
+འདི་གི་སྐོར་ལས་ ག་ནི་ཡང་མ་ཤེས་པར་ རྒྱབ་རྟེན་བློ་གཏད་ཅན་གྱི་རྩིས་ཞིབ་འབད་བཅུག།
+ལག་ལེན་པ་ ཡང་ན་ བང་རིམ་གྱི་ རྗེས་སྙེགས། བརྡ་མཚོན་གཉིས་ཆ་ར་གིས་ Torii ཕྱིར་འདྲེན་འབད་མི་འདི་ ལོག་ལག་ལེན་འཐབ་དོ་ཡོདཔ་ལས་ ཁོང་གིས་ ཤུལ་འཛིན་འབདཝ་ཨིན།
+དེ་དང་འདྲ་བར་ I18NT0000001X མཚན་རྟགས་བཀོད་པ་ བདག་འཛིན་སྲིད་བྱུས་དང་ཉེན་བརྡ་ཧུཀ་ཚུ་ཧེ་མ་ལས་ངེས་འཛིན་འབད་ཡོདཔ།
+AND7. དེ་འབདཝ་ལས་ རྒྱབ་སྐྱོར་གྱི་ རན་དེབ་ཚུ་གིས་ ཧ་ཤིཌ་ བརྡབ་འགྱོ་བའི་ངོས་འཛིན་འབད་མི་ཅིག་ འབྲེལ་མཐུད་འབད་ཚུགས།
+བར་གྱི་ Android དང་ Rust སྒྲུབ་བྱེད་ཀྱི་ བརྡབ་ལྷུང་མེད་པའི་ བརྡབ་ལྷུང་མེད་པའི་ མདོང་ལམ་མེད།
 
-Uploading a crash creates the `android.crash.report.upload` counter entry,
-allowing SRE to audit backend reliability without learning anything about the
-user or stack trace. Because both signals reuse the Torii exporter, they inherit
-the same Sigstore signing, retention policy, and alerting hooks already defined
-for AND7. Support runbooks can therefore correlate a hashed crash identifier
-between Android and Rust evidence bundles without a bespoke crash pipeline.
+`ClientConfig.Builder.enableCrashTelemetryHandler()` བརྒྱུད་དེ་ འཛིན་སྐྱོང་པ་འདི་ ལྕོགས་ཅན་བཟོ།
+ཊེ་ལི་མི་ཊི་གདམ་ཁ་དང་ སིན་ཀ་ཚུ་རིམ་སྒྲིག་འབད་ཡོདཔ་ཨིན། བརྡབ་ལྷུང་སྐྱེལ་འཐེན།
+`ClientConfig.crashTelemetryReporter()` (ཡང་ན་ `CrashTelemetryHandler.recordUpload`)
+མིང་རྟགས་བཀོད་ཡོད་པའི་ ཆུ་མཛོད་ནང་ རྒྱབ་རྟེན་གྲུབ་འབྲས་ཚུ་ བཏོན་ནི།
 
-Enable the handler via `ClientConfig.Builder.enableCrashTelemetryHandler()` once
-telemetry options and sinks are configured; crash upload bridges can reuse
-`ClientConfig.crashTelemetryReporter()` (or `CrashTelemetryHandler.recordUpload`)
-to emit backend outcomes in the same signed pipeline.
+## སྲིད་བྱུས་ཌེལ་ཊསི་དང་ རསཊ་གཞི་རྟེན་ལམ།
 
-## Policy Deltas vs Rust Baseline
+མར་ཕབ་ཀྱི་གོ་རིམ་དང་ Android དང་ Rust telemetry སྲིད་བྱུས་ཚུ་གི་བར་ན་ ཁྱད་པར་ཚུ།
 
-Differences between Android and Rust telemetry policies with mitigation steps.
+| དབྱེ་ཁག་ | རསཊ་གཞི་རྟེན་ | Android སྲིད་བྱུས། | མར་ཕབ་ / བདེན་དཔྱད། |
+|-------------------------------------------------------------------------------------- --------------
+| དབང་འཛིན་ / མཉམ་རོགས་ངོས་འཛིན་འབད་མི་ཚུ་ | དབང་འཛིན་གྱིས་ཡིག་རྒྱུན་ཚུ་ | `authority_hash` (Blake2b-256, བསྒྱིར་བའི་ཚྭ་) | བརྗེ་སོར་འབད་ཡོད་པའི་ཚྭ་འདི་ `iroha_config.telemetry.redaction_salt` བརྒྱུད་དེ་དཔར་བསྐྲུན་འབད་ཡོདཔ། ཆ་སྙོམས་བརྟག་དཔྱད་ཀྱིས་ རྒྱབ་སྐྱོར་ལས་བྱེདཔ་ཚུ་གི་དོན་ལུ་ ལོག་བཏང་ཚུགས་པའི་ སབ་ཁྲ་བཟོ་ནི་ལུ་ ངེས་གཏན་བཟོཝ་ཨིན། |
+| ཧོསིཊི་ / ཡོངས་འབྲེལ་ མེ་ཊ་ཌེ་ཊ་ | ནོཌི་ཧོསཊི་མིང་/ཨའི་པི་ཚུ་ཕྱིར་འདྲེན་འབད་ཡོདཔ། | ཡོངས་འབྲེལ་དབྱེ་བ་ + བསྐྱོད་དོ་ | ཧོསཊི་མིང་ཚུ་གི་ཚབ་ལུ་ འཐོབ་ཚུགས་པའི་དབྱེ་རིམ་ཚུ་ལག་ལེན་འཐབ་ནི་ལུ་ ཡོངས་འབྲེལ་གསོ་བའི་ ཌེཤ་བོརཌི་ཚུ་ དུས་མཐུན་བཟོ་ཡོདཔ་ཨིན། |
+| ཐབས་འཕྲུལ་གྱི་ཁྱད་ཆོས། | N/A (སར་བར་ཕྱོགས་) | བཱ་ཀེཊ་གསལ་སྡུད་ (SDK 21/23/29+, རིམ་པ་ `emulator`/`consumer`/I18NI0000000007X) | མགོ་རྙོག་སྦྱོང་བརྡར་ཚུ་གིས་ བཱ་ཀེཊ་སབ་ཁྲ་བདེན་དཔྱད་འབདཝ་ཨིན། ཁ་གསལ་གྱི་དོན་ལུ་ ཁ་གསལ་དགོཔ་ད་ runbook ཡིག་ཆ་ཚུ་ ཡར་འཕར་འགྱོ་བའི་འགྲུལ་ལམ་ལུ་རྒྱབ་སྐྱོར་འབད། |
+| བཅོས་སྒྲུང་ཚུ་ བསྐྱར་ལོག་འབདཝ་ཨིན། | རྒྱབ་སྐྱོར་མེད་ | ལག་ཐོག་ལས་ Norito ལེ་ཌི་ཇར་ (`actor_role_masked`, `reason`) | དབང་བཟུང་ཚུ་ལུ་ མཚན་རྟགས་བཀོད་དགོ་པའི་ཞུ་བ་དགོ། རྩིས་ཞིབ་དྲན་ཐོ་འདི་ལོ་༡ བཞག་ཡོདཔ། |
+| བརྟག་དཔྱད་ཀྱི་འཚོལ་ཞིབ་ | SRE བརྒྱུད་དེ་ སར་བར་གྱི་བདེན་དཔང་འབད་ཡོདཔ། | ཨེསི་ཌི་ཀེ་གིས་ གཙང་སྦྲ་འཕྲོད་བསྟེན་གྱི་ བདེན་ཁུངས་བཅུད་བསྡུས་ | རཱསི་ཊི་ བདེན་ཁུངས་བདེན་དཔྱད་འབད་མི་ལུ་ རྒྱབ་འགལ་འབད་མི་ བདེན་ཁུངས་བཀལ་མི་ ཧེ་ཤི་ཚུ་ ཞིབ་དཔྱད་འབདཝ་ཨིན། hashed alias གིས་ ཆུ་ཐོན་ནི་ལས་ བཀག་ཆ་འབདཝ་ཨིན། |
 
-| Category | Rust Baseline | Android Policy | Mitigation / Validation |
-|----------|---------------|----------------|-------------------------|
-| Authority / peer identifiers | Plain authority strings | `authority_hash` (Blake2b-256, rotated salt) | Shared salt published via `iroha_config.telemetry.redaction_salt`; parity test ensures reversible mapping for support staff. |
-| Host / network metadata | Node hostnames/IPs exported | Network type + roaming only | Network health dashboards updated to use availability categories instead of hostnames. |
-| Device characteristics | N/A (server-side) | Bucketed profile (SDK 21/23/29+, tier `emulator`/`consumer`/`enterprise`) | Chaos rehearsals verify bucket mapping; support runbook documents escalation path when finer detail needed. |
-| Redaction overrides | Not supported | Manual override token stored in Norito ledger (`actor_role_masked`, `reason`) | Overrides require signed request; audit log retained 1 year. |
-| Attestation traces | Server attestation via SRE only | SDK emits sanitized attestation summary | Cross-check attestation hashes against Rust attestation validator; hashed alias prevents leakage. |
+བདེན་དཔྱད་ཞིབ་དཔྱད་ཐོ་ཡིག་:
 
-Validation checklist:
+- བརྡ་རྟགས་རེ་རེ་གི་དོན་ལུ་ བཏོན་གཏང་/ཁ་རས་འབད་ཡོད་པའི་ས་སྒོ་ཚུ་གི་ཧེ་མ་ ཧེ་མ་གི་ཧེ་མ་ལས་ བཏོན་གཏང་ནིའི་ཡུ་ནིཊི་བརྟག་དཔྱད།
+  ཕྱིར་གཏོང་ལས་ཀ།
+- ས་སྒོའི་འདྲ་མཉམ་ངེས་གཏན་བཟོ་ནི་ལུ་ རིམ་སྒྲིག་ཁྱད་པར་ལག་ཆས་ (Rust nodes དང་ཅིག་ཁར་བགོ་བཤའ་རྐྱབ་) མཚན་མོ་ གཡོག་བཀོལ་ནི།
+- མགོ་རྙོག་པའི་སྦྱོང་བརྡར་ཡིག་གཟུགས་སྦྱོང་བརྡར་ཚུ་གིས་ ལཱ་གི་རྒྱུན་རིམ་འདི་ བཀག་ཆ་འབད་དེ་ རྩིས་ཞིབ་ནང་བསྐྱོད་ཚུ་ ངེས་གཏན་བཟོཝ་ཨིན།
 
-- Redaction unit tests for each signal verifying hashed/masked fields before
-  exporter submission.
-- Schema diff tool (shared with Rust nodes) run nightly to confirm field parity.
-- Chaos rehearsal script exercises override workflow and confirms audit logging.
+## ལག་ལེན་འཐབ་ནིའི་ལས་རིམ། (སྔོན་འགྲོའི་གཞུང་སྐྱོང་།)
 
-## Implementation Tasks (Pre-SRE Governance)
+1. **ཐོ་གཞུང་གཏན་འཁེལ་** — Android SDK དང་བཅས་པའི་ལྟག་ལུ་ཐིག་ཁྲམ་བདེན་དཔྱད་འབད་ནི།
+   ལག་ཆས་hooks དང་ Norito ལས་འཆར་གྱི་ངེས་ཚིག་ཚུ། ཇོ་བདག་: Android
+   བལྟ་རྟོག་འབད་ཚུགསཔ་ TL, LLM.
+2. **Telemetry Schema Diff** — རསཊི་མེ་ཊིགསི་ལུ་འགོག་པའི་ མཉམ་རུབ་འབད་ཡོད་པའི་ ལག་ཆས་འདི་ གཡོག་བཀོལ།
+   SRE བསྐྱར་ཞིབ་ཀྱི་དོན་ལུ་ ཆ་སྙོམས་ཅ་ཆས་ཚུ་བཏོནམ་ཨིན། ཇོ་བདག་: SRE སྒེར་གྱི་འགོ་ཁྲིད།
+༣. **རཱན་ཀི་དེབ་ (མཇུག་བསྡུ་ ༢༠༢༦-༠༢-༠༣)** — `docs/source/android_runbook.md`
+   ད་ ཡིག་ཆ་བཟོཝ་ཨིན་ (Section3) དང་ རྒྱ་བསྐྱེད་འབད་ཡོད་པའི་ལཱ་གི་རྒྱུན་རིམ་ (Section3) ཨིན།
+   ཡར་འཕར་གྱི་མེ་ཊིགསི་དང་འགན་ཁུར་གྱི་འགན་ཁུར་ (Section3.1), CLI བསྡམ་ནི།
+   གྲོགས་རམ་པ་དང་ བྱུང་རྐྱེན་གྱི་སྒྲུབ་བྱེད་ དེ་ལས་ གཞུང་སྐྱོང་སྲིད་བྱུས་ལུ་ ལོག་འགྱོཝ་ཨིན།
+   ཇོ་བདག་ཚུ་: ཡིག་ཆ་/རྒྱབ་སྐྱོར་ཞུན་དག་འབད་ནི།
+4. **ལྕོགས་ཅན་བཟོ་ནིའི་ནང་དོན་** — བརྡ་བཀོད་བཤུད་བརྙན་དང་ བརྟག་དཔྱད་ཁང་གི་བཀོད་རྒྱ་ཚུ་གྲ་སྒྲིག་འབད།
+   སྤྱི་ཟླ་༢ པའི་ཚེས་ ༢༠༢༦ གི་ལས་རིམ་གྱི་དོན་ལུ་ ཤེས་ཡོན་ཞིབ་དཔྱད་ཀྱི་དྲི་བ་ཚུ། ཇོ་བདག་: ཡིག་ཆ་/རྒྱབ་སྐྱོར།
+   འཛིན་སྐྱོང་པ། ཨེསི་ཨར་ཨི་ལྕོགས་ཅན་སྡེ་ཚན།
 
-1. **Inventory Confirmation** — Cross-verify table above with actual Android SDK
-   instrumentation hooks and Norito schema definitions. Owners: Android
-   Observability TL, LLM.
-2. **Telemetry Schema Diff** — Run the shared diff tool against Rust metrics to
-   produce parity artefacts for the SRE review. Owner: SRE privacy lead.
-3. **Runbook Draft (Completed 2026-02-03)** — `docs/source/android_runbook.md`
-   now documents the end-to-end override workflow (Section 3) and the expanded
-   escalation matrix plus role responsibilities (Section 3.1), tying the CLI
-   helpers, incident evidence, and chaos scripts back to the governance policy.
-   Owners: LLM with Docs/Support editing.
-4. **Enablement Content** — Prepare briefing slides, lab instructions, and
-   knowledge-check questions for the Feb 2026 session. Owners: Docs/Support
-   Manager, SRE enablement team.
+## ལྕོགས་ཅན་བཟོ་ནིའི་ལཱ་གི་རྒྱུན་རིམ་དང་ རན་བུཀ་ཧུཀ་ཚུ།
 
-## Enablement Workflow & Runbook Hooks
+### 1. ས་གནས་ + CI དུ་བ་ཁྱབ་ཁོངས།
 
-### 1. Local + CI smoke coverage
+- I18NI0000000000171X Torii sandbox, འདི་ ཚད་ལྡན་གྱི་སྣ་མང་ SoraFS བརྟན་པོ་ (I18NI000000172X) དང་ སོན་རིགས་ཚུ་ བཅོས་མ་དང་ བརྒྱུད་འཕྲིན་ཚུ་ལུ་ བཀོད་སྒྲིག་འབད་དོ་ཡོདཔ།
+  - འགྲུལ་སྐྱོད་ཀྱི་མི་རབས་འདི་ `scripts/telemetry/generate_android_load.py` གིས་ འཛིན་སྐྱོང་འཐབ་དོ་ཡོདཔ་ད་ དེ་གིས་ `artifacts/android/telemetry/load-generator.log` གི་འོག་ལུ་ ཞུ་བ་/ལན་གསལ་གྱི་ཡིག་ཆ་དང་ གཟེངས་བསྟོད་ཀྱི་མགོ་ཡིག་དང་ ལམ་འགྲུལ་འབད་ནི་ ཡང་ན་ སྐམ་བཏང་ཐབས་ལམ་ཚུ་ ཐོ་བཀོད་འབདཝ་ཨིན།
+  - གྲོགས་རམ་འབད་མི་གིས་ SoraFS སྐུགས་ཤོག་/བཅུད་བསྡུས་ I18NI000000175X ནང་ལུ་ བཅུད་བསྡུས་ཚུ་ཨིནམ་ལས་ AND7 བསྐྱར་སྤྱོད་ཚུ་གིས་ འགྲུལ་འཕྲིན་གྱི་ མཁོ་མངགས་འབད་མི་ཚུ་ལུ་ མ་གནོདཔ་ལས་ འབྱུང་ཁུངས་སྣ་ཚོགས་ཀྱི་ ཆ་སྙོམས་འདི་ བདེན་ཁུངས་བསྐྱལཝ་ཨིན།
+- CI གིས་ ལག་ཆས་ཅོག་འཐདཔ་ཅིག་ ལོག་སྟེ་ལག་ལེན་འཐབ་ཨིན། `ci/check_android_dashboard_parity.sh` `scripts/telemetry/compare_dashboards.py` `dashboards/grafana/android_telemetry_overview.json` གཡོག་བཀོལ་དོ་ཡོདཔ་ཨིན།
+- མགོ་རྙོག་པའི་སྦྱོང་བརྡར་ཚུ་ `docs/source/sdk/android/telemetry_chaos_checklist.md` ལུ་རྗེས་སུ་འབྲང་། དཔེ་ཚད་-ཨེན་ཝི་ཡིག་གཟུགས་དང་ ཌེཤ་བོརཌ་ ཆ་སྙོམས་ཞིབ་དཔྱད་འདི་གིས་ “གྲ་སྒྲིག་ཡོད་པའི་” སྒྲུབ་བྱེད་ཀྱི་སྡེ་ཚན་འདི་ AND7 མེ་འབར་གྱི་རྩིས་ཞིབ་ལུ་ ལྟོ་བྱིནམ་ཨིན།
 
-- `scripts/android_sample_env.sh --telemetry --telemetry-duration=5m --telemetry-cluster=<host>` spins up the Torii sandbox, replays the canonical multi-source SoraFS fixture (delegating to `ci/check_sorafs_orchestrator_adoption.sh`), and seeds synthetic Android telemetry.
-  - Traffic generation is handled by `scripts/telemetry/generate_android_load.py`, which records a request/response transcript under `artifacts/android/telemetry/load-generator.log` and honours headers, path overrides, or dry-run mode.
-  - The helper copies SoraFS scoreboard/summaries into `${WORKDIR}/sorafs/` so AND7 rehearsals can prove multi-source parity before touching mobile clients.
-- CI reuses the same tooling: `ci/check_android_dashboard_parity.sh` runs `scripts/telemetry/compare_dashboards.py` against `dashboards/grafana/android_telemetry_overview.json`, the Rust reference dashboard, and the allowance file at `dashboards/data/android_rust_dashboard_allowances.json`, emitting the signed diff snapshot `docs/source/sdk/android/readiness/dashboard_parity/android_vs_rust-latest.json`.
-- Chaos rehearsals follow `docs/source/sdk/android/telemetry_chaos_checklist.md`; the sample-env script plus the dashboard parity check form the “ready” evidence bundle that feeds the AND7 burn-in audit.
+### 2. བཀག་འགོག་དང་རྩིས་ཞིབ་ལམ་ལུགས།
 
-### 2. Override issuance and audit trail
+- `scripts/android_override_tool.py` འདི་ བསྐྱར་བཟོ་བཀག་ཆ་ཚུ་ བཏོན་ནི་དང་ ཆ་མེད་བཏང་ནིའི་དོན་ལུ་ ཀེ་ནོ་ནིག་སི་ཨེལ་ཨའི་ཨིན། `apply` གིས་ མཚན་རྟགས་བཀོད་ཡོད་པའི་ཞུ་བ་ཅིག་ གསལ་སྟོན་འབདཝ་ཨིནམ་དང་ གསལ་སྟོན་གྱི་བང་རིམ་ (`telemetry_redaction_override.to`) འདི་ སྔོན་སྒྲིག་གིས་ བཏོནམ་ཨིནམ་དང་ དེ་ལས་ `docs/source/sdk/android/telemetry_override_log.md` ནང་ལུ་ Hased token གྲལ་ཐིག་འདི་ ཁ་སྐོང་འབདཝ་ཨིན། I18NI000000186X གིས་ གྱལ་རིམ་དེ་གི་རྒྱབ་འགལ་ལུ་ ཆ་མེད་གཏང་ནི་གི་དུས་ཚོད་ཀྱི་རྟགས་བཀོད་འབདཝ་ཨིནམ་དང་ I18NI000000187X གིས་ གཞུང་སྐྱོང་དོན་ལུ་དགོ་པའི་ གཙང་སྦྲ་ཅན་གྱི་ JSON པར་ལེན་འདི་བྲིས།
+- སི་ཨེལ་ཨའི་གིས་ མརཀ་ཌའོན་ཐིག་ཁྲམ་མགོ་ཡིག་འདི་མེད་པ་ཅིན་ རྩིས་ཞིབ་དྲན་ཐོ་འདི་ ལེགས་བཅོས་འབད་ནི་ལུ་ ངོས་ལེན་མ་འབད་བར་ `docs/source/android_support_playbook.md` ནང་ བསྒྲིག་ཡོད་པའི་ བསྟར་སྤྱོད་དགོས་མཁོ་ཚུ་ མཐུན་སྒྲིག་འབདཝ་ཨིན། `scripts/tests/test_android_override_tool_cli.py` ནང་ཡོད་པའི་ ཡུ་ནིཊ་ཁྱབ་ཚད་ཀྱིས་ ཐིག་ཁྲམ་དབྱེ་དཔྱད་པ་ གསལ་སྟོན་དང་ འཛོལ་བ་འཛིན་སྐྱོང་འཐབ་མི་ཚུ་ ཉེན་སྲུང་འབདཝ་ཨིན།
+- བཀོལ་སྤྱོད་པ་ཚུ་གིས་ བཟོ་བཏོན་འབད་ཡོད་པའི་ གསལ་སྟོན་གསལ་སྟོན་ དུས་མཐུན་བཟོ་ཡོད་པའི་ དྲན་ཐོ་ཨེགསི་སེརཊི་, **དང་** བཞུ་བཅོས་འདི་ བཞུར་ཚད་ཅིག་ ལག་ལེན་འཐབ་པའི་སྐབས་ I18NI000000190X གི་འོག་ལུ་ JSON འདི་ མཉམ་སྦྲགས་འབདཝ་ཨིན། འཆར་གཞི་འདི་ནང་ གཞུང་སྐྱོང་གྲོས་ཐག་རེ་ལུ་ བྱུང་རབས་ཀྱི་ ཉིནམ་༣༦༥ གི་ དྲན་ཐོ་འདི་ བདག་འཛིན་འཐབ་ཨིན།
 
-- `scripts/android_override_tool.py` is the canonical CLI for issuing and revoking redaction overrides. `apply` ingests a signed request, emits the manifest bundle (`telemetry_redaction_override.to` by default), and appends a hashed token row into `docs/source/sdk/android/telemetry_override_log.md`. `revoke` stamps the revocation timestamp against that same row, and `digest` writes the sanitised JSON snapshot required for governance.
-- The CLI refuses to modify the audit log unless the Markdown table header is present, matching the compliance requirement captured in `docs/source/android_support_playbook.md`. Unit coverage in `scripts/tests/test_android_override_tool_cli.py` protects the table parser, manifest emitters, and error handling.
-- Operators attach the generated manifest, updated log excerpt, **and** the digest JSON under `docs/source/sdk/android/readiness/override_logs/` whenever an override is exercised; the log retains 365 days of history per the governance decision in this plan.
+### 3. སྒྲུབ་བྱེད་འཛིན་པ་དང་བདག་འཛིན་འཐབ་འཛིན།
 
-### 3. Evidence capture & retention
+- བསྐྱར་སྦྱོང་ཡང་ན་ བྱུང་རྐྱེན་རེ་རེ་གིས་ `artifacts/android/telemetry/` འོག་ལུ་ བཀོད་སྒྲིག་འབད་ཡོད་པའི་སྡེ་ཚན་ཅིག་ བཏོནམ་ཨིན།
+  - མངོན་གསལ་འཕྲུལ་ཆས་ཡིག་ཆ་དང་ བསྡོམས་རྩིས་ གྱངས་ཁ་ `generate_android_load.py` ལས་ .
+  - ཌེཤ་བོརཌ་ མཉམ་ཕྱོགས། (`android_vs_rust-<stamp>.json`) དང་ `ci/check_android_dashboard_parity.sh` གིས་ བཏོན་ཡོད་པའི་ འཐུས་ཀྱི་ ཧ་ཤི་།
+  - བཀག་ཆ་འབད་ཡོད་པའི་ log delta (གལ་སྲིད་བཀག་ཆ་འབད་བ་ཅིན་) དེ་དང་མཐུན་པའི་གསལ་སྟོན་དང་ བསྐྱར་བཟློས་འབད་མི་ JSON.
+- ཨེསི་ཨར་ཨི་ མེ་འབར་བའི་སྙན་ཞུ་འདི་གིས་ ཅ་རྙིང་ཚུ་དང་ I18NI000000195X གིས་ འདྲ་བཤུས་རྐྱབ་ཡོད་མི་ I18NT0000012X གི་སྐུགས་བཀོད་ཐངས་ཚུ་ གཞི་བསྟུན་འབད་དེ་ AND7 བསྐྱར་ཞིབ་ལུ་ བརྒྱུད་འཕྲིན་ཧ་ཤེ་སི་ → dashboard → བརྒལ་བའི་གནས་རིམ་ལས་ གཏན་འབེབས་རིམ་སྒྲིག་ཅིག་བྱིནམ་ཨིན།
 
-- Every rehearsal or incident produces a structured bundle under `artifacts/android/telemetry/` containing:
-  - The load-generator transcript and aggregate counters from `generate_android_load.py`.
-  - Dashboard parity diff (`android_vs_rust-<stamp>.json`) and allowance hash emitted by `ci/check_android_dashboard_parity.sh`.
-  - Override log delta (if an override was granted), the corresponding manifest, and the refreshed digest JSON.
-- The SRE burn-in report references those artefacts plus the SoraFS scoreboard copied by `android_sample_env.sh`, giving the AND7 readiness review a deterministic chain from telemetry hashes → dashboards → override status.
+## cross-SDK ཐབས་འཕྲུལ་གསལ་སྡུད་ཕྲང་ཕྲན།
 
-## Cross-SDK Device Profile Alignment
+Dashboards Android’s `hardware_tier` འདི་ ཀེ་ནོ་ནིག་ནང་ལུ་ སྐད་སྒྱུར་འབདཝ་ཨིན།
+I18NI000000197X ནང་གསལ་བསྒྲགས།
+`docs/source/sdk/mobile_device_profile_alignment.md` དེ་འབདཝ་ལས་ AND7 དང་ IOS7 བརྒྱུད་འཕྲིན་གཏང་ནི།
+སྡེ་ཚན་གཅིག་པ་ག་བསྡུར་འབད།
 
-Dashboards translate Android’s `hardware_tier` into the canonical
-`mobile_profile_class` defined in
-`docs/source/sdk/mobile_device_profile_alignment.md` so AND7 and IOS7 telemetry
-compare the same cohorts:
-
-- `lab` — emitted as `hardware_tier = emulator`, matching Swift’s
+- `lab` — I18NI000000200X, དང་མཐུན་པའི་ Swift’s དང་མཐུན་པ།
   `device_profile_bucket = simulator`.
-- `consumer` — emitted as `hardware_tier = consumer` (with the SDK-major suffix)
-  and grouped with Swift’s `iphone_small`/`iphone_large`/`ipad` buckets.
-- `enterprise` — emitted as `hardware_tier = enterprise`, aligning with Swift’s
-  `mac_catalyst` bucket and future managed/iOS desktop runtimes.
+- `consumer` — I18NI000000203X (SDK-major རྗེས་འཇུག་དང་མཉམ་དུ།)
+  དང་ སུའིཕཊ་གི་ `iphone_small`/`iphone_large`/I18NI0000206X གི་སྦྱར་རྫས་ཚུ་དང་གཅིག་ཁར་ སྡེ་ཚན་བཟོ་ཡོདཔ་ཨིན།
+- `enterprise` — Swift’s དང་མཐུན་པའི་ `hardware_tier = enterprise`,
+  `mac_catalyst` བཱ་ཀེཊི་དང་མ་འོངས་འཛིན་སྐྱོང་འཛིན་སྐྱོང་/ཨའི་ཨོ་ཨེསི་ཌེཀསི་ཊོཔ་རཱན་ཊའི།
 
-Any new tier must be added to the alignment document and schema diff artefacts
-before dashboards consume it.
+རིམ་པ་གསརཔ་ག་ཅི་རང་འབད་རུང་ ཕྲང་སྒྲིག་ཡིག་ཆ་དང་ ལས་འཆར་སོ་སོ་ ཅ་རྙིང་ཚུ་ལུ་ཁ་སྐོང་བརྐྱབ་དགོ།
+ཌེཤ་བོརཌི་ཚུ་གིས་ དེ་ མ་ཟ་བའི་ཧེ་མ་ཨིན།
 
-## Governance & Distribution
+## གཞུང་སྐྱོང་དང་བཀྲམ་སྤེལ།
 
-- **Pre-read package** — This document plus appendix artefacts (schema diff,
-  runbook diff, readiness deck outline) will be distributed to the SRE governance
-  mailing list no later than **2026-02-05**.
-- **Feedback loop** — Comments collected during governance will feed into the
-  `AND7` JIRA epic; blockers are surfaced in `status.md` and the Android weekly
-  stand-up notes.
-- **Publishing** — Once approved, the policy summary will be linked from
-  `docs/source/android_support_playbook.md` and referenced by the shared
-  telemetry FAQ in `docs/source/telemetry.md`.
+- **སྔོན་སྒྲིག་ཐུམ་སྒྲིལ་** — ཡིག་ཆ་འདི་དང་ ཟུར་ཐོ་ཅ་རྙིང་ཚུ་ (འཆར་གཞི་ཁྱད་པར་,
+  རན་བུཀ་ཌིཕ་ གྲ་སྒྲིག་ཌེཀ་ བཀོད་རིས་) འདི་ ཨེསི་ཨར་ཨི་ གཞུང་སྐྱོང་ལུ་ བཀྲམ་སྤེལ་འབད་ནི་ཨིན།
+  ཡིག་འཕྲིན་ཐོ་ཡིག་འདི་ **2026-02-05** ལས་ཕྱི་མ་མེདཔ་ཨིན།
+- **བསམ་བློའི་ལོག་ལུན** — གཞུང་སྐྱོང་སྐབས་བསྡུ་སྒྲིག་འབད་མི་བསམ་འཆར་ཚུ་གིས་
+  `AND7` ཇི་ཨར་ཨེ་ མཐོ་ཚད་; བཀག་ཆ་འབད་མི་ཚུ་ I18NI000000211X དང་ Android ནང་ བདུན་ཕྲག་རེ་ནང་ བཏོན་ཡོདཔ་ཨིན།
+  སྟོང་ཆ་-ཨཔ་དྲན་ཐོ།
+- **དཔར་བསྐྲུན་** — ཆ་འཇོག་འབད་ཚརཝ་ད་ སྲིད་བྱུས་བཅུད་དོན་འདི་ ལས་འབྲེལ་མཐུད་འབད་འོང་།
+  `docs/source/android_support_playbook.md` དང་ བརྗེ་སོར་གྱི་གཞི་བསྟུན་འབད་ཡོདཔ།
+  telemetry FAQ ནང་ `docs/source/telemetry.md`.
 
-## Audit & Compliance Notes
+## རྩིས་ཞིབ་དང་མཐུན་སྒྲིག་དྲན་ཐོ།
 
-- Policy honours GDPR/CCPA requirements by removing mobile subscriber data
-  before export; the hashed authority salt rotates quarterly and is stored in
-  the shared secrets vault.
-- Enablement artefacts and runbook updates are logged in the compliance registry.
-- Quarterly reviews confirm that overrides remain closed-loop (no stale access).
+- སྲིད་བྱུས་གཟེངས་བསྟོད་ GDPR/CCPA དགོས་མཁོ།
+  ཕྱིར་གཏོང་མ་འབད་བའི་ཧེ་མ་; ཧའི་ཤི་ཤེཌ་དབང་ཚད་ཚྭ་འདི་ ལོ་གསུམ་གྱི་ནང་ལུ་ བསྒྱིར་ཞིནམ་ལས་ ༢༠༡༢ ལུ་ བསག་བཞག་ཡོདཔ་ཨིན།
+  བརྗེ་སོར་འབད་ཡོད་པའི་གསང་བ་ཚུ་ལུ།
+- ལྕོགས་གྲུབ་ཅན་གྱི་ཅ་ཆས་ཚུ་དང་ རན་དེབ་དུས་མཐུན་ཚུ་ བསྟར་སྤྱོད་ཐོ་བཀོད་ནང་ ནང་བསྐྱོད་འབད་ཡོདཔ་ཨིན།
+- ཟླཝ་བཞི་པའི་ནང་ བསྐྱར་ལོག་ཚུ་ ཁ་བསྡམས་ཡོད་པའི་ བསྐོར་རིམ་ལྷག་ལུས་ཚུ་ ངེས་གཏན་བཟོཝ་ཨིན།
 
-## Governance Outcome (2026-02-12)
+## གཞུང་སྐྱོང་གྲུབ་འབྲས་ (༢༠༢༦-༠༢-༡༢)
 
-The SRE governance session on **2026-02-12** approved the Android redaction
-policy without modifications. Key decisions (see
+**2026-02-12** གུ་ SRE གཞུང་སྐྱོང་ཚོགས་ཐེངས་འདི་གིས་ Android redaction འདི་ ཆ་འཇོག་འབད་ཡོདཔ་ཨིན།
+བཟོ་བཅོས་མེད་པའི་སྲིད་བྱུས། གཙོ་བོའི་ཐག་གཅོད།
 `docs/source/sdk/android/telemetry_redaction_minutes_20260212.md`):
 
-- **Policy acceptance.** Hashed authority, device-profile bucketting, and the
-  omission of carrier names were ratified. Salt rotation tracking via
-  `android.telemetry.redaction.salt_version` becomes a quarterly audit item.
-- **Validation plan.** Unit/integration coverage, nightly schema diff runs, and
-  quarterly chaos rehearsals were endorsed. Action item: publish a dashboard
-  parity report after each rehearsal.
-- **Override governance.** Norito-recorded override tokens were approved with a
-  365-day retention window. Support engineering will own the override log
-  digest review during monthly operations syncs.
+- **སྲིད་བྱུས།* དབང་ཆ་ ཧེ་ཤིས་ ཐབས་འཕྲུལ་-གསལ་སྡུད་ཀྱི་ བཱ་ཀེཊིང་ དང་།
+  སྐྱེལ་འདྲེན་གྱི་མིང་ཚུ་ ཆ་འཇོག་འབད་ཡོདཔ། ཚྭ་བསྒྱིར་བའི་རྗེས་འདེད་ བརྒྱུད་དེ།
+  `android.telemetry.redaction.salt_version` འདི་ ཟླཝ་གསུམ་གྱི་རྩིས་ཞིབ་ཅ་ཆས་ཅིག་ལུ་འགྱུར་ཡོདཔ་ཨིན།
+- **བདེན་དཔྱད་འཆར་གཞི་།** ཡན་ལག་/མཉམ་བསྡོམས་ཁྱབ་བསྒྲགས། མཚན་མོའི་འཆར་གཞི་ཁྱད་པར་གཡོག་བཀོལ། དང་།
+  ཟླཝ་གསུམ་གྱི་ཟང་ཟིང་སྦྱོང་བརྡར་ཚུ་ ངོས་ལེན་འབད་ཡོདཔ་ཨིན། བྱ་བ་རྣམ་གྲངས་: ཌེཤ་བོརཌི་ཅིག་དཔར་བསྐྲུན་འབད།
+  བསྐྱར་སྦྱོང་རེ་རེ་གི་ཤུལ་ལས་ ཆ་སྙོམས་སྙན་ཞུ།
+- **ཕྱིར་ལོག་གཞུང་སྐྱོང་།** Norito-ཐོ་བཀོད་བྱས་པའི་བཀག་ཆའི་ཊོ་ཀེན་ཚུ་ ཆ་འཇོག་འབད་ཡོདཔ་ཨིན།
+  ཉིན་གྲངས་ ༣༦༥ ཉིན་ཉེར་པའི་སྒོ་སྒྲིག། རྒྱབ་སྐྱོར་བཟོ་རིག་བཟོ་རིག་གིས་ བཀག་ཆ་འབད་དེ་ཡོད་པའི་ དྲན་ཐོ་འདི་ བདག་དབང་འབད་འོང་།
+  ཟླ་རིམ་བཀོལ་སྤྱོད་མཉམ་འབྱུང་སྐབས་ བསྐྱར་ཞིབ།
 
-## Follow-up Status
+## རྗེས་འཇུག་གནས་སྟངས།
 
-1. **Device-profile alignment (due 2026-03-01).** ✅ Completed — the shared
-   mapping in `docs/source/sdk/mobile_device_profile_alignment.md` defines how
-   Android `hardware_tier` values map to the canonical `mobile_profile_class`
-   consumed by the parity dashboards and schema diff tooling.
+1. **ཐབས་འཕྲུལ་-གསལ་སྡུད་ཕྲང་སྒྲིག་ (Due 2026-03-01),** ✅ མཇུག་བསྡུ་ — རུབ་སྤྱོད་འབད་ཡོདཔ།
+   སབ་ཁྲ་འདི་གིས་ `docs/source/sdk/mobile_device_profile_alignment.md` གིས་ག་དེ་སྦེ་ངེས་འཛིན་འབདཝ་ཨིན།
+   Android `hardware_tier` གནས་གོང་ཚུ་ ཀེ་ནོ་ནིག་ `mobile_profile_class` ལུ་སབ་ཁྲ་བཟོཝ་ཨིན།
+   ཆ་མེད་ཀྱི་ ཌེཤ་བོརཌི་དང་ ལས་རིམ་མ་འདྲཝ་ལག་ཆས་ཚུ་གིས་ བཀོལ་སྤྱོད་འབདཝ་ཨིན།
 
-## Upcoming SRE Governance Brief (Q2 2026)
+## འཕྲོ་མཐུད་ཨེས་ཨར་ཨི་གཞུང་སྐྱོང་མདོར་བསྡུས། (Q22026)རོ་ཌི་སབ་ཁྲ་གི་རྣམ་གྲངས་ **AND7** གིས་ ཤུལ་མའི་ཨེསི་ཨར་ཨི་གཞུང་ཚོགས་འདི་ ༡༠ ཐོབ་དགོཔ་ཨིན།
+Android telemetry redaction སྔོན་སྒྲིག་ལྷག་མ། དབྱེ་ཚན་འདི་ འཚོ་བ་སྦེ་ལག་ལེན་འཐབ།
+གསལ༌བཀོད; ཚོགས་སྡེའི་ཞལ་འཛོམས་ག་ར་གི་ཧེ་མ་ དུས་མཐུན་བཟོ་དགོ།
 
-Roadmap item **AND7** requires that the next SRE governance session receives a
-concise Android telemetry redaction pre-read. Use this section as the living
-brief; keep it updated before every council meeting.
+### སྔོན་སྒྲིག་ཞིབ་དཔྱད་ཐོ་ཡིག་།
 
-### Prep checklist
+1. **མངོན་གསལ་ཅན་གྱི་བང་རིམ་** — གསར་ཤོས་ལས་རིམ་གྱི་ཁྱད་པར་ ཌེཤ་བོརཌ་གསལ་གཞི་ཚུ་ཕྱིར་འདྲེན་འབད།
+   དང་ བཀག་ཆ་འབད་ཡོད་པའི་ log digest (འོག་གི་མེ་ཊིགསི་བལྟ།) དེ་ལས་ དེ་ཚུ་ ཚེས་གྲངས་ཅིག་གི་འོག་ལུ་བཙུགས།
+   སྣོད་འཛིན་ (དཔེར་ན།
+   `docs/source/sdk/android/readiness/and7_sre_brief/2026-02-07/` སྔོན་མ་སྔོན་མ།
+   མགྲོན་བརྡ་གཏང་ནི།
+2. **Drill བཅུད་བསྡུས་** — འཕྲལ་གྱི་ཟང་ཟིང་སྦྱོང་བརྡར་དྲན་ཐོ་འདི་ མཉམ་སྦྲགས་འབད།
+   `android.telemetry.redaction.failure` མེ་ཊིག་པར་ལེན་; ཉེན་བརྡ་བཏང་མི་འདི་ངེས་གཏན་བཟོ།
+   བརྡ་བཀོད་ཚུ་གིས་ དུས་ཚོད་མཚོན་རྟགས་གཅིག་མཚུངས་ལུ་གཞི་བསྟུན་འབདཝ་ཨིན།
+3. **Override sept** — ཤུགས་ལྡན་གྱི་ཚབ་མ་ཆ་མཉམ་ I18NT0000008X ནང་ཐོ་བཀོད་འབད་ཡོདཔ་ངེས་གཏན་བཟོ།
+   ཐོ་བཀོད་དང་ ཞལ་འཛོམས་ཁང་ནང་ལུ་ བཅུད་བསྡུས་འབད་ཡོདཔ་ཨིན། དུས་ཡུན་ཚང་བའི་ཚེས་གྲངས་དང་
+   འབྲེལ་མཐུན་བྱུང་རིམ་ ID.
+4. **Agnada note** — ཞལ་འཛོམས་ཀྱི་མདུན་དུ་ SRE གི་ཁྲི་འཛིན་ 48 of the wood with the with.
+   མཐུད་ལམ་ཐུང་ཀུ་ཅིག་ ཐག་གཅོད་ག་ཅི་རང་དགོཔ་ཨིན་ན་ གཙོ་བོར་བཏོན་ཡོདཔ་ཨིན།
+   བསྒྱུར་བཅོས་, ཡང་ན་ སྲིད་བྱུས་དུས་མཐུན་བཟོ་ནི་ཚུ་ བཀག་ཆ་འབད།)
 
-1. **Evidence bundle** — export the latest schema diff, dashboard screenshots,
-   and override log digest (see matrix below) and place them under a dated
-   folder (for example
-   `docs/source/sdk/android/readiness/and7_sre_brief/2026-02-07/`) before
-   sending the invite.
-2. **Drill summary** — attach the most recent chaos rehearsal log plus the
-   `android.telemetry.redaction.failure` metric snapshot; ensure Alertmanager
-   annotations reference the same timestamp.
-3. **Override audit** — confirm all active overrides are recorded in the Norito
-   registry and summarised in the meeting deck. Include expiry dates and the
-   corresponding incident IDs.
-4. **Agenda note** — ping the SRE chair 48 hours ahead of the meeting with the
-   brief link, highlighting any decisions required (new signals, retention
-   changes, or override policy updates).
+### སྒྲུབ་བྱེད་ཀྱི་མེ་ཏོག།
 
-### Evidence matrix
+| ཅ་ཆས། | ས་གནས་ | ཇོ་བདག་ | དྲན་ཐོ། |
+|------------------------------------------------- |
+| Schema diff vs རཱསི་ | `docs/source/sdk/android/readiness/schema_diffs/<latest>.json` | བརྒྱུད་འཕྲིན་ལག་བཟོའི་ DRI | ཞལ་འཛོམས་མ་འབད་བའི་ཧེ་མ་ <72h བཟོ་དགོ། |
+| ཌེཤ་བོརཌ་ ཁྱད་པར་གསལ་གཞི་ཚུ། | I18NI000002222X | བལྟ་རྟོག་འབད་ཚུགསཔ་ TL | ཚུད་སྒྲིག་འབད་ཡོད་མི་ `sorafs.fetch.*`, `android.telemetry.*`, དང་ དྲན་སྐུལ་འཕྲུལ་ཆས་ཀྱི་པར་རིས། |
+| བཙོག་པ་ འཇུ་ནི། | `docs/source/sdk/android/readiness/override_logs/<date>.json` | རྒྱབ་སྐྱོར་བཟོ་རིག | I18NI00000000226X གཡོག་བཀོལ། (སྣོད་ཐོ་དེ་ནང་ README བལྟ།) གསརཔ་ `status_code`; བརྗེ་སོར་འབད་བའི་ཧེ་མ་ རྟགས་མཚན་ཚུ་ ཧ་ལས་ཏེ་ ལུས་ཡོདཔ་ཨིན། |
+| ཟང་ཟིང་བསྐྱར་སྦྱོང་གི་ལོག | `artifacts/android/telemetry/chaos/<date>/log.ndjson` | QA རང་འགུལ་ | ཀེ་པི་ཨའི་ བཅུད་བསྡུས་ (ཚོང་ཁང་གི་གྱངས་ཁ་ ལོག་འབད་རྩོལ་ཡོད་པའི་ ཆ་ཚད་ བཀག་འཛིན་ལག་ལེན་) མཉམ་སྦྲགས་འབད། |
 
-| Artefact | Location | Owner | Notes |
-|----------|----------|-------|-------|
-| Schema diff vs Rust | `docs/source/sdk/android/readiness/schema_diffs/<latest>.json` | Telemetry tooling DRI | Must be generated <72 h before meeting. |
-| Dashboard diff screenshots | `docs/source/sdk/android/readiness/dashboards/<date>/` | Observability TL | Include `sorafs.fetch.*`, `android.telemetry.*`, and Alertmanager snapshots. |
-| Override digest | `docs/source/sdk/android/readiness/override_logs/<date>.json` | Support engineering | Run `scripts/android_override_tool.sh digest` (see README in that directory) against the latest `telemetry_override_log.md`; tokens remain hashed before sharing. |
-| Chaos rehearsal log | `artifacts/android/telemetry/chaos/<date>/log.ndjson` | QA automation | Attach KPI summary (stall count, retry ratio, override usage). |
+### ཚོགས་འདུའི་དོན་ལུ་ ཁ་ཕྱེ་ཡོདཔ།
 
-### Open questions for the council
+- ང་བཅས་ཀྱིས་ ད་ལྟོ་ ཉིནམ་༣༦༥ ལས་ བཀག་ཆ་འབད་ཡོད་པའི་ བཀག་འཛིན་སྒོ་སྒྲིག་འདི་ ཐུང་ཀུ་བཟོ་དགོཔ་ཨིན་ན།
+  བཅུད་ལྡན་འདི་རང་བཞིན་གྱིས་ཨིན་ན?
+- I18NI000000229X གིས་ བགོ་བཤའ་གསརཔ་འདི་ ཆ་གནས་འབད་དགོ།
+  `mobile_profile_class` ཤུལ་མམ་གྱི་གསར་བཏོན་ནང་ ཁ་ཡིག་ཚུ་ ཡང་ན་ སུའིཕཊི་/ཇེ་ཨེསི་ལུ་སྒུག་སྡོདཔ་ཨིན།
+  བསྒྱུར་བཅོས་གཅིག་པའི་ SDKs ཡིན་ནམ།
+- ལུང་ཕྱོགས་གནས་སྡུད་སྡོད་གནས་ཀྱི་དོན་ལུ་ ལམ་སྟོན་ཁ་སྐོང་འདི་ I18NT0000019X ཚར་གཅིག་དགོཔ་ཨིན།
+  Norito-RPC ལས་རིམ་ཚུ་ Android (NRPC-3 རྗེས་འཇུག་) ལུ་འབྱུང་ཡོདཔ་ཨིན་ན?
 
-- Do we need to shorten the override retention window from 365 days now that
-  the digest is automated?
-- Should `android.telemetry.device_profile` adopt the new shared
-  `mobile_profile_class` labels in the next release, or wait for the Swift/JS
-  SDKs to ship the same change?
-- Is additional guidance required for regional data residency once Torii
-  Norito-RPC events land on Android (NRPC-3 follow-up)?
+### རྒྱང་འཕྲིན་ལས་འཆར་གྱི་ཁྱབ་ཁོངས།
 
-### Telemetry Schema Diff Procedure
+གསར་བཏོན་འབད་མི་འདེམས་ངོ་རེ་ལུ་ ཉུང་མཐའ་ལུ་ཚར་གཅིག་ ལས་འཆར་གྱི་ ལག་ཆས་འདི་ གཡོག་བཀོལ། (དང་ ཨེན་ཌོའིཌ་ ག་དུས་འབད་རུང་།
+ལག་ཆས་བསྒྱུར་བཅོས) དེ་འབདཝ་ལས་ SRE ཚོགས་སྡེ་གིས་ མཉམ་དུ་ ཆ་སྙོམས་ཀྱི་ ཅ་ཆས་ཚུ་ཐོབ་ཨིན།
+dashbood dif:
 
-Run the schema diff tool at least once per release candidate (and whenever the Android
-instrumentation changes) so the SRE council receives fresh parity artefacts alongside the
-dashboard diff:
+༡ ཁྱོད་ཀྱིས་ག་བསྡུར་འབད་དགོ་མནོ་མི་ Android དང་ Rust ཊེ་ལི་མི་ཊི་རི་འཆར་གཞི་ཚུ་ ཕྱིར་འདྲེན་འབད། CI གི་དོན་ལུ་ རིམ་སྒྲིག་ཚུ་ ཐད་རི་བ་རི་སྦེ་ སྡོདཔ་ཨིན།
+   `configs/android_telemetry.json` དང་ `configs/rust_telemetry.json` གི་འོག་ལུ་ཨིན།
+2. `scripts/telemetry/run_schema_diff.sh --android-config configs/android_telemetry.json --rust-config configs/rust_telemetry.json --out docs/source/sdk/android/readiness/schema_diffs/<date>-android_vs_rust.json` ལག་ལེན་པ།
+   - གདམ་ཁ་ཅན་གྱི་ཐོག་ལས་ (`scripts/telemetry/run_schema_diff.sh android-main rust-main`) ལུ།
+     རིམ་སྒྲིག་ཚུ་ ཐད་ཀར་དུ་ གིཊི་ལས་ འཐེན་དགོ། ཡིག་ཆ་འདི་གིས་ ཅ་རྙིང་ནང་ལུ་ ཧ་ཤེ་ཚུ་ བཙུགསཔ་ཨིན།
+3. བཟོ་བཏོན་འབད་ཡོད་པའི་ JSON འདི་ གྲ་སྒྲིག་ཡོད་པའི་བང་རིམ་ལུ་ མཐུད་ཞིནམ་ལས་ I18NI000000235X + ལས་འབྲེལ་མཐུད་འབད།
+   `docs/source/telemetry.md`. ཁྱད་པར་དེ་གིས་ ཁ་སྐོང་/བཏོན་གཏང་ཡོད་པའི་ས་སྒོ་དང་ བཀག་འཛིན་ཌེལ་ཊ་ཚུ་ འོད་རྟགས་འབདཝ་ཨིན།
+   རྩིས་ཞིབ་པ་ཚུ་གིས་ ལག་ཆས་འདི་ ལོག་སྟེ་མ་རྩེད་བར་ བསྐྱར་བཟོ་འདྲ་མཉམ་གྱི་ བདེན་དཔྱད་འབད་ཚུགས།
+༤ ཁྱད་པར་དེ་གིས་ འབད་བཏུབ་པའི་ཁ་སྟོར་འདི་ གསལ་སྟོན་འབད་བའི་སྐབས་ (དཔེར་ན་ Android-only redive signal) འདི་དུས་མཐུན་བཟོ་ནི།
+   I18NI000000237X གིས་ རྒྱབ་རྟེན་འབད་ཡོད་མི་ འཐུས་ཡིག་སྣོད་ནང་ རྒྱུ་མཚན་འདི་ ༢༠༠༨ ལུ་ དྲན་འཛིན་འབད་ཡོད།
+   Schema-diff སྣོད་ཐོ་ README.
 
-1. Export the Android and Rust telemetry schemas you want to compare. For CI the configs live
-   under `configs/android_telemetry.json` and `configs/rust_telemetry.json`.
-2. Execute `scripts/telemetry/run_schema_diff.sh --android-config configs/android_telemetry.json --rust-config configs/rust_telemetry.json --out docs/source/sdk/android/readiness/schema_diffs/<date>-android_vs_rust.json`.
-   - Alternatively pass commits (`scripts/telemetry/run_schema_diff.sh android-main rust-main`) to
-     pull the configs directly from git; the script pins the hashes inside the artefact.
-3. Attach the generated JSON to the readiness bundle and link it from `status.md` +
-   `docs/source/telemetry.md`. The diff highlights added/removed fields and retention deltas so
-   auditors can confirm redaction parity without replaying the tool.
-4. When the diff reveals allowable divergence (e.g., Android-only override signals), update the
-   allowance file referenced by `ci/check_android_dashboard_parity.sh` and note the rationale in
-   the schema-diff directory README.
-
-> **Archive rules:** keep the five most recent diffs under
-> `docs/source/sdk/android/readiness/schema_diffs/` and move older snapshots to
-> `artifacts/android/telemetry/schema_diffs/` so governance reviewers always see the latest data.
+> **ཡིག་རྙིང་ལམ་ལུགས་:** འཕྲལ་གྱི་ཁྱད་པར་ལྔ་འདི་ འོག་ལུ་བཞག།
+> `docs/source/sdk/android/readiness/schema_diffs/` དང་ པར་ཆས་རྙིངམ་ཚུ་ ལུ་སྤོ་བཤུད་འབད།
+> `artifacts/android/telemetry/schema_diffs/` དེ་འབདཝ་ལས་ གཞུང་སྐྱོང་བསྐྱར་ཞིབ་པ་ཚུ་གིས་ དུས་རྒྱུན་དུ་ གནས་སྡུད་གསརཔ་ཚུ་ མཐོངམ་ཨིན།

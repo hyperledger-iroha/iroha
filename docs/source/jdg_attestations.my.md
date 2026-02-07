@@ -7,33 +7,34 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 459e8ed4612da7cfa68053e4e299b2f68e7620d4f3b98a8a721ebf8327829ea1
 source_last_modified: "2026-01-08T21:57:18.412403+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# JDG Attestations: Guard, Rotation, and Retention
+# JDG အတည်ပြုချက်များ- အစောင့်အကြပ်၊ အလှည့်အပြောင်းနှင့် ထိန်းသိမ်းမှု
 
-This note documents the v1 JDG attestation guard that now ships in `iroha_core`.
+ဤမှတ်စုသည် ယခု `iroha_core` တွင် တင်ပို့သည့် v1 JDG သက်သေအစောင့်ကို မှတ်တမ်းတင်ထားသည်။
 
-- **Committee manifests:** Norito-encoded `JdgCommitteeManifest` bundles carry per-dataspace rotation
-  schedules (`committee_id`, ordered members, threshold, `activation_height`, `retire_height`).
-  Manifests are loaded with `JdgCommitteeSchedule::from_path` and enforce strictly increasing
-  activation heights with an optional grace overlap (`grace_blocks`) between retiring/activating
-  committees.
-- **Attestation guard:** `JdgAttestationGuard` enforces dataspace binding, expiry, stale bounds,
-  committee id/threshold matching, signer membership, supported signature schemes, and optional
-  SDN validation via `JdgSdnEnforcer`. Size caps, max lag, and allowed signature schemes are
-  constructor parameters; `validate(attestation, dataspace, current_height)` returns the active
-  committee or a structured error.
-  - `scheme_id = 1` (`simple_threshold`): per-signer signatures, optional signer bitmap.
-  - `scheme_id = 2` (`bls_normal_aggregate`): single pre-aggregated BLS-normal signature over the
-    attestation hash; signer bitmap optional, defaults to all signers in the attestation. BLS
-    aggregate validation requires a valid PoP per committee member in the manifest; missing or
-    invalid PoPs reject the attestation.
-  Configure the allow-list via `governance.jdg_signature_schemes`.
-- **Retention store:** `JdgAttestationStore` tracks attestations per dataspace with a configurable
-  per-dataspace cap, pruning oldest entries on insert. Call `for_dataspace` or
-  `for_dataspace_and_epoch` to retrieve audit/replay bundles.
-- **Tests:** Unit coverage now exercises valid committee selection, unknown signer rejection, stale
-  attestation rejection, unsupported scheme ids, and retention pruning. See
-  `crates/iroha_core/src/jurisdiction.rs`.
+- **ကော်မတီက ဖော်ပြသည်-** Norito-ကုဒ်လုပ်ထားသော `JdgCommitteeManifest` အစုအဝေးများသည် dataspace လည်ပတ်မှုကို သယ်ဆောင်သည်
+  အချိန်ဇယားများ (`committee_id`၊ အဖွဲ့ဝင်များ၊ ကန့်သတ်ချက်များ၊ `activation_height`၊ `retire_height`)။
+  မန်နီးဖက်စ်များကို `JdgCommitteeSchedule::from_path` ဖြင့် တင်ဆောင်ပြီး တင်းကြပ်စွာ တိုးမြှင့်ပြဋ္ဌာန်းရန်
+  အနားယူခြင်း/စဖွင့်ခြင်းကြားတွင် ရွေးချယ်နိုင်သော ကျေးဇူးအထပ်ထပ် (`grace_blocks`) ဖြင့် အသက်သွင်းခြင်း အမြင့်များ
+  ကော်မတီများ။
+- **Attestation guard:** `JdgAttestationGuard` သည် dataspace binding၊ သက်တမ်းကုန်ဆုံးမှု၊ stale bounds၊
+  ကော်မတီ id/threshold ကိုက်ညီမှု၊ လက်မှတ်ထိုးအဖွဲ့ဝင်မှု၊ ပံ့ပိုးထားသော လက်မှတ်အစီအစဉ်များနှင့် ရွေးချယ်နိုင်သည်
+  `JdgSdnEnforcer` မှတစ်ဆင့် SDN အတည်ပြုခြင်း အရွယ်အစားထုပ်များ၊ အမြင့်ဆုံးနောက်ကျခြင်းနှင့် ခွင့်ပြုထားသော လက်မှတ်ပုံစံများဖြစ်သည်။
+  constructor ဘောင်များ; `validate(attestation, dataspace, current_height)` သည် တက်ကြွမှုကို ပြန်ပေးသည်။
+  ကော်မတီ သို့မဟုတ် ဖွဲ့စည်းတည်ဆောက်ထားသော အမှား။
+  - `scheme_id = 1` (`simple_threshold`)- လက်မှတ်ထိုးသူ တစ်ဦးချင်း လက်မှတ်များ၊ ရွေးချယ်နိုင်သော လက်မှတ်ထိုးသူ ဘစ်မြေပုံ။
+  - `scheme_id = 2` (`bls_normal_aggregate`) - ကြိုတင်စုစည်းထားသော BLS-ပုံမှန် လက်မှတ်တစ်ခုတည်း၊
+    သက်သေခံချက် hash; လက်မှတ်ထိုးသူ ဘစ်မြေပုံကို ရွေးချယ်နိုင်သည်၊ BLS
+    စုစည်းအတည်ပြုချက်သည် မန်နီးဖက်စ်တွင် ကော်မတီအဖွဲ့ဝင်တစ်ဦးလျှင် တရားဝင် PoP လိုအပ်သည်။ ပျောက်ဆုံးနေသည် သို့မဟုတ်
+    မမှန်ကန်သော PoPs များသည် သက်သေခံချက်ကို ငြင်းပယ်သည်။
+  `governance.jdg_signature_schemes` မှတစ်ဆင့် ခွင့်ပြုစာရင်းကို ပြင်ဆင်ပါ။
+- ** သိမ်းဆည်းခြင်းစတိုးဆိုင်-** `JdgAttestationStore` သည် ပြင်ဆင်သတ်မှတ်နိုင်သော အချက်အလက်တစ်ခုဖြင့် ဒေတာနေရာတစ်ခုအတွက် သက်သေခံချက်များကို ခြေရာခံသည်
+  per-dataspace cap၊ ထည့်သွင်းမှုတွင် ရှေးအကျဆုံး entries များကို ဖြတ်တောက်ခြင်း။ `for_dataspace` သို့ ဖုန်းခေါ်ဆိုပါ။
+  စာရင်းစစ်/ပြန်ဖွင့်သည့်အစုအဝေးများကို ရယူရန် `for_dataspace_and_epoch`။
+- **စမ်းသပ်မှုများ-** ယခု ယူနစ်လွှမ်းခြုံမှုသည် တရားဝင်ကော်မတီရွေးချယ်မှု၊ အမည်မသိလက်မှတ်ထိုးငြင်းပယ်မှု၊
+  အထောက်အထား ငြင်းပယ်ခြင်း၊ ပံ့ပိုးမထားသော အစီအစဉ် ids နှင့် ထိန်းသိမ်းမှု ဖြတ်တောက်ခြင်း ကြည့်ပါ။
+  `crates/iroha_core/src/jurisdiction.rs`။
 
-The guard rejects schemes outside the configured allow-list.
+ပြင်ဆင်သတ်မှတ်ထားသော ခွင့်ပြုစာရင်းပြင်ပရှိ အစီအမံများကို အစောင့်သည် ငြင်းပယ်သည်။

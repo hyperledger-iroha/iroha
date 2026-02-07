@@ -8,18 +8,20 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Staging Manifest Playbook
 sidebar_label: Staging Manifest Playbook
 description: Checklist for enabling the Parliament-ratified chunker profile on staging Torii deployments.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
+:::შენიშვნა კანონიკური წყარო
 :::
 
-## Overview
+## მიმოხილვა
 
-This playbook walks through enabling the Parliament-ratified chunker profile on a staging Torii deployment before promoting the change to production. It assumes the SoraFS governance charter has been ratified and the canonical fixtures are available in the repository.
+ეს სახელმძღვანელო გადის პარლამენტის მიერ რატიფიცირებული ჩუნკერის პროფილის ჩართვას ინსცენირების Torii განლაგების თაობაზე, სანამ დაიწყება ცვლილება წარმოებაში. იგი ვარაუდობს, რომ SoraFS მმართველობის წესდება რატიფიცირებულია და კანონიკური მოწყობილობები ხელმისაწვდომია საცავში.
 
-## 1. Prerequisites
+## 1. წინაპირობები
 
-1. Sync the canonical fixtures and signatures:
+1. სინქრონიზაცია კანონიკური მოწყობილობებისა და ხელმოწერების შესახებ:
 
    ```bash
    cargo xtask sorafs-fetch-fixture \
@@ -28,8 +30,8 @@ This playbook walks through enabling the Parliament-ratified chunker profile on 
    ci/check_sorafs_fixtures.sh
    ```
 
-2. Prepare the admission envelope directory that Torii will read at startup (example path): `/var/lib/iroha/admission/sorafs`.
-3. Ensure the Torii config enables the discovery cache and admission enforcement:
+2. მოამზადეთ მისაღები კონვერტის დირექტორია, რომელსაც Torii წაიკითხავს გაშვებისას (მაგალითი გზა): `/var/lib/iroha/admission/sorafs`.
+3. დარწმუნდით, რომ Torii კონფიგურაცია საშუალებას იძლევა აღმოჩენის ქეში და დაშვების აღსრულება:
 
    ```toml
    [torii.sorafs.discovery]
@@ -47,43 +49,43 @@ This playbook walks through enabling the Parliament-ratified chunker profile on 
    enforce_capabilities = true
    ```
 
-## 2. Publish Admission Envelopes
+## 2. გამოაქვეყნეთ მისაღები კონვერტები
 
-1. Copy the approved provider admission envelopes into the directory referenced by `torii.sorafs.discovery.admission.envelopes_dir`:
+1. დააკოპირეთ დამტკიცებული პროვაიდერის დაშვების კონვერტები დირექტორიაში, რომელიც მითითებულია `torii.sorafs.discovery.admission.envelopes_dir`-ის მიერ:
 
    ```bash
    install -m 0644 fixtures/sorafs_manifest/provider_admission/*.json \
      /var/lib/iroha/admission/sorafs/
    ```
 
-2. Restart Torii (or send a SIGHUP if you wrapped the loader with on-the-fly reload).
-3. Tail the logs for admission messages:
+2. გადატვირთეთ Torii (ან გაგზავნეთ SIGHUP, თუ ჩამტვირთავი შეფუთეთ ფრენის დროს გადატვირთვით).
+3. ჩაწერეთ ჟურნალები მისაღები შეტყობინებებისთვის:
 
    ```bash
    torii | grep "loaded provider admission envelope"
    ```
 
-## 3. Validate Discovery Propagation
+## 3. აღმოჩენის გავრცელების დადასტურება
 
-1. Post the signed provider advert payload (Norito bytes) produced by your
-   provider pipeline:
+1. განათავსეთ ხელმოწერილი პროვაიდერის სარეკლამო დატვირთვა (Norito ბაიტი) მიერ წარმოებული თქვენი
+   პროვაიდერის მილსადენი:
 
    ```bash
    curl -sS -X POST --data-binary @provider_advert.to \
      http://staging-torii:8080/v1/sorafs/provider/advert
    ```
 
-2. Query the discovery endpoint and confirm the advert appears with canonical aliases:
+2. გამოიკითხეთ აღმოჩენის საბოლოო წერტილი და დაადასტურეთ, რომ რეკლამა გამოჩნდება კანონიკური მეტსახელებით:
 
    ```bash
    curl -sS http://staging-torii:8080/v1/sorafs/providers | jq .
    ```
 
-   Ensure `profile_aliases` includes `"sorafs.sf1@1.0.0"` as the first entry.
+   დარწმუნდით, რომ `profile_aliases` შეიცავს `"sorafs.sf1@1.0.0"` როგორც პირველ ჩანაწერს.
 
-## 4. Exercise Manifest & Plan Endpoints
+## 4. სავარჯიშო მანიფესტი და დაგეგმეთ საბოლოო წერტილები
 
-1. Fetch the manifest metadata (requires a stream token if admission is enforced):
+1. მიიღეთ მანიფესტის მეტამონაცემები (საჭიროებს ნაკადის ჟეტონს, თუ დაშვება ძალაშია):
 
    ```bash
    sorafs-fetch \
@@ -94,25 +96,25 @@ This playbook walks through enabling the Parliament-ratified chunker profile on 
      --json-out=reports/staging_manifest.json
    ```
 
-2. Inspect the JSON output and verify:
-   - `chunk_profile_handle` is `sorafs.sf1@1.0.0`.
-   - `manifest_digest_hex` matches the determinism report.
-   - `chunk_digests_blake3` align with the regenerated fixtures.
+2. შეამოწმეთ JSON გამომავალი და გადაამოწმეთ:
+   - `chunk_profile_handle` არის `sorafs.sf1@1.0.0`.
+   - `manifest_digest_hex` ემთხვევა დეტერმინიზმის ანგარიშს.
+   - `chunk_digests_blake3` შეესაბამება რეგენერაციულ მოწყობილობებს.
 
-## 5. Telemetry Checks
+## 5. ტელემეტრიული ჩეკები
 
-- Confirm Prometheus exposes the new profile metrics:
+- დაადასტურეთ, რომ Prometheus აჩვენებს ახალი პროფილის მეტრიკას:
 
   ```bash
   curl -sS http://staging-torii:8080/metrics | grep torii_sorafs_chunk_range_requests_total
   ```
 
-- Dashboards should show the staging provider under the expected alias and keep brownout counters at zero while the profile is active.
+- საინფორმაციო დაფებმა უნდა აჩვენოს დადგმის პროვაიდერი მოსალოდნელი მეტსახელის ქვეშ და შეინახოს ბრუნაუტის მრიცხველები ნულზე, სანამ პროფილი აქტიურია.
 
-## 6. Rollout Readiness
+## 6. გაშვების მზადყოფნა
 
-1. Capture a short report with the URLs, manifest ID, and telemetry snapshot.
-2. Share the report in the Nexus rollout channel alongside the planned production activation window.
-3. Proceed to the production checklist (Section 4 in `chunker_registry_rollout_checklist.md`) once stakeholders sign off.
+1. გადაიღეთ მოკლე ანგარიში URL-ებით, მანიფესტის ID-ით და ტელემეტრიის სნეპშოტით.
+2. გააზიარეთ ანგარიში Nexus გაშვების არხში დაგეგმილი წარმოების აქტივაციის ფანჯარასთან ერთად.
+3. გადადით წარმოების საკონტროლო სიაზე (ნაწილი 4 `chunker_registry_rollout_checklist.md`-ში), როგორც კი დაინტერესებული მხარეები მოაწერენ ხელს.
 
-Keeping this playbook updated ensures every chunker/admission rollout follows the same deterministic steps across staging and production.
+ამ სათამაშო წიგნის განახლების უზრუნველყოფა უზრუნველყოფს, რომ ყოველი ბლოკი/დაშვება მიჰყვება იგივე განმსაზღვრელ ნაბიჯებს დადგმასა და წარმოებაში.

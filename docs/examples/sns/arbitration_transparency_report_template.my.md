@@ -7,72 +7,73 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 305a3f3b253a013825d4dd798d2282e111913ec777fe0fbf5b02a92c7172b92a
 source_last_modified: "2025-12-29T18:16:35.076964+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
-# SNS Arbitration Transparency Report — <Month YYYY>
+# SNS အနုညာတစီရင်ဆုံးဖြတ်ခြင်းဆိုင်ရာ ပွင့်လင်းမြင်သာမှုအစီရင်ခံစာ — <လ YYYY>
 
-- **Suffix:** `<.sora / .nexus / .dao>`
-- **Reporting window:** `<ISO start>` → `<ISO end>`
-- **Prepared by:** `<Council liaison>`
-- **Source artefacts:** `cases.ndjson` SHA256 `<hash>`, dashboard export `<filename>.json`
+- **နောက်ဆက်တွဲ-** `<.sora / .nexus / .dao>`
+- **အစီရင်ခံခြင်းဝင်းဒိုး-** `<ISO start>` → `<ISO end>`
+- **ပြင်ဆင်သည်-** `<Council liaison>`
+- **ရင်းမြစ် အထောက်အထားများ-** `cases.ndjson` SHA256 `<hash>`၊ ဒက်ရှ်ဘုတ် တင်ပို့မှု `<filename>.json`
 
-## 1. Executive Summary
+## 1. အမှုဆောင်အကျဉ်းချုပ်
 
-- Total new cases: `<count>`
-- Cases closed this period: `<count>`
-- SLA compliance: `<ack %>` acknowledge / `<resolution %>` decision
-- Guardian overrides issued: `<count>`
-- Transfers/refunds executed: `<count>`
+- စုစုပေါင်းလူနာအသစ်- `<count>`
+- ဤကာလအတွင်း အမှုပိတ်မှု- `<count>`
+- SLA လိုက်နာမှု- `<ack %>` အသိအမှတ်ပြု / `<resolution %>` ဆုံးဖြတ်ချက်
+- ထုတ်ပြန်ထားသော Guardian overrides- `<count>`
+- လွှဲပြောင်းမှုများ/ပြန်အမ်းငွေ- `<count>`
 
 ## 2. Case Mix
 
-| Dispute type | New cases | Closed cases | Median resolution (days) |
-|--------------|-----------|--------------|--------------------------|
-| Ownership | 0 | 0 | 0 |
-| Policy violation | 0 | 0 | 0 |
-| Abuse | 0 | 0 | 0 |
-| Billing | 0 | 0 | 0 |
-| Other | 0 | 0 | 0 |
+| အငြင်းပွားမှုအမျိုးအစား | အမှုတွဲအသစ်များ | ပိတ်သိမ်းမှုတွေ | Median resolution (ရက်) |
+|-----------------|-----------|-----------------|--------------------------------|
+| ပိုင်ဆိုင်မှု | 0 | 0 | 0 |
+| မူဝါဒချိုးဖောက်မှု | 0 | 0 | 0 |
+| အလွဲသုံးစားလုပ် | 0 | 0 | 0 |
+| ငွေတောင်းခံခြင်း | 0 | 0 | 0 |
+| အခြား | 0 | 0 | 0 |
 
-## 3. SLA Performance
+## 3. SLA စွမ်းဆောင်ရည်
 
-| Priority | Acknowledge SLA | Achieved | Resolution SLA | Achieved | Breaches |
-|----------|-----------------|----------|----------------|----------|----------|
-| Urgent | ≤ 2 h | 0% | ≤ 72 h | 0% | 0 |
-| High | ≤ 8 h | 0% | ≤ 10 d | 0% | 0 |
-| Standard | ≤ 24 h | 0% | ≤ 21 d | 0% | 0 |
-| Info | ≤ 3 d | 0% | ≤ 30 d | 0% | 0 |
+| ဦးစားပေး | SLA | အသိအမှတ်ပြုပါ။ အောင်မြင်သည် | ဆုံးဖြတ်ချက် SLA | အောင်မြင်သည် | ချိုးဖောက်မှု |
+|----------|-----------------|----------------|----------------|----------------|----------------|
+| အရေးတကြီး | ≤ 2h | 0% | ≤ 72h | 0% | 0 |
+| မြင့် | ≤ 8h | 0% | ≤ 10d | 0% | 0 |
+| စံ | ≤ 24h | 0% | ≤ 21d | 0% | 0 |
+| အချက်အလက် | ≤ 3d | 0% | ≤ 30d | 0% | 0 |
 
-Describe root causes for any breaches and link to remediation tickets.
+ချိုးဖောက်မှုများအတွက် အရင်းခံအကြောင်းတရားများကို ဖော်ပြပြီး ပြန်လည်ပြင်ဆင်ခြင်းလက်မှတ်များနှင့် ချိတ်ဆက်ပါ။
 
 ## 4. Case Register
 
-| Case ID | Selector | Priority | Status | Outcome | Notes |
-|---------|----------|----------|--------|---------|-------|
-| SNS-YYYY-NNNNN | `label.suffix` | Standard | Closed | Upheld | `<summary>` |
+| Case ID | ရွေးချယ်သူ | ဦးစားပေး | အဆင့်အတန်း | ရလဒ် | မှတ်စုများ |
+|---------|----------|----------|--------|--------|---------|
+| SNS-YYYY-NNNNNN | `label.suffix` | စံ | ပိတ် | လက်ကိုင် | `<summary>` |
 
-Provide one-line notes referencing anonymised facts or public vote links. Seal
-where required and mention redactions applied.
+အမည်မဖော်လိုသော အချက်အလက် သို့မဟုတ် အများသူငှာ မဲပေးလင့်ခ်များကို ရည်ညွှန်းသည့် တစ်ကြောင်းတည်းသော မှတ်စုများ ပေးပါ။ တံဆိပ်
+လိုအပ်သည့်နေရာတွင် အသုံးချပြီး ပြန်လည်တုံ့ပြန်မှုများကို ဖော်ပြပါ။
 
-## 5. Actions & Remedies
+## 5. လုပ်ဆောင်ချက်များနှင့် ကုထုံးများ
 
-- **Freezes / releases:** `<counts + case ids>`
-- **Transfers:** `<counts + assets moved>`
-- **Billing adjustments:** `<credits/debits>`
-- **Policy follow-ups:** `<tickets or RFCs opened>`
+- ** အေးခဲခြင်း/ ထုတ်ဝေမှုများ-** `<counts + case ids>`
+- **လွှဲပြောင်းမှုများ-** `<counts + assets moved>`
+- **ငွေပေးချေမှု ချိန်ညှိချက်များ-** `<credits/debits>`
+- **မူဝါဒနောက်ဆက်တွဲများ-** `<tickets or RFCs opened>`
 
-## 6. Appeals & Guardian Overrides
+## 6. အယူခံများနှင့် အုပ်ထိန်းသူ အစားထိုးမှုများ
 
-Summarise any appeals escalated to the guardian board, including timestamps and
-decisions (approve/deny). Link to `sns governance appeal` records or council
-votes.
+အချိန်တံဆိပ်ခေါင်းများ အပါအဝင် အုပ်ထိန်းရေးအဖွဲ့ထံ တိုးမြှင့်ထားသော အယူခံဝင်မှုမှန်သမျှကို အကျဉ်းချုပ်ဖော်ပြပါ။
+ဆုံးဖြတ်ချက်များ (အတည်ပြု/ငြင်းဆို)။ `sns governance appeal` မှတ်တမ်းများ သို့မဟုတ် ကောင်စီသို့ ချိတ်ဆက်ပါ။
+မဲ
 
-## 7. Outstanding Items
+## 7. ထူးချွန်သောအရာများ
 
-- `<Action item>` — Owner `<name>`, ETA `<date>`
-- `<Action item>` — Owner `<name>`, ETA `<date>`
+- `<Action item>` — ပိုင်ရှင် `<name>`၊ ETA `<date>`
+- `<Action item>` — ပိုင်ရှင် `<name>`၊ ETA `<date>`
 
-Attach NDJSON, Grafana exports, and CLI logs referenced in this report.
+ဤအစီရင်ခံစာတွင် ကိုးကားထားသော NDJSON၊ Grafana နှင့် CLI မှတ်တမ်းများကို ပူးတွဲပါ။

@@ -4,46 +4,46 @@ direction: rtl
 source: docs/portal/docs/devportal/preview-feedback/w2/plan.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: preview-feedback-w2-plan
-title: Plano de intake comunitario W2
-sidebar_label: Plano W2
-description: Intake, aprovacoes e checklist de evidencia para a coorte de preview comunitaria.
+ID: پیش نظارہ-فیڈ بیک-ڈبلیو 2-پلان
+عنوان: W2 کمیونٹی انٹیک پلان
+سائڈبار_لیبل: ڈبلیو 2 منصوبہ
+تفصیل: کمیونٹی کے پیش نظارہ کوہورٹ کے لئے انٹیک ، منظوری اور شواہد چیک لسٹ۔
 ---
 
-| Item | Detalhes |
+| آئٹم | تفصیلات |
 | --- | --- |
-| Onda | W2 - Reviewers comunitarios |
-| Janela alvo | Q3 2025 semana 1 (tentativa) |
-| Tag de artefato (planejado) | `preview-2025-06-15` |
-| Issue do tracker | `DOCS-SORA-Preview-W2` |
+| لہر | ڈبلیو 2 - کمیونٹی جائزہ لینے والے |
+| ہدف ونڈو | Q3 2025 ہفتہ 1 (عارضی) |
+| نمونہ ٹیگ (منصوبہ بند) | `preview-2025-06-15` |
+| ٹریکر کا مسئلہ | `DOCS-SORA-Preview-W2` |
 
-## Objetivos
+## مقاصد
 
-1. Definir criterios de intake comunitario e workflow de vetting.
-2. Obter aprovacao de governanca para o roster proposto e o addendum de uso aceitavel.
-3. Atualizar o artefato de preview verificado por checksum e o bundle de telemetria para a nova janela.
-4. Preparar o proxy Try it e os dashboards antes do envio dos convites.
+1. کمیونٹی کی انٹیک کے معیار اور جانچ پڑتال کے فلو کی وضاحت کریں۔
+2. مجوزہ روسٹر کے لئے گورننس کی منظوری حاصل کریں اور قابل قبول استعمال کے اضافے۔
+3. چیکم کی تصدیق شدہ پیش نظارہ نمونہ اور ٹیلی میٹری بنڈل کو نئی ونڈو میں اپ ڈیٹ کریں۔
+4. دعوت نامے بھیجنے سے پہلے اس پر پراکسی اور ڈیش بورڈز کی کوشش کریں۔
 
-## Desdobramento de tarefas
+## ٹاسک تعیناتی
 
-| ID | Tarefa | Responsavel | Prazo | Status | Notas |
+| ID | ٹاسک | ذمہ دار | آخری تاریخ | حیثیت | نوٹ |
 | --- | --- | --- | --- | --- | --- |
-| W2-P1 | Redigir criterios de intake comunitario (eligibilidade, max slots, requisitos de CoC) e circular para governanca | Docs/DevRel lead | 2025-05-15 | Concluido | A politica de intake foi mergeada em `DOCS-SORA-Preview-W2` e endossada na reuniao do conselho 2025-05-20. |
-| W2-P2 | Atualizar template de solicitacao com perguntas comunitarias (motivacao, disponibilidade, necessidades de localizacao) | Docs-core-01 | 2025-05-18 | Concluido | `docs/examples/docs_preview_request_template.md` agora inclui a secao Community, referenciada no formulario de intake. |
-| W2-P3 | Garantir aprovacao de governanca para o plano de intake (voto em reuniao + atas registradas) | Governance liaison | 2025-05-22 | Concluido | Voto aprovado por unanimidade em 2025-05-20; atas e roll call linkados em `DOCS-SORA-Preview-W2`. |
-| W2-P4 | Programar staging do proxy Try it + captura de telemetria para a janela W2 (`preview-2025-06-15`) | Docs/DevRel + Ops | 2025-06-05 | Concluido | Ticket de change `OPS-TRYIT-188` aprovado e executado em 2025-06-09 02:00-04:00 UTC; screenshots Grafana arquivados com o ticket. |
-| W2-P5 | Construir/verificar novo tag de artefato de preview (`preview-2025-06-15`) e arquivar descriptor/checksum/probe logs | Portal TL | 2025-06-07 | Concluido | `scripts/preview_wave_preflight.sh --tag preview-2025-06-15 ...` rodou em 2025-06-10; outputs armazenados em `artifacts/docs_preview/W2/preview-2025-06-15/`. |
-| W2-P6 | Montar roster de convites comunitarios (<=25 reviewers, lotes escalonados) com contatos aprovados por governanca | Community manager | 2025-06-10 | Concluido | Primeiro cohorte de 8 reviewers comunitarios aprovado; IDs de requisicao `DOCS-SORA-Preview-REQ-C01...C08` registrados no tracker. |
+| W2-P1 | کمیونٹی انٹیک کے معیار (اہلیت ، زیادہ سے زیادہ سلاٹ ، سی او سی کی ضروریات) لکھیں اور گورننس میں گردش کریں دستاویزات/ڈیوریل لیڈ | 2025-05-15 | مکمل | انٹیک پالیسی کو `DOCS-SORA-Preview-W2` میں ضم کردیا گیا تھا اور 2025-05-20 بورڈ کے اجلاس میں اس کی توثیق کی گئی تھی۔ |
+| W2-P2 | کمیونٹی کے سوالات (حوصلہ افزائی ، دستیابی ، مقام کی ضروریات) کے ساتھ درخواست کے سانچے کو اپ ڈیٹ کریں DOCS-CORE-01 | 2025-05-18 | مکمل | `docs/examples/docs_preview_request_template.md` میں اب کمیونٹی سیکشن شامل ہے ، جس کا انٹیک فارم میں حوالہ دیا گیا ہے۔ |
+| W2-P3 | انٹیک پلان کے لئے گورننس کی منظوری کو یقینی بنائیں (میٹنگ میں ووٹ دیں + ریکارڈ شدہ منٹ) | گورننس رابطہ | 2025-05-22 | مکمل | ووٹ 2025-05-20 کو متفقہ طور پر منظور ہوا۔ منٹ اور رول کال `DOCS-SORA-Preview-W2` میں لنکڈ۔ |
+| W2-P4 | شیڈول کی کوشش کریں کہ W2 ونڈو (`preview-2025-06-15`) کے لئے پراکسی اسٹیجنگ + ٹیلی میٹری کیپچر کی کوشش کریں | دستاویزات/ڈیوریل + اوپس | 2025-06-05 | مکمل | ٹکٹ `OPS-TRYIT-188` کو 2025-06-09 02: 00-04: 00 UTC پر منظور شدہ اور پھانسی دے دی گئی۔ اسکرین شاٹس Grafana ٹکٹ کے ساتھ دائر کیا گیا۔ |
+| W2-P5 | نیا پیش نظارہ نمونہ ٹیگ (`preview-2025-06-15`) اور آرکائیو ڈسکرپٹر/چیکم/تحقیقات لاگز کی تعمیر/چیک کریں | TL پورٹل | 2025-06-07 | مکمل | `scripts/preview_wave_preflight.sh --tag preview-2025-06-15 ...` 2025-06-10 پر چلا گیا۔ `artifacts/docs_preview/W2/preview-2025-06-15/` میں محفوظ کردہ آؤٹ پٹ۔ |
+| W2-P6 | گورننس کے ذریعہ منظور شدہ رابطوں کے ساتھ کمیونٹی کے دعوت ناموں (<= 25 جائزہ نگاروں ، حیرت زدہ بیچوں) کی ایک فہرست بنائیں | کمیونٹی مینیجر | 2025-06-10 | مکمل | 8 کمیونٹی جائزہ لینے والوں کا پہلا گروپ منظور کیا گیا۔ ٹریکر میں رجسٹرڈ IDS `DOCS-SORA-Preview-REQ-C01...C08` کی درخواست کریں۔ |
 
-## Checklist de evidencia
+## ثبوت چیک لسٹ- [x] گورننس کی منظوری کا ریکارڈ (میٹنگ نوٹ + ووٹنگ لنک) `DOCS-SORA-Preview-W2` سے منسلک ہے۔
+- [x] تازہ ترین درخواست ٹیمپلیٹ `docs/examples/` کے تحت کیا گیا ہے۔
+۔
+۔
+۔
 
-- [x] Registro de aprovacao de governanca (notas de reuniao + link de voto) anexado a `DOCS-SORA-Preview-W2`.
-- [x] Template de solicitacao atualizado commited sob `docs/examples/`.
-- [x] Descriptor `preview-2025-06-15`, checksum log, probe output, link report e transcript do proxy Try it armazenados em `artifacts/docs_preview/W2/`.
-- [x] Screenshots Grafana (`docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals`) capturados para a janela preflight W2.
-- [x] Tabela de roster de convites com IDs de reviewers, tickets de solicitacao e timestamps de aprovacao preenchidos antes do envio (ver secao W2 no tracker).
-
-Mantenha este plano atualizado; o tracker o referencia para que o roadmap DOCS-SORA veja exatamente o que falta antes de enviar convites W2.
+اس منصوبے کو اپ ڈیٹ رکھیں ؛ ٹریکر اس کا حوالہ دیتا ہے لہذا DOCS-SORA روڈ میپ W2 دعوت ناموں کو بھیجنے سے پہلے بالکل وہی دیکھ سکتا ہے جو غائب ہے۔

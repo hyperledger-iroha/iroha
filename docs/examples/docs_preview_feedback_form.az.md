@@ -7,62 +7,63 @@ generator: scripts/sync_docs_i18n.py
 source_hash: afb7e51ddc0b7e819f2cbf3888aadf907b0e0010c676cb44af648f9f4818f8f5
 source_last_modified: "2025-12-29T18:16:35.071058+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Docs preview feedback form (W1 partner wave)
+# Sənədə baxış rəy forması (W1 partnyor dalğası)
 
-Use this template when collecting feedback from W1 reviewers. Duplicate it per
-partner, fill the metadata, and store the completed copy under
+W1 rəyçilərindən rəy toplayan zaman bu şablondan istifadə edin. Onu dublikat edin
+tərəfdaş, metadatanı doldurun və tamamlanmış nüsxəni altında saxlayın
 `artifacts/docs_preview/W1/preview-2025-04-12/feedback/<partner-id>/`.
 
-## Reviewer metadata
+## Rəyçi metadatası
 
-- **Partner ID:** `partner-w1-XX`
-- **Request ticket:** `DOCS-SORA-Preview-REQ-PXX`
-- **Invite sent (UTC):** `YYYY-MM-DD hh:mm`
-- **Acknowledged checksum (UTC):** `YYYY-MM-DD hh:mm`
-- **Primary focus areas:** (for example _SoraFS orchestrator docs_, _Torii ISO flows_)
+- **Tərəfdaş ID-si:** `partner-w1-XX`
+- **Bilet tələb edin:** `DOCS-SORA-Preview-REQ-PXX`
+- **Dəvət göndərildi (UTC):** `YYYY-MM-DD hh:mm`
+- **Təsdiq edilmiş yoxlama məbləği (UTC):** `YYYY-MM-DD hh:mm`
+- **Əsas diqqət sahələri:** (məsələn, _SoraFS orkestrator sənədləri_, _Torii ISO axınları_)
 
-## Telemetry & artefact confirmations
+## Telemetriya və artefakt təsdiqləri
 
-| Checklist item | Result | Evidence |
+| Yoxlama siyahısı elementi | Nəticə | Sübut |
 | --- | --- | --- |
-| Checksum verification | ✅ / ⚠️ | Path to log (e.g., `build/checksums.sha256`) |
-| Try it proxy smoke test | ✅ / ⚠️ | `npm run manage:tryit-proxy …` transcript snippet |
-| Grafana dashboard review | ✅ / ⚠️ | Screenshot path(s) |
-| Portal probe report review | ✅ / ⚠️ | `artifacts/docs_preview/.../preflight-summary.json` |
+| Yoxlama məbləğinin yoxlanılması | ✅ / ⚠️ | Giriş yolu (məsələn, `build/checksums.sha256`) |
+| Proksi duman testini sınayın | ✅ / ⚠️ | `npm run manage:tryit-proxy …` transkript parçası |
+| Grafana tablosuna baxış | ✅ / ⚠️ | Ekran görüntüsü yol(ları) |
+| Portal araşdırma hesabatının nəzərdən keçirilməsi | ✅ / ⚠️ | `artifacts/docs_preview/.../preflight-summary.json` |
 
-Add rows for any additional SLOs a reviewer inspects.
+Rəyçinin yoxladığı hər hansı əlavə SLO üçün sətirlər əlavə edin.
 
-## Feedback log
+## Əlaqə qeydi
 
-| Area | Severity (info/minor/major/blocker) | Description | Suggested fix or question | Tracker issue |
+| Ərazi | Ciddilik (info/minor/major/blocker) | Təsvir | Təklif edilən düzəliş və ya sual | İzləyici problemi |
 | --- | --- | --- | --- | --- |
 | | | | | |
 
-Reference the GitHub issue or internal ticket in the last column so the preview
-tracker can tie remediation items back to this form.
+Son sütunda GitHub məsələsinə və ya daxili biletə istinad edin
+izləyici remediasiya elementlərini yenidən bu forma bağlaya bilər.
 
-## Survey summary
+## Sorğunun xülasəsi
 
-1. **How confident are you in the checksum guidance and invite process?** (1–5)
-2. **Which docs were the most/least helpful?** (short answer)
-3. **Were there any blockers accessing the Try it proxy or telemetry dashboards?**
-4. **Is additional localisation or accessibility content required?**
-5. **Any other comments before GA?**
+1. **Yoxlama məbləği təlimatı və dəvət prosesinə nə dərəcədə əminsiniz?** (1–5)
+2. **Hansı sənədlər ən çox/ən az faydalı oldu?** (qısa cavab)
+3. **Try it proksi və ya telemetriya panellərinə daxil olan blokerlər var idi?**
+4. **Əlavə lokalizasiya və ya əlçatanlıq məzmunu tələb olunurmu?**
+5. **GA-dan əvvəl hər hansı digər şərh varmı?**
 
-Capture short answers and attach raw survey exports if you use an external form.
+Qısa cavabları çəkin və xarici formadan istifadə edirsinizsə, xam sorğu ixracını əlavə edin.
 
-## Knowledge check
+## Bilik yoxlanışı
 
-- Score: `__/10`
-- Incorrect questions (if any): `[#1, #4, …]`
-- Follow-up actions (if score < 9/10): remediation call scheduled? y/n
+- Qiymət: `__/10`
+- Yanlış suallar (əgər varsa): `[#1, #4, …]`
+- Təqib tədbirləri (əgər xal < 9/10 olarsa): remediasiya çağırışı planlaşdırılıb? y/n
 
-## Sign-off
+## Çıxış
 
-- Reviewer name & timestamp:
-- Docs/DevRel reviewer & timestamp:
+- Rəyçi adı və vaxt möhürü:
+- Sənədlər/DevRel rəyçisi və vaxt damğası:
 
-Store the signed copy with the associated artefacts so auditors can replay the
-wave without additional context.
+İmzalanmış nüsxəni əlaqəli artefaktlarla birlikdə saxlayın ki, auditorlar onu təkrarlaya bilsinlər
+əlavə kontekst olmadan dalğa.

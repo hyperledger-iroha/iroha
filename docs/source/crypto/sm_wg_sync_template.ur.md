@@ -6,40 +6,41 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: c5fe52a907606a67a09e0ff229adb94f91dda73d809d8a8344166862dc62def9
 source_last_modified: "2026-01-03T18:07:57.090255+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-//! Template for recording SM rollout decisions during Crypto WG syncs.
+//! کریپٹو ڈبلیو جی مطابقت پذیری کے دوران ایس ایم رول آؤٹ فیصلوں کو ریکارڈ کرنے کے لئے ٹیمپلیٹ۔
 
-# SM Rollout – WG Sync Notes (Template)
+# ایس ایم رول آؤٹ - ڈبلیو جی مطابقت پذیری نوٹ (ٹیمپلیٹ)
 
-- **Date:** 2025-__-__
-- **Participants:** Crypto WG core, Release Eng, Security Review, SDK leads
-- **Facilitator:** ___________________
+-** تاریخ: ** 2025 -__-__
+- ** شرکاء: ** کریپٹو ڈبلیو جی کور ، ریلیز انجیر ، سیکیورٹی جائزہ ، ایس ڈی کے لیڈز
+- ** سہولت کار: ** ___________________
 
-## Agenda
-1. Lock refresh approval (`sm_lock_refresh_plan.md`)
-2. Deterministic policy & config knobs (SM-1/SM-3 tasks)
-3. Compliance brief status (SM-6a complete) & operator checklist updates (SM-6b)
-4. Dependency audit reviewers for `sm2`, `sm3`, `sm4`, `rfc6979`
+## ایجنڈا
+1. لاک ریفریش منظوری (`sm_lock_refresh_plan.md`)
+2. تعصب کی پالیسی اور کنفیگ نوبس (SM-1/SM-3 کام)
+3. تعمیل مختصر حیثیت (SM-6A مکمل) اور آپریٹر چیک لسٹ اپڈیٹس (SM-6B)
+4. انحصار آڈٹ جائزہ لینے والوں کے لئے `sm2` ، `sm3` ، `sm4` ، `rfc6979`
 
-## Decisions
-- [ ] Lock refresh approved? Details:
-- [ ] Deterministic policy affirmed? Notes:
-- [ ] Compliance brief owner + due date:
-- [ ] Audit reviewers assigned:
+## فیصلے
+- [] لاک ریفریش منظور شدہ؟ تفصیلات:
+- [] عزم پالیسی کی تصدیق کی گئی؟ نوٹ:
+- [] تعمیل مختصر مالک + مقررہ تاریخ:
+- [] آڈٹ جائزہ لینے والوں کو تفویض کیا گیا:
 
-## Action Items
-| Item | Owner | Due | Status |
-|------|-------|-----|--------|
-| Prepare Cargo.lock PR after approval | Release Eng | ████ | ☐ |
-| Verify Annex D OpenSSL checks | Crypto WG | ████ | ☐ |
-| Track compliance brief revisions & operator checklist addenda | Docs/Legal | ████ | ☐ |
+## ایکشن آئٹمز
+| آئٹم | مالک | وجہ | حیثیت |
+| ------ | ------- | ----- | -------- |
+| منظوری کے بعد cargo.lock PR تیار کریں | eng | ████ | ☐ |
+| انیکس ڈی اوپنس ایس ایل چیک کی تصدیق کریں کریپٹو ڈبلیو جی | ████ | ☐ |
+| ٹریک کی تعمیل مختصر نظرثانی اور آپریٹر چیک لسٹ ایڈینڈا | دستاویزات/قانونی | ████ | ☐ |
 
-## Notes / Risks
-- _______________________________
-- _______________________________
+## نوٹ / خطرات
+- ___________________________________
+- ___________________________________
 
-## Follow-up
-- Next review date:
-- Reporting back channel:
+## فالو اپ
+- اگلی جائزہ تاریخ:
+- واپس چینل کی اطلاع دہندگی:

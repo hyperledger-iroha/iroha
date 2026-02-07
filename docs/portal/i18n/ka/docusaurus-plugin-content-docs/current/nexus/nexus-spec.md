@@ -7,283 +7,279 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Sora Nexus technical specification
 description: Full mirror of `docs/source/nexus.md`, covering the architecture and design constraints for the Iroha 3 (Sora Nexus) ledger.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
-This page mirrors `docs/source/nexus.md`. Keep both copies aligned until the translation backlog lands in the portal.
+:::შენიშვნა კანონიკური წყარო
+ეს გვერდი ასახავს `docs/source/nexus.md`-ს. შეინახეთ ორივე ასლი გასწორებული მანამ, სანამ თარგმანის ჩანაწერი არ მოხვდება პორტალზე.
 :::
 
-#! Iroha 3 – Sora Nexus Ledger: Technical Design Specification
+#! Iroha 3 – Sora Nexus Ledger: ტექნიკური დიზაინის სპეციფიკაცია
 
-This document proposes the Sora Nexus Ledger architecture for Iroha 3, evolving Iroha 2 toward a single global, logically unified ledger organized around Data Spaces (DS). Data Spaces provide strong privacy domains (“private data spaces”) and open participation (“public data spaces”). The design preserves composability across the global ledger while ensuring strict isolation and confidentiality for private‑DS data, and introduces data‑availability scaling via erasure coding across Kura (block storage) and WSV (World State View).
+ეს დოკუმენტი გვთავაზობს Sora Nexus Ledger-ის არქიტექტურას Iroha 3-ისთვის, რომელიც ვითარდება Iroha 2 ერთი გლობალური, ლოგიკურად ერთიანი წიგნისკენ, რომელიც ორგანიზებულია მონაცემთა სივრცის (DS) გარშემო. მონაცემთა სივრცეები უზრუნველყოფს ძლიერ კონფიდენციალურობის დომენებს („პირადი მონაცემთა სივრცეები“) და ღია მონაწილეობას („საჯარო მონაცემთა სივრცეები“). დიზაინი ინარჩუნებს კომპოზიციურობას გლობალურ წიგნში, ხოლო უზრუნველყოფს კერძო DS მონაცემების მკაცრ იზოლაციას და კონფიდენციალურობას და შემოაქვს მონაცემთა ხელმისაწვდომობის სკალირებას წაშლის კოდირების მეშვეობით Kura (ბლოკის საცავი) და WSV (World State View).
 
-The same repository builds both Iroha 2 (self-hosted networks) and Iroha 3 (SORA Nexus). Execution is powered by
-the shared Iroha Virtual Machine (IVM) and Kotodama toolchain, so contracts and bytecode artifacts remain
-portable across self-hosted deployments and the Nexus global ledger.
+ერთი და იგივე საცავი აშენებს როგორც Iroha 2 (თვით განთავსებულ ქსელებს) და Iroha 3 (SORA Nexus). შესრულება იკვებება
+საერთო Iroha ვირტუალური მანქანა (IVM) და Kotodama ხელსაწყოების ჯაჭვი, ასე რომ კონტრაქტები და ბაიტეკოდის არტეფაქტები რჩება
+პორტატული თვითმმართველობის განლაგებით და Nexus გლობალური წიგნით.
 
-Goals
-- One global logical ledger composed from many cooperating validators and Data Spaces.
-- Private Data Spaces for permissioned operation (e.g., CBDCs), with data never leaving the private DS.
-- Public Data Spaces with open participation, Ethereum-like permissionless access.
-- Composable smart contracts across Data Spaces, subject to explicit permissions for access to private‑DS assets.
-- Performance isolation so public activity cannot degrade private‑DS internal transactions.
-- Data availability at scale: erasure‑coded Kura and WSV to support effectively unbounded data while keeping private‑DS data private.
+მიზნები
+- ერთი გლობალური ლოგიკური წიგნი, რომელიც შედგება მრავალი თანამშრომლობის ვალიდატორებისა და მონაცემთა სივრცისგან.
+- პირადი მონაცემების სივრცეები ნებადართული ოპერაციებისთვის (მაგ. CBDC), სადაც მონაცემები არასოდეს ტოვებს კერძო DS-ს.
+- საჯარო მონაცემთა სივრცეები ღია მონაწილეობით, Ethereum-ის მსგავსი უნებართვო წვდომით.
+- კომპოზირებადი გონიერი კონტრაქტები მონაცემთა სივრცეში, ექვემდებარება მკაფიო ნებართვებს კერძო DS აქტივებზე წვდომისთვის.
+- შესრულების იზოლაცია ისე, რომ საჯარო აქტივობამ ვერ შეამციროს კერძო DS შიდა ტრანზაქციები.
+- მონაცემთა ხელმისაწვდომობა მასშტაბით: წაშლის კოდირებული Kura და WSV ეფექტური შეუზღუდავი მონაცემების მხარდასაჭერად, ხოლო პირადი DS მონაცემების კონფიდენციალურობის შენარჩუნება.
 
-Non‑Goals (Initial Phase)
-- Defining token economics or validator incentives; scheduling and staking policies are pluggable.
-- Introducing a new ABI version; changes target ABI v1 with explicit syscall and pointer‑ABI extensions per IVM policy.
+არამიზნები (საწყისი ფაზა)
+- სიმბოლური ეკონომიკის ან ვალიდატორის წახალისების განსაზღვრა; დაგეგმვისა და ფსონის პოლიტიკები ჩართულია.
+- ახალი ABI ვერსიის დანერგვა; ცვლის სამიზნე ABI v1-ს აშკარა syscall-ის და მაჩვენებლის-ABI გაფართოებებით IVM პოლიტიკის მიხედვით.
 
-Terminology
-- Nexus Ledger: The global logical ledger formed by composing Data Space (DS) blocks into a single, ordered history and state commitment.
-- Data Space (DS): A bounded execution and storage domain with its own validators, governance, privacy class, DA policy, quotas, and fee policy. Two classes exist: public DS and private DS.
-- Private Data Space: Permissioned validators and access control; transaction data and state never leave the DS. Only commitments/metadata are anchored globally.
-- Public Data Space: Permissionless participation; full data and state are publicly available.
-- Data Space Manifest (DS Manifest): A Norito-encoded manifest that declares DS parameters (validators/QC keys, privacy class, ISI policy, DA parameters, retention, quotas, ZK policy, fees). The manifest hash is anchored on the nexus chain. Unless overridden, DS quorum certificates use ML‑DSA‑87 (Dilithium5‑class) as the default post‑quantum signature scheme.
-- Space Directory: A global on‑chain directory contract that tracks DS manifests, versions, and governance/rotation events for resolvability and audits.
-- DSID: A globally unique identifier for a Data Space. Used to namespace all objects and references.
-- Anchor: A cryptographic commitment from a DS block/header included into the nexus chain to bind DS history into the global ledger.
-- Kura: Iroha block storage. Extended here with erasure‑coded blob storage and commitments.
-- WSV: Iroha World State View. Extended here with versioned, snapshot‑capable, erasure‑coded state segments.
-- IVM: Iroha Virtual Machine for smart contract execution (Kotodama bytecode `.to`).
- - AIR: Algebraic Intermediate Representation. An algebraic view of computation for STARK‑style proofs, describing execution as field‑based traces with transition and boundary constraints.
+ტერმინოლოგია
+- Nexus Ledger: გლობალური ლოგიკური წიგნი, რომელიც ჩამოყალიბდა მონაცემთა სივრცის (DS) ბლოკების შედგენით ერთ, მოწესრიგებულ ისტორიაში და სახელმწიფო ვალდებულებაში.
+- მონაცემთა სივრცე (DS): შეზღუდული შესრულებისა და შენახვის დომენი თავისი ვალიდატორებით, მმართველობით, კონფიდენციალურობის კლასით, DA პოლიტიკით, კვოტებით და საფასურის პოლიტიკით. არსებობს ორი კლასი: საჯარო DS და კერძო DS.
+- პირადი მონაცემების სივრცე: ნებადართული ვალიდატორები და წვდომის კონტროლი; ტრანზაქციის მონაცემები და მდგომარეობა არასოდეს ტოვებს DS-ს. მხოლოდ ვალდებულებები/მეტამონაცემები არის დამაგრებული გლობალურად.
+- საჯარო მონაცემთა სივრცე: უნებართვო მონაწილეობა; სრული მონაცემები და მდგომარეობა საჯაროა.
+- მონაცემთა სივრცის მანიფესტი (DS Manifest): Norito-ში კოდირებული მანიფესტი, რომელიც აცხადებს DS პარამეტრებს (ვალიდიატორები/QC გასაღებები, კონფიდენციალურობის კლასი, ISI პოლიტიკა, DA პარამეტრები, შენახვა, კვოტები, ZK პოლიტიკა, მოსაკრებლები). მანიფესტის ჰეში დამაგრებულია ნექსუს ჯაჭვზე. DS კვორუმის სერთიფიკატები ML-DSA-87-ს (Dilithium5-კლასი) თუ არ გადალახავს, ​​როგორც ნაგულისხმევი პოსტკვანტური ხელმოწერის სქემა.
+- კოსმოსური დირექტორია: გლობალური ჯაჭვური დირექტორია კონტრაქტი, რომელიც აკონტროლებს DS მანიფესტებს, ვერსიებს და მმართველობის/როტაციის მოვლენებს გადაწყვეტადობისა და აუდიტის მიზნით.
+- DSID: გლობალურად უნიკალური იდენტიფიკატორი მონაცემთა სივრცისთვის. გამოიყენება ყველა ობიექტისა და მითითების სახელთა სივრცისთვის.
+- წამყვანი: კრიპტოგრაფიული ვალდებულება DS ბლოკიდან/სათაურიდან, რომელიც შედის nexus-ის ჯაჭვში DS ისტორიის გლობალურ წიგნში დასაკავშირებლად.
+- Kura: Iroha ბლოკის საცავი. აქ გაფართოებულია წაშლის კოდირებული ბლომების საცავებით და ვალდებულებებით.
+- WSV: Iroha მსოფლიო მდგომარეობის ხედი. აქ გაფართოებულია ვერსიით, სნეფშოტით, წაშლის კოდირებული მდგომარეობის სეგმენტებით.
+- IVM: Iroha ვირტუალური მანქანა ჭკვიანი კონტრაქტის შესასრულებლად (Kotodama ბაიტიკოდი `.to`).
+ - ჰაერი: ალგებრული შუალედური წარმოდგენა. გამოთვლის ალგებრული ხედი STARK-ის სტილის მტკიცებულებებისთვის, რომელიც აღწერს შესრულებას, როგორც ველზე დაფუძნებულ კვალს გარდამავალი და საზღვრების შეზღუდვით.
 
-Data Spaces Model
-- Identity: `DataSpaceId (DSID)` identifies a DS and namespaces everything. DS can be instantiated at two granularities:
-  - Domain‑DS: `ds::domain::<domain_name>` — execution and state scoped to a domain.
-  - Asset‑DS: `ds::asset::<domain_name>::<asset_name>` — execution and state scoped to a single asset definition.
-  Both forms coexist; transactions can touch multiple DSIDs atomically.
-- Manifest lifecycle: DS creation, updates (key rotation, policy changes), and retirement are recorded in the Space Directory. Each per‑slot DS artifact references the latest manifest hash.
-- Classes: Public DS (open participation, public DA) and Private DS (permissioned, confidential DA). Hybrid policies are possible via manifest flags.
-- Policies per DS: ISI permissions, DA parameters `(k,m)`, encryption, retention, quotas (min/max tx share per block), ZK/optimistic proof policy, fees.
-- Governance: DS membership and validator rotation defined by the manifest’s governance section (on-chain proposals, multisig, or external governance anchored by nexus transactions and attestations).
+მონაცემთა სივრცის მოდელი
+- იდენტურობა: `DataSpaceId (DSID)` განსაზღვრავს DS-ს და ათავსებს ყველაფერს. DS შეიძლება წარმოიშვას ორი გრანულარობით:
+  - Domain-DS: `ds::domain::<domain_name>` — შესრულება და მდგომარეობა დომენისთვის.
+  - Asset‑DS: `ds::asset::<domain_name>::<asset_name>` — შესრულება და მდგომარეობა, რომელიც ვრცელდება ერთი აქტივის განსაზღვრებამდე.
+  ორივე ფორმა თანაარსებობს; ტრანზაქციებს შეუძლია ატომურად შეეხოს რამდენიმე DSID-ს.
+- მანიფესტის სასიცოცხლო ციკლი: DS-ის შექმნა, განახლებები (გასაღების როტაცია, პოლიტიკის ცვლილებები) და პენსიაზე გასვლა ჩაწერილია Space Directory-ში. თითოეული სლოტის DS არტეფაქტი მიუთითებს უახლეს მანიფესტ ჰეშზე.
+- კლასები: საჯარო DS (ღია მონაწილეობა, საჯარო DA) და კერძო DS (ნებადართული, კონფიდენციალური DA). ჰიბრიდული პოლიტიკა შესაძლებელია მანიფესტ დროშების მეშვეობით.
+- პოლიტიკები DS-ზე: ISI ნებართვები, DA პარამეტრები `(k,m)`, დაშიფვრა, შეკავება, კვოტები (მინ/მაქს tx წილი ბლოკზე), ZK/ოპტიმისტური მტკიცებულების პოლიტიკა, მოსაკრებლები.
+- მმართველობა: DS წევრობა და ვალიდატორის როტაცია, რომელიც განსაზღვრულია მანიფესტის მართვის განყოფილებით (ჯაჭვური წინადადებები, მულტიზიგები ან გარე მმართველობა, რომელიც დაკავშირებულია ნექსუს ტრანზაქციებითა და ატესტაციებით).
 
-Capability manifests & UAID
-- Universal accounts: Every participant receives a deterministic UAID (`UniversalAccountId` in `crates/iroha_data_model/src/nexus/manifest.rs`) that spans all dataspaces. Capability manifests (`AssetPermissionManifest`) bind a UAID to a specific dataspace, activation/expiry epochs, and an ordered list of allow/deny `ManifestEntry` rules that scope `dataspace`, `program_id`, `method`, `asset`, and optional AMX roles. Deny rules always win; the evaluator emits either `ManifestVerdict::Denied` with an audit reason or an `Allowed` grant with the matching allowance metadata.
-- Allowances: Each allow entry carries deterministic `AllowanceWindow` buckets (`PerSlot`, `PerMinute`, `PerDay`) plus an optional `max_amount`. Hosts and SDKs consume the same Norito payload, so enforcement remains identical across hardware and SDK implementations.
-- Audit telemetry: The Space Directory broadcasts `SpaceDirectoryEvent::{ManifestActivated, ManifestExpired, ManifestRevoked}` (`crates/iroha_data_model/src/events/data/space_directory.rs`) whenever a manifest changes state. The new `SpaceDirectoryEventFilter` surface allows Torii/data-event subscribers to monitor UAID manifest updates, revocations, and deny-wins decisions without custom plumbing.
+შესაძლებლობების მანიფესტები და UAID
+- უნივერსალური ანგარიშები: ყველა მონაწილე იღებს დეტერმინისტულ UAID-ს (`UniversalAccountId` `crates/iroha_data_model/src/nexus/manifest.rs`-ში), რომელიც მოიცავს მონაცემთა ყველა სივრცეს. შესაძლებლობების მანიფესტები (`AssetPermissionManifest`) აკავშირებს UAID-ს კონკრეტულ მონაცემთა სივრცესთან, აქტივაციის/ვადის გასვლის ეპოქებთან და `ManifestEntry` წესების ნებადართული/უარყოფის ჩამონათვალში, რომლებიც მოიცავს `dataspace`, I18NI00000010071 I18NI000000070X, I18NI0000010071 `asset` და სურვილისამებრ AMX როლები. წესების უარყოფა ყოველთვის იმარჯვებს; შემფასებელი გამოსცემს ან `ManifestVerdict::Denied`-ს აუდიტის მიზეზით ან `Allowed` გრანტს შესაბამისი შემწეობის მეტამონაცემებით.
+- შემწეობები: ყოველი შესვლის დაშვება შეიცავს განმსაზღვრელ `AllowanceWindow` თაიგულებს (`PerSlot`, `PerMinute`, `PerDay`) პლუს არჩევითი `max_amount`. ჰოსტები და SDK-ები მოიხმარენ ერთსა და იმავე Norito დატვირთვას, ამიტომ აღსრულება იდენტური რჩება ტექნიკისა და SDK-ის დანერგვაში.
+- აუდიტის ტელემეტრია: Space Directory ავრცელებს `SpaceDirectoryEvent::{ManifestActivated, ManifestExpired, ManifestRevoked}` (`crates/iroha_data_model/src/events/data/space_directory.rs`) ყოველთვის, როდესაც მანიფესტი ცვლის მდგომარეობას. ახალი `SpaceDirectoryEventFilter` ზედაპირი Torii/მონაცემთა მოვლენის აბონენტებს საშუალებას აძლევს დააკვირდნენ UAID მანიფესტის განახლებებს, გაუქმებას და უარყოს-მოგების გადაწყვეტილებები მორგებული სანტექნიკის გარეშე.
 
-For end-to-end operator evidence, SDK migration notes, and manifest publishing checklists, mirror this section with the Universal Account Guide (`docs/source/universal_accounts_guide.md`). Keep both documents aligned whenever UAID policy or tooling changes.
+ოპერატორის ბოლოდან ბოლომდე მტკიცებულებისთვის, SDK-ის მიგრაციის ჩანაწერებისთვის და მანიფესტების გამოქვეყნების საკონტროლო სიებისთვის, ასახეთ ეს სექცია უნივერსალური ანგარიშის სახელმძღვანელოსთან (`docs/source/universal_accounts_guide.md`). შეინახეთ ორივე დოკუმენტი გასწორებული, როდესაც UAID პოლიტიკა ან ხელსაწყოები შეიცვლება.
 
-High‑Level Architecture
-1) Global Composition Layer (Nexus Chain)
-- Maintains a single, canonical ordering of 1‑second Nexus Blocks that finalize atomic transactions spanning one or more Data Spaces (DS). Every committed transaction updates the unified global world state (vector of per‑DS roots).
-- Contains minimal metadata plus aggregated proofs/QCs to ensure composability, finality, and fraud detection (DSIDs touched, per‑DS state roots before/after, DA commitments, per‑DS validity proofs, and the DS quorum certificate using ML‑DSA‑87). No private data is included.
-- Consensus: Single global, pipelined BFT committee of size 22 (3f+1 with f=7), selected from a pool of up to ~200k potential validators by an epochal VRF/stake mechanism. The nexus committee sequences transactions and finalizes the block within 1s.
+მაღალი დონის არქიტექტურა
+1) გლობალური შემადგენლობის ფენა (Nexus ჯაჭვი)
+- ინარჩუნებს 1-წამიანი Nexus ბლოკების ერთ, კანონიკურ წესრიგს, რომლებიც ასრულებენ ატომურ ტრანზაქციებს, რომლებიც მოიცავს ერთ ან მეტ მონაცემთა სივრცეს (DS). ყოველი ჩადენილი ტრანზაქცია განაახლებს ერთიან გლობალურ მდგომარეობას (per-DS ფესვების ვექტორი).
+- შეიცავს მინიმალურ მეტამონაცემებს პლუს გაერთიანებულ მტკიცებულებებს/QC-ებს, რათა უზრუნველყოს შედგენილობა, საბოლოოობა და თაღლითობის გამოვლენა (DSID შეხება, per-DS მდგომარეობის ფესვები ადრე/შემდეგ, DA ვალდებულებები, per-DS მოქმედების მტკიცებულებები და DS კვორუმის სერტიფიკატი ML-DSA-87-ის გამოყენებით). არ შედის პირადი მონაცემები.
+- კონსენსუსი: 22 ზომის ერთი გლობალური, მილსადენის მქონე BFT კომიტეტი (3f+1 f=7), შერჩეული ~200 ათასამდე პოტენციური ვალიდატორების ჯგუფიდან ეპოქალური VRF/ფსონის მექანიზმით. Nexus კომიტეტი აწესრიგებს ტრანზაქციებს და ასრულებს ბლოკს 1 წამში.
 
-2) Data Space Layer (Public/Private)
-- Executes per‑DS fragments of global transactions, updates DS‑local WSV, and produces per‑block validity artifacts (aggregated per‑DS proofs and DA commitments) that roll up into the 1‑second Nexus Block.
-- Private DS encrypt data‑at‑rest and data‑in‑flight among authorized validators; only commitments and PQ validity proofs leave the DS.
-- Public DS export full data bodies (via DA) and PQ validity proofs.
+2) მონაცემთა სივრცის ფენა (საჯარო/პირადი)
+- ახორციელებს გლობალური ტრანზაქციების თითო DS ფრაგმენტებს, აახლებს DS-ლოკალურ WSV-ს და აწარმოებს თითო ბლოკის მოქმედების არტეფაქტებს (გაერთიანებული per-DS მტკიცებულებები და DA ვალდებულებები), რომლებიც გროვდება 1-წამიან I18NT0000003X ბლოკში.
+- პირადი DS დაშიფვრა მონაცემები დასვენების დროს და მონაცემები ფრენის დროს ავტორიზებულ ვალიდატორებს შორის; მხოლოდ ვალდებულებები და PQ მოქმედების მტკიცებულებები ტოვებს DS-ს.
+- საჯარო DS ექსპორტზე სრული მონაცემების ორგანოები (მეშვეობით DA) და PQ მოქმედების მტკიცებულება.
 
-3) Atomic Cross‑Data‑Space Transactions (AMX)
-- Model: Each user transaction may touch multiple DS (e.g., domain DS and one or more asset DS). It commits atomically in a single Nexus Block or aborts; no partial effects.
-- Prepare‑Commit within 1s: For each candidate transaction, touched DS execute in parallel against the same snapshot (start‑of‑slot DS roots) and produce per‑DS PQ validity proofs (FASTPQ‑ISI) and DA commitments. The nexus committee commits the transaction only if all required DS proofs verify and the DA certificates arrive (≤300 ms target); otherwise the transaction is re‑scheduled for the next slot.
-- Consistency: Read‑write sets are declared; conflict detection occurs at commit against the start‑of‑slot roots. Lock‑free optimistic execution per DS avoids global stalls; atomicity is enforced by the nexus commit rule (all‑or‑nothing across DS).
-- Privacy: Private DS export only proofs/commitments tied to pre/post DS roots. No raw private data leaves the DS.
+3) ატომური ჯვარედინი ტრანზაქციები მონაცემთა სივრცეში (AMX)
+- მოდელი: თითოეული მომხმარებლის ტრანზაქცია შეიძლება შეეხოს მრავალ DS-ს (მაგ. დომენის DS და ერთი ან მეტი აქტივის DS). ის ატომურად ჩართულია ერთ Nexus ბლოკში ან წყვეტს; არ არის ნაწილობრივი ეფექტი.
+- მოამზადეთ დასრულება 1 წამში: თითოეული კანდიდატი ტრანზაქციისთვის, შეეხეთ DS შესრულებას პარალელურად იმავე სნეპშოტის (DS root-of-slot DS roots) და შექმენით per-DS PQ მოქმედების მტკიცებულებები (FASTPQ-ISI) და DA ვალდებულებები. Nexus კომიტეტი ახორციელებს ტრანზაქციას მხოლოდ იმ შემთხვევაში, თუ ყველა საჭირო DS მტკიცებულება გადამოწმებულია და DA სერთიფიკატები მოვა (≤300 ms მიზანი); წინააღმდეგ შემთხვევაში ტრანზაქცია ხელახლა დაიგეგმება მომდევნო სლოტზე.
+- თანმიმდევრულობა: დეკლარირებულია წაკითხვის-წერის კომპლექტები; კონფლიქტის გამოვლენა ხდება ჩადენისას საწყისი სლოტის ფესვების წინააღმდეგ. დაბლოკვის გარეშე ოპტიმისტური შესრულება თითო DS-ზე თავიდან აიცილებს გლობალურ შეფერხებებს; ატომურობა აღსრულებულია ნექსის ჩადენის წესით (ყველა ან არაფერი DS-ში).
+- კონფიდენციალურობა: პირადი DS ექსპორტზე მხოლოდ მტკიცებულებები/ვალდებულებებია დაკავშირებული DS ფესვებთან წინასწარ/პოსტთან. არავითარი პირადი მონაცემები არ ტოვებს DS-ს.4) მონაცემთა ხელმისაწვდომობა (DA) წაშლის კოდირებით
+- Kura ინახავს ბლოკის სხეულებს და WSV კადრებს, როგორც წაშლის კოდირებულ ბლომებს. საჯარო ბლოგები ფართოდ არის გახეხილი; პირადი blobs ინახება მხოლოდ private-DS ვალიდატორებში, დაშიფრული ნაჭრებით.
+- DA ვალდებულებები ჩაწერილია როგორც DS არტეფაქტებში, ასევე Nexus ბლოკებში, რაც იძლევა ნიმუშის აღების და აღდგენის გარანტიებს პირადი შინაარსის გამოვლენის გარეშე.
 
-4) Data Availability (DA) with Erasure Coding
-- Kura stores block bodies and WSV snapshots as erasure-coded blobs. Public blobs are widely sharded; private blobs are stored only within private‑DS validators, with encrypted chunks.
-- DA Commitments are recorded in both DS artifacts and Nexus Blocks, enabling sampling and recovery guarantees without revealing private contents.
+ბლოკირებისა და ჩადენის სტრუქტურა
+- მონაცემთა სივრცის დამადასტურებელი არტეფაქტი (1 წამის სლოტზე, DS-ზე)
+  - ველები: dsid, slot, pre_state_root, post_state_root, ds_tx_set_hash, kura_da_commitment, wsv_da_commitment, manifest_hash, ds_qc (ML‑DSA‑87), ds_validity_proof (FASTPQ ).
+  - Private-DS არტეფაქტების ექსპორტი მონაცემთა ორგანოების გარეშე; საჯარო DS იძლევა სხეულის მოძიებას DA-ს მეშვეობით.
 
-Block and Commit Structure
-- Data Space Proof Artifact (per 1s slot, per DS)
-  - Fields: dsid, slot, pre_state_root, post_state_root, ds_tx_set_hash, kura_da_commitment, wsv_da_commitment, manifest_hash, ds_qc (ML‑DSA‑87), ds_validity_proof (FASTPQ‑ISI).
-  - Private‑DS export artifacts without data bodies; public DS allow body retrieval via DA.
+- Nexus ბლოკი (1 წამის კადენცია)
+  - ველები: block_number, parent_hash, slot_time, tx_list (ატომური ჯვარედინი DS ტრანზაქციები DSID-ებით შეხებით), ds_artifacts[], nexus_qc.
+  - ფუნქცია: ახორციელებს ყველა ატომურ ტრანზაქციას, რომლის მოთხოვნილი DS არტეფაქტების შემოწმება ხდება; განაახლებს DS ფესვების გლობალური მსოფლიო მდგომარეობის ვექტორს ერთი ნაბიჯით.
 
-- Nexus Block (1s cadence)
-  - Fields: block_number, parent_hash, slot_time, tx_list (atomic cross‑DS transactions with DSIDs touched), ds_artifacts[], nexus_qc.
-  - Function: finalizes all atomic transactions whose required DS artifacts verify; updates the global world state vector of DS roots in one step.
+კონსენსუსი და დაგეგმვა
+- Nexus ჯაჭვის კონსენსუსი: ერთი გლობალური, მილსადენი BFT (Sumeragi-კლასი) 22-კვანძიანი კომიტეტით (3f+1 f=7-ით), რომელიც მიზნად ისახავს 1s ბლოკებს და 1s საბოლოოობას. კომიტეტის წევრები ეპოქალურად შეირჩევიან VRF/ფსონის საშუალებით ~ 200 ათასი კანდიდატიდან; როტაცია ინარჩუნებს დეცენტრალიზაციას და ცენზურის წინააღმდეგობას.
+- მონაცემთა სივრცის კონსენსუსი: თითოეული DS აწარმოებს საკუთარ BFT-ს თავის ვალიდატორებს შორის, რათა წარმოქმნას თითო სლოტის არტეფაქტები (მტკიცებულებები, DA ვალდებულებები, DS QC). ზოლის სარელეო კომიტეტების ზომაა `3f+1` მონაცემთა სივრცის `fault_tolerance` პარამეტრის გამოყენებით და აღებულია დეტერმინისტულად თითო ეპოქის მიხედვით მონაცემთა სივრცის ვალიდატორის ფონდიდან VRF ეპოქის სათაურის გამოყენებით, რომელიც დაკავშირებულია `(dataspace_id, lane_id)`-თან. ნებადართულია პირადი DS; საჯარო DS ნებას რთავს ღია აქტიურობას, ექვემდებარება ანტი-Sybil პოლიტიკას. გლობალური ნექსის კომიტეტი უცვლელი რჩება.
+- ტრანზაქციის განრიგი: მომხმარებლები წარადგენენ ატომურ ტრანზაქციებს, სადაც აცხადებენ შეხებით DSID-ებს და წაკითხვა-ჩაწერის კომპლექტებს. DS შესრულება სლოტში პარალელურად; Nexus კომიტეტი მოიცავს ტრანზაქციას 1s ბლოკში, თუ ყველა DS არტეფაქტი გადამოწმებულია და DA სერთიფიკატები დროულია (≤300 ms).
+- შესრულების იზოლაცია: თითოეულ DS-ს აქვს დამოუკიდებელი მემპოლები და შესრულება. Per‑DS კვოტები ზღუდავს რამდენი ტრანზაქცია, რომელიც ეხება მოცემულ DS-ს, შეიძლება განხორციელდეს თითო ბლოკზე, რათა თავიდან იქნას აცილებული სათაურის დაბლოკვა და დაიცვას პირადი DS შეყოვნება.
 
-Consensus and Scheduling
-- Nexus Chain Consensus: Single global, pipelined BFT (Sumeragi-class) with a 22-node committee (3f+1 with f=7) targeting 1s blocks and 1s finality. Committee members are epochally selected via VRF/stake from ~200k candidates; rotation maintains decentralization and censorship resistance.
-- Data Space Consensus: Each DS runs its own BFT among its validators to produce per‑slot artifacts (proofs, DA commitments, DS QC). Lane-relay committees are sized at `3f+1` using the dataspace `fault_tolerance` setting and are sampled deterministically per epoch from the dataspace validator pool using the VRF epoch seed bound with `(dataspace_id, lane_id)`. Private DS are permissioned; public DS allow open liveness subject to anti‑Sybil policies. The global nexus committee remains unchanged.
-- Transaction Scheduling: Users submit atomic transactions declaring touched DSIDs and read‑write sets. DS execute in parallel within the slot; the nexus committee includes the transaction in the 1s block if all DS artifacts verify and DA certificates are timely (≤300 ms).
-- Performance Isolation: Each DS has independent mempools and execution. Per‑DS quotas bound how many transactions touching a given DS can be committed per block to avoid head‑of‑line blocking and protect private DS latency.
+მონაცემთა მოდელი და სახელთა სივრცე
+- DS-კვალიფიცირებული ID: ყველა ერთეული (დომენები, ანგარიშები, აქტივები, როლები) კვალიფიცირებულია `dsid`-ით. მაგალითი: `ds::<domain>::account`, `ds::<domain>::asset#precision`.
+- გლობალური მითითებები: გლობალური მითითება არის tuple `(dsid, object_id, version_hint)` და შეიძლება განთავსდეს ჯაჭვზე nexus ფენაში ან AMX აღწერებში cross-DS გამოყენებისთვის.
+- Norito სერიალიზაცია: ყველა cross-DS შეტყობინება (AMX აღწერები, მტკიცებულებები) იყენებს Norito კოდეკებს. არ არის სერდების გამოყენება წარმოების ბილიკებში.
 
-Data Model and Namespacing
-- DS‑Qualified IDs: All entities (domains, accounts, assets, roles) are qualified by `dsid`. Example: `ds::<domain>::account`, `ds::<domain>::asset#precision`.
-- Global References: A global reference is a tuple `(dsid, object_id, version_hint)` and can be placed on‑chain in the nexus layer or in AMX descriptors for cross‑DS use.
-- Norito Serialization: All cross‑DS messages (AMX descriptors, proofs) use Norito codecs. No serde usage in production paths.
+სმარტ კონტრაქტები და IVM გაფართოებები
+- შესრულების კონტექსტი: დაამატეთ `dsid` IVM შესრულების კონტექსტში. Kotodama კონტრაქტები ყოველთვის სრულდება მონაცემთა კონკრეტულ სივრცეში.
+- Atomic Cross-DS Primitives:
+  - `amx_begin()` / `amx_commit()` განასხვავებს ატომურ მულტი-DS ტრანზაქციას IVM ჰოსტში.
+  - `amx_touch(dsid, key)` აცხადებს წაკითხვის/ჩაწერის განზრახვას კონფლიქტის აღმოჩენისთვის სლოტის სნეპშოტის ფესვებთან მიმართებაში.
+  - `verify_space_proof(dsid, proof, statement)` → ბული
+  - `use_asset_handle(handle, op, amount)` → შედეგი (ოპერაცია დასაშვებია მხოლოდ იმ შემთხვევაში, თუ პოლიტიკა საშუალებას იძლევა და სახელური მოქმედებს)
+- აქტივების სახელურები და მოსაკრებლები:
+  - აქტივების ოპერაციები ავტორიზებულია DS-ის ISI/როლის პოლიტიკით; საკომისიო გადახდილია DS-ის გაზის ნიშნით. არასავალდებულო შესაძლებლობების ნიშნები და უფრო მდიდარი პოლიტიკა (მრავალ დამმტკიცებელი, განაკვეთის ლიმიტები, გეოფენინგი) შეიძლება მოგვიანებით დაემატოს ატომური მოდელის შეცვლის გარეშე.
+- დეტერმინიზმი: ყველა ახალი syscals არის სუფთა და დეტერმინისტული მოცემული შეყვანები და დეკლარირებული AMX წაკითხვის/ჩაწერის კომპლექტები. არ არის ფარული დროის ან გარემოს ეფექტი.
 
-Smart Contracts and IVM Extensions
-- Execution Context: Add `dsid` to IVM execution context. Kotodama contracts always execute within a specific Data Space.
-- Atomic Cross‑DS Primitives:
-  - `amx_begin()` / `amx_commit()` demarcate an atomic multi‑DS transaction in the IVM host.
-  - `amx_touch(dsid, key)` declares read/write intent for conflict detection against slot snapshot roots.
-  - `verify_space_proof(dsid, proof, statement)` → bool
-  - `use_asset_handle(handle, op, amount)` → result (operation permitted only if policy allows and handle is valid)
-- Asset Handles and Fees:
-  - Asset operations are authorized by the DS’s ISI/role policies; fees are paid in the DS’s gas token. Optional capability tokens and richer policy (multi‑approver, rate‑limits, geofencing) can be added later without changing the atomic model.
-- Determinism: All new syscalls are pure and deterministic given inputs and declared AMX read/write sets. No hidden time or environment effects.
-
-Post‑Quantum Validity Proofs (Generalized ISIs)
-- FASTPQ‑ISI (PQ, no trusted setup): A kernelized, hash‑based argument that generalizes the transfer design to all ISI families while targeting sub‑second proving for 20k‑scale batches on GPU‑class hardware.
-  - Operational profile:
-    - Production nodes construct the prover through `fastpq_prover::Prover::canonical`, which now always initialises the production backend; the deterministic mock has been removed.【crates/fastpq_prover/src/proof.rs:126】
-    - `zk.fastpq.execution_mode` (config) and `irohad --fastpq-execution-mode` allow operators to pin CPU/GPU execution deterministically while the observer hook records requested/resolved/backend triples for fleet audits.【crates/iroha_config/src/parameters/user.rs:1357】【crates/irohad/src/main.rs:270】【crates/irohad/src/main.rs:2192】【crates/iroha_telemetry/src/metrics.rs:8887】
-- Arithmetization:
-  - KV‑Update AIR: Treat WSV as a typed key‑value map committed via Poseidon2‑SMT. Each ISI expands to a small set of read‑check‑write rows over keys (accounts, assets, roles, domains, metadata, supply).
-  - Opcode‑gated constraints: A single AIR table with selector columns enforces per‑ISI rules (conservation, monotonic counters, permissions, range checks, bounded metadata updates).
-  - Lookup arguments: Transparent, hash‑committed tables for permissions/roles, asset precisions, and policy parameters avoid heavy bitwise constraints.
-- State commitments and updates:
-  - Aggregated SMT Proof: All touched keys (pre/post) are proven against `old_root`/`new_root` using a compressed frontier with deduped siblings.
-  - Invariants: Global invariants (e.g., total supply per asset) are enforced via multiset equality between effect rows and tracked counters.
-- Proof system:
-  - FRI‑style polynomial commitments (DEEP‑FRI) with high arity (8/16) and blow‑up 8–16; Poseidon2 hashes; Fiat‑Shamir transcript with SHA‑2/3.
-  - Optional recursion: DS‑local recursive aggregation to compress micro‑batches to one proof per slot if needed.
-- Scope and examples covered:
-  - Assets: transfer, mint, burn, register/unregister asset definitions, set precision (bounded), set metadata.
-  - Accounts/Domains: create/remove, set key/threshold, add/remove signatories (state‑only; signature checks are attested by DS validators, not proven inside the AIR).
-  - Roles/Permissions (ISI): grant/revoke roles and permissions; enforced by lookup tables and monotonic policy checks.
-  - Contracts/AMX: AMX begin/commit markers, capability mint/revoke if enabled; proven as state transitions and policy counters.
-- Out‑of‑AIR checks to preserve latency:
-  - Signatures and heavy cryptography (e.g., ML‑DSA user signatures) are verified by DS validators and attested in the DS QC; the validity proof covers only state consistency and policy compliance. This keeps proofs PQ and fast.
-- Performance targets (illustrative, 32‑core CPU + single modern GPU):
-  - 20k mixed ISIs with small key‑touch (≤8 keys/ISI): ~0.4–0.9 s prove, ~150–450 KB proof, ~5–15 ms verify.
-  - Heavier ISIs (more keys/rich constraints): micro‑batch (e.g., 10×2k) + recursion to keep per‑slot <1 s.
-- DS Manifest configuration:
+პოსტ-კვანტური მოქმედების მტკიცებულებები (განზოგადებული ISI)
+- FASTPQ-ISI (PQ, სანდო დაყენების გარეშე): ბირთვული, ჰეშზე დაფუძნებული არგუმენტი, რომელიც აზოგადებს გადაცემის დიზაინს ყველა ISI ოჯახზე, ხოლო მიზნად ისახავს ქვემეორე მტკიცებულებას 20k-ს მასშტაბის პარტიებზე GPU-ს კლასის აპარატურაზე.
+  - ოპერატიული პროფილი:
+    - საწარმოო კვანძები აყალიბებენ პროვერს `fastpq_prover::Prover::canonical`-ის მეშვეობით, რომელიც ახლა ყოველთვის ინიციალიზაციას უკეთებს წარმოების ფონს; დეტერმინისტული დაცინვა ამოღებულია.【crates/fastpq_prover/src/proof.rs:126】
+    - `zk.fastpq.execution_mode` (კონფიგურაცია) და `irohad --fastpq-execution-mode` საშუალებას აძლევს ოპერატორებს დაამაგრონ CPU/GPU შესრულება დეტერმინისტულად, ხოლო დამკვირვებლის კვარცხლბეკის ჩანაწერები მოითხოვეს/გადაჭრეს/სამმაგები ფლოტისთვის აუდიტი.
+- არითმეტიზაცია:
+  - KV-განახლება AIR: განიხილეთ WSV, როგორც აკრეფილი გასაღები-მნიშვნელობის რუკა, რომელიც შესრულებულია Poseidon2-SMT-ის მეშვეობით. თითოეული ISI ფართოვდება კლავიშების (ანგარიშები, აქტივები, როლები, დომენები, მეტამონაცემები, მიწოდება) წაკითხვის-შემოწმების-ჩაწერის რიგების მცირე კომპლექტამდე.
+  - ოპტიმალური შეზღუდვები: ერთი AIR ცხრილი ამომრჩეველი სვეტებით ახორციელებს თითო ISI წესებს (კონსერვაცია, მონოტონური მრიცხველები, ნებართვები, დიაპაზონის შემოწმება, შემოსაზღვრული მეტამონაცემების განახლებები).
+  - საძიებო არგუმენტები: გამჭვირვალე, ჰეშით დაფუძნებული ცხრილები ნებართვების/როლებისთვის, აქტივების სიზუსტე და პოლიტიკის პარამეტრები თავიდან აიცილებს მძიმე ბიტიურ შეზღუდვებს.
+- სახელმწიფო ვალდებულებები და განახლებები:
+  - გაერთიანებული SMT მტკიცებულება: ყველა შეხებული კლავიატურა (წინასწარ/პოსტა) დადასტურებულია `old_root`/`new_root`-ის საწინააღმდეგოდ, შეკუმშული საზღვრის გამოყენებით მოხსნილ და-ძმებთან.
+  - უცვლელები: გლობალური უცვლელები (მაგ., მთლიანი მიწოდება თითო აქტივზე) განხორციელდება მრავალკომპლექტიანი თანასწორობის მეშვეობით ეფექტის მწკრივებსა და თვალთვალის მრიცხველებს შორის.
+- დადასტურების სისტემა:
+  - FRI-ის სტილის პოლინომიური ვალდებულებები (DEEP-FRI) მაღალი არით (8/16) და აფეთქება 8–16; Poseidon2 ჰეშები; Fiat-Shamir-ის ტრანსკრიპტი SHA-2/3-ით.
+  - არჩევითი რეკურსია: DS-ლოკალური რეკურსიული აგრეგაცია მიკრო პარტიების შეკუმშვისთვის ერთ სლოტზე, საჭიროების შემთხვევაში.
+- ფარგლები და მაგალითები დაფარული:
+  - აქტივები: გადაცემა, ზარაფხანა, დაწვა, აქტივების განმარტებების რეგისტრაცია/აღრიცხვა, დაყენების სიზუსტე (შეზღუდული), კომპლექტის მეტამონაცემები.
+  - ანგარიშები/დომენები: შექმნა/წაშლა, გასაღების/ზღვრის დაყენება, ხელმომწერების დამატება/წაშლა (მხოლოდ სახელმწიფოსთვის; ხელმოწერის შემოწმება დამოწმებულია DS ვალიდატორების მიერ, არ არის დადასტურებული AIR-ში).
+  - როლები/ნებართვები (ISI): როლებისა და ნებართვების მინიჭება/გაუქმება; აღსრულებულია საძიებო ცხრილებით და მონოტონური პოლიტიკის შემოწმებით.
+  - კონტრაქტები/AMX: AMX start/commit მარკერები, შესაძლებლობების შემცირება/გაუქმება, თუ ჩართულია; დადასტურებულია როგორც სახელმწიფო გადასვლები და პოლიტიკის მრიცხველები.
+- ჰაერის გარეთ შემოწმებები შეყოვნების შესანარჩუნებლად:
+  - ხელმოწერები და მძიმე კრიპტოგრაფია (მაგ., ML-DSA მომხმარებლის ხელმოწერები) დამოწმებულია DS ვალიდაატორების მიერ და დამოწმებულია DS QC-ში; მოქმედების მტკიცებულება მოიცავს მხოლოდ სახელმწიფოს თანმიმდევრულობას და პოლიტიკის შესაბამისობას. ეს ინარჩუნებს მტკიცებულებებს PQ და სწრაფად.
+- შესრულების მიზნები (ილუსტრაციული, 32 ბირთვიანი CPU + ერთი თანამედროვე GPU):
+  - 20 ათასი შერეული ISI მცირე კლავიშის შეხებით (≤8 კლავიშები/ISI): ~0,4–0,9 წმ დადასტურება, ~150–450 KB დადასტურება, ~5–15 ms დადასტურება.
+  - უფრო მძიმე ISI (მეტი კლავიშები/მდიდარი შეზღუდვები): მიკრო პარტია (მაგ., 10×2k) + რეკურსია თითო სლოტის შესანარჩუნებლად <1 წმ.
+- DS Manifest-ის კონფიგურაცია:
   - `zk.policy = "fastpq_isi"`
   - `zk.hash = "poseidon2"`, `zk.fri = { blowup: 8|16, arity: 8|16 }`
   - `state.commitment = "smt_poseidon2"`
   - `zk.recursion = { none | local }`
-  - `attestation.signatures_in_proof = false` (signatures verified by DS QC)
-  - `attestation.qc_signature = "ml_dsa_87"` (default; alternatives must be explicitly declared)
-- Fallbacks:
-  - Complex/custom ISIs may use a general STARK (`zk.policy = "stark_fri_general"`) with deferred proof and 1 s finality via QC attestation + slashing on invalid proofs.
-  - Non‑PQ options (e.g., Plonk with KZG) require a trusted setup and are no longer supported in the default build.
+  - `attestation.signatures_in_proof = false` (ხელმოწერები დამოწმებული DS QC-ის მიერ)
+  - `attestation.qc_signature = "ml_dsa_87"` (ნაგულისხმევი; ალტერნატივა მკაფიოდ უნდა იყოს გამოცხადებული)
+- სარეზერვო:
+  - კომპლექსურ/მორგებულ ISI-ებს შეუძლიათ გამოიყენონ ზოგადი STARK (`zk.policy = "stark_fri_general"`) გადადებული მტკიცებულებით და 1 წამის დასრულებით QC ატესტაციის საშუალებით + არასწორი მტკიცებულებების შემცირებით.
+  - არა-PQ ვარიანტები (მაგ. Plonk KZG-თან ერთად) საჭიროებს სანდო დაყენებას და აღარ არის მხარდაჭერილი ნაგულისხმევი build-ში.
 
-AIR Primer (for Nexus)
-- Execution trace: A matrix with width (register columns) and length (steps). Each row is a logical step of ISI processing; columns hold pre/post values, selectors, and flags.
-- Constraints:
-  - Transition constraints: enforce row‑to‑row relations (e.g., post_balance = pre_balance − amount for a debit row when `sel_transfer = 1`).
-  - Boundary constraints: bind public I/O (old_root/new_root, counters) to the first/last rows.
-  - Lookups/permutations: ensure membership and multiset equalities against committed tables (permissions, asset params) without bit‑heavy circuits.
-- Commitment and verification:
-  - Prover commits to traces via hash‑based encodings and constructs low‑degree polynomials that are valid iff constraints hold.
-  - Verifier checks low‑degree via FRI (hash‑based, post‑quantum) with a few Merkle openings; cost is logarithmic in steps.
-- Example (Transfer): registers include pre_balance, amount, post_balance, nonce, and selectors. Constraints enforce non‑negativity/range, conservation, and nonce monotonicity, while an aggregated SMT multi‑proof links pre/post leaves to old/new roots.
-
-ABI and Syscall Evolution (ABI v1)
-- Syscalls to add (illustrative names):
+AIR Primer (Nexus-ისთვის)
+- შესრულების კვალი: მატრიცა სიგანით (რეგისტრაციის სვეტები) და სიგრძით (ნაბიჯები). თითოეული მწკრივი არის ISI დამუშავების ლოგიკური ნაბიჯი; სვეტები შეიცავს წინასწარ/პოსტ მნიშვნელობებს, სელექტორებს და დროშებს.
+- შეზღუდვები:
+  - გარდამავალი შეზღუდვები: განახორციელეთ მწკრივი-სტრიქონის მიმართებები (მაგ., პოსტ_ბალანსი = წინასწარ ბალანსი − თანხა სადებეტო მწკრივისთვის, როდესაც `sel_transfer = 1`).
+  - სასაზღვრო შეზღუდვები: შეაერთეთ საჯარო I/O (ძველი_ძირი/ახალი_ძირი, მრიცხველები) პირველ/ბოლო სტრიქონებთან.
+  - ძიება/პერმუტაციები: უზრუნველყოს წევრობა და მრავალკომპლექტიანი თანასწორობა ჩადენილი ცხრილების (ნებართვები, აქტივების პარამეტრები) ბიტიანი სქემების გარეშე.
+- ვალდებულება და შემოწმება:
+  - პროვერი ახორციელებს კვალს ჰეშზე დაფუძნებული კოდირების საშუალებით და აყალიბებს დაბალი ხარისხის მრავალწევრებს, რომლებიც მართებულია, თუ შეზღუდვები მოქმედებს.
+  - ვერიფიკატორი ამოწმებს დაბალ გრადუსს FRI-ის (ჰეშზე დაფუძნებული, პოსტკვანტური) მეშვეობით Merkle-ის რამდენიმე ღიობით; ღირებულება არის ლოგარითმული ნაბიჯებით.
+- მაგალითი (გადარიცხვა): რეგისტრები მოიცავს წინასწარ ბალანსს, თანხას, პოსტბალანსს, ნონსს და სელექტორებს. შეზღუდვები აძლიერებს არანეგატიურობას/დიაპაზონს, კონსერვაციას და არაერთგვაროვან ერთფეროვნებას, ხოლო გაერთიანებული SMT მრავალპროფილიანი აკავშირებს წინასწარ/პოსტ ტოვებს ძველ/ახალ ფესვებს.ABI და Syscall Evolution (ABI v1)
+- Syscals დასამატებლად (საილუსტრაციო სახელები):
   - `SYS_AMX_BEGIN`, `SYS_AMX_TOUCH`, `SYS_AMX_COMMIT`, `SYS_VERIFY_SPACE_PROOF`, `SYS_USE_ASSET_HANDLE`.
-- Pointer‑ABI Types to add:
+- Pointer-ABI ტიპები დასამატებლად:
   - `PointerType::DataSpaceId`, `PointerType::AmxDescriptor`, `PointerType::AssetHandle`, `PointerType::ProofBlob`.
-- Required updates:
-  - Add to `ivm::syscalls::abi_syscall_list()` (keep ordering), gate by policy.
-  - Map unknown numbers to `VMError::UnknownSyscall` in hosts.
-  - Update tests: syscall list golden, ABI hash, pointer type ID goldens, and policy tests.
-  - Docs: `crates/ivm/docs/syscalls.md`, `status.md`, `roadmap.md`.
+- საჭირო განახლებები:
+  - დაამატეთ `ivm::syscalls::abi_syscall_list()`-ში (განაგრძეთ შეკვეთა), კარიბჭის მიხედვით.
+  - ამოიღეთ უცნობი ნომრები `VMError::UnknownSyscall`-ზე ჰოსტებში.
+  - განაახლეთ ტესტები: syscall list ოქროსფერი, ABI hash, მაჩვენებლის ტიპის ID ოქროსფერი და პოლიტიკის ტესტები.
+  - დოკუმენტები: `crates/ivm/docs/syscalls.md`, `status.md`, `roadmap.md`.
 
-Privacy Model
-- Private Data Containment: Transaction bodies, state diffs, and WSV snapshots for private DS never leave the private validator subset.
-- Public Exposure: Only headers, DA commitments, and PQ validity proofs are exported.
-- Optional ZK Proofs: Private DS may produce ZK proofs (e.g., balance sufficient, policy satisfied) enabling cross‑DS actions without revealing internal state.
-- Access Control: Authorization is enforced by ISI/role policies inside the DS. Capability tokens are optional and can be introduced later if needed.
+კონფიდენციალურობის მოდელი
+- პირადი მონაცემების შეკავება: ტრანზაქციის ორგანოები, სახელმწიფო განსხვავებები და WSV სნეპშოტები კერძო DS-ისთვის არასოდეს ტოვებენ კერძო ვალიდატორის ქვეჯგუფს.
+- საჯარო ექსპოზიცია: ექსპორტირებულია მხოლოდ სათაურები, DA ვალდებულებები და PQ მოქმედების მტკიცებულებები.
+- არასავალდებულო ZK მტკიცებულებები: კერძო DS-ს შეუძლია წარმოადგინოს ZK მტკიცებულებები (მაგ., ბალანსი საკმარისია, პოლიტიკა დაკმაყოფილებულია), რაც საშუალებას აძლევს cross-DS ქმედებებს შიდა მდგომარეობის გამოვლენის გარეშე.
+- წვდომის კონტროლი: ავტორიზაცია ხორციელდება ISI/Role Policy-ით DS-ში. შესაძლებლობების ნიშნები არჩევითია და საჭიროების შემთხვევაში შეიძლება მოგვიანებით დაინერგოს.
 
-Performance Isolation and QoS
-- Separate consensus, mempools, and storage per DS.
-- Nexus scheduling quotas per DS to bound anchor inclusion time and avoid head-of-line blocking.
-- Contract resource budgets per DS (compute/memory/IO), enforced by IVM host. Public‑DS contention cannot consume private‑DS budgets.
-- Asynchronous cross‑DS calls avoid long synchronous waits inside private‑DS execution.
+შესრულების იზოლაცია და QoS
+- ცალკე კონსენსუსი, შემადგენლობისა და შენახვა DS-ზე.
+- Nexus დაგეგმვის კვოტები თითო DS-ზე, რათა შეზღუდოს წამყვანის ჩართვის დრო და თავიდან იქნას აცილებული სათაურის დაბლოკვა.
+- კონტრაქტის რესურსების ბიუჯეტები თითო DS-ზე (გამოთვლა/მეხსიერება/IO), განხორციელებული IVM ჰოსტის მიერ. Public-DS დაპირისპირება ვერ მოიხმარს კერძო-DS ბიუჯეტს.
+- ასინქრონული cross-DS ზარები თავიდან აიცილებს ხანგრძლივ სინქრონულ ლოდინს private-DS შესრულების შიგნით.
 
-Data Availability and Storage Design
-1) Erasure Coding
-- Use systematic Reed‑Solomon (e.g., GF(2^16)) for blob‑level erasure coding of Kura blocks and WSV snapshots: parameters `(k, m)` with `n = k + m` shards.
-- Default parameters (proposed, public DS): `k=32, m=16` (n=48), enabling recovery from up to 16 shard losses with ~1.5× expansion. For private DS: `k=16, m=8` (n=24) within the permissioned set. Both are configurable per DS Manifest.
-- Public Blobs: Shards distributed across many DA nodes/validators with sampling‑based availability checks. DA commitments in headers allow light clients to verify.
-- Private Blobs: Shards encrypted and distributed only within private‑DS validators (or designated custodians). Global chain carries only DA commitments (no shard locations or keys).
+მონაცემთა ხელმისაწვდომობა და შენახვის დიზაინი
+1) წაშლის კოდირება
+- გამოიყენეთ სისტემატური Reed-Solomon (მაგ., GF(2^16)) Kura ბლოკებისა და WSV სნეპშოტების blob-დონის წაშლის კოდირებისთვის: პარამეტრები `(k, m)` `n = k + m` ფრაგმენტებით.
+- ნაგულისხმევი პარამეტრები (შემოთავაზებული, საჯარო DS): `k=32, m=16` (n=48), რაც საშუალებას გაძლევთ აღადგინოთ 16-მდე ნატეხი დანაკარგიდან ~1.5× გაფართოებით. პირადი DS-ისთვის: `k=16, m=8` (n=24) ნებადართული ნაკრების ფარგლებში. ორივე კონფიგურირებადია DS Manifest-ის მიხედვით.
+- საჯარო ბლოკები: ნატეხები, რომლებიც განაწილებულია მრავალ DA კვანძზე/ვალიდიატორზე სინჯზე დაფუძნებული ხელმისაწვდომობის შემოწმებით. DA ვალდებულებები სათაურებში საშუალებას აძლევს მსუბუქ კლიენტებს გადაამოწმონ.
+- პირადი Blobs: ფრაგმენტები დაშიფრულია და ნაწილდება მხოლოდ კერძო DS ვალიდატორებში (ან დანიშნულ მცველებში). გლობალური ჯაჭვი ახორციელებს მხოლოდ DA ვალდებულებებს (ნატეხი მდებარეობების ან გასაღებების გარეშე).
 
-2) Commitments and Sampling
-- For each blob: compute a Merkle root over shards and include it in `*_da_commitment`. Remain PQ by avoiding elliptic‑curve commitments.
-- DA Attesters: VRF‑sampled regional attesters (e.g., 64 per region) issue an ML‑DSA‑87 certificate attesting successful shard sampling. Target DA attestation latency ≤300 ms. Nexus committee validates certificates instead of pulling shards.
+2) ვალდებულებები და ნიმუშის აღება
+- თითოეული ბლომისთვის: გამოთვალეთ მერკლის ფესვი ნატეხებზე და შეიტანეთ იგი `*_da_commitment`-ში. დარჩით PQ ელიფსური მრუდის ვალდებულებების თავიდან აცილებით.
+- DA ატესტატორები: VRF-ის ნიმუშის მქონე რეგიონული ატესტერი (მაგ., 64 რეგიონში) გასცემენ ML-DSA-87 სერტიფიკატს, რომელიც ადასტურებს ნამსხვრევების წარმატებულ სინჯს. სამიზნე DA ატესტაციის შეყოვნება ≤300 ms. Nexus კომიტეტი ამოწმებს სერთიფიკატებს ნატეხების ამოღების ნაცვლად.
 
-3) Kura Integration
-- Blocks store transaction bodies as erasure-coded blobs with Merkle commitments.
-- Headers carry blob commitments; bodies are retrievable via DA network for public DS and via private channels for private DS.
+3) კურას ინტეგრაცია
+- ბლოკები ინახავს ტრანზაქციის ორგანოებს, როგორც წაშლის კოდირებულ ბლომებს Merkle-ის ვალდებულებებით.
+- სათაურები ატარებენ blob ვალდებულებებს; ორგანოების მიღება შესაძლებელია DA ქსელის მეშვეობით საჯარო DS-ისთვის და კერძო არხების მეშვეობით კერძო DS-ისთვის.
 
-4) WSV Integration
-- WSV Snapshotting: Periodically checkpoint DS state into chunked, erasure-coded snapshots with commitments recorded in headers. Between snapshots, maintain change logs. Public snapshots are widely sharded; private snapshots remain within private validators.
-- Proof‑Carrying Access: Contracts can provide (or request) state proofs (Merkle/Verkle) anchored by snapshot commitments. Private DS may supply zero‑knowledge attestations instead of raw proofs.
+4) WSV ინტეგრაცია
+- WSV Snapshotting: პერიოდულად საკონტროლო პუნქტი DS მდგომარეობს დაქუცმაცებულ, წაშლის კოდირებულ კადრებში, სათაურებში ჩაწერილი ვალდებულებებით. სნეპშოტებს შორის შეინახეთ ცვლილებების ჟურნალი. საჯარო კადრები ფართოდ არის გატეხილი; პირადი სნეპშოტები რჩება კერძო ვალიდატორებში.
+- Proof-Carrying Access: კონტრაქტებს შეუძლიათ მიაწოდონ (ან მოითხოვონ) სახელმწიფო მტკიცებულებები (Merkle/Verkle), რომლებიც დამაგრებულია სნეპშოტის ვალდებულებებით. კერძო DS-მა შეიძლება მიაწოდოს ნულოვანი ცოდნის ატესტაციები ნედლი მტკიცებულებების ნაცვლად.
 
-5) Retention and Pruning
-- No pruning for public DS: retain all Kura bodies and WSV snapshots via DA (horizontal scaling). Private DS may define internal retention, but exported commitments remain immutable. Nexus layer retains all Nexus Blocks and DS artifact commitments.
+5) შეკავება და მორთვა
+- არ არის გასხვლა საჯარო DS-ისთვის: შეინახეთ ყველა Kura სხეული და WSV სნეპშოტი DA (ჰორიზონტალური მასშტაბირება) მეშვეობით. კერძო DS-მა შეიძლება განსაზღვროს შიდა შეკავება, მაგრამ ექსპორტირებული ვალდებულებები უცვლელი რჩება. Nexus ფენა ინარჩუნებს ყველა Nexus ბლოკს და DS არტეფაქტის ვალდებულებებს.
 
-Networking and Node Roles
-- Global Validators: Participate in nexus consensus, validate Nexus Blocks and DS artifacts, perform DA checks for public DS.
-- Data Space Validators: Run DS consensus, execute contracts, manage local Kura/WSV, handle DA for their DS.
-- DA Nodes (optional): Store/publicize public blobs, facilitate sampling. For private DS, DA nodes are co-located with validators or trusted custodians.
+ქსელის და კვანძის როლები
+- გლობალური ვალიდატორები: მიიღეთ მონაწილეობა Nexus-ის კონსენსუსში, დაადასტურეთ Nexus ბლოკები და DS არტეფაქტები, შეასრულეთ DA შემოწმებები საჯარო DS-ისთვის.
+- მონაცემთა სივრცის ვალიდატორები: გაუშვით DS კონსენსუსი, შეასრულეთ კონტრაქტები, მართეთ ადგილობრივი Kura/WSV, მართეთ DA მათი DS.
+- DA კვანძები (არასავალდებულო): შეინახეთ/გამოაქვეყნეთ საჯარო ბლოგები, გაამარტივეთ შერჩევის პროცესი. კერძო DS-ისთვის, DA კვანძები განლაგებულია ვალიდატორებთან ან სანდო მცველებთან ერთად.
 
-System‑Level Improvements and Considerations
-- Sequencing/mempool decoupling: Adopt a DAG mempool (e.g., Narwhal‑style) feeding a pipelined BFT at the nexus layer to lower latency and improve throughput without changing the logical model.
-- DS quotas and fairness: Per‑DS per‑block quotas and weight caps to avoid head‑of‑line blocking and ensure predictable latency for private DS.
-- DS attestation (PQ): Default DS quorum certificates use ML‑DSA‑87 (Dilithium5‑class). This is post‑quantum and larger than EC signatures but acceptable at one QC per slot. DS may explicitly opt for ML‑DSA‑65/44 (smaller) or EC signatures if declared in the DS Manifest; public DS are strongly encouraged to keep ML‑DSA‑87.
-- DA attesters: For public DS, use VRF‑sampled regional attesters that issue DA certificates. The nexus committee validates certificates instead of raw shard sampling; private DS keep DA attestations internal.
-- Recursion and epoch proofs: Optionally aggregate multiple micro‑batches within a DS into one recursive proof per slot/epoch to keep proof sizes and verify time steady under high load.
-- Lane scaling (if needed): If a single global committee becomes a bottleneck, introduce K parallel sequencing lanes with a deterministic merge. This preserves a single global order while scaling horizontally.
-- Deterministic acceleration: Provide SIMD/CUDA feature‑gated kernels for hashing/FFT with a bit‑exact CPU fallback to preserve cross‑hardware determinism.
-- Lane activation thresholds (proposal): Enable 2–4 lanes if either (a) p95 finality exceeds 1.2 s for >3 consecutive minutes, or (b) per‑block occupancy exceeds 85% for >5 minutes, or (c) incoming tx rate would require >1.2× block capacity at sustained levels. Lanes deterministically bucket transactions by DSID hash and merge in the nexus block.
+სისტემის დონის გაუმჯობესება და მოსაზრებები
+- თანმიმდევრობა/მემპულის განცალკევება: მიიღეთ DAG mempool (მაგ., Narwhal-ის სტილში), რომელიც კვებავს მილსადენს BFT-ს ნექსუს შრეზე, რათა შეამციროს შეყოვნება და გააუმჯობესოს გამტარუნარიანობა ლოგიკური მოდელის შეცვლის გარეშე.
+- DS კვოტები და სამართლიანობა: Per-DS თითო ბლოკის კვოტები და წონის ლიმიტები, რათა თავიდან იქნას აცილებული მთავარი ხაზის დაბლოკვა და უზრუნველყოს პროგნოზირებადი შეყოვნება კერძო DS-ისთვის.
+- DS ატესტაცია (PQ): ნაგულისხმევი DS კვორუმის სერტიფიკატები იყენებს ML-DSA-87 (Dilithium5-კლასი). ეს არის პოსტკვანტური და უფრო დიდი ვიდრე EC ხელმოწერები, მაგრამ მისაღებია ერთი QC თითო სლოტზე. DS-ს შეუძლია ცალსახად აირჩიოს ML-DSA-65/44 (პატარა) ან EC ხელმოწერები, თუ გამოცხადებულია DS Manifest-ში; საჯარო DS კატეგორიულად მოწოდებულია შეინარჩუნოს ML-DSA-87.
+- DA ატესტატორები: საჯარო DS-ისთვის გამოიყენეთ VRF-ის ნიმუშის რეგიონული ატესტატორები, რომლებიც გასცემენ DA სერთიფიკატებს. ნექსუს კომიტეტი ამოწმებს სერთიფიკატებს ნედლი ნატეხების შერჩევის ნაცვლად; კერძო DS ინახავს DA ატესტაციას შიდა.
+- რეკურსიისა და ეპოქის მტკიცებულებები: სურვილისამებრ დააგროვეთ მრავალი მიკრო-სერიები DS-ში ერთ რეკურსიულ მტკიცებულებად თითო სლოტ/ეპოქაში, რათა შეინარჩუნოთ მტკიცებულების ზომები და შეამოწმოთ დრო სტაბილურად მაღალი დატვირთვის პირობებში.
+- ზოლის მასშტაბირება (საჭიროების შემთხვევაში): თუ ერთი გლობალური კომიტეტი ხდება ბოსტნეული, შემოიღეთ K პარალელური თანმიმდევრობის ზოლები დეტერმინისტული შერწყმით. ეს ინარჩუნებს ერთ გლობალურ წესრიგს ჰორიზონტალურად სკალირებისას.
+- დეტერმინისტული აჩქარება: მიაწოდეთ SIMD/CUDA ფუნქციებით შემოსაზღვრული ბირთვები ჰეშირებისთვის/FFT-ისთვის ცოტა ზუსტი CPU-ის სარეზერვო საშუალებით, რათა შეინარჩუნოთ ჯვარედინი აპარატურის დეტერმინიზმი.
+- ზოლის გააქტიურების ზღურბლები (წინადადება): ჩართეთ 2–4 ზოლი, თუ (a) p95 საბოლოოობა აღემატება 1.2 წმ-ს >3 ზედიზედ წუთის განმავლობაში, ან (ბ) თითო ბლოკის დაკავება აღემატება 85%-ს >5 წუთის განმავლობაში, ან (c) შემომავალი tx სიხშირე მოითხოვს ბლოკის მდგრად დონეს >1.2× სიმძლავრეზე. ბილიკები დეტერმინისტულად აგროვებს ტრანზაქციებს DSID-ის მიერ ჰეშირებით და ერწყმის nexus ბლოკში.
 
-Fees and Economics (Initial Defaults)
-- Gas unit: per‑DS gas token with metered compute/IO; fees are paid in the DS’s native gas asset. Conversion across DS is an application concern.
-- Inclusion priority: round‑robin across DS with per‑DS quotas to preserve fairness and 1s SLOs; within a DS, fee bidding can break ties.
-- Future: optional global fee market or MEV‑minimizing policies can be explored without changing atomicity or PQ proof design.
+მოსაკრებლები და ეკონომიკა (საწყისი ნაგულისხმევი)
+- გაზის დანადგარი: თითო DS გაზის ჟეტონი გაზომილი გამოთვლით/IO; საკომისიო გადახდილია DS-ის ბუნებრივი გაზის აქტივში. DS-ში კონვერტაცია აპლიკაციის პრობლემაა.
+- ჩართვის პრიორიტეტი: ორმხრივი დისტანცია DS-ში თითო DS კვოტით სამართლიანობისა და 1s SLO-ების შესანარჩუნებლად; DS-ის ფარგლებში, საფასურის შეთავაზებამ შეიძლება დაარღვიოს კავშირები.
+- მომავალი: არასავალდებულო გლობალური საფასურის ბაზარი ან MEV-ის მინიმიზაციის პოლიტიკა შეიძლება შეისწავლოს ატომურობის ან PQ მტკიცებულების დიზაინის შეცვლის გარეშე.
 
-Cross‑Data‑Space Workflow (Example)
-1) A user submits an AMX transaction touching public DS P and private DS S: move asset X from S to beneficiary B whose account is in P.
-2) Within the slot, P and S each execute their fragment against the slot snapshot. S verifies authorization and availability, updates its internal state, and produces a PQ validity proof and DA commitment (no private data leaked). P prepares the corresponding state update (e.g., mint/burn/locking in P according to policy) and its proof.
-3) The nexus committee verifies both DS proofs and DA certificates; if both verify within the slot, the transaction is committed atomically in the 1s Nexus Block, updating both DS roots in the global world state vector.
-4) If any proof or DA certificate is missing/invalid, the transaction aborts (no effects), and the client may resubmit for the next slot. No private data leaves S at any step.
+Cross-Data-Space Workflow (მაგალითი)
+1) მომხმარებელი წარადგენს AMX ტრანზაქციას, რომელიც ეხება საჯარო DS P-სა და კერძო DS S-ს: გადაიტანეთ X აქტივი S-დან B ბენეფიციარზე, რომლის ანგარიშიც არის P-ში.
+2) სლოტში, P და S თითოეული ასრულებს თავის ფრაგმენტს სლოტის სნეპშოტის წინააღმდეგ. S ამოწმებს ავტორიზაციას და ხელმისაწვდომობას, აახლებს მის შიდა მდგომარეობას და აწარმოებს PQ ვალიდურობის მტკიცებულებას და DA ვალდებულებას (პირადი მონაცემების გაჟონვა არ არის). P ამზადებს შესაბამის სახელმწიფო განახლებას (მაგ., პიტნა/დაწვა/დაბლოკვა P-ში პოლიტიკის მიხედვით) და მის დადასტურებას.
+3) Nexus კომიტეტი ამოწმებს როგორც DS მტკიცებულებებს, ასევე DA სერთიფიკატებს; თუ ორივე გადაამოწმებს სლოტში, ტრანზაქცია შესრულებულია ატომურად 1s Nexus ბლოკში, განახლდება ორივე DS ფესვი გლობალური მსოფლიო მდგომარეობის ვექტორში.
+4) თუ რაიმე მტკიცებულება ან DA სერთიფიკატი აკლია/არასწორია, ტრანზაქცია შეწყვეტს (არ ეფექტი) და კლიენტს შეუძლია ხელახლა გაგზავნოს შემდეგი სლოტისთვის. არცერთი პირადი მონაცემები არ ტოვებს S-ს არცერთ ნაბიჯზე.
 
-- Security Considerations
-- Deterministic Execution: IVM syscalls remain deterministic; cross‑DS outcomes are driven by AMX commit and finality, not wall‑clock or network timing.
-- Access Control: ISI permissions in private DS restrict who may submit transactions and what operations are allowed. Capability tokens encode fine‑grained rights for cross‑DS use.
-- Confidentiality: End‑to‑end encryption for private‑DS data, erasure‑coded shards stored only among authorized members, optional ZK proofs for external attestations.
-- DoS Resistance: Isolation at mempool/consensus/storage layers prevents public congestion from impacting private‑DS progress.
+- უსაფრთხოების მოსაზრებები
+- Deterministic Execution: IVM syscals რჩება დეტერმინისტული; cross-DS შედეგებს განაპირობებს AMX დასრულება და საბოლოოობა და არა კედლის საათი ან ქსელის დრო.
+- წვდომის კონტროლი: ISI ნებართვები კერძო DS-ში ზღუდავს ვის შეუძლია წარადგინოს ტრანზაქციები და რა ოპერაციებია დაშვებული. შესაძლებლობების ტოკენები კოდირებს წვრილმარცვლიან უფლებებს cross-DS გამოყენებისთვის.
+- კონფიდენციალურობა: დისტანციური დაშიფვრა პირადი DS მონაცემებისთვის, წაშლის კოდირებული ფრაგმენტები ინახება მხოლოდ ავტორიზებულ წევრებს შორის, არჩევითი ZK მტკიცებულებები გარე ატესტაციისთვის.
+- DoS რეზისტენტობა: იზოლაცია mempool/consensus/storage ფენებში ხელს უშლის საზოგადოებრივი გადატვირთულობის გავლენას კერძო DS-ის პროგრესზე.ცვლილებები Iroha კომპონენტებში
+- iroha_data_model: შემოიღეთ `DataSpaceId`, DS-კვალიფიცირებული იდენტიფიკატორები, AMX აღწერები (წაკითხვა/ჩაწერა კომპლექტები), მტკიცებულება/DA ვალდებულების ტიპები. Norito მხოლოდ სერიალიზაცია.
+- ivm: დაამატეთ syscals და pointer-ABI ტიპები AMX-ისთვის (`amx_begin`, `amx_commit`, `amx_touch`) და DA მტკიცებულებებისთვის; განაახლეთ ABI ტესტები/დოკუმენტები v1 პოლიტიკის მიხედვით.
+- iroha_core: განახორციელეთ nexus scheduler, Space Directory, AMX routing/validation, DS artifact-ის დადასტურება და პოლიტიკის აღსრულება DA შერჩევისა და კვოტებისთვის.
+- Space Directory & manifest loaders: Thread FMS-ის ბოლო წერტილის მეტამონაცემები (და სხვა საერთო კარგი სერვისის აღწერები) DS manifest-ის ანალიზის მეშვეობით, რათა კვანძებმა ავტომატურად აღმოაჩინონ ადგილობრივი სერვისის საბოლოო წერტილები მონაცემთა სივრცეში შეერთებისას.
+- kura: Blob მაღაზია წაშლის კოდირებით, ვალდებულებებით, ამოღების API-ებით, რომლებიც იცავენ კერძო/საჯარო პოლიტიკას.
+- WSV: Snapshotting, chunking, ვალდებულებები; მტკიცებულება API; ინტეგრაცია AMX კონფლიქტის გამოვლენასა და გადამოწმებასთან.
+- irohad: კვანძის როლები, ქსელი DA-სთვის, private-DS წევრობა/ავთენტიფიკაცია, კონფიგურაცია `iroha_config`-ის მეშვეობით (არ env გადართვა წარმოების ბილიკებზე).
 
-Changes to Iroha Components
-- iroha_data_model: Introduce `DataSpaceId`, DS‑qualified identifiers, AMX descriptors (read/write sets), proof/DA commitment types. Norito‑only serialization.
-- ivm: Add syscalls and pointer‑ABI types for AMX (`amx_begin`, `amx_commit`, `amx_touch`), and DA proofs; update ABI tests/docs per v1 policy.
-- iroha_core: Implement nexus scheduler, Space Directory, AMX routing/validation, DS artifact verification, and policy enforcement for DA sampling and quotas.
-- Space Directory & manifest loaders: Thread FMS endpoint metadata (and other common-good service descriptors) through DS manifest parsing so nodes auto-discover local service endpoints when joining a Data Space.
-- kura: Blob store with erasure coding, commitments, retrieval APIs respecting private/public policies.
-- WSV: Snapshotting, chunking, commitments; proof APIs; integration with AMX conflict detection and verification.
-- irohad: Node roles, networking for DA, private‑DS membership/authentication, configuration via `iroha_config` (no env toggles in production paths).
+კონფიგურაცია და დეტერმინიზმი
+- ყველა გაშვების ქცევა კონფიგურირებულია `iroha_config`-ის მეშვეობით და გადაბმული კონსტრუქტორების/ჰოსტების მეშვეობით. არ არის წარმოების env გადართვები.
+- აპარატურის აჩქარება (SIMD/NEON/METAL/CUDA) არის სურვილისამებრ და ფუნქციური კარიბჭით; დეტერმინისტული სარეზერვო ასლები უნდა აწარმოონ იდენტური შედეგები ტექნიკის მასშტაბით.
+ - პოსტ-კვანტური ნაგულისხმევი: ყველა DS ნაგულისხმევად უნდა გამოიყენოს PQ ვალიდობის მტკიცებულებები (STARK/FRI) და ML-DSA-87 DS QC-ებისთვის. ალტერნატივა მოითხოვს DS Manifest-ის მკაფიო დეკლარაციას და პოლიტიკის დამტკიცებას.
 
-Configuration and Determinism
-- All runtime behavior configured via `iroha_config` and threaded through constructors/hosts. No production env toggles.
-- Hardware acceleration (SIMD/NEON/METAL/CUDA) is optional and feature-gated; deterministic fallbacks must produce identical results across hardware.
- - Post‑Quantum default: All DS must use PQ validity proofs (STARK/FRI) and ML‑DSA‑87 for DS QCs by default. Alternatives require explicit DS Manifest declaration and policy approval.
+მიგრაციის გზა (Iroha 2 → Iroha 3)
+1) მონაცემთა მოდელში მონაცემთა სივრცის კვალიფიცირებული ID-ების და ნექსუს ბლოკის/გლობალური მდგომარეობის შემადგენლობის დანერგვა; დაამატეთ ფუნქციების დროშები, რათა შეინარჩუნოთ Iroha 2 ძველი რეჟიმი გადასვლისას.
+2) განახორციელეთ Kura/WSV წაშლის კოდირების სარეზერვო სისტემა ფუნქციების დროშების მიღმა, ადრეულ ფაზებში მიმდინარე ბექენდების ნაგულისხმევად შენახვა.
+3) დაამატეთ IVM სისკალები და მაჩვენებლის ტიპები AMX (ატომური მულტი-DS) ოპერაციებისთვის; გააფართოვოს ტესტები და დოკუმენტები; შეინახეთ ABI v1.
+4) მიაწოდეთ მინიმალური ნექსუს ჯაჭვი ერთი საჯარო DS და 1s ბლოკებით; შემდეგ დაამატეთ პირველი კერძო DS პილოტი მხოლოდ მტკიცებულებების/დავალებების ექსპორტზე.
+5) გაფართოვდეს სრულ ატომურ cross-DS ტრანზაქციებზე (AMX) DS-ლოკალური FASTPQ-ISI მტკიცებულებებით და DA ატესტერებით; ML-DSA-87 QC-ების ჩართვა DS-ში.
 
-Migration Path (Iroha 2 → Iroha 3)
-1) Introduce data‑space‑qualified IDs and nexus block/global state composition in data model; add feature flags to keep Iroha 2 legacy modes during transition.
-2) Implement Kura/WSV erasure‑coding backends behind feature flags, preserving current backends as defaults during early phases.
-3) Add IVM syscalls and pointer types for AMX (atomic multi‑DS) operations; extend tests and docs; keep ABI v1.
-4) Deliver minimal nexus chain with a single public DS and 1s blocks; then add first private‑DS pilot exporting proofs/commitments only.
-5) Expand to full atomic cross‑DS transactions (AMX) with DS‑local FASTPQ‑ISI proofs and DA attesters; enable ML‑DSA‑87 QCs across DS.
+ტესტირების სტრატეგია
+- ერთეულის ტესტები მონაცემთა მოდელის ტიპებისთვის, Norito ორმხრივი ტურები, AMX syscall ქცევები და მტკიცებულების კოდირება/გაშიფვრა.
+- IVM ტესტები ახალი syscalls და ABI goldens.
+- ინტეგრაციის ტესტები ატომური cross-DS ტრანზაქციებისთვის (დადებითი/უარყოფითი), DA ატესტერის შეყოვნების სამიზნეები (≤300 ms) და შესრულების იზოლაცია დატვირთვის ქვეშ.
+- უსაფრთხოების ტესტები DS QC ვერიფიკაციისთვის (ML‑DSA‑87), კონფლიქტის აღმოჩენის/შეწყვეტის სემანტიკისთვის და კონფიდენციალური ნამსხვრევების გაჟონვის თავიდან ასაცილებლად.
 
-Testing Strategy
-- Unit tests for data model types, Norito roundtrips, AMX syscall behaviors, and proof encoding/decoding.
-- IVM tests for new syscalls and ABI goldens.
-- Integration tests for atomic cross‑DS transactions (positive/negative), DA attester latency targets (≤300 ms), and performance isolation under load.
-- Security tests for DS QC verification (ML‑DSA‑87), conflict detection/abort semantics, and confidential shard leakage prevention.
+### NX-18 ტელემეტრია და Runbook აქტივები
 
-### NX-18 Telemetry & Runbook Assets
+- **Grafana დაფა:** `dashboards/grafana/nexus_lanes.json` ახლა ექსპორტს ახორციელებს NX‑18-ის მიერ მოთხოვნილი „Nexus Lane Finality & Oracles“ დაფა. პანელები ფარავს `histogram_quantile()` `iroha_slot_duration_ms`-ზე, `iroha_da_quorum_ratio`, DA ხელმისაწვდომობის გაფრთხილებებს (`sumeragi_da_gate_block_total{reason="missing_local_data"}`), Oracle-ის ფასი/მოძველება/TWAP/თმის შეჭრა, და ცოცხალი ოპერატორის პანელს შეუძლია დაამტკიცოს 2000004 I001 ოპერატორი. 1s სლოტი, DA და სახაზინო SLO შეკვეთილი მოთხოვნების გარეშე.
+- **Runbook:** `docs/source/runbooks/nexus_lane_finality.md` აფიქსირებს გამოძახების სამუშაო პროცესს (ზღვრები, ინციდენტის საფეხურები, მტკიცებულებების აღბეჭდვა, ქაოსის წვრთნები), რომელიც თან ახლავს დაფას, ასრულებს NX‑18-დან „ოპერატორის დაფების/გაშვების წიგნების გამოქვეყნების“ პუნქტს.
+- **ტელემეტრიის დამხმარეები:** ხელახლა გამოიყენეთ არსებული `scripts/telemetry/compare_dashboards.py` ექსპორტირებული დაფების გასასხვავებლად (დადგმის/პროდ დრიფტის თავიდან ასაცილებლად), გაუშვით `scripts/telemetry/nx18_acceptance.py --json-out artifacts/nx18/nx18_acceptance.json <metrics.prom>` `ci/check_nexus_lane_smoke.sh`-ში DA/quorum/oracle/buffer/8NI1-ის კარიბჭემდე და 40X გამოძახება SLO01-ის დროს. მარშრუტირებული კვალი ან ქაოსის რეპეტიცია, ასე რომ, ყოველი NX‑18 საბურღი დაარქივებს შესაბამის `nexus.audit.outcome` დატვირთვას.
 
-- **Grafana board:** `dashboards/grafana/nexus_lanes.json` now exports the “Nexus Lane Finality & Oracles” dashboard requested by NX‑18. Panels cover `histogram_quantile()` on `iroha_slot_duration_ms`, `iroha_da_quorum_ratio`, DA availability warnings (`sumeragi_da_gate_block_total{reason="missing_local_data"}`), oracle price/staleness/TWAP/haircut gauges, and the live `iroha_settlement_buffer_xor` buffer panel so operators can prove the 1 s slot, DA, and treasury SLOs without bespoke queries.
-- **Runbook:** `docs/source/runbooks/nexus_lane_finality.md` documents the on-call workflow (thresholds, incident steps, evidence capture, chaos drills) that accompanies the dashboard, fulfilling the “publish operator dashboards/runbooks” bullet from NX‑18.
-- **Telemetry helpers:** reuse the existing `scripts/telemetry/compare_dashboards.py` to diff exported dashboards (preventing staging/prod drift), run `scripts/telemetry/nx18_acceptance.py --json-out artifacts/nx18/nx18_acceptance.json <metrics.prom>` inside `ci/check_nexus_lane_smoke.sh` to gate DA/quorum/oracle/buffer/slot SLOs, and call `scripts/telemetry/check_nexus_audit_outcome.py` during routed-trace or chaos rehearsals so every NX‑18 drill archives the matching `nexus.audit.outcome` payload.
+ღია კითხვები (საჭიროა განმარტება)
+1) ტრანზაქციის ხელმოწერები: გადაწყვეტილება - საბოლოო მომხმარებლებს შეუძლიათ თავისუფლად აირჩიონ ხელმოწერის ნებისმიერი ალგორითმი, რომელსაც მათი სამიზნე DS ავრცელებს (Ed25519, secp256k1, ML-DSA და ა.შ.). მასპინძლებმა უნდა განახორციელონ მანიფესტებში მულტისიგ/მრუდის შესაძლებლობების დროშები, უზრუნველყონ დეტერმინისტული ჩანაცვლებები და დაადასტურონ შეყოვნების შედეგები ალგორითმების შერევისას. გამორჩეული: დაასრულეთ შესაძლებლობების მოლაპარაკების ნაკადი Torii/SDK-ებში და განაახლეთ მისაღები ტესტები.
+2) გაზის ეკონომიკა: თითოეულ DS-ს შეუძლია გაზის დასახელება ლოკალური ნიშნით, ხოლო გლობალური ანგარიშსწორების საფასური გადახდილია SORA XOR-ში. გამორჩეული: განსაზღვრეთ კონვერტაციის სტანდარტული გზა (საჯარო ხაზის DEX წინააღმდეგ ლიკვიდობის სხვა წყაროების წინააღმდეგ), ბუღალტრული აღრიცხვის საბუთები და გარანტიები DS-ისთვის, რომელიც სუბსიდირებს ან ნულოვანი ფასის ტრანზაქციებს.
+3) DA ატესტატორები: სამიზნე რიცხვი თითო რეგიონში და ზღურბლზე (მაგ., 64 ნიმუში, 43‑64 ML‑DSA‑87 ხელმოწერიდან) უნდა დააკმაყოფილოს ≤300 ms გამძლეობის შენარჩუნებისას. რომელი რეგიონები უნდა შევიტანოთ პირველი დღიდან?
+4) ნაგულისხმევი DA პარამეტრები: ჩვენ შევთავაზეთ საჯარო DS `k=32, m=16` და კერძო DS `k=16, m=8`. გსურთ უფრო მაღალი ზედმეტობის პროფილი (მაგ., `k=30, m=20`) გარკვეული DS კლასებისთვის?
+5) DS მარცვლოვნება: დომენები და აქტივები ორივე შეიძლება იყოს DS. მხარდაჭერილი უნდა იყოს იერარქიული DS (დომენი DS, როგორც აქტივის მშობელი DS) პოლიტიკის არასავალდებულო მემკვიდრეობით, თუ შევინარჩუნოთ ისინი v1-ისთვის?
+6) მძიმე ISI: რთული ISI-ებისთვის, რომლებსაც არ შეუძლიათ ქვემეორე მტკიცებულებების წარმოება, უნდა (ა) უარვყოთ ისინი, (ბ) დავყოთ პატარა ატომურ საფეხურებად ბლოკებზე, ან (გ) დავუშვათ დაგვიანებული ჩართვა აშკარა დროშებით?
+7) Cross-DS კონფლიქტები: კლიენტის მიერ გამოცხადებული წაკითხვის/ჩაწერის კომპლექტი საკმარისია, თუ მასპინძელმა უნდა გამოიტანოს და გააფართოვოს ის ავტომატურად უსაფრთხოების მიზნით (მეტი კონფლიქტის ფასად)?
 
-Open Questions (Clarification Needed)
-1) Transaction signatures: Decision — end users are free to pick any signing algorithm that their target DS advertises (Ed25519, secp256k1, ML‑DSA, etc.). Hosts must enforce multisig/curve capability flags in manifests, provide deterministic fallbacks, and document latency implications when mixing algorithms. Outstanding: finalise capability negotiation flow across Torii/SDKs and update admission tests.
-2) Gas economics: Each DS may denominate gas in a local token, while global settlement fees are paid in SORA XOR. Outstanding: define the standard conversion path (public-lane DEX vs. other liquidity sources), ledger accounting hooks, and safeguards for DS that subsidise or zero-price transactions.
-3) DA attesters: Target number per region and threshold (e.g., 64 sampled, 43‑of‑64 ML‑DSA‑87 signatures) to meet ≤300 ms while maintaining durability. Any regions we must include from day one?
-4) Default DA parameters: We proposed public DS `k=32, m=16` and private DS `k=16, m=8`. Do you want a higher redundancy profile (e.g., `k=30, m=20`) for certain DS classes?
-5) DS granularity: Domains and assets can both be DS. Should we support hierarchical DS (domain DS as parent of asset DS) with optional inheritance of policies, or keep them flat for v1?
-6) Heavy ISIs: For complex ISIs that cannot produce sub‑second proofs, should we (a) reject them, (b) split into smaller atomic steps across blocks, or (c) allow delayed inclusion with explicit flags?
-7) Cross‑DS conflicts: Is client‑declared read/write set sufficient, or should the host infer and expand it automatically for safety (at cost of more conflicts)?
-
-Appendix: Compliance with Repository Policies
-- Norito is used for all wire formats and JSON serialization via Norito helpers.
-- ABI v1 only; no runtime toggles for ABI policies. Syscall and pointer-type additions follow the documented evolution process with golden tests.
-- Determinism preserved across hardware; acceleration is optional and gated.
-- No serde in production paths; no environment-based configuration in production.
+დანართი: შესაბამისობა საცავის პოლიტიკასთან
+- Norito გამოიყენება ყველა მავთულის ფორმატისთვის და JSON სერიალიზაციისთვის Norito დამხმარეების მეშვეობით.
+- მხოლოდ ABI v1; არ არის გაშვების დრო ABI პოლიტიკისთვის. Syscall და მაჩვენებლის ტიპის დამატებები მოჰყვება დოკუმენტირებული ევოლუციის პროცესს ოქროს ტესტებით.
+- დეტერმინიზმი შენარჩუნებულია აპარატურაში; აჩქარება არჩევითია და დახურულია.
+- არ არის სერდი საწარმოო ბილიკებზე; არ არის გარემოზე დაფუძნებული კონფიგურაცია წარმოებაში.

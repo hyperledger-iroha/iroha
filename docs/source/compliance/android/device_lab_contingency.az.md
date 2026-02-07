@@ -7,18 +7,19 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 4016b82d86dc61a9de5e345950d02aeadf26db4cc26777c60db336c57479ba15
 source_last_modified: "2025-12-29T18:16:35.923121+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Device Lab Contingency Log
+# Cihaz Laboratoriyası Fövqəladə Hallar Qeydiyyatı
 
-Record every activation of the Android device-lab contingency plan here.
-Include enough detail for compliance reviews and future readiness audits.
+Android cihazı-laboratoriya fövqəladə hal planının hər aktivləşdirilməsini burada qeyd edin.
+Uyğunluq yoxlamaları və gələcək hazırlıq auditləri üçün kifayət qədər təfərrüatı daxil edin.
 
-| Date | Trigger | Actions Taken | Follow-ups | Owner |
+| Tarix | Tətik | Görülən tədbirlər | Təqiblər | Sahibi |
 |------|---------|---------------|------------|-------|
-| 2026-02-11 | Capacity fell to 78% after Pixel 8 Pro lane outage and delayed Pixel 8a delivery (see `android_strongbox_device_matrix.md`). | Promoted Pixel 7 lane to primary CI target, borrowed shared Pixel 6 fleet, scheduled Firebase Test Lab smoke tests for retail-wallet sample, and engaged external StrongBox lab per AND6 plan. | Replace faulty USB-C hub for Pixel 8 Pro (due 2026-02-15); confirm Pixel 8a arrival and rebaseline capacity report. | Hardware Lab Lead |
-| 2026-02-13 | Pixel 8 Pro hub replaced and Galaxy S24 approved, restoring capacity to 85%. | Returned Pixel 7 lane to secondary, re-enabled `android-strongbox-attestation` Buildkite job with tags `pixel8pro-strongbox-a` and `s24-strongbox-a`, updated readiness matrix + evidence log. | Monitor Pixel 8a delivery ETA (still pending); keep spare hub inventory documented. | Hardware Lab Lead |
+| 2026-02-11 | Pixel8 Pro zolağı kəsildikdən və Pixel8a çatdırılması gecikdikdən sonra tutum 78%-ə düşdü (bax: `android_strongbox_device_matrix.md`). | Pixel7 zolağı əsas CI hədəfinə yüksəldi, borc götürülmüş paylaşılan Pixel6 donanması, pərakəndə pul kisəsi nümunəsi üçün planlaşdırılmış Firebase Test Laboratoriyası tüstü testləri və AND6 planı üzrə xarici StrongBox laboratoriyası işə salındı. | Pixel8 Pro üçün nasaz USB-C mərkəzini dəyişdirin (2026-02-15 tarixinə); Pixel8a gəlişi və yenidən əsas tutum hesabatını təsdiqləyin. | Hardware Laboratoriyası Rəhbəri |
+| 2026-02-13 | Pixel8 Pro mərkəzi dəyişdirildi və GalaxyS24 təsdiqləndi, tutumu 85%-ə bərpa etdi. | `pixel8pro-strongbox-a` və `s24-strongbox-a` teqləri ilə ikinci dərəcəli, yenidən aktivləşdirilmiş `android-strongbox-attestation` Buildkite işinə Pixel7 zolağı qaytarıldı, yenilənmiş hazırlıq matrisi + sübut jurnalı. | Pixel8a çatdırılma ETA monitorinqi (hələ də gözləməkdədir); ehtiyat hub inventarını sənədləşdirin. | Hardware Laboratoriyası Rəhbəri |

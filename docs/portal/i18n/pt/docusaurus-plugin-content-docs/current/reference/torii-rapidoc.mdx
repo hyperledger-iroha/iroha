@@ -4,27 +4,28 @@ direction: ltr
 source: docs/portal/docs/reference/torii-rapidoc.mdx
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-import RapiDocPanel from '@site/src/components/RapiDocPanel.jsx';
+importar RapiDocPanel de '@site/src/components/RapiDocPanel.jsx';
 
-# Torii API (RapiDoc)
+# API Torii (RapiDoc)
 
-`RapiDoc` offers a compact, documentation-first rendering of the same Torii
-OpenAPI document. Use it when you need a denser overview or read-only review of
-request/response models.
+`RapiDoc` oferece uma renderização compacta e com documentação inicial do mesmo Torii
+Documento OpenAPI. Use-o quando precisar de uma visão geral mais densa ou de uma revisão somente leitura de
+modelos de solicitação/resposta.
 
-## Usage tips
+## Dicas de uso
 
-- Enter a bearer token to enable interactive calls. The value is forwarded as an
-  `X-TryIt-Auth` header and normalised by the proxy.
-- Configure `TRYIT_PROXY_PUBLIC_URL` when serving the portal so interactive
-  requests are routed through the staging proxy. The widget warns when the proxy
-  URL is missing.
-- Use the “OpenAPI snapshot” dropdown to load historical specs published by
-  `npm run sync-openapi`; the `Latest (tracked)` option always resolves to
+- Insira um token de portador para ativar chamadas interativas. O valor é encaminhado como um
+  Cabeçalho `X-TryIt-Auth` e normalizado pelo proxy.
+- Configurar `TRYIT_PROXY_PUBLIC_URL` ao atender o portal de forma interativa
+  as solicitações são roteadas por meio do proxy de teste. O widget avisa quando o proxy
+  O URL está faltando.
+- Use o menu suspenso “OpenAPI snapshot” para carregar especificações históricas publicadas por
+  `npm run sync-openapi`; a opção `Latest (tracked)` sempre resolve para
   `/openapi/torii.json`.
-- Combine with the “[Try it](/api/overview#try-it-sandbox-docs-3)” console when
-  working against staged gateways requiring the proxy.
+- Combine com o console “[Try it](/api/overview#try-it-sandbox-docs-3)” quando
+  trabalhando em gateways preparados que exigem o proxy.
 
-<RapiDocPanel />

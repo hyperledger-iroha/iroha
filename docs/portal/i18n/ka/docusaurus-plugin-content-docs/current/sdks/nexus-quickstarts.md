@@ -7,13 +7,15 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Nexus SDK quickstarts
 description: Minimal steps for Rust/JS/Swift/Android/CLI SDKs to connect to Sora Nexus.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-The full quickstart lives at `docs/source/nexus_sdk_quickstarts.md`. This portal
-summary highlights the shared prerequisites and per-SDK commands so developers
-can verify their setup quickly.
+სრული სწრაფი დაწყება მოქმედებს `docs/source/nexus_sdk_quickstarts.md`-ზე. ეს პორტალი
+რეზიუმე ხაზს უსვამს დეველოპერების საერთო წინაპირობებს და თითო SDK ბრძანებებს
+შეუძლია მათი დაყენების სწრაფად გადამოწმება.
 
-## Shared setup
+## გაზიარებული დაყენება
 
 ```bash
 export NEXUS_TORII_URL="https://torii.nexus.sora.org"
@@ -22,11 +24,11 @@ export NEXUS_CHAIN_ID="iroha3"
 export NEXUS_TRUSTED_PUBKEY="<peer-public-key>"
 ```
 
-Download the Nexus config bundle, install each SDK’s dependencies, and ensure
-TLS certificates match the release profile (see
+ჩამოტვირთეთ Nexus კონფიგურაციის ნაკრები, დააინსტალირეთ თითოეული SDK-ის დამოკიდებულებები და დარწმუნდით
+TLS სერთიფიკატები ემთხვევა გამოშვების პროფილს (იხ
 `docs/source/sora_nexus_operator_onboarding.md`).
 
-## Rust
+## ჟანგი
 
 ```bash
 cargo run --bin nexus_quickstart \
@@ -35,7 +37,7 @@ cargo run --bin nexus_quickstart \
   --chain "${NEXUS_CHAIN_ID}"
 ```
 
-Refs: `docs/source/sdk/rust.md`
+ნომრები: `docs/source/sdk/rust.md`
 
 ## JavaScript / TypeScript
 
@@ -43,16 +45,16 @@ Refs: `docs/source/sdk/rust.md`
 npm run demo:nexus
 ```
 
-The script instantiates `ToriiClient` with the env vars above and prints the
-latest block.
+სკრიპტი ახდენს `ToriiClient` ინსტანციას ზემოთ env vars-ით და ბეჭდავს
+უახლესი ბლოკი.
 
-## Swift
+## სვიფტი
 
 ```bash
 make swift-nexus-demo
 ```
 
-Uses `Torii.Client` from `IrohaSwift` to fetch `FindNetworkStatus`.
+იყენებს `Torii.Client`-დან `IrohaSwift`-დან `FindNetworkStatus`-ის მისაღებად.
 
 ## Android
 
@@ -62,7 +64,7 @@ Uses `Torii.Client` from `IrohaSwift` to fetch `FindNetworkStatus`.
   -PNEXUS_PIPELINE_URL="${NEXUS_PIPELINE_URL}"
 ```
 
-Runs the managed-device test hitting the Nexus staging endpoint.
+აწარმოებს მართული მოწყობილობის ტესტს Nexus დადგმის საბოლოო წერტილზე.
 
 ## CLI
 
@@ -73,13 +75,13 @@ iroha_cli app nexus quickstart \
   --chain-id "${NEXUS_CHAIN_ID}"
 ```
 
-## Troubleshooting
+## პრობლემების მოგვარება
 
-- TLS failures → confirm the CA bundle from the Nexus release tarball.
-- `ERR_UNKNOWN_LANE` → pass `--lane-id`/`--dataspace-id` once multi-lane routing
-  is enforced.
-- `ERR_SETTLEMENT_PAUSED` → check [Nexus operations](../nexus/nexus-operations) for the
-  incident process; governance may have paused the lane.
+- TLS წარუმატებლობა → დაადასტურეთ CA პაკეტი Nexus გამოშვების ტარბოლიდან.
+- `ERR_UNKNOWN_LANE` → გაიარეთ `--lane-id`/`--dataspace-id` ერთხელ მრავალ ზოლიანი მარშრუტით
+  აღსრულებულია.
+- `ERR_SETTLEMENT_PAUSED` → შეამოწმეთ [Nexus ოპერაციები](../nexus/nexus-operations)
+  ინციდენტის პროცესი; მმართველობამ შესაძლოა შეაჩერა ჩიხი.
 
-For deeper context and SDK-specific explanations see
+უფრო ღრმა კონტექსტისა და SDK-ს სპეციფიკური ახსნა-განმარტებისთვის იხ
 `docs/source/nexus_sdk_quickstarts.md`.

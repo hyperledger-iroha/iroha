@@ -9,13 +9,14 @@ source_last_modified: "2026-01-03T19:37:11.140795+00:00"
 translation_last_reviewed: 2026-02-07
 title: SoraFS CI Cookbook
 summary: Reference GitHub Actions workflow bundling sign + verify steps with review notes.
+translator: machine-google-reviewed
 ---
 
-# SoraFS CI Cookbook
+# SoraFS CI የማብሰያ መጽሐፍ
 
-This snippet mirrors the guidance in `docs/source/sorafs_ci_templates.md` and
-demonstrates how to integrate signing, verification, and proof checks into a
-single GitHub Actions job.
+ይህ ቅንጣቢ በ`docs/source/sorafs_ci_templates.md` እና መመሪያውን ያንጸባርቃል
+ፊርማን፣ ማረጋገጫን እና የማረጋገጫ ቼኮችን ከሀ ጋር እንዴት እንደሚያዋህድ ያሳያል
+ነጠላ GitHub ድርጊቶች ሥራ.
 
 ```yaml
 name: sorafs-cli-release
@@ -78,18 +79,18 @@ jobs:
         run: cosign verify-blob --bundle artifacts/manifest.bundle.json artifacts/manifest.to
 ```
 
-## Notes
+## ማስታወሻዎች
 
-- `sorafs_cli` must be available on the runner (e.g., `cargo install --path crates/sorafs_car --features cli` prior to these steps).
-- The workflow must supply an explicit OIDC audience (here `sorafs`); adjust `--identity-token-audience` to match your Fulcio policy.
-- The release pipeline should archive `artifacts/manifest.bundle.json`, `artifacts/manifest.sig`, and `artifacts/proof.json` for governance review.
-- Deterministic sample artefacts live in `fixtures/sorafs_manifest/ci_sample`; copy them into tests when you need golden manifests, chunk plans, or bundle JSON without recomputing the pipeline.
+- `sorafs_cli` በሩጫው ላይ መገኘት አለበት (ለምሳሌ፣ `cargo install --path crates/sorafs_car --features cli` ከእነዚህ እርምጃዎች በፊት)።
+- የስራ ሂደቱ ግልጽ የሆነ OIDC ታዳሚ ማቅረብ አለበት (እዚህ `sorafs`); ከእርስዎ Fulcio ፖሊሲ ጋር እንዲዛመድ `--identity-token-audience` ያስተካክሉ።
+- የሚለቀቀው የቧንቧ መስመር `artifacts/manifest.bundle.json`፣ `artifacts/manifest.sig` እና `artifacts/proof.json`ን ለአስተዳደር ግምገማ ማስቀመጥ አለበት።
+- ቆራጥ ናሙና ቅርሶች በ `fixtures/sorafs_manifest/ci_sample` ውስጥ ይኖራሉ; የቧንቧ መስመርን እንደገና ሳያስሉ ወርቃማ መግለጫዎችን፣ ቸንክ እቅዶችን ወይም JSONን ጠቅልለው ሲፈልጉ ወደ ሙከራዎች ይቅዱዋቸው።
 
-## Fixture Verification
+## ቋሚ ማረጋገጫ
 
-Deterministic artefacts for this workflow live under
-`fixtures/sorafs_manifest/ci_sample`. Pipelines can replay the steps above and
-diff their outputs against the canonical files, for example:
+ለዚህ የስራ ሂደት ቆራጥ ቅርሶች ይኖራሉ
+`fixtures/sorafs_manifest/ci_sample`. የቧንቧ መስመሮች ከላይ ያሉትን ደረጃዎች እና እንደገና ማጫወት ይችላሉ
+ውጤታቸውን ከቀኖናዊው ፋይሎች ጋር ይለያዩ፣ ለምሳሌ፡-
 
 ```bash
 diff -u fixtures/sorafs_manifest/ci_sample/car_summary.json artifacts/car_summary.json
@@ -100,7 +101,7 @@ diff -u fixtures/sorafs_manifest/ci_sample/manifest.verify.summary.json artifact
 diff -u fixtures/sorafs_manifest/ci_sample/proof.json artifacts/proof.json
 ```
 
-Empty diffs confirm the build produced byte-identical manifests, plans, and
-signature bundles. See `fixtures/sorafs_manifest/ci_sample/README.md` for a full
-directory listing and tips on templating release notes from the captured
-summaries.
+ባዶ ልዩነቶች የተሰራውን ባይት-ተመሳሳይ መግለጫዎች፣ ዕቅዶች እና ግንባታ ያረጋግጣሉ
+የፊርማ ቅርቅቦች. ለሙሉ `fixtures/sorafs_manifest/ci_sample/README.md` ይመልከቱ
+የማውጫ ዝርዝር እና ከተያዙት የመልቀቂያ ማስታወሻዎችን በመቅረጽ ላይ ጠቃሚ ምክሮች
+ማጠቃለያ

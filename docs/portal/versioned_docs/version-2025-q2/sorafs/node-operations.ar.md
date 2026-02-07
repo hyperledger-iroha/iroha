@@ -6,21 +6,21 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: a37b7ca6ae1aa64e6289ecc44b48ef29c1c884abc039123c1a03b9c35b2e7120
 source_last_modified: "2026-01-22T15:38:30.655980+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-
-:::note Canonical Source
-Mirrors `docs/source/sorafs/runbooks/sorafs_node_ops.md`. Keep both copies aligned across releases.
+:::ملاحظة المصدر الكنسي
+المرايا `docs/source/sorafs/runbooks/sorafs_node_ops.md`. حافظ على محاذاة كلا النسختين عبر الإصدارات.
 :::
 
-## Overview
+## نظرة عامة
 
-This runbook walks operators through validating an embedded `sorafs-node` deployment inside Torii. Each section maps directly to the SF-3 deliverables: pin/fetch round trips, restart recovery, quota rejection, and PoR sampling.
+يوجه دليل التشغيل هذا المشغلين عبر التحقق من صحة نشر `sorafs-node` المضمن داخل Torii. يعين كل قسم مباشرة مخرجات SF-3: رحلات الذهاب والإياب ذهابًا وإيابًا، وإعادة تشغيل الاسترداد، ورفض الحصص، وأخذ عينات PoR.
 
-## 1. Prerequisites
+## 1. المتطلبات الأساسية
 
-- Enable the storage worker in `torii.sorafs.storage`:
+- تمكين عامل التخزين في `torii.sorafs.storage`:
 
   ```toml
   [torii.sorafs.storage]
@@ -38,13 +38,13 @@ This runbook walks operators through validating an embedded `sorafs-node` deploy
   por_success_alpha = 0.25
   ```
 
-- Ensure the Torii process has read/write access to `data_dir`.
-- Confirm the node advertises the expected capacity via `GET /v1/sorafs/capacity/state` once a declaration is recorded.
-- When smoothing is enabled, dashboards expose both the raw and smoothed GiB·hour/PoR counters to highlight jitter-free trends alongside spot values.
+- تأكد من أن عملية Torii لديها حق الوصول للقراءة/الكتابة إلى `data_dir`.
+- تأكد من أن العقدة تعلن عن السعة المتوقعة عبر `GET /v1/sorafs/capacity/state` بمجرد تسجيل الإعلان.
+- عند تمكين التجانس، تعرض لوحات المعلومات كلاً من عدادات GiB·hour/PoR الأولية والملساء لتسليط الضوء على الاتجاهات الخالية من الارتعاش إلى جانب القيم الفورية.
 
-### CLI Dry Run (Optional)
+### التشغيل الجاف لـ CLI (اختياري)
 
-Before exposing HTTP endpoints you can sanity-check the storage backend with the bundled CLI.【crates/sorafs_node/src/bin/sorafs-node.rs#L1】
+قبل الكشف عن نقاط نهاية HTTP، يمكنك التحقق من سلامة الواجهة الخلفية للتخزين باستخدام واجهة سطر الأوامر (CLI) المجمعة.
 
 ```bash
 cargo run -p sorafs_node --bin sorafs-node ingest \
@@ -59,21 +59,21 @@ cargo run -p sorafs_node --bin sorafs-node export \
   --payload-out ./out/payload.bin
 ```
 
-The commands print Norito JSON summaries and refuse chunk-profile or digest mismatches, making them useful for CI smoke checks ahead of Torii wiring.【crates/sorafs_node/tests/cli.rs#L1】
+تقوم الأوامر بطباعة ملخصات Norito JSON وترفض ملف تعريف القطعة أو عدم تطابق الملخص، مما يجعلها مفيدة لعمليات فحص دخان CI قبل توصيل أسلاك Torii.
 
-Once Torii is live you can retrieve the same artefacts via HTTP:
+بمجرد نشر Torii، يمكنك استرداد نفس العناصر عبر HTTP:
 
 ```bash
 curl -s http://$TORII/v1/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
 curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
 ```
 
-Both endpoints are served by the embedded storage worker, so CLI smoke tests and gateway probes stay in sync.【crates/iroha_torii/src/sorafs/api.rs#L1207】【crates/iroha_torii/src/sorafs/api.rs#L1259】
+تتم خدمة كلا نقطتي النهاية بواسطة عامل التخزين المضمن، لذلك تظل اختبارات دخان CLI ومسبارات البوابة متزامنة.
 
-## 2. Pin → Fetch Round Trip
+## 2. دبوس → جلب رحلة ذهابًا وإيابًا
 
-1. Produce a manifest + payload bundle (for example with `iroha app sorafs toolkit pack ./payload.bin --manifest-out manifest.to --car-out payload.car --json-out manifest_report.json`).
-2. Submit the manifest with base64 encoding:
+1. قم بإنشاء بيان + حزمة حمولة (على سبيل المثال مع `iroha app sorafs toolkit pack ./payload.bin --manifest-out manifest.to --car-out payload.car --json-out manifest_report.json`).
+2. أرسل البيان بتشفير base64:
 
    ```bash
    curl -X POST http://$TORII/v1/sorafs/storage/pin \
@@ -81,8 +81,8 @@ Both endpoints are served by the embedded storage worker, so CLI smoke tests and
      -d @pin_request.json
    ```
 
-   The request JSON must contain `manifest_b64` and `payload_b64`. A successful response returns `manifest_id_hex` and the payload digest.
-3. Fetch the pinned data:
+   يجب أن يحتوي طلب JSON على `manifest_b64` و`payload_b64`. تؤدي الاستجابة الناجحة إلى إرجاع `manifest_id_hex` وملخص الحمولة.
+3. جلب البيانات المثبتة:
 
    ```bash
    curl -X POST http://$TORII/v1/sorafs/storage/fetch \
@@ -94,26 +94,26 @@ Both endpoints are served by the embedded storage worker, so CLI smoke tests and
      }'
    ```
 
-   Base64-decode the `data_b64` field and verify it matches the original bytes.
+   Base64-فك تشفير الحقل `data_b64` والتحقق من مطابقته للبايتات الأصلية.
 
-## 3. Restart Recovery Drill
+## 3. أعد تشغيل تمرين الاسترداد
 
-1. Pin at least one manifest as above.
-2. Restart the Torii process (or the entire node).
-3. Re-submit the fetch request. The payload must still be retrievable and the returned digest must match the pre-restart value.
-4. Inspect `GET /v1/sorafs/storage/state` to confirm `bytes_used` reflects the persisted manifests after the reboot.
+1. قم بتثبيت بيان واحد على الأقل كما هو مذكور أعلاه.
+2. أعد تشغيل عملية Torii (أو العقدة بأكملها).
+3. إعادة تقديم طلب الجلب. يجب أن تظل الحمولة قابلة للاسترجاع ويجب أن يتطابق الملخص الذي تم إرجاعه مع قيمة ما قبل إعادة التشغيل.
+4. افحص `GET /v1/sorafs/storage/state` للتأكد من أن `bytes_used` يعكس البيانات المستمرة بعد إعادة التشغيل.
 
-## 4. Quota Rejection Test
+## 4. اختبار رفض الحصص
 
-1. Temporarily lower `torii.sorafs.storage.max_capacity_bytes` to a small value (for example the size of a single manifest).
-2. Pin one manifest; the request should succeed.
-3. Attempt to pin a second manifest of similar size. Torii must reject the request with HTTP `400` and an error message containing `storage capacity exceeded`.
-4. Restore the normal capacity limit when finished.
+1. قم بخفض `torii.sorafs.storage.max_capacity_bytes` مؤقتًا إلى قيمة صغيرة (على سبيل المثال حجم بيان واحد).
+2. قم بتثبيت بيان واحد؛ يجب أن ينجح الطلب.
+3. حاول تثبيت بيان ثانٍ بنفس الحجم. يجب أن يرفض Torii الطلب باستخدام HTTP `400` ورسالة خطأ تحتوي على `storage capacity exceeded`.
+4. قم باستعادة الحد الطبيعي للسعة عند الانتهاء.
 
-## 5. PoR Sampling Probe
+## 5. مسبار أخذ عينات PoR
 
-1. Pin a manifest.
-2. Request a PoR sample:
+1. قم بتثبيت البيان.
+2. اطلب عينة PoR:
 
    ```bash
    curl -X POST http://$TORII/v1/sorafs/storage/por-sample \
@@ -125,21 +125,19 @@ Both endpoints are served by the embedded storage worker, so CLI smoke tests and
      }'
    ```
 
-3. Verify the response contains `samples` with the requested count and that each proof validates against the stored manifest root.
+3. تحقق من أن الاستجابة تحتوي على `samples` مع العدد المطلوب وأن كل دليل يتم التحقق من صحته مقابل جذر البيان المخزن.
 
-## 6. Automation Hooks
+## 6. خطافات الأتمتة
 
-- CI / smoke tests can reuse the targeted checks added in:
+- يمكن لاختبارات CI / الدخان إعادة استخدام الفحوصات المستهدفة المضافة في:
 
   ```bash
   cargo test -p sorafs_node --test pin_workflows
-  ```
+  ```والذي يغطي `pin_fetch_roundtrip`، و`pin_survives_restart`، و`pin_quota_rejection`، و`por_sampling_returns_verified_proofs`.
+- يجب على لوحات المعلومات تتبع:
+  -`torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
+  - `torii_sorafs_storage_pin_queue_depth` و`torii_sorafs_storage_fetch_inflight`
+  - ظهرت عدادات نجاح/فشل PoR عبر `/v1/sorafs/capacity/state`
+  - محاولات نشر التسوية عبر `sorafs_node_deal_publish_total{result=success|failure}`
 
-  which covers `pin_fetch_roundtrip`, `pin_survives_restart`, `pin_quota_rejection`, and `por_sampling_returns_verified_proofs`.
-- Dashboards should track:
-  - `torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
-  - `torii_sorafs_storage_pin_queue_depth` and `torii_sorafs_storage_fetch_inflight`
-  - PoR success/failure counters surfaced via `/v1/sorafs/capacity/state`
-  - Settlement publish attempts via `sorafs_node_deal_publish_total{result=success|failure}`
-
-Following these drills ensures the embedded storage worker can ingest data, survive restarts, respect configured quotas, and generate deterministic PoR proofs before the node advertises capacity to the wider network.
+يضمن اتباع هذه التدريبات أن يتمكن عامل التخزين المضمن من استيعاب البيانات، والبقاء على قيد الحياة في عمليات إعادة التشغيل، واحترام الحصص التي تم تكوينها، وإنشاء أدلة إثبات الأداء الحتمية قبل أن تعلن العقدة عن السعة للشبكة الأوسع.

@@ -4,144 +4,136 @@ direction: ltr
 source: docs/portal/docs/sorafs/storage-capacity-marketplace.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: storage-capacity-marketplace
-title: Mercado de capacidad de almacenamiento de SoraFS
-sidebar_label: Mercado de capacidad
-description: Plan SF-2c para el mercado de capacidad, ordenes de replicacion, telemetria y hooks de gobernanza.
+id : place de marché de capacité de stockage
+titre : Marché de capacité de stockage de SoraFS
+sidebar_label : Marché de capacité
+description : Plan SF-2c pour le marché de capacité, les ordonnances de réplication, la télémétrie et les crochets de gouvernement.
 ---
 
-:::note Fuente canónica
-Esta página refleja `docs/source/sorafs/storage_capacity_marketplace.md`. Mantén ambos lugares alineados mientras la documentación heredada siga activa.
+:::note Source canonique
+Cette page reflète `docs/source/sorafs/storage_capacity_marketplace.md`. Gardez les emplacements alignés au milieu de la documentation héritée si active.
 :::
 
-# Mercado de capacidad de almacenamiento de SoraFS (Borrador SF-2c)
+# Marché de capacité de stockage de SoraFS (Borrador SF-2c)
 
-El item del roadmap SF-2c introduce un mercado gobernado donde los providers de
-almacenamiento declaran capacidad comprometida, reciben ordenes de replicacion y
-ganan fees proporcionales a la disponibilidad entregada. Este documento delimita
-los entregables requeridos para la primera release y los divide en tracks accionables.
+L'élément de la feuille de route SF-2c introduit un marché géré par les fournisseurs de
+almacenamiento déclarera capacité compromise, recevoir des ordres de réplication et
+ganan frais proportionnels à la disponibilidad entregada. Ce document délimité
+les éléments requis pour la première sortie et les divisions en pistes accessibles.
 
-## Objetivos
+## Objets
 
-- Expresar compromisos de capacidad (bytes totales, limites por lane, expiracion)
-  en una forma verificable consumible por gobernanza, transporte SoraNet y Torii.
-- Asignar pins entre providers segun capacidad declarada, stake y restricciones de
-  politica mientras se mantiene comportamiento determinista.
-- Medir la entrega de storage (exito de replicacion, uptime, proofs de integridad) y
-  exportar telemetria para distribucion de fees.
-- Proveer procesos de revocacion y disputa para que providers deshonestos sean
-  penalizados o removidos.
+- Exprimer des compromis de capacité (octets totaux, limites par voie, expiration)
+  en une forme de consommable vérifiable par l'administration, le transport SoraNet et Torii.
+- Attribuer des broches entre les fournisseurs selon la capacité déclarée, la mise et les restrictions de
+  La politique à tous les égards se maintient dans un comportement déterministe.
+- Médir l'entrega de stockage (sortie de réplication, disponibilité, preuves d'intégrité) et
+  exporter des télémétries pour la distribution des frais.
+- Procéder aux processus de révocation et de litige pour les fournisseurs malhonnêtes de Sean
+  pénalisés ou supprimés.
 
-## Conceptos de dominio
+## Concepts de propriété
 
-| Concepto | Descripcion | Entregable inicial |
-|---------|-------------|---------------------|
-| `CapacityDeclarationV1` | Payload Norito que describe ID de provider, soporte de perfil de chunker, GiB comprometidos, limites por lane, pistas de pricing, compromiso de staking y expiracion. | Esquema + validador en `sorafs_manifest::capacity`. |
-| `ReplicationOrder` | Instruccion emitida por gobernanza que asigna un CID de manifest a uno o mas providers, incluyendo nivel de redundancia y metricas SLA. | Esquema Norito compartido con Torii + API de smart contract. |
-| `CapacityLedger` | Registry on-chain/off-chain que rastrea declaraciones de capacidad activas, ordenes de replicacion, metricas de rendimiento y accrual de fees. | Modulo de smart contract o stub de servicio off-chain con snapshot determinista. |
-| `MarketplacePolicy` | Politica de gobernanza que define stake minimo, requisitos de auditoria y curvas de penalizacion. | Struct de config en `sorafs_manifest` + documento de gobernanza. |
+| Concept | Description | Initiale entregable |
+|---------|-------------|-----------|
+| `CapacityDeclarationV1` | Charge utile Norito qui décrit l'ID du fournisseur, le support de profil de chunker, les compromis GiB, les limites de voie, les pistes de tarification, le compromis de jalonnement et l'expiration. | Esquema + validateur en `sorafs_manifest::capacity`. |
+| `ReplicationOrder` | Instruction émise par le gouvernement pour attribuer un CID de manifeste à un ou plusieurs fournisseurs, y compris le niveau de redondance et les mesures SLA. | Esquema Norito partagé avec Torii + API de contrat intelligent. |
+| `CapacityLedger` | Registre en chaîne/hors chaîne qui rastrea les déclarations de capacité active, les ordonnances de réplication, les mesures de rendu et l'accumulation des frais. | Module de contrat intelligent ou stub de service hors chaîne avec détermination d'instantané. |
+| `MarketplacePolicy` | Politique de gouvernance qui définit les enjeux minimes, les exigences des auditoires et les courbes de pénalisation. | Structure de configuration en `sorafs_manifest` + document de gouvernement. |
 
-### Esquemas implementados (estado)
+### Esquemas Implementados (État)
 
-## Desglose de trabajo
+## Desglose de travail
 
-### 1. Capa de esquema y registry
+### 1. Capa de esquema et registre| Tarée | Responsable(s) | Notes |
+|------|------|------|
+| Définissez `CapacityDeclarationV1`, `ReplicationOrderV1`, `CapacityTelemetryV1`. | Equipo de Storage / Gobernanza | Utiliser Norito ; inclure la version sémantique et les références de capacités. |
+| Implémenter les modules d'analyseur + validateur en `sorafs_manifest`. | Équipement de stockage | Imponer des identifiants monotones, des limites de capacité, des exigences d'enjeu. |
+| Extension des métadonnées du registre chunker avec `min_capacity_gib` par profil. | GT Outillage | Aidez les clients à exiger un minimum de matériel par profil. |
+| Rédiger le document `MarketplacePolicy` avec garde-corps d'admission et calendrier de pénalités. | Conseil de gouvernance | Publier des documents avec les défauts de la politique. |
 
-| Tarea | Responsable(s) | Notas |
-|------|----------------|------|
-| Definir `CapacityDeclarationV1`, `ReplicationOrderV1`, `CapacityTelemetryV1`. | Equipo de Storage / Gobernanza | Usar Norito; incluir versionado semantico y referencias de capacidades. |
-| Implementar modulos de parser + validador en `sorafs_manifest`. | Equipo de Storage | Imponer IDs monotónicos, limites de capacidad, requisitos de stake. |
-| Extender metadata del chunker registry con `min_capacity_gib` por perfil. | Tooling WG | Ayuda a los clientes a imponer requisitos minimos de hardware por perfil. |
-| Redactar el documento `MarketplacePolicy` con guardrails de admision y calendario de penalizaciones. | Governance Council | Publicar en docs junto con defaults de politica. |
+#### Définitions de l'esquema (implémentées)- `CapacityDeclarationV1` capture les compromis de capacité ferme du fournisseur, y compris les poignées canoniques du chunker, les références de capacités, les plafonds optionnels par voie, les listes de prix, les fenêtres de validation et les métadonnées. La validation est assurée sans zéro, gère les canoniques, les alias dédupliqués, les plafonds par voie à l'intérieur du total déclaré et la stabilité de GiB monotonique.【crates/sorafs_manifest/src/capacity.rs:28】
+- `ReplicationOrderV1` enlaza manifestes con cessions émises par la gouvernance qui incluent des objets de redondance, des cadres de SLA et des garanties par cession ; Les validateurs imposent des poignées canoniques, des fournisseurs uniques et des restrictions de délai avant que Torii ou le registre consomme la commande.【crates/sorafs_manifest/src/capacity.rs:301】
+- `CapacityTelemetryV1` exprime des instantanés par époque (GiB déclarés par rapport aux utilisateurs, contrôleurs de réplication, pourcentages de disponibilité/PoR) qui alimentent la distribution des frais. Les validations maintiennent l'utilisation dans la déclaration et les pourcentages dans 0-100%.【crates/sorafs_manifest/src/capacity.rs:476】
+- Les aides comparées (`CapacityMetadataEntry`, `PricingScheduleV1`, validateurs de voie/signature/SLA) ont prouvé la détermination de la validation des clés et signalent les erreurs que CI et les outils en aval peuvent réutiliser. 【crates/sorafs_manifest/src/capacity.rs:230】
+- `PinProviderRegistry` expose désormais l'instantané en chaîne via `/v1/sorafs/capacity/state`, en combinant les déclarations du fournisseur et les entrées du grand livre des frais avec Norito JSON déterministe.【crates/iroha_torii/src/sorafs/registry.rs:17】【crates/iroha_torii/src/sorafs/api.rs:64】
+- La couverture de validation exerçant l'application des poignées canoniques, la détection des duplications, les limites par voie, les gardes d'attribution de réplication et les contrôles de portée de télémétrie pour que les régressions apparaissent en CI de immédiat.【crates/sorafs_manifest/src/capacity.rs:792】
+- Outils pour les opérateurs : `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` convertit les spécifications lisibles en charges utiles Norito canoniques, blobs base64 et résumés JSON pour que les opérateurs préparent les appareils de `/v1/sorafs/capacity/declare`, `/v1/sorafs/capacity/telemetry` et les ordres de réplication avec validation local.【crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1】 Les appareils de référence sont présents en `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) et sont générés via `cargo run -p sorafs_car --bin sorafs_manifest_stub -- capacity replication-order`.
 
-#### Definiciones de esquema (implementadas)
+### 2. Intégration du plan de contrôle| Tarée | Responsable(s) | Notes |
+|------|------|------|
+| Gestionnaires d'agrégation Torii `/v1/sorafs/capacity/declare`, `/v1/sorafs/capacity/telemetry`, `/v1/sorafs/capacity/orders` avec charges utiles Norito JSON. | Équipe Torii | Réfléchir à la logique du validateur ; réutiliser les assistants Norito JSON. |
+| Propager les instantanés de `CapacityDeclarationV1` dans les métadonnées du tableau de bord de l'explorateur et des avions à récupérer sur la passerelle. | Groupe de travail sur l'outillage / Equipo de Orchestrator | Extender `provider_metadata` avec références de capacité pour que le scoring multi-source respecte les limites de la voie. |
+| Inspectez les commandes de réplication chez les clients de l'explorateur/passerelle pour guider les attributions et les conseils de basculement. | Équipe Réseautage TL / Gateway | Le constructeur du tableau de bord consomme des ordres fermes par la gouvernance. |
+| CLI d'outillage : extension `sorafs_cli` avec `capacity declare`, `capacity telemetry`, `capacity orders import`. | GT Outillage | Proveer JSON déterministe + sorties du tableau de bord. |
 
-- `CapacityDeclarationV1` captura compromisos de capacidad firmados por provider, incluyendo handles canonicos del chunker, referencias de capacidades, caps opcionales por lane, pistas de pricing, ventanas de validez y metadata. La validacion asegura stake no cero, handles canonicos, aliases deduplicados, caps por lane dentro del total declarado y contabilidad de GiB monotónica.【crates/sorafs_manifest/src/capacity.rs:28】
-- `ReplicationOrderV1` enlaza manifests con asignaciones emitidas por gobernanza que incluyen objetivos de redundancia, umbrales de SLA y garantias por asignacion; los validadores imponen handles canonicos, providers unicos y restricciones de deadline antes de que Torii o el registry consuman la orden.【crates/sorafs_manifest/src/capacity.rs:301】
-- `CapacityTelemetryV1` expresa snapshots por epoca (GiB declarados vs usados, contadores de replicacion, porcentajes de uptime/PoR) que alimentan la distribucion de fees. Las validaciones mantienen el uso dentro de la declaracion y los porcentajes dentro de 0-100%.【crates/sorafs_manifest/src/capacity.rs:476】
-- Helpers compartidos (`CapacityMetadataEntry`, `PricingScheduleV1`, validadores de lane/asignacion/SLA) proveen validacion determinista de keys y reportes de error que CI y tooling downstream pueden reutilizar.【crates/sorafs_manifest/src/capacity.rs:230】
-- `PinProviderRegistry` ahora expone el snapshot on-chain via `/v1/sorafs/capacity/state`, combinando declaraciones de provider y entradas del fee ledger con Norito JSON determinista.【crates/iroha_torii/src/sorafs/registry.rs:17】【crates/iroha_torii/src/sorafs/api.rs:64】
-- La cobertura de validacion ejercita enforcement de handles canonicos, deteccion de duplicados, limites por lane, guardas de asignacion de replicacion y checks de rango de telemetria para que las regresiones aparezcan en CI de inmediato.【crates/sorafs_manifest/src/capacity.rs:792】
-- Tooling para operadores: `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` convierte especificaciones legibles en payloads Norito canonicos, blobs base64 y resúmenes JSON para que los operadores preparen fixtures de `/v1/sorafs/capacity/declare`, `/v1/sorafs/capacity/telemetry` y ordenes de replicacion con validacion local.【crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1】 Los fixtures de referencia viven en `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) y se generan via `cargo run -p sorafs_car --bin sorafs_manifest_stub -- capacity replication-order`.
+### 3. Politique du marché et de la gouvernance
 
-### 2. Integracion del plano de control
+| Tarée | Responsable(s) | Notes |
+|------|------|------|
+| Ratificar `MarketplacePolicy` (mise minimo, multiplicadores de penalizacion, cadencia de auditoria). | Conseil de gouvernance | Publier des documents, capturer l'histoire des révisions. |
+| Agréger les crochets de gouvernement pour que le Parlement puisse approuver, rénover et révoquer les déclarations. | Conseil de gouvernance / équipe Smart Contract | Utiliser les événements Norito + ingérer les manifestes. |
+| Mettre en œuvre l'esquema de penalizaciones (réduction des frais, réduction de la caution) liée aux violations des télégraphies SLA. | Conseil de Gouvernance / Trésorerie | Sorties linéaires avec règlement de `DealEngine`. |
+| Documenter le processus de litige et la matrice d'escalade. | Documents / Gouvernance | Vinculaire du runbook de litige + helpers de CLI. |
 
-| Tarea | Responsable(s) | Notas |
-|------|----------------|------|
-| Agregar handlers Torii `/v1/sorafs/capacity/declare`, `/v1/sorafs/capacity/telemetry`, `/v1/sorafs/capacity/orders` con payloads Norito JSON. | Torii Team | Reflejar la logica del validador; reutilizar helpers Norito JSON. |
-| Propagar snapshots de `CapacityDeclarationV1` a metadata del scoreboard del orquestador y planes de fetch de gateway. | Tooling WG / Equipo de Orchestrator | Extender `provider_metadata` con referencias de capacidad para que el scoring multi-source respete limites por lane. |
-| Inyectar ordenes de replicacion en clientes de orquestador/gateway para guiar asignaciones y hints de failover. | Networking TL / Gateway team | El builder del scoreboard consume ordenes firmadas por gobernanza. |
-| Tooling CLI: extender `sorafs_cli` con `capacity declare`, `capacity telemetry`, `capacity orders import`. | Tooling WG | Proveer JSON determinista + salidas de scoreboard. |
+### 4. Médicaments et répartition des frais
 
-### 3. Politica del marketplace y gobernanza
+| Tarée | Responsable(s) | Notes |
+|------|------|------|
+| Développez la dose de dosage en Torii pour accepter `CapacityTelemetryV1`. | Équipe Torii | Valider GiB-heure, quitter PoR, disponibilité. |
+| Actualiser le pipeline de comptage de `sorafs_node` pour signaler l'utilisation sur commande + estadisticas SLA. | Équipe de stockage | Linéaire avec ordres de réplication et poignées du chunker. |
+| Pipeline de règlement : convertir des données télémétriques + des données de réplication en pages libellées en XOR, produire des listes de résultats pour l'administration et enregistrer l'état du grand livre. | Équipe Trésorerie / Stockage | Connectez-vous aux exportations de Deal Engine / Treasury. |
+| Exporter des tableaux de bord/alertes pour la santé du comptage (backlog de ingesta, télémétrie obsolète). | Observabilité | Extension du pack de Grafana référencée par SF-6/SF-7. |- Torii ahora expone `/v1/sorafs/capacity/telemetry` et `/v1/sorafs/capacity/state` (JSON + Norito) pour que les opérateurs souhaitent des instantanés de télémétrie par époque et que les inspecteurs récupèrent le grand livre canonique pour les auditoires ou les empaquetés de preuve.【crates/iroha_torii/src/sorafs/api.rs:268】【crates/iroha_torii/src/sorafs/api.rs:816】
+- L'intégration `PinProviderRegistry` garantit que les commandes de réplication sont accessibles au point de terminaison mismo ; les assistants de CLI (`sorafs_cli capacity telemetry --from-file telemetry.json`) valident et publient désormais la télémétrie des exécutions automatisées avec hachage déterministe et résolution des alias.
+- Les instantanés de mesure produits par les entrées `CapacityTelemetrySnapshot` sont fixés à l'instantané `metering`, et les exportations Prometheus alimentent le tableau Grafana liste pour importer en `docs/source/grafana_sorafs_metering.json` pour que les équipements de fabrication soient surveillés. accumulation de GiB-heure, frais nano-SORA projetés et cumul de SLA en temps réel.【crates/iroha_torii/src/routing.rs:5143】【docs/source/grafana_sorafs_metering.json:1】
+- Lorsque le lissage de mesure est activé, l'instantané inclut `smoothed_gib_hours` et `smoothed_por_success_bps` pour que les opérateurs comparent les valeurs avec EMA en face des contadores bruts que la gouvernance utilise pour les pages.【crates/sorafs_node/src/metering.rs:401】
 
-| Tarea | Responsable(s) | Notas |
-|------|----------------|------|
-| Ratificar `MarketplacePolicy` (stake minimo, multiplicadores de penalizacion, cadencia de auditoria). | Governance Council | Publicar en docs, capturar historial de revisiones. |
-| Agregar hooks de gobernanza para que el Parlamento pueda aprobar, renovar y revocar declaraciones. | Governance Council / Smart Contract team | Usar eventos Norito + ingesta de manifests. |
-| Implementar el esquema de penalizaciones (reduccion de fees, slashing de bond) ligado a violaciones de SLA telegrafiadas. | Governance Council / Treasury | Alinear con outputs de settlement de `DealEngine`. |
-| Documentar el proceso de disputa y la matriz de escalamiento. | Docs / Governance | Vincular al runbook de disputa + helpers de CLI. |
+### 5. Manière de litiges et de révocations
 
-### 4. Medicion y distribucion de fees
+| Tarée | Responsable(s) | Notes |
+|------|------|------|
+| Définissez la charge utile `CapacityDisputeV1` (demandante, preuve, objet du fournisseur). | Conseil de gouvernance | Esquema Norito + validateur. |
+| Support de CLI pour lancer des litiges et répondre (avec accessoires de preuve). | GT Outillage | Assurez-vous que le hachage est déterminant pour le bundle de preuves. |
+| Agréger les contrôles automatisés pour les violations répétées du SLA (auto-escalado a disputa). | Observabilité | Parapluies d'alerte et crochets de gouvernement. |
+| Documenter le manuel de révocation (période de grâce, évacuation des données Pineados). | Équipe Documents/Stockage | Vinculaire du document politique et du runbook des opérateurs. |
 
-| Tarea | Responsable(s) | Notas |
-|------|----------------|------|
-| Expandir la ingesta de metering en Torii para aceptar `CapacityTelemetryV1`. | Torii Team | Validar GiB-hour, exito PoR, uptime. |
-| Actualizar el pipeline de metering de `sorafs_node` para reportar utilizacion por orden + estadisticas SLA. | Storage Team | Alinear con ordenes de replicacion y handles de chunker. |
-| Pipeline de settlement: convertir telemetria + datos de replicacion en pagos denominados en XOR, producir resúmenes listos para gobernanza y registrar el estado del ledger. | Treasury / Storage Team | Conectar con exportaciones de Deal Engine / Treasury. |
-| Exportar dashboards/alertas para salud del metering (backlog de ingesta, telemetria stale). | Observability | Extender el pack de Grafana referenciado por SF-6/SF-7. |
-
-- Torii ahora expone `/v1/sorafs/capacity/telemetry` y `/v1/sorafs/capacity/state` (JSON + Norito) para que operadores envien snapshots de telemetria por epoca y los inspectores recuperen el ledger canonico para auditorias o empaquetado de evidencia.【crates/iroha_torii/src/sorafs/api.rs:268】【crates/iroha_torii/src/sorafs/api.rs:816】
-- La integracion `PinProviderRegistry` asegura que las ordenes de replicacion sean accesibles por el mismo endpoint; helpers de CLI (`sorafs_cli capacity telemetry --from-file telemetry.json`) ahora validan y publican telemetria desde ejecuciones automatizadas con hashing determinista y resolucion de aliases.
-- Los snapshots de metering producen entradas `CapacityTelemetrySnapshot` fijadas al snapshot `metering`, y los exports Prometheus alimentan el tablero Grafana listo para importar en `docs/source/grafana_sorafs_metering.json` para que los equipos de facturacion monitoreen la acumulacion de GiB-hour, fees nano-SORA proyectados y cumplimiento de SLA en tiempo real.【crates/iroha_torii/src/routing.rs:5143】【docs/source/grafana_sorafs_metering.json:1】
-- Cuando el smoothing de metering esta habilitado, el snapshot incluye `smoothed_gib_hours` y `smoothed_por_success_bps` para que operadores comparen valores con EMA frente a contadores crudos que la gobernanza usa para pagos.【crates/sorafs_node/src/metering.rs:401】
-
-### 5. Manejo de disputas y revocaciones
-
-| Tarea | Responsable(s) | Notas |
-|------|----------------|------|
-| Definir el payload `CapacityDisputeV1` (demandante, evidencia, provider objetivo). | Governance Council | Esquema Norito + validador. |
-| Soporte de CLI para iniciar disputas y responder (con adjuntos de evidencia). | Tooling WG | Asegurar hashing determinista del bundle de evidencia. |
-| Agregar checks automatizados para violaciones SLA repetidas (auto-escalado a disputa). | Observability | Umbrales de alerta y hooks de gobernanza. |
-| Documentar el playbook de revocacion (periodo de gracia, evacuacion de datos pineados). | Docs / Storage Team | Vincular a documento de politica y runbook de operadores. |
-
-## Requisitos de testing y CI
+## Conditions requises pour les tests et CI
 
 - Tests unitarios para todos los validadores de esquema nuevos (`sorafs_manifest`).
-- Tests de integracion que simulan: declaracion -> orden de replicacion -> metering -> payout.
-- Workflow de CI para regenerar declaraciones/telemetria de capacidad y asegurar que las firmas se mantengan sincronizadas (extender `ci/check_sorafs_fixtures.sh`).
-- Tests de carga para la API del registry (simular 10k providers, 100k ordenes).
+- Tests d'intégration simulés : déclaration -> ordre de réplication -> comptage -> paiement.
+- Workflow de CI pour régénérer les déclarations/télémétries de capacité et assurer que les entreprises sont synchronisées (extender `ci/check_sorafs_fixtures.sh`).
+- Tests de charge pour l'API du registre (10 000 fournisseurs simultanés, 100 000 commandes).
 
-## Telemetria y dashboards
+## Télémétrie et tableaux de bord
 
-- Paneles de dashboard:
-  - Capacidad declarada vs utilizada por provider.
-  - Backlog de ordenes de replicacion y demora promedio de asignacion.
-  - Cumplimiento de SLA (uptime %, tasa de exito PoR).
-  - Accrual de fees y penalizaciones por epoca.
-- Alertas:
-  - Provider por debajo de la capacidad minima comprometida.
-  - Orden de replicacion atascada > SLA.
-  - Fallas en el pipeline de metering.
+- Panneaux de tableau de bord :
+  - Capacité déclarée ou utilisée par le fournisseur.
+  - Carnet de commandes de réplication et de demande de cession.
+  - Cumul de SLA (uptime %, tasa de exito PoR).
+  - Accumulation de frais et pénalités par époque.
+- Alertes :
+  - Provider por debajo de la capacidad minima compromis.
+  - Ordre de réplication atascada > SLA.
+  - Fallas en el pipeline de comptage.
 
-## Entregables de documentacion
+## Entregables de documentation- Guide de l'opérateur pour déclarer la capacité, rénover les compromis et surveiller l'utilisation.
+- Guide d'administration pour approuver les déclarations, émettre des ordonnances et gérer les litiges.
+- Référence d'API pour les points finaux de capacité et le format d'ordre de réplication.
+- FAQ du marché pour les développeurs.
 
-- Guia de operador para declarar capacidad, renovar compromisos y monitorear utilizacion.
-- Guia de gobernanza para aprobar declaraciones, emitir ordenes y manejar disputas.
-- Referencia de API para endpoints de capacidad y formato de orden de replicacion.
-- FAQ del marketplace para developers.
+## Liste de contrôle de préparation pour GA
 
-## Checklist de readiness para GA
+L'élément de la feuille de route **SF-2c** bloque le déploiement et la production sur des preuves concrètes
+acerca de contabilidad, manejo de disputas y onboarding. Utiliser les artefacts suivants
+pour maintenir les critères d’acceptation en synchronisation avec la mise en œuvre.
 
-El item de roadmap **SF-2c** bloquea el rollout en produccion sobre evidencia concreta
-acerca de contabilidad, manejo de disputas y onboarding. Usa los artefactos siguientes
-para mantener los criterios de aceptacion en sync con la implementacion.
-
-### Contabilidad nocturna y reconciliacion XOR
-- Exporta el snapshot de estado de capacidad y el export del ledger XOR para la misma
+### Contrôle nocturne et réconciliation XOR
+- Exporter l'instantané de l'état de capacité et l'exportation du grand livre XOR pour le même
   ventana, luego ejecuta:
   ```bash
   python3 scripts/telemetry/capacity_reconcile.py \
@@ -151,39 +143,39 @@ para mantener los criterios de aceptacion en sync con la implementacion.
     --json-out artifacts/sorafs/capacity/reconcile_$(date +%F).json \
     --prom-out "${SORAFS_CAPACITY_RECONCILE_TEXTFILE:-artifacts/sorafs/capacity/reconcile.prom}"
   ```
-  El helper sale con codigo no cero si hay settlements o penalizaciones faltantes/excesivas y
-  emite un resumen de Prometheus en formato textfile.
-- La alerta `SoraFSCapacityReconciliationMismatch` (en `dashboards/alerts/sorafs_capacity_rules.yml`)
-  dispara cuando las metricas de reconciliacion reportan gaps; los dashboards viven en
+  El helper sale con codigo no cero si hay colonies o penalizaciones faltantes/excesivas y
+  émettre un CV de Prometheus au format fichier texte.
+- L'alerte `SoraFSCapacityReconciliationMismatch` (en `dashboards/alerts/sorafs_capacity_rules.yml`)
+  dispara quando las metricas de réconciliation reportan lacunes; les tableaux de bord viven fr
   `dashboards/grafana/sorafs_capacity_penalties.json`.
-- Archiva el resumen JSON y los hashes en `docs/examples/sorafs_capacity_marketplace_validation/`
-  junto con los paquetes de gobernanza.
+- Archivage du CV JSON et des hachages en `docs/examples/sorafs_capacity_marketplace_validation/`
+  avec les paquets de gouvernement.
 
-### Evidencia de disputa y slashing
-- Presenta disputas via `sorafs_manifest_stub capacity dispute` (tests:
-  `cargo test -p sorafs_car --test capacity_cli`) para mantener payloads canonicos.
-- Ejecuta `cargo test -p iroha_core -- capacity_dispute_replay_is_deterministic` y las suites de
-  penalizacion (`record_capacity_telemetry_penalises_persistent_under_delivery`) para probar que
-  disputas y slashes se reproducen de manera determinista.
-- Sigue `docs/source/sorafs/dispute_revocation_runbook.md` para captura de evidencia y escalamiento;
-  enlaza las aprobaciones de strikes en el reporte de validacion.
+### Preuves de litige et de coupure
+- Présenter des litiges via `sorafs_manifest_stub capacity dispute` (tests :
+  `cargo test -p sorafs_car --test capacity_cli`) pour maintenir les charges utiles canoniques.
+- Exécution `cargo test -p iroha_core -- capacity_dispute_replay_is_deterministic` et les suites de
+  pénalité (`record_capacity_telemetry_penalises_persistent_under_delivery`) pour vérifier que
+  les disputes et les escarmouches se reproduisent de manière déterministe.
+- Sigue `docs/source/sorafs/dispute_revocation_runbook.md` pour la capture des preuves et l'escalade ;
+  enlaza les autorisations de grève dans le rapport de validation.
 
-### Onboarding de providers y exit smoke tests
-- Regenera artefactos de declaracion/telemetria con `sorafs_manifest_stub capacity ...` y
-  reejecuta los tests de CLI antes del submit (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`).
-- Envialos via Torii (`/v1/sorafs/capacity/declare`) y luego captura `/v1/sorafs/capacity/state` mas
-  screenshots de Grafana. Sigue el flujo de salida en `docs/source/sorafs/capacity_onboarding_runbook.md`.
-- Archiva artefactos firmados y outputs de reconciliacion dentro de
+### Intégration des prestataires et sortie des tests de fumée
+- Régénérer les artefacts de déclaration/télémétrie avec `sorafs_manifest_stub capacity ...` et
+  lance les tests de la CLI avant la soumission (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`).
+- Envialos via Torii (`/v1/sorafs/capacity/declare`) et ensuite capturer `/v1/sorafs/capacity/state` mas
+  captures d'écran de Grafana. Siguez el flujo de salida en `docs/source/sorafs/capacity_onboarding_runbook.md`.
+- Archives des artefacts confirmés et des résultats de réconciliation à l'intérieur de
   `docs/examples/sorafs_capacity_marketplace_validation/`.
 
-## Dependencias y secuenciacion
+## Dépendances et sécurité
 
-1. Terminar SF-2b (politica de admision) — el marketplace depende de providers validados.
-2. Implementar esquema + capa de registry (este doc) antes de la integracion de Torii.
-3. Completar el pipeline de metering antes de habilitar payouts.
+1. Terminaire SF-2b (politique d'admission) — le marché dépend des fournisseurs validés.
+2. Implémenter un schéma + une tête de registre (ce document) avant l'intégration de Torii.
+3. Compléter le pipeline de comptage avant d'autoriser les paiements.
 4. Paso final: habilitar distribucion de fees controlada por gobernanza una vez que los datos
-   de metering se verifiquen en staging.
+   de comptage se vérifie en mise en scène.
 
-El progreso debe rastrearse en el roadmap con referencias a este documento. Actualiza el
-roadmap una vez que cada seccion mayor (esquema, plano de control, integracion, metering,
-manejo de disputas) alcance estado feature complete.
+Le progrès doit être suivi de la feuille de route avec des références à ce document. Actualiser le
+feuille de route una vez que cada sección mayor (esquema, plano de control, integración, metering,
+manejo de disputas) alcance estado fonctionnalité complète.

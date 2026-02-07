@@ -7,51 +7,50 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 788902cfafc6c7db6d52d4237b46ffe78193efd57852bc3427a16d7f3cda2f9c
 source_last_modified: "2025-12-29T18:16:35.954370+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Sparse Merkle Update Example
+# Sparse Merkle-ի թարմացման օրինակ
 
-This worked example illustrates how the FASTPQ Stage 2 trace encodes a
-non-membership witness using the `neighbour_leaf` column. The sparse Merkle tree
-is binary over Poseidon2 field elements. Keys are converted to canonical
-32-byte little-endian strings, hashed to a field element, and the most
-significant bits select the branch at each level.
+Այս աշխատանքային օրինակը ցույց է տալիս, թե ինչպես է FASTPQ 2-րդ փուլի հետքը կոդավորում a
+ոչ անդամության վկա՝ օգտագործելով `neighbour_leaf` սյունակը: Մերկլի նոսր ծառը
+երկուական է Poseidon2 դաշտի տարրերի վրա: Բանալիները վերածվում են կանոնականի
+32 բայթ փոքր էնդյան տողեր՝ հեշված դաշտային տարրի մեջ և ամենաշատը
+զգալի բիթերը ընտրում են ճյուղը յուրաքանչյուր մակարդակում:
 
-## Scenario
+## Սցենար
 
-- Pre-state leaves
-  - `asset::alice::rose` -> hashed key `0x12b7...` with value `0x0000_0000_0000_0005`.
-  - `asset::bob::rose`   -> hashed key `0x1321...` with value `0x0000_0000_0000_0003`.
-- Update request: insert `asset::carol::rose` with value 2.
-- The canonical key hash for Carol expands to the 5-bit prefix `0b01011`. The
-  existing neighbours have prefixes `0b01010` (Alice) and `0b01101` (Bob).
+- Նախապետական թողնում
+  - `asset::alice::rose` -> հեշավորված բանալի `0x12b7...` `0x0000_0000_0000_0005` արժեքով:
+  - `asset::bob::rose` -> հեշավորված բանալի `0x1321...` `0x0000_0000_0000_0003` արժեքով:
+- Թարմացման հարցում. տեղադրեք `asset::carol::rose` 2 արժեքով:
+- Carol-ի կանոնական բանալու հեշը ընդլայնվում է մինչև `0b01011` 5-բիթանոց նախածանցը: Այն
+  գոյություն ունեցող հարևաններն ունեն `0b01010` (Ալիս) և `0b01101` (Բոբ) նախածանցները:
 
-Because there is no leaf whose prefix matches `0b01011`, the prover must provide
-additional evidence that the interval `(alice, bob)` is empty. Stage 2 populates
-the trace row across the columns `path_bit_{level}`, `sibling_{level}`,
-`node_in_{level}`, and `node_out_{level}` (with `level` in `[0, 31]`). All values
-are Poseidon2 field elements encoded in little-endian form:
+Քանի որ չկա տերեւ, որի նախածանցը համընկնում է `0b01011`-ի հետ, պրովերը պետք է տրամադրի
+լրացուցիչ ապացույց, որ `(alice, bob)` միջակայքը դատարկ է: 2-րդ փուլը համալրվում է
+հետագծային տողը `path_bit_{level}`, `sibling_{level}` սյունակների միջով,
+`node_in_{level}` և `node_out_{level}` (`level`-ով `[0, 31]`-ում): Բոլոր արժեքները
+Poseidon2 դաշտի տարրերն են, որոնք կոդավորված են փոքր-էնդիական ձևով.
 
-| level | `path_bit_level` | `sibling_level`             | `node_in_level`                      | `node_out_level`                     | Notes |
-| ----- | ---------------- | --------------------------- | ------------------------------------ | ------------------------------------ | ----- |
-| 0 | 1             | `0x241f...` (Alice leaf hash) | `0x0000...`                          | `0x4b12...` (`value_2 = 2`)          | Insert: start from zero, store new value. |
-| 1 | 1             | `0x7d45...` (empty right)     | Poseidon2(`node_out_0`, `sibling_0`) | Poseidon2(`sibling_1`, `node_out_1`) | Follow prefix bit 1. |
-| 2 | 0             | `0x03ae...` (Bob branch)      | Poseidon2(`node_out_1`, `sibling_1`) | Poseidon2(`node_in_2`, `sibling_2`)  | Branch flips because bit = 0. |
-| 3 | 1             | `0x9bc4...`                   | Poseidon2(`node_out_2`, `sibling_2`) | Poseidon2(`sibling_3`, `node_out_3`) | Higher levels continue hashing upward. |
-| 4 | 0             | `0xe112...`                   | Poseidon2(`node_out_3`, `sibling_3`) | Poseidon2(`node_in_4`, `sibling_4`)  | Root level; result is the post-state root. |
+| մակարդակ | `path_bit_level` | `sibling_level` | `node_in_level` | `node_out_level` | Ծանոթագրություններ |
+| ----- | ---------------- | ---------------------------- | ------------------------------------ | ------------------------------------ | ----- |
+| 0 | 1 | `0x241f...` (Alice leaf hash) | `0x0000...` | `0x4b12...` (`value_2 = 2`) | Տեղադրեք՝ սկսել զրոյից, պահել նոր արժեք: |
+| 1 | 1 | `0x7d45...` (դատարկ աջ) | Պոսեյդոն2(`node_out_0`, `sibling_0`) | Պոսեյդոն2(`sibling_1`, `node_out_1`) | Հետևեք նախածանց 1-ին: |
+| 2 | 0 | `0x03ae...` (Բոբ մասնաճյուղ) | Պոսեյդոն2(`node_out_1`, `sibling_1`) | Պոսեյդոն2(`node_in_2`, `sibling_2`) | Մասնաճյուղը շրջվում է, քանի որ բիթ = 0. |
+| 3 | 1 | `0x9bc4...` | Պոսեյդոն2(`node_out_2`, `sibling_2`) | Պոսեյդոն2(`sibling_3`, `node_out_3`) | Ավելի բարձր մակարդակները շարունակում են հաշվել դեպի վեր: |
+| 4 | 0 | `0xe112...` | Պոսեյդոն2(`node_out_3`, `sibling_3`) | Պոսեյդոն2(`node_in_4`, `sibling_4`) | Արմատային մակարդակ; արդյունքը հետպետական ​​արմատն է: |
 
-The `neighbour_leaf` column for this row is populated with Bob's leaf
-(`key = 0x1321...`, `value = 3`, `hash = Poseidon2(key, value) = 0x03ae...`). When
-verifying, the AIR checks that:
+Այս տողի `neighbour_leaf` սյունակը լցված է Բոբի տերևով
+(`key = 0x1321...`, `value = 3`, `hash = Poseidon2(key, value) = 0x03ae...`): Երբ
+ստուգելով՝ AIR-ը ստուգում է, որ.
 
-1. The supplied neighbour corresponds to the sibling used at level 2.
-2. The neighbour key is lexicographically greater than the inserted key and the
-   left sibling (Alice) is lexicographically smaller.
-3. Replacing the inserted leaf with the neighbour reproduces the pre-state root.
-
-Together these checks prove that no leaf existed for the interval `(0b01010,
-0b01101)` before the update. Implementations generating FASTPQ traces can use
-this layout verbatim; the numerical constants above are illustrative. For a full
-JSON witness, emit the columns exactly as they appear in the table above (with
-numeric suffixes per level), using little-endian byte strings serialized with
-Norito JSON helpers.
+1. Մատակարարված հարեւանը համապատասխանում է 2-րդ մակարդակում օգտագործվող եղբորը կամ եղբորը:
+2. Հարևան բանալին բառարանագրորեն ավելի մեծ է, քան տեղադրված բանալին և the
+   ձախ եղբայրը (Ալիսը) բառարանագրորեն ավելի փոքր է:
+3. Տեղադրված տերեւը հարեւանով փոխարինելով՝ վերարտադրում է նախապետական ​​արմատը։Այս ստուգումները միասին ապացուցում են, որ միջակայքի համար տերեւ գոյություն չի ունեցել «(0b01010,
+0b01101)` թարմացումից առաջ: FASTPQ հետքեր ստեղծող իրականացումները կարող են օգտագործվել
+այս դասավորությունը բառացիորեն; վերը նշված թվային հաստատունները պատկերավոր են: Համար լիարժեք
+JSON վկա, թողարկեք սյունակները ճիշտ այնպես, ինչպես երևում են վերևի աղյուսակում (հետ
+թվային վերջածանցներ յուրաքանչյուր մակարդակի համար), օգտագործելով քիչ-էնդիական բայթ տողեր, որոնք սերիականացված են
+Norito JSON օգնականներ:

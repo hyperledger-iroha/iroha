@@ -4,64 +4,62 @@ direction: ltr
 source: docs/portal/docs/sns/registry-schema.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note مستند ماخذ
+:::nota مستند ماخذ
 یہ صفحہ `docs/source/sns/registry_schema.md` کی عکاسی کرتا ہے اور پورٹل کی کینونیکل کاپی کے طور پر کام کرتا ہے۔ سورس فائل ترجمہ اپ ڈیٹس کے لیے برقرار رہے گی۔
 :::
 
-# Sora Name Service رجسٹری اسکیمہ (SN-2a)
+# Servicio de nombres Sora رجسٹری اسکیمہ (SN-2a)
 
-**حیثیت:** مسودہ 2026-03-24 -- SNS پروگرام ریویو کے لیے جمع کیا گیا  
-**روڈمیپ لنک:** SN-2a "Registry schema & storage layout"  
-**دائرہ:** Sora Name Service (SNS) کے لیے Norito اسٹرکچرز، لائف سائیکل اسٹیٹس اور اخراجی ایونٹس متعین کرنا تاکہ registry اور registrar کی implementations کنٹریکٹس، SDKs اور gateways میں deterministic رہیں۔
+**حیثیت:** Actualización 2026-03-24 -- SNS پروگرام ریویو کے لیے جمع کیا گیا  
+**روڈمیپ لنک:** SN-2a "Esquema de registro y diseño de almacenamiento"  
+**دائرہ:** Sora Name Service (SNS) کے لیے Norito اسٹرکچرز، لائف سائیکل اسٹیٹس اور اخراجی ایونٹس متعین کرنا تاکہ registro اور registrador کی implementaciones کنٹریکٹس، SDK اور gateways میں determinista رہیں۔
 
 یہ دستاویز SN-2a کے اسکیمہ ڈیلیورایبل کو مکمل کرتی ہے، جس میں درج ذیل شامل ہیں:
 
-1. شناختیں اور hashing قواعد (`SuffixId`, `NameHash`, selector derivation)۔
-2. نام ریکارڈز، suffix پالیسیز، قیمت tiers، ریونیو سپلٹس اور رجسٹری ایونٹس کے لیے Norito structs/enums۔
-3. deterministic replay کے لیے storage layout اور index prefixes۔
-4. رجسٹریشن، تجدید، grace/redemption، freeze اور tombstone پر مشتمل state machine۔
-5. DNS/gateway automation کے لیے canonical events۔
+1. شناختیں اور hash قواعد (`SuffixId`, `NameHash`, derivación del selector) ۔
+2. نام ریکارڈز، sufijo پالیسیز، قیمت niveles, ریونیو سپلٹس اور رجسٹری ایونٹس کے لیے Norito estructuras / enumeraciones ۔
+3. reproducción determinista کے لیے diseño de almacenamiento اور prefijos de índice۔
+4. رجسٹریشن، تجدید، gracia/redención, congelación اور lápida پر مشتمل máquina de estado۔
+5. Automatización de DNS/gateway کے لیے eventos canónicos۔
 
-## 1. شناختیں اور hashing
-
-| شناخت | وضاحت | اخذ |
+## 1. شناختیں اور hash| شناخت | وضاحت | اخذ |
 |------------|-------------|------------|
-| `SuffixId` (`u16`) | ٹاپ لیول suffixes (`.sora`, `.nexus`, `.dao`) کے لیے رجسٹری شناخت۔ [`sns_suffix_governance_charter.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns_suffix_governance_charter.md) کے suffix catalog کے مطابق۔ | governance vote سے مختص; `SuffixPolicyV1` میں محفوظ۔ |
-| `SuffixSelector` | suffix کی canonical string شکل (ASCII, lower-case)۔ | مثال: `.sora` -> `sora`. |
-| `NameSelectorV1` | رجسٹر شدہ لیبل کے لیے بائنری selector۔ | `struct NameSelectorV1 { version:u8 (=1); suffix_id:u16; label_len:u16; label_bytes:Vec<u8> }`. لیبل Norm v1 کے مطابق NFC + lower-case۔ |
-| `NameHash` (`[u8;32]`) | کنٹریکٹس، ایونٹس اور caches کے لیے بنیادی سرچ key۔ | `blake3(NameSelectorV1_bytes)`. |
+| `SuffixId` (`u16`) | ٹاپ لیول sufijos (`.sora`, `.nexus`, `.dao`) کے لیے رجسٹری شناخت۔ [`sns_suffix_governance_charter.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns_suffix_governance_charter.md) کے catálogo de sufijos کے مطابق۔ | votación de gobernanza سے مختص; `SuffixPolicyV1` Pantalla táctil |
+| `SuffixSelector` | sufijo کی cadena canónica شکل (ASCII, minúscula)۔ | Nombre: `.sora` -> `sora`. |
+| `NameSelectorV1` | رجسٹر شدہ لیبل کے لیے بائنری selector۔ | `struct NameSelectorV1 { version:u8 (=1); suffix_id:u16; label_len:u16; label_bytes:Vec<u8> }`. لیبل Norm v1 کے مطابق NFC + minúsculas۔ |
+| `NameHash` (`[u8;32]`) | کنٹریکٹس، ایونٹس اور cachés کے لیے بنیادی سرچ key۔ | `blake3(NameSelectorV1_bytes)`. |
 
-Determinism کی ضروریات:
+Determinismo کی ضروریات:
 
-- لیبلز Norm v1 (UTS-46 strict, STD3 ASCII, NFC) کے ذریعے normalize ہوتے ہیں۔ صارف کی strings کو hashing سے پہلے normalize کرنا لازم ہے۔
-- Reserved labels (`SuffixPolicyV1.reserved_labels`) کبھی registry میں داخل نہیں ہوتے؛ governance-only overrides `ReservedNameAssigned` ایونٹس خارج کرتے ہیں۔
+- لیبلز Norm v1 (UTS-46 estricto, STD3 ASCII, NFC) کے ذریعے normalizar ہوتے ہیں۔ صارف کی cadenas کو hash سے پہلے normalizar کرنا لازم ہے۔
+- Etiquetas reservadas (`SuffixPolicyV1.reserved_labels`) کبھی registro میں داخل نہیں ہوتے؛ anulaciones de solo gobernanza `ReservedNameAssigned` ایونٹس خارج کرتے ہیں۔
 
 ## 2. Norito ساختیں
 
-### 2.1 NameRecordV1
-
-| فیلڈ | قسم | نوٹس |
+### 2.1 NombreRegistroV1| فیلڈ | قسم | نوٹس |
 |-------|------|-------|
 | `suffix_id` | `u16` | `SuffixPolicyV1` کی ریفرنس۔ |
-| `selector` | `NameSelectorV1` | audit/debug کے لیے raw selector bytes۔ |
-| `name_hash` | `[u8; 32]` | maps/events کے لیے key۔ |
-| `normalized_label` | `AsciiString` | انسانی قابلِ پڑھائی لیبل (Norm v1 کے بعد)۔ |
-| `display_label` | `AsciiString` | steward کی casing؛ اختیاری cosmetics۔ |
-| `owner` | `AccountId` | renewals/transfers کنٹرول کرتا ہے۔ |
-| `controllers` | `Vec<NameControllerV1>` | اکاؤنٹ ایڈریسز، resolvers یا ایپ metadata کے حوالہ جات۔ |
+| `selector` | `NameSelectorV1` | auditoría/depuración کے لیے bytes del selector sin formato۔ |
+| `name_hash` | `[u8; 32]` | mapas/eventos کے لیے tecla۔ |
+| `normalized_label` | `AsciiString` | انسانی قابلِ پڑھائی لیبل (Norma v1 کے بعد)۔ |
+| `display_label` | `AsciiString` | mayordomo کی tripa؛ اختیاری cosméticos۔ |
+| `owner` | `AccountId` | renovaciones/traspasos کنٹرول کرتا ہے۔ |
+| `controllers` | `Vec<NameControllerV1>` | اکاؤنٹ ایڈریسز، solucionadores یا ایپ metadatos کے حوالہ جات۔ |
 | `status` | `NameStatus` | لائف سائیکل فلیگ (سیکشن 4 دیکھیں)۔ |
-| `pricing_class` | `u8` | suffix کے price tiers کا index (standard, premium, reserved)۔ |
-| `registered_at` | `Timestamp` | ابتدائی activation کا بلاک ٹائم۔ |
-| `expires_at` | `Timestamp` | ادا شدہ مدت کا اختتام۔ |
-| `grace_expires_at` | `Timestamp` | auto-renew grace کا اختتام (default +30 دن)۔ |
-| `redemption_expires_at` | `Timestamp` | redemption window کا اختتام (default +60 دن)۔ |
-| `auction` | `Option<NameAuctionStateV1>` | Dutch reopen یا premium auctions کی صورت میں موجود۔ |
-| `last_tx_hash` | `Hash` | اس ورژن کو پیدا کرنے والی ٹرانزیکشن کا deterministic pointer۔ |
-| `metadata` | `Metadata` | registrar کی arbitrarily metadata (text records, proofs)۔ |
+| `pricing_class` | `u8` | sufijo کے niveles de precios کا índice (estándar, premium, reservado)۔ |
+| `registered_at` | `Timestamp` | Activación de ابتدائی کا بلاک ٹائم۔ |
+| `expires_at` | `Timestamp` | ادا شدہ مدت کا اختام۔ |
+| `grace_expires_at` | `Timestamp` | gracia de renovación automática کا اختتام (predeterminado +30 días) ۔ |
+| `redemption_expires_at` | `Timestamp` | ventana de canje کا اختتام (predeterminado +60 دن)۔ |
+| `auction` | `Option<NameAuctionStateV1>` | Los holandeses reabren las subastas premium کی صورت میں موجود۔ |
+| `last_tx_hash` | `Hash` | اس ورژن کو پیدا کرنے والی ٹرانزیکشن کا puntero determinista۔ |
+| `metadata` | `Metadata` | registrador کی metadatos arbitrarios (registros de texto, pruebas) ۔ |
 
-معاون structs:
+Otras estructuras:
 
 ```text
 Enum NameStatus {
@@ -117,26 +115,24 @@ Enum AuctionKind {
 }
 ```
 
-### 2.2 SuffixPolicyV1
-
-| فیلڈ | قسم | نوٹس |
+### 2.2 Política de sufijo V1| فیلڈ | قسم | نوٹس |
 |-------|------|-------|
-| `suffix_id` | `u16` | بنیادی key؛ پالیسی ورژنز میں مستحکم۔ |
+| `suffix_id` | `u16` | بنیادی clave؛ پالیسی ورژنز میں مستحکم۔ |
 | `suffix` | `AsciiString` | مثال کے طور پر `sora`۔ |
-| `steward` | `AccountId` | governance charter میں متعین steward۔ |
+| `steward` | `AccountId` | carta de gobernanza میں متعین administrador۔ |
 | `status` | `SuffixStatus` | `Active`, `Paused`, `Revoked`. |
-| `payment_asset_id` | `AsciiString` | default settlement asset identifier (مثلا `xor#sora`)۔ |
-| `pricing` | `Vec<PriceTierV1>` | قیمت کے tiers کے coefficients اور مدت کے قواعد۔ |
+| `payment_asset_id` | `AsciiString` | identificador de activo de liquidación predeterminado (مثلا `xor#sora`)۔ |
+| `pricing` | `Vec<PriceTierV1>` | قیمت کے niveles کے coeficientes اور مدت کے قواعد۔ |
 | `min_term_years` | `u8` | خریدی گئی مدت کے لیے کم از کم حد۔ |
-| `grace_period_days` | `u16` | Default 30. |
-| `redemption_period_days` | `u16` | Default 60. |
+| `grace_period_days` | `u16` | Predeterminado 30. |
+| `redemption_period_days` | `u16` | Predeterminado 60. |
 | `max_term_years` | `u8` | پیشگی تجدید کی زیادہ سے زیادہ مدت۔ |
-| `referral_cap_bps` | `u16` | <=1000 (10%) charter کے مطابق۔ |
-| `reserved_labels` | `Vec<ReservedNameV1>` | governance کی فراہم کردہ فہرست مع assign ہدایات۔ |
-| `fee_split` | `SuffixFeeSplitV1` | treasury / steward / referral حصص (basis points)۔ |
-| `fund_splitter_account` | `AccountId` | escrow رکھنے اور فنڈز تقسیم کرنے والا اکاؤنٹ۔ |
+| `referral_cap_bps` | `u16` | <=1000 (10%) carta کے مطابق۔ |
+| `reserved_labels` | `Vec<ReservedNameV1>` | gobernanza کی فراہم کردہ فہرست مع asignar ہدایات۔ |
+| `fee_split` | `SuffixFeeSplitV1` | tesorería / administrador / referencia حصص (puntos básicos) ۔ |
+| `fund_splitter_account` | `AccountId` | depósito de garantía رکھنے اور فنڈز تقسیم کرنے والا اکاؤنٹ۔ |
 | `policy_version` | `u16` | ہر تبدیلی پر بڑھتا ہے۔ |
-| `metadata` | `Metadata` | توسیعی نوٹس (KPI covenant, compliance doc hashes)۔ |
+| `metadata` | `Metadata` | توسیعی نوٹس (pacto de KPI, hashes de documentos de cumplimiento) ۔ |
 
 ```text
 Struct PriceTierV1 {
@@ -164,18 +160,16 @@ Struct SuffixFeeSplitV1 {
 }
 ```
 
-### 2.3 ریونیو اور settlement ریکارڈز
-
-| Struct | فیلڈز | مقصد |
+### 2.3 ریونیو اور asentamiento ریکارڈز| Estructura | فیلڈز | مقصد |
 |--------|-------|------|
-| `RevenueShareRecordV1` | `suffix_id`, `epoch_id`, `treasury_amount`, `steward_amount`, `referral_amount`, `escrow_amount`, `settled_at`, `tx_hash`. | settlement epoch (ہفتہ وار) کے حساب سے routed ادائیگیوں کا deterministic ریکارڈ۔ |
-| `RevenueAccrualEventV1` | `name_hash`, `suffix_id`, `event`, `gross_amount`, `net_amount`, `referral_account`. | ہر ادائیگی پوسٹ ہونے پر emit (registration, renewal, auction)۔ |
+| `RevenueShareRecordV1` | `suffix_id`, `epoch_id`, `treasury_amount`, `steward_amount`, `referral_amount`, `escrow_amount`, `settled_at`, `tx_hash`. | época de asentamiento (ہفتہ وار) کے حساب سے enrutado ادائیگیوں کا determinista ریکارڈ۔ |
+| `RevenueAccrualEventV1` | `name_hash`, `suffix_id`, `event`, `gross_amount`, `net_amount`, `referral_account`. | ہر ادائیگی پوسٹ ہونے پر emitir (registro, renovación, subasta)۔ |
 
-تمام `TokenValue` فیلڈز Norito کی canonical fixed-point encoding استعمال کرتی ہیں اور کرنسی کوڈ متعلقہ `SuffixPolicyV1` میں declare ہوتا ہے۔
+تمام `TokenValue` فیلڈز Norito کی codificación canónica de punto fijo استعمال کرتی ہیں اور کرنسی کوڈ متعلقہ `SuffixPolicyV1` میں declarar ہوتا ہے۔
 
 ### 2.4 رجسٹری ایونٹس
 
-Canonical events DNS/gateway automation اور analytics کے لیے replay log فراہم کرتے ہیں۔
+Eventos canónicos Automatización de DNS/puerta de enlace Análisis y registro de reproducción Registro de reproducción
 
 ```text
 Struct RegistryEventV1 {
@@ -204,52 +198,48 @@ Enum RegistryEventKind {
 }
 ```
 
-ایونٹس کو replayable log (مثلا `RegistryEvents` domain) میں append کرنا ضروری ہے اور gateway feeds میں mirror کرنا ضروری ہے تاکہ DNS caches SLA کے اندر invalidate ہوں۔
+ایونٹس کو registro reproducible (dominio `RegistryEvents`) میں anexar کرنا ضروری ہے اور feeds de puerta de enlace میں mirror کرنا ضروری ہے تاکہ Cachés DNS SLA کے اندر invalidar ہوں۔
 
-## 3. Storage layout اور indexes
+## 3. Diseño de almacenamiento e índices
 
-| Key | وضاحت |
+| Clave | وضاحت |
 |-----|-------------|
-| `Names::<name_hash>` | `name_hash` سے `NameRecordV1` تک بنیادی map۔ |
-| `NamesByOwner::<AccountId, suffix_id>` | wallet UI کے لیے ثانوی index (pagination friendly)۔ |
-| `NamesByLabel::<suffix_id, normalized_label>` | conflicts detect کرتا ہے اور deterministic search فعال بناتا ہے۔ |
+| `Names::<name_hash>` | `name_hash` سے `NameRecordV1` تک بنیادی mapa۔ |
+| `NamesByOwner::<AccountId, suffix_id>` | billetera UI کے لیے ثانوی índice (paginación amigable) ۔ |
+| `NamesByLabel::<suffix_id, normalized_label>` | detección de conflictos کرتا ہے اور búsqueda determinista فعال بناتا ہے۔ |
 | `SuffixPolicies::<suffix_id>` | تازہ ترین `SuffixPolicyV1`. |
 | `RevenueShare::<suffix_id, epoch_id>` | `RevenueShareRecordV1` ہسٹری۔ |
-| `RegistryEvents::<u64>` | append-only log جس کی key sequence monotonic ہے۔ |
+| `RegistryEvents::<u64>` | registro de solo agregar جس کی secuencia de teclas monótona ہے۔ |تمام claves Norito tuplas کے ساتھ serializar ہوتی ہیں تاکہ hosts کے درمیان hash determinista رہے۔ actualizaciones de índice بنیادی ریکارڈ کے ساتھ atómicamente ہوتی ہیں۔
 
-تمام keys Norito tuples کے ساتھ serialize ہوتی ہیں تاکہ hosts کے درمیان hashing deterministic رہے۔ index updates بنیادی ریکارڈ کے ساتھ atomically ہوتی ہیں۔
+## 4. Máquina de estado del ciclo de vida
 
-## 4. Lifecycle state machine
-
-| State | Entry Conditions | Allowed Transitions | Notes |
+| Estado | Condiciones de entrada | Transiciones permitidas | Notas |
 |-------|------------------|--------------------|-------|
-| Available | جب `NameRecord` موجود نہ ہو۔ | `PendingAuction` (premium), `Active` (standard registration). | availability search صرف indexes پڑھتی ہے۔ |
-| PendingAuction | جب `PriceTierV1.auction_kind` != none ہو۔ | `Active` (auction settles), `Tombstoned` (no bids). | auctions `AuctionOpened` اور `AuctionSettled` emit کرتی ہیں۔ |
-| Active | رجسٹریشن یا تجدید کامیاب ہو۔ | `GracePeriod`, `Frozen`, `Tombstoned`. | `expires_at` transition چلاتا ہے۔ |
-| GracePeriod | جب `now > expires_at` ہو۔ | `Active` (on-time renewal), `Redemption`, `Tombstoned`. | Default +30 دن; resolve ہوتا ہے مگر flag ہوتا ہے۔ |
-| Redemption | `now > grace_expires_at` لیکن `< redemption_expires_at`. | `Active` (late renewal), `Tombstoned`. | کمانڈز پر penalty fee درکار ہے۔ |
-| Frozen | governance یا guardian freeze۔ | `Active` (remediation کے بعد), `Tombstoned`. | transfer یا controllers update نہیں کر سکتے۔ |
-| Tombstoned | رضاکارانہ surrender، مستقل dispute نتیجہ، یا redemption ختم۔ | `PendingAuction` (Dutch reopen) یا tombstoned رہتا ہے۔ | `NameTombstoned` ایونٹ میں وجہ شامل ہونی چاہیے۔ |
+| Disponible | جب `NameRecord` Hombre de ہو۔ | `PendingAuction` (premium), `Active` (registro estándar). | búsqueda de disponibilidad صرف índices پڑھتی ہے۔ |
+| Subasta Pendiente | جب `PriceTierV1.auction_kind` != ninguno ہو۔ | `Active` (se liquida la subasta), `Tombstoned` (sin ofertas). | subastas `AuctionOpened` اور `AuctionSettled` emiten کرتی ہیں۔ |
+| Activo | رجسٹریشن یا تجدید کامیاب ہو۔ | `GracePeriod`, `Frozen`, `Tombstoned`. | `expires_at` transición چلاتا ہے۔ |
+| Período de Gracia | جب `now > expires_at` ہو۔ | `Active` (renovación puntual), `Redemption`, `Tombstoned`. | Predeterminado +30 días; resolver ہوتا ہے مگر bandera ہوتا ہے۔ |
+| Redención | `now > grace_expires_at` en lugar de `< redemption_expires_at`. | `Active` (renovación tardía), `Tombstoned`. | کمانڈز پر penalización درکار ہے۔ |
+| Congelado | gobernanza یا guardián congelado۔ | `Active` (remediación کے بعد), `Tombstoned`. | transferir یا controladores actualizar نہیں کر سکتے۔ |
+| Lápida | رضاکارانہ rendición, مستقل disputa نتیجہ، یا redención ختم۔ | `PendingAuction` (reapertura holandesa) یا desechado رہتا ہے۔ | `NameTombstoned` ایونٹ میں وجہ شامل ہونی چاہیے۔ |Las transiciones de estado لازمی طور پر متعلقہ `RegistryEventKind` emiten کریں تاکہ cachés posteriores ہم آہنگ رہیں۔ Tombstoned نام جو Dutch reabre subastas میں داخل ہوں وہ `AuctionKind::DutchReopen` carga útil شامل کرتے ہیں۔
 
-State transitions لازمی طور پر متعلقہ `RegistryEventKind` emit کریں تاکہ downstream caches ہم آہنگ رہیں۔ Tombstoned نام جو Dutch reopen auctions میں داخل ہوں وہ `AuctionKind::DutchReopen` payload شامل کرتے ہیں۔
+## 5. Eventos canónicos y sincronización de puerta de enlace
 
-## 5. Canonical events اور gateway sync
+Puertas de enlace `RegistryEventV1` Configuración de sincronización y DNS/SoraFS Configuración de sincronización:
 
-Gateways `RegistryEventV1` کو سبسکرائب کرتے ہیں اور DNS/SoraFS کو یوں sync کرتے ہیں:
+1. Secuencia ایونٹ میں حوالہ کردہ تازہ ترین `NameRecordV1` حاصل کریں۔
+2. plantillas de resolución دوبارہ بنائیں (IH58 ترجیحی + comprimido (`sora`) segunda mejor dirección, registros de texto) ۔
+3. [`soradns_registry_rfc.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md) میں بیان کردہ Flujo de trabajo SoraDNS کے ذریعے pin de datos de zona کریں۔
 
-1. ایونٹ sequence میں حوالہ کردہ تازہ ترین `NameRecordV1` حاصل کریں۔
-2. resolver templates دوبارہ بنائیں (IH58 ترجیحی + compressed (`sora`) second‑best addresses, text records)۔
-3. [`soradns_registry_rfc.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md) میں بیان کردہ SoraDNS workflow کے ذریعے zone data pin کریں۔
-
-Event delivery guarantees:
+Garantías de entrega de eventos:
 
 - ہر ٹرانزیکشن جو `NameRecordV1` پر اثر ڈالے *لازمی* طور پر `version` کے ساتھ صرف ایک ایونٹ شامل کرے جو سختی سے بڑھتی ہو۔
-- `RevenueSharePosted` ایونٹس `RevenueShareRecordV1` سے emitted settlements کو reference کرتے ہیں۔
-- freeze/unfreeze/tombstone ایونٹس audit replay کے لیے `metadata` میں governance artefact hashes شامل کرتے ہیں۔
+- `RevenueSharePosted` ایونٹس `RevenueShareRecordV1` سے asentamientos emitidos کو referencia کرتے ہیں۔
+- congelar/descongelar/lápida ایونٹس repetición de auditoría کے لیے `metadata` میں hashes de artefactos de gobernanza شامل کرتے ہیں۔
 
-## 6. Norito payloads کی مثالیں
+## 6. Cargas útiles Norito کی مثالیں
 
-### 6.1 NameRecord مثال
+### 6.1 Registro de nombre مثال
 
 ```text
 NameRecordV1 {
@@ -279,7 +269,7 @@ NameRecordV1 {
 }
 ```
 
-### 6.2 SuffixPolicy مثال
+### 6.2 Política de sufijos
 
 ```text
 SuffixPolicyV1 {
@@ -307,10 +297,8 @@ SuffixPolicyV1 {
 }
 ```
 
-## 7. اگلے اقدامات
-
-- **SN-2b (Registrar API & governance hooks):** ان structs کو Torii کے ذریعے expose کریں (Norito اور JSON bindings) اور admission checks کو governance artefacts سے جوڑیں۔
-- **SN-3 (Auction & registration engine):** commit/reveal اور Dutch reopen logic کے لیے `NameAuctionStateV1` دوبارہ استعمال کریں۔
-- **SN-5 (Payment & settlement):** مالی reconciliation اور رپورٹنگ automation کے لیے `RevenueShareRecordV1` استعمال کریں۔
+## 7. اگلے اقدامات- **SN-2b (API de registrador y ganchos de gobernanza):** Las estructuras Torii exponen la información (Norito con enlaces JSON) y las comprobaciones de admisión y los artefactos de gobernanza.
+- **SN-3 (motor de subasta y registro):** confirmar/revelar Lógica de reapertura holandesa کے لیے `NameAuctionStateV1` دوبارہ استعمال کریں۔
+- **SN-5 (Pago y liquidación):** مالی conciliación اور رپورٹنگ automatización کے لیے `RevenueShareRecordV1` استعمال کریں۔
 
 سوالات یا تبدیلی کی درخواستیں `roadmap.md` میں SNS اپ ڈیٹس کے ساتھ درج کریں اور merge کے وقت `status.md` میں شامل کریں۔

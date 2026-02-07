@@ -4,41 +4,43 @@ direction: rtl
 source: docs/portal/docs/devportal/observability.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Observabilite et analytics du portail
+# مراقبة وتحليلات البوابة
 
-La roadmap DOCS-SORA exige des analytics, des probes synthetiques et une automatisation des liens
-casses pour chaque build de preview. Cette note documente la plomberie livre avec le portail afin
-que les operateurs puissent brancher le monitoring sans exposer les donnees des visiteurs.
+تتطلب خريطة الطريق DOCS-SORA التحليلات والمسبارات التركيبية وأتمتة الامتيازات
+الحالات من أجل كل بناء دي المعاينة. Cette note documente la plomberie livre avec le portail afin
+يمكن للمشغلين فرع المراقبة دون الكشف عن بيانات الزوار.
 
-## Tagging de release
+## وضع العلامات على الإصدار
 
-- Definir `DOCS_RELEASE_TAG=<identifier>` (fallback sur `GIT_COMMIT` ou `dev`) lors du
-  build du portail. La valeur est injectee dans `<meta name="sora-release">`
-  pour que les probes et dashboards distinguent les deploiements.
-- `npm run build` genere `build/release.json` (ecrit par
-  `scripts/write-checksums.mjs`) qui decrit le tag, le timestamp et le
-  `DOCS_RELEASE_SOURCE` optionnel. Le meme fichier est embarque dans les artefacts preview et
-  reference par le rapport du link checker.
+- تحديد `DOCS_RELEASE_TAG=<identifier>` (الرجوع إلى `GIT_COMMIT` أو `dev`) عند
+  بناء دو بورتال. يتم حقن القيمة في `<meta name="sora-release">`
+  لتمييز المسابير ولوحات المعلومات عن عمليات النشر.
+- `npm run build` النوع `build/release.json` (القيمة المكتوبة
+  `scripts/write-checksums.mjs`) الذي يصف العلامة والطابع الزمني وما إلى ذلك
+  خيار `DOCS_RELEASE_SOURCE`. يتم إغلاق ملف meme في معاينة القطع الأثرية وما إلى ذلك
+  مرجع على قدم المساواة لو علاقة دو مدقق الارتباط.
 
-## Analytics respectueuses de la vie privee
+## تحليلات تحترم الحياة الخاصة
 
-- Configurer `DOCS_ANALYTICS_ENDPOINT=<https://collector.example/ingest>` pour activer
-  le tracker leger. Les payloads contiennent `{ event, path, locale, release, ts }`
-  sans metadata de referrer ou d'IP, et `navigator.sendBeacon` est utilise des que possible
-  pour eviter de bloquer les navigations.
-- Controler l'echantillonnage avec `DOCS_ANALYTICS_SAMPLE_RATE` (0-1). Le tracker conserve
-  le dernier path envoye et n'emmet jamais d'evenements dupliques pour la meme navigation.
-- L'implementation se trouve dans `src/components/AnalyticsTracker.jsx` et est montee
-  globalement via `src/theme/Root.js`.
+- المهيئ `DOCS_ANALYTICS_ENDPOINT=<https://collector.example/ingest>` للتنشيط
+  le Tracker Leger. تحتوي الحمولات على `{ event, path, locale, release, ts }`
+  بدون البيانات الوصفية المرجعية أو IP، و`navigator.sendBeacon` يستخدم ما هو ممكن
+  لتجنب حجب التنقلات.
+- جهاز التحكم بالكهرباء مع `DOCS_ANALYTICS_SAMPLE_RATE` (0-1). الحفاظ على تعقب
+  المسار الأخير مبعوث ولا يوجد عدد من الأحداث المزدوجة للملاحة الميمية.
+- تم العثور على التنفيذ في `src/components/AnalyticsTracker.jsx` وهو قيد التنفيذ
+  العولمة عبر `src/theme/Root.js`.
 
-## Probes synthetiques
+## مجسات صناعية
 
-- `npm run probe:portal` emet des requetes GET sur des routes courantes
-  (`/`, `/norito/overview`, `/reference/torii-swagger`, etc.) et verifie que le
-  meta tag `sora-release` correspond a `--expect-release` (ou `DOCS_RELEASE_TAG`).
-  Exemple:
+- `npm run probe:portal` emet des requetes GET sur des المسارات الرئيسية
+  (`/`، `/norito/overview`، `/reference/torii-swagger`، وما إلى ذلك) وتحقق من ذلك
+  العلامة الوصفية `sora-release` تتوافق مع `--expect-release` (ou `DOCS_RELEASE_TAG`).
+  مثال:
 
 ```bash
 PORTAL_BASE_URL="https://docs.staging.sora" \
@@ -46,60 +48,60 @@ DOCS_RELEASE_TAG="preview-42" \
 npm run probe:portal -- --expect-release=preview-42
 ```
 
-Les echecs sont rapportes par path, ce qui facilite le gate CD sur le succes des probes.
+تعتبر هذه التأثيرات مطابقة للمسار، مما يسهل بوابة القرص المضغوط على نجاح المسبار.
 
-## Automatisation des liens casses
+## أتمتة حالات الامتيازات
 
-- `npm run check:links` scanne `build/sitemap.xml`, s'assure que chaque entree mappe vers un
-  fichier local (en verifiant les fallbacks `index.html`), et ecrit
-  `build/link-report.json` contenant la metadata de release, les totaux, les echecs et
-  l'empreinte SHA-256 de `checksums.sha256` (exposee comme `manifest.id`) afin que chaque
-  rapport puisse etre rattache au manifeste d'artefact.
-- Le script retourne un code non-zero quand une page manque, afin que la CI puisse bloquer
-  les releases sur des routes obsoletes ou cassees. Les rapports citent les chemins candidats
-  tentes, ce qui aide a tracer les regressions de routage jusqu'a l'arbre de docs.
+- `npm run check:links` scanne `build/sitemap.xml`، تأكد من أنه يمكنك كل إدخال من الخريطة إلى الأمم المتحدة
+  ملف محلي (والتحقق من الاحتياطيات `index.html`)، وكتابة
+  يحتوي `build/link-report.json` على البيانات التعريفية للإصدار، والمجموعات، والمؤثرات، وما إلى ذلك
+  يتم تشغيل SHA-256 de `checksums.sha256` (يُعرض باسم `manifest.id`) لكل ما تحتاجه
+  علاقة puisse etre ratache au maniste d'artefact.
+- يقوم البرنامج النصي بإرجاع رمز غير صفري عند توقف الصفحة، حتى يتمكن CI من حظره
+  الإصدارات على المسارات القديمة أو الأشرطة. تشير التقارير إلى مسارات المرشحين
+  هذه هي الطريقة التي تساعد في تتبع تراجعات التوجيه حتى شجرة المستندات.
 
-## Dashboard Grafana et alertes
+## لوحة المعلومات Grafana والتنبيهات
 
-- `dashboards/grafana/docs_portal.json` publie le tableau Grafana **Docs Portal Publishing**.
-  Il contient les panneaux suivants:
-  - *Gateway Refusals (5m)* utilise `torii_sorafs_gateway_refusals_total` scope par
-    `profile`/`reason` pour que les SRE detectent des pushes de politique incorrects ou des
-    echecs de tokens.
-  - *Alias Cache Refresh Outcomes* et *Alias Proof Age p90* suivent
-    `torii_sorafs_alias_cache_*` pour prouver que des proofs frais existent avant un cut
-    over DNS.
-  - *Pin Registry Manifest Counts* et la statistique *Active Alias Count* refletent le
-    backlog du pin-registry et le total des aliases pour que la gouvernance puisse auditer
-    chaque release.
-  - *Gateway TLS Expiry (hours)* met en avant l'approche de l'expiration du cert TLS du
-    gateway de publishing (seuil d'alerte a 72 h).
-  - *Replication SLA Outcomes* et *Replication Backlog* surveillent la telemetrie
-    `torii_sorafs_replication_*` pour s'assurer que toutes les replicas respectent le
-    niveau GA apres publication.
-- Utilisez les variables de template integrees (`profile`, `reason`) pour vous concentrer sur
-  le profil de publishing `docs.sora` ou enqueter sur des pics sur l'ensemble des gateways.
-- Le routage PagerDuty utilise les panneaux du dashboard comme preuve: les alertes
-  `DocsPortal/GatewayRefusals`, `DocsPortal/AliasCache` et `DocsPortal/TLSExpiry`
-  se declenchent lorsque la serie correspondante depasse son seuil. Liez le runbook de
-  l'alerte a cette page pour que l'on-call puisse rejouer les requetes Prometheus exactes.
+- `dashboards/grafana/docs_portal.json` نشر اللوحة Grafana **نشر بوابة المستندات**.
+  يحتوي على الألواح التالية:
+  - *رفض البوابة (5 م)* استخدم النطاق `torii_sorafs_gateway_refusals_total` على قدم المساواة
+    `profile`/`reason` حتى يتمكن SRE من اكتشاف الدفعات السياسية غير الصحيحة أو
+    echecs دي الرموز.
+  - *نتائج تحديث ذاكرة التخزين المؤقت للاسم المستعار* و *الاسم المستعار لإثبات العمر ص90* التالي
+    `torii_sorafs_alias_cache_*` لإثبات وجود البراهين الطازجة قبل القطع
+    عبر DNS.
+  - *عدد بيانات بيان التسجيل* والإحصائيات *عدد الأسماء المستعارة النشطة* يعكس
+    تراكم السجل السري وإجمالي الأسماء المستعارة حتى تتمكن الإدارة من تدقيق الحسابات
+    الافراج عن تشاك.
+  - *انتهاء صلاحية بوابة TLS (ساعات)* قبل اقتراب انتهاء صلاحية شهادة TLS du
+    بوابة النشر (seuil d'alerte a 72 h).
+  - *نتائج النسخ المتماثل لجيش تحرير السودان* و*تراكم النسخ المتماثل* يراقب القياس عن بعد
+    `torii_sorafs_replication_*` لضمان احترام جميع النسخ المتماثلة
+    نيفو GA بعد النشر.
+- استخدم متغيرات القالب المتكاملة (`profile`، `reason`) لتركيزك على
+  ملف تعريف النشر `docs.sora` أو ابحث عن صور مجموعة البوابات.
+- يستخدم توجيه PagerDuty لوحات لوحة القيادة كميزة أولية: التنبيهات
+  `DocsPortal/GatewayRefusals`، `DocsPortal/AliasCache` و`DocsPortal/TLSExpiry`
+  يتم إيقافه عند توقف المسلسل المراسل عن العمل. Liez le runbook de
+  قم بتنبيه هذه الصفحة حتى يتمكن المتصل من تجديد الطلبات Prometheus بدقة.
 
-## Assembler le tout
+## المجمع كله
 
-1. Pendant `npm run build`, definir les variables d'environnement de release/analytics et
-   laisser l'etape post-build emettre `checksums.sha256`, `release.json` et
+1. قلادة `npm run build`، تحدد متغيرات بيئة الإصدار/التحليلات وما إلى ذلك
+   اترك الشريط بعد البناء `checksums.sha256`، `release.json` وآخرون
    `link-report.json`.
-2. Executer `npm run probe:portal` contre l'hote preview avec
-   `--expect-release` branche sur le meme tag. Sauvegarder le stdout pour la checklist
-   de publishing.
-3. Executer `npm run check:links` pour echouer rapidement sur les entrees de sitemap cassees
-   et archiver le rapport JSON genere avec les artefacts preview. La CI depose le
-   dernier rapport dans `artifacts/docs_portal/link-report.json` pour que la gouvernance
-   puisse telecharger le bundle de preuves directement depuis les logs de build.
-4. Router l'endpoint analytics vers votre collecteur respectueux de la vie privee (Plausible,
-   OTEL ingest auto-heberge, etc.) et s'assurer que les taux d'echantillonnage sont documentes
-   par release afin que les dashboards interpretent correctement les volumes.
-5. La CI cable deja ces etapes via les workflows preview/deploy
-   (`.github/workflows/docs-portal-preview.yml`,
-   `.github/workflows/docs-portal-deploy.yml`), donc les dry runs locaux ne doivent couvrir
-   que le comportement specifique aux secrets.
+2. المنفذ `npm run probe:portal` لمكافحة المعاينة الساخنة مع
+   `--expect-release` فرع على علامة meme. قم بحفظ الإعدادات لقائمة التحقق
+   دي النشر.
+3. قم بتنفيذ `npm run check:links` للتكرار السريع لمدخلات ملفات خريطة الموقع
+   ويتم أرشفة علاقة JSON مع معاينة القطع الأثرية. La CI إيداع جنيه
+   أحدث علاقة في `artifacts/docs_portal/link-report.json` من أجل الحكم
+   يمكنك تنزيل حزمة Preuves مباشرة من سجلات الإنشاء.
+4. توجيه تحليلات نقطة النهاية إلى جامعتك التي تحترم الحياة الخاصة (معقول،
+   تقوم OTEL باستقبال الرحلات الجوية، وما إلى ذلك) وتتأكد من أن مستندات echantillonnage هي وثائق
+   قم بالإصدار حتى تتمكن لوحات المعلومات من تفسير وحدات التخزين بشكل صحيح.
+5. قم بتمرير كابل CI عبر معاينة/نشر سير العمل
+   (`.github/workflows/docs-portal-preview.yml`،
+   `.github/workflows/docs-portal-deploy.yml`)، لا تقم بتغطية المسارات الجافة المحلية
+   ما هو السلوك المحدد للأسرار.

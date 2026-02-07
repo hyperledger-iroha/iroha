@@ -4,46 +4,48 @@ direction: ltr
 source: docs/portal/docs/sorafs/multi-source-rollout.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: multi-source-rollout
-title: Runbook de déploiement multi-source et de mise en liste noire
-sidebar_label: Runbook déploiement multi-source
-description: Checklist opérationnelle pour des déploiements multi-source par étapes et la mise en liste noire d'urgence des fournisseurs.
+id: implementação de várias fontes
+título: Runbook de implementação multi-source e mise en liste noire
+sidebar_label: implementação de runbook multi-fonte
+descrição: Lista de verificação operacional para implantações multi-fonte por etapas e lista negra de emergência de fornecedores.
 ---
 
-:::note Source canonique
-Cette page reflète `docs/source/sorafs/runbooks/multi_source_rollout.md`. Gardez les deux copies synchronisées jusqu'à ce que la documentation héritée soit retirée.
+:::nota Fonte canônica
+Esta página reflete `docs/source/sorafs/runbooks/multi_source_rollout.md`. Garanta que as duas cópias sejam sincronizadas até que a documentação herdada seja retirada.
 :::
 
-## Objectif
+## Objetivo
 
-Ce runbook guide les SRE et les ingénieurs d'astreinte à travers deux workflows critiques :
+Este runbook guia o SRE e os engenheiros de gerenciamento através de duas críticas de fluxos de trabalho:
 
-1. Déployer l'orchestrateur multi-source par vagues contrôlées.
-2. Mettre en liste noire ou déprioriser les fournisseurs défaillants sans déstabiliser les sessions existantes.
+1. Implante o orquestrador multifonte por vagas controladas.
+2. Insira uma lista negra ou despreze os fornecedores deficientes sem desestabilizar as sessões existentes.
 
-Il suppose que la pile d'orchestration livrée sous SF-6 est déjà déployée (`sorafs_orchestrator`, API de plage de chunks du gateway, exporteurs de télémétrie).
+Suponho que a pilha de orquestração liberada sob SF-6 esteja implantada (`sorafs_orchestrator`, API de plage de chunks du gateway, exportadores de télémétrie).
 
-> **Voir aussi :** Le [Runbook d'exploitation de l'orchestrateur](./orchestrator-ops.md) approfondit les procédures par exécution (capture de scoreboard, bascules de déploiement par étapes, rollback). Utilisez les deux références ensemble lors des changements en production.
+> **Veja também:** O [Runbook de exploração do orquestrador](./orchestrator-ops.md) aborda os procedimentos de execução (captura de placar, basculas de implantação por etapas, reversão). Utilize o conjunto de duas referências para alterações na produção.
 
-## 1. Validation pré-déploiement
+## 1. Validação pré-implantação
 
-1. **Confirmer les entrées de gouvernance.**
-   - Tous les fournisseurs candidats doivent publier des enveloppes `ProviderAdvertV1` avec des payloads de capacité de plage et des budgets de flux. Validez via `/v1/sorafs/providers` et comparez aux champs de capacité attendus.
-   - Les snapshots de télémétrie fournissant les taux de latence/échec doivent dater de moins de 15 minutes avant chaque exécution canary.
-2. **Préparer la configuration.**
-   - Persistez la configuration JSON de l'orchestrateur dans l'arborescence `iroha_config` en couches :
+1. **Confirme as entradas de governo.**
+   - Todos os fornecedores candidatos devem publicar os envelopes `ProviderAdvertV1` com cargas úteis de capacidade de plage e orçamentos de fluxo. Validade via `/v1/sorafs/providers` e compare os níveis de capacidade atendidos.
+   - Os instantâneos de télémétrie fornecem a taxa de latência/échec deve ser datada de menos de 15 minutos antes de cada execução canary.
+2. **Prepare a configuração.**
+   - Mantenha a configuração JSON do orquestrador na árvore `iroha_config` em sofás:
 
      ```toml
      [torii.sorafs.orchestrator]
      config_path = "/etc/iroha/sorafs/orchestrator.json"
      ```
 
-     Mettez à jour le JSON avec les limites spécifiques au rollout (`max_providers`, budgets de retry). Utilisez le même fichier en staging/production pour garder des diffs minimales.
-3. **Exercer les fixtures canoniques.**
-   - Renseignez les variables d'environnement manifest/token et lancez le fetch déterministe :
+     Atualize o JSON com os limites específicos de implementação (`max_providers`, orçamentos de nova tentativa). Utilize o mesmo arquivo na encenação/produção para preservar as diferenças mínimas.
+3. **Exerça os fixtures canônicos.**
+   - Registra as variáveis do ambiente manifest/token e lança a busca determinada:
 
      ```bash
      sorafs_cli fetch \
@@ -58,55 +60,51 @@ Il suppose que la pile d'orchestration livrée sous SF-6 est déjà déployée (
        --json-out artifacts/canary.fetch.json
      ```
 
-     Les variables d'environnement doivent contenir le digest du payload du manifest (hex) et les tokens de flux encodés en base64 pour chaque fournisseur participant au canary.
-   - Comparez `artifacts/canary.scoreboard.json` au release précédent. Tout nouveau fournisseur inéligible ou un décalage de poids >10% nécessite une revue.
-4. **Vérifier que la télémétrie est câblée.**
-   - Ouvrez l'export Grafana dans `docs/examples/sorafs_fetch_dashboard.json`. Assurez-vous que les métriques `sorafs_orchestrator_*` apparaissent en staging avant de poursuivre.
+     As variáveis ​​de ambiente devem conter o resumo da carga útil do manifesto (hex) e os tokens de fluxo codificados em base64 para cada participante fornecido no canário.
+   - Compare `artifacts/canary.scoreboard.json` com a versão anterior. Todo novo fornecedor não é elegível ou uma redução de peso >10% requer uma revisão.
+4. **Verifique se a televisão está cabeada.**
+   - Abra a exportação Grafana em `docs/examples/sorafs_fetch_dashboard.json`. Certifique-se de que as métricas `sorafs_orchestrator_*` sejam exibidas em estágio antes de serem executadas.
 
 ## 2. Mise en liste noire d'urgence des fournisseurs
 
-Suivez cette procédure lorsqu'un fournisseur sert des chunks corrompus, subit des délais d'attente persistants ou échoue aux contrôles de conformité.
+Siga este procedimento quando um fornecedor apresentar pedaços corrompidos, desde atrasos de atenção persistentes ou ecoados aux controles de conformidade.1. **Capture as prévias.**
+   - Exporte o último currículo de busca (sorteio de `--json-out`). Registre o índice de pedaços em cheque, os alias dos fornecedores e as discordâncias do resumo.
+   - Guarde os extratos de registros pertinentes aos livros `telemetry::sorafs.fetch.*`.
+2. **Aplicar uma substituição imediatamente.**
+   - Marque o fornecedor como penalizado no snapshot da televisão distribuído ao orquestrador (definido `penalty=true` ou forçado `token_health` a `0`). O placar prochain exclui automaticamente o fornecedor.
+   - Para testes de fumaça ad hoc, passe `--deny-provider gw-alpha` para `sorafs_cli fetch` para executar o caminho de falha sem atender à propagação da televisão.
+   - Redeployez le bundle télémétrie/configure mis a jour no ambiente touché (staging → canary → produção). Documente as alterações no diário de incidentes.
+3. **Validar a substituição.**
+   - Relance a busca do dispositivo canônico. Confirme que o placar marca o fornecedor como inelegível com o motivo `policy_denied`.
+   - Inspecione `sorafs_orchestrator_provider_failures_total` para verificar se o contador foi aumentado para o fornecedor recusado.
+4. **Escale as interdições de longa duração.**
+   - Se o fornecedor permanecer bloqueado >24 horas, abra um ticket de governo para fazer girar ou suspender seu anúncio. Apenas vote, salve a lista de recusas e rafraîchissez os instantâneos de télémétrie para evitar que ele não reintegre o placar.
+5. **Protocolo de reversão.**
+   - Para restaurar o fornecedor, retirar a lista de recusas, reimplantar e capturar um novo instantâneo do placar. Anexe as alterações post mortem do incidente.
 
-1. **Capturer les preuves.**
-   - Exportez le dernier résumé de fetch (sortie de `--json-out`). Enregistrez les index de chunks en échec, les alias de fournisseurs et les discordances de digest.
-   - Sauvegardez les extraits de logs pertinents des cibles `telemetry::sorafs.fetch.*`.
-2. **Appliquer un override immédiat.**
-   - Marquez le fournisseur comme pénalisé dans le snapshot de télémétrie distribué à l'orchestrateur (définissez `penalty=true` ou forcez `token_health` à `0`). Le prochain scoreboard exclura automatiquement le fournisseur.
-   - Pour des smoke tests ad hoc, passez `--deny-provider gw-alpha` à `sorafs_cli fetch` afin d'exercer le chemin de défaillance sans attendre la propagation de la télémétrie.
-   - Redéployez le bundle télémétrie/configuration mis à jour dans l'environnement touché (staging → canary → production). Documentez le changement dans le journal d'incident.
-3. **Valider l'override.**
-   - Relancez le fetch de la fixture canonique. Confirmez que le scoreboard marque le fournisseur comme inéligible avec la raison `policy_denied`.
-   - Inspectez `sorafs_orchestrator_provider_failures_total` pour vérifier que le compteur cesse d'augmenter pour le fournisseur refusé.
-4. **Escalader les interdictions longue durée.**
-   - Si le fournisseur reste bloqué >24 h, ouvrez un ticket de gouvernance pour faire pivoter ou suspendre son advert. Jusqu'au vote, conservez la liste de refus et rafraîchissez les snapshots de télémétrie pour éviter qu'il ne réintègre le scoreboard.
-5. **Protocole de rollback.**
-   - Pour rétablir le fournisseur, retirez-le de la liste de refus, redéployez et capturez un nouveau snapshot de scoreboard. Attachez le changement au postmortem d'incident.
+## 3. Plano de implementação por etapas
 
-## 3. Plan de rollout par étapes
-
-| Phase | Portée | Signaux requis | Critères Go/No-Go |
+| Fase | Portée | Requisitos de assinatura | Critérios Go/No-Go |
 |-------|--------|----------------|-------------------|
-| **Lab** | Cluster d'intégration dédié | Fetch CLI manuel contre les payloads de fixtures | Tous les chunks réussissent, les compteurs d'échec fournisseur restent à 0, taux de retry < 5%. |
-| **Staging** | Staging du control-plane complet | Dashboard Grafana connecté; règles d'alerte en mode warning-only | `sorafs_orchestrator_active_fetches` revient à zéro après chaque exécution de test; aucune alerte `warn/critical`. |
-| **Canary** | ≤10% du trafic de production | Pager muet mais télémétrie surveillée en temps réel | Ratio de retry < 10%, échecs fournisseurs limités aux pairs bruyants connus, histogramme de latence conforme à la baseline staging ±20%. |
-| **Disponibilité générale** | 100% du rollout | Règles du pager actives | Zéro erreur `NoHealthyProviders` pendant 24 h, ratio de retry stable, panneaux SLA du dashboard au vert. |
+| **Laboratório** | Cluster de integração concluído | Fetch CLI manual contra cargas úteis de fixtures | Todos os pedaços reussissent, les compteurs d'échec fournisseur restant a 0, taux de retry < 5%. |
+| **Encenação** | Preparação do plano de controle completo | Dashboard Grafana conectado; regras de alerta no modo somente aviso | `sorafs_orchestrator_active_fetches` retorna a zero após cada execução do teste; nenhum alerta `warn/critical`. |
+| **Canário** | ≤10% do tráfego de produção | Pager muet mais télémétrie vigiado em tempo real | Proporção de novas tentativas < 10%, recursos limitados a pares extremamente conhecidos, histograma de latência em conformidade com o estadiamento da linha de base ±20%. |
+| **Disponibilidade geral** | 100% do lançamento | Regras do pager ativo | Zero erro `NoHealthyProviders` pendente 24 h, taxa de repetição estável, painéis SLA do painel na vertical. |
 
-Pour chaque phase :
+Despeje a fase chaque:1. Insira hoje o JSON do orquestrador com o `max_providers` e os orçamentos de nova tentativa anteriores.
+2. Lance `sorafs_cli fetch` ou o conjunto de testes de integração SDK com o dispositivo canônico e um manifesto representante do ambiente.
+3. Capture os artefatos do placar + resumo e anexe-os ao registro de lançamento.
+4. Revise os painéis de controle com o engenheiro de controle antes de promovê-los na fase seguinte.
 
-1. Mettez à jour le JSON de l'orchestrateur avec les `max_providers` et budgets de retry prévus.
-2. Lancez `sorafs_cli fetch` ou la suite de tests d'intégration SDK contre la fixture canonique et un manifest représentatif de l'environnement.
-3. Capturez les artefacts de scoreboard + summary et attachez-les au registre de release.
-4. Revoyez les dashboards de télémétrie avec l'ingénieur d'astreinte avant de promouvoir à la phase suivante.
+## 4. Observabilidade e riscos de incidentes
 
-## 4. Observabilité et hooks d'incident
+- **Métricas:** Certifique-se de que o Alertmanager monitore `sorafs_orchestrator_fetch_failures_total{reason="no_healthy_providers"}` e `sorafs_orchestrator_retries_total`. Um pic soudain significa geralmente que um fornecedor se degrada sob carga.
+- **Logs :** Obtenha os códigos `telemetry::sorafs.fetch.*` para o registrador de logs compartilhado. Crie pesquisas registradas para `event=complete status=failed` para acelerar a triagem.
+- **Placares:** Persistez cada artefato de placar e armazenamento a longo prazo. O JSON também está na pista de auditoria para revisões de conformidade e reversões por etapas.
+- **Dashboards:** Clone o quadro Grafana canônico (`docs/examples/sorafs_fetch_dashboard.json`) no dossiê de produção com as regras de alerta de `docs/examples/sorafs_fetch_alerts.yaml`.
 
-- **Métriques :** Assurez-vous qu'Alertmanager surveille `sorafs_orchestrator_fetch_failures_total{reason="no_healthy_providers"}` et `sorafs_orchestrator_retries_total`. Un pic soudain signifie généralement qu'un fournisseur se dégrade sous charge.
-- **Logs :** Acheminez les cibles `telemetry::sorafs.fetch.*` vers l'agrégateur de logs partagé. Créez des recherches enregistrées pour `event=complete status=failed` afin d'accélérer le triage.
-- **Scoreboards :** Persistez chaque artefact de scoreboard en stockage long terme. Le JSON sert aussi de piste d'audit pour les revues de conformité et les rollbacks par étapes.
-- **Dashboards :** Clonez le tableau Grafana canonique (`docs/examples/sorafs_fetch_dashboard.json`) dans le dossier production avec les règles d'alerte de `docs/examples/sorafs_fetch_alerts.yaml`.
+## 5. Comunicação e documentação
 
-## 5. Communication et documentation
-
-- Journalisez chaque changement de deny/boost dans le changelog d'exploitation avec horodatage, opérateur, raison et incident associé.
-- Informez les équipes SDK lorsque les poids de fournisseurs ou les budgets de retry changent pour aligner les attentes côté client.
-- Une fois la GA terminée, mettez à jour `status.md` avec le résumé du rollout et archivez cette référence de runbook dans les notes de version.
+- Registrar todas as alterações de negação/reforço no changelog de exploração com horodatadores, operadores, motivos e incidentes associados.
+- Informe as equipes SDK quando os pesos dos fornecedores ou os orçamentos de nova tentativa forem alterados para alinhar os clientes ao cliente.
+- Depois que o GA foi encerrado, traga hoje `status.md` com o currículo do lançamento e arquive esta referência do runbook nas notas de versão.

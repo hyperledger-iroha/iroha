@@ -4,61 +4,63 @@ direction: ltr
 source: docs/portal/docs/norito/overview.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Norito Overview
+# Norito მიმოხილვა
 
-Norito is the binary serialization layer used across Iroha: it defines how data
-structures are encoded on the wire, persisted on disk, and exchanged between
-contracts and hosts. Every crate in the workspace relies on Norito instead of
-`serde` so peers on different hardware produce identical bytes.
+Norito არის ორობითი სერიალიზაციის ფენა, რომელიც გამოიყენება Iroha-ში: ის განსაზღვრავს, თუ როგორ ხდება მონაცემები
+სტრუქტურები დაშიფრულია მავთულზე, ინახება დისკზე და ერთმანეთს ცვლის
+კონტრაქტები და მასპინძლები. სამუშაო სივრცეში ყველა უჯრა ეყრდნობა Norito-ს ნაცვლად
+`serde` ასე რომ, სხვადასხვა ტექნიკის თანატოლები წარმოქმნიან იდენტურ ბაიტებს.
 
-This overview summarises the core pieces and links to the canonical references.
+ეს მიმოხილვა აჯამებს ძირითად ნაწილებს და ბმულებს კანონიკურ ცნობებთან.
 
-## Architecture at a glance
+## არქიტექტურა ერთი შეხედვით
 
-- **Header + payload** – Each Norito message begins with a feature-negotiation
-  header (flags, checksum) followed by the bare payload. Packed layouts and
-  compression are negotiated via header bits.
-- **Deterministic encoding** – `norito::codec::{Encode, Decode}` implement the
-  bare encoding. The same layout is reused when wrapping payloads in headers so
-  hashing and signing remain deterministic.
-- **Schema + derives** – `norito_derive` generates `Encode`, `Decode`, and
-  `IntoSchema` implementations. Packed structs/sequences are enabled by default
-  and documented in `norito.md`.
-- **Multicodec registry** – Identifiers for hashes, key types, and payload
-  descriptors live in `norito::multicodec`. The authoritative table is
-  maintained in `multicodec.md`.
+- **Header + payload** – ყოველი Norito შეტყობინება იწყება ფუნქციის მოლაპარაკებით
+  სათაური (დროშები, საკონტროლო ჯამი), რასაც მოჰყვება შიშველი დატვირთვა. შეფუთული განლაგება და
+  შეკუმშვის მოლაპარაკება ხდება სათაურის ბიტების მეშვეობით.
+- **დეტერმინისტული კოდირება** – `norito::codec::{Encode, Decode}` დანერგვა
+  შიშველი კოდირება. იგივე განლაგება ხელახლა გამოიყენება სათაურებში დატვირთვისას
+  ჰეშირება და ხელმოწერა რჩება განმსაზღვრელი.
+- **სქემა + წარმოიქმნება** – `norito_derive` წარმოქმნის `Encode`, `Decode` და
+  `IntoSchema` განხორციელებები. შეფუთული სტრუქტურები/მიმდევრობები ჩართულია ნაგულისხმევად
+  და დოკუმენტირებულია `norito.md`-ში.
+- ** მულტიკოდეკების რეესტრი ** - ჰეშების, გასაღების ტიპებისა და დატვირთვის იდენტიფიკატორები
+  აღწერები ცხოვრობენ `norito::multicodec`-ში. ავტორიტეტული ცხრილია
+  შენარჩუნებულია `multicodec.md`-ში.
 
-## Tooling
+## ხელსაწყოები
 
-| Task | Command / API | Notes |
+| ამოცანა | ბრძანება / API | შენიშვნები |
 | --- | --- | --- |
-| Inspect header/sections | `ivm_tool inspect <file>.to` | Shows ABI version, flags, and entrypoints. |
-| Encode/decode in Rust | `norito::codec::{Encode, Decode}` | Implemented for all core data-model types. |
-| JSON interop | `norito::json::{to_json_pretty, from_json}` | Deterministic JSON backed by Norito values. |
-| Generate docs/specs | `norito.md`, `multicodec.md` | Source-of-truth documentation in the repo root. |
+| სათაურის/სექციების შემოწმება | `ivm_tool inspect <file>.to` | აჩვენებს ABI ვერსიას, დროშებს და შესვლის წერტილებს. |
+| Encode/decode in Rust | `norito::codec::{Encode, Decode}` | დანერგილია ყველა ძირითადი მონაცემთა მოდელის ტიპისთვის. |
+| JSON interop | `norito::json::{to_json_pretty, from_json}` | დეტერმინისტული JSON გამყარებული Norito მნიშვნელობებით. |
+| დოკუმენტების/სპექტაკლების გენერირება | `norito.md`, `multicodec.md` | სიმართლის წყაროს დოკუმენტაცია რეპო root-ში. |
 
-## Development workflow
+## განვითარების სამუშაო პროცესი
 
-1. **Add derives** – Prefer `#[derive(Encode, Decode, IntoSchema)]` for new data
-   structures. Avoid hand-written serializers unless absolutely necessary.
-2. **Validate packed layouts** – Use `cargo test -p norito` (and the packed
-   feature matrix in `scripts/run_norito_feature_matrix.sh`) to ensure new
-   layouts remain stable.
-3. **Regenerate docs** – When the encoding changes, update `norito.md` and the
-   multicodec table, then refresh the portal pages (`/reference/norito-codec`
-   and this overview).
-4. **Keep tests Norito-first** – Integration tests should use the Norito JSON
-   helpers instead of `serde_json` so they exercise the same paths as production.
+1. **მიღებების დამატება** – ახალი მონაცემებისთვის უპირატესობა მიანიჭეთ `#[derive(Encode, Decode, IntoSchema)]`
+   სტრუქტურები. მოერიდეთ ხელნაწერ სერიალებს, თუ აბსოლუტურად აუცილებელი არ არის.
+2. **შეფუთული განლაგების დადასტურება** – გამოიყენეთ `cargo test -p norito` (და შეფუთული
+   მახასიათებლების მატრიცა `scripts/run_norito_feature_matrix.sh`-ში) ახლის უზრუნველსაყოფად
+   განლაგება რჩება სტაბილური.
+3. **დოკუმენტების რეგენერაცია** – როდესაც კოდირება იცვლება, განაახლეთ `norito.md` და
+   მულტიკოდეკების ცხრილი, შემდეგ განაახლეთ პორტალის გვერდები (`/reference/norito-codec`
+   და ეს მიმოხილვა).
+4. ** შეინახეთ ტესტები Norito-პირველი ** – ინტეგრაციის ტესტებმა უნდა გამოიყენონ Norito JSON
+   დამხმარეები `serde_json`-ის ნაცვლად, ამიტომ ისინი ახორციელებენ იგივე ბილიკებს, როგორც წარმოებას.
 
-## Quick links
+## სწრაფი ბმულები
 
-- Specification: [`norito.md`](https://github.com/hyperledger-iroha/iroha/blob/master/norito.md)
-- Multicodec assignments: [`multicodec.md`](https://github.com/hyperledger-iroha/iroha/blob/master/multicodec.md)
-- Feature matrix script: `scripts/run_norito_feature_matrix.sh`
-- Packed-layout examples: `crates/norito/tests/`
+- სპეციფიკაცია: [`norito.md`](https://github.com/hyperledger-iroha/iroha/blob/master/norito.md)
+- მულტიკოდეკების დავალებები: [`multicodec.md`](https://github.com/hyperledger-iroha/iroha/blob/master/multicodec.md)
+- ფუნქციური მატრიცის სკრიპტი: `scripts/run_norito_feature_matrix.sh`
+- შეფუთული განლაგების მაგალითები: `crates/norito/tests/`
 
-Pair this overview with the quickstart guide (`/norito/getting-started`) for a
-hands-on walkthrough of compiling and running bytecode that uses Norito
-payloads.
+დააკავშირეთ ეს მიმოხილვა სწრაფი დაწყების სახელმძღვანელოსთან (`/norito/getting-started`)
+ბაიტეკოდის შედგენისა და გაშვების პრაქტიკული გზა, რომელიც იყენებს Norito-ს
+ტვირთამწეობა.

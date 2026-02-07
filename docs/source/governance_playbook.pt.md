@@ -6,170 +6,165 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 9201c0027f05b1ab2c83fa6b3e1a1e6dad3ff9660a8ed23bac7667408d421ada
 source_last_modified: "2026-01-22T15:38:30.665014+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Governance Playbook
+# Manual de Governança
 
-This playbook captures the day-to-day rituals that keep the Sora Network
-governance council aligned. It aggregates the authoritative references from the
-repository so individual ceremonies can remain concise, while operators always
-have a single entry point for the broader process.
+Este manual captura os rituais diários que mantêm a Rede Sora
+conselho de governação alinhado. Ele agrega as referências oficiais do
+repositório para que cerimônias individuais possam permanecer concisas, enquanto os operadores sempre
+ter um único ponto de entrada para o processo mais amplo.
 
-## Council Ceremonies
+## Cerimônias do Conselho
 
-- **Fixture governance** – See [Sora Parliament Fixture Approval](sorafs/signing_ceremony.md)
-  for the on-chain approval flow that the Parliament’s Infrastructure Panel now
-  follows when reviewing SoraFS chunker updates.
-- **Vote tally publication** – Refer to
-  [Governance Vote Tally](governance_vote_tally.md) for the step-by-step CLI
-  workflow and reporting template.
+- **Governança do dispositivo** – Consulte [Aprovação do dispositivo do Parlamento Sora](sorafs/signing_ceremony.md)
+  para o fluxo de aprovação na cadeia que o Painel de Infraestrutura do Parlamento agora
+  segue ao revisar as atualizações do chunker SoraFS.
+- **Publicação da contagem de votos** – Consulte
+  [Contagem de votos de governança](governance_vote_tally.md) para a CLI passo a passo
+  fluxo de trabalho e modelo de relatório.
 
-## Operational Runbooks
+## Runbooks operacionais
 
-- **API integrations** – [Governance API reference](governance_api.md) lists the
-  REST/gRPC surfaces exposed by council services, including authentication
-  requirements and pagination rules.
-- **Telemetry dashboards** – The Grafana JSON definitions under
-  `docs/source/grafana_*` define the “Governance Constraints” and “Scheduler
-  TEU” boards. Export the JSON into Grafana after each release to stay aligned
-  with the canonical layout.
+- **Integrações de API** – [referência da API de governança](governance_api.md) lista os
+  Superfícies REST/gRPC expostas pelos serviços do conselho, incluindo autenticação
+  requisitos e regras de paginação.
+- **Painéis de telemetria** – As definições JSON Grafana em
+  `docs/source/grafana_*` definem as “Restrições de Governança” e “Agendador
+  TEU”. Exporte o JSON para Grafana após cada versão para ficar alinhado
+  com o layout canônico.
 
-## Data Availability Oversight
+## Supervisão da disponibilidade de dados
 
-### Retention classes
+### Aulas de retenção
 
-Parliament panels approving DA manifests must reference the enforced retention
-policy before voting. The table below mirrors the defaults enforced via
-`torii.da_ingest.replication_policy` so reviewers can spot mismatches without
-hunting for the source TOML.【docs/source/da/replication_policy.md:1】
+Os painéis do Parlamento que aprovam os manifestos da DA devem fazer referência à retenção forçada
+política antes de votar. A tabela abaixo reflete os padrões aplicados via
+`torii.da_ingest.replication_policy` para que os revisores possam detectar incompatibilidades sem
+procurando a fonte TOML.【docs/source/da/replication_policy.md:1】
 
-| Governance tag | Blob class | Hot retention | Cold retention | Required replicas | Storage class |
-|----------------|------------|---------------|----------------|-------------------|---------------|
-| `da.taikai.live` | `taikai_segment` | 24 h | 14 d | 5 | `hot` |
-| `da.sidecar` | `nexus_lane_sidecar` | 6 h | 7 d | 4 | `warm` |
-| `da.governance` | `governance_artifact` | 12 h | 180 d | 3 | `cold` |
-| `da.default` | _all other classes_ | 6 h | 30 d | 3 | `warm` |
+| Etiqueta de governança | Classe de blob | Retenção quente | Retenção de frio | Réplicas necessárias | Classe de armazenamento |
+|----------------|-----------|---------------|----------------|-------------------|---------------|
+| `da.taikai.live` | `taikai_segment` | 24h | 14d | 5 | `hot` |
+| `da.sidecar` | `nexus_lane_sidecar` | 6h | 7d | 4 | `warm` |
+| `da.governance` | `governance_artifact` | 12h | 180d | 3 | `cold` |
+| `da.default` | _todas as outras classes_ | 6h | 30d | 3 | `warm` |
 
-The Infrastructure Panel should attach the filled template from
-`docs/examples/da_manifest_review_template.md` to every ballot so the manifest
-digest, retention tag, and Norito artefacts remain linked in the governance
-record.
+O Painel de Infraestrutura deverá anexar o modelo preenchido do
+`docs/examples/da_manifest_review_template.md` para todas as cédulas, então o manifesto
+resumo, etiqueta de retenção e artefatos Norito permanecem vinculados na governança
+registro.
 
-### Signed manifest audit trail
+### Trilha de auditoria do manifesto assinado
 
-Before a ballot reaches the agenda, council staff must prove that the manifest
-bytes under review match the Parliament envelope and the SoraFS artefact. Use
-the existing tooling to collect that evidence:
-
-1. Fetch the manifest bundle from Torii (`iroha app da get-blob --storage-ticket <hex>`
-   or the equivalent SDK helper) so everyone hashes the same bytes that reached
-   the gateways.
-2. Run the manifest stub verifier with the signed envelope:
+Antes de uma votação chegar à ordem do dia, os funcionários do conselho devem provar que o manifesto
+os bytes em análise correspondem ao envelope do Parlamento e ao artefato SoraFS. Usar
+as ferramentas existentes para coletar essas evidências:1. Obtenha o pacote de manifesto de Torii (`iroha app da get-blob --storage-ticket <hex>`
+   ou o auxiliar SDK equivalente) para que todos façam hash dos mesmos bytes que alcançaram
+   os portais.
+2. Execute o verificador de stub de manifesto com o envelope assinado:
    ```
    cargo run -p sorafs_car --bin sorafs-manifest-stub -- manifest.json \
      --manifest-signatures-in=fixtures/sorafs_chunker/manifest_signatures.json \
      --json-out=/tmp/manifest_report.json
    ```
-   This recomputes the BLAKE3 manifest digest, validates the
-   `chunk_digest_sha3_256`, and checks every Ed25519 signature embedded in
-   `manifest_signatures.json`. See `docs/source/sorafs/manifest_pipeline.md`
-   for additional CLI options.
-3. Copy the digest, `chunk_digest_sha3_256`, profile handle, and signer list into
-   the review template. NOTE: if the verifier reports “profile mismatch” or a
-   missing signature, halt the vote and request a corrected envelope.
-4. Store the verifier output (or CI artefact from
-   `ci/check_sorafs_fixtures.sh`) alongside the Norito `.to` payload so auditors
-   can replay the evidence without accessing internal gateways.
+   Isso recalcula o resumo do manifesto BLAKE3, valida o
+   `chunk_digest_sha3_256` e verifica cada assinatura Ed25519 incorporada em
+   `manifest_signatures.json`. Consulte `docs/source/sorafs/manifest_pipeline.md`
+   para opções CLI adicionais.
+3. Copie o resumo, `chunk_digest_sha3_256`, identificador de perfil e lista de assinantes para
+   o modelo de revisão. NOTA: se o verificador relatar “incompatibilidade de perfil” ou um
+   falta de assinatura, suspender a votação e solicitar um envelope corrigido.
+4. Armazene a saída do verificador (ou artefato CI do
+   `ci/check_sorafs_fixtures.sh`) junto com a carga útil Norito `.to` para que os auditores
+   pode reproduzir as evidências sem acessar gateways internos.
 
-The resulting audit pack should let Parliament recreate every hash and signature
-check even after the manifest is rotated out of hot storage.
+O pacote de auditoria resultante deverá permitir ao Parlamento recriar cada hash e assinatura
+verifique mesmo depois que o manifesto for retirado do armazenamento quente.
 
-### Review checklist
+### Revise a lista de verificação
 
-1. Pull the Parliament-approved manifest envelope (see
-   `docs/source/sorafs/signing_ceremony.md`) and record the BLAKE3 digest.
-2. Verify the manifest’s `RetentionPolicy` block matches the tag in the table
-   above; Torii will reject mismatches, but the council must capture the
-   evidence for auditors.【docs/source/da/replication_policy.md:32】
-3. Confirm that the submitted Norito payload references the same retention tag
-   and blob class that appears in the intake ticket.
-4. Attach proof of the policy check (CLI output, `torii.da_ingest.replication_policy`
-   dump, or CI artefact) to the review packet so SRE can replay the decision.
-5. Record planned subsidy taps or rent adjustments when the proposal depends on
+1. Retire o envelope do manifesto aprovado pelo Parlamento (ver
+   `docs/source/sorafs/signing_ceremony.md`) e registre o resumo BLAKE3.
+2. Verifique se o bloco `RetentionPolicy` do manifesto corresponde à tag na tabela
+   acima; Torii rejeitará incompatibilidades, mas o conselho deve capturar o
+   evidências para auditores.【docs/source/da/replication_policy.md:32】
+3. Confirme se a carga Norito enviada faz referência à mesma tag de retenção
+   e classe blob que aparece no ticket de entrada.
+4. Anexe o comprovante da verificação da política (saída CLI, `torii.da_ingest.replication_policy`
+   dump ou artefato CI) ao pacote de revisão para que o SRE possa repetir a decisão.
+5. Registre as torneiras de subsídio ou ajustes de aluguel planejados quando a proposta depender de
    `docs/source/sorafs_reserve_rent_plan.md`.
 
-### Escalation matrix
+### Matriz de escalonamento
 
-| Request type | Owning panel | Evidence to attach | Deadlines & telemetry | References |
-|--------------|--------------|--------------------|-----------------------|------------|
-| Subsidy / rent adjustment | Infrastructure + Treasury | Filled DA packet, rent delta from `reserve_rentd`, updated reserve projection CSV, council vote minutes | Note rent impact before submitting the Treasury update; include rolling 30 d buffer telemetry so Finance can reconcile within the next settlement window | `docs/source/sorafs_reserve_rent_plan.md`, `docs/examples/da_manifest_review_template.md` |
-| Moderation takedown / compliance action | Moderation + Compliance | Compliance ticket (`ComplianceUpdateV1`), proof tokens, signed manifest digest, appeal status | Follow the gateway compliance SLA (acknowledge within 24 h, full removal ≤72 h). Attach `TransparencyReportV1` excerpt showing the action. | `docs/source/sorafs_gateway_compliance_plan.md`, `docs/source/sorafs_moderation_panel_plan.md` |
-| Emergency freeze / rollback | Parliament moderation panel | Prior approval packet, new freeze order, rollback manifest digest, incident log | Publish freeze notice immediately and schedule the rollback referendum within the next governance slot; include buffer saturation + DA replication telemetry to justify the emergency. | `docs/source/sorafs/signing_ceremony.md`, `docs/source/sorafs_moderation_panel_plan.md` |
+| Tipo de solicitação | Painel proprietário | Provas a anexar | Prazos e telemetria | Referências |
+|--------------|--------------|-----------------------|------------|------------|
+| Subsídio/ajuste de renda | Infraestrutura + Tesouraria | Pacote DA preenchido, delta de aluguel de `reserve_rentd`, projeção de reserva atualizada CSV, ata de votação do conselho | Anote o impacto do aluguel antes de enviar a atualização do Tesouro; inclui telemetria de buffer 30d contínua para que o Departamento Financeiro possa reconciliar na próxima janela de liquidação | `docs/source/sorafs_reserve_rent_plan.md`, `docs/examples/da_manifest_review_template.md` |
+| Remoção de moderação/ação de conformidade | Moderação + Conformidade | Ticket de conformidade (`ComplianceUpdateV1`), tokens de prova, resumo do manifesto assinado, status de apelação | Siga o SLA de conformidade do gateway (reconhecimento dentro de 24h, remoção completa ≤72h). Anexe o trecho `TransparencyReportV1` mostrando a ação. | `docs/source/sorafs_gateway_compliance_plan.md`, `docs/source/sorafs_moderation_panel_plan.md` |
+| Congelamento/reversão de emergência | Painel de moderação do Parlamento | Pacote de aprovação prévia, nova ordem de congelamento, resumo do manifesto de reversão, registro de incidentes | Publicar aviso de congelamento imediatamente e agendar o referendo de reversão no próximo período de governança; incluem saturação de buffer + telemetria de replicação DA para justificar a emergência. | `docs/source/sorafs/signing_ceremony.md`, `docs/source/sorafs_moderation_panel_plan.md` |Use a tabela ao fazer a triagem dos tickets de admissão para que cada painel receba a informação exata
+artefatos necessários para executar seu mandato.
 
-Use the table when triaging intake tickets so every panel receives the exact
-artefacts required to execute its mandate.
+### Relatórios de resultados
 
-### Reporting deliverables
+Cada decisão DA-10 deve ser enviada com os seguintes artefatos (anexe-os ao
+Entrada do DAG de governança referenciada na votação):
 
-Every DA-10 decision must ship with the following artefacts (attach them to the
-Governance DAG entry referenced in the vote):
+- O pacote Markdown concluído de
+  `docs/examples/da_manifest_review_template.md` (agora incluindo assinatura e
+  seções de escalonamento).
+- O manifesto Norito assinado (`.to`) mais o envelope `manifest_signatures.json`
+  ou logs do verificador de CI que comprovam o resumo da busca.
+- Quaisquer atualizações de transparência desencadeadas pela ação:
+  - Delta `TransparencyReportV1` para remoções ou congelamentos orientados por conformidade.
+  - Delta do razão de aluguel/reserva ou instantâneo `ReserveSummaryV1` para subsídios.
+- Links para instantâneos de telemetria coletados durante a revisão (profundidade de replicação,
+  margem de buffer, backlog de moderação) para que os observadores possam verificar as condições
+  depois do fato.
 
-- The completed Markdown packet from
-  `docs/examples/da_manifest_review_template.md` (now including signature and
-  escalation sections).
-- The signed Norito manifest (`.to`) plus the `manifest_signatures.json` envelope
-  or CI verifier logs that prove the fetch digest.
-- Any transparency updates triggered by the action:
-  - `TransparencyReportV1` delta for takedowns or compliance-driven freezes.
-  - Rent/reserve ledger delta or `ReserveSummaryV1` snapshot for subsidies.
-- Links to telemetry snapshots collected during the review (replication depth,
-  buffer headroom, moderation backlog) so observers can cross-check conditions
-  after the fact.
+## Moderação e escalonamento
 
-## Moderation & Escalation
+Remoções de gateway, recuperação de subsídios ou congelamentos de DA seguem a conformidade
+pipeline descrito em `docs/source/sorafs_gateway_compliance_plan.md` e o
+ferramentas de recurso em `docs/source/sorafs_moderation_panel_plan.md`. Os painéis devem:
 
-Gateway takedowns, subsidy clawbacks, or DA freezes follow the compliance
-pipeline described in `docs/source/sorafs_gateway_compliance_plan.md` and the
-appeal tooling in `docs/source/sorafs_moderation_panel_plan.md`. Panels should:
+1. Registre o ticket de conformidade de origem (`ComplianceUpdateV1` ou
+   `ModerationAppealV1`) e anexe os tokens de prova associados.【docs/source/sorafs_gateway_compliance_plan.md:20】
+2. Confirme se a solicitação invoca o caminho de recurso de moderação (painel de cidadãos
+   votação) ou um congelamento de emergência do Parlamento; ambos os fluxos devem citar o manifesto
+   tag de resumo e retenção capturada no novo modelo.【docs/source/sorafs_moderation_panel_plan.md:1】
+3. Enumerar prazos de escalonamento (janelas de confirmação/revelação de apelação, emergência
+   duração do congelamento) e indicar qual conselho ou painel é responsável pelo acompanhamento.
+4. Capture o instantâneo de telemetria (capacidade de buffer, backlog de moderação) usado para
+   justificar a ação para que as auditorias posteriores possam combinar a decisão com o
+   estado.
 
-1. Log the originating compliance ticket (`ComplianceUpdateV1` or
-   `ModerationAppealV1`) and attach the associated proof tokens.【docs/source/sorafs_gateway_compliance_plan.md:20】
-2. Confirm whether the request invokes the moderation appeal path (citizen panel
-   vote) or an emergency Parliament freeze; both flows must cite the manifest
-   digest and retention tag captured in the new template.【docs/source/sorafs_moderation_panel_plan.md:1】
-3. Enumerate escalation deadlines (appeal commit/reveal windows, emergency
-   freeze duration) and state which council or panel owns the follow-up.
-4. Capture the telemetry snapshot (buffer headroom, moderation backlog) used to
-   justify the action so downstream audits can match the decision to the live
-   state.
+Os painéis de conformidade e moderação devem sincronizar seus relatórios semanais de transparência
+com os operadores de roteadores de liquidação, de modo que remoções e subsídios afetem o mesmo
+conjunto de manifestos.
 
-The compliance and moderation panels must sync their weekly transparency reports
-with the settlement router operators so takedowns and subsidies affect the same
-set of manifests.
+## Modelos de relatórios
 
-## Reporting Templates
+Todas as revisões do DA-10 agora exigem um pacote Markdown assinado. Copiar
+`docs/examples/da_manifest_review_template.md`, preencha os metadados do manifesto,
+tabela de verificação de retenção e resumo da votação do painel e, em seguida, fixe o formulário preenchido
+documento (mais artefatos Norito/JSON referenciados) à entrada do Governance DAG.
+Os painéis devem vincular o pacote nas atas de governança para que futuras remoções ou
+renovações de subsídios podem citar o resumo do manifesto original sem executar novamente o
+cerimônia inteira.
 
-All DA-10 reviews now require a signed Markdown packet. Copy
-`docs/examples/da_manifest_review_template.md`, populate the manifest metadata,
-retention verification table, and panel vote summary, then pin the completed
-document (plus referenced Norito/JSON artefacts) to the Governance DAG entry.
-Panels should link the packet in the governance minutes so future takedowns or
-subsidy renewals can cite the original manifest digest without re-running the
-entire ceremony.
+## Fluxo de trabalho de incidentes e revogações
 
-## Incident & Revocation Workflow
+As ações emergenciais agora acontecem on-chain. Quando um lançamento de fixture precisa ser
+revertido, apresentar um bilhete de governança e abrir uma proposta de reversão do Parlamento
+apontando para o resumo do manifesto previamente aprovado. O Painel de Infraestrutura
+lida com a votação e, uma vez finalizado, o tempo de execução Nexus publica a reversão
+evento que os clientes downstream consomem. Nenhum artefato JSON local é necessário.
 
-Emergency actions now happen on-chain. When a fixture release needs to be
-rolled back, file a governance ticket and open a Parliament revert proposal
-pointing at the previously approved manifest digest. The Infrastructure Panel
-handles the vote, and once finalized the Nexus runtime publishes the rollback
-event that downstream clients consume. No local JSON artefacts are required.
-
-## Keeping the Playbook Current
-
-- Update this file whenever a new governance-facing runbook lands in the
-  repository.
-- Cross-link new ceremonies here so the council index remains discoverable.
-- If a referenced document moves (for example, a new SDK path), update the link
-  as part of the same pull request to avoid stale pointers.
+## Mantendo o manual atualizado- Atualize esse arquivo sempre que um novo runbook voltado para governança chegar ao
+  repositório.
+- Faça links cruzados de novas cerimônias aqui para que o índice do conselho permaneça detectável.
+- Se um documento referenciado for movido (por exemplo, um novo caminho do SDK), atualize o link
+  como parte da mesma solicitação pull para evitar ponteiros obsoletos.

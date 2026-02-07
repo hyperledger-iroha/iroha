@@ -8,56 +8,53 @@ source_hash: a0022f5f9c53445d26876f0097635092b5c685d332bfa25b13243c584d358dfe
 source_last_modified: "2026-01-05T09:28:12.006723+00:00"
 translation_last_reviewed: 2026-02-07
 title: FASTPQ Metal Kernel Suite
+translator: machine-google-reviewed
 ---
 
-# FASTPQ Metal Kernel Suite
+# FASTPQ 金属内核套件
 
-The Apple Silicon backend ships a single `fastpq.metallib` that contains every
-Metal Shading Language (MSL) kernel exercised by the prover. This note explains
-the available entry points, their threadgroup limits, and the determinism
-guarantees that make the GPU path interchangeable with the scalar fallback.
+Apple Silicon 后端提供了一个 `fastpq.metallib`，其中包含每个
+证明者使用的金属着色语言 (MSL) 内核。这个注释解释了
+可用的入口点、它们的线程组限制和确定性
+保证 GPU 路径与标量后备可互换。
 
-The canonical implementation lives under
-`crates/fastpq_prover/metal/kernels/` and is compiled by
-`crates/fastpq_prover/build.rs` whenever `fastpq-gpu` is enabled on macOS.
-Runtime metadata (`metal_kernel_descriptors`) mirrors the information below so
-benchmarks and diagnostics can surface the same facts programmatically.【crates/fastpq_prover/metal/kernels/ntt_stage.metal:1】【crates/fastpq_prover/metal/kernels/poseidon2.metal:1】【crates/fastpq_prover/build.rs:1】【crates/fastpq_prover/src/metal.rs:248】
+规范的实现位于
+`crates/fastpq_prover/metal/kernels/` 编译为
+只要 macOS 上启用了 `fastpq-gpu`，就会出现 `crates/fastpq_prover/build.rs`。
+运行时元数据 (`metal_kernel_descriptors`) 镜像以下信息，以便
+基准测试和诊断可以通过编程方式显示相同的事实。【crates/fastpq_prover/metal/kernels/ntt_stage.metal:1】【crates/fastpq_prover/metal/kernels/poseidon2.metal:1】【crates/fastpq_prover/build.rs:1】【crates/fastpq_prover/src/metal.rs:248】
 
-## Kernel inventory
+## 内核清单|切入点|运营|线程组上限 |瓷砖舞台帽|笔记|
+| ----------- | ---------| ---------------- | -------------- | -----|
+| `fastpq_fft_columns` |跟踪列上的正向 FFT | 256 线程 | 32 个阶段 |在第一阶段使用共享内存块，并在规划器请求 IFFT 模式时应用反向缩放。【crates/fastpq_prover/metal/kernels/ntt_stage.metal:223】【crates/fastpq_prover/src/metal.rs:262】
+| `fastpq_fft_post_tiling` |达到图块深度后完成 FFT/IFFT/LDE | 256 线程 | — |直接从设备内存中运行剩余的蝴蝶，并在返回主机之前处理最终的陪集/逆因子。【crates/fastpq_prover/metal/kernels/ntt_stage.metal:447】【crates/fastpq_prover/src/metal.rs:262】
+| `fastpq_lde_columns` |跨列低度扩展 | 256 线程 | 32 个阶段 |将系数复制到评估缓冲区中，使用配置的陪集执行平铺阶段，并在需要时将最终阶段留给`fastpq_fft_post_tiling`。【crates/fastpq_prover/metal/kernels/ntt_stage.metal:341】【crates/fastpq_prover/src/metal.rs:262】
+| `poseidon_trace_fused` |一次性哈希列并计算深度 1 父级 | 256 线程 | — |运行与 `poseidon_hash_columns` 相同的吸收/排列，将叶消化直接存储到输出缓冲区中，并立即将每个 `(left,right)` 对折叠在 `fastpq:v1:trace:node` 域下，以便 `(⌈columns / 2⌉)` 父母在叶切片之后着陆。奇数列计数复制设备上的最终叶子，消除了第一个 Merkle 层的后续内核和 CPU 回退。【crates/fastpq_prover/metal/kernels/poseidon2.metal:384】【crates/fastpq_prover/src/metal.rs:2407】
+| `poseidon_permute` | Poseidon2 排列 (STATE_WIDTH = 3) | 256 线程 | — |线程组将轮常量/MDS 行缓存在线程组内存中，将 MDS 行复制到每个线程寄存器中，并在 4 状态块中处理状态，以便每个轮常量获取在前进之前在多个状态中重复使用。回合保持完全展开，每个通道仍然走多个状态，保证每次调度 ≥ 4096 个逻辑线程。 `FASTPQ_METAL_POSEIDON_LANES` / `FASTPQ_METAL_POSEIDON_BATCH` 固定启动宽度和每通道批次，无需重建 Metallib。【crates/fastpq_prover/metal/kernels/poseidon2.metal:1】【crates/fastpq_prover/src/metal_config.rs:78】【crates/fastpq_prover/src/metal.rs:1971】
 
-| Entry point | Operation | Threadgroup cap | Tile stage cap | Notes |
-| ----------- | --------- | --------------- | -------------- | ----- |
-| `fastpq_fft_columns` | Forward FFT over trace columns | 256 threads | 32 stages | Uses shared-memory tiles for the first stages and applies inverse scaling when the planner requests an IFFT mode.【crates/fastpq_prover/metal/kernels/ntt_stage.metal:223】【crates/fastpq_prover/src/metal.rs:262】
-| `fastpq_fft_post_tiling` | Completes FFT/IFFT/LDE after the tile depth is reached | 256 threads | — | Runs the remaining butterflies directly out of device memory and handles the final coset/inverse factors before returning to the host.【crates/fastpq_prover/metal/kernels/ntt_stage.metal:447】【crates/fastpq_prover/src/metal.rs:262】
-| `fastpq_lde_columns` | Low-degree extension across columns | 256 threads | 32 stages | Copies coefficients into the evaluation buffer, executes tiled stages with the configured coset, and leaves the final stages to `fastpq_fft_post_tiling` when needed.【crates/fastpq_prover/metal/kernels/ntt_stage.metal:341】【crates/fastpq_prover/src/metal.rs:262】
-| `poseidon_trace_fused` | Hash columns and compute depth‑1 parents in one pass | 256 threads | — | Runs the same absorption/permutation as `poseidon_hash_columns`, stores the leaf digests directly into the output buffer, and immediately folds each `(left,right)` pair under the `fastpq:v1:trace:node` domain so `(⌈columns / 2⌉)` parents land after the leaf slice. Odd column counts duplicate the final leaf on-device, eliminating the follow-up kernel and the CPU fallback for the first Merkle layer.【crates/fastpq_prover/metal/kernels/poseidon2.metal:384】【crates/fastpq_prover/src/metal.rs:2407】
-| `poseidon_permute` | Poseidon2 permutation (STATE_WIDTH = 3) | 256 threads | — | Threadgroups cache the round constants/MDS rows in threadgroup memory, copy the MDS rows into per-thread registers, and process states in 4-state chunks so each round constant fetch is reused across multiple states before advancing. The rounds stay fully unrolled and every lane still walks multiple states, guaranteeing ≥4 096 logical threads per dispatch. `FASTPQ_METAL_POSEIDON_LANES` / `FASTPQ_METAL_POSEIDON_BATCH` pin the launch width and per-lane batch without rebuilding the metallib.【crates/fastpq_prover/metal/kernels/poseidon2.metal:1】【crates/fastpq_prover/src/metal_config.rs:78】【crates/fastpq_prover/src/metal.rs:1971】
+描述符可在运行时通过
+`fastpq_prover::metal_kernel_descriptors()` 用于想要显示的工具
+相同的元数据。
 
-The descriptors are available at runtime via
-`fastpq_prover::metal_kernel_descriptors()` for tooling that wants to display
-the same metadata.
+## 确定性金发姑娘算法- 所有内核都在 Goldilocks 字段上工作，并使用中定义的帮助程序
+  `field.metal`（模块化加/乘/减，逆，`pow5`）。【crates/fastpq_prover/metal/kernels/field.metal:1】
+- FFT/LDE 阶段重用 CPU 规划器生成的相同旋转表。
+  `compute_stage_twiddles` 预先计算每个阶段和主机的一次旋转
+  每次调度前通过缓冲槽 1 上传数组，保证
+  GPU路径使用相同的统一根。【crates/fastpq_prover/src/metal.rs:1527】
+- LDE 的陪集乘法被融合到最后阶段，因此 GPU 永远不会
+  与 CPU 迹线布局不同；主机对评估缓冲区进行零填充
+  在调度之前，保持填充行为确定性。【crates/fastpq_prover/metal/kernels/ntt_stage.metal:288】【crates/fastpq_prover/src/metal.rs:898】
 
-## Deterministic Goldilocks arithmetic
+## Metallib 生成
 
-- All kernels work over the Goldilocks field with helpers defined in
-  `field.metal` (modular add/mul/sub, inverses, `pow5`).【crates/fastpq_prover/metal/kernels/field.metal:1】
-- FFT/LDE stages reuse the same twiddle tables that the CPU planner produces.
-  `compute_stage_twiddles` precomputes one twiddle per stage and the host
-  uploads the array through buffer slot 1 before each dispatch, guaranteeing the
-  GPU path uses identical roots of unity.【crates/fastpq_prover/src/metal.rs:1527】
-- Coset multiplication for LDE is fused into the final stage so the GPU never
-  diverges from the CPU trace layout; the host zero-fills the evaluation buffer
-  before dispatch, keeping padding behaviour deterministic.【crates/fastpq_prover/metal/kernels/ntt_stage.metal:288】【crates/fastpq_prover/src/metal.rs:898】
+`build.rs` 将各个 `.metal` 源编译为 `.air` 对象，然后
+将它们链接到 `fastpq.metallib`，导出上面列出的每个入口点。
+将 `FASTPQ_METAL_LIB` 设置为该路径（构建脚本执行此操作
+自动）允许运行时确定性地加载库，无论
+`cargo` 放置构建工件的位置。【crates/fastpq_prover/build.rs:45】
 
-## Metallib generation
-
-`build.rs` compiles the individual `.metal` sources into `.air` objects and then
-links them into `fastpq.metallib`, exporting every entry point listed above.
-Setting `FASTPQ_METAL_LIB` to that path (the build script does this
-automatically) allows the runtime to load the library deterministically regardless
-of where `cargo` placed the build artifacts.【crates/fastpq_prover/build.rs:45】
-
-For parity with CI runs you can regenerate the library manually:
+为了与 CI 运行保持一致，您可以手动重新生成库：
 
 ```bash
 export OUT_DIR=$PWD/target/metal && mkdir -p "$OUT_DIR"
@@ -67,18 +64,18 @@ xcrun metallib "$OUT_DIR/ntt_stage.air" "$OUT_DIR/poseidon2.air" -o "$OUT_DIR/fa
 export FASTPQ_METAL_LIB="$OUT_DIR/fastpq.metallib"
 ```
 
-## Threadgroup sizing heuristics
+## 线程组大小启发式
 
-`metal_config::fft_tuning` threads the device execution width and max threads per
-threadgroup into the planner so runtime dispatches respect the hardware limits.
-The defaults clamp to 32/64/128/256 lanes as the log-size increases, and the
-tile depth now walks from five stages to four at `log_len ≥ 12`, then keeps the
-shared-memory pass active for 12/14/16 stages once the trace crosses
-`log_len ≥ 18/20/22` before handing work to the post-tiling kernel. Operator
-overrides (`FASTPQ_METAL_FFT_LANES`, `FASTPQ_METAL_FFT_TILE_STAGES`) flow through
-`FftArgs::threadgroup_lanes`/`local_stage_limit` and are applied by the kernels
-above without rebuilding the metallib.【crates/fastpq_prover/src/metal_config.rs:12】【crates/fastpq_prover/src/metal.rs:599】
+`metal_config::fft_tuning` 线程设备执行宽度和每个线程的最大线程数
+将线程组放入规划器中，以便运行时调度遵守硬件限制。
+随着日志大小的增加，默认限制为 32/64/128/256 通道，并且
+平铺深度现在从 `log_len ≥ 12` 的五个阶段变为四个阶段，然后保持
+一旦跟踪交叉，共享内存传递将在 12/14/16 阶段处于活动状态
+`log_len ≥ 18/20/22` 在将工作交给后平铺内核之前。操作员
+覆盖（`FASTPQ_METAL_FFT_LANES`、`FASTPQ_METAL_FFT_TILE_STAGES`）流经
+`FftArgs::threadgroup_lanes`/`local_stage_limit` 并由内核应用
+以上，无需重建metallib。【crates/fastpq_prover/src/metal_config.rs:12】【crates/fastpq_prover/src/metal.rs:599】
 
-Use `fastpq_metal_bench` to capture the resolved tuning values and verify that
-the multi-pass kernels were exercised (`post_tile_dispatches` in the JSON) before
-shipping a benchmark bundle.【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:1048】
+使用 `fastpq_metal_bench` 捕获解析的调整值并验证
+之前已执行多遍内核（JSON 中的 `post_tile_dispatches`）
+发送基准测试包。【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:1048】

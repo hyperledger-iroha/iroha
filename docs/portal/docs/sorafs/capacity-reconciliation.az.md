@@ -10,19 +10,20 @@ translation_last_reviewed: 2026-02-07
 id: capacity-reconciliation
 title: SoraFS Capacity Reconciliation
 description: Nightly workflow for matching capacity fee ledgers to XOR transfer exports.
+translator: machine-google-reviewed
 ---
 
-Roadmap item **SF-2c** mandates that treasury proves the capacity fee ledger
-matches the XOR transfers executed each night. Use the
-`scripts/telemetry/capacity_reconcile.py` helper to compare the
-`/v1/sorafs/capacity/state` snapshot against the executed transfer batch and
-emit Prometheus textfile metrics for Alertmanager.
+Yol xəritəsi bəndi **SF-2c** xəzinədarlığın tutum haqqı kitabçasını sübut etməsini tələb edir
+hər gecə həyata keçirilən XOR köçürmələrinə uyğun gəlir. istifadə edin
+`scripts/telemetry/capacity_reconcile.py` ilə müqayisə etmək üçün köməkçi
+`/v1/sorafs/capacity/state` icra edilmiş köçürmə dəstəsinə qarşı snapshot və
+Alertmanager üçün Prometheus mətn faylı ölçülərini yayır.
 
-## Prerequisites
-- Capacity state snapshot (`fee_ledger` entries) exported from Torii.
-- Ledger export for the same window (JSON or NDJSON with `provider_id_hex`,
-  `kind` = settlement/penalty, and `amount_nano`).
-- Path to the node_exporter textfile collector if you want alerts.
+## İlkin şərtlər
+- Torii-dən ixrac edilmiş tutum vəziyyətinin görüntüsü (`fee_ledger` girişləri).
+- Eyni pəncərə üçün kitab ixracı (`provider_id_hex` ilə JSON və ya NDJSON,
+  `kind` = hesablaşma/cərimə və `amount_nano`).
+- Xəbərdarlıq etmək istəyirsinizsə, node_exporter mətn faylı kollektoruna gedən yol.
 
 ## Runbook
 ```bash
@@ -34,25 +35,25 @@ python3 scripts/telemetry/capacity_reconcile.py \
   --prom-out "${SORAFS_CAPACITY_RECONCILE_TEXTFILE:-artifacts/sorafs/capacity/reconcile.prom}"
 ```
 
-- Exit codes: `0` on a clean match, `1` when settlements/penalties are missing
-  or overpaid, `2` on invalid inputs.
-- Attach the JSON summary + hashes to the treasury packet in
+- Çıxış kodları: təmiz matçda `0`, hesablaşmalar/cəzalar olmadıqda `1`
+  və ya artıq ödənilmiş, etibarsız girişlərdə `2`.
+- JSON xülasəsini + hashləri xəzinə paketinə əlavə edin
   `docs/examples/sorafs_capacity_marketplace_validation/`.
-- When the `.prom` file lands in the textfile collector, the alert
-  `SoraFSCapacityReconciliationMismatch` (see
-  `dashboards/alerts/sorafs_capacity_rules.yml`) fires whenever missing,
-  overpaid, or unexpected provider transfers are detected.
+- `.prom` faylı mətn faylı kollektoruna düşəndə xəbərdarlıq
+  `SoraFSCapacityReconciliationMismatch` (bax
+  `dashboards/alerts/sorafs_capacity_rules.yml`) itkin düşəndə yanğınlar,
+  həddindən artıq ödənişli və ya gözlənilməz provayder köçürmələri aşkar edilir.
 
-## Outputs
-- Per-provider statuses with diffs for settlements and penalties.
-- Totals exported as gauges:
+## Çıxışlar
+- Hesablaşmalar və cərimələr üçün fərqləri olan hər provayder statusları.
+- Ölçülər kimi ixrac edilən cəmi:
   - `sorafs_capacity_reconciliation_missing_total{kind}`
   - `sorafs_capacity_reconciliation_overpaid_total{kind}`
   - `sorafs_capacity_reconciliation_unexpected_transfers_total`
   - `sorafs_capacity_reconciliation_expected_nano{kind}`
   - `sorafs_capacity_reconciliation_actual_nano{kind}`
 
-## Expected Ranges and Tolerances
-- Reconciliation is exact: expected vs actual settlement/penalty nanos should match with zero tolerance. Any non-zero diff should page operators.
-- CI pins a 30-day soak digest for the capacity fee ledger (test `capacity_fee_ledger_30_day_soak_deterministic`) to `71db9e1a17f66920cd4fe6d2bb6a1b008f9cfe1acbb3149d727fa9c80eee80d1`. Refresh the digest only when pricing or cooldown semantics change.
-- In the soak profile (`penalty_bond_bps=0`, `strike_threshold=u32::MAX`) penalties stay at zero; production should only emit penalties when utilisation/uptime/PoR floors are breached and respect the configured cooldown before successive slashes.
+## Gözlənilən Aralıqlar və Tolerantlıqlar
+- Uzlaşma dəqiqdir: gözlənilən və faktiki hesablaşma/cəza nanosları sıfır dözümlülüklə uyğun olmalıdır. Sıfır olmayan istənilən fərq operatorları səhifələməlidir.
+- CI tutum haqqı dəftəri (test `capacity_fee_ledger_30_day_soak_deterministic`) üçün 30 günlük islatmaq həzmini `71db9e1a17f66920cd4fe6d2bb6a1b008f9cfe1acbb3149d727fa9c80eee80d1`-ə bağlayır. Yalnız qiymət və ya soyutma semantikası dəyişdikdə həzmi yeniləyin.
+- Islatma profilində (`penalty_bond_bps=0`, `strike_threshold=u32::MAX`) cərimələr sıfırda qalır; istehsal yalnız istifadə/iş vaxtı/PoR mərtəbələri pozulduqda cərimələr buraxmalı və ardıcıl kəsiklərdən əvvəl konfiqurasiya edilmiş soyumağa riayət etməlidir.

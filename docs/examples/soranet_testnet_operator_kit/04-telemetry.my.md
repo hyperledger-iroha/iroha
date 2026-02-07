@@ -7,13 +7,14 @@ generator: scripts/sync_docs_i18n.py
 source_hash: a947c289c13c15b09dfbbf28c23ae1539fd3e29ca3943fa8522c3eca32c28bf5
 source_last_modified: "2025-12-29T18:16:35.091070+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Telemetry Requirements
+# Telemetry လိုအပ်ချက်များ
 
-## Prometheus Targets
+## Prometheus ပစ်မှတ်များ
 
-Scrape the relay and orchestrator with the following labels:
+အောက်ဖော်ပြပါ အညွှန်းများဖြင့် relay နှင့် orchestrator ကို ခြစ်ပါ။
 
 ```yaml
 - job_name: "soranet-relay"
@@ -30,36 +31,36 @@ Scrape the relay and orchestrator with the following labels:
         role: "orchestrator"
 ```
 
-## Required Dashboards
+## လိုအပ်သော ဒက်ရှ်ဘုတ်များ
 
-1. `dashboards/grafana/soranet_testnet_overview.json` *(to be published)* — load the JSON, import variables `region` and `relay_id`.
-2. `dashboards/grafana/soranet_privacy_metrics.json` *(existing SNNet-8 asset)* — ensure the privacy bucket panels render without gaps.
+1. `dashboards/grafana/soranet_testnet_overview.json` *(ထုတ်ဝေရန်)* — JSON ကို တင်ပါ၊ ကိန်းရှင်များ `region` နှင့် `relay_id` ကို တင်သွင်းပါ။
+2. `dashboards/grafana/soranet_privacy_metrics.json` *(လက်ရှိ SNNet-8 ပိုင်ဆိုင်မှု)* — ကိုယ်ရေးကိုယ်တာပုံးပြားများကို ကွက်လပ်မရှိဘဲ တင်ဆက်ကြောင်း သေချာပါစေ။
 
-## Alert Rules
+## သတိပေးချက်စည်းကမ်းများ
 
-Thresholds must match the playbook expectation:
+သတ်မှတ်ချက်များသည် playbook မျှော်မှန်းချက်နှင့် ကိုက်ညီရမည်-
 
-- `soranet_privacy_circuit_events_total{kind="downgrade"}` increase > 0 over 10 minutes triggers `critical`.
-- `sorafs_orchestrator_policy_events_total{outcome="brownout"}` > 5 per 30 minutes triggers `warning`.
-- `up{job="soranet-relay"}` == 0 for 2 minutes triggers `critical`.
+- `soranet_privacy_circuit_events_total{kind="downgrade"}` တိုးသည် > 0 10 မိနစ်ကျော်သည် `critical` ကို အစပျိုးသည်။
+- မိနစ် 30 လျှင် `sorafs_orchestrator_policy_events_total{outcome="brownout"}` > 5 သည် `warning` ကို အစပျိုးသည်။
+- `up{job="soranet-relay"}` == 0 2 မိနစ်အတွက် `critical` အစပျိုးသည်။
 
-Load your rules into Alertmanager with the `testnet-t0` receiver; validate with `amtool check-config`.
+`testnet-t0` လက်ခံကိရိယာဖြင့် Alertmanager တွင် သင့်စည်းမျဉ်းများကို ထည့်သွင်းပါ။ `amtool check-config` ဖြင့် အတည်ပြုပါ။
 
-## Metrics Evaluation
+## မက်ထရစ်အကဲဖြတ်ခြင်း။
 
-Aggregate a 14-day snapshot and feed it to the SNNet-10 validator:
+၁၄ ရက်ကြာ လျှပ်တစ်ပြက်ကို စုစည်းပြီး SNNet-10 အတည်ပြုသူထံ ပေးပို့ပါ-
 
 ```
 cargo xtask soranet-testnet-metrics --input 07-metrics-sample.json --out metrics-report.json
 ```
 
-- Replace the sample file with your exported snapshot when running against live data.
-- A `status = fail` result blocks promotion; resolve the highlighted check(s) before retrying.
+- တိုက်ရိုက်ဒေတာကို လုပ်ဆောင်နေချိန်တွင် သင်ထုတ်ထားသော လျှပ်တစ်ပြက်ရိုက်ချက်ဖြင့် နမူနာဖိုင်ကို အစားထိုးပါ။
+- `status = fail` ရလဒ်သည် ပရိုမိုးရှင်းကို ပိတ်ဆို့ထားသည်။ ထပ်မစမ်းမီ မီးမောင်းထိုးပြထားသည့် စစ်ဆေးချက်(များ)ကို ဖြေရှင်းပါ။
 
-## Reporting
+## အစီရင်ခံခြင်း။
 
-Every week upload:
+အပတ်တိုင်း အပ်လုဒ်လုပ်သည်-
 
-- Query snapshots (`.png` or `.pdf`) showing PQ ratio, circuit success rate, and PoW solve histogram.
-- Prometheus recording rule output for `soranet_privacy_throttles_per_minute`.
-- A brief narrative describing any alerts that fired and mitigation steps (include timestamps).
+- Query လျှပ်တစ်ပြက်ပုံများ (`.png` သို့မဟုတ် `.pdf`) PQ အချိုး၊ circuit အောင်မြင်မှုနှုန်း နှင့် PoW ဖြေရှင်းချက် histogram ကိုပြသထားသည်။
+- Prometheus အတွက် `soranet_privacy_throttles_per_minute` အတွက် အသံသွင်းခြင်း စည်းမျဉ်း အထွက်။
+- ပစ်လွှတ်သည့်သတိပေးချက်များနှင့် လျော့ပါးစေသည့်အဆင့်များ (အချိန်တံဆိပ်နှိပ်ခြင်းများပါ၀င်သည်) ကိုဖော်ပြသည့် အကျဉ်းချုပ်ဇာတ်ကြောင်း။

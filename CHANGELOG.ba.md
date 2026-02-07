@@ -7,1860 +7,1816 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 26f5115a14476de15fbc8f26c5a9807954df6884763a818b2bc98ec6cfe1a4cc
 source_last_modified: "2026-01-05T09:28:11.640562+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Changelog
+# Үҙгәрештәр
 
-[Unreleased]: https://github.com/hyperledger-iroha/iroha/compare/v2.0.0-rc.2.0...HEAD
-[2.0.0-rc.2.0]: https://github.com/hyperledger-iroha/iroha/releases/tag/v2.0.0-rc.2.0
+I18NL000000115X
+I18NL000000116X
 
-All notable changes to this project will be documented in this file.
+Был проектҡа бөтә иғтибарға лайыҡ үҙгәрештәр ҙә был файлда документлаштырыласаҡ.
 
-## [Unreleased]
+## [Незатрланмаған].- SCALE шим ташларға; I18NI000000125X хәҙер тыуған I18NT000000019X сериализацияһы менән тормошҡа ашырыла.
+- I18NI0000126X XX быуаттар менән I18NI0000000127X менән алмаштырыу йәшниктәр аша алмаштыра.
+- Башланғыс миграция инструменттары тыуған I18NT0000000020X сериализация.
+- Ҡалған `parity-scale-codec` эш урыны буйынса эш урыны файҙаһына тыуған I18NT0000000021X сериализация.
+- Ҡалдыҡ SCALE һыҙаттары сығарылыштарын туған I18NT0000000022X тормошҡа ашырыу һәм версияланған кодек модулен үҙгәртеү.
+- Merge I18NI000000129X һәм `iroha_futures_derive` `iroha_derive`-ҡа нәфис макрос менән.
+- *(мультициг)* Тура ҡултамғаларҙы кире ҡағыу мультисиг властары менән тотороҡло хата коды/аҡыл, multisig TTL ҡапҡастарын үтәү аша оялы эстафеталар, һәм ер өҫтө TTL ҡапҡастары CLI тапшырыу алдынан (SDK паритет көтә).
+- FFI процедураһы макростарын I18NI000000132X-ға күсерергә һәм I18NI0000133X йәшникте алып ташларға.
+- *(схема_ген)* `iroha_data_model` бәйлелектән кәрәкмәгән I18NI0000134X функцияһын сығарыу.
+- *(мәғлүмәттәр)* ICU NFC нормализаторы өсөн I18NI000000136X анализлау өсөн ҡабатланған инициализация накладнойҙарын кәметергә.
+- 📚 Документ JS тиҙ старт, конфигурация руль, баҫтырыу эш ағымы, һәм конфигурация-аңлы рецепт I18NT0000000102X клиент.
+- *(IrohaSwift)* IOS 15 / macOS 12-гә минималь таратыу маҡсаттарын күтәреү, I18NT000000103X клиент API-лар буйынса Свифт конкурентлығын ҡабул итеү, йәмәғәт моделдәрен I18NI00000000000007X тип билдәләй.
+- *(IrohaSwift)* I18NI000000138X һәм `DaProofSummaryArtifactEmitter.emit` өҫтәлгән, шуға күрә Swift ҡушымталары CLI-ға снарядтарһыҙ CLI-ға совместимый ДА-ны сығара ала/эскелек һәм дискта һәм дискта регрессия һынауҙары менән тулы. Эш ағымы.【F:IrohaSwift/Сығанаҡтар/IrohaSwift/ToriiDaProofmaryArtifact.swift:1】【F:IrohaSwift/Тест s/IrohaSwift Tests/ToriiDaProofmaryArtifactTests.swift:1】【F:док/сығанаҡ/sdk/swift/index.md:260】
+- *(мәғлүмәттәр моделдәре/js_host)* I18NI000000140X-тан архивланған ҡабаттан ҡулланыу флагын алып ташлап, тыуған roundtrip һынауҙары һәм JS декодының fallback-ты ташларға, шуға күрә Кайги инструкцияларын хәҙер I18NT00000000023X түңәрәк-сәйәхәтте ташлау юлы менән төҙәтеү. 128】【 Ф:128
+- *(javascript)* рөхсәт I18NI00000000141X шылтыратыусыларҙы юйыу өсөн дефолт баш (үткән I18NI0000000142X) шулай I18NI0000143X таҙа коммутаторҙар араһында JSON һәм I18NT000000000 X тексы Accepce . Башлыҡтар.【F:javascript/iroha_js/src/toriClienClient.js:488】【 F:javascript/iroha_js/src/toriClient.js:761】
+- *(javascript)* Өҫтәлгән итератив ярҙамсылар өсөн NFTs, пер-иҫәп активтары баланстары, һәм актив-билдәләү эйәләре (типтар менән TisScript defs, docs, һәм һынауҙар) шулай Torii pagination хәҙер ҡаплай ҡалған ҡушымта . 105】【 javascript/iroha_js/индекс.д.тс:8. 0 шундай
+- *(javascript)* Өҫтәлгән идара итеү инструкцияһы/транзакция төҙөүселәр плюс идара итеү рецепты шулай JS клиенттар тәҡдим итә ала тәҡдимдәр, бюллетендәр, ҡабул итеү, һәм совет ныҡышмалылыҡ тамамлана 1012】 F:javascript/iroha_js/src/транзакциялар.js:1082】 F: javascript/iroha_js/рецепттар/хөкүмәт.мж.
+- *(javascript)* ISO 20022 pacs.008 тапшырылған тапшырыу/статус ярҙамсылары һәм тап килгән рецепт, рөхсәт JS шылтыратыусылар өсөн ҡулланырға I18NT000000005X ISO күпер bespoke HTTP 1990 йылдарҙа был йүнәлештәге эшмәкәрлекте үҫтереүҙе- *(javascript)* Өҫтәлгән pacs.008/pacs.009 төҙөүсе ярҙамсылары плюс конфигурацияланған рецепт шулай JS шылтыратыусылар синтез ISO 20022 файҙалы йөкләмәләр менән раҫланған BIC/IBAN метамағлүмәттәр һуғыу алдынан күпер.【F:javascript/iroha_js/src/iscBridg :1】【F:javascript/iroha_js/рецепттар/изо_күперҙәр.mjs:1】【 F: javascript/iroha_js/индекс.д.тс:1】
+- *(javascript)* DA ингест/фетч/иҫбатлау иллюминаторы тамамланды: I18NI0000000144X хәҙер авто-производство chunker тотҡалары (яңы `deriveDaChunkerHandle` бәйләү аша), факультатив иҫбатлау резюмеларын ҡабаттан ҡулланыу туған `generateDaProofSummary`, һәм README/tipings/tests булды Яңыртылған, шулай SDK шылтыратыусылар көҙгө I18NI0000000147X bespokeһыҙ 1123】【 F: javascript/srha_js/src/dataAvailabсанлыҡ.js:1】 F:javascrip t/iroha_js/тест/toriClienClient.js:1454】【 F:javascript/iroha_js/индекс.3275】【 F: javascript/iroha_js/README.md:760】
+- *(javascript/js_host)* I18NI0000000148X balowboard метамағлүмәттәр хәҙер шлюз манифест id/CID ҡасан шлюз провайдерҙары ҡулланыла, шуға күрә ҡабул итеү артефакттары CLI менән тура килә. 1990 йылдарҙа был йүнәлештәге эштәрҙең иң мөһимдәренең береһе булып тора.
+- *(торий/кли)* ISO үткәүелдәрен үтәргә: I18NT0000000106X хәҙер I18NI000000149XX тапшырыуҙары менән билдәһеҙ агент BICs һәм DvP CLI алдан ҡарау I18NI000000150X аша раҫлай. `--iso-reference-crosswalk`.【F:крет/ироха_тории/срк/изо20022_күпер.
+- *(тори)* `POST /v1/iso20022/pacs009` аша PvP аҡса ашау өҫтәү, `Purp=SECU` һәм BIC белешмә-мәғлүмәттәр чектарын төҙөү алдынан үтәү 1070】【F:креттар/ироха_тории/срк/либ.4759】
+- *(инструмент)* `cargo xtask iso-bridge-lint` (плюс I18NI000001555X) ISIN/CUSIP, BIC↔LEI һәм MIC снимоктарын репозиторий менән бергә раҫлау өсөн өҫтәлгән. 1990 йылдарҙа был ҡоролма ҡоролмалары
+- *(javascript)* Ҡаты npm нәшриәт иғлан итеү аша репозиторий метамағлүмәттәр, асыҡ файлдар рөхсәт исемлеге, провенанс-инергә мөмкинлек биргән I18NI000000156X, `prepublishOnly` gotlog һаҡсыһы, һәм GitHub Actions эш ағымы, тип күнекмәләр 18/20 1990 йылдарҙа CI【F:javascript/iroha_js/packag .mjs:1】【F:доктар/сығанаҡ/sdk/js/нәҫер.мд:1】【F:.гитюб/эш ағымдары/javascript-sdk.yml:1】
+- *(ivm/cuda)* BN254 ялан өҫтәү/суб/мул хәҙер яңы CUDA ядролары менән башҡарыла хост-яҡ партияһы аша `bn254_launch_kernel`, Посейдон һәм ZK гаджеттары өсөн аппарат тиҙләнеше мөмкинлек бирә, шул уҡ ваҡытта детерминистик һаҡлау 1990 йылдарҙа был йүнәлештәге эштәрҙең иң мөһимдәренең береһе булып тора.
 
-- Drop the SCALE shim; `norito::codec` is now implemented with native Norito serialization.
-- Replace `parity_scale_codec` usages with `norito::codec` across crates.
-- Begin migrating tooling to native Norito serialization.
-- Remove remaining `parity-scale-codec` dependency from the workspace in favor of native Norito serialization.
-- Replace residual SCALE trait derivations with native Norito implementations and rename versioned codec module.
-- Merge `iroha_config_base_derive` and `iroha_futures_derive` into `iroha_derive` with feature-gated macros.
-- *(multisig)* Reject direct signatures from multisig authorities with a stable error code/reason, enforce multisig TTL caps across nested relayers, and surface TTL caps in the CLI before submission (SDK parity pending).
-- Move FFI procedural macros into `iroha_ffi` and remove `iroha_ffi_derive` crate.
-- *(schema_gen)* Remove unnecessary `transparent_api` feature from `iroha_data_model` dependency.
-- *(data_model)* Cache the ICU NFC normalizer for `Name` parsing to reduce repeated initialization overhead.
-- 📚 Document JS quickstart, configuration resolver, publishing workflow, and configuration-aware recipe for the Torii client.
-- *(IrohaSwift)* Raise minimum deployment targets to iOS 15 / macOS 12, adopt Swift concurrency across Torii client APIs, and mark public models as `Sendable`.
-- *(IrohaSwift)* Added `ToriiDaProofSummaryArtifact` and `DaProofSummaryArtifactEmitter.emit` so Swift apps can build/emit CLI-compatible DA proof bundles without shelling out to the CLI, complete with docs and regression tests covering both in-memory and on-disk workflows.【F:IrohaSwift/Sources/IrohaSwift/ToriiDaProofSummaryArtifact.swift:1】【F:IrohaSwift/Tests/IrohaSwiftTests/ToriiDaProofSummaryArtifactTests.swift:1】【F:docs/source/sdk/swift/index.md:260】
-- *(data_model/js_host)* Fix Kaigi Option serialization by removing the archived-reuse flag from `KaigiParticipantCommitment`, add native roundtrip tests, and drop the JS decode fallback so Kaigi instructions now Norito round-trip before submission.【F:crates/iroha_data_model/src/kaigi.rs:128】【F:crates/iroha_js_host/src/lib.rs:1379】【F:javascript/iroha_js/test/instructionBuilders.test.js:30】
-- *(javascript)* Allow `ToriiClient` callers to delete default headers (by passing `null`) so `getMetrics` cleanly switches between JSON and Prometheus text Accept headers.【F:javascript/iroha_js/src/toriiClient.js:488】【F:javascript/iroha_js/src/toriiClient.js:761】
-- *(javascript)* Added iterable helpers for NFTs, per-account asset balances, and asset-definition holders (with TypeScript defs, docs, and tests) so Torii pagination now covers the remaining app endpoints.【F:javascript/iroha_js/src/toriiClient.js:105】【F:javascript/iroha_js/index.d.ts:80】【F:javascript/iroha_js/test/toriiClient.test.js:365】【F:javascript/iroha_js/README.md:470】
-- *(javascript)* Added governance instruction/transaction builders plus a governance recipe so JS clients can stage deploy proposals, ballots, enactment, and council persistence end to end.【F:javascript/iroha_js/src/instructionBuilders.js:1012】【F:javascript/iroha_js/src/transaction.js:1082】【F:javascript/iroha_js/recipes/governance.mjs:1】
-- *(javascript)* Added ISO 20022 pacs.008 submit/status helpers and a matching recipe, letting JS callers exercise the Torii ISO bridge without bespoke HTTP plumbing.【F:javascript/iroha_js/src/toriiClient.js:888】【F:javascript/iroha_js/index.d.ts:706】【F:javascript/iroha_js/recipes/iso_bridge.mjs:1】
-- *(javascript)* Added pacs.008/pacs.009 builder helpers plus a config-driven recipe so JS callers can synthesise ISO 20022 payloads with validated BIC/IBAN metadata before hitting the bridge.【F:javascript/iroha_js/src/isoBridge.js:1】【F:javascript/iroha_js/test/isoBridge.test.js:1】【F:javascript/iroha_js/recipes/iso_bridge_builder.mjs:1】【F:javascript/iroha_js/index.d.ts:1】
-- *(javascript)* Completed the DA ingest/fetch/prove loop: `ToriiClient.fetchDaPayloadViaGateway` now auto-derives chunker handles (via the new `deriveDaChunkerHandle` binding), optional proof summaries reuse the native `generateDaProofSummary`, and the README/typings/tests were refreshed so SDK callers can mirror `iroha da get-blob/prove-availability` without bespoke plumbing.【F:javascript/iroha_js/src/toriiClient.js:1123】【F:javascript/iroha_js/src/dataAvailability.js:1】【F:javascript/iroha_js/test/toriiClient.test.js:1454】【F:javascript/iroha_js/index.d.ts:3275】【F:javascript/iroha_js/README.md:760】
-- *(javascript/js_host)* `sorafsGatewayFetch` scoreboard metadata now records the gateway manifest id/CID whenever gateway providers are used so adoption artefacts align with the CLI captures.【F:crates/iroha_js_host/src/lib.rs:3017】【F:docs/source/sorafs_orchestrator_rollout.md:23】
-- *(torii/cli)* Enforce ISO crosswalks: Torii now rejects `pacs.008` submissions with unknown agent BICs and the DvP CLI preview validates `--delivery-instrument-id` via `--iso-reference-crosswalk`.【F:crates/iroha_torii/src/iso20022_bridge.rs:704】【F:crates/iroha_cli/src/main.rs:3892】
-- *(torii)* Add PvP cash ingestion via `POST /v1/iso20022/pacs009`, enforcing `Purp=SECU` and BIC reference-data checks before building transfers.【F:crates/iroha_torii/src/iso20022_bridge.rs:1070】【F:crates/iroha_torii/src/lib.rs:4759】
-- *(tooling)* Added `cargo xtask iso-bridge-lint` (plus `ci/check_iso_reference_data.sh`) to validate ISIN/CUSIP, BIC↔LEI, and MIC snapshots alongside repository fixtures.【F:xtask/src/main.rs:146】【F:ci/check_iso_reference_data.sh:1】
-- *(javascript)* Hardened npm publishing by declaring repository metadata, an explicit files allowlist, provenance-enabled `publishConfig`, a `prepublishOnly` changelog/test guard, and a GitHub Actions workflow that exercises Node 18/20 in CI【F:javascript/iroha_js/package.json:1】【F:javascript/iroha_js/scripts/check-changelog.mjs:1】【F:docs/source/sdk/js/publishing.md:1】【F:.github/workflows/javascript-sdk.yml:1】
-- *(ivm/cuda)* BN254 field add/sub/mul now execute on the new CUDA kernels with host-side batching via `bn254_launch_kernel`, enabling hardware acceleration for Poseidon and ZK gadgets while preserving deterministic fallbacks.【F:crates/ivm/cuda/bn254.cu:1】【F:crates/ivm/src/cuda.rs:66】【F:crates/ivm/src/cuda.rs:1244】
+## [2,0,0-р.2.0] - 2025-05-08.
 
-## [2.0.0-rc.2.0] - 2025-05-08
+### 🚀 Функциялары
 
-### 🚀 Features
+- *(кли)* I18NI000000159X һәм башҡа мөһим командаларҙы өҫтәү (#5289)
+- [**өҙөү**] Айырым фунгируемый һәм fungible активтар (#5308)
+- [**өҙөү**] Уларҙан һуң буш блоктар рөхсәт итеү, буш булмаған блоктарҙы финаллаштырыу (#5320)
+- Схема һәм клиентта телеметрия төрҙәрен фашлау (#5387)
+- *(iroha_torii)* Функциональ ҡапҡалы ос нөктәләре өсөн стабтар (#5385)
+- Ваҡыт метрикаларын өҫтәү (#5380)
 
-- *(cli)* Add `iroha transaction get` and other important commands (#5289)
-- [**breaking**] Separate fungible and non-fungible assets (#5308)
-- [**breaking**] Finalize non-empty blocks by allowing empty blocks after them (#5320)
-- Expose telemetry types in schema and client (#5387)
-- *(iroha_torii)* Stubs for feature-gated endpoints (#5385)
-- Add commit time metrics (#5380)
+### 🐛 Ҡоротҡос бысраҡтар
 
-### 🐛 Bug Fixes
+- NonZeros ҡабаттан ҡарау (#5278)
+- Документация файлдарында типопос (#5309)
+- *(крипто)* I18NI000000160X габаритлы (#5302) (#5310)
+- *(ядро)* ролдәрҙә булыу өсөн тикшерелгәндәр өҫтәгеҙ, уны биргәнсе (#5300)
+- *(ядро)* Ҡабаттан өҙөлгән тиңдәш (#5325)
+- Магазин активтары һәм НФТ (#5341) менән бәйле төҙәтеүҙәр.
+- *(CI)* Шиғриәт өсөн статик анализ эш ағымын төҙәтеү v2 (#5374)
+- Сроклы транзакция ваҡиғаһы ҡылғандан һуң барлыҡҡа килә (#5396)
 
-- Revise NonZeros (#5278)
-- Typos in documentation files (#5309)
-- *(crypto)* Expose `Signature::payload` getter (#5302) (#5310)
-- *(core)* Add checks for role presence before granting it (#5300)
-- *(core)* Reconnect disconnected peer (#5325)
-- Fix pytests related to store assets and NFT (#5341)
-- *(CI)* Fix python static analysis workflow for poetry v2 (#5374)
-- Expired transaction event appears after commit (#5396)
+### 💼 Башҡа- `rust-toolchain.toml` индереү (#5376)
+- `unused`-та иҫкәрткән, I18NI000000163X түгел (#5377)
 
-### 💼 Other
+### 🚜 Рефактор
 
-- Include `rust-toolchain.toml` (#5376)
-- Warn on `unused`, not `deny` (#5377)
+- Зонтик I18NT000000052X CLI (#5282)
+- *(iroha_test_network)* журналдар өсөн матур формат ҡулланыу (#5331)
+- [** өҙөү**] `NumericSpec` сериализацияһын ябайлаштырыу I18NI000000165X (#5340)
+- Яҡшыртыу өсөн логирование өсөн уңышһыҙ p2p тоташыу (#5379)
+- Revert I18NI000000166X, өҫтәү I18NI000000167X, оҙайтыу конфиг маршруттары (#5384)
 
-### 🚜 Refactor
+### 📚 Документация
 
-- Umbrella Iroha CLI (#5282)
-- *(iroha_test_network)* Use pretty format for logs (#5331)
-- [**breaking**] Simplify serialization of `NumericSpec` in `genesis.json` (#5340)
-- Improve logging for failed p2p connection  (#5379)
-- Revert `logger.level`, add `logger.filter`, extend config routes (#5384)
+- `network.public_address` X-ҡа `peer.template.toml` X (#5321) өҫтәй.
 
-### 📚 Documentation
+### ⚡ Һөҙөмтәлелек
 
-- Add `network.public_address` to `peer.template.toml` (#5321)
+- *(кура)* Ҡабул итеү өсөн артыҡ блок яҙа диск (#5373)
+- транзакциялар өсөн ҡулланыусылар һаҡлауҙы тормошҡа ашырыу хештары (#5405)
 
-### ⚡ Performance
+### ⚙️ Төрлө бурыстар
 
-- *(kura)* Prevent redundant block writes to disk (#5373)
-- Implemented custom storage for transactions hashes (#5405)
-
-### ⚙️ Miscellaneous Tasks
-
-- Fix poetry usage (#5285)
-- Remove redundant consts from `iroha_torii_const` (#5322)
-- Remove unused `AssetEvent::Metadata*` (#5339)
-- Bump Sonarqube Action version (#5337)
-- Remove unused permissions (#5346)
-- Add unzip package to ci-image (#5347)
-- Fix some comments (#5397)
-- Move integrations tests out from `iroha` crate (#5393)
-- Disable defectdojo job (#5406)
-- Add DCO sign-off for missing commits
-- Reorganise workflows (second try) (#5399)
-- Do not run Pull Request CI on push to main (#5415)
+- Шиғриәтте ҡулланыуҙы төҙәтеү (#5285)
+- I18NI000000170X (#5322)-тан артыҡ консттар сығарыу.
+- Ҡулланылмаған I18NI000000171X (#5339) сығарыу.
+- Ҡабул итеү Сонаркюбе Акция версияһы (#5337)
+- Ҡулланылмаған рөхсәттәрҙе сисергә (#5346)
+- Ци-образға (#5347) зипющий пакет өҫтәйбеҙ.
+- Ҡайһы бер комментарийҙарҙы төҙәтегеҙ (#5397)
+- I18NI000000172X йәшникенән интеграцияларҙы күсерергә (#5393)
+- Дефектор эшен инҡар итеү (#5406)
+- юғалған коммиттар өсөн DCO ҡул ҡуйыуын өҫтәгеҙ
+- Эш ағымын үҙгәртеп ҡороу (икенсе һынап ҡарағыҙ) (#5399)
+- Үтергә ярамай, тартып запрос CI өҫтөндә этәрергә төп (#5415)
 
 <!-- generated by git-cliff -->
 
-## [2.0.0-rc.1.3] - 2025-03-07
-
-### Added
-
-- finalize non-empty blocks by allowing empty blocks after them (#5320)
-
-## [2.0.0-rc.1.2] - 2025-02-25
-
-### Fixed
-
-- re-registered peers are now correctly reflected in the peer list (#5327)
-
-## [2.0.0-rc.1.1] - 2025-02-12
-
-### Added
-
-- add `iroha transaction get` and other important commands (#5289)
-
-## [2.0.0-rc.1.0] - 2024-12-06
-
-### Added
-
-- implement query projections (#5242)
-- use persistent executor (#5082)
-- add listen timeouts to iroha cli (#5241)
-- add /peers API endpoint to torii (#5235)
-- address agnostic p2p (#5176)
-- improve multisig utility and usability (#5027)
-- protect `BasicAuth::password` from being printed (#5195)
-- sort descending in `FindTransactions` query (#5190)
-- introduce block header into every smart contract execution context (#5151)
-- dynamic commit time based on view change index (#4957)
-- define default permission set (#5075)
-- add implementation of Niche for `Option<Box<R>>` (#5094)
-- transaction and block predicates (#5025)
-- report amount of remaining items in query (#5016)
-- bounded discrete time (#4928)
-- add missing mathematical operations to `Numeric` (#4976)
-- validate block sync messages (#4965)
-- query filters (#4833)
-
-### Changed
-
-- simplify peer id parsing (#5228)
-- move transaction error out of block payload (#5118)
-- rename JsonString to Json (#5154)
-- add client entity to smart contracts (#5073)
-- leader as transaction ordering service (#4967)
-- make kura drop old blocks from memory (#5103)
-- use `ConstVec` for instructions in `Executable` (#5096)
-- gossip txs at most once (#5079)
-- reduce memory usage of `CommittedTransaction` (#5089)
-- make query cursor errors more specific (#5086)
-- reorganize crates (#4970)
-- introduce `FindTriggers` query, remove `FindTriggerById` (#5040)
-- dont depend on signatures for update (#5039)
-- change parameters format in genesis.json (#5020)
-- only send current and previous view change proof (#4929)
-- disable sending message when not ready to prevent busy loop (#5032)
-- move total asset quantity to asset definition (#5029)
-- sign only block's header, not the whole payload (#5000)
-- use `HashOf<BlockHeader>` as the type of the block hash (#4998)
-- simplify `/health` and `/api_version` (#4960)
-- rename `configs` to `defaults`, remove `swarm` (#4862)
-
-### Fixed
-
-- flatten inner role in json (#5198)
-- fix `cargo audit` warnings (#5183)
-- add range check to signature index (#5157)
-- fix model macro example in docs (#5149)
-- close ws properly in blocks/events stream (#5101)
-- broken trusted peers check (#5121)
-- check that next block has height +1 (#5111)
-- fix timestamp of genesis block (#5098)
-- fix `iroha_genesis` compilation without `transparent_api` feature (#5056)
-- correctly handle `replace_top_block` (#4870)
-- fix cloning of executor (#4955)
-- display more error details (#4973)
-- use `GET` for blocks stream (#4990)
-- improve queue transactions handling (#4947)
-- prevent redundant blocksync block messages (#4909)
-- prevent deadlock on simultaneous sending large message (#4948)
-- remove expired transaction from cache (#4922)
-- fix torii url with path (#4903)
-
-### Removed
-
-- remove module-based api from client (#5184)
-- remove `riffle_iter` (#5181)
-- remove unused dependencies (#5173)
-- remove `max` prefix from `blocks_in_memory` (#5145)
-- remove consensus estimation (#5116)
-- remove `event_recommendations` from block (#4932)
-
-### Security
-
-## [2.0.0-pre-rc.22.1] - 2024-07-30
-
-### Fixed
-
-- added `jq` to the docker image
-
-## [2.0.0-pre-rc.22.0] - 2024-07-25
-
-### Added
-
-- specify on-chain parameters explicitly in genesis (#4812)
-- allow turbofish with multiple `Instruction`s (#4805)
-- reimplement multisignature transactions (#4788)
-- implement built-in vs custom on-chain parameters (#4731)
-- improve custom instruction usage (#4778)
-- make the metadata dynamic via implementing JsonString (#4732)
-- allow multiple peers submit genesis block (#4775)
-- supply `SignedBlock` instead of `SignedTransaction` to peer (#4739)
-- custom instructions in executor (#4645)
-- extend client cli to request json queries (#4684)
- - add detect support for `norito_decoder` (#4680)
-- generalize permissions schema to executor data model (#4658)
-- added register trigger permissions in the default executor (#4616)
- - support JSON in `norito_cli`
-- introduce p2p idle timeout
-
-### Changed
-
-- replace `lol_alloc` with `dlmalloc` (#4857)
-- rename `type_` to `type` in schema (#4855)
-- replace `Duration` with `u64` in schema (#4841)
-- use `RUST_LOG`-like EnvFilter for logging (#4837)
-- keep voting block when possible (#4828)
-- migrate from warp to axum (#4718)
-- split executor data model (#4791)
-- shallow data model (#4734) (#4792)
-- don't send public key with signature (#4518)
-- rename `--outfile` to `--out-file` (#4679)
-- rename iroha server and client (#4662)
-- rename `PermissionToken` to `Permission` (#4635)
-- reject `BlockMessages` eagerly (#4606)
-- make `SignedBlock` immutable (#4620)
-- rename TransactionValue into CommittedTransaction (#4610)
-- authenticate personal accounts by ID (#4411)
-- use multihash format for private keys (#4541)
- - rename `parity_scale_decoder` to `norito_cli`
-- send blocks to Set B validators
-- make `Role` transparent (#4886)
-- derive block hash from header (#4890)
-
-### Fixed
-
-- check that authority owns domain to transfer (#4807)
-- remove logger double initialization (#4800)
-- fix naming convention for assets and permissions (#4741)
-- upgrade executor in separate transaction in genesis block (#4757)
-- correct default value for `JsonString` (#4692)
-- improve deserialization error message (#4659)
-- do not panic if the passed Ed25519Sha512 public key is of invalid length (#4650)
-- use proper view change index on init block load (#4612)
-- don't prematurely execute time-triggers before their `start` timestamp (#4333)
-- support `https` for `torii_url` (#4601) (#4617)
-- remove serde(flatten) from SetKeyValue/RemoveKeyValue (#4547)
-- trigger set is correctly serialized
-- revoke removed `PermissionToken`s on `Upgrade<Executor>` (#4503)
-- report correct view change index for current round
-- remove corresponding triggers on `Unregister<Domain>` (#4461)
-- check genesis pub key in genesis round
-- prevent registering genesis Domain or Account
-- remove permissions from roles on entity unregistration
-- trigger metadata is accessible in smart contracts
-- use rw lock to prevent inconsitent state view (#4867)
-- handle soft fork in snapshot (#4868)
-- fix MinSize for ChaCha20Poly1305
-- add limits to LiveQueryStore to prevent high memory usage (#4893)
-
-### Removed
-
-- remove public key from ed25519 private key (#4856)
-- remove kura.lock (#4849)
-- revert `_ms` and `_bytes` suffixes in config (#4667)
-- remove `_id` and `_file` suffix from genesis fields (#4724)
-- remove index Assets in AssetsMap by AssetDefinitionId (#4701)
-- remove domain from trigger identity (#4640)
-- remove genesis signing from Iroha (#4673)
-- remove `Visit` bound from `Validate` (#4642)
-- remove `TriggeringEventFilterBox` (#4866)
-- remove `garbage` in p2p handshake (#4889)
-- remove `committed_topology` from block (#4880)
-
-### Security
-
-- guard against secrets leakage
-
-## [2.0.0-pre-rc.21] - 2024-04-19
-
-### Added
-
-- include trigger id in trigger entrypoint (#4391)
-- expose event set as bitfields in schema (#4381)
-- introduce new `wsv` with granular access (#2664)
-- add event filters for `PermissionTokenSchemaUpdate`, `Configuration` and `Executor` events
-- introduce snapshot "mode" (#4365)
-- allow granting/revoking role's permissions (#4244)
-- introduce arbitrary-precision numeric type for assets (remove all other numeric types) (#3660)
-- different fuel limit for Executor (#3354)
-- integrate pprof profiler (#4250)
-- add asset subcommand in client CLI (#4200)
-- `Register<AssetDefinition>` permissions (#4049)
-- add `chain_id` to prevent replay attacks (#4185)
-- add subcommands to edit domain metadata in client CLI (#4175)
-- implement store set, remove, get operations in Client CLI (#4163)
-- count identical smart contracts for triggers (#4133)
-- add subcommand into client CLI to transfer domains (#3974)
-- support boxed slices in FFI (#4062)
-- git commit SHA to client CLI (#4042)
-- proc macro for default validator boilerplate (#3856)
-- introduced query request builder into Client API (#3124)
-- lazy queries inside smart contracts (#3929)
-- `fetch_size` query parameter (#3900)
-- asset store tranfer instruction (#4258)
-- guard against secrets leakage (#3240)
-- deduplicate triggers with the same source code (#4419)
-
-### Changed
-
-- bump rust toolchain to nightly-2024-04-18
-- send blocks to Set B validators (#4387)
-- split pipeline events into block and transaction events (#4366)
-- rename `[telemetry.dev]` config section to `[dev_telemetry]` (#4377)
-- make `Action` and `Filter` non-generic types (#4375)
-- improve event filtering API with builder pattern (#3068)
-- unify various event filter APIs, introduce a fluent builder API
-- rename `FilterBox` into `EventFilterBox`
-- rename `TriggeringFilterBox` into `TriggeringEventFilterBox`
-- improve filter naming, e.g. `AccountFilter` -> `AccountEventFilter`
-- rewrite config according to the configuration RFC (#4239)
-- hide internal structure of the versioned structs from the public API (#3887)
-- temporarily introduce predictable ordering after too many failed view changes (#4263)
-- use concrete key types in `iroha_crypto` (#4181)
-- split view changes from normal messages (#4115)
-- make `SignedTransaction` immutable (#4162)
-- export `iroha_config` through `iroha_client` (#4147)
-- export `iroha_crypto` through `iroha_client` (#4149)
-- export `data_model` through `iroha_client` (#4081)
-- remove `openssl-sys` dependency from `iroha_crypto` and introduce configurable tls backends to `iroha_client` (#3422)
-- replace unmaintained EOF `hyperledger/ursa` with in-house solution `iroha_crypto` (#3422)
-- optimize executor performance (#4013)
-- topology peer update (#3995)
-
-### Fixed
-
-- remove corresponding triggers on `Unregister<Domain>` (#4461)
-- remove permissions from roles on entity unregistration (#4242)
-- assert that genesis tranasction is signed by genesis pub key (#4253)
-- introduce timeout for unresponsive peers in p2p (#4267)
-- prevent registering genesis Domain or Account (#4226)
-- `MinSize` for `ChaCha20Poly1305` (#4395)
-- start console when `tokio-console` is enabled (#4377)
-- separate each item with `\n` and recursively create parent directories for `dev-telemetry` file logs
-- prevent account registration without signatures (#4212)
-- key pair generation is now infallible (#4283)
-- stop encoding `X25519` keys as `Ed25519` (#4174)
-- do signature validation in `no_std` (#4270)
-- calling blocking methods within async context (#4211)
-- revoke associated tokens on entity unregistretration (#3962)
-- async blocking bug when starting Sumeragi
-- fixed `(get|set)_config` 401 HTTP (#4177)
-- `musl` archiver name in Docker (#4193)
-- smart contract debug print (#4178)
-- topology update on restart (#4164)
-- registration of new peer (#4142)
-- on-chain predictable iteration order (#4130)
-- re-architect logger and dynamic configuration (#4100)
-- trigger atomicity (#4106)
-- query store message ordering issue (#4057)
-- set `Content-Type: application/x-norito` for endpoints which reply using Norito
-
-### Removed
-
-- `logger.tokio_console_address` configuration parameter (#4377)
-- `NotificationEvent` (#4377)
-- `Value` enum (#4305)
-- MST aggregation from iroha (#4229)
-- cloning for ISI and query execution in smart contracts (#4182)
-- `bridge` and `dex` features (#4152)
-- flattened events (#3068)
-- expressions (#4089)
-- auto-generated config reference
-- `warp` noise in logs (#4097)
-
-### Security
-
-- prevent pub key spoofing in p2p (#4065)
-- ensure the `secp256k1` signatures coming out of OpenSSL are normalized (#4155)
-
-## [2.0.0-pre-rc.20] - 2023-10-17
-
-### Added
-
-- Transfer `Domain` ownership
-- `Domain` owner permissions
-- Add `owned_by` field to `Domain`
-- parse filter as JSON5 in `iroha_client_cli` (#3923)
-- Add support for usage of Self type in serde partially tagged enums
-- Standardize block API (#3884)
-- Implement `Fast` kura init mode
-- Add iroha_swarm disclaimer header
-- initial support for WSV snapshots
-
-### Fixed
-
-- Fix executor downloading in update_configs.sh (#3990)
-- proper rustc in devShell
-- Fix burn `Trigger` reprtitions
-- Fix transfer `AssetDefinition`
-- Fix `RemoveKeyValue` for `Domain`
-- Fix the usage of `Span::join`
-- Fix topology mismatch bug (#3903)
-- Fix `apply_blocks` and `validate_blocks` benchmark
-- `mkdir -r` with store path, not lock path (#3908)
-- Don't fail if dir exists in test_env.py
-- Fix authentication/authorization docstring (#3876)
-- Better error message for query find error
-- Add genesis account public key to dev docker compose
-- Compare permission token payload as JSON (#3855)
-- Fix `irrefutable_let_patterns` in the `#[model]` macro
-- Allow genesis to execute any ISI (#3850)
-- Fix genesis validation (#3844)
-- Fix topology for 3 or less peers
-- Correct how tx_amounts histogram is calculated.
-- `genesis_transactions_are_validated()` test flakiness
-- Default validator generation
-- Fix iroha graceful shutdown
-
-### Refactor
-
-- remove unused dependencies (#3992)
-- bump dependencies (#3981)
-- Rename validator to executor (#3976)
-- Remove `IsAssetDefinitionOwner` (#3979)
-- Include smart contract code into the workspace (#3944)
-- Merge API and Telemetry endpoints into a single server
-- move expression len out of public API into core (#3949)
-- Avoid clone in roles lookup
-- Range queries for roles
-- Move account roles to `WSV`
-- Rename ISI from *Box to *Expr (#3930)
-- Remove 'Versioned' prefix from versioned containers (#3913)
-- move `commit_topology` into block payload (#3916)
-- Migrate `telemetry_future` macro to syn 2.0
-- Registered with Identifiable in ISI bounds (#3925)
-- Add basic generics support to `derive(HasOrigin)`
-- Clean up Emitter APIs documentation to make clippy happy
-- Add tests for derive(HasOrigin) macro, reduce repetition in derive(IdEqOrdHash), fix error reporting on stable
-- Improve naming, simplify repeated .filter_maps & get rid of unnecessary .except in derive(Filter)
-- Make PartiallyTaggedSerialize/Deserialize use darling
-- Make derive(IdEqOrdHash) use darling, add tests
-- Make derive(Filter) use darling
-- Update iroha_data_model_derive to use syn 2.0
-- Add signature check condition unit tests
-- Allow only a fixed set of signature verification conditions
-- Generalize ConstBytes into a ConstVec that holds any const sequence
-- Use a more efficient representation for bytes values that are not changing
-- Store finalized wsv in snapshot
-- Add `SnapshotMaker` actor
-- document limitation of parsing derives in proc macros
-- clean up comments
-- extract a common test utility for parsing attributes to lib.rs
-- use parse_display & update Attr -> Attrs naming
-- allow usage of pattern matching in ffi function args
-- reduce repetition in getset attrs parsing
-- rename Emitter::into_token_stream into Emitter::finish_token_stream
-- Use parse_display to parse getset tokens
-- Fix typos and improve error messages
-- iroha_ffi_derive: use darling to parse attributes and use syn 2.0
-- iroha_ffi_derive: replace proc-macro-error with manyhow
-- Simplify kura lock file code
-- make all numeric values serialize as string literals
-- Split off Kagami (#3841)
-- Rewrite `scripts/test-env.sh`
-- Differentiate between smart contract and trigger entrypoints
-- Elide `.cloned()` in `data_model/src/block.rs`
-- update `iroha_schema_derive` to use syn 2.0
-
-## [2.0.0-pre-rc.19] - 2023-08-14
-
-### Added
-
-- hyperledger#3309 Bump IVM runtime for improved
-- hyperledger#3383 Implement macro to parse a socket addresses at compile time
-- hyperledger#2398 Add integration tests for query filters
-- Include the actual error message in `InternalError`
-- Usage of `nightly-2023-06-25` as the default tool-chain
-- hyperledger#3692 Validator migration
-- [DSL internship] hyperledger#3688: Implement basic arithmetic as proc macro
-- hyperledger#3371 Split validator `entrypoint` to ensure that validators are no longer viewed as smart-contracts
-- hyperledger#3651 WSV snapshots, which allow to bring up an Iroha node quickly after a crash
-- hyperledger#3752 Replace `MockValidator` with an `Initial` validator that accepts all transactions
-- hyperledger#3276 Add temporary instruction called `Log` that logs a specified string to the main log of the Iroha node
-- hyperledger#3641 Make the permission token payload human-readable
-- hyperledger#3324 Add `iroha_client_cli` related `burn` checks and refactoring
-- hyperledger#3781 Validate genesis transactions
-- hyperledger#2885 Differentiate between events that can and cannot be used for triggers
-- hyperledger#2245 `Nix`-based build of iroha node binary as `AppImage`
-
-### Fixed
-
-- hyperledger#3613 Regression which could allow incorrectly signed transactions to be accepted
-- Reject incorrect Configuration topology early
-- hyperledger#3445 Fix regression and make `POST` on the `/configuration` endpoint work again
-- hyperledger#3654 Fix `iroha2` `glibc`-based `Dockerfiles` to be deployed
-- hyperledger#3451 Fix `docker` build on Apple silicon macs
-- hyperledger#3741 Fix `tempfile` error in `kagami validator`
-- hyperledger#3758 Fix regression where individual crates could not be built, but could be built as part of the workspace
-- hyperledger#3777 Patch loophole in role registration not being validated
-- hyperledger#3805 Fix Iroha not shutting down after receiving `SIGTERM`
-
-### Other
-
-- hyperledger#3648 Include `docker-compose.*.yml` check in the CI processes
-- Move instruction `len()` from `iroha_data_model` into `iroha_core`
-- hyperledger#3672 Replace `HashMap` with `FxHashMap` in derive macros
-- hyperledger#3374 Unify error's doc-comments and `fmt::Display` implementation
-- hyperledger#3289 Use Rust 1.70 workspace inheritance throughout project
-- hyperledger#3654 Add `Dockerfiles` to build iroha2 on `GNU libc <https://www.gnu.org/software/libc/>`_
-- Introduce `syn` 2.0, `manyhow` and `darling` for proc-macros
-- hyperledger#3802 Unicode `kagami crypto` seed
-
-## [2.0.0-pre-rc.18]
-
-### Added
-
-- hyperledger#3468: Server-side cursor, which allows for lazily evaluated re-entrant pagination which should have major positive performance implications for query latency
-- hyperledger#3624: General purpose permission tokens; specifically
-  - Permissions tokens can have any structure
-  - Token structure is self-described in the `iroha_schema` and serialised as a JSON string
-  - Token value is `Norito`-encoded
-  - as a consequence of this change permission token naming convention was moved from `snake_case` to `UpeerCamelCase`
-- hyperledger#3615 Preserve wsv after validation
-
-### Fixed
-
-- hyperledger#3627 Transaction atomicity now enforced via cloning of the `WorlStateView`
-- hyperledger#3195 Extend panic behaviour for when receiving a rejected genesis transaction
-- hyperledger#3042 Fix bad request message
-- hyperledger#3352 Split up control flow and data message into separate channels
-- hyperledger#3543 Improve precision of metrics
-
-## 2.0.0-pre-rc.17
-
-### Added
-
-- hyperledger#3330 Extend `NumericValue` deserialisation
-- hyperledger#2622 `u128`/`i128` support in FFI
-- hyperledger#3088 Introduce queue throttling, to prevent DoS
-- hyperledger#2373 `kagami swarm file` and `kagami swarm dir` command variants for generating `docker-compose` files
-- hyperledger#3597 Permission Token Analysis (Iroha side)
-- hyperledger#3353 Remove `eyre` from `block.rs` by enumerating error conditions and using strongly-typed errors
-- hyperledger#3318 Interleave rejected and accepted transactions in blocks to preserve transaction processing order
-
-### Fixed
-
-- hyperledger#3075 Panic on invalid transaction in the `genesis.json` to prevent invalid transactions from being processed
-- hyperledger#3461 Proper handling of default values in default config
-- hyperledger#3548 Fix `IntoSchema` transparent attribute
-- hyperledger#3552 Fix validator path schema representation
-- hyperledger#3546 Fix for time triggers getting stuck
-- hyperledger#3162 Forbid 0 height in block streaming requests
-- Configuration macro initial test
-- hyperledger#3592 Fix for  config files being updated on `release`
-- hyperledger#3246 Don't involve `Set B validators <https://github.com/hyperledger-iroha/iroha/blob/main/docs/source/iroha_2_whitepaper.md#2-system-architecture>`_ without `fault <https://en.wikipedia.org/wiki/Byzantine_fault>`_
-- hyperledger#3570 Correctly display client-side string query errors
-- hyperledger#3596 `iroha_client_cli` shows blocks/events
-- hyperledger#3473 Make `kagami validator` work from outside the  iroha repository root directory
-
-### Other
-
-- hyperledger#3063 Map transaction `hash` to block height in `wsv`
-- strongly-typed `HashOf<T>` in `Value`
-
-## [2.0.0-pre-rc.16]
-
-### Added
-
-- hyperledger#2373 `kagami swarm` sub-command for generating `docker-compose.yml`
-- hyperledger#3525 Standardize transaction API
-- hyperledger#3376 Add Iroha Client CLI `pytest <https://docs.pytest.org/en/7.4.x/>`_ automation framework
-- hyperledger#3516 Retain original blob hash in `LoadedExecutable`
-
-### Fixed
-
-- hyperledger#3462 Add `burn` asset command to `client_cli`
-- hyperledger#3233 Refactor error types
-- hyperledger#3330 Fix regression, by manually implementing `serde::de::Deserialize` for `partially-tagged <https://serde.rs/enum-representations.html>`_ `enums`
-- hyperledger#3487 Return missing types into the schema
-- hyperledger#3444 Return discriminant into schema
-- hyperledger#3496 Fix `SocketAddr` field parsing
-- hyperledger#3498 Fix soft-fork detection
-- hyperledger#3396 Store block in `kura` before emitting a block committed event
-
-### Other
-
-- hyperledger#2817 Remove interior mutability from `WorldStateView`
-- hyperledger#3363 Genesis API refactor
-- Refactor existing and supplement with new tests for topology
-- Switch from `Codecov <https://about.codecov.io/>`_ to `Coveralls <https://coveralls.io/>`_  for test coverage
-- hyperledger#3533 Rename `Bool` to `bool` in schema
-
-## [2.0.0-pre-rc.15]
-
-### Added
-
-- hyperledger#3231 Monolithic validator
-- hyperledger#3015 Support for niche optimization in FFI
-- hyperledger#2547 Add logo to `AssetDefinition`
-- hyperledger#3274 Add to `kagami` a sub-command that generates examples (backported into LTS)
-- hyperledger#3415 `Nix <https://nixos.wiki/wiki/Flakes>`_ flake
-- hyperledger#3412 Move transaction gossiping to a separate actor
-- hyperledger#3435 Introduce `Expression` visitor
-- hyperledger#3168 Provide genesis validator as a separate file
-- hyperledger#3454 Make LTS the default for most Docker operations and documentation
-- hyperledger#3090 Propagate on-chain parameters from blockchain to `sumeragi`
-
-### Fixed
-
-- hyperledger#3330 Fix untagged enum de-serialization with `u128` leaves (backported into RC14)
-- hyperledger#2581 reduced noise in logs
-- hyperledger#3360 Fix `tx/s` benchmark
-- hyperledger#3393 Break communication deadlock loop in `actors`
-- hyperledger#3402 Fix `nightly` build
-- hyperledger#3411 Properly handle peers simultaneous connection
-- hyperledger#3440 Deprecate asset conversions during transfer, instead handled by smart-contracts
-- hyperledger#3408: Fix `public_keys_cannot_be_burned_to_nothing` test
-
-### Other
-
-- hyperledger#3362 Migrate to `tokio` actors
-- hyperledger#3349 Remove `EvaluateOnHost` from smart contracts
-- hyperledger#1786 Add `iroha`-native types for socket addresses
-- Disable IVM cache
-- Re-enable IVM cache
-- Rename permission validator into validator
-- hyperledger#3388 Make `model!` a module-level attribute macro
-- hyperledger#3370 Serialize `hash` as hexadecimal string
-- Move `maximum_transactions_in_block` from `queue` to `sumeragi` configuration
-- Deprecate and remove `AssetDefinitionEntry` type
-- Rename `configs/client_cli` into `configs/client`
-- Update `MAINTAINERS.md`
-
-## [2.0.0-pre-rc.14]
-
-### Added
-
-- hyperledger#3127 data model `structs` opaque by default
-- hyperledger#3122 use `Algorithm` for storing digest function (community contributor)
-- hyperledger#3153 `iroha_client_cli` output is machine readable
-- hyperledger#3105 Implement `Transfer` for  `AssetDefinition`
-- hyperledger#3010 `Transaction` expire pipeline event added
-
-### Fixed
-
-- hyperledger#3113 revision of unstable network tests
-- hyperledger#3129 Fix `Parameter` de/serialisation
-- hyperledger#3141 Manually implement `IntoSchema` for `Hash`
-- hyperledger#3155 Fix panic hook in tests, preventing deadlock
-- hyperledger#3166 Don't view change on idle, improving performance
-- hyperledger#2123 Return to PublicKey de/serialization from multihash
-- hyperledger#3132 Add NewParameter validator
-- hyperledger#3249 Split block hashes into partial and complete versions
-- hyperledger#3031 Fix the UI/UX of missing configuration parameters
-- hyperledger#3247 Removed fault injection from `sumeragi`.
-
-### Other
-
-- Add missing `#[cfg(debug_assertions)]` to fix spurious failures
-- hyperledger#2133 Rewrite topology to be closer the whitepaper
-- Remove `iroha_client` dependency on `iroha_core`
-- hyperledger#2943 Derive `HasOrigin`
-- hyperledger#3232 Share workspace metadata
-- hyperledger#3254 Refactor `commit_block()` and `replace_top_block()`
-- Use stable default allocator handler
-- hyperledger#3183 Rename the `docker-compose.yml` files
-- Improved the `Multihash` display format
-- hyperledger#3268 Globally unique item identifiers
-- New PR template
-
-## [2.0.0-pre-rc.13]
-
-### Added
-
-- hyperledger#2399 Config parameters as ISI.
-- hyperledger#3119 Add `dropped_messages` metric.
-- hyperledger#3094 Generate network with `n` peers.
-- hyperledger#3082 Provide full data in `Created` event.
-- hyperledger#3021 Opaque pointer import.
-- hyperledger#2794 Reject Fieldless enums with explicit discriminants in FFI.
-- hyperledger#2922 Add `Grant<Role>` to default genesis.
-- hyperledger#2922 Omit `inner` field in `NewRole` json deserialization.
-- hyperledger#2922 Omit `object(_id)` in json deserialization.
-- hyperledger#2922 Omit `Id` in json deserialisation.
-- hyperledger#2922 Omit `Identifiable` in json deserialization.
-- hyperledger#2963 Add `queue_size` to the metrics.
-- hyperledger#3027 implement lockfile for Kura.
-- hyperledger#2813 Kagami generate default peer config.
-- hyperledger#3019 Support JSON5.
-- hyperledger#2231 Generate FFI wrapper API.
-- hyperledger#2999 Accumulate block signatures.
-- hyperledger#2995 Soft fork detection.
-- hyperledger#2905 Extend arithmetic operations to support `NumericValue`
-- hyperledger#2868 Emit iroha version and commit hash in logs.
-- hyperledger#2096 Query for total amount of asset.
-- hyperledger#2899 Add multi-instructions subcommand into 'client_cli'
-- hyperledger#2247 Remove websocket communication noise.
-- hyperledger#2889 Add block streaming support into `iroha_client`
-- hyperledger#2280 Produce permission events when role is granted/revoked.
-- hyperledger#2797 Enrich events.
-- hyperledger#2725 Reintroduce timeout into `submit_transaction_blocking`
-- hyperledger#2712 Config proptests.
-- hyperledger#2491 Enum support in FFi.
-- hyperledger#2775 Generate different keys in synthetic genesis.
-- hyperledger#2627 Config finalisation, proxy entrypoint, kagami docgen.
-- hyperledger#2765 Generate synthetic genesis in `kagami`
-- hyperledger#2698 Fix unclear error message in `iroha_client`
-- hyperledger#2689 Add permission token definition parameters.
-- hyperledger#2502 Store GIT hash of build.
-- hyperledger#2672 Add `ipv4Addr`,  `ipv6Addr` variant and predicates.
-- hyperledger#2626 Implement `Combine` derive, split `config` macros.
-- hyperledger#2586 `Builder` and `LoadFromEnv` for proxy structs.
-- hyperledger#2611 Derive `TryFromReprC` and `IntoFfi` for generic opaque structs.
-- hyperledger#2587 Split `Configurable` into two traits. #2587: Split `Configurable` into two traits
-- hyperledger#2488 Add support for trait impls in `ffi_export`
-- hyperledger#2553 Add sorting to asset queries.
-- hyperledger#2407 Parametrise triggers.
-- hyperledger#2536 Introduce `ffi_import` for FFI clients.
-- hyperledger#2338 Add `cargo-all-features` instrumentation.
-- hyperledger#2564 Kagami tool algorithm options.
-- hyperledger#2490 Implement ffi_export for freestanding functions.
-- hyperledger#1891 Validate trigger execution.
-- hyperledger#1988 Derive macros for Identifiable, Eq, Hash, Ord.
-- hyperledger#2434 FFI bindgen library.
-- hyperledger#2073 Prefer ConstString over String for types in blockchain.
-- hyperledger#1889 Add domain-scoped triggers.
-- hyperledger#2098 Block header queries. #2098: add block header queries
-- hyperledger#2467 Add account grant subcommand into iroha_client_cli.
-- hyperledger#2301 Add transaction's block hash when querying it.
- - hyperledger#2454 Add a build script to the Norito decoder tool.
-- hyperledger#2061 Derive macro for filters.
-- hyperledger#2228 Add Unauthorized variant to smartcontracts query error.
-- hyperledger#2395 Add panic if genesis cannot be applied.
-- hyperledger#2000 Disallow empty names. #2000: Disallow empty names
- - hyperledger#2127 Add sanity check to ensure that all data decoded by the Norito codec is consumed.
-- hyperledger#2360 Make `genesis.json` optional again.
-- hyperledger#2053 Add tests to all remaining queries in private blockchain.
-- hyperledger#2381 Unify `Role` registration.
-- hyperledger#2053 Add tests to the asset-related queries in private blockchain.
-- hyperledger#2053 Add tests to 'private_blockchain'
-- hyperledger#2302 Add 'FindTriggersByDomainId' stub-query.
-- hyperledger#1998 Add filters to queries.
-- hyperledger#2276 Include current Block hash into BlockHeaderValue.
-- hyperledger#2161 Handle id and shared FFI fns.
-- add handle id and implement FFI equivalents of shared traits (Clone, Eq, Ord)
-- hyperledger#1638 `configuration` return doc sub-tree.
-- hyperledger#2132 Add `endpointN` proc macro.
-- hyperledger#2257 Revoke<Role> emits RoleRevoked event.
-- hyperledger#2125 Add FindAssetDefinitionById query.
-- hyperledger#1926 Add signal handling and graceful shutdown.
-- hyperledger#2161 generate FFI functions for `data_model`
-- hyperledger#1149 Block file count does not exceed 1000000 per directory.
-- hyperledger#1413 Add API version endpoint.
-- hyperledger#2103 support querying for blocks and transactions. Add `FindAllTransactions` query
-- hyperledger#2186 Add transfer ISI for `BigQuantity` and `Fixed`.
-- hyperledger#2056 Add a derive proc macro crate for `AssetValueType` `enum`.
-- hyperledger#2100 Add query to find all accounts with asset.
-- hyperledger#2179 Optimise trigger execution.
-- hyperledger#1883 Remove embedded configuration files.
-- hyperledger#2105 handle query errors in client.
-- hyperledger#2050 Add role-related queries.
-- hyperledger#1572 Specialized permission tokens.
-- hyperledger#2121 Check keypair is valid when constructed.
- - hyperledger#2003 Introduce Norito Decoder tool.
-- hyperledger#1952 Add a TPS benchmark as a standard for optimizations.
-- hyperledger#2040 Add integration test with transaction execution limit.
-- hyperledger#1890 Introduce integration tests based on Orillion use-cases.
-- hyperledger#2048 Add toolchain file.
-- hyperledger#2100 Add query to find all accounts with asset.
-- hyperledger#2179 Optimise trigger execution.
-- hyperledger#1883 Remove embedded configuration files.
-- hyperledger#2004 Forbid `isize` and `usize` from becoming `IntoSchema`.
-- hyperledger#2105 handle query errors in client.
-- hyperledger#2050 Add role-related queries.
-- hyperledger#1572 Specialized permission tokens.
-- hyperledger#2121 Check keypair is valid when constructed.
- - hyperledger#2003 Introduce Norito Decoder tool.
-- hyperledger#1952 Add a TPS benchmark as a standard for optimizations.
-- hyperledger#2040 Add integration test with transaction execution  limit.
-- hyperledger#1890 Introduce integration tests based on Orillion use-  cases.
-- hyperledger#2048 Add toolchain file.
-- hyperledger#2037 Introduce Pre-commit Triggers.
-- hyperledger#1621 Introduce By Call Triggers.
-- hyperledger#1970 Add optional schema endpoint.
-- hyperledger#1620 Introduce time based triggers.
-- hyperledger#1918 Implement basic authentication for `client`
-- hyperledger#1726 Implement a release PR workflow.
-- hyperledger#1815 Make query responses more type-structured.
-- hyperledger#1928 implement changelog generation using `gitchangelog`
-- hyperledger#1902 Bare metal 4-peer setup script.
-
-  Added a version of setup_test_env.sh that does not require docker-compose and uses the debug build of Iroha.
-- hyperledger#1619 Introduce event-based triggers.
-- hyperledger#1195 Close a websocket connection cleanly.
-- hyperledger#1606 Add ipfs link to domain logo in Domain structure.
-- hyperledger#1754 Add Kura inspector CLI.
-- hyperledger#1790 Improve performance by using stack-based vectors.
-- hyperledger#1805 Optional terminal colors for panic errors.
-- hyperledger#1749 `no_std` in `data_model`
-- hyperledger#1179 Add revoke-permission-or-role instruction.
-- hyperledger#1782 make iroha_crypto no_std compatible.
-- hyperledger#1172 Implement instruction events.
-- hyperledger#1734 Validate `Name` to exclude whitespaces.
-- hyperledger#1144 Add metadata nesting.
-- #1210 Block streaming (server side).
-- hyperledger#1331 Implement more `Prometheus` metrics.
-- hyperledger#1689 Fix feature dependencies. #1261: Add cargo bloat.
-- hyperledger#1675 use type instead of wrapper struct for versioned items.
-- hyperledger#1643 Wait for peers to commit genesis in tests.
-- hyperledger#1678 `try_allocate`
-- hyperledger#1216 Add Prometheus endpoint. #1216: initial implementation of metrics endpoint.
-- hyperledger#1238 Run-time log-level updates. Created basic `connection` entrypoint-based reloading.
-- hyperledger#1652 PR Title Formatting.
-- Add the number of connected peers to `Status`
-
-  - Revert "Delete things related to the number of connected peers"
-
-  This reverts commit b228b41dab3c035ce9973b6aa3b35d443c082544.
-  - Clarify `Peer` has true public key only after handshake
-  - `DisconnectPeer` without tests
-  - Implement unregister peer execution
-  - Add (un)register peer subcommand to `client_cli`
-  - Refuse reconnections from an unregistered peer by its address
-
-  After your peer unregisters and disconnects another peer,
-  your network will hear reconnection requests from the peer.
-  All you can know at first is the address whose port number is arbitrary.
-  So remember the unregistered peer by the part other than the port number
-  and refuse reconnection from there
-- Add `/status` endpoint to a specific port.
-
-### Fixes
-
-- hyperledger#3129 Fix `Parameter` de/serialization.
-- hyperledger#3109 Prevent `sumeragi` sleep after role agnostic message.
-- hyperledger#3046 Ensure Iroha can start gracefully on empty
-  `./storage`
-- hyperledger#2599 Remove nursery lints.
-- hyperledger#3087 Collect votes from Set B validators after view change.
-- hyperledger#3056 Fix `tps-dev` benchmark hanging.
-- hyperledger#1170 Implement cloning-wsv-style soft-fork handling.
-- hyperledger#2456 Make genesis block unlimited.
-- hyperledger#3038 Re-enable multisigs.
-- hyperledger#2894 Fix `LOG_FILE_PATH` env variable deserialization.
-- hyperledger#2803 Return correct status code for signature errors.
-- hyperledger#2963 `Queue` remove transactions correctly.
-- hyperledger#0000 Vergen breaking CI.
-- hyperledger#2165 Remove toolchain fidget.
-- hyperledger#2506 Fix the block validation.
-- hyperledger#3013 Properly chain burn validators.
-- hyperledger#2998 Delete unused Chain code.
-- hyperledger#2816 Move responsibility of access to blocks to kura.
-- hyperledger#2384 Replace decode with decode_all.
-- hyperledger#1967 Replace ValueName with Name.
-- hyperledger#2980 Fix block value ffi type.
-- hyperledger#2858 Introduce parking_lot::Mutex instead of std.
-- hyperledger#2850 Fix deserialization/decoding of `Fixed`
-- hyperledger#2923 Return `FindError` when `AssetDefinition` does not
-  exist.
-- hyperledger#0000 Fix `panic_on_invalid_genesis.sh`
-- hyperledger#2880 Close websocket connection properly.
-- hyperledger#2880 Fix block streaming.
-- hyperledger#2804 `iroha_client_cli` submit transaction blocking.
-- hyperledger#2819 Move non-essential members out of WSV.
-- Fix expression serialization recursion bug.
-- hyperledger#2834 Improve shorthand syntax.
-- hyperledger#2379 Add ability to dump new Kura blocks to blocks.txt.
-- hyperledger#2758 Add Sorting structure to the schema.
+## [2,0,0-р.1.3] - 2025-03-07.
+
+### Өҫтәлгән
+
+- уларҙан һуң буш блоктар рөхсәт итеү юлы менән буш булмаған блоктарҙы тамамларға (#5320)
+
+## [2,0,0-р.1.2] - 2025-02-25.
+
+### Төҙәтелгән
+
+- яңынан теркәлгән тиҫтерҙәре хәҙер тиҫтерҙәр исемлегендә дөрөҫ сағыла (#5327)
+
+## [2,0,0-р.1.1] - 2025-02-12.
+
+### Өҫтәлгән
+
+- `iroha transaction get` һәм башҡа мөһим командаларҙы өҫтәү (#5289)
+
+## [2,0,0-р.1.0] - 2024-12-06.
+
+### Өҫтәлгән
+
+- эҙләү проекцияларын тормошҡа ашырыу (#5242)
+- ныҡышмалы башҡарыусы ҡулланырға (#5082)
+- ироха cly-ға тыңлау тайм-ауттарын өҫтәйбеҙ (#5241)
+- торииға API-ның ос нөктәһе (#5235) өҫтәйбеҙ.
+- адрес агностик р2п (#5176)
+- күп ҙурлыҡтағы утилита һәм ҡулланыусанлыҡты яҡшыртыу (#5027)
+- `BasicAuth::password`-ты баҫтырыуҙан һаҡлау (#5195)
+- сорттарға төшөү I18NI0000000175X эҙләү (#5190)
+- блок башын һәр аҡыллы килешеп башҡарыу контексын индереү (#5151)
+- динамик йөкләмә ваҡыт нигеҙендә ҡараш үҙгәртеү индексы (#4957)
+- рөхсәт йыйылмаһын билдәләү (#5075)
+- I18NI000000176X өсөн Нишаны тормошҡа ашырыуҙы өҫтәргә (#5094)
+- транзакция һәм блок предикаттары (#5025)
+- эҙләүҙә ҡалған әйберҙәрҙең күләме тураһында отчет (#5016)
+- сикләнгән дискрет ваҡыт (#4928)
+- `Numeric`-ҡа математик операциялар юҡ (#4976)
+- раҫлау блок синхронизация хәбәрҙәре (#4965)
+- эҙләү фильтрҙары (#4833)
+
+###
+
+- тиңдәштәр id анализлауҙы ябайлаштырығыҙ (#5228)
+- транзакция хатаһын блок файҙалы йөктән күсерергә (#5118)
+- JsonString исемен Джсонға үҙгәртә (#5154)
+- клиент субъекты өҫтәргә аҡыллы килешеп (#5073)
+- етәксе транзакцияға заказ биреүҙең хеҙмәте булараҡ (#4967)
+- хәтерҙән иҫке блоктарҙы тамсыға әйләндерергә (#5103)
+- `ConstVec` ҡулланыу өсөн күрһәтмәләр I18NI0000000179X (#5096)
+- ғәйбәт txs иң күп тапҡыр (#5079)
+- I18NI000000180X хәтерен ҡулланыуҙы кәметергә (#5089)
+- эҙләү курсоры хаталарын анығыраҡ итеү (#5086)
+- йәшниктәрҙе үҙгәртеп ойоштора (#4970)
+- I18NI000000181X эҙләүен индереү, I18NI000000182X (#5040) сығарыу.
+- яңыртыу өсөн ҡултамғаларға бәйле донт (#5039)
+- genesis.json-да (#5020) форматында үҙгәреш параметрҙары.
+- тик ағымдағы һәм элекке ҡарашты үҙгәртеүгә дәлил ебәрергә (#4929)
+- өҙөү тураһында хәбәр хәбәр әҙер түгел, тип иҫкәртергә мәшәҡәтле цикл (#5032)
+- дөйөм активтар күләмен активтарҙы билдәләүгә күсерергә (#5029)
+- ҡул ҡуйыу ғына блоктың башы, бөтә файҙалы йөк түгел (#5000)
+- ҡулланыу I18NI00000000183X тип, блок хеш (#4998)
+- `/health` һәм I18NI000000185X (#4960) ябайлаштырыу.
+- I18NI000000186X XI18NI000000187X тиклем үҙгәртергә, I18NI000001888X (#4862) алып ташлау.
+
+### Төҙәтелгән- json-да эске роль тигеҙләнгән (#5198)
+- `cargo audit` иҫкәртмәләрен төҙәтеү (#5183)
+- ҡултамға индексы буйынса диапазон тикшерергә (#5157)
+- docs-та модель макро миҫалын төҙәтергә (#5149)
+- блоктарҙа/ваҡиғалар ағымында дөрөҫ ябыла (#5101)
+- өҙөлгән ышаныслы тиҫтерҙәре тикшерә (#5121)
+- киләһе блоктың бейеклеге +1 (#5111) барлығын тикшерегеҙ.
+- генез блокының төҙәтеү ваҡыты (#5098)
+- `iroha_genesis` компиляцияһы I18NI000000191X функцияһы булмаған (#5056) төҙәтеү
+- дөрөҫ идара итеү I18NI000000192X (#4870)
+- башҡарыусы клонлау (#4955)
+- күберәк хата реквизиттарын күрһәтеү (#4973)
+- блоктар ағымы өсөн I18NI0000000193X ҡулланыу (#4990)
+- сират операцияларын яҡшыртыуҙы яҡшыртыу (#4947)
+- артыҡ блоксинхик блок-хәбәрҙәрҙе иҫкәртергә (#4909)
+- бер үк ваҡытта ҙур хәбәр ебәреүҙе иҫкәртергә (#4948)
+- кэштан транзакцияның ваҡыты үткән (#4922)
+- torii url-ды юл менән төҙәтергә (#4903)
+
+###
+
+- клиенттан модуль нигеҙендәге api алып ташларға (#5184)
+- `riffle_iter` (#5181) алып ташлау.
+- ҡулланылмаған бәйлелектәрҙе алып ташларға (#5173)
+- `max` префиксын I18NI0000001966-нан (#5145) алып ташлау.
+- консенсус баһалауҙы алып ташларға (#5116)
+- блоктан I18NI00000000197X алып ташлау (#4932)
+
+### Хәүефһеҙлек
+
+## [2,0,0-пре-rc.1] - 2024-07-30.
+
+### Төҙәтелгән
+
+- тип өҫтәне I18NI0000000198X docker һүрәтенә
+
+## [2,0,0-пре-rc.0] - 2024-07-25.
+
+### Өҫтәлгән
+
+- сылбырлы параметрҙарҙы асыҡтан-асыҡ генезала күрһәтегеҙ (#4812)
+- рөхсәт итеү турбофис менән бер нисә I18NI0000000199Xs (#4805)
+- күп ҡултамғалы операцияларҙы ҡабаттан тормошҡа ашырыу (#4788)
+- ғәмәлгә ашырыу өсөн встроенный vs ҡулланыусылар өсөн сылбырлы параметрҙар (#4731)
+- ҡулланыусылар өсөн инструкция ҡулланыуҙы яҡшыртыу (#4778)
+- JsonString (#4732) тормошҡа ашырыу аша метамағлүмәттәр динамикаһын эшләү.
+- бер нисә тиңдәшкә генез блогын тапшырырға мөмкинлек бирә (#4775)
+- `SignedBlock` менән тәьмин итеү урынына I18NI0000000201X тиңдәштәренә (#4739)
+- башҡарыусы (#4645) буйынса ҡулланыусы күрһәтмәләр.
+- клиент кли оҙайтыу өсөн запрос json эҙләүҙәр (#4684)
+ - I18NI000000202X өсөн ярҙамды асыҡлау (#4680)
+- дөйөмләштереү рөхсәт схемаһы башҡарыусы мәғлүмәттәр моделе (#4658)
+- өҫтәмә регистр рөхсәттәре стандарт башҡарыусы (#4616)
+ - I18NI000000203X-та JSON-ға ярҙам
+- р2п буш тайм-аут индереү
+
+###
+
+- I18NI000000204X алмаштырыу менән I18NI000000205X (#4857)
+- `type_` тип исеменә I18NI000000207X схемаһында (#4855)
+- `Duration` менән алмаштырыу өсөн I18NI000000209X схемаһы (#4841)
+- логин өсөн I18NI000000210X-ға оҡшаш EnvFilter ҡулланыу (#4837)
+- мөмкин булғанда тауыш биреүҙең блогын һаҡларға (#4828)
+- варптан аксумға күсә (#4718)
+- бүлгес башҡарыусы мәғлүмәттәре моделе (#4791)
+- һөҙәк мәғлүмәт моделе (#4734) (#4792)
+- ҡултамға менән асыҡ асҡыс ебәрмәгеҙ (#4518)
+- I18NI000000211X тип исеменә I18NI000000212X тиклем (#4679)
+- ирха серверы һәм клиентты үҙгәртергә (#4662)
+- I18NI000000213X үҙгәртергә I18NI000000214X тиклем (#4635)
+- `BlockMessages` ашҡынып кире ҡағыу (#4606)
+- `SignedBlock` XE deformable (#4620) эшләй.
+- тип исемләнгән Транзакция Value-ға йөкмәтелгән Транзакция (#4610)
+- ID (#411) буйынса шәхси иҫәптәрҙе аутентификациялау.
+- шәхси асҡыстар өсөн мультихаш форматында ҡулланыу (#4541)
+ - `parity_scale_decoder` үҙгәртергә I18NI000000218X тиклем
+- Блоктарҙы В валитаторҙарына ебәрергә
+- `Role` үтә күренмәле эшләй (#4886)
+- баштан блок хеш-ы (#4890)
+
+### Төҙәтелгән- тикшерергә, тип власть эйә домен күсерергә (#4807)
+- логгер икеләтә инициализацияны алып ташларға (#4800)
+- активтар һәм рөхсәттәр өсөн исем биреүҙе төҙәтеү (#4741)
+- генез блогында айырым транзакцияла башҡарыусыны яңыртыу (#4757)
+- I18NI000000220X өсөн дөрөҫ ғәҙәттәге ҡиммәт (#4692)
+- десериализация хатаһы тураһында хәбәрҙе яҡшыртыу (#4659)
+- әгәр үткән Ed25519Ша512 асыҡ асҡыс дөрөҫ булмаған оҙонлоҡта (#4650) паникаға бирелмәгеҙ.
+- init блок йөкләмәһендә (#4612) буйынса дөрөҫ ҡараш үҙгәртеү индексын ҡулланыу.
+- I18NI000000221X ваҡыт маркаһы (#4333) алдынан ваҡытты иртә башҡармағыҙ.
+- I18NI0000002222Х ярҙам итеү өсөн I18NI000000223X (#4601) (#4617)
+- SetKeyValue/DremoveKeyValue-нан (#4547) серд(яҫы) алып ташлау.
+- триггер йыйылмаһы дөрөҫ сериализациялана
+- `PermissionToken`s I18NI00000000225X (#4503) ҡабыҙыуын кире ҡаға.
+- отчет дөрөҫ ҡараш үҙгәртеү индексы өсөн ағымдағы тур
+- I18NI0000000226X (#4461) буйынса тейешле триггерҙарҙы алып ташларға.
+- генез паб төймәһен генезис турында тикшерергә
+- генезияны теркәүҙе иҫкәртергә Домен йәки иҫәп
+- субъекттың ролдәренән рөхсәт алыуҙы теркәүһеҙ .
+- триггер метамағлүмәттәре аҡыллы килешәүҙәрҙә мөмкин
+- rw йоҙаҡ ҡулланырға, тип, килешмәҫ дәүләт ҡарашын булдырмау өсөн (#4867)
+- снимокта йомшаҡ санка (#4868)
+- MinSize өсөн ChaCha20Poly1305
+- LiveQueryStore сиктәрен өҫтәп, хәтерҙе юғары ҡулланыуҙы булдырмау өсөн (#4893)
+
+###
+
+- ed25519 шәхси асҡысынан асыҡ асҡыс (#4856)
+- kura.lock (#4849) алып ташларға.
+- конфигта I18NI0000000227X һәм I18NI000000000228X суффикстарын кире ҡайтарыу (#4667)
+- генез яландарынан I18NI000000229X һәм I18NI0000000230X суффиксын алып ташлау (#4724)
+- AssetDefinitionId (#4701) буйынса AssetsMap-та индекстарҙы алып ташларға.
+- триггер үҙенсәлегенән доменды алып ташларға (#4640)
+- I18NT0000000053X-тан (#4673) генезға ҡул ҡуйыуҙы алып ташлау.
+- `Visit` алып ташлау I18NI000000232X (#4642) менән бәйле.
+- `TriggeringEventFilterBox` (#4866) алып ташлау.
+- р2п ҡул ҡыҫышында I18NI000000234X-ты алып ташлау (#4889)
+- блоктан I18NI000000235X алып ташлау (#4880)
+
+### Хәүефһеҙлек
+
+- һыу ағыу серҙәренән һаҡсыл .
+
+## [2,0,0-пре-rc.21] - 2024-04-19.
+
+### Өҫтәлгән
+
+- тип триггер id триггер инеү нөктәһендә (#4391)
+- схемала битфилдтар тип ҡуйылған ваҡиғаны фашлай (#4381)
+- яңы `wsv` XX индереү менән грануляр инеү (#2664)
+- `PermissionTokenSchemaUpdate`, I18NI0000000238X һәм I18NI000000239X өсөн ваҡиғалар фильтрҙары өҫтәү
+- снимок "режим" индереү (#4365)
+- рөхсәт итеү/кире ролдәр рөхсәттәрен кире ҡағыу (#4244)
+- активтар өсөн үҙ теләге менән теүәл һанлы тип индереү (башҡа бөтә һанлы типтағы бөтә типтағы тип) (#3660)
+- башҡарыусы өсөн төрлө яғыулыҡ сиге (#3354)
+- интеграциялау pprof профилле (#4250)
+- клиент CLI (#4200) актив подкомандаһын өҫтәйбеҙ.
+- I18NI000000240X рөхсәттәре (#4049)
+- өҫтәү `chain_id` реплей һөжүмдәрен булдырмау өсөн (#4185)
+- клиент CLI (#4175) домен метамағлүмәттәрен мөхәррирләү өсөн подкомандалар өҫтәй.
+- магазин комплектын тормошҡа ашырыу, алып ташлау, Клиент CLI-ла операцияларҙы алырға (#4163)
+- триггерҙар өсөн бер үк аҡыллы килешәүҙәр иҫәпләнә (#4133)
+- клиент CLI-ға подкомман өҫтәйбеҙ, домендарҙы күсерергә (#3974)
+- ФФИ-ла (#4062) ҡоҫҡо киҫәктәре ярҙам
+- git CLI клиентҡа SHA йөкмәтә (#4042)
+- proc макрос өсөн ғәҙәттәге валидатор ҡаҙанлыҡ (#3856)
+- Клиент API-ға эҙләү запросы төҙөүсе индергән (#3124)
+- ялҡау эҙләүҙәр эсендә аҡыллы килешәүҙәр (#3929)
+- I18NI000000242X эҙләү параметры (#3900)
+- активтар магазины трангер инструкцияһы (#4258)
+- һыу ағыу серҙәренән һаҡсыл (#3240)
+- дедубликат шул уҡ сығанаҡ коды менән триггер (#4419)
+
+###- ҡабартығыҙ тут инструменттар слет-төндә-2024-04-18
+- блоктар ебәрегеҙ, В-ның валидаторҙары (#4387)
+- торба үткәргес ваҡиғаларын блок һәм транзакция ваҡиғаларына бүлергә (#4366)
+- I18NI000000243X конфиг бүлеге I18NI0000000244X (#4377) тип үҙгәртергә
+- I18NI000000245X һәм I18NI000000246X дөйөм булмаған типтағы (#4375) эшләй.
+- төҙөүсе өлгөһө менән API-ны фильтрлауҙы яҡшыртыу (#3068)
+- төрлө ваҡиға фильтр API-ны берләштереү, иркен төҙөүсе API-ны индереү
+- I18NI000000247X үҙгәртергә I18NI000000248X-ҡа үҙгәртелә
+- I18NI000000249X XX тип үҙгәртергә I18NI000000250X
+- фильтр исемен яҡшыртыу, мәҫ. I18NI000000251X -> I18NI000000252Х.
+- конфигурациялау конфигурацияһы RFC (#4239) буйынса яңынан яҙығыҙ.
+- версияланған структурҙарҙы йәмәғәт API-нан (#3887) эске структураһын йәшерергә кәрәк.
+- ваҡытлыса индереү өсөн күҙаллау тәртибе бик күп уңышһыҙ ҡараш үҙгәрештәре (#4263)
+- I18NI000000253X (#4181) бетон төп төрҙәрен ҡулланыу.
+- бүленә ҡараш үҙгәрә нормаль хәбәрҙәр (#4115)
+- `SignedTransaction` үҙгәрмәй (#4162) эшләй.
+- экспорт I18NI0000000255X аша I18NI000000256X (#4147)
+- экспорт I18NI0000000257X аша I18NI000000258X (#4149)
+- экспорт I18NI0000000259X аша I18NI000000260X (#4081)
+- `openssl-sys` бойондороҡһоҙлоғон алып ташлау I18NI000000262X һәм I18NI000000263X (#342) конфигурацияланған тлс бэкэндтарын индереү.
+- немецһыҙ EOF I18NI000000264X XX (#3422) йорт эсендәге сиселеш менән алмаштырығыҙ.
+- башҡарыусы эшмәкәрлеген оптимальлаштырыу (#4013)
+- топология тиҫтерҙәре яңыртыу (#3995)
+
+### Төҙәтелгән
+
+- I18NI0000000266X (#4461) буйынса тейешле триггерҙарҙы алып ташларға.
+- субъекттың ролдәрҙән рөхсәт алыуҙы теркәү (#4242)
+- тип раҫлай, генез транаскцияһы генез паб төймәһе менән ҡул ҡуя (#4253)
+- p2p-ла яуап бирмәгән тиҫтерҙәре өсөн тайм-аут индереү (#4267)
+- генезды теркәүҙе иҫкәртергә Домен йәки иҫәп (#4226)
+- `MinSize` `ChaCha20Poly1305` өсөн (#4395)
+- I18NI0000000269X X-та эшләй башлағыҙ (#4377)
+- һәр әйберҙе `\n` менән айырып, `dev-telemetry` файл журналдары өсөн ата-әсә каталогтарын рекурсив рәүештә булдырыу.
+- ҡултамғаһыҙ иҫәп теркәүен иҫкәртергә (#4212)
+- төп пар генерацияһы хәҙер хаталы (#4283)
+- `X25519` асҡыстарын кодлауҙы туҡтатығыҙ, сөнки I18NI000000273X (#4174)
+- I18NI000000274X (#4270)-та ҡултамға раҫлауын эшләгеҙ.
+- асинк контексында блокировкалау ысулдарын саҡырыу (#4211)
+- теркәүһеҙҙәр буйынса бәйле токендарҙы теркәү (#3962)
+- асинк блокировка хатаһы ҡасан башлай I18NT000000000003X
+- нығытылған I18NI000000275X 401 HTTP (#4177)
+- I18NI0000000276X архивы исеме I18NT00000000039X (#4193)
+- аҡыллы контракт отладка баҫма (#4178)
+- топология яңыртыу тураһында перезапуск (#4164)
+- яңы тиңдәштәрен теркәү (#4142)
+- сылбырлы итерацион бойороҡ (#4130)
+- яңынан архитектор логгер һәм динамик конфигурация (#4100)
+- триггер атомлылыҡ (#4106)
+- эҙләү магазин хәбәр заказ мәсьәләһе (#4057)
+- `Content-Type: application/x-norito` осоштар өсөн билдәләнгән, улар I18NT000000024X ҡулланып яуап бирә,
+
+###
+
+- I18NI000000278X конфигурация параметры (#4377)
+- `NotificationEvent` X (#4377)
+- I18NI000000280X enum (#4305)
+- Ироханан МСТ агрегацияһы (#4229)
+- ISI һәм эҙләүҙе башҡарыу өсөн клонлау аҡыллы килешәүҙәрҙә (#4182)
+- I18NI000000281X һәм I18NI000000282X функциялары (#4152)
+- тигеҙләнгән ваҡиғалар (#3068)
+- һүҙбәйләнештәр (#4089)
+- авто-генерацияланған конфиг белешмә
+- I18NI000000283X шау-шыу журналдарҙа (#4097)
+
+### Хәүефһеҙлек
+
+- р2п (#4065)-ла паб асҡысы спуфингты иҫкәртергә
+- OpenSSL-дан сыҡҡан `secp256k1` ҡултамғаларын тәьмин итеү нормалаштырылған (#4155)
+
+## [2,0,0-пре-rc.20] - 2023-10-17.
+
+### Өҫтәлгән- I18NI000000285X милекселеге
+- I18NI000000286XX хужаһы рөхсәттәре
+- `owned_by` яланын I18NI0000002888ХХ-ға өҫтәй.
+- I18NI000000289X-та JSON5 булараҡ анализ фильтр (#3923)
+- Өҫтәү өсөн ярҙам ҡулланыу Үҙ-үҙеңде тип өлөшләтә билдәләнгән enums .
+- Стандартлаштырыу блок API (#3884)
+- I18NI0000000290X куры init режимын тормошҡа ашырыу
+- Ироха_сәйер башын өҫтәгеҙ
+- WSV снимоктары өсөн тәүге ярҙам
+
+### Төҙәтелгән
+
+- Фикс башҡарыусы скачать яңыртыу_configs.sh (#3990)
+- dedShell-да дөрөҫ тут.
+- Яндырыу I18NI000000291X репретиялары
+- I18NI000000292X күсермәһен төҙәтеү
+- `RemoveKeyValue` Fix I18NI000000294X өсөн Fix
+- I18NI0000002955Х ҡулланыуҙы төҙәтеү
+- Топологияның тап килмәүе хатаһын төҙәтеү (#3903)
+- Fix I18NI000000296X һәм I18NI000000297X эталон
+- I18NI000000298X магазин юлы менән, бик йоҙаҡ юл түгел (#3908)
+- Әгәр ҙә dir test_env.py-ҙа бар икән, уңышһыҙлыҡҡа осрамағыҙ.
+- Аутентификация/автоторлаштырыу docstring (#3876)
+- Һорау өсөн яҡшыраҡ хата тураһында хәбәр хата таба
+- генезис иҫәбенә асыҡ асҡыс өҫтәү өсөн dev docker compose
+- JSON (#3855) тип рөхсәт токен файҙалы йөктө сағыштырығыҙ.
+- I18NI000000299X I18NI000000003000Х макросында Fix .
+- генезис рөхсәт итеү өсөн теләһә ниндәй ISI (#3850)
+- генезды раҫлауҙы төҙәтеү (#3844)
+- 3 йәки унан да кәмерәк тиҫтерҙәре өсөн топологияны төҙәтеү
+- tx_samano гистограммаһы нисек иҫәпләнә.
+- I18NI0000000301X һынау флаклылығы
+- Валитатор генерацияһы ғәҙәттәгесә
+- Ироха нәфис өҙөлөүен төҙәтегеҙ
+
+### Рефактор- ҡулланылмаған бәйлелектәрҙе алып ташларға (#3992)
+- ҡабарып торған бәйлелектәр (#3981)
+- Башҡарыусыға исем валитаторы (#3976)
+- I18NI000000302X сисергә (#3979)
+- Эш майҙанына аҡыллы килешәү кодын (#3944) индерегеҙ.
+- API һәм Telemetrimetrametermement нөктәләрен бер серверға берләштереү
+- йәмәғәт API-нан ядроға лентаны күсерергә (#3949)
+- ролдәрҙә клондан ҡасығыҙ эҙләү
+- ролдәр өсөн эҙләүҙәр диапазоны
+- I18NI000000303X ролдәрен күсерергә
+- ИСИ-ны *Йәшниктән *Экспрға тиклем үҙгәртеп (#3930)
+- версиялы контейнерҙарҙан «Версионный» префиксын алып ташларға (#3913)
+- I18NI000000304X-ты блок файҙалы йөккә күсерергә (#3916)
+- Migrate I18NI0000000305X макрос син 2.0.
+- ISI сиктәрендә асыҡланған (#3925) теркәлгән.
+- I18NI000000306X-ға төп генериктарҙы раҫлаусы төп генериктарҙы өҫтәү
+- Emitter API-лар документацияһын таҙартыу өсөн клиппи бәхетле итеү өсөн
+- Өҫтәү өсөн һынауҙар өсөн алынған(HasOrigin) макро, ҡабатлауҙы кәметергә алынған(IdEqOrdHash), төҙәтеү хатаһы тураһында отчет тотороҡло .
+- Яҡшыртыу исем биреүҙе, ябайлаштырыу ҡабатланған .фильтр_карта & кәрәкмәгән ҡотолорға .заправляющий алынған(Фильтр)
+- Ҡулланыу өсөн өлөшләтә TaggugedSerialize/Десериализация ҡулланыу ҡәҙерле .
+- Һыу алыу(IdEqOrdHash) ҡулланыу ҡәҙерле, һынауҙар өҫтәй
+- Һыу алыу(Фильтр) ҡулланыу ҡәҙерле
+- Яңыртыу iroha_data_model_derive ҡулланыу өсөн син 2.0.
+- Тикшерергә ҡултамға тикшерергә шарт берәмек һынауҙары .
+- Ҡултамға тикшерелеүе шарттарының нығытылған йыйылмаһы ғына рөхсәт итегеҙ
+- ConstBytes-ты ConstVec-ҡа дөйөмләштереү, унда ниндәй ҙә булһа конст эҙмә-эҙлеклелеге тора
+- Үҙгәрмәй торған байттар ҡиммәттәре өсөн һөҙөмтәлерәк күрһәтеү ҡулланыу .
+- Магазиндың снимбаһында wsv-ны тамамланы
+- Өҫтәмә I18NI0000000307X актеры
+- анализлауҙы документ сикләү прок макроста килеп сыға
+- комментарийҙарҙы таҙартыу .
+- lib.r-ға атрибуттарҙы анализлау өсөн дөйөм һынау утилитаһын сығарыу.
+- ҡулланыу parse_display & яңыртыу Аттр -> Аттр исемдәре
+- ffi функцияһы args-та өлгө тап килтереүҙе ҡулланыу мөмкинлеген бирә
+- aptet attrs анализлауҙа ҡабатлауҙы кәметергә
+- Emitter::into_token_freation тип үҙгәртергә Эмиттер:: тамамлау_токен_
+- Ҡулланыу parse_display анализлау өсөн tokens tokens .
+- опечаткаларҙы төҙәтегеҙ һәм хаталар тураһында хәбәрҙәрҙе яҡшырта
+- iroha_ffi_oderive: атрибуттарҙы анализлау һәм син 2.0 ҡулланыу өсөн ҡәҙерлем ҡулланыу.
+- iroha_fi_osseverive: прок-макро-хаталарҙы шулай уҡ алмаштырыу.
+- Кураның файл кодын ябайлаштырыу .
+- бөтә һанлы ҡиммәттәрҙе епле литералдар итеп сериаллаштырығыҙ
+- I18NT000000035X-тан бүлергә (#3841)
+- I18NI0000000308X 1800 йылда яңынан яҙышыу
+- Аҡыллы килешәү һәм триггер инеү пункттары араһында дифференциация .
+- Элиде I18NI0000000309X I18NI000000310X .
+- яңыртыу I18NI000000311Х син 2.0 ҡулланыу өсөн 2.0.
+
+## [2,0,0-пре-rc.19] - 2023-08-14.
+
+### Өҫтәлгән- гиперледжер#3309
+- гиперледжер#3383 Компиляция ваҡытында розетка адрестарын анализлау өсөн макрос
+- гиперледжер#2398 эҙләү фильтрҙары өсөн интеграция һынауҙары өҫтәү
+- I18NI000000312X-ла ысын хата тураһында хәбәрҙе индереү .
+- I18NI000000313X ҡулланыу ҡорал-сылбыр булараҡ ғәҙәттәгесә
+- гиперледжер#3692 Валидатор миграцияһы
+- [DSL стажировка] гиперледжер#3688: Төп арифметиканы тормошҡа ашырыу прок макрос
+- гиперледжер#3371 Сплит валитатор I18NI0000000314X, валидаторҙарҙы смарт-килешеүҙәр тип ҡабул итмәүен тәьмин итеү өсөн
+- гиперледжер#3651 WSV снимоктары, улар авариянан һуң тиҙ генә I18NT0000000000054X төйөнөн күтәрергә мөмкинлек бирә
+- гиперледжер#3752 I18NI0000000315X алмашыныу менән I18NI00000000316X valitordator, бөтә операцияларҙы ҡабул итә
+- гиперледжер#3276 I18NI000000317X тип аталған ваҡытлыса инструкция өҫтәү, ул Sumeragi төйөнөнөң төп журналына билдәләнгән телмәрҙе теркәй.
+- гиперледжер#3641 Рөхсәт токен файҙалы йөк кеше-уҡыу .
+- гиперледжер#3324 I18NI0000000318X X менән бәйле I18NI0000000319X чектары һәм рефакторинг
+- гиперледжер#3781 генезия транзакцияларын раҫлау
+- гиперледжер#2885 Дифференциация ваҡиғалар араһында, улар өсөн ҡулланырға мөмкин һәм мөмкин түгел триггерҙар
+- гиперледжер#2245 I18NI000000320X-нигеҙендә Iroha төйөнлө бинар бинаһы I18NI000000321X тип.
+
+### Төҙәтелгән
+
+- гиперледжер#3613 Регрессия, был дөрөҫ булмаған ҡул ҡуйылған операцияларҙы ҡабул итергә мөмкинлек бирә ала
+- Дөрөҫ булмаған Конфигурация топологияһын кире ҡағыу
+- гиперледжер#3445 Төҙәтеү регрессияһы һәм I18NI00000000323X ос нөктәһе эшендә яңынан I18NI0000000322X эшләй.
+- гиперледжер#3654 Fix I18NI00000000324X I18NI00000000325X- нигеҙендә I18NI00000000326X XX
+- гиперледжер#3451 I18NI00000000327X Fix Apple кремний macs төҙөү
+- гиперледжер#3741 I18NI000000329X-та I18NI00000000328X X Fix .
+- гиперледжер#3758 Фикс регрессия, унда айырым йәшниктәр төҙөп булмаған, әммә эш урыны өлөшө булараҡ төҙөргә мөмкин
+- гиперледжер#3777 тротуар ролдәрен теркәүҙә раҫланмаған патч тираж
+- гиперледжер#3805 I18NI0000000330X ҡабул иткәндән һуң ябылмаған Fix I18NT000000056X
+
+### Икенсе
+
+- гиперледжер#3648 CI процестарында I18NI00000000031X чекты индереү
+- `len()` инструкцияһын I18NI000000333X-тан I18NI000000334X-ҡа күсерергә
+- гиперледжер#3672 I18NI00000000335X алмашыныу менән I18NI00000000336X менән алынған макрос
+- гиперледжер#3374 Берләштереү хатаһының doc-комментарийҙар һәм I18NI0000000337X тормошҡа ашырыу
+- гиперледжер#3289 Ҡулланыу 1.70 эш урыны мираҫы бөтә проект
+- гиперледжер#3654 I18NI0000000339X_-ла iroha2 төҙөү өсөн I18NI0000000038X X.
+- I18NI0000000340X 2,0, I18NI000000341X һәм I18NI0000000342X индереү.
+- гиперледжер#3802 Уникод I18NI000000343X орлоғо
+
+## [2.0.0-алдан р.18].
+
+### Өҫтәлгән
+
+- гиперледжер#3468: Сервер яғынан курсор, был ялҡаулыҡ менән баһаланған ҡабаттан абитуриентный страсть мөмкинлек бирә, был ҙур ыңғай етештереүсәнлек эҙемтәләренә эйә булырға тейеш эҙләү латентлығы
+- гиперледжер#3624: Дөйөм маҡсатлы рөхсәт билдәләре; махсус рәүештә
+  - Рөхсәт жетондары теләһә ниндәй структураға эйә була ала
+  - Токен структураһы үҙ-үҙен һүрәтләй I18NI0000000344X һәм сериализацияланған JSON стр.
+  - Токен ҡиммәте I18NI000000345X-кодланған
+  - эҙемтәһендә был үҙгәрештәр рөхсәт токен исем биреүҙең конвенцияһы I18NI000000346XX XNI000000347X тиклем күсерелде.
+- гиперледжер#3615 Усв валидациянан һуң wsv
+
+### Төҙәтелгән- гиперледжер#3627 Транзакция атомы хәҙер I18NI000000348X клонлау аша үтәлгән
+- гиперледжер#3195 паника тәртибен киңәйтеү өсөн ҡасан ҡабул ителгән генез транзакцияһы кире ҡағылған
+- гиперледжер#3042 Насар запрос хәбәрен төҙәтеү
+- гиперледжер#3352 Айырым каналдарға идара итеү ағымы һәм мәғлүмәттәр тураһында хәбәрҙе бүлергә
+- гиперледжер#3543 метриканың теүәллеген яҡшыртыу
+
+## 2.0.0-пре-rc.17.
+
+### Өҫтәлгән
+
+- гиперледжер#3330
+- гиперледжер#2622 I18NI0000000350X/I18NI0000000000351X ФФИ-ла ярҙам
+- гиперледжер#3088 Сират дроссель индереү, DoS иҫкәртергә
+- гиперледжер#2373 I18NI000000352X һәм I18NI0000000000354X файлдарын генерациялау өсөн I18NI00000000353X команда варианттары
+- гиперледжер#3597 Рөхсәт токен анализы (I18NT0000000057X яғы)
+- гиперледжер#3353 I18NI00000000355X I18NI00000000356X-тан хата шарттарын иҫәпләп һәм көслө типлы хаталарҙы ҡулланыу юлы менән сығарыу.
+- гиперледжер#3318 Интеррезия транзакцияларҙы эшкәртергә заказды һаҡлау өсөн блоктарҙа транзакцияларҙы кире ҡаҡты һәм ҡабул итте
+
+### Төҙәтелгән
+
+- гиперледжер#3075 паника буйынса дөрөҫ булмаған операция I18NI00000000357X, дөрөҫ булмаған операциялар эшкәртергә ҡамасаулау өсөн
+- гиперледжер#3461 Дөрөҫ эш итеү ҡиммәттәре ғәҙәттәгесә конфигурацияла ғәҙәттәгесә.
+- гиперледжер#3548 I18NI00000000358X үтә күренмәле атрибут Fix
+- гиперледжер#3552 Аливатор юлының схемаһын күрһәтеү
+- гиперледжер#3546 ваҡыт өсөн төҙәтеүҙәр триггерҙар йәбешеп ҡала
+- гиперледжер#3162 Блок потоковый запростарҙа 0 бейеклеге Тыйыу
+- Конфигурация макро башланғыс һынау
+- гиперледжер#3592 I18NI0000000359X-та конфиг файлдарын яңыртыу өсөн төҙәтеү
+- гиперледжер#3246 `Set B validators <https://github.com/hyperledger-iroha/iroha/blob/main/docs/source/iroha_2_whitepaper.md#2-system-architecture>`_ `fault <https://en.wikipedia.org/wiki/Byzantine_fault>`_һеҙ йәлеп итмәгеҙ
+- гиперледжер#3570 Клиент яғынан епле эҙләү хаталары дөрөҫ күрһәтеү
+- гиперледжер#3596 I18NI0000000362X блоктар/ваҡиғалар күрһәтә
+- гиперледжер#3473 I18NI00000000363X эшенә ироха һаҡлағыс тамыр каталогынан ситтәге эш.
+
+### Икенсе
+
+- гиперледжер#3063 Карта транзакцияһы I18NI00000000364X юғары бейеклектә I18NI000000365X .
+- көслө типлы I18NI0000000366ХХХ I18NI0000000367Х.
+
+## [2,0,0-пре-rc.16].
+
+### Өҫтәлгән
+
+- гиперледжер#2373 `kagami swarm`X подкомандацияһы өсөн генерациялау I18NI0000000369X.
+- гиперледжер#3525 Стандартлаштырыу транзакция API
+- гиперледжер#3376 Өҫтәмә I18NT00000000058X Клиент CLI I18NI000000370X_ автоматлаштырыу рамкаһында
+- гиперледжер#3516 I18NI000000371X-та оригиналь блоб хеш һаҡлау
+
+### Төҙәтелгән
+
+- гиперледжер#3462 I18NI0000000372X активтары командаһы I18NI000000373X
+- гиперледжер#3233 Рефактор хатаһы типтары
+- гиперледжер#3330 Төҙәтеү регрессияһы, ҡул менән тормошҡа ашырыу аша I18NI0000000374X өсөн I18NI0000000375X_ I18NI0000000376X
+- гиперледжер#3487 Схемаға юғалған типтарҙы ҡайтарыу
+- гиперледжер#3444 Схемаға дискриминант ҡайтарыу
+- гиперледжер#3496
+- гиперледжер#3498 Йомшаҡ-флоркты асыҡлау
+- гиперледжер#3396 I18NI0000000378X-та магазин блок
+
+### Икенсе
+
+- гиперледжер#2817 I18NI0000000379X-тан интерьер квалификацияһын сығарыу
+- гиперледжер#3363 Genesis API рефакторы
+- Рефактор булған һәм топология өсөн яңы һынауҙар менән тулыландырыу
+- I18NI000000380X_-нан I18NI00000000381X_ һынау ҡаплауы өсөн күсергә
+- гиперледжер#3533 Схема буйынса I18NI0000000000383X тиклем I18NI000000000382X үҙгәртергә
+
+## [2.0,0-пре-rc.15].
+
+### Өҫтәлгән- гиперледжер#3231 Монолит валитасы
+- гиперледжер#3015 ФФИ-ла ниша оптимизацияһы өсөн ярҙам
+- гиперледжер#2547 I18NI000000384X логотип өҫтәү
+- гиперледжер#3274 I18NI0000000385X өҫтәп, миҫалдар генерациялаусы подкоманда (ЛТС-ҡа кире ҡайтарылған)
+- гиперледжер#3415 I18NI0000000386X_ ҡойроғо
+- гиперледжер#3412 Айырым актерға ғәйбәт ғәйбәтен күсерергә
+- гиперледжер#3435
+- гиперледжер#3168 генезис валитаторы айырым файл булараҡ тәьмин итеү
+- гиперледжер#3454 ЛТС-ты күпселек I18NT00000000040X операциялары һәм документацияһы өсөн ғәҙәттәгесә эшләй.
+- гиперледжер#3090 Блокчейндан сылбырлы параметрҙарҙы таратыу.
+
+### Төҙәтелгән
+
+- гиперледжер#3330 I18NI0000000389X япраҡтары менән стагировкаһыҙ таныҡлыҡ десериализацияһын төҙәтеү (RC14-кә кире ҡайтарылған)
+- гиперледжер#2581 журналдарҙа шау-шыуҙы кәметте
+- гиперледжер#3360 Fix I18NI0000000390X эталон
+- гиперледжер#3393 I18NI000000391X-та өҙөлгән элемтә тупик
+- гиперледжер#3402 I18NI00000000392X төҙөү
+- гиперледжер#3411 Дөрөҫ идара итеү тиҫтерҙәре бер үк ваҡытта тоташыу
+- гиперледжер#3440 Транспорт ваҡытында активтарҙы үҙгәртеп ҡороуҙар, уның урынына аҡыллы-килешеүҙәр менән эш итә
+- гиперледжер#3408: I18NI0000000393X тестын төҙәтеү
+
+### Икенсе
+
+- гиперледжер#3362 I18NI000000394X актерҙары
+- гиперледжер#3349 Аҡыллы контракттарҙан I18NI00000000395X
+- гиперледжер#1786 розетка адрестары өсөн I18NI00000000000396Х-тыуған типтары өҫтәү
+- Инвалид I18NT00000001112X кэш
+- Ҡабаттан I18NT000000113X кэш
+- Рөхсәт валитаторын валидатҡа үҙгәртеү
+- гиперледжер#3388 Mike I18NI0000000397X модуль кимәлендәге атрибут макросы
+- гиперледжер#3370 Сериализация I18NI00000000398X Xxadecimal еп булараҡ
+- I18NI0000000399X I18NI000000400X-тан I18NI000000401X конфигурацияһына тиклем хәрәкәт итеү
+- I18NI000000402X типтағы 18-се тип 2012 йыл.
+- I18NI000000403X исемен I18NI000000404X-ҡа үҙгәртергә
+- Яңыртыу I18NI0000000405X
+
+## [2.0.0-алдан р.14].
+
+### Өҫтәлгән
+
+- гиперледжер#3127 мәғлүмәт моделе I18NI000000000406X Xopque ғәҙәттәгесә
+- гиперледжер#3122 ҡулланыу I18NI0000000407X өсөн һаҡлау функцияһы (йәмәғәт өлөшө)
+- гиперледжер#3153 I18NI000000408X сығышы машина менән уҡыла торған
+- гиперледжер#3105 I18NI000000410X өсөн I18NI000000409X X
+- гиперледжер#3010 I18NI000000041X
+
+### Төҙәтелгән
+
+- гиперледжер#3113 тотороҡһоҙ селтәр һынауҙарын ҡабатлау
+- гиперледжер#3129 I18NI000000412X de/сериализация
+- гиперледжер#3141 Ҡул менән I18NI000000413X өсөн `Hash`
+- гиперледжер#3155 Һынауҙарҙа паника ҡармаҡты төҙәтеү, тупикканы иҫкәртергә
+- гиперледжер#3166 Кәрәк түгел, үҙгәрештәр бушҡа, етештереүсәнлеген яҡшыртыу
+- гиперледжер#2123 Күп хаштан PublicKey de/сериализацияға ҡайтыу
+- гиперледжер#3132 ЯңыПараметр валитаторы өҫтәү
+- гиперледжер#3249 Сплит блок хеш өлөшләтә һәм тулы версияларға
+- гиперледжер#3031 Конфигурация параметрҙарының UI/UX-ын төҙәтегеҙ
+- гиперледжер#3247 `sumeragi`-тан өҙөклөктәр инъекцияһын сығарыу.
+
+### Икенсе
+
+- Өҫтәү өсөн юғалған I18NI0000000416X ялған етешһеҙлектәрҙе төҙәтеү өсөн
+- гиперледжер#2133 Аҡ ҡағыҙҙы яҡынайтыу өсөн топологияны яңынан яҙығыҙ
+- `iroha_client` I18NI000000418X-ға бәйлелек
+- гиперледжер#2943
+- гиперледжер#3232 Акция эш урыны метамағлүмәттәр
+- гиперледжер#3254 I18NI000000420X рефакторы һәм `replace_top_block()`
+- Ат тотороҡло бүлгес обработчик ҡулланыу .
+- гиперледжер#3183 I18NI0000000422X файлдарын үҙгәртергә
+- I18NI0000000423X дисплей форматында яҡшыртылған
+- гиперледжер#3268 Глобаль үҙенсәлекле әйбер идентификаторҙары
+- Яңы пиар ҡалыптары
+
+## [2.0.0-пре-rc.13].
+
+### Өҫтәлгән- гиперледжер#2399 Конфиг параметрҙары ISI булараҡ.
+- гиперледжер#3119 I18NI000000424X метрикаһы өҫтәү.
+- гиперледжер#3094 I18NI000000425X тиҫтерҙәре менән селтәр генерациялау.
+- гиперледжер#3082 I18NI000000426X XX сараһында тулы мәғлүмәттәр бирергә.
+- гиперледжер#3021 Непрометчик импорты.
+- гиперледжер#2794 ФФИ-ла асыҡ дискриминанттар менән Фельдһыҙ анументтарҙы кире ҡағыу.
+- гиперледжер#2922 генезис ғәҙәттәгесә I18NI000000427X өҫтәү.
+- гиперледжер#2922 Омит I18NI000000428X яланында I18NI000000429X jserialization.
+- гиперледжер#2922 Omit `object(_id)` json deserialization.
+- гиперледжер#2922 Omit `Id` json deserialization.
+- гиперледжер#2922 Omit `Identifiable` json deserialization.
+- гиперледжер#2963 метрикаға I18NI000000433X өҫтәү.
+- гиперледжер#3027 Кура өсөн локфейҙы тормошҡа ашырыу.
+- гиперледжер#2813 I18NT0000000036X генерациялау ғәҙәттәгесә тиңдәштәр конфигы.
+- гиперледжер#3019 Ярҙам JSON5.
+- гиперледжер#2231 генерациялау ФФИ урау API.
+- гиперледжер#2999 блок ҡултамғаларын туплау.
+- гиперледжер#2995 Йомшаҡ санканы асыҡлау.
+- гиперледжер#2905 I18NI000000434X ярҙам итеү өсөн оҙайтыу арифметик операциялары
+- гиперледжер#2868 Эмит иоха версияһы һәм журналдарҙа хеш ҡылыу.
+- гиперледжер#2096 активтың дөйөм күләме буйынса һорау.
+- гиперледжер#2899 Өҫтәү өсөн күп инструкциялар подкомандаһы 'клиент_кли'
+- гиперледжер#2247 Веб-сокет элемтәһе шау-шыуын сығарыу.
+- гиперледжер#2889 Өҫтәү блок потоковый ярҙам I18NI000000435X
+- гиперледжер#2280 Роль бирелгәндә рөхсәт сараларын Производитель/ҡатнау.
+- гиперледжер#2797 Байытыу саралары.
+- гиперледжер#2725 I18NI000000436X тайм-аут ҡабаттан индереү
+- гиперледжер#2712 Конфиг протесттары.
+- гиперледжер#2491 FFi-ла Һан ярҙамы.
+- гиперледжер#2775 Синтетик генезда төрлө асҡыстарҙы генерациялау.
+- гиперледжер#2627 Конфигурация финализацияһы, проксиға инеү нөктәһе, кагами docgen.
+- гиперледжер#2765 I18NI000000437X-та синтетик генезис генерациялау
+- гиперледжер#2698 `iroha_client`-та асыҡ булмаған хата тураһында хәбәрҙе төҙәтеү
+- гиперледжер#2689 Рөхсәт жетон билдәләү параметрҙарын өҫтәү.
+- гиперледжер#2502 Магазин ГИТ хеш төҙөү.
+- гиперледжер#2672 `ipv4Addr` X, `ipv6Addr` варианты һәм предикаттары.
+- гиперледжер#2626 I18NI0000041X тормошҡа ашырыу килеп сыға, бүлергә I18NI000000442X макрос.
+- гиперледжер#2586 I18NI0000043X һәм I18NI000000444X прокси-структуралар өсөн.
+- гиперледжер#2611 генерик асыҡ булмаған структуралар өсөн I18NI000000445X һәм Docker X Derive.
+- гиперледжер#2587 Сплит I18NI000000447X ике һыҙатҡа. #2587: Сплит I18NI0000000448X ике һыҙатҡа
+- гиперледжер#2488 I18NI000000449X-та һыҙаттар импульсына ярҙам өҫтәү
+- гиперледжер#2553 Актив эҙләүҙәргә сорттарға бүлергә өҫтәү.
+- гиперледжер#2407 Параметрия триггерҙары.
+- гиперледжер#2536 FFI клиенттары өсөн I18NI000000450X индереү.
+- гиперледжер#2338 Өҫтәү I18NI0000000451X приборҙары.
+- гиперледжер#2564 I18NT0000000037X инструмент алгоритмы варианттары.
+- гиперледжер#2490 Үҙ аллы функциялары өсөн ffi_экспортты тормошҡа ашырыу.
+- гиперледжер#1891 Валидат триггер башҡарыу.
+- гиперледжер#1988 Макрос өсөн асыҡлана, тигеҙ, Хэш, Орд.
+- гиперледжер#2434 ФФИ бәйләү китапханаһы.
+- гиперледжер#2073 Блокчейнда төрҙәре өсөн String өҫтөндә констСтрингты өҫтөн ҡуйыу.
+- гиперледжер#1889 Домен-срок триггерҙар өҫтәү.
+- гиперледжер#2098 Блок башлыҡ һорауҙары. #2098: блок башы эҙләүҙәр өҫтәгеҙ
+- гиперледжер#2467 Өҫтәү өсөн иҫәп грант подкомерка iroha_client_cli.
+- гиперледжер#2301 Өҫтәү транзакция блок хеш, ҡасан уны эҙләү.
+ - гиперледжер#2454 I18NT00000000026X декодер инструментына төҙөү сценарийы өҫтәү.
+- гиперледжер#2061 Фильтрҙар өсөн макрос ала.- гиперледжер#2228 Өҫтәү өсөн рөхсәтһеҙ вариант смарт-килешеп эҙләү хатаһы.
+- гиперледжер#2395 Өҫтәү паника, әгәр генез ҡулланыу мөмкин түгел.
+- гиперледжер#2000 буш исемдәрҙе рөхсәт ит. #2000: Буш исемдәрҙе кире ҡағыу
+ - гиперледжер#2127 Өҫтәү өсөн аҡыллы тикшерергә, тип тәьмин итеү өсөн, бөтә мәғлүмәттәр декодировать I18NT00000000000027X кодек ҡулланыла.
+- гиперледжер#2360 I18NI000000452X X Make.
+- гиперледжер#2053 Шәхси блокчейнда ҡалған бөтә һорауҙарға һынауҙар өҫтәү.
+- гиперледжер#2381 Берләшкән I18NI000000453X теркәү.
+- гиперледжер#2053 Шәхси блокчейнда активтар менән бәйле һорауҙарға анализдар өҫтәү.
+- гиперледжер#2053 'перват_блокчейн'ға һынауҙар өҫтәү
+- гиперледжер#2302 Өҫтәү 'FindTriggersByDomainId' стаб-эзгета.
+- гиперледжер#1998 эҙләүҙәргә фильтрҙар өҫтәү.
+- гиперледжер#2276 Ағымдағы блок хеш индереү BlockHeaderValue.
+- гиперледжер#2161 Ҡулланма id һәм FFI fns бүлешкән.
+- өҫтәү ручка id һәм тормошҡа ашырыу FFI эквиваленттары дөйөм һыҙаттар (Клон, тигеҙ, Орд)
+- гиперледжер#1638 I18NI0000000454X ҡайтарыу doc суб-ағас.
+- гиперледжер#2132 Өҫтәү I18NI00000004555Х прок макро.
+- гиперледжер#2257 Revoke<Роле> RoleRevoked ваҡиғаһын сығара.
+- гиперледжер#2125 Өҫтәү FindAssetDefinitionById эҙләү.
+- гиперледжер#1926 сигнал менән эш итеү һәм нәфис өҙөлгән өҫтәү.
+- гиперледжер#2161 I18NI000000456X өсөн FFI функцияларын генерациялай.
+- гиперледжер#1149 Блок файл һаны 10000000-дан артмай, бер каталог.
+- гиперледжер#1413 API версияһының ос нөктәһен өҫтәү.
+- гиперледжер#2103 блоктар һәм транзакциялар өсөн эҙләү ярҙамы. Өҫтәү I18NI0000000457X эҙләү
+- гиперледжер#2186 ISI I18NI000000458X һәм `Fixed` өсөн күсермәһен өҫтәү.
+- гиперледжер#2056 I18NI000000460X I18NI000000461X өсөн алынған прок макро йәшник өҫтәү.
+- гиперледжер#2100 Өҫтәү эҙләү өсөн бөтә иҫәптәр менән актив.
+- гиперледжер#2179 Оптимизациялау триггер башҡарыу.
+- гиперледжер#1883 Конфигурация файлдарын сығарыу.
+- гиперледжер#2105 клиентта эҙләү хаталары менән идара итә.
+- гиперледжер#2050 Өҫтәү ролгә бәйле һорауҙар.
+- гиперледжер#1572 Махсуслаштырылған рөхсәт токендары.
+- гиперледжер#2121 Тикшерергә клавиатура дөрөҫ, ҡасан төҙөлгән.
+ - гиперледжер#2003 I18NT0000000028X Емеш декодер инструменты индереү.
+- гиперледжер#1952 оптимизациялар өсөн стандарт булараҡ ТПС-тың ориентирын өҫтәү.
+- гиперледжер#2040 Өҫтәү интеграция тесты менән транзакция башҡарыу сиге.
+- гиперледжер#1890 Ориллион ҡулланыу осраҡтарына нигеҙләнгән интеграция һынауҙары индереү.
+- гиперледжер#2048 Өҫтәү өсөн инструментальчейн файл.
+- гиперледжер#2100 Өҫтәү эҙләү өсөн бөтә иҫәптәр менән актив.
+- гиперледжер#2179 Оптимизациялау триггер башҡарыу.
+- гиперледжер#1883 Конфигурация файлдарын сығарыу.
+- гиперледжер#2004 The 18NI000000462X һәм I18NI000000463X I18NI000000464X булыуҙан.
+- гиперледжер#2105 клиентта эҙләү хаталары менән идара итә.
+- гиперледжер#2050 Өҫтәү ролгә бәйле һорауҙар.
+- гиперледжер#1572 Махсуслаштырылған рөхсәт токендары.
+- гиперледжер#2121 Тикшерергә клавиатура дөрөҫ, ҡасан төҙөлгән.
+ - гиперледжер#2003 I18NT000000029X X Декодер инструменты индереү.
+- гиперледжер#1952 оптимизациялар өсөн стандарт булараҡ ТПС-тың ориентирын өҫтәү.
+- гиперледжер#2040 Өҫтәү интеграция тесты менән транзакция башҡарыу сиге.
+- гиперледжер#1890 Ориллион ҡулланыу нигеҙендә интеграция һынауҙары индереү- осраҡтарҙа.
+- гиперледжер#2048 Өҫтәү өсөн инструментальчейн файл.
+- гиперледжер#2037 Алдан эшләгән Триггерҙар менән таныштырыу.
+- гиперледжер#1621 Шылтыратыу триггерҙары менән таныштырыу.
+- гиперледжер#1970 Өҫтәү опциональ схемаһы ос нөктәһе.
+- гиперледжер#1620 Ваҡыт нигеҙендәге триггерҙарҙы индереү.
+- гиперледжер#1918 I18NI000000465X өсөн төп аутентификацияны тормошҡа ашырыу
+- гиперледжер#1726 PR эш ағымын сығарыуҙы тормошҡа ашырыу.
+- гиперледжер#1815 эҙләү яуаптарын күберәк тип структуралы эшләү.- гиперледжер#1928 I18NI000000466X XX .
+- гиперледжер#1902 Яланғас металл 4-тиңдәш ҡуйыу сценарийы.
+
+  Өҫтәлгән версия setup_test_env.sh, тип талап итмәй docker-композитор һәм ҡулланыу отладка төҙөү I18NT0000000059X.
+- гиперледжер#1619 Иғтибар итегеҙ, ваҡиғаларға нигеҙләнгән триггерҙар.
+- гиперледжер#1195 Ябығыҙ websocket тоташыу таҙа.
+- гиперледжер#1606 Домен структураһында домен логотибы менән ipfs һылтанма.
+- гиперледжер#1754 Ҡура инспекторы CLI өҫтәү.
+- гиперледжер#1790 Стек нигеҙендәге векторҙар ҡулланып, етештереүсәнлекте яҡшыртыу.
+- гиперледжер#1805 Пенсик хаталар өсөн махсус терминаль төҫтәр.
+- гиперледжеры#1749 I18NI0000000000468ХХ-ла I18NI0000000467X
+- гиперледжер#1179 Өҫтәү өсөн рөхсәт-рөхсәт-йәки-ролле инструкцияһы.
+- гиперледжер#1782 ироха_крипто no_std совместимый итә.
+- гиперледжер#1172 Инструкция сараларын тормошҡа ашырыу саралары.
+- гиперледжер#1734 I18NI000000469X Елидат аҡ майҙандарҙы сығарып ташлау өсөн.
+- гиперледжер#1144 метамағлүмәттәр ояһы өҫтәү.
+- #1210 Блок потоковый (сервер яғы).
+- гиперледжер#1331 I18NI000000470X метрикаларын күберәк тормошҡа ашырыу.
+- гиперледжер#1689 Төҙәтеү функцияһы бәйлелек. #1261: Йөк шешенгән өҫтәгеҙ.
+- гиперледжер#1675 ҡулланыу тип урынына урау структур өсөн версияланған әйберҙәр.
+- гиперледжер#1643 Көтөп, тиҫтерҙәре өсөн гендар ҡылыу өсөн тесттарҙа.
+- гиперледжер#1678 `try_allocate`
+- гиперледжер#1216 Өҫтәү I18NT000000002X ос нөктәһе. #1216: метрикаларҙы тәүге тормошҡа ашырыу ос нөктәһе.
+- гиперледжер#1238 Run-ваҡыт журнал-кимәле яңыртыуҙар. I18NI000000472X инеү нөктәһе нигеҙендә перезагрузка булдырылған.
+- гиперледжер#1652 PR исем форматлау.
+- `Status`-ҡа тоташтырылған тиҫтерҙәр һанын өҫтәгеҙ
+
+  - "Бәйләнешле тиҫтерҙәр һаны менән бәйле әйберҙәрҙе юйырға" тигән кире ҡайтарыу.
+
+  Был ҡайтарып бирә b228b41dab3c035се9973b6aa3b35d443c082544.
+  - I18NI000000474X асыҡлыҡта ҡул ҡыҫышҡандан һуң ғына ысын асыҡ асҡысҡа эйә.
+  - I18NI0000000475X һынауҙарһыҙ
+  - Теркәүһеҙ тиҫтерҙәр башҡарыуын тормошҡа ашырыу
+  - I18NI000000476X-ҡа тиңдәштәр подкомандаһын өҫтәгеҙ (ун) теркәү
+  - адресы буйынса теркәлмәгән тиңдәштән ҡабаттан бәйләнештәрҙе баш тартыу
+
+  Һеҙҙең тиҫтерҙәрегеҙ теркәлмәгән һәм икенсе тиҫтерен өҙөүҙән һуң,
+  һеҙҙең селтәр ишетәсәк ҡабаттан тоташтырыу тураһында үтенестәр тиҫтерҙәре.
+  Барыһы ла һеҙ белә алаһығыҙ, тәүҙә адресы, уның порт номеры үҙ теләге менән.
+  Шуға күрә порт номерынан башҡа теркәлмәгән тиҫтерҙәрен иҫегеҙҙә тотоғоҙ.
+  һәм шунан баш тарта.
+- Өҫтәү I18NI0000000477X тамамлау нөктәһе аныҡ порт.
+
+### Төҙәтеүҙәр- гиперледжер#3129 Fix I18NI000000478X де/сериализация.
+- гиперледжер#3109 ролде агностик хәбәрҙән һуң I18NI0000000479Х йоҡлай.
+- гиперледжер#3046 I18NT00000000060X грациозно буш өҫтөндә башлай ала
+  I18NI000000480X
+- гиперледжер#2599 Пилот питомниктарын сығарыу.
+- гиперледжер#3087 Йыйыу тауыштары Set B валитаторҙары ҡараш үҙгәртеүҙән һуң.
+- гиперледжер#3056 Fix I18NI000000481X эталон эленеп тора.
+- гиперледжер#1170 Ғәмәлгә ашырыу клонлау-wsv-стиль йомшаҡ-ҡаршы эшкәртергә.
+- гиперледжер#2456 Генез блогы сикләнмәгән.
+- гиперледжер#3038 Ҡабаттан килгән мультисигтар.
+- гиперледжер#2894 I18NI000000482X Fix Inv үҙгәрмәй торған десериализация.
+- гиперледжер#2803 Ҡултамға хаталары өсөн дөрөҫ статус кодын ҡайтарыу.
+- гиперледжер#2963 I18NI000000483X транзакцияларҙы дөрөҫ алып ташлау.
+- гиперледжер#0000 Верген өҙөү CI.
+- гиперледжер#2165 Ҡорал сылбырлы фиджет сығарыу.
+- гиперледжер#2506 блок раҫлауын төҙәтергә.
+- гиперледжер#3013 Дөрөҫ сылбырлы яндырыу валидаторҙары.
+- гиперледжер#2998 Юйырға ҡулланылмаған сылбыр коды.
+- гиперледжер#2816 Кураға блоктарға инеү мөмкинлегенең яуаплылығын күсерергә.
+- гиперледжер#2384 decode decode_all менән алмаштырыу.
+- гиперледжер#1967 Ҡиммәте Нәғүә менән алмаштырыу.
+- гиперледжер#2980 ffi типтағы блок ҡиммәтен төҙәтеү.
+- гиперледжер#2858 Парковка_күп::Мутекс урынына std.
+- гиперледжер#2850 I18NI0000000484X-ның сүллекләүе/декодлауы.
+- гиперледжер#2923 Ҡайтыу I18NI00000000485X ҡасан I18NI000000486X түгел.
+  булырға.
+- гиперледжер#0000 Fix I18NI000000487X
+- гиперледжер#2880 Ябыҡ websocket тоташыу дөрөҫ.
+- гиперледжер#2880 Төҙәтеү блок стриминг.
+- гиперледжер#2804 I18NI000000488X транзакция блокировкаһын тапшырыу.
+- гиперледжер#2819 Кәрәкле булмаған ағзаларын WSV-нан сығарыу.
+- Сериализация рекурсияһының экспрессияһын төҙәтеү.
+- гиперледжер#2834 стенография синтаксисын яҡшыртыу.
+- гиперледжер#2379 Өҫтәү мөмкинлеге сүп-сар яңы Кура блоктар өсөн блоктар.txt.
+- гиперледжер#2758 Схемаға сортлау структураһын өҫтәү.
 - CI.
-- hyperledger#2548 Warn on large genesis file.
-- hyperledger#2638 Update `whitepaper` and propagate changes.
-- hyperledger#2678 Fix tests on staging branch.
-- hyperledger#2678 Fix tests abort on Kura force shutdown.
-- hyperledger#2607 Refactor of sumeragi code for more simplicity and
-  robustness fixes.
-- hyperledger#2561 Reintroduce viewchanges to consensus.
-- hyperledger#2560 Add back in block_sync and peer disconnecting.
-- hyperledger#2559 Add sumeragi thread shutdown.
-- hyperledger#2558 Validate genesis before updating the wsv from kura.
-- hyperledger#2465 Reimplement sumeragi node as singlethreaded state
-  machine.
-- hyperledger#2449 Initial implementation of Sumeragi Restructuring.
-- hyperledger#2802 Fix env loading for configuration.
-- hyperledger#2787 Notify every listener to shutdown on panic.
-- hyperledger#2764 Remove limit on max message size.
-- #2571: Better Kura Inspector UX.
-- hyperledger#2703 Fix Orillion dev env bugs.
-- Fix typo in a doc comment in schema/src.
-- hyperledger#2716 Make Duration in Uptime public.
-- hyperledger#2700 Export `KURA_BLOCK_STORE_PATH` in docker images.
-- hyperledger#0 Remove `/iroha/rust-toolchain.toml` from the builder
-  image.
-- hyperledger#0 Fix `docker-compose-single.yml`
-- hyperledger#2554 Raise error if `secp256k1` seed shorter than 32
-  bytes.
-- hyperledger#0 Modify `test_env.sh` to allocate storage for each peer.
-- hyperledger#2457 Forcibly shut down kura in tests.
-- hyperledger#2623 Fix doctest for VariantCount.
-- Update an expected error in ui_fail tests.
-- Fix incorrect doc comment in permission validators.
-- hyperledger#2422 Hide private keys in configuration endpoint response.
-- hyperledger#2492: Fix not all triggers being executed that match an event.
-- hyperledger#2504 Fix failing tps benchmark.
-- hyperledger#2477 Fix bug when permissions from roles weren't counted.
-- hyperledger#2416 Fix lints on macOS arm.
-- hyperledger#2457 Fix tests flakiness related to shut down on panic.
-  #2457: Add shut down on panic configuration
-- hyperledger#2473 parse rustc --version instead of RUSTUP_TOOLCHAIN.
-- hyperledger#1480 Shut down on panic. #1480: Add panic hook to exit program on panic
-- hyperledger#2376 Simplified Kura, no async, two files.
-- hyperledger#0000 Docker build failure.
-- hyperledger#1649 remove `spawn` from `do_send`
-- hyperledger#2128 Fix `MerkleTree` construction and iteration.
-- hyperledger#2137 Prepare tests for multiprocess context.
-- hyperledger#2227 Implement Register and Unregister for Asset.
-- hyperledger#2081 Fix role granting bug.
-- hyperledger#2358 Add release with debug profile.
-- hyperledger#2294 Add flamegraph generation to oneshot.rs.
-- hyperledger#2202 Fix total field in query response.
-- hyperledger#2081 Fix the test case to grant the role.
-- hyperledger#2017 Fix role unregistration.
-- hyperledger#2303 Fix docker-compose' peers doesn't get gracefully shut down.
-- hyperledger#2295 Fix unregister trigger bug.
-- hyperledger#2282 improve FFI derives from getset implementation.
-- hyperledger#1149 Remove nocheckin code.
-- hyperledger#2232 Make Iroha print meaningful message when genesis has too many isi.
-- hyperledger#2170 Fix build in docker container on M1 machines.
-- hyperledger#2215 Make nightly-2022-04-20 optional for `cargo build`
-- hyperledger#1990 Enable peer startup via env vars in the absence of config.json.
-- hyperledger#2081 Fix role registration.
-- hyperledger#1640 Generate config.json and genesis.json.
-- hyperledger#1716 Fix consensus failure with f=0 cases.
-- hyperledger#1845 Non-mintable assets can be minted once only.
-- hyperledger#2005 Fix `Client::listen_for_events()` not closing WebSocket stream.
-- hyperledger#1623 Create a RawGenesisBlockBuilder.
-- hyperledger#1917 Add easy_from_str_impl macro.
-- hyperledger#1990 Enable peer startup via env vars in the absence of config.json.
-- hyperledger#2081 Fix role registration.
-- hyperledger#1640 Generate config.json and genesis.json.
-- hyperledger#1716 Fix consensus failure with f=0 cases.
-- hyperledger#1845 Non-mintable assets can be minted once only.
-- hyperledger#2005 Fix `Client::listen_for_events()` not closing WebSocket stream.
-- hyperledger#1623 Create a RawGenesisBlockBuilder.
-- hyperledger#1917 Add easy_from_str_impl macro.
-- hyperledger#1922 Move crypto_cli into tools.
-- hyperledger#1969 Make the `roles` feature part of the default feature set.
-- hyperledger#2013 Hotfix CLI args.
-- hyperledger#1897 Remove usize/isize from serialization.
-- hyperledger#1955 Fix possibility to pass `:` inside `web_login`
-- hyperledger#1943 Add query errors to the schema.
-- hyperledger#1939 Proper features for `iroha_config_derive`.
-- hyperledger#1908 fix zero value handling for telemetry analysis script.
-- hyperledger#0000 Make implicitly ignored doc-test explicitly ignored.
-- hyperledger#1848 Prevent public keys from being burned to nothing.
-- hyperledger#1811 added tests and checks to dedup trusted peer keys.
-- hyperledger#1821 add IntoSchema for MerkleTree and VersionedValidBlock, fix HashOf and SignatureOf schemas.
-- hyperledger#1819 Remove traceback from error report in validation.
-- hyperledger#1774 log exact reason for validation failures.
-- hyperledger#1714 Compare PeerId only by key.
-- hyperledger#1788 Reduce memory footprint of `Value`.
-- hyperledger#1804 fix schema generation for HashOf, SignatureOf, add test to ensure no schemas are missing.
-- hyperledger#1802 Logging readability improvements.
-  - events log moved to trace level
-  - ctx removed from log capture
-  - terminal colors are made optional (for better log output to files)
-- hyperledger#1783 Fixed torii benchmark.
-- hyperledger#1772 Fix after #1764.
-- hyperledger#1755 Minor fixes for #1743, #1725.
-  - Fix JSONs according to #1743 `Domain` struct change
-- hyperledger#1751 Consensus fixes. #1715: Consensus fixes to handle high load (#1746)
-  - View change handling fixes
-  - View change proofs made independent of particular transaction hashes
-  - Reduced message passing
-  - Collect view change votes instead of sending messages right away (improves network resilience)
-  - Fully use Actor framework in Sumeragi (schedule messages to self instead of task spawns)
-  - Improves fault injection for tests with Sumeragi
-  - Brings testing code closer to production code
-  - Removes overcomplicated wrappers
-  - Allows Sumeragi use actor Context in test code
-- hyperledger#1734 Update genesis to fit the new Domain validation.
-- hyperledger#1742 Concrete errors returned in `core` instructions.
-- hyperledger#1404 Verify fixed.
-- hyperledger#1636 Remove `trusted_peers.json` and `structopt`
-  #1636: Remove `trusted_peers.json`.
-- hyperledger#1706 Update `max_faults` with Topology update.
-- hyperledger#1698 Fixed public keys, documentation and error messages.
-- Minting issues (1593 and 1405) issue 1405
+- гиперледжер#2548 Ҙур генез файлы тураһында иҫкәртергә.
+- гиперледжер#2638 Яңыртыу I18NI000000489X һәм үҙгәрештәр таратыу.
+- гиперледжер#2678 стадиялау филиалында тесттарҙы төҙәтеү.
+- гиперледжер#2678 Кара көстәрен өҙөү буйынса аборт һынауҙарын төҙәтә.
+- гиперледжер#2607 Рефактор сурари коды өсөн күберәк ябайлыҡ һәм
+  ныҡлылыҡ төҙәтә.
+- гиперледжер#2561 Консенсусҡа ҡараштарҙы ҡабаттан индереү.
+- гиперледжер#2560 Блок_синхрон һәм тиңдәштәрен өҙөп кире өҫтәү.
+- гиперледжер#2559 Супераги епте өҙөү өҫтәгеҙ.
+- гиперледжер#2558 Валидат генезы wsv яңыртыу алдынан куран.
+- гиперледжер#2465 Ҡайтананы тормошҡа ашырыу сутераги төйөндәре булараҡ, яңғыҙ дәүләт
+  машина.
+- гиперледжер#2449 I18NT000000004X реструктуризацияһын башланғыс тормошҡа ашырыу.
+- гиперледжер#2802 Конфигурация өсөн тейәү env env.
+- гиперледжер#2787 Һәр тыңлаусыға паникаға өҙөлөүе тураһында хәбәр итегеҙ.
+- гиперледжер#2764 Макс хәбәр күләме буйынса сикте сығарыу.
+- #2571: Яҡшыраҡ Кура инспекторы UX.
+- гиперледжер#2703 Төҙәтеү Ориллион dev env exts.
+- опечатка doc комментарий схема/срк.
+- гиперледжер#2716 Ағымдағы йәмәғәтселектә оҙайлы ваҡыт эшләү.
+- гиперледжер#2700 Экспорт I18NI000000490X докер һүрәттәрендә.
+- гиперледжер#0 Төҙөүсенән I18NI0000000491X
+  һүрәт.
+- гиперледжер#0 I18NI000000492X Fix .
+- гиперледжер#2554 Әгәр I18NI0000000493X орлоҡтары 32-нән ҡыҫҡараҡ булһа, хатаны күтәрегеҙ.
+  байт.
+- гиперледжер#0 Модифика I18NI000000494X һәр тиңдәш өсөн һаҡлау бүлергә.
+- гиперледжер#2457 Һынауҙарҙа Кураны көсләп ябып.
+- гиперледжер#2623 VarytCount өсөн доктатураны төҙәтеү.
+- ui_fail һынауҙарында көтөлгән хатаны яңыртыу.
+- Рөхсәт валидаторҙарында дөрөҫ булмаған doc комментарийҙы төҙәтеү.- гиперледжер#2422 Конфигурацияның осло нөктә яуапында шәхси асҡыстарҙы Йәшерергә.
+- гиперледжер#2492: Фикс бөтә триггерҙар башҡарылған, тип тап килгән ваҡиға.
+- гиперледжер#2504 Төҙәтеү tps эталон tps.
+- гиперледжер#2477 ролдәрҙән рөхсәттәр иҫәпләнмәгәндә төҙәтмәләр төҙәтеү.
+- гиперледжер#2416 macOS ҡулында линттарҙы төҙәтеү.
+- гиперледжер#2457 Төҙәтеү һынауҙары plakiness менән бәйле ябыу паника.
+  #2457: Өҫтәү өсөн паника конфигурацияһы ябылған
+- гиперледжер#2473 парза русты --версия урынына RUSTUP_TOOLCHAIN.
+- гиперледжер#1480 Паникаға ябыр. #1480: Өҫтәү өсөн паника ҡармаҡ сығыу өсөн сығыу программаһы паника
+- гиперледжер#2376 Ябайлаштырылған Кура, асинк юҡ, ике файл.
+- гиперледжер#0000 I18NT000000041X төҙөү етешһеҙлеге.
+- гиперледжер#1649 I18NI000000495X XI18NI000000496X .
+- гиперледжер#2128 Fix I18NI000000497X төҙөлөшө һәм итерацион.
+- гиперледжер#2137 Күп процесслы контекст өсөн һынауҙар әҙерләү.
+- гиперледжер#2227 Активтар өсөн реестр һәм регистр тормошҡа ашырыу.
+- гиперледжер#2081 ролде төҙәтеү ҡорамал.
+- гиперледжер#2358 Отладка профиле менән сығарыу.
+- гиперледжер#2294 Өҫтәү флаграф быуын oneshot.r.
+- гиперледжер#2202 Эҙләү яуапында дөйөм яланды төҙәтеү.
+- гиперледжер#2081 ролдә тест осрағын төҙәтегеҙ.
+- гиперледжер#2017 Түләүҙәрҙе төҙәтмәү.
+- гиперледжер#2303 Төҙәтеү docker-композит’ тиҫтерҙәре нәфис ябыла алмай.
+- гиперледжер#2295 Регистр триггер хатаһын төҙәтеү.
+- гиперледжер#2282 ФФИ-ны яҡшырта, уларҙы тормошҡа ашырыуҙан килеп сыға.
+- гиперледжер#1149 ночеккин кодты сығарыу.
+- гиперледжер#2232 генезистың бик күп isi булғанда I18NT00000000061Х баҫмаһы мәғәнәле хәбәр Make.
+- гиперледжер#2170 М1 станоктарында докер контейнерында Fix төҙөү.
+- гиперледжер#2215 Төн-2022-04-20 I18NI000000498X өсөн факультатив эшләү.
+- гиперледжер#1990 Конфиг.json булмағанда env vars аша тиҫтерҙәр стартапын индереү.
+- гиперледжер#2081 роль теркәүҙе төҙәтеү.
+- гиперледжер#1640 генерациялау config.json һәм genesis.json.
+- гиперледжер#1716 f=0 осраҡтар менән консенсус етешһеҙлеген төҙәтеү.
+- гиперледжер#1845 Ҡайнатмаған активтарҙы бер тапҡыр ғына һуғып була.
+- гиперледжер#2005 Fix I18NI000000499X X VebSocket ағымын ябып тормай.
+- гиперледжер#1623 RawGenesisBlockBoller булдырыу.
+- гиперледжер#1917 Өҫтәү өсөн eye_fr_st_impl макро.
+- гиперледжер#1990 Конфиг.json булмағанда env vars аша тиҫтерҙәр стартапын индереү.
+- гиперледжер#2081 роль теркәүҙе төҙәтеү.
+- гиперледжер#1640 генерациялау config.json һәм genesis.json.
+- гиперледжер#1716 f=0 осраҡтар менән консенсус етешһеҙлеген төҙәтеү.
+- гиперледжер#1845 Ҡайнатмаған активтарҙы бер тапҡыр ғына һуғып була.
+- гиперледжер#2005 Fix `Client::listen_for_events()` WebSocket ағымын ябып тормай.
+- гиперледжер#1623 RawGenesisBlockBoller булдырыу.
+- гиперледжер#1917 Өҫтәү өсөн eye_fr_st_impl макро.
+- гиперледжер#1922 Крипто_клиҙы ҡоралдарға күсерергә.
+- гиперледжер#1969 I18NI000000501X функцияһы өлөшө йыйылмаһы функцияһы йыйылмаһы.
+- гиперледжер#2013 Hotfix CLI аргс.
+- гиперледжер#1897 Сериализациянан ҡулланыу/йыйылыш.
+- гиперледжер#1955 I18NI000000502X аша үткән I18NI0000000503X.
+- гиперледжер#1943 Схемаға эҙләү хаталарын өҫтәү.
+- гиперледжер#1939 I18NI000000504X өсөн дөрөҫ функциялар.
+- гиперледжер#1908 нуль ҡиммәтен төҙәтеү өсөн эш итеү телеметрия анализы сценарийы.
+- гиперледжер#0000 Яһау асыҡтан-асыҡ иғтибарһыҙ ҡалдырылған doc-тест аныҡ ҡына иғтибарға алынмаған.
+- гиперледжер#1848 асыҡ асҡыстарҙы яндырыуҙы бер нәмәгә лә еткермәҫкә.
+- гиперледжер#1811 тестар һәм чектар өҫтәлгән, ышаныслы тиҫтерҙәре асҡыстары dedidup.
+- гиперледжер#1821 өҫтәргә IntoSchema өсөн MerkleTree һәм VersiedValidBlock, төҙәтергә HashOf һәм SignatureOf схемалары.- гиперледжер#1819 раҫлауҙа хаталар тураһында отчеттан эҙләү эҙләү.
+- гиперледжер#1774 логик теүәл сәбәп раҫлау етешһеҙлектәре.
+- гиперледжер#1714 сағыштырырға PeerId тик асҡыс буйынса.
+- гиперледжер#1788 I18NI000000505X-тың хәтер эҙен кәметергә.
+- гиперледжер#1804 HashOf өсөн схема генерацияһын төҙәтегеҙ, SignatureOf, схемалар юҡлығын тәьмин итеү өсөн һынау өҫтәгеҙ.
+- гиперледжер#1802 Логинг уҡыусанлыҡ яҡшыртыу.
+  - ваҡиғалар журналы эҙ кимәленә күсте.
+  - ctx лог тотоуҙан алынған
+  - терминаль төҫтәр опциональ эшләнә (файлдарға яҡшыраҡ журнал сығарыу өсөн)
+- гиперледжер#1783 Спецированный тори ориентиры.
+- гиперледжер#1772 #1764-тән һуң төҙәтеү.
+- гиперледжер#1755 #1743, #1725 өсөн бәләкәй генә төҙәтеүҙәр.
+  - 1743 йылда I18NI000000506X структур үҙгәреше буйынса JSON-ды төҙәтеү
+- гиперледжер#1751 Консенсус төҙәтеүҙәре. #1715: Консенсус юғары йөк менән эш итеү өсөн төҙәтә (#1746)
+  - Ҡарау үҙгәрештәр менән идара итеү төҙәтеүҙәр
+  - Үҙгәрештәрҙе ҡарау дәлилдәре айырым транзакция хештарынан бойондороҡһоҙландырылған
+  - Хәбәрҙе кәметкән
+  - Ҡарашты йыйыу үҙгәрештәр тауыштары урынына хәбәрҙәр ебәреп, шунда уҡ (селтәр ныҡлығын яҡшырта)
+  - I18NT000000005X (үҙ-үҙенә эш ыуылдырыҡлы урынына үҙ-үҙеңә хәбәрҙәр планлаштырыу) Actor рамкаһында тулыһынса ҡулланыу)
+  - I18NT0000000006X менән һынауҙар өсөн етешһеҙлектәр инъекцияһын яҡшырта
+  - Һынау кодын етештереү кодына яҡынайта
+  - Ҡатмарлы урауҙарҙы алып ташлай
+  - I18NT000000007X рөхсәт итеү өсөн актер Контекст һынау коды
+- гиперледжер#1734 Яңы Домен валидацияһына тура килер өсөн яңыртыу генезисы.
+- гиперледжер#1742 Конкрет хаталары I18NI000000507X инструкцияларында ҡайтарылған.
+- гиперледжер#1404 Тикшерелгән нығытылған.
+- гиперледжер#1636
+  #1636: `trusted_peers.json` сығарыу.
+- гиперледжер#1706 Яңыртыу I18NI000000511X Топология яңыртыу менән.
+- гиперледжер#1698 асыҡ асҡыстар, документация һәм хата тураһында хәбәрҙәрҙе төҙәткән.
+— Йыйылыш мәсьәләләре (1593 һәм 1405) 1405
 
-### Refactor
+### Рефактор- Саурари төп иллюзияһынан функцияларҙы сығарыу.
+- Яңы типҡа `ProofChain` рефакторы.
+- `Mutex`-ты I18NI000000514X-тан алып ташлау
+- Төндә det_const_generics алып ташларға.
+- гиперледжер#3039 мультисигтар өсөн көтөү буферы индереү.
+- Саурари ябайлаштырыу.
+- гиперледжер#3053 Клиппи линттарҙы төҙәтеү.
+- гиперледжер#2506 Блок раҫлау буйынса күберәк һынауҙар өҫтәү.
+- Курала I18NI000000515X.
+- I18NI000000516X өсөн яңыртыу линттары
+- гиперледжер#3022 I18NI000000518X-та I18NI000000517X-ты сығарыу
+- гиперледжер#3008 I18NI000000519X ниша ҡиммәтен өҫтәү
+- Яңыртыу линт 1.65.
+- ҡаплауҙы арттырыу өсөн бәләкәй һынауҙар өҫтәгеҙ.
+- I18NI000000520X-тан үле кодты алып ташларға
+- p2p һирәгерәк шылтыратығыҙ, сурариҙан.
+- гиперледжер#2675 Валидат элементтары атамалары/ids бүлеп, Vec.
+- гиперледжер#2974 Тулыһынса ҡабаттан ҡарауһыҙ спуфингты Спофингҡа еткерергә.
+- комбинаторҙарҙа `NonEmpty` һөҙөмтәлерәк.
+- гиперледжер#2955 БлокСиниглы хәбәрҙән блокты сығарыу.
+- гиперледжер#1868 Проблема раҫланған операциялар ебәрелеүҙән
+  тиҫтерҙәре араһында.
+- гиперледжер#2458 Дөйөм комбинатор API-ны тормошҡа ашырыу.
+- Һаҡлау папкаһын гитинорға өҫтәгеҙ.
+- гиперледжер#2909 Хардкод порттары өсөн киләһе.
+- гиперледжер#2747 үҙгәреш I18NI0000005222222.
+- Конфигурация етешһеҙлеге тураһында хата тураһында хәбәрҙәрҙе яҡшыртыу.
+- I18NI000000523X-ҡа өҫтәмә миҫалдар өҫтәгеҙ.
+- Ҡулланылмаған бәйлелектәрҙе сығарыу I18NI000000524X релизға тиклем.
+- Яңы I18NT000000008X-та линзалау.
+- Төп иллюзияла подпроцедураларҙы сығарыу.
+- гиперледжер#2774 үҙгәреш I18NI0000005255X генезис генерациялау режимы флагтан 2012 йылға тиклем.
+  субкомандацияһы.
+- гиперледжер#2478 Өҫтәмә I18NI000000526X
+- гиперледжер#2649 I18NI000000528X-тан I18NI0000000527X йәшниктәрен сығарыу
+- `DEFAULT_BLOCK_STORE_PATH` XI18NI000000530X-тан I18NI000000531X-ҡа тиклем үҙгәртергә
+- гиперледжер#2650 I18NI000000532X өҫтәү ирха подмодулдәренә ябыу.
+- гиперледжер#2482 I18NI000000534X-та I18NI0000000533X магазины магазины
+- 1.62-гә яңы линттар өҫтәгеҙ.
+- Improve I18NI000000535X хатаһы тураһында хәбәрҙәр.
+- гиперледжер#2001 `EvaluatesTo` статик типты тикшергән.
+- гиперледжер#2052 Рөхсәт токендары билдәләү менән теркәлергә мөмкин.
+  #2052: Рөхсәт итеү ТокенДефинацияны тормошҡа ашырыу
+- Бөтә функциялар комбинациялары эшен тәьмин итеү.
+- гиперледжер#2468 Рөхсәт валидаторҙарынан отладка супертриатын сығарыу.
+- гиперледжер#2419 `drop`s асыҡтан-асыҡ сығарыу.
+- гиперледжер#2253 I18NI0000000539X Хикмәскә тиклем I18NI00000000538X өҫтәй
+- Мәғлүмәт ваҡиғалары өсөн I18NI0000000541X урынына `Origin` тормошҡа ашырыу.
+- гиперледжер#2369 Рефактор рөхсәт валидаторҙары.
+- гиперледжер#2307 I18NI0000000543X-та I18NI000000542X Make.
+- гиперледжер#1985 I18NI000000544X структурының күләмен кәметергә.
+- I18NI000000545X күберәк өҫтәү.
+- Интеграция һынауҙары эшләү `default_permissions()` .
+- рөхсәт жетон wrappers өҫтәргә шәхси_блокчейн.
+- гиперледжер#2292 I18NI000000547X сығарыу, генериктарҙы I18NI000000548X-тан алып ташлау
+- гиперледжер#2204 Активтар менән бәйле операцияларҙы генераль.
+- гиперледжер#2233 I18NI0000000550X менән I18NI000000549X I18NI000000551X һәм Iroha менән алмаштырыу.
+- Структураны асыҡлауҙы асыҡлау.
+- гиперледжер#2323 Экенеү кура init хатаһы тураһында хәбәр.
+- гиперледжер#2238 Тесттар өсөн тиңдәш төҙөүсе өҫтәү.
+- гиперледжер#2011 Күберәк тасуири конфигурация парамдары.
+- гиперледжер#1896 Ябайлыҡ Iroha ғәмәлгә ашырыу.
+- Iroha тирәһендә рефактор.
+- I18NI000000555X хәрәкәте I18NI000000556X тиклем.
+- гиперледжер#2145 рефактор клиентының I18NI0000057X яғы, таҙа мәғлүмәттәр логикаһын сығарыу.
+- Iroha һыҙатын алып ташларға.
+- гиперледжер#2149 `Mintable` һәм I18NI000000561X-та I18NI000000560X Expos
+- гиперледжер#2144 клиенттың http эш ағымын үҙгәртеп ҡороу, эске api фашлау.- I18NI000000562X-ға күсеү.
+- `iroha_gen` бинар булдырыу, консолидациялаусы документтар, схема_бин.
+- гиперледжер#2109 Mike I18NI000000564X тест стабиль.
+- гиперледжер#1982 I18NI000000565X структураларына инеү мөмкинлеген инкапсуляр.
+- I18NI000000566ХХХ-ны өҫтәү.
+- API-нан кәрәкмәгән `&mut`.
+- мәғлүмәт моделе структураларына инеү мөмкинлеген үҙ эсенә ала.
+- гиперледжер#2144 клиенттың http эш ағымын үҙгәртеп ҡороу, эске api фашлау.
+- I18NI000000568X тиклем күсеп.
+- `iroha_gen` бинар булдырыу, консолидациялаусы документтар, схема_бин.
+- гиперледжер#2109 Mike `integration::events::pipeline` тест стабиль.
+- гиперледжер#1982 I18NI000000571X структураларына инеү мөмкинлеген инкапсуляр.
+- Өҫтәү I18NI000000572X төҙөүсе.
+- API-нан кәрәкмәгән `&mut`.
+- мәғлүмәт моделе структураларына инеү мөмкинлеген үҙ эсенә ала.
+- Core, `sumeragi`, инстанция функциялары, I18NI000000575X
+- гиперледжер#1903 ваҡиғалар эмиссияһы I18NI000000576X ысулдарына күсеү.
+- Сплит `data_model` lib.r.
+- wsv-ға сиратҡа һылтанма өҫтәгеҙ.
+- гиперледжер#1210 Сплит ваҡиға ағымы.
+  - транзакция менән бәйле функционаллекте мәғлүмәт_модель/транзакция модуле күсерергә
+- гиперледжер#1725 I18NT000000107X-та глобаль дәүләтте сығарыу.
+  - InI000000578X-ны тормошҡа ашырыу һәм I18NI000000579X XX быуатты алып ташлау
+- Линтер хатаһын төҙәтеү.
+- гиперледжер#1661 `Cargo.toml` өмәләре.
+  - Йөк бәйлелектәрен сорттарға .
+- гиперледжер#1650 йыйнаҡ өҫкә I18NI000000581X
+  - Донъяны wsv-ға күсерергә, ролдәрҙе төҙәтеү функцияһы, IntoSchema өсөн алынған Блок
+- `json` файлдарын һәм readme компанияһын ойоштороу. Яңыртыу Readme шаблонға ярашлы булырға.
+- 1529: структуралы ағас ҡырҡыу.
+  - Рефактор журналы хәбәрҙәре
+- I18NI000000583X
+  - р2п хосусилаштырыуҙы өҫтәгеҙ.
 
-- Extract functions from sumeragi main loop.
-- Refactor `ProofChain` to newtype.
-- Remove `Mutex` from `Metrics`
-- Remove adt_const_generics nightly feature.
-- hyperledger#3039 Introduce waiting buffer for the multisigs.
-- Simplify sumeragi.
-- hyperledger#3053 Fix clippy lints.
-- hyperledger#2506 Add more tests on block validation.
-- Remove `BlockStoreTrait` in Kura.
-- Update lints for `nightly-2022-12-22`
-- hyperledger#3022 Remove `Option` in `transaction_cache`
-- hyperledger#3008 Add niche value into `Hash`
-- Update lints to 1.65.
-- Add small tests to boost coverage.
-- Remove dead code from `FaultInjection`
-- Call p2p less often from sumeragi.
-- hyperledger#2675 Validate item names/ids without allocating Vec.
-- hyperledger#2974 Prevent block spoofing without full revalidation.
-- more efficient `NonEmpty` in combinators.
-- hyperledger#2955 Remove Block from BlockSigned message.
-- hyperledger#1868 Prevent validated transactions from being sent
-  between peers.
-- hyperledger#2458 Implement generic combinator API.
-- Add storage folder into gitignore.
-- hyperledger#2909 Hardcode ports for nextest.
-- hyperledger#2747 Change `LoadFromEnv` API.
-- Improve error messages on configuration failure.
-- Add extra examples to `genesis.json`
-- Remove unused dependencies before `rc9` release.
-- Finalise linting on new Sumeragi.
-- Extract subprocedures in the main loop.
-- hyperledger#2774 Change `kagami` genesis generation mode from flag to
-  subcommand.
-- hyperledger#2478 Add `SignedTransaction`
-- hyperledger#2649 Remove `byteorder` crate from `Kura`
-- Rename `DEFAULT_BLOCK_STORE_PATH` from `./blocks` to `./storage`
-- hyperledger#2650 Add `ThreadHandler` to shutdown iroha submodules.
-- hyperledger#2482 Store `Account` permission tokens in `Wsv`
-- Add new lints to 1.62.
-- Improve `p2p` error messages.
-- hyperledger#2001 `EvaluatesTo` static type checking.
-- hyperledger#2052 Make permission tokens registrable with definition.
-  #2052: Implement PermissionTokenDefinition
-- Ensure all feature combinations work.
-- hyperledger#2468 Remove debug supertrait from permission validators.
-- hyperledger#2419 Remove explicit `drop`s.
-- hyperledger#2253 Add `Registrable` trait to `data_model`
-- Implement `Origin` instead of `Identifiable` for the data events.
-- hyperledger#2369 Refactor permission validators.
-- hyperledger#2307 Make `events_sender` in `WorldStateView` non-optional.
-- hyperledger#1985 Reduce size of `Name` struct.
-- Add more `const fn`.
-- Make integration tests use `default_permissions()`
-- add permission token wrappers in private_blockchain.
-- hyperledger#2292 Remove `WorldTrait`, remove generics from `IsAllowedBoxed`
-- hyperledger#2204 Make Asset-related operations generic.
-- hyperledger#2233 Replace `impl` with `derive` for `Display` and `Debug`.
-- Identifiable structure improvements.
-- hyperledger#2323 Enhance kura init error message.
-- hyperledger#2238 Add peer builder for tests.
-- hyperledger#2011 More descriptive config params.
-- hyperledger#1896 Simplify `produce_event` implementation.
-- Refactor around `QueryError`.
-- Move `TriggerSet` to `data_model`.
-- hyperledger#2145 refactor client's `WebSocket` side, extract pure data logic.
-- remove `ValueMarker` trait.
-- hyperledger#2149 Expose `Mintable` and `MintabilityError` in `prelude`
-- hyperledger#2144 redesign client's http workflow, expose internal api.
-- Move to `clap`.
-- Create `iroha_gen` binary, consolidating docs, schema_bin.
-- hyperledger#2109 Make `integration::events::pipeline` test stable.
-- hyperledger#1982 encapsulate access to `iroha_crypto` structures.
-- Add `AssetDefinition` builder.
-- Remove unnecessary `&mut` from the API.
-- encapsulate access to data model structures.
-- hyperledger#2144 redesign client's http workflow, expose internal api.
-- Move to `clap`.
-- Create `iroha_gen` binary, consolidating docs, schema_bin.
-- hyperledger#2109 Make `integration::events::pipeline` test stable.
-- hyperledger#1982 encapsulate access to `iroha_crypto` structures.
-- Add `AssetDefinition` builder.
-- Remove unnecessary `&mut` from the API.
-- encapsulate access to data model structures.
-- Core, `sumeragi`, instance functions, `torii`
-- hyperledger#1903 move event emission to `modify_*` methods.
-- Split `data_model` lib.rs file.
-- Add wsv reference to queue.
-- hyperledger#1210 Split event stream.
-  - Move transaction-related functionality to data_model/transaction module
-- hyperledger#1725 Remove global state in Torii.
-  - Implement `add_state macro_rules` and remove `ToriiState`
-- Fix linter error.
-- hyperledger#1661 `Cargo.toml` cleanup.
-  - Sort out cargo dependencies
-- hyperledger#1650 tidy up `data_model`
-  - Move World to wsv, fix roles feature, derive IntoSchema for CommittedBlock
-- Organisation of `json` files and readme. Update Readme to conform to template.
-- 1529: structured logging.
-  - Refactor log messages
-- `iroha_p2p`
-  - Add p2p privatisation.
+### Документация
 
-### Documentation
+- Яңыртыу I18NT0000000062X Клиент CLI readme.
+- Яңыртыу дәресе өҙөктәре.
+- API спецына «сорт_by_metadata_key» өҫтәгеҙ.
+- Документацияға һылтанмаларҙы яңыртыу.
+- Активтар менән бәйле docs менән киңәйтелгән дәреслек.
+- иҫкергән doc файлдарын алып ташлау.
+- Тикшереү тыныш билдәләре.
+- Ҡайһы бер doc-тарҙы өйрәтмә һаҡлағысҡа күсерергә.
+- Сәхнәгә һалыу өсөн флакнесс отчеты.
+- rc.7 өсөн үҙгәрештәр журналын генерациялау.
+- 30 июл өсөн флакнесс отчеты.
+- Бамп версиялары.
+- Яңыртыу һынау ҡабығы.
+- гиперледжер#2499 Клиент_клиль хатаһы тураһында хәбәрҙәрҙе төҙәтергә.
+- гиперледжер#2344 2,0,0-артҡа тиклем.5-лтс өсөн CHANGELOG генерациялау.
+- өйрәтмәгә һылтанмалар өҫтәгеҙ.
+- Гит ҡармаҡтар тураһында мәғлүмәтте яңыртыу.
+- ҡойроҡлолоҡ тест яҙыу.
+- гиперледжер#2193 Яңыртыу I18NT000000063X клиент документацияһы.
+- гиперледжер#2193 Яңыртыу I18NT0000000064X CLI документацияһы.
+- гиперледжер#2193 Макро йәшник өсөн README Яңыртыу.
+ - гиперледжер#2193 Яңыртыу I18NT00000000030X Декодер ҡоралы документацияһы.
+- гиперледжер#2193 Яңыртыу I18NT0000000038X документацияһы.
+- гиперледжер#2193 Яңыртыу ориентирҙары документацияһы.
+- гиперледжер#2192 Ҡабатлау үҙ өлөшөн индергән йүнәлештәр.
+- өҙөлгән өҙөлгән-код һылтанмалар.
+- гиперледжер#1280 Документ I18NT000000065X метрикаһы.
+- гиперледжер#2119 I18NT0000000042X контейнерында эҫе перезагрузка I18NT0000000066X.
+- гиперледжер#2181 УҠЫУЫНЫҢ УҠЫУ.
+- гиперледжер#2113 Документ функциялары Cargo.toml файлдарында.
+- гиперледжер#2177 Гитрунжелогия сығышын таҙартыу.
+- гиперледжер#1991 Ҡура инспекторына репетиция өҫтәү.
+- гиперледжер#2119 I18NT0000000043X контейнерында эҫе перезагрузка I18NT00000000067X тураһында йүнәлеш өҫтәү.
+- гиперледжер#2181 УҠЫУЫНЫҢ УҠЫУ.
+- гиперледжер#2113 Документ функциялары Cargo.toml файлдарында.
+- гиперледжер#2177 Гитрунжелогия сығышын таҙартыу.
+- гиперледжер#1991 Ҡура инспекторына репетиция өҫтәү.
+- һуңғы үҙгәрештәр журналын генерациялау.
+- Үҙгәрештәр журналын генерациялау.
+- Яңыртылған иҫке README файлдарын.
+- I18NI000000584X тиклем юғалған документтар өҫтәлде.
 
-- Update Iroha Client CLI readme.
-- Update tutorial snippets.
-- Add 'sort_by_metadata_key' into API spec.
-- Update links to documentation.
-- Extend tutorial with asset-related docs.
-- Remove outdated doc files.
-- Review punctuation.
-- Move some docs to the tutorial repository.
-- Flakyness report for staging branch.
-- Generate changelog for pre-rc.7.
-- Flakyness report for Jul 30.
-- Bump versions.
-- Update test flakyness.
-- hyperledger#2499 Fix client_cli error messages.
-- hyperledger#2344 Generate CHANGELOG for 2.0.0-pre-rc.5-lts.
-- Add links to the tutorial.
-- Update information on git hooks.
-- flakyness test writeup.
-- hyperledger#2193 Update Iroha client documentation.
-- hyperledger#2193 Update Iroha CLI documentation.
-- hyperledger#2193 Update README for macro crate.
- - hyperledger#2193 Update Norito Decoder Tool documentation.
-- hyperledger#2193 Update Kagami documentation.
-- hyperledger#2193 Update benchmarks documentation.
-- hyperledger#2192 Review contributing guidelines.
-- Fix broken in-code references.
-- hyperledger#1280 Document Iroha metrics.
-- hyperledger#2119 Add guidance on how to hot reload Iroha in a Docker container.
-- hyperledger#2181 Review README.
-- hyperledger#2113 Document features in Cargo.toml files.
-- hyperledger#2177 Clean up gitchangelog output.
-- hyperledger#1991 Add readme to Kura inspector.
-- hyperledger#2119 Add guidance on how to hot reload Iroha in a Docker container.
-- hyperledger#2181 Review README.
-- hyperledger#2113 Document features in Cargo.toml files.
-- hyperledger#2177 Clean up gitchangelog output.
-- hyperledger#1991 Add readme to Kura inspector.
-- generate latest changelog.
-- Generate changelog.
-- Update outdated README files.
-- Added missing docs to `api_spec.md`.
+### CI/CD үҙгәрештәр- Тағы ла биш үҙ-үҙен йөрөткән йүгерселәр өҫтәгеҙ.
+- Сорамиту реестры өсөн даими һүрәт тегын өҫтәгеҙ.
+- libgit2-се өсөн урау юл 0,5,0. 0.4.4-кә ҡайтыу.
+- Арка нигеҙендәге һүрәтте ҡулланырға тырышыу.
+- Яңыртыу эш ағымы яңы төнгө-тик-контейнер өҫтөндә эшләү өсөн.
+- Бинар инеү нөктәләрен ҡаплауҙан алып ташларға.
+- Equinix үҙ-үҙен хостинг йүгерселәренә Switch de de dest.
+- гиперледжер#2865 I18NI000000585X tmp файлын ҡулланыуҙы юйыу
+- гиперледжер#2781 Өҫтәү ҡаплау офсеттары.
+- яй интеграция һынауҙарын өҙөү.
+- База һүрәтен докер кэш менән алмаштырығыҙ.
+- гиперледжер#2781 Өҫтәү кодов ата-әсә функцияһын үтәй.
+- Эштәрҙе github йүгерселәргә күсерергә.
+- гиперледжер#2778 Клиент конфиг тикшерергә.
+- гиперледжер#2732 iroha2-база һүрәттәрен яңыртыу һәм өҫтәү өсөн шарттар өҫтәү һәм
+  PR ярлыҡтары.
+- Төнгө һүрәт төҙөүҙе төҙәтегеҙ.
+- I18NI0000000586X хатаһы менән I18NI0000000587X менән Fix
+- Функцияһыҙ I18NI0000005888X
+- Һүрәттәрҙе эҙмә-эҙлекле баҫтырырға мөмкинлек бирегеҙ, 2662-се #2662.
+- гавань реестрын өҫтәгеҙ.
+- Авто-ярлыҡ I18NI000000589X һәм I18NI000000590X
+- Һүрәттә хеш-хеш, инструменттар сылбырлы файлды яңынан, UI изоляцияһы,
+  схема күҙәтеү.
+- нәшриәт эш ағымы эҙмә-эҙлекле эшләү, һәм 2427 #2427.
+- гиперледжер#2309: CI-ла яңынан doc анализдары.
+- гиперледжер#2165 Кодековты сығарыу.
+- Хәҙерге ҡулланыусылар менән низағтарҙы булдырмау өсөн яңы контейнерға күсергә.
+ - гиперледжер#2158 Яңыртыу `parity_scale_codec` һәм башҡа бәйлелектәр. (I18NT000000031X кодек)
+- Фикс төҙөү.
+- гиперледжер#2461 Ироха2 CI яҡшыртыу.
+- Яңыртыу I18NI000000592X.
+- яҡтыртыуҙы яңы эш ағымына күсерергә.
+- кире докер логин вер.
+- I18NI000000593X версияһының спецификацияһын алып ташларға
+- Яңыртыу Dockerfiles & Codecov хәбәр итә, ҡабаттан ҡулланыу & Конкурентлыҡ.
+- Үҙгәрештәр журналын генерациялау.
+- `cargo deny` файлын өҫтәй.
+- `iroha2-lts` филиалы өҫтәү менән эш ағымы күсерелгән I18NI00000005966.
+- гиперледжер#2393 I18NT00000000044X база һүрәтенең версияһын Bump.
+- гиперледжер#1658 Документация чек өҫтәү.
+- йәшниктәрҙең версия ҡабарыуы һәм ҡулланылмаған бәйлелектәрҙе бөтөрөү.
+- Кәрәкмәгән яҡтыртыу тураһында отчетты алып ташлағыҙ.
+- гиперледжер#2222 Сплит һынауҙары, был ҡаплау йәки юҡмы, тип, үҙ эсенә ала.
+- гиперледжер#2153 #2154-се төҙәтеү.
+- Версия бөтә йәшниктәрҙең барыһын да ҡабартығыҙ.
+- Торба үткәргес таратыуҙы төҙәтегеҙ.
+- гиперледжер#2153 Төҙәтеү ҡаплауы.
+- генезды тикшерергә һәм документацияны яңыртыу.
+- Ҡабат тут, форма һәм төндә 1.60, 1.2.0 һәм 1.62 ярашлы.
+- йөк-рорҙар триггерҙары.
+- гиперледжер#2153 #2154-се төҙәтеү.
+- Версия бөтә йәшниктәрҙең барыһын да ҡабартығыҙ.
+- Торба үткәргес таратыуҙы төҙәтегеҙ.
+- гиперледжер#2153 Төҙәтеү ҡаплауы.
+- генезды тикшерергә һәм документацияны яңыртыу.
+- 1.60, 1,2,0 һәм 1,62-се һанлы формаға тиклем ҡойолоу, көкөрт һәм төндә.
+- йөк-рорҙар триггерҙары.
+- йөк-r:derlease эш ағымы триггерҙары.
+- Фикс эш ағымы.
+- Ғәҙәттәгесә, функцияларға телеметрия өҫтәгеҙ.
+- төп өҫтөндә эш ағымын этәрергә тейешле тег өҫтәгеҙ.
+- етешһеҙлектәрҙе төҙәтеү.
+- гиперледжер#1657 Яңыртыу һүрәте 1.57 тут өсөн. #1630: Үҙ-үҙен алып барылған йүгерселәргә ҡайтығыҙ.
+- CI төҙөкләндереүҙең.
+- I18NI000000597X ҡулланыу өсөн коммутацияланған ҡаплау.
+- CI бәйлелек төҙәтеү.
+- CI сегментацияһы яҡшыртыуҙар.
+- CI-ла нығытылған Rust версияһын ҡуллана.
+- Fix I18NT00000000045X баҫтырып сығарыу һәм iroha2-дев push CI. Күсерергә ҡаплау һәм эскәмйәгә PR
+- CI докер һынауында кәрәкмәгән тулы I18NT000000068X төҙөү.
 
-### CI/CD changes
-
-- Add five more self-hosted runners.
-- Add regular image tag for Soramitsu registry.
-- Workaround for libgit2-sys 0.5.0. Revert to 0.4.4.
-- Attempt to use arch-based image.
-- Update workflows to work on new nightly-only-container.
-- Remove binary entrypoints from coverage.
-- Switch dev tests to Equinix self-hosted runners.
-- hyperledger#2865 Remove usage of tmp file from `scripts/check.sh`
-- hyperledger#2781 Add coverage offsets.
-- Disable slow integration tests.
-- Replace base image with docker cache.
-- hyperledger#2781 Add codecov commit parent feature.
-- Move jobs to github runners.
-- hyperledger#2778 Client config check.
-- hyperledger#2732 Add a conditions to update iroha2-base images and add
-  PR labels.
-- Fix nightly image build.
-- Fix `buildx` error with `docker/build-push-action`
-- First-aids for non-functioning `tj-actions/changed-files`
-- Enable sequential publish of images, after #2662.
-- Add harbor registry.
-- Auto-label `api-changes` and `config-changes`
-- Commit hash in image, toolchain file again, UI isolation,
-  schema tracking.
-- Make publishing workflows sequential, and complements to #2427.
-- hyperledger#2309: Re-enable doc tests in CI.
-- hyperledger#2165 Remove codecov install.
-- Move to new container to prevent conflicts with current users.
- - hyperledger#2158 Upgrade `parity_scale_codec` and other dependencies. (Norito codec)
-- Fix build.
-- hyperledger#2461 Improve iroha2 CI.
-- Update `syn`.
-- move coverage to a new workflow.
-- reverse docker login ver.
-- Remove the version specification of `archlinux:base-devel`
-- Update Dockerfiles & Codecov reports reuse & Concurrency.
-- Generate changelog.
-- Add `cargo deny` file.
-- Add `iroha2-lts` branch with workflow copied from `iroha2`
-- hyperledger#2393 Bump the version of the Docker base image.
-- hyperledger#1658 Add documentation check.
-- Version bump of crates and remove unused dependencies.
-- Remove unnecessary coverage reporting.
-- hyperledger#2222 Split tests by whether it involves coverage or not.
-- hyperledger#2153 Fix #2154.
-- Version bump all of the crates.
-- Fix deploy pipeline.
-- hyperledger#2153 Fix coverage.
-- Add genesis check and update documentation.
-- Bump rust, mold and nightly to 1.60, 1.2.0 and 1.62 respectively.
-- load-rs triggers.
-- hyperledger#2153 Fix #2154.
-- Version bump all of the crates.
-- Fix deploy pipeline.
-- hyperledger#2153 Fix coverage.
-- Add genesis check and update documentation.
-- Bump rust, mold and nightly to 1.60, 1.2.0 and 1.62respectively.
-- load-rs triggers.
-- load-rs:release workflow triggers.
-- Fix push workflow.
-- Add telemetry to default features.
-- add proper tag to push workflow on main.
-- fix failing tests.
-- hyperledger#1657 Update image to rust 1.57. #1630: Move back to self-hosted runners.
-- CI improvements.
-- Switched coverage to use `lld`.
-- CI Dependency Fix.
-- CI segmentation improvements.
-- Uses a fixed Rust version in CI.
-- Fix Docker publish and iroha2-dev push CI. Move coverage and bench into PR
-- Remove unnecessary full Iroha build in CI docker test.
-
-  The Iroha build became useless as it is now done in docker image itself. So the CI only builds the client cli which is used in tests.
-- Add support for iroha2 branch in CI pipeline.
-  - long tests only ran on PR into iroha2
-  - publish docker images only from iroha2
-- Additional CI caches.
+  I18NT000000069X төҙөү файҙаһыҙ булып китте, сөнки ул хәҙер докер имиджында эшләй. Шулай итеп, CI тик клиент кли төҙөү, улар һынауҙарҙа ҡулланыла.
+- CI торбаһында iroha2 филиалы өсөн ярҙам өҫтәгеҙ.
+  - оҙайлы һынауҙар PR-ҙа iroha2-гә генә йүгерҙе.
+  - докер һүрәттәрен тик iroha2-нән генә баҫтырабыҙ.
+- Өҫтәмә CI кэштары.
 
 ### Web-Assembly
 
 
-### Version bumps
+### Версия ҡабарып- rc.13-кә тиклемге версия.
+- rc.11-гә тиклемге версия.
+- RC.9-ға версия.
+- RC.8-гә версия.
+- Яңыртыу версиялары RC7.
+- Алдан сығарыу препараттары.
+- Яңыртыу формовка 1.0.
+- Ҡабул итеү бәйлелектәре.
+- Яңыртыу api_spec.мд: төҙәтеү запросы/яуап органдары.
+- 1.56.0-ға тиклем ржавчиналы версияны яңыртыу.
+- Яңыртыу үҙ өлөшөн индергән етәксе.
+- Яңыртыу README.md һәм I18NI000000598X яңы API һәм URL форматында тура килтерергә.
+- Яңыртыу docker баҫтырып сығарыу маҡсатлы гиперледжер/iroha2 #1453.
+- Яңыртыуҙар эш ағымы, шулай итеп, ул төп тап килә.
+- Яңыртыу api спец һәм һаулыҡ һаҡлау ос нөктәһен төҙәтергә.
+- 1.54-кә тиклем яңыртыу.
+- Docs(iroha_clysco): яңыртыу I18NI000000599X docs һәм тура килтереп аргтар I18NI00000000600X .
+- Урса версияһы 0,3,5-тән 0,3,6-ға тиклем ҡабарып тора.
+- Яңы йүгерселәргә эш ағымын яңыртыу.
+- Яңыртыу өсөн dockerfile өсөн кэшлау һәм тиҙерәк ци төҙөү.
+- Яңыртыу либсл версияһы.
+- Яңыртыу докерфайлс һәм асинк-стд.
+- Яңыртылған клиппины төҙәтегеҙ.
+- Яңыртыуҙар активтар структураһы.
+  - Активта төп ҡиммәтле күрһәтмәләр өсөн ярҙам
+  - Актив төрҙәре enum булараҡ
+  - актив ISI төҙәтеүҙә первучать уязвимость
+- Яңыртыуҙар үҙ өлөшөн индерә.
+- Яңыртыуҙан ситтә либ.
+- Яңыртыу аҡ ҡағыҙ һәм төҙәтеү линт мәсьәләләре.
+- Ҡыяр_яраҡлы либ яңыртыу.
+- Төп быуын өсөн README яңыртыуҙары.
+- Яңыртыу Гитюб ғәмәлдәре эш ағымы.
+- Яңыртыу Гитюб ғәмәлдәре эш ағымы.
+- Яңыртыу талаптары.txt.
+- Яңыртыу дөйөм.йамл.
+- Саранан Docs яңыртыуҙар.
+- Инструкция логикаһын яңыртыу.
+- Яңыртыу аҡ ҡағыҙ.
+- Яңырта селтәр функциялары тасуирламаһы.
+- Комментарийҙар нигеҙендә аҡ ҡағыҙҙы яңыртыу.
+- WSV яңыртыу һәм миграция айырыу масштабы.
+- Яңыртыу гитигнор.
+- WP-ла кураның бер аҙ һүрәтләүен яңыртыу.
+- Kura тураһында яңылыш һүрәтләү аҡ ҡағыҙҙа.
 
-- Version to pre-rc.13.
-- Version to pre-rc.11.
-- Version to RC.9.
-- Version to RC.8.
-- Update versions to RC7.
-- Pre-release preparations.
-- Update Mold 1.0.
-- Bump dependencies.
-- Update api_spec.md: fix request/response bodies.
-- Update rust version to 1.56.0.
-- Update contributing guide.
-- Update README.md and `iroha/config.json` to match new API and URL  format.
-- Update docker publish target to hyperledger/iroha2 #1453.
-- Updates workflow so that it matches main.
-- Update api spec and fix health endpoint.
-- Rust update to 1.54.
-- Docs(iroha_crypto): update `Signature` docs and align args of `verify`
-- Ursa version bump from 0.3.5 to 0.3.6.
-- Update workflows to new runners.
-- Update dockerfile for caching and faster ci builds.
-- Update libssl version.
-- Update dockerfiles and async-std.
-- Fix updated clippy.
-- Updates asset structure.
-  - Support for key-value instructions in asset
-  - Asset types as an enum
-  - Overflow vulnerability in asset ISI fix
-- Updates contributing guide.
-- Update out of date lib.
-- Update whitepaper and fix linting issues.
-- Update the cucumber_rust lib.
-- README updates for key generation.
-- Update Github Actions workflows.
-- Update Github Actions workflows.
-- Update requirements.txt.
-- Update common.yaml.
-- Docs updates from Sara.
-- Update instruction logic.
-- Update whitepaper.
-- Updates network functions description.
-- Update whitepaper based on comments.
-- Separation of WSV update and migration to Scale.
-- Update gitignore.
-- Update slightly description of kura in WP.
-- Update description about kura in whitepaper.
+### Схема
 
-### Schema
+- гиперледжер#2114 Схемалар буйынса сорттарға терәктәр ярҙамы.
+- гиперледжер#2108 Өҫтәү мәжлесе.
+- гиперледжер#2114 Схемалар буйынса сорттарға терәктәр ярҙамы.
+- гиперледжер#2108 Өҫтәү мәжлесе.
+- Схема, версия һәм макро но_стд совместимый эшләү.
+- Схема буйынса ҡултамғаларҙы төҙәтегеҙ.
+- Схема буйынса I18NI000000601X-тың үҙгәртелгән вәкиллеге.
+- Өҫтәлгән I18NI000000602X схема интроспекцияһы.
+- Объект-моделдәр үҙгәртелә, схема ИК-115 булдырыу өсөн.
 
-- hyperledger#2114 Sorted collections support in schemas.
-- hyperledger#2108 Add pagination.
-- hyperledger#2114 Sorted collections support in schemas.
-- hyperledger#2108 Add pagination.
-- Make schema, version and macro no_std compatible.
-- Fix signatures in schema.
-- Altered  representation of `FixedPoint` in schema.
-- Added `RawGenesisBlock` to schema introspection.
-- Changed object-models to create schema IR-115.
+### Һынауҙар
 
-### Tests
+- гиперледжер#2544 Өйрәнеү докталары.
+- гиперледжер#2272 'FindAssetDefinitionById' эҙләү өсөн һынауҙар өҫтәү.
+- I18NI000000603X интеграция һынауҙарын өҫтәү.
+- Стандартлаштырыу ui тест форматында, ui тесттарҙы йәшниктәр алыу өсөн сығарыуҙы күсерергә.
+- Фикс макет һынауҙары (киләсәктә тәртипһеҙ хаталар).
+- DSL йәшникте алып ташланы & `data_model` тиклем һынауҙарҙы күсерҙе.
+- Тотороҡһоҙ селтәр һынауҙары дөрөҫ код өсөн үткәнен тәьмин итеү.
+- iroha_p2p-ҡа һынауҙар өҫтәлгән.
+- Һынауҙар үтмәһә, һынауҙарҙа логиндарҙы ала.
+- Һынауҙар өсөн һорау алыу өҫтәп, һирәк осраҡта анализдарҙы өҙөүҙе төҙәтегеҙ.
+- Параллель ҡуйыу һынауҙары.
+- Ироха init һәм ироха_клиент анализдарынан тамырҙы алып ташлағыҙ.
+- Һынауҙарҙы төҙәтеү өсөн клиппи иҫкәртмәләр һәм циста өҫтәй ци.
+- I18NI000000605X валидация хаталары эталон һынауҙары ваҡытында Fix.
+- гиперледжер#860: I18NT000000070X Һорауҙар һәм һынауҙар.
+- Iroha ҡулланыусылар өсөн ISI етәксе һәм ҡыяр һынауҙары.
+- std клиент өсөн һынауҙар өҫтәү.
+- Күпер теркәү үҙгәрештәре & һынауҙар.
+- Селтәр мысҡылы менән консенсус һынауҙары.
+- Һынауҙарҙы башҡарыу өсөн темп-дир ҡулланыу.
+- эскәмйәләр ыңғай осраҡтарҙы тикшерә.
+- Башланғыс Меркл ағасы функциональ тестар менән.
+- Һынауҙар һәм Бөтә донъя дәүләт ҡарау инициализацияһы.
 
-- hyperledger#2544 Tutorial doctests.
-- hyperledger#2272 Add tests for 'FindAssetDefinitionById' query.
-- Add `roles` integration tests.
-- Standardise ui tests format, move derive ui tests to derive crates.
-- Fix mock tests (futures unordered bug).
-- Removed the DSL crate & moved tests to `data_model`
-- Ensure that unstable network tests pass for valid code.
-- Added tests to iroha_p2p.
-- Captures logs in tests unless test fails.
-- Add polling for tests and fix rarely breaking tests.
-- Tests parallel setup.
-- Remove root from iroha init and iroha_client tests.
-- Fix tests clippy warnings and adds checks to ci.
-- Fix `tx` validation errors during benchmark tests.
-- hyperledger#860: Iroha Queries and tests.
-- Iroha custom ISI guide and Cucumber tests.
-- Add tests for no-std client.
-- Bridge registration changes & tests.
-- Consensus tests with network mock.
-- Usage of temp dir for tests execution.
-- Benches tests positive cases.
-- Initial Merkle Tree functionality with tests.
-- Fixed tests and World State View initialization.
-
-### Other
-
-- Move parametrization into traits and remove FFI IR types.
-- Add support for unions, introduce `non_robust_ref_mut` * implement conststring FFI conversion.
-- Improve IdOrdEqHash.
-- Remove FilterOpt::BySome from (de-)serialization.
-- Make Not transparent.
-- Make ContextValue transparent.
-- Make Expression::Raw tag optional.
-- Add transparency for some instructions.
-- Improve (de-)serialization of RoleId.
-- Improve (de-)serialization of validator::Id.
-- Improve (de-)serialization of PermissionTokenId.
-- Improve (de-)serialization of TriggerId.
-- Improve (de-)serialization of Asset(-Definition) Ids.
-- Improve (de-)serialization of AccountId.
-- Improve (de-)serialization of Ipfs and DomainId.
-- Remove logger config from client config.
-- Add support for transparent structs in FFI.
-- Refactor &Option<T> to Option<&T>
-- Fix clippy warnings.
-- Add more details in `Find` error description.
-- Fix `PartialOrd` and `Ord` implementations.
-- Use `rustfmt` instead of `cargo fmt`
-- Remove `roles` feature.
-- Use `rustfmt` instead of `cargo fmt`
-- Share workdir as a volume with dev docker instances.
-- Remove Diff associated type in Execute.
-- Use custom encoding instead of multival return.
-- Remove serde_json as iroha_crypto dependency.
-- Allow only known fields in version attribute.
-- Clarify different ports for endpoints.
-- Remove `Io` derive.
-- Initial documentation of key_pairs.
-- Move back to self-hosted runners.
-- Fix new clippy lints in the code.
-- Remove i1i1 from maintainers.
-- Add actor doc and minor fixes.
-- Poll instead of pushing latest blocks.
-- Transaction status events tested for each of 7 peers.
-- `FuturesUnordered` instead of `join_all`
-- Switch to GitHub Runners.
-- Use VersionedQueryResult vs QueryResult for /query endpoint.
-- Reconnect telemetry.
-- Fix dependabot config.
-- Add commit-msg git hook to include signoff.
-- Fix the push pipeline.
-- Upgrade dependabot.
-- Detect future timestamp on queue push.
-- hyperledger#1197: Kura handles errors.
-- Add Unregister peer instruction.
-- Add optional nonce to distinguish transactions. Close #1493.
-- Removed unnecessary `sudo`.
-- Metadata for domains.
-- Fix the random bounces in `create-docker` workflow.
-- Added `buildx` as suggested by the failing pipeline.
-- hyperledger#1454: Fix query error response with specific status code and hints.
-- hyperledger#1533: Find transaction by hash.
-- Fix `configure` endpoint.
-- Add boolean-based asset mintability check.
-- Addition of typed crypto primitives and migration to type-safe cryptography.
-- Logging improvements.
-- hyperledger#1458: Add actor channel size to config as `mailbox`.
-- hyperledger#1451: Add warning about misconfiguration if `faulty_peers = 0` and `trusted peers count > 1`
-- Add handler for getting specific block hash.
-- Added new query FindTransactionByHash.
-- hyperledger#1185: Change crates name and path.
-- Fix logs and general improvements.
-- hyperledger#1150: Group 1000 blocks into each file
-- Queue stress test.
-- Log level fix.
-- Add header specification to client library.
-- Queue panic failure fix.
-- Fixup queue.
-- Fixup dockerfile release build.
-- Https client fixup.
-- Speedup ci.
-- 1. Removed all ursa dependences, except for iroha_crypto.
-- Fix overflow when subtracting durations.
-- Make fields public in client.
-- Push Iroha2 to Dockerhub as nightly.
-- Fix http status codes.
-- Replace iroha_error with thiserror, eyre and color-eyre.
-- Substitute queue with crossbeam one.
-- Remove some useless lint allowences.
-- Introduces metadata for asset definitions.
-- Removal of arguments from test_network crate.
-- Remove unnecessary dependencies.
-- Fix iroha_client_cli::events.
-- hyperledger#1382: Remove old network implementation.
-- hyperledger#1169: Added precision for assets.
-- Improvements in peer start up:
-  - Allows loading genesis public key only from env
-  - config, genesis and trusted_peers path can now be specified in cli params
-- hyperledger#1134: Integration of Iroha P2P.
-- Change query endpoint to POST instead of GET.
-- Execute on_start in actor synchronously.
-- Migrate to warp.
-- Rework commit with broker bug fixes.
-- Revert "Introduces multiple broker fixes" commit(9c148c33826067585b5868d297dcdd17c0efe246)
-- Introduces multiple broker fixes:
-  - Unsubscribe from broker on actor stop
-  - Support multiple subscriptions from the same actor type (previously a TODO)
-  - Fix a bug where broker always put self as an actor id.
-- Broker bug (test showcase).
-- Add derives for data model.
-- Remove rwlock from torii.
-- OOB Query Permission Checks.
-- hyperledger#1272: Implementation of peer counts,
-- Recursive check for query permissions inside of instructions.
-- Schedule stop actors.
-- hyperledger#1165: Implementation of peer counts.
-- Check query permissions by account in torii endpoint.
-- Removed exposing CPU and memory usage in system metrics.
- - Replace JSON with Norito for WS messages.
-- Store proof of view changes.
-- hyperledger#1168: Added logging if transaction does not passed signature check condition.
-- Fixed small issues, added connection listen code.
-- Introduce network topology builder.
-- Implement P2P network for Iroha.
-- Adds block size metric.
-- PermissionValidator trait renamed to IsAllowed. and corresponding other name changes
-- API spec web socket corrections.
-- Removes unnecessary dependencies from docker image.
-- Fmt uses Crate import_granularity.
-- Introduces Generic Permission Validator.
-- Migrate to actor framework.
-- Change broker design and add some functionality to actors.
-- Configures codecov status checks.
-- Uses source based coverage with grcov.
-- Fixed multiple build-args format and redeclared ARG for intermediate build containers.
-- Introduces SubscriptionAccepted message.
-- Remove zero-value assets from accounts after operating upon.
-- Fixed docker build arguments format.
-- Fixed error message if child block not found.
-- Added vendored OpenSSL to build, fixes pkg-config dependency.
-- Fix repository name for dockerhub and coverage diff.
-- Added clear error text and filename if TrustedPeers could not be loaded.
-- Changed text entities to links in docs.
-- Fix wrong username secret in Docker publish.
-- Fix small typo in whitepaper.
-- Allows mod.rs usage for better file structure.
-- Move main.rs into separate crate and make permissions for public blockchain.
-- Add querying inside client cli.
-- Migrate from clap to structopts for cli.
-- Limit telemetry to unstable network test.
-- Move traits to smartcontracts module.
-- Sed -i "s/world_state_view/wsv/g"
-- Move smart contracts into separate module.
-- Iroha network content length bugfix.
-- Adds task local storage for actor id. Useful for deadlock detection.
-- Add deadlock detection test to CI
-- Add Introspect macro.
-- Disambiguates workflow names also formatting corrections
-- Change of query api.
-- Migration from async-std to tokio.
-- Add analyze of telemetry to ci.
-- Add futures telemetry for iroha.
-- Add iroha futures to every async function.
-- Add iroha futures for observability of number of polls.
-- Manual deploy and configuration added to README.
-- Reporter fixup.
-- Add derive Message macro.
-- Add simple actor framework.
-- Add dependabot configuration.
-- Add nice panic and error reporters.
-- Rust version migration to 1.52.1 and corresponding fixes.
-- Spawn blocking CPU intensive tasks in separate threads.
-- Use unique_port and cargo-lints from crates.io.
-- Fix for lockfree WSV:
-  - removes unnecessary Dashmaps and locks in API
-  - fixes bug with excessive number of blocks created (rejected transactions were not recorded)
-  - Displays full error cause for errors
-- Add telemetry subscriber.
-- Queries for roles and permissions.
-- Move blocks from kura to wsv.
-- Change to lock-free data structures inside wsv.
-- Network timeout fix.
-- Fixup health endpoint.
-- Introduces Roles.
-- Add push docker images from dev branch.
-- Add more agressive linting and remove panics from code.
-- Rework of Execute trait for instructions.
-- Remove old code from iroha_config.
-- IR-1060 Adds Grant checks for all the existing permissions.
-- Fix ulimit and timeout for iroha_network.
-- Ci timeout test fix.
-- Remove all assets when their definition was removed.
-- Fix wsv panic at adding asset.
-- Remove Arc and Rwlock for channels.
-- Iroha network fixup.
-- Permission Validators use references in checks.
-- Grant Instruction.
-- Added configuration for string length limits and validation of id's for NewAccount, Domain and AssetDefinition IR-1036.
-- Substitute log with tracing lib.
-- Add ci check for docs and deny dbg macro.
-- Introduces grantable permissions.
-- Add iroha_config crate.
-- Add @alerdenisov as a code owner to approve all incoming merge requests.
-- Fix of transaction size check during consensus.
-- Revert upgrading of async-std.
-- Replace some consts with power of 2 IR-1035.
-- Add query to retrieve transaction history IR-1024.
-- Add validation of permissions for store and restructure of permission validators.
-- Add NewAccount for account registration.
-- Add types for asset definition.
-- Introduces configurable metadata limits.
-- Introduces transaction metadata.
-- Add expressions inside queries.
-- Add lints.toml and fix warnings.
-- Separate trusted_peers from config.json.
-- Fix typo in URL to Iroha 2 community in Telegram.
-- Fix clippy warnings.
-- Introduces key-value metadata support for Account.
-- Add versioning of blocks.
-- Fixup ci linting repetitions.
-- Add mul,div,mod,raise_to expressions.
-- Add into_v* for versioning.
-- Substitute Error::msg with error macro.
-- Rewrite iroha_http_server and rework torii errors.
- - Upgrades Norito version to 2.
-- Whitepaper versioning description.
-- Infallable pagination. Fix the cases when pagination may unnecessary through errors, not returns empty collections instead.
-- Add derive(Error) for enums.
-- Fix nightly version.
-- Add iroha_error crate.
-- Versioned messages.
-- Introduces container versioning primitives.
-- Fix benchmarks.
-- Add pagination.
-- Add varint encoding decoding.
-- Change query timestamp to u128.
-- Add RejectionReason enum for pipeline events.
-- Removes outdated lines from genesis files. The destination was removed from register ISI in previous commits.
-- Simplifies register and unregister ISIs.
-- Fix commit timeout not being sent in 4 peer network.
-- Topology shuffle at change view.
-- Add other containers for FromVariant derive macro.
-- Add MST support for client cli.
-- Add FromVariant macro and cleanup codebase.
-- Add i1i1 to code owners.
-- Gossip transactions.
-- Add length for instructions and expressions.
-- Add docs to block time and commit time parameters.
-- Replaced Verify and Accept traits with TryFrom.
-- Introduce waiting only for the minimum number of peers.
-- Add github action to test api with iroha2-java.
-- Add genesis for docker-compose-single.yml.
-- Default signature check condition for account.
-- Add test for account with multiple signatories.
-- Add client API support for MST.
-- Build in docker.
-- Add genesis to docker compose.
-- Introduce Conditional MST.
-- Add wait_for_active_peers impl.
-- Add test for isahc client in iroha_http_server.
-- Client API spec.
-- Query execution in Expressions.
-- Integrates expressions and ISIs.
-- Expressions for ISI.
-- Fix account config benchmarks.
-- Add account config for client.
-- Fix `submit_blocking`.
-- Pipeline events are sent.
-- Iroha client web socket connection.
-- Events separation for pipeline and data events.
-- Integration test for permissions.
-- Add permission checks for burn and mint.
-- Unregister ISI permission.
-- Fix benchmarks for world struct PR.
-- Introduce World struct.
-- Implement the genesis block loading component.
-- Introduce genesis account.
-- Introduce permissions validator builder.
-- Add labels to Iroha2 PRs with Github Actions.
-- Introduce Permissions Framework.
-- Queue tx tx number limit and Iroha initialization fixes.
-- Wrap Hash in a struct.
-- Improve log level:
-  - Add info level logs to consensus.
-  - Mark network communication logs as trace level.
-  - Remove block vector from WSV as it is a duplication and it showed all the blockchain in logs.
-  - Set info log level as default.
-- Remove mutable WSV references for validation.
-- Heim version increment.
-- Add default trusted peers to the config.
-- Client API migration to http.
-- Add transfer isi to CLI.
-- Configuration of Iroha Peer related Instructions.
-- Implementation of missing ISI execute methods and test.
-- Url query params parsing
-- Add `HttpResponse::ok()`, `HttpResponse::upgrade_required(..)`
-- Replacement of old Instruction and Query models with Iroha DSL approach.
-- Add BLS signatures support.
-- Introduce http server crate.
-- Patched libssl.so.1.0.0 with symlink.
-- Verifies account signature for transaction.
-- Refactor transaction stages.
-- Initial domains improvements.
-- Implement DSL prototype.
-- Improve Torii Benchmarks: disable logging in benchmarks, add success ratio assert.
-- Improve test coverage pipeline: replaces `tarpaulin` with `grcov`, publish test coverage report to `codecov.io`.
-- Fix RTD theme.
-- Delivery artifacts for iroha subprojects.
-- Introduce `SignedQueryRequest`.
-- Fix a bug with signature verification.
-- Rollback transactions support.
-- Print generated key-pair as json.
-- Support `Secp256k1` key-pair.
-- Initial support for different crypto algorithms.
-- DEX Features.
-- Replace hardcoded config path with cli param.
-- Bench master workflow fix.
-- Docker event connection test.
-- Iroha Monitor Guide and CLI.
-- Events cli improvements.
-- Events filter.
-- Event connections.
-- Fix in master workflow.
-- Rtd for iroha2.
-- Merkle tree root hash for block transactions.
-- Publication to docker hub.
-- CLI functionality for Maintenance Connect.
-- CLI functionality for Maintenance Connect.
-- Eprintln to log macro.
-- Log improvements.
-- IR-802 Subscription to blocks statuses changes.
-- Events sending of transactions and blocks.
-- Moves Sumeragi message handling into message impl.
-- General Connect Mechanism.
-- Extract Iroha domain entities for no-std client.
-- Transactions TTL.
-- Max transactions per block configuration.
-- Store invalidated blocks hashes.
-- Synchronize blocks in batches.
-- Configuration of connect functionality.
-- Connect to Iroha functionality.
-- Block validation corrections.
-- Block synchronization: diagrams.
-- Connect to Iroha functionality.
-- Bridge: remove clients.
-- Block synchronization.
+### Икенсе- Параметрлаштырыуҙы һыҙаттарға күсерергә һәм ФФИ ИК төрҙәрен алып ташлау.
+- Профсоюздарға ярҙам өҫтәгеҙ, `non_robust_ref_mut` * консстр ФФИ конверсияһын тормошҡа ашырыу.
+- IdOrdEqHash яҡшыртыу.
+- FilterOpt::Ди-)сериализациянан алынған.
+- Үтә күренмәле түгел.
+- ContexstValue үтә күренмәле эшләү.
+- Экспрессия яһау::Сеймал тег факультатив.
+- Ҡайһы бер күрһәтмәләр өсөн асыҡлыҡ өҫтәгеҙ.
+- Яҡшыртыу (де-)сериализация RoleId.
+- Яҡшыртыу (де-)сериализация валитатор::Ид.
+- Рөхсәт ТокенИдты яҡшыртыу (де-)сериализация.
+- TriggerId-ты яҡшыртыу (де-)сериализация.
+- Яҡшыртыу (де-)сериализация актив(-Билдәле) Ids.
+- Яҡшыртыу (де-)сериализация Иҫәп иҫәбе Id.
+- Ipfs һәм DomainId-ты яҡшыртыу (де-)сериализация.
+- Клиент конфигынан логгер конфигын алып ташларға.
+- ФФИ-ла үтә күренмәле структурҙарға ярҙам өҫтәгеҙ.
+- Рефактор &Опцион<Т> Вариант<&Т>
+- Клиппи иҫкәртмәләрен төҙәтеү.
+- I18NI000000607X хатаһы тасуирламаһында тулыраҡ мәғлүмәт өҫтәгеҙ.
+- Fix I18NI000000608X һәм I18NI0000000609X тормошҡа ашырыу.
+- `rustfmt` ҡулланыу урынына I18NI000000611X
+- I18NI000000612X функцияһын алып ташлау.
+- `rustfmt` ҡулланыу урынына I18NI000000614X
+- 2-се өлөштә эш асыу том булараҡ dev docker осраҡтарында.
+- Дифф менән бәйле типты Сисеп, башҡарма.
+- Күп валлы ҡайтарыу урынына ҡулланыусылар өсөн кодлауҙы ҡулланығыҙ.
+- Ироха_криптоға бәйлелек булараҡ серҙә_json-ды алып ташларға.
+- версия атрибутында ғына билдәле яландар рөхсәт итегеҙ.
+- Аҙаҡҡы нөктәләр өсөн төрлө порттарҙы асыҡлағыҙ.
+- I18NI000000615X сығарыу.
+- Асҡыс_парҙарының башланғыс документацияһы.
+- Үҙ-үҙен алып барылған йүгерселәргә ҡайт.
+- Кодта яңы клиппи линттарҙы төҙәтегеҙ.
+- i1i1-ҙе хеҙмәтләндергәндәрҙән сығарыу.
+- Актер doc һәм ваҡ төҙәтмәләр өҫтәгеҙ.
+- Һуңғы блоктарҙы этәрергә урынына һорау алыу.
+- 7 йәштәштең һәр береһе өсөн һынау үткән транзакция статусы ваҡиғалары.
+- I18NI000000616X урынына I18NI000000617X
+- GitHub йүгерселәргә күсерергә.
+- Ҡулланыу VersiedQueryResult vs QueryResult өсөн /query ос нөктәһе.
+- Телеметрияны яңынан тоташтырыу.
+- Ҡабат конфигын төҙәтеү.
+- өҫтәү өсөн коммит-мсг git крючок индереү өсөн знак.
+- Плащ торбаһын төҙәтегеҙ.
+- Яңыртыу тыйыу.
+- Киләсәктә сиратҡа этәрергә кәрәк.
+- гиперледжер#1197: Кура хаталар менән эш итә.
+- теркәлмәгән тиңдәштәренең инструкцияһын өҫтәгеҙ.
+- Өҫтәү өсөн өҫтәмә nonce айырырға транзакциялар. Ябыҡ #1493.
+- кәрәкмәгән `sudo` сискән.
+- Домендар өсөн метамағлүмәт.
+- I18NI000000619X эш ағымында осраҡлы отскоктарҙы төҙәтегеҙ.
+- Өҫтәлгән I18NI0000000620X тәҡдим итеүенсә, етешһеҙлектәр торба.
+- гиперледжер#1454: аныҡ статус коды һәм кәңәштәре менән эҙләү хатаһына яуапты төҙәтеү.
+- гиперледжер#1533: Хаш менән транзакцияны табығыҙ.
+- I18NI000000621X матдәһе.
+- Булен нигеҙендә активтар матдәһе тикшерергә өҫтәгеҙ.
+- Типланған крипто примитивтар һәм тип-хәүефһеҙ криптографияға миграция өҫтәү.
+- Яҡтылыҡты яҡшыртыу.
+- гиперледжер#1458: I18NI0000000622X тип конфиглау өсөн актер каналының күләмен өҫтәү.
+- гиперледжер#1451: I18NI0000000623X һәм I18NI000000624X әгәр дөрөҫ булмаған конфигурация тураһында иҫкәртмә өҫтәгеҙ.
+- аныҡ блоклы хеш алыу өсөн обработчик өҫтәгеҙ.
+- Яңы эҙләүҙәр өҫтәгән FindTransacionByHash.
+- гиперледжер#1185: Йәшниктәрҙең исемен һәм юлды үҙгәртергә.
+- журналдарҙы төҙәтеү һәм дөйөм төҙөкләндереүҙе.
+- гиперледжер#1150: Һәр файлға 1000-се төркөм блоктар
+- Сират стресс-тест.
+- журнал кимәлендә төҙәтеү.
+- Клиент китапханаһына башлыҡ спецификацияһы өҫтәгеҙ.
+- Сират паника етешһеҙлеге төҙәтеү.
+- Сығып сират.
+- Fixup dockerfile сығарыу төҙөү.
+- Https клиент төҙәтеү.
+- Тиҙлек ци.
+- 1. Ироха_криптонан башҡа бөтә урсаға бәйлелектәрҙе алып ташланы.
+- Оҙайтыуҙарҙы кәметкәндә ташыуҙы төҙәтеү.
+- Клиентта яландарҙы йәмәғәтселеккә еткерегеҙ.
+- Iroha2-ны Докерхубҡа төнгө итеп ҡыҫтырығыҙ.
+- Фикс http статусы кодтары.
+- Ироха_хараторҙы тетрүк, eyre һәм төҫ-ҡуш менән алмаштырығыҙ.
+- Кроссвейн менән сират алмаштырыусы бер.- Ҡайһы бер файҙаһыҙ линт положениеларын алып ташлағыҙ.
+- Актив билдәләмәләр өсөн метамағлүмәттәрҙе индерә.
+- тест_сентке йәшникенән аргументтар сығарыу.
+- Кәрәкмәгән бәйлелектәрҙе алып ташлағыҙ.
+- Ироха_клиент_кли хәл итеү::араттар.
+- гиперледжер#1382: Иҫке селтәрҙе тормошҡа ашырыуҙы алып ташлау.
+- гиперледжер#1169: активтар өсөн теүәллек өҫтәлгән.
+- Тиҫтерҙәре стартында төҙөкләндереүҙең:
+  - генезисты асыҡ асҡыс тейәү рөхсәт итә env-нан ғына
+  - конфигурация, генез һәм ышаныслы_тиңдәштәр юлын хәҙер cli param-да күрһәтергә мөмкин.
+- гиперледжер#1134: I18NT000000072X Р2П интеграцияһы.
+- ГЭТ урынына POST-ҡа эҙләүҙең аҙаҡҡы нөктәһен үҙгәртергә.
+- Актерҙа синхрон рәүештә башҡарығыҙ.
+- Миграцияға бәрелергә.
+- Брокер ҡомаҡтарҙы төҙәтеүҙәр менән ҡабаттан эшләү.
+- Ҡайтарыу "Бер нисә брокер төҙәтеүен индерә" коммит(9c148c3826067585868868d297dcdd17c0efeefefefefefefefefefe)
+- Бер нисә брокер төҙәтеүҙәр индерә:
+  - Актер туҡталышында брокерҙан яҙылыуҙан баш тартығыҙ
+  - Бер үк актер тибы (элек ТОДО) бер нисә яҙылыуҙы хуплағыҙ.
+  - Брокер һәр ваҡыт үҙен актер id тип ҡуйған хатаны төҙәтегеҙ.
+- Брокер ҡомаҡ (һынау витринаһы).
+- Мәғлүмәттәр моделе өсөн сығарылыш өҫтәгеҙ.
+- Торииҙан rwlock-ты алып ташларға.
+- OOB эҙләү рөхсәт тикшерә.
+- гиперледжер#1272: Тиңдәштәр һанын тормошҡа ашырыу,
+- Инструкция эсендәге эҙләү рөхсәттәрен рекурсив тикшерергә.
+- График актерҙарҙы туҡтата.
+- гиперледжер#1165: Тиңдәштәр һанын тормошҡа ашырыу.
+- torii ос нөктәһендә иҫәп буйынса эҙләү рөхсәттәрен тикшерергә.
+- Система метрикаларында процессор һәм хәтер ҡулланыуҙы фашлау.
+ - WS хәбәрҙәре өсөн JSON I18NT0000000032Х менән алмаштырығыҙ.
+- Ҡараулылыҡты үҙгәртеү үҙгәрештәре.
+- гиперледжер#1168: Өҫтәлгән ағас ҡырҡыу, әгәр транзакция үткәрмәй ҡултамға тикшерергә шарт.
+- Бәләкәй генә мәсьәләләрҙе хәл иттек, өҫтәүенә тыңлау коды.
+- Селтәр топологияһын төҙөүсе индереү.
+- I18NT000000073X өсөн P2P селтәрен тормошҡа ашырыу.
+- Блок күләме метрикаһын өҫтәй.
+- РәхмәтВалидатор һыҙаты IsAllowed тип атала. һәм башҡа исем үҙгәртеүгә тап килгән
+- API спектр веб-розетка төҙәтеүҙәр.
+- Докер һүрәтенән кәрәкмәгән бәйлелектәр алып ташлай.
+- Fmt ҡуллана Crate CIntime_grulation.
+- Дөйөм рөхсәт валидаторы менән таныштыра.
+- Актер рамкаһына күсергә.
+- Брокер дизайнын үҙгәртергә һәм актерҙарға ниндәйҙер функциональ өҫтәй.
+- Кодеков статусын тикшерергә конфигурациялай.
+- Грков менән сығанаҡ нигеҙендәге ҡаплауҙы ҡуллана.
+- Бер нисә төҙөү-арг форматында нығытылған һәм арауыҡ төҙөү контейнерҙары өсөн АРГ үҙгәртеп ҡоролған.
+- Яҙылыу ҡабул ителгән хәбәрҙе индерә.
+- нуль ҡиммәтле активтарҙы эшләгәндән һуң иҫәптәрҙән сығарыу.
+- Фиксированный докер төҙөү аргументтары форматында.
+- Бала блокын табылмаһа, хата тураһында хәбәрҙе төҙәтегеҙ.
+- Өҫтәлгән һатыуланған OpenSSL төҙөү өсөн, төҙәтеүҙәр pkg-config бәйлелек.
+- dockerhub һәм ҡаплау диффы өсөн репозиторий исемен төҙәтеү.
+- Өҫтәлгән аныҡ хата тексы һәм файл исеме, әгәр TrustedPeers тейәп булмай.
+- Текст субъекттарының docs һылтанмаларына үҙгәртелгән.
+- I18NT000000046X X нәшриәтендә дөрөҫ булмаған ҡулланыусы исеме серен төҙәтегеҙ.
+- Аҡ ҡағыҙҙа бәләкәй опечатканы төҙәтегеҙ.
+- moduces mod.rs ҡулланыу өсөн яҡшыраҡ файл структураһы.
+- Move main.rs айырым йәшниккә күсерергә һәм йәмәғәт блокчейн өсөн рөхсәттәр эшләй.
+- Өҫтәү эҙләү эсендә клиент cli.
+- Ҡул сабыуҙан көфөргә кли өсөн миграция.
+- Телеметрияны тотороҡһоҙ селтәр тесты менән сикләү.
+- Һиҙгерлектәрҙе смарт менән килешеп эшләү модуленә күсерергә.
+- Сед -и "с/донъяһы_видание/всв/г".
+- Аҡыллы килешәүҙәрҙе айырым модулгә күсерергә.
+- Iroha селтәре йөкмәткеһе оҙонлоғо хатаһы.
+- Актер өсөн урындағы һаҡлау бурысын өҫтәй. Тупик асыҡлау өсөн файҙалы.
+- CI-ға тупикканы асыҡлау һынауын өҫтәгеҙ
+- Өҫтәү өсөн Introspes макро.
+- Эш ағымы исемдәрен дисамбигутациялау шулай уҡ төҙәтмәләрҙе формалаштыра .
+- эҙләү api үҙгәреше.
+- Асинк-стдтан токиоға тиклем миграция.
+- ци-ға телеметрияны анализлауҙы өҫтәгеҙ.- Ироха өсөн фьючерс телеметрияһын өҫтәү.
+- Һәр асинк функцияһына ироха фьючерстарын өҫтәгеҙ.
+- Һорау алыуҙар һанының күҙәтеүсәнлеге өсөн ироха фьючерстарын өҫтәгеҙ.
+- Ҡул менән таратыу һәм конфигурация өҫтәлгән README.
+- Репортер төҙәтеү.
+- Мәғлүмәт макросын сығарыу.
+- Ябай актер рамкаһын өҫтәү.
+- Ҡот осҡос конфигурация өҫтәгеҙ.
+- Өҫтәү өсөн матур паника һәм хата хәбәрселәр.
+- 1.52.1 һәм тейешле төҙәтеүҙәргә тиклем версия миграцияһы.
+- Процессор интенсив бурыстарҙы айырым ептәрҙә блоклау.
+- Ҡулланыу уникаль_порт һәм йөк-линттар крит.ио.
+- локһыҙ WSV өсөн төҙәтеү:
+  - кәрәкмәгән Дэшмаптарҙы һәм API-ла йоҙаҡтарҙы юҡ итә.
+  - төҙәтеү ҡомаҡтары менән артыҡ һаны блоктар булдырылған (киреопеле операциялар теркәлмәгән)
+  - Хаталар өсөн тулы хатаны күрһәтә.
+- Телеметрия абонентын өҫтәү.
+- ролдәр һәм рөхсәттәр эҙләү.
+- Куранан wsv-ға тиклем кварталдар хәрәкәт итә.
+- Всв эсендә локһыҙ мәғлүмәт структураларына үҙгәртергә.
+- Селтәр тайм-аут төҙәтеү.
+- Һаулыҡ һаҡлау ос нөктәһе.
+- Ролдәр менән таныштыра.
+- Өҫтәү өсөн docker һүрәттәре dev тармағы.
+- Күберәк агрессив линк өҫтәп, паникаларҙы кодтан сығарырға.
+- Инструкция өсөн башҡарыу һыҙатын ҡабаттан эшләү.
+- Iroha_config-тан иҫке кодты алып ташлағыҙ.
+- IR-1060 Бөтә булған рөхсәттәр өсөн Грант чектарын өҫтәй.
+- Ироха_селтәр өсөн лимит һәм тайм-аут төҙәтегеҙ.
+- Ci тайм-аут һынау төҙәтеү.
+- Уларҙы билдәләгәндә бөтә активтарҙы алып ташлағыҙ.
+- актив өҫтәү ваҡытында wsv паника төҙәтеү.
+- Каналдар өсөн дуға һәм Rwlock-ты алып ташлағыҙ.
+- I18NT000000075X селтәре фиксация.
+- Рөхсәт Валидаторҙар чектарҙа һылтанмалар ҡуллана.
+- Грант Инструкция.
+- Өҫтәлгән конфигурация өсөн струнный оҙонлоғо сиктәре һәм раҫлау өсөн id&#8217;s өсөн NewAcount, Домен һәм AssetDefinition IR-1036.
+- Эҙләү либлығы менән журналды алмаштырыу.
+- Өҫтәү ци тикшерергә docs һәм инҡар dbg макро.
+- Вәкил рөхсәттәре менән таныштыра.
+- Ироха_конфиг йәшникен өҫтәгеҙ.
+- Өҫтәү @alerdenisov код хужаһы булараҡ, бөтә килгән берләштереү запростарын раҫлау өсөн.
+- Консенсус ваҡытында транзакция күләмен тикшерергә төҙәтеү.
+- Асинк-стдты кире яңыртыу.
+- 2 IR-1035 ҡөҙрәте менән бер нисә өлөштәрҙе алмаштырығыҙ.
+- Өҫтәү өсөн эҙләү транзакция тарихы IR-1024.
+- Рөхсәт валидаторҙарын магазин һәм үҙгәртеп ҡороу өсөн рөхсәттәрҙе раҫлауҙы өҫтәү.
+- Иҫәп яҙмаһын теркәү өсөн NewAcount өҫтәгеҙ.
+- Активтарҙы билдәләү өсөн төрҙәрен өҫтәү.
+- Конфигурацияланған метамағлүмәт сиктәрен индерә.
+- Транзакция метамағлүмәттәрен индерә.
+- Һорауҙар эсендә аңлатмалар өҫтәгеҙ.
+- линттарҙы өҫтәгеҙ.томл һәм иҫкәртмәләрҙе төҙәтергә.
+- Айырым ышаныслы_тиҫтерҙәре concig.json.
+- TURL-да опечатка I18NT000000076X 2 йәмәғәтселегенә тиклем Телеграммала.
+- Клиппи иҫкәртмәләрен төҙәтеү.
+- Иҫәп яҙмаһына төп ҡиммәтле метамағлүмәттәр ярҙамы индерә.
+- Блоктарҙы версиялау.
+- Фиксп цилиндинг ҡабатлауҙары.
+- муль, бүлгес,мод,ҡулланыу_ҡашмаҡ өҫтәгеҙ.
+- Өҫтәү өсөн in_v* өсөн версиялау.
+- Хата алмаштырыусы::мсг хата макрос менән.
+- iroha_http_erver һәм переработка тории хаталарын яңынан яҙығыҙ.
+ - 2-гә тиклем I18NT0000000033X версияһын яңыртыу.
+- Аҡ ҡағыҙ версияһы тасуирламаһы.
+- Намыҫһыҙ өҙөклөк. Ҡайһы бер осраҡтарҙа pagination кәрәкмәгән булыуы мөмкин хаталар аша, ә буш коллекцияларҙы ҡайтарып түгел, урынына.
+- enums өсөн алынған(Хата) өҫтәгеҙ.
+- Төнгө версияны төҙәтегеҙ.
+- Ироха_хара йәшникен өҫтәгеҙ.
+- Версиялы хәбәрҙәр.
+- Контейнерҙарҙы версиялау примитивтарын индерә.
+- Эталондарҙы төҙәтеү.
+- Өҫтәп сәфәр.
+- Көтөүҙәрҙе кодлаусы расшифровкалауҙы өҫтәгеҙ.
+- u128-гә эҙләү ваҡыт тамғаһын үҙгәртеү.
+- Торбалар ваҡиғалары өсөн кире ҡайтарыу enum өҫтәгеҙ.
+- генез файлдарынан иҫкергән юлдарҙы сығарығыҙ. Урыны регистр ISI-нан элекке коммиттарҙа сығарылған.
+- Регистр һәм теркәлмәгән ИСИ-ны ябайлаштыра.
+- 4 тиңдәш селтәрендә ебәрелмәгән тайм-аутты төҙәтеү.
+- Топология үҙгәрештәр ҡарашында ҡатыштырып.- ФромВариант өсөн башҡа һауыттар өҫтәгеҙ макрос.
+- Клиент кли өсөн МСТ-ны өҫтәү.
+- Өҫтәү өсөн FromVarant макро һәм өмәләр кодексы.
+- Код хужаларына i1i1 өҫтәү.
+- Ғәйбәт операциялары.
+- Инструкциялар һәм аңлатмалар өсөн оҙонлоҡ өҫтәгеҙ.
+- Өҫтәү өсөн документтарҙы блоклау һәм ваҡыт параметрҙарын үтәргә.
+- TryFrom менән алмаштырылған тикшерелгән һәм ҡабул итеү һыҙаттары.
+- Минималь тиңдәштәр һанын ғына көтөү.
+- iroha2-java менән api һынау өсөн github ғәмәлдәрен өҫтәгеҙ.
+- Докер-композа-яңғыҙ өсөн генез өҫтәү.yml.
+- Иҫәп яҙмаһы өсөн ҡултамға чек шарты.
+- Бер нисә ҡул ҡуйыусылар менән иҫәп яҙмаһы өсөн тест өҫтәгеҙ.
+- Клиент API-ны МСТ-ға ярҙам өҫтәү.
+- Докерҙа төҙөү.
+- Докер композиторына генез өҫтәү.
+- Шартлы МСТ менән таныштырыу.
+- Өҫтәү_for_актив_тиҫтәләр импульс.
+- iroha_http_erver isahc клиент өсөн һынау өҫтәгеҙ.
+- Клиент API спец.
+- Экспрессияларҙа һорау алыу.
+- Һиҙеүҙәрҙе һәм ИСИ-ны интеграциялай.
+- ИСИ өсөн аңлатмалар.
+- Сикләп иҫәп-хисап конфигурациялау ориентирҙары.
+- Клиент өсөн иҫәп яҙмаһы конфигын өҫтәгеҙ.
+- I18NI000000625X-ны төҙәтеү.
+- Торбалы ваҡиғалар ебәрелә.
+- Iroha клиент веб-розетка тоташыу.
+- Торба һәм мәғлүмәт ваҡиғалары өсөн айырыу саралары.
+- Рөхсәт алыу өсөн интеграция тесты.
+- Яныу һәм мәтрүшкә өсөн рөхсәт чектарын өҫтәгеҙ.
+- ИСИ-ның теркәлмәгән рөхсәте.
+- Донъя структуры өсөн эталондарҙы төҙәтеү PR.
+- Донъя структурын индереү.
+- генез блок йөкләү компонентын тормошҡа ашырыу.
+- генезия иҫәбен индерегеҙ.
+- Рөхсәт валитасы төҙөүсе индереү.
+- Github Actions менән Iroha2 PRs ярлыҡтарын өҫтәү.
+- Рөхсәт рамкаһын индереү.
+- Сират tx tx һаны сиге һәм I18NT0000000078X инициализация төҙәтеүҙәре.
+- Хэшты структурға урап.
+- Журнал кимәлен яҡшыртыу:
+  - Консенсусҡа мәғлүмәт кимәлендә журналдар өҫтәгеҙ.
+  - Марк селтәре элемтә журналдары эҙ кимәле булараҡ.
+  - WSV-нан блок векторын сығарыу, сөнки ул дубляж һәм ул бөтә блокчейн логтарҙа күрһәткән.
+  - Инфо лог кимәлен ғәҙәттәгесә ҡуйырға.
+- Ваҡиғаларҙы раҫлау өсөн lintable WSV һылтанмаларын алып ташларға.
+- Хейм версияһы өҫтәү.
+- Ышаныслы тиҫтерҙәрен конфигурацияға өҫтәгеҙ.
+- Клиент API миграцияһы http.
+- CLI-ға күсерергә isi өҫтәгеҙ.
+- I18NT000000079X-ның конфигурацияһы тиңдәштәре менән бәйле Инструкциялар.
+- ИСИ-ның юҡ итеү ысулдарын һәм тестын тормошҡа ашырыу.
+- Урл ​​эҙләү парамдары анализлай
+- I18NI000000626X, I18NI0000000627Х.
+- I18NT000000080X DSL алымы менән иҫке инструкция һәм эҙләү моделдәрен алмаштырыу.
+- BLS ҡултамғаларын өҫтәү.
+- http сервер йәшниктәрен индереү.
+- Патч libssl.so.1.0.0 симлинк менән.
+- Операция өсөн иҫәп-хисап ҡултамғаһын тикшерә.
+- Рефактор операцияһы этаптары.
+- Башланғыс домендар яҡшыртыуҙар.
+- DSL прототибы тормошҡа ашырыу.
+- Improve I18NT000000108X эталондар: эталондарҙа логин өҙөү, уңыш нисбәте раҫлауын өҫтәү.
+- Һынауҙы ҡаплау торбаһы яҡшыртыу: I18NI000000628X X менән I18NI0000000629X менән алмаштыра, `codecov.io`-ҡа һынау ҡаплауы тураһында отчет баҫтырыу.
+- РТД темаһын төҙәтегеҙ.
+- Ироха субпроекттар өсөн тапшырыу артефакттары.
+- I18NI000000631X индереү.
+- Ҡултамға тикшерелеүе менән хатаны төҙәтегеҙ.
+- Rollback операциялары ярҙам.
+- Баҫма генерацияланған асҡыс-пар json булараҡ.
+- I18NI000000632X асҡыс-пар ярҙамы.
+- Төрлө крипто алгоритмдары өсөн тәүге ярҙам.
+- DEX Функциялары.
+- Хаҡ кодировкалы конфиг юлды cli парам менән алмаштырығыҙ.
+- Эскәмйә оҫта эш ағымы төҙәтеү.
+- I18NT000000047X ваҡиғаларҙы тоташтырыу тесты.
+- Iroha монитор етәкселеге һәм CLI.
+- Ваҡиғалар кли төҙөкләндереүҙе.
+- Ваҡиғалар фильтр.
+- Ваҡиға бәйләнештәре.
+- Мастер эш ағымын төҙәтеү.
+- iroha2 өсөн Rtd.
+- Меркл ағас тамыр хеш өсөн блок транзакциялар.
+- docker hub-ҡа баҫма.
+- CLI функциональ өсөн хеҙмәтләндереүҙе тоташтырыу.
+- CLI функциональ өсөн хеҙмәтләндереүҙе тоташтырыу.
+- Eprintln лог макрок.- Журнал төҙөкләндереүҙең.
+- IR-802 Блоктарға яҙылыу статустары үҙгәрә.
+- транзакциялар һәм блоктар ебәреп ваҡиғалар.
+- Sumeragi хәбәрҙәр менән эш итеү тураһында хәбәр импульсы.
+- Дөйөм тоташтырыу механизмы.
+- Iroha домен субъекттары өсөн std no-std клиент.
+- ТТЛ транзакциялары.
+- Блок конфигурацияһына Макс транзакциялары.
+- Магазиндарҙы ғәмәлдән сығарылған блоктар хеш.
+- Партияларҙа блоктарҙы синхронлаштырыу.
+- тоташтырыу функциональ конфигурацияһы.
+- I18NT000000083X функциональ менән бәйләнеш.
+- Блок раҫлау төҙәтеүҙәре.
+- Блок синхронизацияһы: схемалар.
+- I18NT000000084X функциональ менән бәйләнеш.
+- Күпер: клиенттарҙы алып ташлау.
+- Блок синхронизация.
 - AddPeer ISI.
-- Commands to Instructions renaming.
-- Simple metrics endpoint.
-- Bridge: get registered bridges and external assets.
-- Docker compose test in pipeline.
-- Not enough votes Sumeragi test.
-- Block chaining.
-- Bridge: manual external transfers handling.
-- Simple Maintenance endpoint.
-- Migration to serde-json.
-- Demint ISI.
-- Add bridge clients, AddSignatory ISI, and CanAddSignatory permission.
-- Sumeragi: peers in set b related TODO fixes.
-- Validates the block before signing in Sumeragi.
-- Bridge external assets.
-- Signature validation in Sumeragi messages.
-- Binary asset-store.
-- Replace PublicKey alias with type.
-- Prepare crates for publishing.
-- Minimum votes logic inside NetworkTopology.
-- TransactionReceipt validation refactoring.
-- OnWorldStateViewChange trigger change: IrohaQuery instead of Instruction.
-- Separate construction from initialization in NetworkTopology.
-- Add Iroha Special Instructions related to Iroha events.
-- Block creation timeout handling.
-- Glossary and How-to add Iroha Module docs.
-- Replace hardcoded bridge model with origin Iroha model.
-- Introduce NetworkTopology struct.
-- Add Permission entity with transformation from Instructions.
-- Sumeragi Messages in the message module.
-- Genesis Block functionality for Kura.
-- Add README files for Iroha crates.
-- Bridge and RegisterBridge ISI.
-- Initial work with Iroha changes listeners.
-- Injection of Permission checks into OOB ISI.
-- Docker multiple peers fix.
-- Peer to peer docker example.
-- Transaction Receipt handling.
-- Iroha Permissions.
-- Module for Dex and crates for Bridges.
-- Fix integration test with asset creation with several peers.
-- Re-implement of Asset model into EC-S-.
-- Commit timeout handling.
-- Block header.
-- ISI related methods for domain entities.
-- Kura Mode enumeration and Trusted Peers configuration.
-- Documentation linting rule.
-- Add CommittedBlock.
-- Decoupling kura from `sumeragi`.
-- Check that transactions are not empty before block creation.
-- Re-implement Iroha Special Instructions.
-- Benchmarks for transactions and blocks transitions.
-- Transactions lifecycle and states reworked.
-- Blocks lifecycle and states.
-- Fix validation bug, `sumeragi` loop cycle synced with block_build_time_ms configuration parameter.
-- Encapsulation of Sumeragi algorithm inside `sumeragi` module.
-- Mocking module for Iroha Network crate implemented via channels.
-- Migration to async-std API.
-- Network mock feature.
-- Asynchronous related code clean up.
-- Performance optimizations in transaction processing loop.
-- Generation of key pairs was extracted from Iroha start.
-- Docker packaging of Iroha executable.
-- Introduce Sumeragi basic scenario.
-- Iroha CLI client.
-- Drop of iroha after bench group execution.
-- Integrate `sumeragi`.
-- Change `sort_peers` implementation to rand shuffle seeded with previous block hash.
-- Remove Message wrapper in peer module.
-- Encapsulate network-related information inside `torii::uri` and `iroha_network`.
-- Add Peer instruction implemented instead of hardcode handling.
-- Peers communication via trusted peers list.
-- Encapsulation of network requests handling inside Torii.
-- Encapsulation of crypto logic inside crypto module.
-- Block sign with timestamp and previous block hash as payload.
-- Crypto functions placed on top of the module and work with ursa signer encapsulated into Signature.
-- Sumeragi initial.
-- Validation of transaction instructions on world state view clone before commit to store.
-- Verify signatures on transaction acceptance.
-- Fix bug in Request deserialization.
-- Implementation of Iroha signature.
-- Blockchain entity was removed to clean up codebase.
-- Changes in Transactions API: better creation and work with requests.
-- Fix the bug that would create blocks with empty vector of transaction
-- Forward pending transactions.
- - Fix bug with missing byte in u128 Norito encoded TCP packet.
-- Attribute macros for methods tracing.
-- P2p module.
-- Usage of iroha_network in torii and client.
-- Add new ISI info.
-- Specific type alias for network state.
-- Box<dyn Error> replaced with String.
-- Network listen stateful.
-- Initial validation logic for transactions.
-- Iroha_network crate.
-- Derive macro for Io, IntoContract and IntoQuery traits.
-- Queries implementation for Iroha-client.
-- Transformation of Commands into ISI contracts.
-- Add proposed design for conditional multisig.
-- Migration to Cargo workspaces.
-- Modules migration.
-- External configuration via environment variables.
-- Get and Put requests handling for Torii.
-- Github ci correction.
-- Cargo-make cleans up blocks after test.
-- Introduce `test_helper_fns` module with a function to cleanup directory with blocks.
-- Implement validation via merkle tree.
-- Remove unused derive.
-- Propagate async/await and fix unawaited `wsv::put`.
-- Use join from `futures` crate.
-- Implement parallel store execution: writing to disk and updating WSV are happening in parallel.
-- Use references instead of ownership for (de)serialization.
-- Code ejection from  files.
-- Use ursa::blake2.
-- Rule about mod.rs in Contributing guide.
-- Hash 32 bytes.
-- Blake2 hash.
-- Disk accepts references to block.
-- Refactoring of commands module and Initial Merkle Tree.
-- Refactored modules structure.
-- Correct formatting.
-- Add doc comments to read_all.
-- Implement `read_all`, reorganize storage tests, and turn tests with async functions into async tests.
-- Remove unnecessary mutable capture.
-- Review issue, fix clippy.
-- Remove dash.
-- Add format check.
-- Add token.
-- Create rust.yml for github actions.
-- Introduce disk storage prototype.
-- Transfer asset test and functionality.
-- Add default initializer to structs.
-- Change name of MSTCache struct.
-- Add forgotten borrow.
-- Initial outline of iroha2 code.
-- Initial Kura API.
-- Add some basic files and also release the first draft of the whitepaper outlining the vision for iroha v2.
-- Basic iroha v2 branch.
+- Инструкцияларға командалар үҙгәртеү.
+- Ябай метрика ос нөктәһе.
+- Күпер: теркәлгән күперҙәр һәм тышҡы активтар алырға.
+- I18NT000000048X торба үткәргестә тест төҙөү.
+- Тауыштар етмәй I18NT000000010X тесты.
+- Блок сылбырлау.
+- Күпер: ҡул менән тышҡы күсермәләр менән эш итеү.
+- Ябай хеҙмәтләндереүҙең ос нөктәһе.
+- Серде-жсонға миграция.
+- ИСИ-ны бүлергә.
+- Күпер клиенттары, AddSignater ISI һәм CanAddSignater рөхсәт өҫтәгеҙ.
+- Sumeragi: тиҫтерҙәре b-ға бәйле ТОДО төҙәтеүҙәрендә.
+- I18NT0000000012X-ла ҡул ҡуйыу алдынан блокты раҫлай.
+- Күпер тышҡы активтар.
+- I18NT000000013X хәбәрҙәрендә ҡултамға раҫлау.
+- Бинар актив-магазин.
+- PiculicKey псевдонимын тип менән алмаштырығыҙ.
+- нәшриәт өсөн йәшниктәр әҙерләгеҙ.
+- Минималь логика тауыш бирә эсендә NetworkTopology.
+- Транзакция Рефакторлауҙы раҫлау.
+- OnWorldStateViewCange триггер үҙгәрештәре: IrohaQuery урынына өйрәтеү.
+- NetworkTopology-ҙа инициализациянан айырым төҙөлөш.
+- I18NT0000085X I18NT0000000086X саралары менән бәйле махсус инструкцияларҙы өҫтәү.
+- Блок булдырыу тайм-аут менән эш итеү.
+- Һүҙлек һәм нисек-был өҫтәү I18NT00000000087X модуль документтары.
+- 18NT000000088X моделе менән сығышы менән ҡаты кодлы күпер моделен алмаштырығыҙ.
+- СелтәрТопология структурын индереү.
+- Инструкциянан үҙгәртеп ҡороу менән рөхсәт субъектын өҫтәү.
+- Sumeragi хәбәрҙәр хәбәр модулендә.
+- Genesis Block функциональ өсөн Кура.
+- I18NT000000089X йәшниктәре өсөн README файлдарын өҫтәү.
+- Күпер һәм РегистерБридж ИСИ.
+- Iroha менән башланғыс эш тыңлаусыларҙы үҙгәртә.
+- ООБ ИСИ-ға Рөхсәт тикшерелеүе инъекцияһы.
+- I18NT000000049X бер нисә тиҫтерҙәре төҙәтеү.
+- тиҫтерҙәре тиҫтерҙәре өсөн докер миҫал.
+- Транзакция квитанцияһы менән эш итеү.
+- Iroha Рөхсәт.
+- Декс һәм күперҙәр өсөн йәшниктәр өсөн модуль.
+- Бер нисә тиҫтерҙәре менән активтар булдырыу менән интеграция тесты төҙәтеү.
+- Активтар моделен EC-S-ҡа ҡабаттан тормошҡа ашырыу.
+- тайм-аут менән эш итеүҙе йөкмәтегеҙ.
+- Блок башы.
+- ISI домен субъекттары өсөн бәйле ысулдар.
+- Кура режимын иҫәпләп сығарыу һәм ышаныслы тиҫтерҙәр конфигурацияһы.
+- Документация ҡағиҙәһе.
+- Өҫтәү өсөн йөкләмә.
+- I18NI0000006333X-тан өҙөү.
+- Тикшерергә, транзакциялар буш түгел, блок булдырыу алдынан.
+- Ҡабаттан тормошҡа ашырыу I18NT000000092X Махсус инструкциялар.
+- Оттекалар өсөн транзакциялар һәм блоктар күсеүҙәр.
+- Транзакциялар йәшәү циклы һәм дәүләттәр яңынан эшләй.
+- Тормош циклын һәм дәүләттәрҙе блоклай.
+- Фикс валидация хатаһы, I18NI000000634X цикл циклы синхронлаштырылған блок_төҙөлөш_ваҡыт_ms конфигурация параметры менән синхронизацияланған.
+- I18NI00000000635X модулендә I18NT000000015X алгоритмы инкапсулированиеһы.
+- I18NT000000093X өсөн модуль каналдар аша тормошҡа ашырылған селтәр йәшниктәре.
+- Асинх-стд API-ға миграция.
+- Селтәр мысҡыллау функцияһы.
+- асинхрон менән бәйле кодты таҙартыу.
+- Транзакция эшкәрткән иллюзияла етештереүсәнлек оптимизацияһы.
+- Төп парҙар быуыны I18NT000000094X старттан сығарылған.
+- Docker упаковка I18NT00000000955Х башҡарыла.- I18NT000000016X төп сценарийҙы индереү.
+- I18NT000000966 CLI клиент.
+- Эскәмйә төркөмөн башҡарыуҙан һуң ироха тамсыһы.
+- I18NI000000636X интеграцияһы.
+- Instage I18NI000000637X тормошҡа ашырыу өсөн ранд переработчик орлоҡ менән алдағы блок хеш.
+- Тиңдәштәр модулендә Хәбәрҙе урап сығарығыҙ.
+- I18NI000000638X һәм I18NI000000639XX селтәре менән бәйле мәғлүмәтте инкапсулировать.
+- Йөктәшен өҫтәү өсөн инструкция тормошҡа ашырыла урынына хардкод менән эш итеү.
+- Тиҫтерҙәр ышаныслы тиҫтерҙәр исемлеге аша аралашыу.
+- I18NT0000000109X эсендә эш итеү селтәре запростарына инкапсулирование.
+- Крипто логикаһы эсендә крипто модуль инкапсулирование.
+- Блок билдәһе менән ваҡыт маркаһы һәм элекке блок хеш файҙалы йөк булараҡ.
+- Крипто функциялары модуль өҫтөндә урынлаштырылған һәм урса ҡул ҡуйыусыһы менән эшләй, тип капсулировать ҡултамға.
+- Sumeragi башланғыс.
+- Донъя дәүләте ҡарашы тураһында транзакция күрһәтмәләрен һаҡлау клонын һаҡлау алдынан үҙ өҫтөнә ала.
+- Транзакцияларҙы ҡабул итеү буйынса ҡултамғаларҙы тикшерергә.
+- Запрос десериализацияһында хаталарҙы төҙәтеү.
+- I18NT000000097X ҡултамғаһын тормошҡа ашырыу.
+- Блокчейн субъекты код базаһын таҙартыу өсөн сығарылған.
+- Транзакцияларҙа үҙгәрештәр API: яҡшыраҡ булдырыу һәм запростар менән эшләү.
+- транзакцияның буш векторы менән блоктар булдырырлыҡ хатаны төҙәтегеҙ
+- Операцияны көткән операцияларҙы алға ебәрегеҙ.
+ - u128 I18NT0000000034X-та юғалған байт менән төҙәтелгән хаталар TCP пакетында кодланған.
+- методтарҙы эҙләү өсөн макрос атрибуты.
+- Р2п модуле.
+- Тории һәм клиентта ироха_селтәр ҡулланыу.
+- Яңы ИГИ-ны инфо өҫтәгеҙ.
+- Селтәр торошо өсөн махсус тип псевдоним.
+- йәшник<din Хата> Стринг менән алмаштырылған.
+- Селтәрҙәр мәғдәнле тыңлағыҙ.
+- Операциялар өсөн башланғыс раҫлау логикаһы.
+- Ироха_селтәр йәшник.
+- Io, IntoConcract һәм IntoQuery һыҙаттары өсөн макрос ала.
+- I18NT000000098X-клиент өсөн эҙләүҙәр тормошҡа ашырыу.
+- Командаларҙы ISI контракттарына үҙгәртеп ҡороу.
+- Шартлы мультисиг өсөн тәҡдим ителгән проектлау өҫтәгеҙ.
+- Йөк эш урындарына миграция.
+- Модулдәр миграцияһы.
+- Экологик үҙгәртеүселәр аша тышҡы конфигурация.
+- I18NT000000110X өсөн эш итеү һәм эшкә алыу өсөн үтенестәр.
+- Гитуб ци төҙәтеү.
+- Һынауҙан һуң блоктарҙы таҙартыу-таҙарта.
+- I18NI0000000640X модулен блоктар менән каталогты таҙартыу өсөн функция менән индереү.
+- Меркл ағасы аша раҫлауҙы тормошҡа ашырыу.
+- Ҡулланылмаған килеп сығығыҙ.
+- Таба асинхрон/көтөп һәм көтөлмәгән `wsv::put` төҙәтергә.
+- I18NI000000642X йәшникенән ҡушылыу.
+- Параллель магазинды тормошҡа ашырыуҙы тормошҡа ашырыу: дискҡа яҙыу һәм WSV-ны яңыртыу параллель рәүештә бара.
+- (де)сериялаштырыу өсөн милек урынына һылтанмалар ҡулланыу.
+- Файлдарҙан код сығарыу.
+- Урса ҡулланыу:::блейк2.
+- Ҡағиҙә тураһында mod.rs индереүсе ҡулланма.
+- Хэш 32 байт.
+- Блейк2 хеш.
+- Диск блокҡа һылтанмалар ҡабул итә.
+- Командаларҙы рефакторлау модуле һәм башланғыс меркл ағасы.
+- Рефакторлы модулдәр структураһы.
+- Дөрөҫ форматлау.
+- Уҡыу өсөн doc комментарийҙар уҡыу_all.
+- `read_all` тормошҡа ашырыу, һаҡлау һынауҙарын үҙгәртеп ҡороу һәм асинк функциялары менән һынауҙарҙы асинк һынауҙарына әйләндерергә.
+- Кәрәкмәгән үҙгәрмәй торған тотоуҙы алып ташлағыҙ.
+- Тикшереү мәсьәләһе, төҙәтеү клиппи.
+- Һыҙыҡты алып ташларға.
+- Формат тикшерергә.
+- Токенды өҫтәйбеҙ.
+- Житб ғәмәлдәре өсөн ржавчина булдырыу.
+- Диск һаҡлау прототибы индереү.
+- Активтар тест һәм функциональ тапшырыу.
+- Структураларға ғәҙәттәгесә инициализатор өҫтәгеҙ.
+- MSTCache структурының исемен үҙгәртеү.
+- Онотолған бурысҡа өҫтәгеҙ.
+- Ироха2 кодының башланғыс планы.
+- Башланғыс Кура АПИ.
+- Ҡайһы бер төп файлдарҙы өҫтәп, шулай уҡ ироха v2 өсөн күренеште һүрәтләгән аҡ ҡағыҙҙағы беренсе проектты сығарырға.
+- Төп ироха v2 филиалы.
 
-## [1.5.0] - 2022-04-08
+## [1,5,0] - 2022-04-08.
 
-### CI/CD changes
-- Remove Jenkinsfile and JenkinsCI.
+### CI/CD үҙгәрештәр
+- Дженкинсфиле һәм ДженкинсЦИ алып ташларға.
 
-### Added
+### Өҫтәлгән- Берроу өсөн RocksDB һаҡлауҙы тормошҡа ашырыуҙы өҫтәү.
+- Блум-фильтр менән юл хәрәкәтен оптимизациялау менән таныштырыу
+- Яңыртыу I18NI0000000000644X модуль селтәре I18NI00000000645X модулендә I18NI00000000646X-та урынлашасаҡ.
+- Юл хәрәкәтен оптимизациялауҙы тәҡдим итегеҙ.
 
-- Add RocksDB storage implementation for Burrow.
-- Introduce traffic optimization with Bloom-filter
-- Update `MST` module network to be located in `OS` module in `batches_cache`.
-- Propose traffic optimization.
+### Документация
 
-### Documentation
+- Фикс төҙөү. Өҫтәү өсөн ДБ айырмаһы, миграция практикаһы, healthcheck ос нөктәһе, ироха-көтөү ҡоралы тураһында мәғлүмәт.
 
-- Fix build. Add DB differences, migration practice, healthcheck endpoint, information about iroha-swarm tool.
+### Икенсе
 
-### Other
+- Талап төҙәтеү өсөн doc төҙөү.
+- Ҡалған тәнҡитле эҙмә-эҙлекле әйберҙе иғтибарға алыу өсөн документацияны сығарыу.
+- Фикс 'тикшерергә, әгәр docker һүрәте бар' /төҙөү бөтә skip_testing.
+- /бөтә скип_тестлау төҙөү.
+- /төҙөү skipp_testing; Һәм күберәк документтар.
+- Өҫтәү I18NI000000647X.
+- I18NI000000648X Е.
+- Һынау параметрында үҙгәрештәрҙе алып ташларға.
+- Яңы параметр ҡулланып, һынау стадияһын үткәреү өсөн.
+- Эш ағымына өҫтәп.
+- Репозиторий диспетчерлығын алып ташларға.
+- Репозицион диспетчер өҫтәгеҙ.
+- тестерҙар өсөн параметр өҫтәгеҙ.
+- I18NI000000649X тайм-аут алып ташлау.
 
-- Requirement fix for doc build.
-- Trim release documentation to spotlight the remaining critical follow-up item.
-- Fix 'check if docker image exists' /build all skip_testing.
-- /build all skip_testing.
-- /build skip_testing; And more docs.
-- Add `.github/_README.md`.
-- Remove `.packer`.
-- Remove changes on test parameter.
-- Use new parameter to skip test stage.
-- Add to workflow.
-- Remove repository dispatch.
-- Add repository dispatch.
-- Add parameter for testers.
-- Remove `proposal_delay` timeout.
+## [1.4.0] - 2022-01-31.
 
-## [1.4.0] - 2022-01-31
+### Өҫтәлгән
 
-### Added
+- төйөндәренең синхронлаштырыусы хәлен өҫтәгеҙ
+- RocksDB өсөн метрика өҫтәй
+- http һәм метрика аша һаулыҡ һаҡлау интерфейстарын өҫтәгеҙ.
 
-- Add syncing node state
-- Adds metrics for RocksDB
-- Add healthcheck interfaces via http and metrics.
+### Төҙәтеүҙәр
 
-### Fixes
+- I18NT000000099X v1,4-rc.2-лә колонна ғаиләләрен төҙәтеү.
+- I18NT000000100X v1,4-rc.1-ҙә 10 битлы сәскә атыу фильтрын өҫтәгеҙ.
 
-- Fix column families in Iroha v1.4-rc.2
-- Add 10-bit bloom filter in Iroha v1.4-rc.1
+### Документация
 
-### Documentation
+- Өҫтәү өсөн молния һәм pkg-config исемлегенә төҙөү деп.
+- Яңыртыу readme: өҙөлгән һылтанмалар төҙөү өсөн статус, төҙөү етәксеһе, һ.б.
+- Конфигурацияны төҙәтеү һәм I18NT000000051X метрикаһы.
 
-- Add zip and pkg-config to list of build deps.
-- Update readme: fix broken links to build status, build guide, and so on.
-- Fix Config and Docker Metrics.
+### Икенсе
 
-### Other
-
-- Update GHA docker tag.
-- Fix Iroha 1 compile errors when compiling with g++11.
-- Replace `max_rounds_delay` with `proposal_creation_timeout`.
-- Update sample config file to remove old DB connection params.
+- Яңыртыу ГХА docker тег.
+- g++11 менән төҙөгәндә I18NT000000101X 1 хаталарҙы төҙөй.
+- I18NI000000650X менән I18NI000000651X менән алмаштырырға.
+- Яңыртыу өлгөһө конфиг файлы иҫке DB тоташыу парамдарын юйырға.

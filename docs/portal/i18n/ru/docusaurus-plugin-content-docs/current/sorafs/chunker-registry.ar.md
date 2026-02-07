@@ -4,54 +4,56 @@ direction: ltr
 source: docs/portal/docs/sorafs/chunker-registry.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: chunker-registry
+идентификатор: chunker-реестр
 title: سجل ملفات chunker في SoraFS
-sidebar_label: سجل chunker
-description: معرفات الملفات والمعلمات وخطة التفاوض لسجل chunker في SoraFS.
+Sidebar_label: Добавить чанкёр
+описание: Создан новый блок управления чанкером на SoraFS.
 ---
 
-:::note المصدر المعتمد
-تعكس هذه الصفحة `docs/source/sorafs/chunker_registry.md`. احرص على إبقاء النسختين متزامنتين إلى أن يتم إيقاف مجموعة توثيق Sphinx القديمة.
+:::примечание
+Был установлен `docs/source/sorafs/chunker_registry.md`. Он был убит в фильме "Сфинкс" القديمة.
 :::
 
-## سجل ملفات chunker في SoraFS (SF-2a)
+## Загрузка чанкера для SoraFS (SF-2a)
 
-تتفاوض حزمة SoraFS على سلوك chunking عبر سجل صغير بفضاءات اسمية.
-يُسند كل ملف معلمات CDC حتمية وبيانات semver ووظيفة digest/multicodec المتوقعة المستخدمة في manifests وأرشيفات CAR.
+Он создал SoraFS, а затем разбил фрагменты, чтобы получить возможность использовать его.
+Получение данных от CDC в течение всей недели в режиме дайджеста/мультикодека в режиме реального времени. проявляет وأرشيفات CAR.
 
 على مؤلفي الملفات الرجوع إلى
 [`docs/source/sorafs/chunker_profile_authoring.md`](./chunker-profile-authoring.md)
-للاطلاع على البيانات المطلوبة وقائمة التحقق وقالب المقترح قبل إرسال أي إدخال جديد.
-وبعد أن تعتمد الحوكمة أي تغيير، اتبع
-[قائمة تحقق إطلاق السجل](./chunker-registry-rollout-checklist.md) و
-[دليل manifest في staging](./staging-manifest-playbook) لترقية
-الـ fixtures إلى staging والإنتاج.
+للاطلاع على البيانات المطلوبة وقائمة التحقق وقالب المقترح قبل إرسال أي دخال جديد.
+Он был создан в 2007 году.
+[قائمة تحقق إطلاق السجل](./chunker-registry-rollout-checklist.md) и
+[Манифест в промежуточной версии](./staging-manifest-playbook)
+Все запланированные матчи и постановка «Нью-Йорка».
 
 ### الملفات
 
-| Namespace | الاسم | SemVer | معرف الملف | الحد الأدنى (بايت) | الهدف (بايت) | الحد الأقصى (بايت) | قناع القطع | Multihash | البدائل | ملاحظات |
-|-----------|-------|--------|------------|--------------------|--------------|--------------------|-----------|-----------|--------|---------|
-| `sorafs`  | `sf1` | `1.0.0` | `1` | 65536 | 262144 | 524288 | `0x0000ffff` | `0x1f` (BLAKE3-256) | `["sorafs.sf1@1.0.0", "sorafs.sf1@1.0.0"]` | الملف المعتمد المستخدم في fixtures SF-1 |
+| Пространство имен | الاسم | СемВер | معرف الملف | الحد الأدنى (بايت) | الهدف (بايت) | الحد الأقصى (بايت) | قناع القطع | Мультихэш | بدائل | ملاحظات |
+|-----------|-------|--------|------------|--------------------|---------------|----|-----------|-----------|--------|---------|
+| `sorafs` | `sf1` | `1.0.0` | `1` | 65536 | 262144 | 524288 | `0x0000ffff` | `0x1f` (BLAKE3-256) | `["sorafs.sf1@1.0.0", "sorafs.sf1@1.0.0"]` | Подробнее о светильниках SF-1 |
 
-يعيش السجل في الشيفرة ضمن `sorafs_manifest::chunker_registry` (ويحكمه [`chunker_registry_charter.md`](./chunker-registry-charter.md)). ويُعبَّر عن كل إدخال كـ `ChunkerProfileDescriptor` يضم:
+Создан для `sorafs_manifest::chunker_registry` (например, [`chunker_registry_charter.md`](./chunker-registry-charter.md)). Код для `ChunkerProfileDescriptor`:
 
-* `namespace` – تجميع منطقي للملفات ذات الصلة (مثل `sorafs`).
+* `namespace` – используется для проверки работоспособности (например, `sorafs`).
 * `name` – تسمية مقروءة للبشر (`sf1`, `sf1-fast`, …).
-* `semver` – سلسلة نسخة دلالية لمجموعة المعلمات.
-* `profile` – `ChunkProfile` الفعلي (min/target/max/mask).
-* `multihash_code` – الـ multihash المستخدم لإنتاج digests للـ chunk (`0x1f`
-  للإعداد الافتراضي في SoraFS).
+* `semver` – Вы можете получить дополнительную информацию о программе.
+* `profile` – `ChunkProfile` Параметры (мин/цель/макс/маска).
+* `multihash_code` – мультихэш-запрос обрабатывает фрагмент фрагмента (`0x1f`
+  Установите флажок SoraFS).
 
-يقوم manifest بتسلسل الملفات عبر `ChunkingProfileV1`. تسجل البنية بيانات السجل (namespace, name, semver) إلى جانب
-معلمات CDC الخام وقائمة البدائل أعلاه. ينبغي على المستهلكين أولاً محاولة البحث في السجل عبر `profile_id`
-والرجوع إلى المعلمات المضمّنة عند ظهور معرفات غير معروفة؛ تضمن قائمة البدائل استمرار العملاء HTTP في إرسال
-المقابض القديمة ضمن `Accept-Chunker` دون تخمين. وتفرض قواعد ميثاق السجل أن يكون المقبض المعتمد
-(`namespace.name@semver`) أول إدخال في `profile_aliases`، تليه أي بدائل قديمة.
+В манифесте بتسلسل الملفات عبر `ChunkingProfileV1`. تسجل البنية بيانات السجل (пространство имен, имя, семвер) إلى جانب
+Центр по контролю и профилактике заболеваний США (CDC) объявил о создании Центра по контролю и профилактике заболеваний США (CDC). Он сказал, что Сэнсэйл Уинстон в 1993 году `profile_id`
+В 2007 году он сказал: Вы можете получить доступ к HTTP-запросу
+Пожалуйста, проверьте `Accept-Chunker`. Он был убит в 2007 году в Нью-Йорке.
+(`namespace.name@semver`) Зарегистрируйтесь для `profile_aliases`, затем нажмите кнопку .
 
-لفحص السجل من الأدوات، شغّل CLI المساعد:
+Доступ к интерфейсу CLI:
 
 ```
 $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
@@ -71,70 +73,66 @@ $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profi
 ]
 ```
 
-تقبل كل أعلام CLI التي تكتب JSON (`--json-out`, `--por-json-out`, `--por-proof-out`,
-`--por-sample-out`) المسار `-`، ما يبث الحمولة إلى stdout بدل إنشاء ملف. يسهل ذلك تمرير
-البيانات إلى الأدوات مع الحفاظ على السلوك الافتراضي لطباعة التقرير الرئيسي.
+Вызовите CLI для обработки JSON (`--json-out`, `--por-json-out`, `--por-proof-out`,
+`--por-sample-out`) `-`, который находится в стандартном интерфейсе пользователя. Кейл Дэйл Сейр
+Он сказал, что это будет означать, что он сделал это для того, чтобы сделать это.
 
 ### مصفوفة التوافق وخطة الإطلاق
 
 
-يلخص الجدول التالي حالة الدعم الحالية لـ `sorafs.sf1@1.0.0` عبر المكونات الأساسية. يشير "Bridge"
-إلى مسار التوافق CARv1 + SHA-256 الذي يتطلب تفاوضًا صريحًا من العميل (`Accept-Chunker` + `Accept-Digest`).
-
-| المكون | الحالة | ملاحظات |
+Установите флажок для `sorafs.sf1@1.0.0` и установите флажок `sorafs.sf1@1.0.0`. фильм "Мост"
+Используется для CARv1 + SHA-256 в зависимости от конфигурации (`Accept-Chunker` + `Accept-Digest`).| المكون | حالة | ملاحظات |
 |--------|--------|---------|
-| `sorafs_manifest_chunk_store` | ✅ مدعوم | يتحقق من المقبض المعتمد + البدائل، ويبث التقارير عبر `--json-out=-`، ويفرض ميثاق السجل عبر `ensure_charter_compliance()`. |
-| `sorafs_manifest_stub` | ⚠️ قديم | مُنشئ manifest قديم؛ استخدم `iroha app sorafs toolkit pack` لتغليف CAR/manifest وأبقِ `--plan=-` لإعادة التحقق الحتمية. |
-| `sorafs_provider_advert_stub` | ⚠️ قديم | مساعد تحقق offline فقط؛ يجب إنتاج provider adverts عبر خط أنابيب النشر والتحقق منها عبر `/v1/sorafs/providers`. |
-| `sorafs_fetch` (developer orchestrator) | ✅ مدعوم | يقرأ `chunk_fetch_specs` ويفهم حمولة قدرة `range` ويجمع إخراج CARv2. |
-| Fixtures للـ SDK (Rust/Go/TS) | ✅ مدعوم | يُعاد توليدها عبر `export_vectors`؛ المقبض المعتمد يظهر أولاً في كل قائمة بدائل ويُوقَّع بواسطة أظرف المجلس. |
-| تفاوض ملفات gateway Torii | ✅ مدعوم | يطبق كامل قواعد `Accept-Chunker`، ويتضمن ترويسات `Content-Chunker`، ويعرض Bridge CARv1 فقط لطلبات downgrade الصريحة. |
+| `sorafs_manifest_chunk_store` | ✅ مدعوم | يتحقق من المقبض المعتمد + البدائل, ويبث التقارير عبر `--json-out=-`, ويفرض Код: `ensure_charter_compliance()`. |
+| `sorafs_manifest_stub` | ⚠️ قديم | مُنشئ قديم؛ استخدم `iroha app sorafs toolkit pack` для CAR/манифеста и `--plan=-` для проверки работоспособности. |
+| `sorafs_provider_advert_stub` | ⚠️ قديم | مساعد تحقق оффлайн فقط؛ Реклама провайдера в Интернете. |
+| `sorafs_fetch` (оркестратор разработчика) | ✅ مدعوم | Загрузите `chunk_fetch_specs` и установите `range` для CARv2. |
+| Исправления в SDK (Rust/Go/TS) | ✅ مدعوم | يُعاد توليدها عبر `export_vectors`; Он сказал, что О'Лэнн в фильме "Пансионат" в Нью-Йорке сказал: المجلس. |
+| Открыт шлюз Torii | ✅ مدعوم | Создан `Accept-Chunker`, установлен в `Content-Chunker`, установлен Bridge CARv1, установленный на сервере. понизить версию الصريحة. |
 
-طرح التليمترية:
+Ответ на вопрос:
 
-- **تليمترية جلب الـ chunks** — يصدر CLI الخاص بـ Iroha `sorafs toolkit pack` digests للـ chunk، وبيانات CAR، وجذور PoR لإدخالها في لوحات المتابعة.
-- **Provider adverts** — تتضمن حمولة الإعلانات بيانات القدرات والبدائل؛ تحقّق من التغطية عبر `/v1/sorafs/providers` (مثل وجود قدرة `range`).
-- **مراقبة الـ gateway** — على المشغلين الإبلاغ عن أزواج `Content-Chunker`/`Content-Digest` لاكتشاف أي خفض غير متوقع؛ ومن المتوقع أن ينخفض استخدام الـ bridge إلى الصفر قبل الإيقاف.
+- **Обработка фрагментов** — вызов CLI для Iroha `sorafs toolkit pack` обрабатывает фрагменты, CAR, Он был выбран PoR в Лос-Анджелесе.
+- **Реклама поставщика** Используется для установки `/v1/sorafs/providers` (только для `range`).
+- **Шлюз для шлюза** — Проверьте настройки `Content-Chunker`/`Content-Digest` в разделе `Content-Chunker`/`Content-Digest`. Д-р Миссисипи Он был построен в 2007 году на мосту в Атлантическом океане.
 
-سياسة الإيقاف: بعد اعتماد ملف خلف، حدّد نافذة نشر مزدوجة (موثقة في المقترح) قبل وسم
-`sorafs.sf1@1.0.0` بأنه متوقف ضمن السجل وإزالة Bridge CARv1 من بوابات الإنتاج.
+Сюжет фильма: Он сказал, что в фильме "Нет" (Миссис Миссисипи) المقترح) قبل وسم
+`sorafs.sf1@1.0.0` используется для установки моста CARv1 в Сан-Франциско.
 
-لفحص شاهد PoR محدد، قدم مؤشرات chunk/segment/leaf واحفظ البرهان على القرص إذا رغبت:
+Для создания PoR необходимо создать фрагмент/сегмент/лист, который можно использовать для проверки:
 
 ```
 $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
     --por-proof=0:0:0 --por-proof-out=leaf.proof.json
 ```
 
-يمكنك اختيار ملف عبر معرف رقمي (`--profile-id=1`) أو عبر المقبض المسجل
-(`--profile=sorafs.sf1@1.0.0`)؛ صيغة المقبض مناسبة للسكريبتات التي تمرر namespace/name/semver
-مباشرة من بيانات الحوكمة.
+Его имя было отправлено в رقمي (`--profile-id=1`).
+(`--profile=sorafs.sf1@1.0.0`); Для этого необходимо создать пространство имен/имя/семвер.
+Создан в Нью-Йорке.
 
-استخدم `--promote-profile=<handle>` لإخراج كتلة JSON من البيانات الوصفية (بما في ذلك كل البدائل
-المسجلة) يمكن لصقها في `chunker_registry_data.rs` عند ترقية ملف افتراضي جديد:
+Создайте `--promote-profile=<handle>` для создания файла JSON в режиме онлайн-обработки (Берег в формате JSON).
+(например) для `chunker_registry_data.rs` в случае необходимости:
 
 ```
 $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
     --promote-profile=sorafs.sf1@1.0.0
 ```
 
-يتضمن التقرير الرئيسي (وملف البرهان الاختياري) الـ digest الجذري، وbytes الأوراق المُعاينة
-(مشفرة بالهيكس)، وdigests الأشقاء للـ segment/chunk بحيث يمكن للمدققين إعادة هاش طبقات
-64 KiB/4 KiB مقابل قيمة `por_root_hex`.
+يتضمن التقرير الرئيسي (وملف البرهان الاختياري) дайджест الجذري, وbytes الأوراق المُعاينة
+(на английском языке) и дайджесты الأشقاء для сегмента/части
+64 КиБ/4 КиБ в формате `por_root_hex`.
 
-للتحقق من برهان موجود مقابل حمولة، مرر المسار عبر
-`--por-proof-verify` (تضيف CLI الحقل `"por_proof_verified": true` عندما يتطابق الشاهد مع الجذر المحسوب):
+В фильме рассказывается о Джоне Миссисипи в фильме "Старый мир".
+`--por-proof-verify` (доступен интерфейс командной строки `"por_proof_verified": true`, который можно использовать при настройке):
 
 ```
 $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
     --por-proof-verify=leaf.proof.json
 ```
 
-لأخذ عينات على دفعات، استخدم `--por-sample=<count>` ويمكنك تمرير seed/مسار إخراج اختياري.
-تضمن CLI ترتيبًا حتميًا (`splitmix64` seeded) وتقوم بالاقتطاع تلقائيًا عندما تتجاوز
-الطلبات الأوراق المتاحة:
-
-```
+لأخذ عينات على دفعات، استخدم `--por-sample=<count>` ويمكنك تمريرseed/مسار إخراج اختياري.
+Пользователь CLI, созданный пользователем (`splitmix64`, посеянный)
+Ниже приведены сведения:```
 $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
     --por-sample=8 --por-sample-seed=0xfeedface --por-sample-out=por.samples.json
 ```
@@ -145,19 +143,19 @@ $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
 (`--profile=sorafs.sf1@1.0.0`) لتجنب ترميز معرفات رقمية صلبة في سكريبتات البناء:
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- --list-chunker-profiles
+$ Cargo Run -p sorafs_manifest --bin sorafs_manifest_stub -- --list-chunker-profiles
 [
   {
-    "profile_id": 1,
-    "namespace": "sorafs",
-    "name": "sf1",
-    "semver": "1.0.0",
+    «идентификатор_профиля»: 1,
+    "пространство имен": "сорафа",
+    "имя": "SF1",
+    "семвер": "1.0.0",
     "handle": "sorafs.sf1@1.0.0",
     "min_size": 65536,
     "target_size": 262144,
     "max_size": 524288,
     "break_mask": "0x0000ffff",
-    "multihash_code": 31
+    «мультихэш_код»: 31
   }
 ]
 ```
@@ -172,8 +170,8 @@ $ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- --list-chunker-prof
 ```
 ProviderAdvertBodyV1 {
     ...
-    chunk_profile: profile_id (ضمنيًا عبر السجل)
-    capabilities: [...]
+    chunk_profile: Profile_id (отображение профиля)
+    возможности: [...]
 }
 ```
 
@@ -187,25 +185,25 @@ ProviderAdvertBodyV1 {
 
 ```
 
-تختار البوابات ملفًا مدعومًا من الطرفين (الافتراضي `sorafs.sf1@1.0.0`) وتعكس القرار عبر ترويسة
-الاستجابة `Content-Chunker`. تضمن manifests الملف المختار كي تتمكن العقد اللاحقة من التحقق
-من تخطيط الـ chunks دون الاعتماد على تفاوض HTTP.
+تختار البوابات ملفًا مدعومًا من الطرفين (الافتراضي `sorafs.sf1@1.0.0`) عبر ترويسة
+Приложение `Content-Chunker`. تضمن проявляет الملف المختار и تتمكن العقد اللاحقة من التحقق
+Для создания фрагментов можно использовать HTTP.
 
-### توافق CAR
+### ДАВАЙТЕ АВТОМОБИЛЬ
 
-تستخدم حزمة manifest المعتمدة جذور CIDv1 مع `dag-cbor` (`0x71`). وللتوافق القديم نحتفظ
-بمسار تصدير CARv1+SHA-2:
+Откройте манифест CIDv1 для `dag-cbor` (`0x71`). وللتوافق القديم نحتفظ
+Получение CARv1+SHA-2:
 
-* **المسار الأساسي** – CARv2، digest حمولة BLAKE3 (`0x1f` multihash)،
-  `MultihashIndexSorted`، والملف مسجل كما سبق.
-  هذا الخيار عندما يهمل العميل `Accept-Chunker` أو يطلب `Accept-Digest: sha2-256`.
+* ** المسار الأساسي** – CARv2, дайджест DBAKE3 (многохэш `0x1f`),
+  `MultihashIndexSorted`, его имя - Хан Сэн.
+  Установите флажок `Accept-Chunker` или `Accept-Digest: sha2-256`.
 
-لكن يجب ألا تستبدل الـ digest المعتمد.
+Он написал дайджест المعتمد.
 
 ### المطابقة
 
-* يطابق ملف `sorafs.sf1@1.0.0` الـ fixtures العامة في
-  `fixtures/sorafs_chunker` والمجموعات المسجلة تحت
-  `fuzz/sorafs_chunker`. يتم اختبار التكافؤ الطرفي في Rust وGo وNode عبر الاختبارات المتاحة.
-* تؤكد `chunker_registry::lookup_by_profile` أن معلمات الوصف تطابق `ChunkProfile::DEFAULT` للحماية من الانحرافات العرضية.
-* تتضمن manifests الناتجة عن `iroha app sorafs toolkit pack` و `sorafs_manifest_stub` بيانات السجل.
+* Обратите внимание на `sorafs.sf1@1.0.0` светильники.
+  `fixtures/sorafs_chunker` Дополнительная информация
+  `fuzz/sorafs_chunker`. Он был создан для работы с Rust и Go и Node.
+* Установите `chunker_registry::lookup_by_profile` для получения дополнительной информации о `ChunkProfile::DEFAULT` в режиме онлайн. عرضية.
+* В этом случае отображаются изменения для `iroha app sorafs toolkit pack` и `sorafs_manifest_stub` для `sorafs_manifest_stub`.

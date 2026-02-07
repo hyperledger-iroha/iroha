@@ -8,39 +8,41 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: W2 community intake plan
 sidebar_label: W2 plan
 description: Intake, approvals, and evidence checklist for the community preview cohort.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-| Item | Details |
+| ንጥል | ዝርዝሮች |
 | --- | --- |
-| Wave | W2 — Community reviewers |
-| Target window | Q3 2025 week 1 (tentative) |
-| Artefact tag (planned) | `preview-2025-06-15` |
-| Tracker issue | `DOCS-SORA-Preview-W2` |
+| ማዕበል | W2 - የማህበረሰብ ገምጋሚዎች |
+| የዒላማ መስኮት | Q3 2025 ሳምንት 1 (ጊዜያዊ) |
+| Artefact መለያ (የታቀደ) | `preview-2025-06-15` |
+| የመከታተያ ጉዳይ | `DOCS-SORA-Preview-W2` |
 
-## Objectives
+# አላማዎች
 
-1. Define the community intake criteria and vetting workflow.
-2. Obtain governance approval for the proposed roster and acceptable-use addendum.
-3. Refresh the checksum-verified preview artefact and telemetry bundle for the new window.
-4. Stage the Try it proxy + dashboards ahead of invite dispatch.
+1. የማህበረሰብ ቅበላ መስፈርቶችን እና የስራ ሂደትን ማጣራት.
+2. ለታቀደው የስም ዝርዝር እና ተቀባይነት ያለው አጠቃቀም ተጨማሪ የአስተዳደር ፍቃድ ያግኙ።
+3. ለአዲሱ መስኮት በቼክሱም የተረጋገጠ ቅድመ እይታ አርቲፊክ እና ቴሌሜትሪ ጥቅል ያድሱ።
+4. ከግብዣ መላክ በፊት ፕሮክሲውን + ዳሽቦርዶችን ይሞክሩ።
 
-## Task breakdown
+##የተግባር ትንተና
 
-| ID | Task | Owner | Due | Status | Notes |
+| መታወቂያ | ተግባር | ባለቤት | የሚከፈልበት | ሁኔታ | ማስታወሻ |
 | --- | --- | --- | --- | --- | --- |
-| W2-P1 | Draft community intake criteria (eligibility, max slots, CoC requirements) and circulate to governance | Docs/DevRel lead | 2025‑05‑15 | ✅ Completed | Intake policy merged into `DOCS-SORA-Preview-W2` and endorsed at the 2025‑05‑20 council meeting. |
-| W2-P2 | Update request template with community-specific questions (motivation, availability, localization needs) | Docs-core-01 | 2025‑05‑18 | ✅ Completed | `docs/examples/docs_preview_request_template.md` now includes the Community section, referenced in the intake form. |
-| W2-P3 | Secure governance approval for the intake plan (meeting vote + recorded minutes) | Governance liaison | 2025‑05‑22 | ✅ Completed | Vote passed unanimously on 2025‑05‑20; minutes + roll call linked in `DOCS-SORA-Preview-W2`. |
-| W2-P4 | Schedule Try it proxy staging + telemetry capture for the W2 window (`preview-2025-06-15`) | Docs/DevRel + Ops | 2025‑06‑05 | ✅ Completed | Change ticket `OPS-TRYIT-188` approved and executed 2025‑06‑09 02:00–04:00 UTC; Grafana screenshots archived with ticket. |
-| W2-P5 | Build/verify new preview artefact tag (`preview-2025-06-15`) and archive descriptor/checksum/probe logs | Portal TL | 2025‑06‑07 | ✅ Completed | `scripts/preview_wave_preflight.sh --tag preview-2025-06-15 ...` ran 2025‑06‑10; outputs stored under `artifacts/docs_preview/W2/preview-2025-06-15/`. |
-| W2-P6 | Assemble community invite roster (≤25 reviewers, staged batches) with governance-approved contact info | Community manager | 2025‑06‑10 | ✅ Completed | First cohort of 8 community reviewers approved; request IDs `DOCS-SORA-Preview-REQ-C01…C08` logged in the tracker. |
+| W2-P1 | የማህበረሰብ ቅበላ መስፈርቶችን (ብቁነት፣ ከፍተኛ ቦታዎች፣ የCoC መስፈርቶች) እና ወደ አስተዳደር ማሰራጨት | ሰነዶች/DevRel አመራር | 2025-05-15 | ✅ ተጠናቀቀ | የቅበላ ፖሊሲ ወደ `DOCS-SORA-Preview-W2` ተዋህዶ በ2025-05-20 የምክር ቤት ስብሰባ ላይ ጸድቋል። |
+| W2-P2 | የጥያቄ አብነት በማህበረሰብ-ተኮር ጥያቄዎች (ተነሳሽነት፣ ተገኝነት፣ የአካባቢ ፍላጎቶች) ያዘምኑ | ሰነዶች-ኮር-01 | 2025-05-18 | ✅ ተጠናቀቀ | `docs/examples/docs_preview_request_template.md` አሁን የማህበረሰብ ክፍልን ያካትታል፣ በመግቢያ ቅጹ ላይ የተጠቀሰው። |
+| W2-P3 | ለቅበላ ዕቅዱ ደህንነቱ የተጠበቀ አስተዳደር ማፅደቅ (የስብሰባ ድምጽ + የተቀዳ ደቂቃዎች) | የአስተዳደር ግንኙነት | 2025-05-22 | ✅ ተጠናቀቀ | እ.ኤ.አ. በ 2025 - 05 - 20 ላይ ድምጽ በሙሉ ድምፅ ተላለፈ ። ደቂቃዎች + ጥቅል ጥሪ በI18NI0000012X ውስጥ ተገናኝቷል። |
+| W2-P4 | መርሐግብር ለW2 መስኮት (`preview-2025-06-15`) ፕሮክሲ ስቴጅንግ + ቴሌሜትሪ መቅረጽ ይሞክሩት | ሰነዶች/DevRel + Ops | 2025-06-05 | ✅ ተጠናቀቀ | ቲኬት ለውጥ `OPS-TRYIT-188` ጸድቋል እና ተፈጽሟል 2025-06-09 02:00–04:00UTC; Grafana ቅጽበታዊ ገጽ እይታዎች በቲኬት ተቀምጠዋል። |
+| W2-P5 | አዲስ የቅድመ እይታ አርቲፊክ ታግ (`preview-2025-06-15`) እና የማህደር ገላጭ/Checksum/የመመርመሪያ ምዝግብ ማስታወሻዎችን ይገንቡ/ ያረጋግጡ | ፖርታል TL | 2025-06-07 | ✅ ተጠናቀቀ | `scripts/preview_wave_preflight.sh --tag preview-2025-06-15 ...` ሮጦ 2025-06-10; በ `artifacts/docs_preview/W2/preview-2025-06-15/` ስር የተከማቹ ውጤቶች. |
+| W2-P6 | የማህበረሰብ ጥሪ ዝርዝር (≤25 ገምጋሚዎች፣ የተደራጁ ስብስቦች) በአስተዳደር የጸደቀ የግንኙነት መረጃ ሰብስብ | የማህበረሰብ አስተዳዳሪ | 2025-06-10 | ✅ ተጠናቀቀ | የ8 የማህበረሰብ ገምጋሚዎች የመጀመሪያ ቡድን ጸድቋል። የጥያቄ መታወቂያዎች `DOCS-SORA-Preview-REQ-C01…C08` መከታተያ ውስጥ ገብቷል። |
 
-## Evidence checklist
+## የማስረጃ ዝርዝር
 
-- [x] Governance approval record (meeting notes + vote link) attached to `DOCS-SORA-Preview-W2`.
-- [x] Updated request template committed under `docs/examples/`.
-- [x] `preview-2025-06-15` descriptor, checksum log, probe output, link report, and Try it proxy transcript stored under `artifacts/docs_preview/W2/`.
-- [x] Grafana screenshots (`docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals`) captured for the W2 preflight window.
-- [x] Invite roster table with reviewer IDs, request tickets, and approval timestamps populated before dispatch (see tracker W2 section).
+- [x] ከ`DOCS-SORA-Preview-W2` ጋር ተያይዟል የአስተዳደር ማጽደቂያ መዝገብ (የስብሰባ ማስታወሻዎች + የድምጽ ማገናኛ)።
+- [x] የዘመነ ጥያቄ አብነት `docs/examples/` ስር ተፈጸመ.
+- [x] `preview-2025-06-15` ገላጭ፣ የፍተሻ መዝገብ፣ የፍተሻ ውፅዓት፣ የአገናኝ ዘገባ እና ይሞክሩት የተኪ ግልባጭ በ`artifacts/docs_preview/W2/`።
+- [x] Grafana ቅጽበታዊ ገጽ እይታዎች (`docs.preview.integrity`፣ `TryItProxyErrors`፣ `DocsPortal/GatewayRefusals`) ለW2 ቅድመ በረራ መስኮት ተይዟል።
+- [x] የመመዝገቢያ ሠንጠረዥን ከገምጋሚ መታወቂያዎች ጋር ይጋብዙ፣ ትኬቶችን ይጠይቁ እና የማረጋገጫ ጊዜ ማህተሞች ከመላኩ በፊት የተሞሉ (የመከታተያ W2 ክፍል ይመልከቱ)።
 
-Keep this plan updated; the tracker references it so the DOCS-SORA roadmap can see exactly what remains before W2 invitations go out.
+ይህንን እቅድ ማዘመን; የ DOCS-SORA ፍኖተ ካርታ የW2 ግብዣዎች ከመውጣታቸው በፊት የቀረውን በትክክል ማየት እንዲችል መከታተያው ያጣቅሰዋል።

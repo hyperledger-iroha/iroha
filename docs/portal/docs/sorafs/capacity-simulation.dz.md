@@ -11,71 +11,59 @@ id: capacity-simulation
 title: SoraFS Capacity Simulation Runbook
 sidebar_label: Capacity Simulation Runbook
 description: Exercising the SF-2c capacity marketplace simulation toolkit with reproducible fixtures, Prometheus exports, and Grafana dashboards.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
+:::དྲན་ཐོའི་འབྱུང་ཁུངས།
 :::
 
-This runbook explains how to run the SF-2c capacity marketplace simulation kit and visualise the resulting metrics. It validates quota negotiation, failover handling, and slashing remediation end-to-end using the deterministic fixtures in `docs/examples/sorafs_capacity_simulation/`. Capacity payloads still use `sorafs_manifest_stub capacity`; use `iroha app sorafs toolkit pack` for manifest/CAR packaging flows.
+རན་དེབ་འདི་གིས་ ཨེསི་ཨེཕ་-༢སི་ ལྕོགས་གྲུབ་ཚོང་ཁང་གི་ བརྡ་སྟོན་ཆས་ཆས་འདི་ ག་དེ་སྦེ་ གཡོག་བཀོལ་ནི་ཨིན་ན་ འགྲེལ་བཤད་རྐྱབ་སྟེ་ གྲུབ་འབྲས་ཐོན་པའི་ བརྡ་རྟགས་ཚུ་ མཐོང་སྣང་བཟོཝ་ཨིན། འདི་གིས་ མཐུན་སྒྲིག་དང་ འཐུས་ཤོར་འཛིན་སྐྱོང་ དེ་ལས་ I18NI000000010X ནང་ལུ་ གཏན་འབེབས་བཟོ་ཐངས་ཚུ་ལག་ལེན་འཐབ་སྟེ་ མཇུག་ལས་མཇུག་ཚུན་ཚོད་ བཅོ་ཁ་རྐྱབ་ནི་འདི་ བདེན་དཔྱད་འབདཝ་ཨིན། ཤུགས་ཚད་སྤྲོད་ལེན་ཚུ་གིས་ ད་ལྟོ་ཡང་ `sorafs_manifest_stub capacity` ལག་ལེན་འཐབ་ཨིན། གསལ་སྟོན་/སི་ཨར་ ཐུམ་སྒྲིལ་རྒྱུན་འགྲུལ་གྱི་དོན་ལུ་ `iroha app sorafs toolkit pack` ལག་ལེན་འཐབ།
 
-## 1. Generate CLI artefacts
+## 1. CLI ཅ་རྙིང་བཟོ་བསྐྲུན།
 
 ```bash
 cd $REPO_ROOT/docs/examples/sorafs_capacity_simulation
 ./run_cli.sh ./artifacts
 ```
 
-`run_cli.sh` wraps `sorafs_manifest_stub capacity` to emit Norito payloads, base64 blobs, Torii request bodies, and JSON summaries for:
+I18NI000000000013X བཀབ་སྟེ་ `sorafs_manifest_stub capacity` གིས་ I18NI0000000014X གིས་ I18NT0000005X པེ་ལེཊི་, base64 blobbs, I18NT0000000006X ཞུ་བ་ཕུལཝ་ཨིན།
 
-- Three provider declarations participating in the quota negotiation scenario.
-- A replication order allocating the staged manifest across those providers.
-- Telemetry snapshots for the pre-outage baseline, outage interval, and failover recovery.
-- A dispute payload requesting slashing after the simulated outage.
+- གྲོས་བསྟུན་གནས་སྟངས་ནང་ བཅའ་མར་གཏོགས་མི་ གསལ་བསྒྲགས་གསུམ་གྱིས་ བཅའ་མར་གཏོགས་མི་ གསལ་བསྒྲགས་ཚུ།
+- བྱིན་མི་ཚུ་ནང་ལུ་ གནས་རིམ་གྱི་གསལ་སྟོན་འདི་ བགོ་བཀྲམ་འབད་མི་ འདྲ་བཤུས་གོ་རིམ་ཅིག།
+- སྔོན་འགྲོའི་ཕྱིར་ཐོན་གཞི་རྟེན་དང་ ཕྱིར་ཐོན་བར་མཚམས་ དེ་ལས་ འཐུས་ཤོར་སླར་གསོ་ཚུ་གི་དོན་ལུ་ ཊེ་ལི་མི་ཊི་པར་ལེན་ཚུ།
+- དཔེ་སྟོན་འབད་བའི་ བཀག་ཆ་འབད་བའི་ཤུལ་ལས་ བརྡལ་བཤིག་གཏང་དགོ་པའི་ ཞུ་བ་འབད་མི་ རྩོད་རྙོགས་ པེ་ལོ།
 
-All artefacts land under `./artifacts` (override by passing a different directory as the first argument). Inspect the `_summary.json` files for human-readable context.
+ཅ་ཆས་ཆ་མཉམ་ `./artifacts` གི་འོག་ལུ་ཡོདཔ་ཨིན། མི་ལྷག་ཚུགས་པའི་སྐབས་དོན་གྱི་དོན་ལུ་ `_summary.json` ཡིག་སྣོད་ཚུ་བརྟག་དཔྱད་འབད།
 
-## 2. Aggregate results & emit metrics
+## 2. གྲུབ་འབྲས་ཚུ་བསྡོམས་རྩིས་དང་ ཨིམ་པིཊི་མེ་ཊིགསི་འབད།
 
-```bash
-./analyze.py --artifacts ./artifacts
-```
+I18NF0000008X
 
-The analyzer produces:
+དབྱེ་དཔྱད་པ་གིས་ བཟོ་བསྐྲུན་འབདཝ་ཨིན།
 
-- `capacity_simulation_report.json` - aggregated allocations, failover deltas, and dispute metadata.
-- `capacity_simulation.prom` - Prometheus textfile metrics (`sorafs_simulation_*`) suitable for the node-exporter textfile collector or a standalone scrape job.
+- I18NI000000017X - བསྡོམས་རྩིས་བགོ་བཀྲམ་དང་ འཐུས་ཤོར་གྱི་ཌེལ་ཊ་ དེ་ལས་ རྩོད་རྙོགས་ མེ་ཊ་ཌེ་ཊ་ཚུ་ཨིན།
+- I18NI0000000018X - I18NT0000000X ཚིག་ཡིག་ཡིག་སྣོད་ཀྱི་མེ་ཊིགསི་ (I18NI000000019X) མཐུད་མཚམས་ཕྱིར་ཚོང་འབད་མི་ཚིག་ཡིག་ཡིག་སྣོད་བསྡུ་སྒྲིག་ཡང་ན་ standolone srape ལཱ་ཅིག་གི་དོན་ལུ་འོས་འབབ་ཡོདཔ་ཨིན།
 
-Example Prometheus scrape configuration:
+དཔེ་ Prometheus བརྡ་རྟགས་རིམ་སྒྲིག་:
 
-```yaml
-scrape_configs:
-  - job_name: sorafs-capacity-sim
-    scrape_interval: 15s
-    static_configs:
-      - targets: ["localhost:9100"]
-        labels:
-          scenario: "capacity-sim"
-    metrics_path: /metrics
-    params:
-      format: ["prometheus"]
-```
+I18NF0000009X
 
-Point the textfile collector at `capacity_simulation.prom` (when using node-exporter copy it into the directory passed via `--collector.textfile.directory`).
+I18NI000000020X ལུ་ ཚིག་ཡིག་ཡིག་སྣོད་བསྡུ་སྒྲིག་འབད་མི་འདི་ (node-ཕྱིར་ཚོང་པ་ལག་ལེན་འཐབ་པའི་སྐབས་ I18NI000000021X བརྒྱུད་དེ་ བརྒྱུད་དེ་སྤྲོད་ཡོད་པའི་སྣོད་ཐོ་ནང་ལུ་འདྲ་བཤུས་རྐྱབས།)
 
-## 3. Import the Grafana dashboard
+## 3. Grafana བརྡ་བཀོད་ནང་འདྲེན་འབད།
 
-1. In Grafana, import `dashboards/grafana/sorafs_capacity_simulation.json`.
-2. Bind the `Prometheus` datasource variable to the scrape target configured above.
-3. Verify the panels:
-   - **Quota Allocation (GiB)** shows committed/assigned balances for each provider.
-   - **Failover Trigger** flips to *Failover Active* when the outage metrics stream in.
-   - **Uptime Drop During Outage** charts the percentage loss for provider `alpha`.
-   - **Requested Slash Percentage** visualises the remediation ratio extracted from the dispute fixture.
+1. Grafana ནང་ ནང་འདྲེན་ `dashboards/grafana/sorafs_capacity_simulation.json`.
+2. གོང་ལུ་རིམ་སྒྲིག་འབད་ཡོད་པའི་ བཤུད་ཕྲའི་དམིགས་གཏད་ལུ་ `Prometheus` གནད་སྡུད་འབྱུང་ཁུངས་འདི་བསྡམས།
+༣ པེ་ནཱལ་ཚུ་བདེན་དཔྱད་འབད།
+   - **Quota བགོ་བཀྲམ་ (GiB)** གིས་ བྱིན་མི་རེ་རེ་གི་དོན་ལུ་ ཁས་བླངས་/འགན་སྤྲོད་འབད་ཡོད་པའི་ལྷག་ལུས་ཚུ་སྟོནམ་ཨིན།
+   - **འཐུས་ཤོར་གྱི་ མེ་ཊིགསི་རྒྱུན་ལམ་ཚུ་ *Failover Active* ལུ་ filive fileps ལུ་འགྱོཝ་ཨིན།
+   - **ཨཔ་ཊའིམ་ཌོརཔ་འདི་ ཕྱིར་ཐོན་སྐབས་** གིས་ བརྒྱ་ཆའི་གྱོང་རྒུད་འདི་ བྱིན་མི་ `alpha` གི་དོན་ལུ་ བརྡ་སྟོནམ་ཨིན།
+   - **ཞུ་བ་འབད་མི་ Slash བརྒྱ་ཆ་** རྩོད་རྙོགས་ཅན་གྱི་སྒྲིག་ཆས་ལས་ བཏོན་ཡོད་པའི་ བཅོ་ཐབས་ཆ་ཚད་འདི་ མཐོང་སྣང་འབདཝ་ཨིན།
 
-## 4. Expected checks
+## 4. རེ་འདུན་ཅན་གྱི་བརྟག་དཔྱད།
 
-- `sorafs_simulation_quota_total_gib{scope="assigned"}` equals `600` while the committed total remains >=600.
-- `sorafs_simulation_failover_triggered` reports `1` and the replacement provider metric highlights `beta`.
-- `sorafs_simulation_slash_requested` reports `0.15` (15% slash) for the `alpha` provider identifier.
+- `sorafs_simulation_quota_total_gib{scope="assigned"}` འདྲ་མཉམ་ `600` དང་ཁས་བླངས་འབད་ཡོད་པའི་བསྡོམས་རྩིས་ >=600.
+- I18NI0000000027X སྙན་ཞུ་ `1` དང་ ཚབ་བཙུགས་མི་བྱིན་མི་ མེ་ཊིག་འོད་རྟགས་ `beta`.
+- I18NI0000000030X སྙན་ཞུ་ I18NI0000003X (15% slash) I18NI000000032X བྱིན་ཡོད་པའི་ངོ་སྤྲོད་པ་ཨིན།
 
-Run `cargo test -p sorafs_car --features cli --test capacity_simulation_toolkit` to confirm the fixtures are still accepted by the CLI schema.
+གཏན་འཁེལ་བཟོ་ནིའི་དོན་ལུ་ `cargo test -p sorafs_car --features cli --test capacity_simulation_toolkit` གཡོག་བཀོལ་ནི་འདི་ ད་ལྟོ་ཡང་ CLI ལས་རིམ་གྱིས་ ངོས་ལེན་འབདཝ་ཨིན།

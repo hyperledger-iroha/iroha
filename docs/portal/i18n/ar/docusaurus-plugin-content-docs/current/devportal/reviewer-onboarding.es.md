@@ -4,65 +4,67 @@ direction: rtl
 source: docs/portal/docs/devportal/reviewer-onboarding.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Onboarding de revisores de preview
+# Onboarding de revisores de Preview
 
-## Resumen
+## السيرة الذاتية
 
-DOCS-SORA sigue un lanzamiento escalonado del portal de desarrolladores. Los builds con gate de checksum
-(`npm run serve`) y los flujos Try it reforzados desbloquean el siguiente hito:
-onboarding de revisores validados antes de que el preview publico se abra de forma amplia. Esta guia
-describe como recopilar solicitudes, verificar elegibilidad, aprovisionar acceso y dar de baja
-participantes de forma segura. Consulta el
-[preview invite flow](./preview-invite-flow.md) para la planificacion de cohortes, la
-cadencia de invitaciones y los exports de telemetria; los pasos de abajo se enfocan en las acciones
-a tomar una vez que un revisor ha sido seleccionado.
+DOCS-SORA هو تصعيد متصاعد لبوابة المطورين. يبني لوس مع بوابة المجموع الاختباري
+(`npm run serve`) والتدفقات، جربه بعد إصلاح القفل التالي:
+إعداد المراجعة الصالحة قبل أن يتم نشر المعاينة على نطاق واسع. هذا هو الحال
+وصف كيفية استعادة الطلبات والتحقق من الأهلية وتوفير الوصول والإجازة
+المشاركون بشكل آمن. استشارة إل
+[معاينة تدفق الدعوة](./preview-invite-flow.md) لتخطيط المجموعات الجماعية،
+إيقاع الدعوات وصادرات القياس عن بعد؛ يتم التركيز على خطوات الخلع على الإجراءات
+قم بالتمرير مرة واحدة عندما يتم اختيار أحد المراجعين.
 
-- **Alcance:** revisores que necesitan acceso al preview de docs (`docs-preview.sora`,
-  builds de GitHub Pages o bundles de SoraFS) antes de GA.
-- **Fuera de alcance:** operadores de Torii o SoraFS (cubiertos por sus propios kits de onboarding)
-  y despliegues del portal de produccion (ver
+- **الإلغاء:** المراجعات التي تحتاج إلى الوصول إلى معاينة المستندات (`docs-preview.sora`,
+  إنشاء صفحات GitHub أو حزم SoraFS قبل GA.
+- **مصدر الطاقة:** مشغلي Torii أو SoraFS (مكعبات لمجموعات الإعداد الخاصة بهم)
+  واطلع على بوابة الإنتاج (ver
   [`devportal/deploy-guide`](./deploy-guide.md)).
 
-## Roles y prerequisitos
+## الأدوار والمتطلبات الأساسية
 
-| Rol | Objetivos tipicos | Artefactos requeridos | Notas |
+| رول | الأهداف النوعية | المصنوعات اليدوية المطلوبة | نوتاس |
 | --- | --- | --- | --- |
-| Core maintainer | Verificar nuevas guias, ejecutar smoke tests. | GitHub handle, contacto Matrix, CLA firmada en archivo. | Usualmente ya esta en el equipo GitHub `docs-preview`; aun asi registra una solicitud para que el acceso sea auditable. |
-| Partner reviewer | Validar snippets de SDK o contenido de gobernanza antes del release publico. | Email corporativo, POC legal, terminos de preview firmados. | Debe reconocer los requerimientos de telemetria + manejo de datos. |
-| Community volunteer | Aportar feedback de usabilidad sobre guias. | GitHub handle, contacto preferido, huso horario, aceptacion del CoC. | Mantener cohortes pequenas; priorizar revisores que han firmado el acuerdo de contribucion. |
+| المشرف الأساسي | التحقق من الأدلة الجديدة، وإخراج اختبارات الدخان. | مقبض GitHub، اتصل بـ Matrix، CLA Firmada في الأرشيف. | عادةً ما تكون موجودًا في جهاز GitHub `docs-preview`؛ يمكنك أيضًا تسجيل طلب للحصول على إمكانية الوصول للتدقيق. |
+| مراجع شريك | التحقق من مقتطفات SDK أو المحتوى الذي تمت إدارته قبل الإصدار العام. | البريد الإلكتروني للشركات، POC القانوني، ومحطات معاينة الشركات. | يجب عليك التعرف على متطلبات القياس عن بعد + طريقة البيانات. |
+| متطوع مجتمعي | نشر تعليقات حول قابلية الاستخدام. | مقبض GitHub، جهة الاتصال المفضلة، العمل اليومي، قبول CoC. | Mantener أفواج صغيرة؛ إعطاء الأولوية للمراجعات التي تؤكد على قبول المساهمة. |
 
-Todos los tipos de revisores deben:
+جميع أنواع المراجعة مطلوبة:
 
-1. Reconocer la politica de uso aceptable para artefactos de preview.
-2. Leer los apendices de seguridad/observabilidad
-   ([`security-hardening`](./security-hardening.md),
-   [`observability`](./observability.md),
+1. اكتشف الاستخدام السياسي المقبول للمعاينة المصطنعة.
+2. اقرأ ملحقات الأمان/المراقبة
+   ([`security-hardening`](./security-hardening.md)،
+   [`observability`](./observability.md)،
    [`incident-runbooks`](./incident-runbooks.md)).
-3. Aceptar ejecutar `docs/portal/scripts/preview_verify.sh` antes de servir cualquier
-   snapshot localmente.
+3. قبول تنفيذ `docs/portal/scripts/preview_verify.sh` قبل أي خادم
+   لقطة محلية.
 
-## Flujo de intake
+##فلوجو دي تناول
 
-1. Pedir al solicitante que complete el
+1. قم بإرسال الطلب لإكمال الطلب
    [`docs/examples/docs_preview_request_template.md`](../../../examples/docs_preview_request_template.md)
-   formulario (o copiar/pegar en una issue). Capturar al menos: identidad, metodo de contacto,
-   GitHub handle, fechas de revision previstas y confirmacion de que los docs de seguridad fueron leidos.
-2. Registrar la solicitud en el tracker `docs-preview` (issue de GitHub o ticket de gobernanza)
-   y asignar un aprobador.
-3. Validar prerequisitos:
-   - CLA / acuerdo de contribucion en archivo (o referencia de contrato partner).
-   - Reconocimiento de uso aceptable almacenado en la solicitud.
-   - Evaluacion de riesgo completa (por ejemplo, revisores partner aprobados por Legal).
-4. El aprobador firma en la solicitud y enlaza la issue de tracking con cualquier
-   entrada de change-management (ejemplo: `DOCS-SORA-Preview-####`).
+   صيغة (أو نسخ/ربط في إصدار واحد). التقاط أصغر: الهوية، طريقة الاتصال،
+   يتعامل GitHub مع مذكرات المراجعة المسبقة ويؤكد أن المستندات الآمنة ستكون ممتعة.
+2. تسجيل الطلب في المتتبع `docs-preview` (إصدار GitHub أو تذكرة الإدارة)
+   وقم بتعيين aprobador.
+3. المتطلبات الأساسية:
+   - CLA / الحصول على المساهمة في الأرشيف (أو مرجع عقد الشريك).
+   - التعرف على الاستخدام المقبول بناءً على الطلب.
+   - تقييم المشروع بالكامل (على سبيل المثال، مراجعة الشركاء من أجل الشؤون القانونية).
+4. الموافقة على الطلب وتفعيل مشكلة التتبع مع أي شخص
+   مدخل إدارة التغيير (مثال: `DOCS-SORA-Preview-####`).
 
-## Aprovisionamiento y herramientas
+## توفير الأدوات والأدوات
 
-1. **Compartir artefactos** - Proporcionar el descriptor + archivo de preview mas reciente desde
-   el workflow de CI o el pin de SoraFS (artefacto `docs-portal-preview`). Recordar a los revisores
-   ejecutar:
+1. **مشاركة المصنوعات اليدوية** - تقديم الواصف + أرشيف المعاينة الأحدث من هنا
+   سير العمل في CI أو الدبوس SoraFS (`docs-portal-preview`). قم بتسجيل المراجعة
+   القاذف:
 
    ```bash
    ./docs/portal/scripts/preview_verify.sh \
@@ -71,58 +73,58 @@ Todos los tipos de revisores deben:
      --archive artifacts/preview-site.tar.gz
    ```
 
-2. **Servir con enforcement de checksum** - Indicar a los revisores el comando con gate de checksum:
+2. **الخادم مع تطبيق المجموع الاختباري** - للإشارة إلى المراجعين عبر بوابة المجموع الاختباري:
 
    ```bash
    DOCS_RELEASE_TAG=preview-<stamp> npm run --prefix docs/portal serve
    ```
 
-   Esto reutiliza `scripts/serve-verified-preview.mjs` para que no se lance un build sin verificar
-   por accidente.
+   سيتم إعادة استخدام هذا `scripts/serve-verified-preview.mjs` حتى لا تتمكن من إنشاء البناء بدون التحقق
+   بالصدفة.
 
-3. **Dar acceso a GitHub (opcional)** - Si los revisores necesitan ramas no publicadas, agregarlos
-   al equipo GitHub `docs-preview` durante la revision y registrar el cambio de membresia en la solicitud.
+3. **الوصول إلى GitHub (اختياري)** - إذا كانت المراجعة لا تحتاج إلى منشورات، قم بالاشتراك
+   على GitHub `docs-preview` أثناء المراجعة وقم بتسجيل تغيير الذاكرة عند الطلب.
 
-4. **Comunicar canales de soporte** - Compartir el contacto on-call (Matrix/Slack) y el procedimiento
-   de incidentes de [`incident-runbooks`](./incident-runbooks.md).
+4. **قنوات الاتصال الداعمة** - مشاركة الاتصال عند الطلب (Matrix/Slack) والإجراءات
+   أحداث [`incident-runbooks`](./incident-runbooks.md).
 
-5. **Telemetria + feedback** - Recordar a los revisores que se recopila analitica anonimizada
-   (ver [`observability`](./observability.md)). Proporcionar el formulario de feedback o la plantilla
-   de issue referenciada en la invitacion y registrar el evento con el helper
-   [`preview-feedback-log`](./preview-feedback-log) para que el resumen de ola se mantenga al dia.
+5. **القياس عن بعد + التعليقات** - قم بتسجيل المراجعات التي تقوم بنسخها تحليلياً مجهولاً
+   (الإصدار [`observability`](./observability.md)). تقديم صيغة ردود الفعل أو النبات
+   قم بإصدار مرجع في الدعوة وقم بتسجيل الحدث باستخدام المساعد
+   [`preview-feedback-log`](./preview-feedback-log) للحفاظ على السيرة الذاتية مستمرة طوال اليوم.
 
-## Checklist del revisor
+## قائمة المراجعة للمراجع
 
-Antes de acceder al preview, los revisores deben completar lo siguiente:
+قبل الوصول إلى المعاينة، يجب أن تكتمل التحديثات التالية:
 
-1. Verificar los artefactos descargados (`preview_verify.sh`).
-2. Lanzar el portal via `npm run serve` (o `serve:verified`) para asegurar que el guard de checksum esta activo.
-3. Leer las notas de seguridad y observabilidad enlazadas arriba.
-4. Probar la consola OAuth/Try it usando login de device-code (si aplica) y evitar reutilizar tokens de produccion.
-5. Registrar hallazgos en el tracker acordado (issue, doc compartido o formulario) y etiquetarlos
-   con el tag de release de preview.
+1. التحقق من المصنوعات التي تم تنزيلها (`preview_verify.sh`).
+2. قم بفتح البوابة عبر `npm run serve` (o `serve:verified`) للتأكد من أن حارس المجموع الاختباري نشط.
+3. اقرأ ملاحظات الأمان وإمكانية الملاحظة.
+4. اختبر وحدة OAuth/Try باستخدام تسجيل الدخول إلى رمز الجهاز (إذا كان التطبيق) وتجنب إعادة استخدام رموز الإنتاج المميزة.
+5. قم بتسجيل الأحداث في المتتبع المسجل (الإصدار أو المستند المقسم أو الصيغة) والعلامات
+   مع علامة إصدار المعاينة.
 
-## Responsabilidades de maintainers y offboarding
+## مسؤوليات المشرفين والإخراج
 
-| Fase | Acciones |
+| فاس | أعمال |
 | --- | --- |
-| Kickoff | Confirmar que el checklist de intake esta adjunto a la solicitud, compartir artefactos + instrucciones, agregar una entrada `invite-sent` via [`preview-feedback-log`](./preview-feedback-log), y agendar un sync de mitad de periodo si la revision dura mas de una semana. |
-| Monitoreo | Monitorear telemetria de preview (buscar trafico Try it inusual, fallas de probe) y seguir el runbook de incidentes si ocurre algo sospechoso. Registrar eventos `feedback-submitted`/`issue-opened` conforme llegan hallazgos para que las metricas de la ola se mantengan precisas. |
-| Offboarding | Revocar acceso temporal de GitHub o SoraFS, registrar `access-revoked`, archivar la solicitud (incluir resumen de feedback + acciones pendientes), y actualizar el registro de revisores. Pedir al revisor que elimine builds locales y adjuntar el digest generado desde [`docs/examples/docs_preview_feedback_digest.md`](../../../examples/docs_preview_feedback_digest.md). |
+| ضربة البداية | قم بتأكيد أن قائمة التحقق من الإدخال ملحقة بالطلب، ومشاركة العناصر + التعليمات، وإضافة إدخال `invite-sent` عبر [`preview-feedback-log`](./preview-feedback-log)، وجدول مزامنة لمدة زمنية إذا كانت المراجعة أكثر من أسبوع. |
+| مونيتوريو | مراقبة معاينة القياس عن بعد (بحث حركة المرور جربه بشكل غير عادي، فشل في التحقيق) ومتابعة دليل الأحداث إذا حدثت أي حالة خاصة. تتوافق أحداث التسجيل `feedback-submitted`/`issue-opened` مع المتطلبات الأساسية للحفاظ على دقة مقاييس العلا. |
+| الخروج من الطائرة | قم بإلغاء الوصول المؤقت لـ GitHub إلى SoraFS، والمسجل `access-revoked`، وحفظ الطلب (بما في ذلك استئناف التعليقات + الإجراءات المعلقة)، وتحديث سجل المراجعات. قم بمراجعة حذف إنشاء المواقع وإضافة الملخص الذي تم إنشاؤه من [`docs/examples/docs_preview_feedback_digest.md`](../../../examples/docs_preview_feedback_digest.md). |
 
-Usa el mismo proceso al rotar revisores entre olas. Mantener el rastro en el repo (issue + plantillas) ayuda
-a que DOCS-SORA siga siendo auditable y permite a gobernanza confirmar que el acceso de preview siguio
-los controles documentados.
+تستخدم نفس العملية للمراجعة الدوارة بين الأشخاص. الحفاظ على الراسترو في الريبو (الإصدار + النباتات) يساعد
+حيث أن DOCS-SORA سيظل قابلاً للتدقيق ويسمح بإدارة التأكد من أن الوصول إلى المعاينة مستمر
+الضوابط الوثائقية.
 
-## Plantillas de invitacion y tracking
+## نباتات الدعوة والتتبع
 
 - Inicia todo outreach con el
   [`docs/examples/docs_preview_invite_template.md`](../../../examples/docs_preview_invite_template.md)
-  archivo. Captura el lenguaje legal minimo, las instrucciones de checksum de preview y la expectativa
-  de que los revisores reconozcan la politica de uso aceptable.
-- Al editar la plantilla, reemplaza los placeholders para `<preview_tag>`, `<request_ticket>` y canales
-  de contacto. Guarda una copia del mensaje final en el ticket de intake para que revisores, aprobadores
-  y auditores puedan referenciar el texto exacto que se envio.
-- Despues de enviar la invitacion, actualiza la hoja de tracking o issue con el timestamp `invite_sent_at`
-  y la fecha esperada de cierre para que el reporte de
-  [preview invite flow](./preview-invite-flow.md) pueda detectar la cohorte automaticamente.
+  معرف com لهذا التطبيق هو com.archivo. احصل على الحد الأدنى من اللغة القانونية وتعليمات المجموع الاختباري للمعاينة والتوقعات
+  لأن المراجعات ترى أن الاستخدام السياسي مقبول.
+- تحرير النبات، واستبدال العناصر النائبة لـ `<preview_tag>` و`<request_ticket>` والقنوات
+  دي كونتاتو. احتفظ بنسخة من الرسالة النهائية في تذكرة الدخول للمراجعة والمؤيدين
+  ويمكن للمراجعين الرجوع إلى النص الدقيق الذي يرسلونه.
+- بعد إرسال الدعوة، قم بتحديث يوم التتبع أو إصدار الطابع الزمني `invite_sent_at`
+  وينتظر التذكير بالقفل حتى يتم الإبلاغ عنه
+  [معاينة تدفق الدعوة](./preview-invite-flow.md) يمكن اكتشاف المجموعة تلقائيًا.

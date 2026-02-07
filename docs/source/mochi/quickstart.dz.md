@@ -7,65 +7,66 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 44faf6c98d141959cf8cf40b1df7d3d82c3448e6f2b1bc4fa54cdeceb97994b0
 source_last_modified: "2025-12-29T18:16:35.985408+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# MOCHI Quickstart
+# MOChI མགྱོགས་མྱུར།
 
-**MOCHI** is the desktop supervisor for local Hyperledger Iroha networks. This guide walks through
-installing the prerequisites, building the application, launching the egui shell, and using the
-runtime tools (settings, snapshots, wipes) for day‑to‑day development.
+**MOCHI** འདི་ ས་གནས་ཀྱི་ Hyperledger Iroha ཡོངས་འབྲེལ་གྱི་དོན་ལུ་ ཌེཀསི་ཊོཔ་ལྟ་རྟོག་པ་ཨིན། ལམ་སྟོན་འདི་བརྒྱུད་དེ་འགྱོཝ་ཨིན།
+སྔོན་འགྲོའི་ཆ་རྐྱེན་ཚུ་བཙུགས་ཏེ་ གློག་རིམ་བཟོ་སྟེ་ ཨི་གུའི་ཤེལ་འགོ་བཙུགས་ཞིནམ་ལས་ ལག་ལེན་འཐབ་ནི།
+རན་ཊའིམ་ལག་ཆས་ཚུ་ (གཞི་སྒྲིག་དང་ པར་རིས་ཚུ་) ཉིན་གྲངས་ལས་ གོང་འཕེལ་གྱི་དོན་ལུ་ཨིན།
 
-## Prerequisites
+## སྔོན་འགྲོའི་ཆ་རྐྱེན།
 
-- Rust toolchain: `rustup default stable` (workspace targets edition 2024 / Rust 1.82+).
-- Platform toolchain:
-  - macOS: Xcode Command Line Tools (`xcode-select --install`).
-  - Linux: GCC, pkg-config, OpenSSL headers (`sudo apt install build-essential pkg-config libssl-dev`).
-- Iroha workspace dependencies:
-  - `cargo xtask mochi-bundle` requires built `irohad`, `kagami`, and `iroha_cli`. Build them once via
+- རསཊི་ལག་ཆས་རྒྱུན་རིམ་: `rustup default stable` (ལཱ་གི་ས་སྒོ་དམིགས་གཏད་པར་སྐྲུན་ ༢༠༢༤ / རསཊི་ ༡.༨༢+)།
+- སྟེགས་རིས་ལག་ཆས།
+  - macOS: ཨེགསི་ཀོཌི་བརྡ་བཀོད་གྲལ་ཐིག་ལག་ཆས་ (`xcode-select --install`)།
+  - ལི་ནགསི་: ཇི་སི་སི་, pkg-config, OpenSSL མགོ་ཡིག་ཚུ་ (`sudo apt install build-essential pkg-config libssl-dev`).
+- Iroha ལཱ་གི་ས་སྒོ་བརྟེན་པ་ཚུ་:
+  - `cargo xtask mochi-bundle` ལུ་ `irohad`, `kagami`, དང་ `iroha_cli` བཟོ་བསྐྲུན་འབད་དགོཔ་ཨིན། དེ་ཚུ་བརྒྱུད་དེ་ཚར་གཅིག་བཟོ་བསྐྲུན་འབད།
     `cargo build -p irohad -p kagami -p iroha_cli`.
-- Optional: `direnv` or `cargo binstall` for managing local cargo binaries.
+- གདམ་ཁ་ཅན་: ས་གནས་ཀྱི་ ཅ་ཆས་གཉིས་ལྡན་ཚུ་ འཛིན་སྐྱོང་འཐབ་ནིའི་དོན་ལུ་ `direnv` ཡང་ན་ `cargo binstall` ཨིན།
 
-MOCHI shells out to the CLI binaries. Ensure they are discoverable via the environment variables
-below or available on the PATH:
+MOCHI འདི་ CLI གཉིས་ལྡན་ཚུ་ལུ་ ཕྱིར་འཐོན་འབདཝ་ཨིན། མཐའ་འཁོར་འགྱུར་ཅན་ཚུ་བརྒྱུད་དེ་ དེ་ཚུ་ གསར་འཚོལ་འབད་ཚུགསཔ་ངེས་གཏན་བཟོ།
+འོག་ལུ་ཡང་ན་ PATH གུ་ཐོབ་ཚུགས།
 
-| Binary   | Environment override | Notes                                   |
-|----------|----------------------|-----------------------------------------|
-| `irohad` | `MOCHI_IROHAD`       | Supervises peers                        |
-| `kagami` | `MOCHI_KAGAMI`       | Generates genesis manifests/snapshots   |
-| `iroha_cli` | `MOCHI_IROHA_CLI` | Optional for upcoming helper features   |
+| གཉིས་ལྡན་ | ཁོར་ཡུག བཙན་ཤེད་ | དྲན་ཐོ། |
+| |
+| `irohad` | `MOCHI_IROHAD` | མཉམ་རོགས་ |
+| `kagami` | `MOCHI_KAGAMI` | རིགས་མཚན་འདི་ གསལ་སྟོན་/བརྡ་རྟགས་ཚུ་ བཏོན་གཏངམ་ཨིན། |
+| `iroha_cli` | `MOCHI_IROHA_CLI` | འོང་ནི་ཨིན་མི་གྲོགས་རམ་གྱི་ཁྱད་རྣམ་ཚུ་གི་དོན་ལུ་གདམ་ཁ་ཅན། |
 
-## Building MOCHI
+## ཡར་འཕེལ་གྱི་མོ་ཁི།
 
-From the repository root:
+མཛོད་ཁང་གི་རྩ་བ་ལས།
 
 ```bash
 cargo build -p mochi-ui-egui
 ```
 
-This command builds both `mochi-core` and the egui frontend. To produce a distributable bundle, run:
+བརྡ་བཀོད་འདི་གིས་ `mochi-core` གཉིས་ཆ་ར་བཟོ་བསྐྲུན་འབདཝ་ཨིན། བཀྲམ་སྤེལ་ཅན་གྱི་བཱུནཌལ་ཅིག་བཟོ་ནི་གི་དོན་ལུ་ གཡོག་བཀོལ།
 
 ```bash
 cargo xtask mochi-bundle
 ```
 
-The bundle task assembles the binaries, manifest, and config stubs under `target/mochi-bundle`.
+བཱན་ཌལ་ལས་འགན་འདི་གིས་ གཉིས་ལྡན་དང་ གསལ་སྟོན་ དེ་ལས་ `target/mochi-bundle` གི་འོག་ལུ་ རིམ་སྒྲིག་འབདཝ་ཨིན།
 
-## Launching the egui shell
+## egui shell འགོ་བཙུགས།
 
-Run the UI directly from cargo:
+སྐྱེལ་འདྲེན་ལས་ཐད་ཀར་ཡུ་ཨའི་གཡོག་བཀོལ།:
 
 ```bash
 cargo run -p mochi-ui-egui
 ```
 
-By default MOCHI creates a single-peer preset in a temporary data directory:
+སྔོན་སྒྲིག་གིས་ MOCHI གིས་ གནས་སྐབས་གནས་སྡུད་སྣོད་ཐོ་ནང་ མཉམ་པའི་ མཉམ་པའི་སྔོན་སྒྲིག་ཅིག་གསར་བསྐྲུན་འབདཝ་ཨིན།
 
-- Data root: `$TMPDIR/mochi`.
-- Torii base port: `8080`.
-- P2P base port: `1337`.
+- གནད་སྡུད་རྩ་བ་: `$TMPDIR/mochi`.
+- Torii གཞི་རྟེན་འདྲེན་ལམ་: `8080`.
+- P2P གཞི་རྟེན་འདྲེན་ལམ་: `1337`.
 
-Use CLI flags to override the defaults when launching:
+འགོ་བཙུགས་པའི་སྐབས་ སྔོན་སྒྲིག་ཚུ་ བཀག་ཆ་འབད་ནི་ལུ་ སི་ཨེལ་ཨའི་ དར་ཆ་ཚུ་ལག་ལེན་འཐབ།
 
 ```bash
 cargo run -p mochi-ui-egui -- \
@@ -77,99 +78,95 @@ cargo run -p mochi-ui-egui -- \
   --irohad /path/to/irohad
 ```
 
-Environment variables mirror the same overrides when CLI flags are omitted: set `MOCHI_DATA_ROOT`,
-`MOCHI_PROFILE`, `MOCHI_CHAIN_ID`, `MOCHI_TORII_START`, `MOCHI_P2P_START`, `MOCHI_RESTART_MODE`,
-`MOCHI_RESTART_MAX`, or `MOCHI_RESTART_BACKOFF_MS` to preseed the supervisor builder; binary paths
-continue to respect `MOCHI_IROHAD`/`MOCHI_KAGAMI`/`MOCHI_IROHA_CLI`, and `MOCHI_CONFIG` points at an
-explicit `config/local.toml`.
+མཐའ་འཁོར་གྱི་འགྱུར་ཅན་ཚུ་ སི་ཨེལ་ཨའི་རྒྱལ་དར་ཚུ་ བཀོ་བཞག་པའི་སྐབས་ གཅིག་མཚུངས་སྦེ་ མེ་ལོང་: `MOCHI_DATA_ROOT`, གཞི་སྒྲིག་འབད།
+Norito, `MOCHI_TORII_START`, `MOCHI_P2P_START`, `MOCHI_P2P_START`, `MOCHI_RESTART_MODE`, `MOCHI_RESTART_MODE`,
+`MOCHI_RESTART_MAX`, ཡང་ན་ `MOCHI_RESTART_BACKOFF_MS` འདི་ ལྟ་རྟོག་པ་བཟོ་བསྐྲུན་པ་ལུ་ སྔོན་སྒྲིག་འབད་ནི། གཉིས་ལྡན་གྱི་ལམ་ཚུ།
+འཕྲོ་མཐུད་དེ་ `MOCHI_IROHAD`/`MOCHI_KAGAMI`/`MOCHI_IROHA_CLI`, དང་ `MOCHI_CONFIG` གི་ས་ཚིགས་ཅིག་ལུ་གུས་ཞབས་འབད་ནི།
+གསལ་ཏོག་ཏོ་སྦེ་ `config/local.toml`.
 
-## Settings & persistence
+## སྒྲིག་སྟངས་དང་གནས་སྟངས།
 
-Open the **Settings** dialog from the dashboard toolbar to adjust the supervisor configuration:
+ལྟ་རྟོག་པ་རིམ་སྒྲིག་བདེ་སྒྲིག་འབད་ནི་ལུ་ ཌེཤ་བོརཌི་ལག་ཆས་ཕྲ་རིང་ལས་ **སྒྲིག་སྟངས་** ཌའི་ལོག་ཁ་ཕྱེ།
 
-- **Data root** — base directory for peer configs, storage, logs, and snapshots.
-- **Torii / P2P base ports** — starting ports for deterministic allocation.
-- **Log visibility** — toggle stdout/stderr/system channels in the log viewer.
+- **གནས་སྡུད་རྩ་བའི་** — མཉམ་རོགས་རིམ་སྒྲིག་དང་ གསོག་འཇོག་ དྲན་ཐོ་ཚུ་ དེ་ལས་ པར་ལེན་ཚུ་གི་དོན་ལུ་ གཞི་རྟེན་སྣོད་ཐོ།
+- **Torii / P2P གཞི་རྟེན་འདྲེན་ལམ་ཚུ་** — གཏན་འབེབས་བགོ་བཀྲམ་གྱི་དོན་ལུ་ འདྲེན་ལམ་འགོ་བཙུགས།
+- **དྲན་ཐོ་མཐོང་སྣང་** — དྲན་དེབ་བལྟ་མི་ནང་ལུ་ stdout/stderr/རིམ་ལུགས་ཀྱི་རྒྱུ་ལམ་ཚུ་ སོར་བསྒྱུར་འབད།
 
-Advanced knobs such as the supervisor restart policy live in
-`config/local.toml`. Set `[supervisor.restart] mode = "never"` to disable
-automatic restarts during incident debugging, or adjust
-`max_restarts`/`backoff_ms` (via either the config file or the CLI flags
-`--restart-mode`, `--restart-max`, `--restart-backoff-ms`) to control retry
-behaviour.
+ལྟ་རྟོག་པ་གིས་ སྲིད་བྱུས་ལོག་འགོ་བཙུགས་ནི་བཟུམ་གྱི་ ཡར་འཕེལ་ཅན་གྱི་ མཛུབ་མོ་ཚུ་ ནང་སྡོད་དོ་ཡོདཔ་ཨིན།
+Norito. ལྕོགས་མིན་བཟོ་ནིའི་དོན་ལུ་ `[supervisor.restart] mode = "never"` གཞི་སྒྲིག་འབད།
+བྱུང་རྐྱེན་རྐྱེན་སེལ་འབད་བའི་སྐབས་ རང་བཞིན་གྱིས་ལོག་འགོ་བཙུགསཔ་ཨིན་ ཡང་ན་ བདེ་སྒྲིག་འབདཝ་ཨིན།
+`max_restarts`/Kagami (རིམ་སྒྲིག་ཡིག་སྣོད་ཡང་ན་སི་ཨེལ་ཨའི་དར་ཆ་ཚུ་གང་རུང་ཅིག་བརྒྱུད་དེ་
+`/status`, `--restart-max`, `--restart-backoff-ms`)
+བྱ༌སྤྱོད།བསྒྱུར་བཅོས་ཚུ་འཇུག་སྤྱོད་འབད་མི་འདི་གིས་ ལྟ་རྟོག་པ་འདི་ ལོག་བཟོ་བསྐྲུན་འབདཝ་ཨིནམ་དང་ གཡོག་བཀོལ་མི་གང་རུང་ཅིག་ ལོག་འགོ་བཙུགསཔ་ཨིན་ དེ་ལས་ བརྒལ་མི་ཚུ་ ལུ་བྲིས།
+`config/local.toml`. རིམ་སྒྲིག་མཉམ་བསྡོམས་འདི་གིས་ འབྲེལ་བ་མེད་པའི་ལྡེ་མིག་ཚུ་ ཡར་འཕེལ་ཅན་ཚུ་གིས་བཞག་ཚུགས་ནིའི་དོན་ལུ་ ཉམས་སྲུང་འབདཝ་ཨིན།
+ལག་དེབ་ཚུ་ MOCHI-འཛིན་སྐྱོང་པའི་གནས་གོང་ཚུ་དང་གཅིག་ཁར་ བསྒྱུར་བཅོས་འབདཝ་ཨིན།
 
-Applying changes rebuilds the supervisor, restarts any running peers, and writes the overrides to
-`config/local.toml`. The configuration merge preserves unrelated keys so advanced users can keep
-manual tweaks alongside MOCHI-managed values.
+## པར་རིས་དང་ འཕྱག་བདའ་ནི་/བསྐྱར་བཟོ་འབད་ནི།
 
-## Snapshots & wipe/re-genesis
+**བདག་འཛིན་** ཌའི་ལོག་འདི་གིས་ ཉེན་སྲུང་གི་ལག་ལེན་གཉིས་ གསལ་སྟོན་འབདཝ་ཨིན།
 
-The **Maintenance** dialog exposes two safety operations:
+- **ཕྱིར་ཚོང་པར་ཆས་** — མཉམ་རོགས་ གསོག་འཇོག་/རིམ་སྒྲིག་/དྲན་ཐོ་ཚུ་དང་ ད་ལྟོའི་རིགས་མཚན་འདི་ གསལ་སྟོན་འབདཝ་ཨིན།
+  ཤུགས་ལྡན་གནད་སྡུད་རྩ་བའི་འོག་ལུ་ `snapshots/<label>` ཨིན། ཁ་ཡིག་ཚུ་ རང་བཞིན་གྱིས་ གཙང་སྦྲ་འཕྲོད་བསྟེན་འབདཝ་ཨིན།
+- **སླར་གསོའི་པར་ཆས་** — མཉམ་རོགས་ བསག་བཞག་དང་ རྩ་བ་ རིམ་སྒྲིག་ དྲན་ཐོ་ དེ་ལས་ རིགས་མཚན་ཚུ་ ལོག་སྟེ་ ཆུ་བཏང་དགོ།
+  ད་ལྟོ་ཡོད་པའི་བང་སྒྲིག་ལས་ མངོན་གསལ་འབད་ནི། `Supervisor::restore_snapshot` གིས་ ཡང་དག་པའི་འགྲུལ་ལམ་ཡང་ན་ གང་རུང་ཅིག་ ངོས་ལེན་འབདཝ་ཨིན།
+  གཙང་སྦྲ་ཅན་གྱི་ `snapshots/<label>` སྣོད་འཛིན་མིང་། གིས་ ཡུ་ཨའི་གིས་ རྒྱུན་འགྲུལ་འདི་ མེ་ལོང་བཟོཝ་ལས་ རྒྱུན་སྐྱོང་ → བསྐྱར་གསོ་འབདཝ་ཨིན།
+  ཡིག་སྣོད་ཚུ་ ལག་ཐོག་ལས་ ལགཔ་མ་རྐྱབ་པར་ སྒྲུབ་བྱེད་བང་སྒྲིག་ཚུ་ བསྐྱར་རྩེད་འབད་ཚུགས།
+- **Rype & regenesis*** — མཉམ་རོགས་ཚུ་ གཡོག་བཀོལ་ནི་དང་ བསག་བཞག་སའི་སྣོད་ཐོ་ཚུ་བཏོན་བཏང་ནི་ དེ་ལས་ རིགས་མཚན་ཚུ་ ལོག་བཟོ་ནི།
+  Kagami, དང་ འགྱིབ་འདི་མཇུག་བསྡུ་བའི་སྐབས་ མཉམ་རོགས་ཚུ་ ལོག་འགོ་བཙུགས།
 
-- **Export snapshot** — copies peer storage/config/logs and the current genesis manifest into
-  `snapshots/<label>` under the active data root. Labels are sanitized automatically.
-- **Restore snapshot** — rehydrates peer storage, snapshot roots, configs, logs, and the genesis
-  manifest from an existing bundle. `Supervisor::restore_snapshot` accepts either an absolute path or
-  the sanitised `snapshots/<label>` folder name; the UI mirrors this flow so Maintenance → Restore
-  can replay evidence bundles without touching files manually.
-- **Wipe & re-genesis** — stops running peers, removes storage directories, regenerates genesis via
-  Kagami, and restarts peers when the wipe completes.
+རྒྱུན་རིམ་གཉིས་ཆ་ར་ འགྱུར་ལྡོག་བརྟག་དཔྱད་ (`export_snapshot_captures_storage_and_metadata`, གིས་ཁྱབ་སྟེ་ཡོདཔ་ཨིན།
+`wipe_and_regenerate_resets_storage_and_genesis`) གཏན་འབེབས་ཐོན་འབྲས་ཚུ་ འགན་ལེན་འབད་ནིའི་དོན་ལུ་ཨིན།
 
-Both flows are covered by regression tests (`export_snapshot_captures_storage_and_metadata`,
-`wipe_and_regenerate_resets_storage_and_genesis`) to guarantee deterministic outputs.
+## དྲན་ཐོ་དང་ཆུ་ཚོད།
 
-## Logs & streams
+ཌེཤ་བོརཌི་གིས་ གནད་སྡུད་/མེ་ཊིགསི་ཚུ་ མཐོང་སྣང་ཅིག་ནང་ གསལ་སྟོན་འབདཝ་ཨིན།
 
-The dashboard exposes data/metrics at a glance:
+- **ལོགས་** — — `irohad` stdout/stderr/རིམ་ལུགས་ཀྱི་ མི་ཚེ་འཁོར་རིམ་གྱི་འཕྲིན་དོན་ཚུ་ གཤམ་གསལ་ལྟར་ཨིན། སྒྲིག་སྟངས་ཚུ་ནང་རྒྱུ་ལམ་ཚུ་སོར་བསྒྱུར་འབད།
+- **བཀག་ཆ་ / བྱུང་ལས་** — འཛིན་སྐྱོང་འཐབ་ཡོད་པའི་ རྒྱུན་ལམ་ཚུ་ རང་བཞིན་གྱིས་ སྒྱུར་རྩིས་སྒྱུར་རྩིས་མགྱོགས་ཡིག་དང་གཅིག་ཁར་ ལོག་མཐུད་དེ་ གཞི་ཁྲམ་ཚུ་ མནན།
+  with Norito-decoded བཅུད་བསྡུས་རིགས།
+- **Status** — འོས་བསྡུའི་ Iroha དང་ བང་རིམ་གྱི་གཏིང་ཚད་དང་ ཐོན་འབྲས་ དེ་ལས་ འཕྲོ་མཐུད་ཚུ་གི་དོན་ལུ་ བརྡ་རྟགས་ཚུ་ བཏོནམ་ཨིན།
+- **འགོ་བཙུགས་གྲ་སྒྲིག་འབད་ནི་** — ཨེབ་པའི་ཤུལ་ལས་ **འགོ་བཙུགས་** (མཉམ་རོགས་ ཡང་ན་ མཉམ་རོགས་ ཡང་ན་ ཆ་མཉམ་) MOCHI འཚོལ་ཞིབ་ཚུ།
+  `/status` དང་མཉམ་པའི་རྒྱབ་ཕྱོགས་དང་བཅས་; བརྡ་བྱང་སྙན་ཞུ་འདི་ མཉམ་རོགས་རེ་རེ་གྲ་སྒྲིག་འབད་བའི་སྐབས་ (བལྟ་བརྟོག་འབད་དེ་ བལྟ་རྟོག་འབད་ཡོདཔ།
+  གྲལ་ཐིག་གཏིང་ཚད་) ཡང་ན་ གྲ་སྒྲིག་དུས་ཚོད་ཕྱིར་ཐོན་པ་ཅིན་ Torii འཛོལ་བ་འདི་ ཁ་ཐོག་ལུ་འཐབ།
 
-- **Logs** — follows `irohad` stdout/stderr/system lifecycle messages. Toggle channels in Settings.
-- **Blocks / Events** — managed streams auto-reconnect with exponential backoff and annotate frames
-  with Norito-decoded summaries.
-- **Status** — polls `/status` and renders sparklines for queue depth, throughput, and latency.
-- **Startup readiness** — after pressing **Start** (single peer or all peers), MOCHI probes
-  `/status` with bounded backoff; the banner reports when each peer goes ready (with the observed
-  queue depth) or surfaces the Torii error if readiness times out.
+མངའ་སྡེ་འཚོལ་ཞིབ་དང་ གཞས་ཚིག་བརྩམ་མི་ཚུ་གི་དོན་ལུ་ མཆོང་ལྡེ་ཚུ་གིས་ རྩིས་ཁྲ་དང་རྒྱུ་དངོས་ མཉམ་རོགས་ དེ་ལས་ སྤྱིར་བཏང་ཚུ་ མགྱོགས་དྲགས་སྦེ་ འཛུལ་སྤྱོད་འབད་ཚུགས།
+UI མ་བཞག་པར་བཀོད་རྒྱ་ཚུ། པི་རསི་གིས་ ཁྱོད་ཀྱིས་ ངེས་གཏན་བཟོ་ཚུགས་ནིའི་དོན་ལུ་ `FindPeers` འདྲི་དཔྱད་འདི་ མེ་ལོང་ནང་བཟོཝ་ཨིན།
+མི་མང་ལྡེ་མིག་ག་འདི་ མཉམ་བསྡོམས་བརྟག་དཔྱད་ཚུ་ གཡོག་བཀོལ་མ་འབད་བའི་ཧེ་མ་ བདེན་དཔྱད་ཆ་ཚན་ནང་ ཐོ་བཀོད་འབད་ཡོདཔ་ཨིན།
 
-Tabs for state explorer and composer provide quick access to accounts, assets, peers, and common
-instructions without leaving the UI. The Peers view mirrors the `FindPeers` query so you can confirm
-which public keys are currently registered in the validator set before running integration tests.
+བརྩམ་མི་ལག་ཆས་ཕྲ་རིང་གི་ **མིང་རྟགས་བཀོད་པའི་དབང་འཛིན་ནང་འདྲེན་ཡང་ན་ཞུན་དག་འབད་ནི་ལུ་ རྩོམ་སྒྲིག་ལག་ཆས་ཕྲ་རིང་གི་ **མིང་རྟགས་བཀོད་ཡོད་པའི་ མཚན་རྟགས་** ཨེབ་རྟ་འདི་ལག་ལེན་འཐབ། ཚིག༌ཕྲད
+ཌའི་ལོག་གིས་ ཤུགས་ལྡན་ཡོངས་འབྲེལ་རྩ་བ་ (`<data_root>/<profile>/signers.json`), དང་སྲུང་བཞག་འབད་ནུག
+བརྡ་རྟགས་ལྡེ་མིག་ཚུ་ ཚོང་འབྲེལ་སྔོན་ལྟ་དང་ ཞུ་ཡིག་ཚུ་གི་དོན་ལུ་ དེ་འཕྲོ་ལས་ འཐོབ་ཚུགས། དྲང་གཞིའི་སྐབས།
+བརྩམ་མི་འདི་ བཱན་ཌི་འབད་ཡོད་པའི་གོང་འཕེལ་གྱི་ལྡེ་མིག་ཚུ་ལུ་ལོག་འགྱོཝ་ལས་ ཉེ་གནས་ཀྱི་ལཱ་གི་རྒྱུན་རིམ་ཚུ་ འཕྲོ་མཐུད་དེ་རང་ལཱ་འབད་དོ་ཡོདཔ་ཨིན།
+ད་ལྟོ་འབྲི་ཤོག་ཚུ་གིས་ མིཊི་/བཱརན་/སྤོ་སོར་ (འོད་རྟགས་ཐོབ་མི་ཚུ་རྩིས་ཏེ་) མངའ་ཁོངས་/གྲུབ་འབྲས་ཚུ་/རྒྱུ་དངོས་ངེས་འཛིན་ཚུ་ ཁྱབ་ཚུགསཔ་ཨིན།
+ཐོ་བཀོད་དང་ རྩིས་ཁྲ་འཛུལ་ཞུགས་སྲིད་བྱུས་ སྣ་མང་གྲོས་འཆར་ གནམ་སྟོང་སྣོད་ཐོ་ གསལ་སྟོན་ (AXT/AMX) ཚུ་ཨིན།
+SoraFS pin དང་ གཞུང་སྐྱོང་བྱ་བ་ཚུ་ གནང་བ་དང་ ཡང་ན་ ཆ་མེད་གཏང་ནི་བཟུམ་གྱི་ འགན་ཁུར་འདི་ སྤྱིར་བཏང་སྦེ་ གསལ་སྟོན་འབདཝ་ཨིན།
+ལམ་སྟོན་རྩོམ་སྒྲིགཔ་གི་ལཱ་ཚུ་ ལགཔ་གིས་བྲིས་མ་དགོ་པར་ བསྐྱར་སྦྱོང་འབད་ཚུགས།
 
-Use the composer toolbar's **Manage signing vault** button to import or edit signing authorities. The
-dialog writes entries to the active network root (`<data_root>/<profile>/signers.json`), and saved
-vault keys are immediately available for transaction previews and submissions. When the vault is
-empty the composer falls back to the bundled development keys so local workflows continue to work.
-Forms now cover mint/burn/transfer (including implicit receive), domain/account/asset-definition
-registration, account admission policies, multisig proposals, Space Directory manifests (AXT/AMX),
-SoraFS pin manifests, and governance actions such as granting or revoking roles so common
-roadmap-authoring tasks can be rehearsed without hand-writing Norito payloads.
+## གཙང་སྦྲ་དང་དཀའ་ངལ་སེལ་ནི།- ལྟ་རྟོག་འབད་མི་ མཉམ་རོགས་ཚུ་ མཚམས་འཇོག་འབད་ནིའི་དོན་ལུ་ ཞུ་ཡིག་འདི་བཀག་དགོ།
+- གནས་སྟངས་ཆ་མཉམ་སླར་སྒྲིག་འབད་ནི་ལུ་ གནད་སྡུད་རྩ་བའི་ (`rm -rf <data_root>`) རྩ་བསྐྲད་གཏང་།
+- Kagami ཡང་ན་ irohad གནས་ཁོངས་ཚུ་བསྒྱུར་བཅོས་འབད་བ་ཅིན་ མཐའ་འཁོར་འགྱུར་ཅན་ཚུ་དུས་མཐུན་བཟོ་ནི་ཡང་ན་ འདི་དང་གཅིག་ཁར་ལོག་སྟེ་ MOCHI འདི་བསྐྱར་གཡོག་བཀོལ།
+  འོས་འབབ་ཅན་གྱི་ CLI དར་ཆ་ཚུ་; སྒྲིག་སྟངས་ཚུ་ ཌའི་ལོག་འདི་ ཤུལ་མམ་གྱི་འཇུག་སྤྱོད་གུ་ཡོད་པའི་ འགྲུལ་ལམ་གསརཔ་ཚུ་ གནས་ཏེ་འོང་།
 
-## Cleanup & troubleshooting
+ཁ་སྐོང་རང་བཞིན་ཞིབ་དཔྱད་ཀྱི་དོན་ལུ་ `mochi/mochi-core/tests` (supervisor མི་ཚེ་འཁོར་རིམ་བརྟག་དཔྱད) དང་།
+`mochi/mochi-integration` གིས་ Torii གནས་སྟངས་ཚུ་གི་དོན་ལུ་ཨིན། བང་རིམ་ཡང་ན་ གློག་ཐག་བཏང་ནིའི་དོན་ལུ་
+ཌེཀསི་ཊོཔ་ སི་ཨའི་ པའིཔ་ལའིན་ཚུ་ནང་ {doc}`mochi/packaging` ལམ་སྟོན་ལུ་གཞི་བསྟུན་འབད།
 
-- Stop the application to terminate supervised peers.
-- Remove the data root (`rm -rf <data_root>`) to reset all state.
-- If Kagami or irohad locations change, update the environment variables or re-run MOCHI with the
-  appropriate CLI flags; the Settings dialog will persist new paths on the next apply.
+## ས་གནས་བརྟག་དཔྱད།
 
-For additional automation check `mochi/mochi-core/tests` (supervisor lifecycle tests) and
-`mochi/mochi-integration` for mocked Torii scenarios. To ship bundles or wire the
-desktop into CI pipelines, refer to the {doc}`mochi/packaging` guide.
-
-## Local test gate
-
-Run `ci/check_mochi.sh` before sending patches so the shared CI gate exercises all three MOCHI
-crates:
+`ci/check_mochi.sh` འདི་ ཐབས་འཕྲུལ་ཚུ་མ་གཏང་པའི་ཧེ་མ་ གཡོག་བཀོལ་ནི་འདི་གིས་ བརྗེ་སོར་འབད་དེ་ བརྗེ་སོར་འབད་དེ་ མཉམ་སྤྱོད་འབད་མི་ CI གི་སྒོ་འདི་གིས་ MOCHI གསུམ་ཆ་ར་ ལག་ལེན་འཐབ་ཨིན།
+carttes:
 
 ```bash
 ./ci/check_mochi.sh
 ```
 
-The helper executes `cargo check`/`cargo test` for `mochi-core`, `mochi-ui-egui`, and
-`mochi-integration`, which catches fixture drift (canonical block/event captures) and egui harness
-regressions in one shot. If the script reports stale fixtures, rerun the ignored regeneration tests,
-for example:
+གྲོགས་རམ་པ་འདི་གིས་ `mochi-core`, `mochi-ui-egui`, གི་དོན་ལུ་ `cargo check`/`cargo test` ལག་ལེན་འཐབ་ཨིན།
+`mochi-integration`, དེ་གིས་ བརྟན་བརྟན་གྱི་ ཌིཕཊ་ (ཀེ་ནོ་ནིག་བཀག་ཆ་/བྱུང་རིམ་ཚུ་ བཟུང་མི་ཚུ་) དང་ ཨི་གུའི་ ཧར་ནིས་ འཛིན་མི་ཚུ།
+པར་གཅིག་ནང་ འགྱུར་ལྡོག་ཚུ། ཡིག་གཟུགས་འདི་གིས་ སྒྲིག་སྟངས་སྙན་ཞུ་ཚུ་སྙན་ཞུ་འབད་བ་ཅིན་ སྣང་མེད་བཞག་ཡོད་པའི་ བསྐྱར་ལོག་བརྟག་དཔྱད་ཚུ་ ལོག་གཡོག་བཀོལཝ་ཨིན།
+དཔྱེ༌འབད༌བ༌ཅིན:
 
 ```bash
 cargo test -p mochi-core regenerate_block_wire_fixture -- --ignored
 ```
 
-Re-running the gate after regenerating ensures the updated bytes stay consistent before you push.
+བསྐྱར་བཟོ་འབད་བའི་ཤུལ་ལས་ འཛུལ་སྒོ་འདི་ ལོག་སྟེ་གཡོག་བཀོལ་མི་འདི་གིས་ ཁྱོད་ཀྱིས་ བསྐུལ་མ་མ་འབད་བའི་ཧེ་མ་ དུས་མཐུན་བཟོ་ཡོད་པའི་བཱའིཊི་ཚུ་ རིམ་མཐུན་སྦེ་སྡོད་ནི་ལུ་ ངེས་གཏན་བཟོཝ་ཨིན།

@@ -7,188 +7,179 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 8b6388355a41797eb7d0b7f47cfa8fcac4e136c5a2e5eb0a264384ecdba930b8
 source_last_modified: "2026-02-01T13:51:49.945202+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Iroha v2 Data Model – Deep Dive
+# Iroha v2 მონაცემთა მოდელი – ღრმა ჩაყვინთვის
 
-This document explains the structures, identifiers, traits, and protocols that form the Iroha v2 data model, as implemented in the `iroha_data_model` crate and used across the workspace. It is meant to be a precise reference you can review and propose updates to.
+ეს დოკუმენტი განმარტავს სტრუქტურებს, იდენტიფიკატორებს, მახასიათებლებს და პროტოკოლებს, რომლებიც ქმნიან Iroha v2 მონაცემთა მოდელს, როგორც დანერგილია `iroha_data_model` კრატში და გამოიყენება სამუშაო სივრცეში. ეს არის ზუსტი მითითება, რომელსაც შეგიძლიათ გადახედოთ და შესთავაზოთ განახლებები.
 
-## Scope and Foundations
+## სფერო და საფუძვლები
 
-- Purpose: Provide canonical types for domain objects (domains, accounts, assets, NFTs, roles, permissions, peers), state-changing instructions (ISI), queries, triggers, transactions, blocks, and parameters.
-- Serialization: All public types derive Norito codecs (`norito::codec::{Encode, Decode}`) and schema (`iroha_schema::IntoSchema`). JSON is used selectively (e.g., for HTTP and `Json` payloads) behind feature flags.
-- IVM note: Certain deserialization-time validations are disabled when targeting the Iroha Virtual Machine (IVM), since the host performs validation before invoking contracts (see crate docs in `src/lib.rs`).
-- FFI gates: Some types are conditionally annotated for FFI via `iroha_ffi` behind `ffi_export`/`ffi_import` to avoid overhead when FFI is not needed.
+- მიზანი: მიაწოდეთ კანონიკური ტიპები დომენის ობიექტებისთვის (დომენები, ანგარიშები, აქტივები, NFT, როლები, ნებართვები, თანატოლები), მდგომარეობის შეცვლის ინსტრუქციები (ISI), მოთხოვნები, ტრიგერები, ტრანზაქციები, ბლოკები და პარამეტრები.
+- სერიალიზაცია: ყველა საჯარო ტიპი იღებს Norito კოდეკებს (`norito::codec::{Encode, Decode}`) და სქემას (`iroha_schema::IntoSchema`). JSON გამოიყენება შერჩევით (მაგ., HTTP და `Json` დატვირთვისთვის) ფუნქციების დროშების მიღმა.
+- IVM შენიშვნა: გარკვეული დესერიალიზაციის დროის ვალიდაცია გამორთულია Iroha ვირტუალური აპარატის (IVM) გამიზნებისას, ვინაიდან ჰოსტი ახორციელებს ვალიდაციას კონტრაქტების გამოძახებამდე (იხილეთ კრატის დოკუმენტები I1003NI00X-ში).
+- FFI კარიბჭე: ზოგიერთი ტიპი პირობითად არის ანოტირებული FFI-სთვის `iroha_ffi`-ის საშუალებით `ffi_export`/`ffi_import`-ის უკან, რათა თავიდან იქნას აცილებული ზედნადები, როდესაც FFI არ არის საჭირო.
 
-## Core Traits and Helpers
+## ძირითადი თვისებები და დამხმარეები
 
-- `Identifiable`: Entities have a stable `Id` and `fn id(&self) -> &Self::Id`. Should be derived with `IdEqOrdHash` for map/set friendliness.
-- `Registrable`/`Registered`: Many entities (e.g., `Domain`, `AssetDefinition`, `Role`) use a builder pattern. `Registered` ties the runtime type to a lightweight builder type (`With`) suitable for registration transactions.
-- `HasMetadata`: Unified access to a key/value `Metadata` map.
-- `IntoKeyValue`: Storage split helper to store `Key` (ID) and `Value` (data) separately to reduce duplication.
-- `Owned<T>`/`Ref<'world, K, V>`: Lightweight wrappers used in storages and query filters to avoid unnecessary copies.
+- `Identifiable`: ერთეულებს აქვთ სტაბილური `Id` და `fn id(&self) -> &Self::Id`. უნდა იყოს მიღებული `IdEqOrdHash`-ით რუკის/კომპლექტის კეთილგანწყობისთვის.
+- `Registrable`/`Registered`: ბევრი ერთეული (მაგ., `Domain`, `AssetDefinition`, `Role`) იყენებს აღმშენებლის შაბლონს. `Registered` აკავშირებს გაშვების ტიპს მსუბუქ მშენებლის ტიპთან (`With`), რომელიც შესაფერისია სარეგისტრაციო ტრანზაქციებისთვის.
+- `HasMetadata`: ერთიანი წვდომა გასაღების/მნიშვნელობის `Metadata` რუკაზე.
+- `IntoKeyValue`: მეხსიერების გაყოფის დამხმარე `Key` (ID) და `Value` (მონაცემების) ცალკე შესანახად, დუბლირების შესამცირებლად.
+- `Owned<T>`/`Ref<'world, K, V>`: მსუბუქი შეფუთვები, რომლებიც გამოიყენება საცავებში და შეკითხვის ფილტრებში, ზედმეტი ასლების თავიდან ასაცილებლად.
 
-## Names and Identifiers
+## სახელები და იდენტიფიკატორები
 
-- `Name`: Valid textual identifier. Disallows whitespace and reserved characters `@`, `#`, `$` (used in composite IDs). Constructible via `FromStr` with validation. Names are normalized to Unicode NFC on parse (canonically equivalent spellings are treated as identical and stored composed). The special name `genesis` is reserved (checked case-insensitively).
-- `IdBox`: A sum-type envelope for any supported ID (`DomainId`, `AccountId`, `AssetDefinitionId`, `AssetId`, `NftId`, `PeerId`, `TriggerId`, `RoleId`, `Permission`, `CustomParameterId`). Useful for generic flows and Norito encoding as a single type.
-- `ChainId`: Opaque chain identifier used for replay protection in transactions.
+- `Name`: სწორი ტექსტური იდენტიფიკატორი. არ იძლევა უფსკრული და დაჯავშნილი სიმბოლოები `@`, `#`, `$` (გამოიყენება კომპოზიტურ ID-ებში). კონსტრუირებადია `FromStr`-ის მეშვეობით ვალიდაციის საშუალებით. სახელები ნორმალიზებულია Unicode NFC-ზე ანალიზზე (კანონიკურად ექვივალენტური მართლწერები განიხილება, როგორც იდენტური და ინახება შედგენილი). სპეციალური სახელწოდება `genesis` დაცულია (შემოწმებულია ასოების გარეშე).
+- `IdBox`: ჯამის ტიპის კონვერტი ნებისმიერი მხარდაჭერილი ID-სთვის (`DomainId`, `AccountId`, `AssetDefinitionId`, `AssetId`, Kotodama `TriggerId`, `RoleId`, `Permission`, `CustomParameterId`). სასარგებლოა ზოგადი ნაკადებისთვის და Norito კოდირებისთვის, როგორც ერთი ტიპის.
+- `ChainId`: გაუმჭვირვალე ჯაჭვის იდენტიფიკატორი, რომელიც გამოიყენება ტრანზაქციებში განმეორებით დასაცავად.ID-ების სიმებიანი ფორმები (ორმხრივი `Display`/`FromStr`-ით):
+- `DomainId`: `name` (მაგ., `wonderland`).
+- `AccountId`: კანონიკური იდენტიფიკატორი დაშიფრულია `AccountAddress`-ის მეშვეობით, რომელიც ავლენს IH58-ს, Sora შეკუმშულს (`sora…`) და კანონიკურ თექვსმეტობით კოდეკებს (Kotodama, Kotodama, `canonical_hex`, `parse_any`). IH58 არის ანგარიშის სასურველი ფორმატი; `sora…` ფორმა მეორე საუკეთესოა მხოლოდ Sora UX-ისთვის. ადამიანისთვის შესაფერისი მარშრუტიზაციის მეტსახელი `alias@domain` შენახულია UX-ისთვის, მაგრამ აღარ განიხილება, როგორც ავტორიტეტული იდენტიფიკატორი. Torii ახდენს შემომავალი სტრიქონების ნორმალიზებას `AccountAddress::parse_any`-ის მეშვეობით. ანგარიშის ID-ები მხარს უჭერენ როგორც ერთ გასაღების, ასევე მრავალსიგნ კონტროლერებს.
+- `AssetDefinitionId`: `asset#domain` (მაგ., `xor#soramitsu`).
+- `AssetId`: `asset#domain#account` ან სტენოგრაფიული `asset##account` თუ განმარტების დომენი უდრის ანგარიშის დომენს, სადაც `account` არის კანონიკური `AccountId` სტრიქონი (სასურველია IH58).
+- `NftId`: `nft$domain` (მაგ., `rose$garden`).
+- `PeerId`: `public_key` (თანასწორობა არის საჯარო გასაღებით).
 
-String forms of IDs (round-trippable with `Display`/`FromStr`):
-- `DomainId`: `name` (e.g., `wonderland`).
-- `AccountId`: canonical identifier encoded via `AccountAddress`, which exposes IH58, Sora compressed (`sora…`), and canonical hex codecs (`AccountAddress::to_ih58`, `to_compressed_sora`, `canonical_hex`, `parse_any`). IH58 is the preferred account format; the `sora…` form is second-best for Sora-only UX. The human-friendly routing alias `alias@domain` is preserved for UX but is no longer treated as the authoritative identifier. Torii normalises incoming strings through `AccountAddress::parse_any`. Account IDs support both single-key and multisig controllers.
-- `AssetDefinitionId`: `asset#domain` (e.g., `xor#soramitsu`).
-- `AssetId`: `asset#domain#account` or shorthand `asset##account` if the definition domain equals the account domain, where `account` is the canonical `AccountId` string (IH58 preferred).
-- `NftId`: `nft$domain` (e.g., `rose$garden`).
-- `PeerId`: `public_key` (peer equality is by public key).
+## პირები
 
-## Entities
-
-### Domain
-- `DomainId { name: Name }` – unique name.
+### დომენი
+- `DomainId { name: Name }` – უნიკალური სახელი.
 - `Domain { id, logo: Option<IpfsPath>, metadata: Metadata, owned_by: AccountId }`.
-- Builder: `NewDomain` with `with_logo`, `with_metadata`, then `Registrable::build(authority)` sets `owned_by`.
+- მშენებელი: `NewDomain` `with_logo`, `with_metadata`, შემდეგ `Registrable::build(authority)` კომპლექტი `owned_by`.
 
-### Account
-- `AccountId { domain: DomainId, controller: AccountController }` (controller = single key or multisig policy).
-- `Account { id, metadata, label?, uaid? }` — `label` is an optional stable alias used by rekey records, `uaid` carries the optional Nexus-wide [Universal Account ID](./universal_accounts_guide.md).
-- Builder: `NewAccount` via `Account::new(id)`; `HasMetadata` for both builder and entity.
+### ანგარიში
+- `AccountId { domain: DomainId, controller: AccountController }` (კონტროლერი = ერთი გასაღები ან მულტისიგ პოლიტიკა).
+- `Account { id, metadata, label?, uaid? }` — `label` არის არასავალდებულო სტაბილური მეტსახელი, რომელსაც იყენებენ ხელახალი ჩანაწერები, `uaid` ატარებს არასავალდებულო Nexus ფართო [უნივერსალური ანგარიშის ID](Kotodama).
+- მშენებელი: `NewAccount` `Account::new(id)` მეშვეობით; `HasMetadata` როგორც მშენებლისთვის, ასევე ერთეულისთვის.
 
-### Asset Definitions and Assets
+### აქტივების განმარტებები და აქტივები
 - `AssetDefinitionId { domain: DomainId, name: Name }`.
 - `AssetDefinition { id, spec: NumericSpec, mintable: Mintable, logo: Option<IpfsPath>, metadata, owned_by: AccountId, total_quantity: Numeric }`.
   - `Mintable`: `Infinitely` | `Once` | `Limited(u32)` | `Not`.
-  - Builders: `AssetDefinition::new(id, spec)` or convenience `numeric(id)`; setters for `metadata`, `mintable`, `owned_by`.
+  - მშენებლები: `AssetDefinition::new(id, spec)` ან კომფორტული `numeric(id)`; სეტერები `metadata`, `mintable`, `owned_by`.
 - `AssetId { account: AccountId, definition: AssetDefinitionId }`.
-- `Asset { id, value: Numeric }` with storage-friendly `AssetEntry`/`AssetValue`.
-- `AssetTotalQuantityMap = BTreeMap<AssetDefinitionId, Numeric>` exposed for summary APIs.
+- `Asset { id, value: Numeric }` შესანახად მოსახერხებელი `AssetEntry`/`AssetValue`.
+- `AssetTotalQuantityMap = BTreeMap<AssetDefinitionId, Numeric>` გამოფენილია შემაჯამებელი API-ებისთვის.
 
 ### NFTs
 - `NftId { domain: DomainId, name: Name }`.
-- `Nft { id, content: Metadata, owned_by: AccountId }` (content is arbitrary key/value metadata).
-- Builder: `NewNft` via `Nft::new(id, content)`.
+- `Nft { id, content: Metadata, owned_by: AccountId }` (შინაარსი არის თვითნებური გასაღები/მნიშვნელობის მეტამონაცემები).
+- მშენებელი: `NewNft` `Nft::new(id, content)`-ით.
 
-### Roles and Permissions
+### როლები და ნებართვები
 - `RoleId { name: Name }`.
-- `Role { id, permissions: BTreeSet<Permission> }` with builder `NewRole { inner: Role, grant_to: AccountId }`.
-- `Permission { name: Ident, payload: Json }` – the `name` and payload schema must align with the active `ExecutorDataModel` (see below).
+- `Role { id, permissions: BTreeSet<Permission> }` მშენებელთან `NewRole { inner: Role, grant_to: AccountId }`.
+- `Permission { name: Ident, payload: Json }` – `name` და დატვირთვის სქემა უნდა შეესაბამებოდეს აქტიურ `ExecutorDataModel`-ს (იხ. ქვემოთ).
 
-### Peers
+### თანატოლები
 - `PeerId { public_key: PublicKey }`.
-- `Peer { address: SocketAddr, id: PeerId }` and parsable `public_key@address` string form.
+- `Peer { address: SocketAddr, id: PeerId }` და გასარჩევი `public_key@address` სიმებიანი ფორმა.### კრიპტოგრაფიული პრიმიტივები (მახასიათებელი `sm`)
+- `Sm2PublicKey` და `Sm2Signature`: SEC1-თან თავსებადი წერტილები და ფიქსირებული სიგანის `r∥s` ხელმოწერები SM2-სთვის. კონსტრუქტორები ამოწმებენ მრუდის წევრობას და განმასხვავებელ ID-ებს; Norito კოდირება ასახავს `iroha_crypto`-ის მიერ გამოყენებულ კანონიკურ წარმოდგენას.
+- `Sm3Hash`: `[u8; 32]` ახალი ტიპი, რომელიც წარმოადგენს GM/T 0004 დაიჯესტს, რომელიც გამოიყენება მანიფესტებში, ტელემეტრიაში და სისკალურ პასუხებში.
+- `Sm4Key`: 128-ბიტიანი სიმეტრიული კლავიში გაზიარებული მასპინძელ სისტემასა და მონაცემთა მოდელის მოწყობილობებს შორის.
+ეს ტიპები დგანან არსებულ Ed25519/BLS/ML-DSA პრიმიტივებთან ერთად და გახდებიან საჯარო სქემის ნაწილი, როგორც კი სამუშაო სივრცე აშენდება `--features sm`-ით.
 
-### Cryptographic primitives (feature `sm`)
-- `Sm2PublicKey` and `Sm2Signature`: SEC1-compliant points and fixed-width `r∥s` signatures for SM2. Constructors validate curve membership and distinguishing IDs; Norito encoding mirrors the canonical representation used by `iroha_crypto`.
-- `Sm3Hash`: `[u8; 32]` newtype representing the GM/T 0004 digest, used in manifests, telemetry, and syscall responses.
-- `Sm4Key`: 128-bit symmetric key wrapper shared between host syscalls and data-model fixtures.
-These types sit alongside the existing Ed25519/BLS/ML-DSA primitives and become part of the public schema once the workspace is built with `--features sm`.
-
-### Triggers and Events
-- `TriggerId { name: Name }` and `Trigger { id, action: action::Action }`.
+### ტრიგერები და მოვლენები
+- `TriggerId { name: Name }` და `Trigger { id, action: action::Action }`.
 - `action::Action { executable: Executable, repeats: Repeats, authority: AccountId, filter: EventFilterBox, metadata }`.
-  - `Repeats`: `Indefinitely` or `Exactly(u32)`; ordering and depletion utilities included.
-  - Safety: `TriggerCompleted` cannot be used as an action’s filter (validated during (de)serialization).
-- `EventBox`: sum type for pipeline, pipeline-batch, data, time, execute-trigger, and trigger-completed events; `EventFilterBox` mirrors that for subscriptions and trigger filters.
+  - `Repeats`: `Indefinitely` ან `Exactly(u32)`; შეკვეთისა და ამოწურვის კომუნალური მომსახურება შედის.
+  - უსაფრთხოება: `TriggerCompleted` არ შეიძლება გამოყენებულ იქნას მოქმედების ფილტრად (დამოწმებული (დე)სერიალიზაციის დროს).
+- `EventBox`: ჯამის ტიპი მილსადენის, მილსადენის პარტიისთვის, მონაცემები, დრო, შესრულება-გამშვები და ტრიგერით დასრულებული მოვლენები; `EventFilterBox` ასახავს გამოწერებს და ააქტიურებს ფილტრებს.
 
-## Parameters and Configuration
+## პარამეტრები და კონფიგურაცია
 
-- System parameter families (all `Default`ed, carry getters, and convert to individual enums):
+- სისტემის პარამეტრების ოჯახები (ყველა `Default`ed, გადამყვანები და კონვერტირება ინდივიდუალურ რიცხვებად):
 - `SumeragiParameters { block_time_ms, commit_time_ms, min_finality_ms, pacing_factor_bps, max_clock_drift_ms, collectors_k, collectors_redundant_send_r }`.
   - `BlockParameters { max_transactions: NonZeroU64 }`.
   - `TransactionParameters { max_signatures, max_instructions, ivm_bytecode_size, max_tx_bytes, max_decompressed_bytes }`.
   - `SmartContractParameters { fuel, memory, execution_depth }`.
-- `Parameters` groups all families and a `custom: BTreeMap<CustomParameterId, CustomParameter>`.
-- Single-parameter enums: `SumeragiParameter`, `BlockParameter`, `TransactionParameter`, `SmartContractParameter` for diff-like updates and iteration.
-- Custom parameters: executor-defined, carried as `Json`, identified by `CustomParameterId` (a `Name`).
+- `Parameters` აჯგუფებს ყველა ოჯახს და `custom: BTreeMap<CustomParameterId, CustomParameter>`.
+- ერთპარამეტრიანი ნომრები: `SumeragiParameter`, `BlockParameter`, `TransactionParameter`, `SmartContractParameter` განსხვავებების მსგავსი განახლებისთვის და გამეორებისთვის.
+- მორგებული პარამეტრები: შემსრულებლის მიერ განსაზღვრული, გადატანილი როგორც `Json`, იდენტიფიცირებული `CustomParameterId`-ით (a `Name`).
 
-## ISI (Iroha Special Instructions)
+## ISI (Iroha სპეციალური ინსტრუქციები)
 
-- Core trait: `Instruction` with `dyn_encode`, `as_any`, and a stable per-type identifier `id()` (defaults to the concrete type name). All instructions are `Send + Sync + 'static`.
-- `InstructionBox`: owned `Box<dyn Instruction>` wrapper with clone/eq/ord implemented via type ID + encoded bytes.
-- Built-in instruction families are organized under:
-  - `mint_burn`, `transfer`, `register`, and a `transparent` bundle of helpers.
-  - Type enums for meta flows: `InstructionType`, boxed sums like `SetKeyValueBox` (domain/account/asset_def/nft/trigger).
-- Errors: rich error model under `isi::error` (evaluation type errors, find errors, mintability, math, invalid parameters, repetition, invariants).
-- Instruction registry: the `instruction_registry!{ ... }` macro builds a runtime decode registry keyed by type name. Used by `InstructionBox` clone and Norito serde to achieve dynamic (de)serialization. If no registry has been explicitly set via `set_instruction_registry(...)`, a built-in default registry with all core ISI is lazily installed on first use to keep binaries robust.
+- ძირითადი თვისება: `Instruction` `dyn_encode`, `as_any` და სტაბილური თითო ტიპის იდენტიფიკატორით `id()` (ნაგულისხმევია კონკრეტული ტიპის სახელი). ყველა ინსტრუქცია არის `Send + Sync + 'static`.
+- `InstructionBox`: ფლობდა `Box<dyn Instruction>` შეფუთვას კლონით/eq/ord-ით, რომელიც განხორციელებულია ID ტიპის + კოდირებული ბაიტით.
+- ჩაშენებული ინსტრუქციის ოჯახები ორგანიზებულია შემდეგნაირად:
+  - `mint_burn`, `transfer`, `register` და დამხმარეების `transparent` ნაკრები.
+  - აკრიფეთ ნომრები მეტა ნაკადებისთვის: `InstructionType`, ყუთში თანხები, როგორიცაა `SetKeyValueBox` (დომენი/ანგარიში/asset_def/nft/ტრიგერი).
+- შეცდომები: მდიდარი შეცდომის მოდელი `isi::error`-ის ქვეშ (შეფასების ტიპის შეცდომები, შეცდომების პოვნა, შეჯამება, მათემატიკა, არასწორი პარამეტრები, გამეორება, ინვარიანტები).
+- ინსტრუქციის რეესტრი: `instruction_registry!{ ... }` მაკრო აშენებს გაშვების დეკოდირების რეესტრს, რომელსაც აქვს ტიპის სახელი. გამოიყენება `InstructionBox` კლონის და Norito სერდის მიერ დინამიური (დე)სერიალიზაციის მისაღწევად. თუ რეესტრი აშკარად არ არის დაყენებული `set_instruction_registry(...)`-ის საშუალებით, ჩაშენებული ნაგულისხმევი რეესტრი ყველა ძირითადი ISI-ით ზარმაცად არის დაინსტალირებული პირველი გამოყენებისას, რათა შეინარჩუნოს ორობითი ფაილები.
 
-## Transactions
-
-- `Executable`: either `Instructions(ConstVec<InstructionBox>)` or `Ivm(IvmBytecode)`. `IvmBytecode` serializes as base64 (transparent newtype over `Vec<u8>`).
-- `TransactionBuilder`: constructs a transaction payload with `chain`, `authority`, `creation_time_ms`, optional `time_to_live_ms` and `nonce`, `metadata`, and an `Executable`.
-  - Helpers: `with_instructions`, `with_bytecode`, `with_executable`, `with_metadata`, `set_nonce`, `set_ttl`, `set_creation_time`, `sign`.
-- `SignedTransaction` (versioned with `iroha_version`): carries `TransactionSignature` and payload; provides hashing and signature verification.
-- Entrypoints and results:
+## ტრანზაქციები- `Executable`: ან `Instructions(ConstVec<InstructionBox>)` ან `Ivm(IvmBytecode)`. `IvmBytecode` სერიდება როგორც base64 (გამჭვირვალე ახალი ტიპი `Vec<u8>`-ზე).
+- `TransactionBuilder`: აყალიბებს ტრანზაქციის სასარგებლო დატვირთვას `chain`, `authority`, `creation_time_ms`, სურვილისამებრ `time_to_live_ms` და `nonce`, Norito, `nonce`, Kotodama, `nonce`, `authority` `Executable`.
+  - დამხმარეები: `with_instructions`, `with_bytecode`, `with_executable`, `with_metadata`, `set_nonce`, `set_ttl`, `with_executable`, `set_nonce`, `set_ttl`, I1828NI000001
+- `SignedTransaction` (ვერსიით `iroha_version`): ატარებს `TransactionSignature` და დატვირთვას; უზრუნველყოფს ჰეშინგს და ხელმოწერის გადამოწმებას.
+- შესვლის პუნქტები და შედეგები:
   - `TransactionEntrypoint`: `External(SignedTransaction)` | `Time(TimeTriggerEntrypoint)`.
-  - `TransactionResult` = `Result<DataTriggerSequence, TransactionRejectionReason>` with hashing helpers.
-  - `ExecutionStep(ConstVec<InstructionBox>)`: a single ordered batch of instructions in a transaction.
+  - `TransactionResult` = `Result<DataTriggerSequence, TransactionRejectionReason>` ჰეშირების დამხმარეებით.
+  - `ExecutionStep(ConstVec<InstructionBox>)`: ინსტრუქციების ერთი შეკვეთილი პარტია ტრანზაქციაში.
 
-## Blocks
+## ბლოკები
 
-- `SignedBlock` (versioned) encapsulates:
-  - `signatures: BTreeSet<BlockSignature>` (from validators),
+- `SignedBlock` (ვერსიით) აერთიანებს:
+  - `signatures: BTreeSet<BlockSignature>` (ვალიდატორებისგან),
   - `payload: BlockPayload { header: BlockHeader, transactions: Vec<SignedTransaction> }`,
-  - `result: BlockResult` (secondary execution state) containing `time_triggers`, entry/result Merkle trees, `transaction_results`, and `fastpq_transcripts: BTreeMap<Hash, Vec<TransferTranscript>>`.
-- Utilities: `presigned`, `set_transaction_results(...)`, `set_transaction_results_with_transcripts(...)`, `header()`, `signatures()`, `hash()`, `add_signature`, `replace_signatures`.
-- Merkle roots: transaction entrypoints and results are committed via Merkle trees; result Merkle root is placed into the block header.
-- Block inclusion proofs (`BlockProofs`) expose both entry/result Merkle proofs and the `fastpq_transcripts` map so off-chain provers can fetch the transfer deltas associated with a transaction hash.
-- `ExecWitness` messages (streamed via Torii and piggy-backed on consensus gossip) now include both `fastpq_transcripts` and prover-ready `fastpq_batches: Vec<FastpqTransitionBatch>` with embedded `public_inputs` (dsid, slot, roots, perm_root, tx_set_hash), so external provers can ingest canonical FASTPQ rows without re-encoding transcripts.
+  - `result: BlockResult` (შესრულების მეორადი მდგომარეობა), რომელიც შეიცავს `time_triggers`, შესვლის/შედეგის Merkle ხეებს, `transaction_results` და `fastpq_transcripts: BTreeMap<Hash, Vec<TransferTranscript>>`.
+- კომუნალური საშუალებები: `presigned`, `set_transaction_results(...)`, `set_transaction_results_with_transcripts(...)`, `header()`, `signatures()`, `hash()`, I1823NI0000
+- Merkle roots: ტრანზაქციის შესვლის წერტილები და შედეგები მიიღება მერკლის ხეების მეშვეობით; შედეგად Merkle root მოთავსებულია ბლოკის სათაურში.
+- ბლოკის ჩართვის მტკიცებულებები (`BlockProofs`) ამჟღავნებს როგორც შესვლის/შედეგის Merkle-ის მტკიცებულებებს, ასევე `fastpq_transcripts` რუკას, რათა ჯაჭვის მიღმა პროვაიდერებმა შეძლონ ტრანსაქციის ჰეშთან დაკავშირებული გადაცემის დელტას მიღება.
+- `ExecWitness` შეტყობინებები (გადაცემული Torii-ის საშუალებით და კონსენსუსის ჭორებით დაფუძნებული ყულაბა) ახლა მოიცავს როგორც `fastpq_transcripts`-ს, ასევე პროვერტისთვის მზად `fastpq_batches: Vec<FastpqTransitionBatch>`-ს ჩაშენებული X0 root-ებით (Kotodama,50,0000024) perm_root, tx_set_hash), ასე რომ, გარე პროვერებს შეუძლიათ მიიღონ კანონიკური FASTPQ რიგები ტრანსკრიპტების ხელახალი კოდირების გარეშე.
 
-## Queries
+## შეკითხვები
 
-- Two flavors:
-  - Singular: implement `SingularQuery<Output>` (e.g., `FindParameters`, `FindExecutorDataModel`).
-  - Iterable: implement `Query<Item>` (e.g., `FindAccounts`, `FindAssets`, `FindDomains`, etc.).
-- Type-erased forms:
-  - `QueryBox<T>` is a boxed, erased `Query<Item = T>` with Norito serde backed by a global registry.
-  - `QueryWithFilter<T> { query, predicate, selector }` pairs a query with a DSL predicate/selector; converts into an erased iterable query via `From`.
-- Registry and codecs:
-  - `query_registry!{ ... }` builds a global registry mapping concrete query types to constructors by type name for dynamic decode.
-  - `QueryRequest = Singular(SingularQueryBox) | Start(QueryWithParams) | Continue(ForwardCursor)` and `QueryResponse = Singular(..) | Iterable(QueryOutput)`.
-  - `QueryOutputBatchBox` is a sum-type over homogeneous vectors (e.g., `Vec<Account>`, `Vec<Name>`, `Vec<AssetDefinition>`, `Vec<BlockHeader>`), plus tuple and extension helpers for efficient pagination.
-- DSL: Implemented in `query::dsl` with projection traits (`HasProjection<PredicateMarker>` / `SelectorMarker`) for compile-time-checked predicates and selectors. A `fast_dsl` feature exposes a lighter variant if needed.
+- ორი არომატი:
+  - სინგულარული: დანერგვა `SingularQuery<Output>` (მაგ., `FindParameters`, `FindExecutorDataModel`).
+  - განმეორებადი: დანერგვა `Query<Item>` (მაგ., `FindAccounts`, `FindAssets`, `FindDomains` და ა.შ.).
+- ტიპის წაშლილი ფორმები:
+  - `QueryBox<T>` არის ყუთში, წაშლილი `Query<Item = T>` Norito სერდიით, რომელსაც მხარს უჭერს გლობალური რეესტრი.
+  - `QueryWithFilter<T> { query, predicate, selector }` აწყვილებს მოთხოვნას DSL პრედიკატთან/სელექტორთან; გარდაიქმნება წაშლილ გამეორებად მოთხოვნად `From`-ის საშუალებით.
+- რეესტრი და კოდეკები:
+  - `query_registry!{ ... }` აშენებს გლობალურ რეესტრს, რომელიც ასახავს კონკრეტული მოთხოვნის ტიპებს კონსტრუქტორებისთვის ტიპის სახელების მიხედვით დინამიური დეკოდირებისთვის.
+  - `QueryRequest = Singular(SingularQueryBox) | Start(QueryWithParams) | Continue(ForwardCursor)` და `QueryResponse = Singular(..) | Iterable(QueryOutput)`.
+  - `QueryOutputBatchBox` არის ჯამის ტიპი ჰომოგენურ ვექტორებზე (მაგ., `Vec<Account>`, `Vec<Name>`, `Vec<AssetDefinition>`, `Vec<BlockHeader>`), პლუს ეფექტური კუპე და გაფართოების დამხმარეები.
+- DSL: დანერგილია `query::dsl`-ში პროექციის ნიშნებით (`HasProjection<PredicateMarker>` / `SelectorMarker`) კომპილაციის დროში შემოწმებული პრედიკატებისა და სელექტორებისთვის. საჭიროების შემთხვევაში, `fast_dsl` ფუნქცია გამოავლენს უფრო მსუბუქ ვარიანტს.
 
-## Executor and Extensibility
+## შემსრულებელი და გაფართოება- `Executor { bytecode: IvmBytecode }`: ვალიდატორის მიერ შესრულებული კოდის ნაკრები.
+- `ExecutorDataModel { parameters: CustomParameters, instructions: BTreeSet<Ident>, permissions: BTreeSet<Ident>, schema: Json }` აცხადებს შემსრულებლის მიერ განსაზღვრულ დომენს:
+  - მორგებული კონფიგურაციის პარამეტრები,
+  - მორგებული ინსტრუქციის იდენტიფიკატორები,
+  - ნებართვის ნიშნის იდენტიფიკატორები,
+  - JSON სქემა, რომელიც აღწერს კლიენტის ინსტრუმენტების მორგებულ ტიპებს.
+- პერსონალიზაციის ნიმუშები არსებობს `data_model/samples/executor_custom_data_model`-ში, რომელიც აჩვენებს:
+  - მორგებული ნებართვის ნიშანი `iroha_executor_data_model::permission::Permission` გამოყვანის საშუალებით,
+  - მორგებული პარამეტრი განსაზღვრულია, როგორც ტიპი, რომელიც კონვერტირებადია `CustomParameter`-ში,
+  - მორგებული ინსტრუქციები სერიული `CustomInstruction`-ში შესასრულებლად.
 
-- `Executor { bytecode: IvmBytecode }`: the validator-executed code bundle.
-- `ExecutorDataModel { parameters: CustomParameters, instructions: BTreeSet<Ident>, permissions: BTreeSet<Ident>, schema: Json }` declares the executor-defined domain:
-  - Custom configuration parameters,
-  - Custom instruction identifiers,
-  - Permission token identifiers,
-  - A JSON schema describing custom types for client tooling.
-- Customization samples exist under `data_model/samples/executor_custom_data_model` demonstrating:
-  - Custom permission token via `iroha_executor_data_model::permission::Permission` derive,
-  - Custom parameter defined as a type convertible into `CustomParameter`,
-  - Custom instructions serialized into `CustomInstruction` for execution.
+### CustomInstruction (აღმასრულებელი განსაზღვრული ISI)
 
-### CustomInstruction (executor-defined ISI)
+- ტიპი: `isi::CustomInstruction { payload: Json }` სტაბილური მავთულის ID-ით `"iroha.custom"`.
+- დანიშნულება: კონვერტი შემსრულებლის სპეციფიკური ინსტრუქციებისთვის კერძო/კონსორციუმის ქსელებში ან პროტოტიპებისთვის, საჯარო მონაცემთა მოდელის ჩანგლის გარეშე.
+- შემსრულებლის ნაგულისხმევი ქცევა: `iroha_core`-ში ჩაშენებული შემსრულებელი არ ახორციელებს `CustomInstruction`-ს და შეხვედრის შემთხვევაში პანიკაში ჩავარდება. მორგებულმა შემსრულებელმა უნდა ჩამოაგდეს `InstructionBox` `CustomInstruction`-მდე და დეტერმინისტული ინტერპრეტაცია მოახდინოს ყველა ვალიდატორზე.
+- Norito: დაშიფვრავს/გაშიფრავს `norito::codec::{Encode, Decode}`-ით სქემით; `Json` დატვირთვა არის სერიული დეტერმინისტულად. ორმხრივი მგზავრობა სტაბილურია მანამ, სანამ ინსტრუქციის რეესტრში შედის `CustomInstruction` (ის ნაგულისხმევი რეესტრის ნაწილია).
+- IVM: Kotodama კომპილირებულია IVM ბაიტეკოდზე (`.to`) და არის აპლიკაციის ლოგიკის რეკომენდებული გზა. გამოიყენეთ `CustomInstruction` მხოლოდ შემსრულებლის დონის გაფართოებებისთვის, რომლებიც ჯერ არ არის გამოხატული Kotodama-ში. უზრუნველყოს დეტერმინიზმი და იდენტური შემსრულებელი ორობითი ფაილები თანატოლებს შორის.
+- არა საჯარო ქსელებისთვის: არ გამოიყენოთ საჯარო ჯაჭვებისთვის, სადაც ჰეტეროგენული შემსრულებლები რისკავს კონსენსუსის ჩანგლებს. ამჯობინეთ შემოგთავაზოთ ახალი ჩაშენებული ISI ზემოთ, როდესაც გჭირდებათ პლატფორმის ფუნქციები.
 
-- Type: `isi::CustomInstruction { payload: Json }` with stable wire id `"iroha.custom"`.
-- Purpose: envelope for executor-specific instructions in private/consortium networks or for prototyping, without forking the public data model.
-- Default executor behavior: the built-in executor in `iroha_core` does not execute `CustomInstruction` and will panic if encountered. A custom executor must downcast `InstructionBox` to `CustomInstruction` and deterministically interpret the payload on all validators.
-- Norito: encodes/decodes via `norito::codec::{Encode, Decode}` with schema included; the `Json` payload is serialized deterministically. Round-trips are stable so long as the instruction registry includes `CustomInstruction` (it is part of the default registry).
-- IVM: Kotodama compiles to IVM bytecode (`.to`) and is the recommended path for application logic. Only use `CustomInstruction` for executor-level extensions that cannot yet be expressed in Kotodama. Ensure determinism and identical executor binaries across peers.
-- Not for public networks: do not use for public chains where heterogeneous executors risk consensus forks. Prefer proposing new built-in ISI upstream when you need platform features.
+## მეტამონაცემები
 
-## Metadata
+- `Metadata(BTreeMap<Name, Json>)`: გასაღები/მნიშვნელობის შენახვა, რომელიც მიმაგრებულია მრავალ ერთეულზე (`Domain`, `Account`, `AssetDefinition`, `Nft`, ტრიგერები და ტრანზაქციები).
+- API: `contains`, `iter`, `get`, `insert` და (`transparent_api`-ით) `remove`.
 
-- `Metadata(BTreeMap<Name, Json>)`: key/value store attached to multiple entities (`Domain`, `Account`, `AssetDefinition`, `Nft`, triggers, and transactions).
-- API: `contains`, `iter`, `get`, `insert`, and (with `transparent_api`) `remove`.
+## თვისებები და დეტერმინიზმი
 
-## Features and Determinism
+- აქვს არასავალდებულო API-ების კონტროლი (`std`, `json`, `transparent_api`, `ffi_export`, `ffi_import`, Norito, Norito, `fast_dsl`001 `fault_injection`).
+- დეტერმინიზმი: ყველა სერიალიზაცია იყენებს Norito დაშიფვრას, რომ იყოს პორტატული აპარატურაში. IVM ბაიტიკოდი არის გაუმჭვირვალე ბაიტის ბლოკი; აღსრულებამ არ უნდა შემოიღოს არადეტერმინისტული შემცირება. ჰოსტი ამოწმებს ტრანზაქციებს და აწვდის შეყვანებს IVM-ს დეტერმინისტულად.
 
-- Features control optional APIs (`std`, `json`, `transparent_api`, `ffi_export`, `ffi_import`, `fast_dsl`, `http`, `fault_injection`).
-- Determinism: All serialization uses Norito encoding to be portable across hardware. IVM bytecode is an opaque byte blob; execution must not introduce non-deterministic reductions. The host validates transactions and supplies inputs to IVM deterministically.
+### გამჭვირვალე API (`transparent_api`)- მიზანი: ავლენს სრულ, ცვალებადი წვდომას `#[model]` სტრუქტურებზე/რიცხვებზე შიდა კომპონენტებისთვის, როგორიცაა Torii, შემსრულებლები და ინტეგრაციის ტესტები. ამის გარეშე, ეს ელემენტები განზრახ გაუმჭვირვალეა, ამიტომ გარე SDK-ები ხედავენ მხოლოდ უსაფრთხო კონსტრუქტორებს და დაშიფრულ დატვირთვას.
+- მექანიკა: `iroha_data_model_derive::model` მაკრო გადაწერს თითოეულ საჯარო ველს `#[cfg(feature = "transparent_api")] pub`-ით და ინახავს პირად ასლს ნაგულისხმევი კონსტრუქციისთვის. ფუნქციის ჩართვა აბრუნებს ამ cfgs-ებს, ასე რომ, `Account`, `Domain`, `Asset` და ა.შ. დესტრუქტურიზაცია ლეგალური ხდება მათი განმსაზღვრელი მოდულების გარეთ.
+- ზედაპირის ამოცნობა: ყუთი ახორციელებს `TRANSPARENT_API: bool` მუდმივ ექსპორტს (გენერირდება `transparent_api.rs` ან `non_transparent_api.rs`). Downstream კოდს შეუძლია შეამოწმოს ეს დროშა და განშტოება, როდესაც ის უნდა დაუბრუნდეს გაუმჭვირვალე დამხმარეებს.
+- ჩართვა: დაამატეთ `features = ["transparent_api"]` დამოკიდებულებას `Cargo.toml`-ში. სამუშაო სივრცის ყუთები, რომლებსაც სჭირდებათ JSON პროექცია (მაგ., `iroha_torii`) დროშის ავტომატურად გადამისამართება, მაგრამ მესამე მხარის მომხმარებლებმა უნდა გამორთონ ის, თუ ისინი არ აკონტროლებენ განლაგებას და არ მიიღებენ უფრო ფართო API ზედაპირს.
 
-### Transparent API (`transparent_api`)
+## სწრაფი მაგალითები
 
-- Purpose: exposes full, mutable access to the `#[model]` structs/enums for internal components such as Torii, executors, and integration tests. Without it, those items are intentionally opaque so external SDKs only see safe constructors and encoded payloads.
-- Mechanics: the `iroha_data_model_derive::model` macro rewrites each public field with `#[cfg(feature = "transparent_api")] pub` and keeps a private copy for the default build. Enabling the feature flips those cfgs, so destructuring `Account`, `Domain`, `Asset`, etc. becomes legal outside their defining modules.
-- Surface detection: the crate exports a `TRANSPARENT_API: bool` constant (generated into either `transparent_api.rs` or `non_transparent_api.rs`). Downstream code can check this flag and branch when it needs to fall back to opaque helpers.
-- Enabling: add `features = ["transparent_api"]` to the dependency in `Cargo.toml`. Workspace crates that need the JSON projection (e.g., `iroha_torii`) forward the flag automatically, but third-party consumers should keep it off unless they control the deployment and accept the broader API surface.
-
-## Quick Examples
-
-Create a domain and account, define an asset, and build a transaction with instructions:
+შექმენით დომენი და ანგარიში, განსაზღვრეთ აქტივი და შექმენით ტრანზაქცია ინსტრუქციებით:
 
 ```rust
 use iroha_data_model::prelude::*;
@@ -218,7 +209,7 @@ let tx = TransactionBuilder::new(chain_id, account_id.clone())
     .sign(kp.private_key());
 ```
 
-Query accounts and assets with the DSL:
+მოითხოვეთ ანგარიშები და აქტივები DSL-ით:
 
 ```rust
 use iroha_data_model::prelude::*;
@@ -237,7 +228,7 @@ let q: QueryBox<QueryOutputBatchBox> =
 // Encode and send via Torii; decode on server using the query registry
 ```
 
-Use IVM smart contract bytecode:
+გამოიყენეთ IVM ჭკვიანი კონტრაქტის ბაიტეკოდი:
 
 ```rust
 use iroha_data_model::prelude::*;
@@ -248,14 +239,14 @@ let tx = TransactionBuilder::new("dev-chain".parse().unwrap(), account_id.clone(
     .sign(kp.private_key());
 ```
 
-## Versioning
+## ვერსია
 
-- `SignedTransaction`, `SignedBlock`, and `SignedQuery` are canonical Norito-encoded structs. Each implements `iroha_version::Version` to prefix their payload with the current ABI version (currently `1`) when encoded via `EncodeVersioned`.
+- `SignedTransaction`, `SignedBlock` და `SignedQuery` არის კანონიკური Norito-ში კოდირებული სტრუქტურები. თითოეული ახორციელებს `iroha_version::Version`-ს, რათა დააფიქსიროს თავისი დატვირთვა მიმდინარე ABI ვერსიასთან (ამჟამად `1`), როდესაც კოდირებულია `EncodeVersioned`-ით.
 
-## Review Notes / Potential Updates
+## მიმოხილვის შენიშვნები / პოტენციური განახლებები
 
-- Query DSL: consider documenting a stable user-facing subset and examples for common filters/selectors.
-- Instruction families: expand public docs listing the built-in ISI variants exposed by `mint_burn`, `register`, `transfer`.
+- მოთხოვნა DSL: განიხილეთ მომხმარებლისთვის სტაბილური ქვეჯგუფის დოკუმენტირება და მაგალითები საერთო ფილტრებისთვის/სელექტორებისთვის.
+- ინსტრუქციების ოჯახები: გააფართოვეთ საჯარო დოკუმენტები, სადაც ჩამოთვლილია `mint_burn`, `register`, `transfer` ჩაშენებული ISI ვარიანტები.
 
 ---
-If any part needs more depth (e.g., full ISI catalog, complete query registry list, or block header fields), let me know and I’ll extend those sections accordingly.
+თუ რომელიმე ნაწილს მეტი სიღრმე სჭირდება (მაგ. სრული ISI კატალოგი, შეკითხვის რეესტრის სრული სია, ან სათაურის ველების დაბლოკვა), შემატყობინეთ და მე გავაგრძელებ ამ სექციებს შესაბამისად.

@@ -8,38 +8,40 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Multi-Source Client Rollout & Blacklisting Runbook
 sidebar_label: Multi-Source Rollout Runbook
 description: Operational checklist for staged multi-source rollouts and emergency provider blacklisting.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
+::: Eslatma Kanonik manba
 :::
 
-## Purpose
+## Maqsad
 
-This runbook guides SRE and on-call engineers through two critical workflows:
+Ushbu runbook SRE va qo'ng'iroq bo'yicha muhandislarga ikkita muhim ish oqimi orqali yo'l ko'rsatadi:
 
-1. Rolling out the multi-source orchestrator in controlled waves.
-2. Blacklisting or de-prioritising misbehaving providers without destabilising existing sessions.
+1. Ko'p manbali orkestrni boshqariladigan to'lqinlarda yoyish.
+2. Mavjud seanslarni beqarorlashtirmasdan, noto'g'ri ishlaydigan provayderlarni qora ro'yxatga kiritish yoki ustuvorlikdan chiqarish.
 
-It assumes the orchestration stack delivered under SF-6 is already deployed (`sorafs_orchestrator`, gateway chunk-range API, telemetry exporters).
+Bu SF-6 ostida yetkazib berilgan orkestratsiya stegi allaqachon o'rnatilgan deb taxmin qiladi (`sorafs_orchestrator`, shlyuz chunk-diapazoni API, telemetriya eksportchilari).
 
-> **See also:** The [Orchestrator Operations Runbook](./orchestrator-ops.md) dives into per-run procedures (scoreboard capture, staged rollout toggles, rollback). Use both references together during live changes.
+> **Shuningdek qarang:** [Orchestrator Operations Runbook](./orchestrator-ops.md) har bir ishga tushirish tartib-qoidalariga kiradi (ko‘rsatkichlar jadvalini suratga olish, bosqichma-bosqich o‘chirish, orqaga qaytarish). Jonli o'zgarishlar paytida ikkala havoladan birgalikda foydalaning.
 
-## 1. Pre-flight Validation
+## 1. Parvoz oldidan tekshirish
 
-1. **Confirm governance inputs.**
-   - All candidate providers must publish `ProviderAdvertV1` envelopes with range capability payloads and stream budgets. Validate via `/v1/sorafs/providers` and compare against the expected capability fields.
-   - Telemetry snapshots supplying latency/failure rates should be < 15 minutes old before each canary run.
-2. **Stage configuration.**
-   - Persist the orchestrator JSON config in the layered `iroha_config` tree:
+1. **Boshqaruv maʼlumotlarini tasdiqlang.**
+   - Barcha nomzod provayderlar `ProviderAdvertV1` konvertlarini diapazonning foydali yuklari va oqim byudjetlari bilan nashr etishlari kerak. `/v1/sorafs/providers` orqali tasdiqlang va kutilgan imkoniyatlar maydonlari bilan solishtiring.
+   - Kechikish/muvaffaqiyatsizlik tezligini ta'minlovchi telemetriya suratlari har bir kanareyka yugurishidan oldin < 15 daqiqa eski bo'lishi kerak.
+2. **Bosqich konfiguratsiyasi.**
+   - Qatlamli `iroha_config` daraxtida orkestr JSON konfiguratsiyasini davom ettiring:
 
      ```toml
      [torii.sorafs.orchestrator]
      config_path = "/etc/iroha/sorafs/orchestrator.json"
      ```
 
-     Update the JSON with rollout-specific limits (`max_providers`, retry budgets). Feed the same file to staging/production so diffs stay small.
-3. **Exercise canonical fixtures.**
-   - Populate the manifest/token environment variables and run the deterministic fetch:
+     JSON-ni tarqatish uchun maxsus cheklovlar bilan yangilang (`max_providers`, qayta urinib ko'ring byudjetlar). Xuddi shu faylni sahnalashtirish/ishlab chiqarishga yuboring, shunda farqlar kichik bo'lib qoladi.
+3. **Kononik moslamalarni mashq qiling.**
+   - Manifest/token muhiti o'zgaruvchilarini to'ldiring va deterministik olishni ishga tushiring:
 
      ```bash
      sorafs_cli fetch \
@@ -54,55 +56,55 @@ It assumes the orchestration stack delivered under SF-6 is already deployed (`so
        --json-out artifacts/canary.fetch.json
      ```
 
-     Environment variables should contain the manifest payload digest (hex) and base64-encoded stream tokens for each provider participating in the canary.
-   - Diff `artifacts/canary.scoreboard.json` against the previous release. Any new ineligible provider or weight shift >10 % requires review.
-4. **Verify telemetry is wired.**
-   - Open the Grafana export in `docs/examples/sorafs_fetch_dashboard.json`. Ensure the `sorafs_orchestrator_*` metrics populate in staging before progressing.
+     Atrof-muhit o'zgaruvchilari kanareykada ishtirok etuvchi har bir provayder uchun manifest foydali yuk dayjestini (hex) va base64-kodlangan oqim tokenlarini o'z ichiga olishi kerak.
+   - Oldingi versiyaga nisbatan `artifacts/canary.scoreboard.json` farqi. Har qanday yangi nomaqbul provayder yoki vazn o'zgarishi >10% ko'rib chiqishni talab qiladi.
+4. **Telemetriya simli ekanligini tekshiring.**
+   - `docs/examples/sorafs_fetch_dashboard.json` da Grafana eksportini oching. Davom etishdan oldin `sorafs_orchestrator_*` koʻrsatkichlari bosqichma-bosqich toʻldirilganligiga ishonch hosil qiling.
 
-## 2. Emergency Provider Blacklisting
+## 2. Favqulodda provayderning qora ro'yxati
 
-Follow this procedure when a provider serves corrupt chunks, times out persistently, or fails compliance checks.
+Provayder buzilgan bo'laklarga xizmat ko'rsatsa, vaqtni doimiy ravishda tugatsa yoki muvofiqlikni tekshirishda muvaffaqiyatsizlikka uchrasa, ushbu tartibni bajaring.
 
-1. **Capture evidence.**
-   - Export the latest fetch summary (`--json-out` output). Record failing chunk indices, provider aliases, and digest mismatches.
-   - Save relevant log excerpts from `telemetry::sorafs.fetch.*` targets.
-2. **Apply an immediate override.**
-   - Mark the provider penalised in the telemetry snapshot distributed to the orchestrator (set `penalty=true` or clamp `token_health` to `0`). The next scoreboard build will exclude the provider automatically.
-   - For ad-hoc smoke tests, pass `--deny-provider gw-alpha` to `sorafs_cli fetch` so the failure path is exercised without waiting for telemetry propagation.
-   - Redeploy the updated telemetry/config bundle to the affected environment (staging → canary → production). Document the change in the incident log.
-3. **Validate the override.**
-   - Re-run the canonical fixture fetch. Confirm the scoreboard marks the provider as ineligible with reason `policy_denied`.
-   - Inspect `sorafs_orchestrator_provider_failures_total` to ensure the counter stops incrementing for the denied provider.
-4. **Escalate long-lived bans.**
-   - If the provider will remain blocked for >24 h, raise a governance ticket to rotate or suspend its advert. Until the vote passes, keep the deny list in place and refresh telemetry snapshots so the provider does not re-enter the scoreboard.
-5. **Rollback protocol.**
-   - To reinstate the provider, remove it from the deny list, redeploy, and capture a fresh scoreboard snapshot. Attach the change to the incident postmortem.
+1. **Dalillarni qo‘lga olish.**
+   - Oxirgi qabul qilish xulosasini eksport qiling (`--json-out` chiqishi). Muvaffaqiyatsiz bo'lak indekslarini, provayder taxalluslarini va hazm qilish mos kelmasligini yozib oling.
+   - `telemetry::sorafs.fetch.*` maqsadlaridan tegishli jurnal parchalarini saqlang.
+2. **Darhol bekor qilishni qo'llang.**
+   - Orkestrga tarqatilgan telemetriya snapshotida provayderni jazolangan deb belgilang (`penalty=true` yoki qisqich `token_health` ni `0` ga o'rnating). Keyingi reyting jadvali provayderni avtomatik ravishda chiqarib tashlaydi.
+   - Ad-hoc tutun sinovlari uchun `--deny-provider gw-alpha` ni `sorafs_cli fetch` ga o'tkazing, shunda muvaffaqiyatsizlik yo'li telemetriya tarqalishini kutmasdan amalga oshiriladi.
+   - Yangilangan telemetriya/konfiguratsiya to'plamini ta'sirlangan muhitga qayta joylashtiring (staging → kanareyka → ishlab chiqarish). Hodisalar jurnalida o'zgarishlarni hujjatlashtiring.
+3. **Bekor qilishni tasdiqlang.**
+   - Kanonik moslamani qayta ishga tushiring. Tabloda provayderni `policy_denied` sabab bilan nomaqbul deb belgilashini tasdiqlang.
+   - Hisoblagich rad etilgan provayder uchun o'sishni to'xtatganiga ishonch hosil qilish uchun `sorafs_orchestrator_provider_failures_total` ni tekshiring.
+4. **Uzoq muddatli taqiqlarni kuchaytiring.**
+   - Agar provayder >24 soat davomida bloklangan bo'lsa, reklamani aylantirish yoki to'xtatib turish uchun boshqaruv chiptasini ko'taring. Ovoz berish tugaguniga qadar rad etishlar ro‘yxatini joyida saqlang va provayder reyting jadvaliga qayta kirmasligi uchun telemetriya suratlarini yangilang.
+5. **Orqaga qaytarish protokoli.**
+   - Provayderni qayta tiklash uchun uni rad etish roʻyxatidan olib tashlang, qayta joylashtiring va yangi jadval suratini oling. O'zgarishlarni o'limdan keyingi voqeaga qo'shing.
 
-## 3. Staged Rollout Plan
+## 3. Bosqichli ishlab chiqarish rejasi
 
-| Phase | Scope | Required Signals | Go/No-Go Criteria |
+| Bosqich | Qo'llash doirasi | Kerakli signallar | Go/No-Go mezonlari |
 |-------|-------|------------------|-------------------|
-| **Lab** | Dedicated integration cluster | Manual CLI fetch against fixture payloads | All chunks succeed, provider failure counters stay at 0, retry rate < 5 %. |
-| **Staging** | Full control-plane staging | Grafana dashboard connected; alert rules in warning-only mode | `sorafs_orchestrator_active_fetches` returns to zero after each test run; no `warn/critical` alert firings. |
-| **Canary** | ≤10 % of production traffic | Pager muted but telemetry monitored in real time | Retry ratio < 10 %, provider failures isolated to known noisy peers, latency histogram matches staging baseline ±20 %. |
-| **General Availability** | 100 % roll-out | Pager rules active | Zero `NoHealthyProviders` errors for 24 h, retry ratio stable, dashboard SLA panels green. |
+| **Laboratoriya** | Maxsus integratsiya klasteri | Armatura yuklamalariga qarshi qo'lda CLI olish | Barcha qismlar muvaffaqiyatli bo'ldi, provayderning xatolik hisoblagichlari 0 da qoladi, qayta urinish darajasi < 5%. |
+| **Sahnalashtirish** | To'liq nazorat-samolyot staging | Grafana asboblar paneli ulangan; faqat ogohlantirish rejimida ogohlantirish qoidalari | `sorafs_orchestrator_active_fetches` har bir sinovdan keyin nolga qaytadi; `warn/critical` ogohlantirish otishmalari yo'q. |
+| **Kanarya** | Ishlab chiqarish trafigining ≤10% | Peyjer ovozi o'chirilgan, ammo telemetriya real vaqtda kuzatilmoqda | Qayta urinish nisbati < 10%, provayderning nosozliklari maʼlum shovqinli tengdoshlar bilan ajratilgan, kechikish gistogrammasi bosqichma-bosqich ±20% bilan mos keladi. |
+| **Umumiy mavjudlik** | 100% ishlab chiqarish | Peyjer qoidalari faol | 24 soat davomida nol `NoHealthyProviders` xatolar, qayta urinish nisbati barqaror, asboblar panelidagi SLA panellari yashil. |
 
-For each phase:
+Har bir bosqich uchun:
 
-1. Update the orchestrator JSON with the intended `max_providers` and retry budgets.
-2. Run `sorafs_cli fetch` or the SDK integration test suite against the canonical fixture and a representative manifest from the environment.
-3. Capture scoreboard + summary artefacts and attach them to the release record.
-4. Review telemetry dashboards with the on-call engineer before promoting to the next phase.
+1. Orkestr JSON-ni mo'ljallangan `max_providers` bilan yangilang va qayta urinib ko'ring.
+2. `sorafs_cli fetch` yoki SDK integratsiya test to'plamini kanonik moslamaga va atrof-muhitning vakili manifestiga qarshi ishga tushiring.
+3. Tablo + sarhisob artefaktlarini yozib oling va ularni reliz yozuviga biriktiring.
+4. Keyingi bosqichga o'tishdan oldin qo'ng'iroq bo'yicha muhandis bilan telemetriya asboblar panelini ko'rib chiqing.
 
-## 4. Observability & Incident Hooks
+## 4. Kuzatish va hodisa ilgaklari
 
-- **Metrics:** Ensure Alertmanager monitors `sorafs_orchestrator_fetch_failures_total{reason="no_healthy_providers"}` and `sorafs_orchestrator_retries_total`. A sudden spike typically means a provider is degrading under load.
-- **Logs:** Route the `telemetry::sorafs.fetch.*` targets to the shared log aggregator. Build saved searches for `event=complete status=failed` to speed up triage.
-- **Scoreboards:** Persist every scoreboard artefact to long-term storage. The JSON doubles as the evidence trail for compliance reviews and staged rollbacks.
-- **Dashboards:** Clone the canonical Grafana board (`docs/examples/sorafs_fetch_dashboard.json`) into the production folder with alert rules from `docs/examples/sorafs_fetch_alerts.yaml`.
+- **Ko'rsatkichlar:** Alertmanager monitorlari `sorafs_orchestrator_fetch_failures_total{reason="no_healthy_providers"}` va `sorafs_orchestrator_retries_total` mavjudligiga ishonch hosil qiling. To'satdan ko'tarilish odatda provayder yuk ostida yomonlashayotganini anglatadi.
+- **Jurnallar:** `telemetry::sorafs.fetch.*` maqsadlarini umumiy jurnal agregatoriga yo'naltiring. Triajni tezlashtirish uchun `event=complete status=failed` uchun saqlangan qidiruvlarni yarating.
+- **Ko'rsatkichlar jadvali:** Har bir tablo artefaktini uzoq muddatli saqlash uchun saqlang. JSON muvofiqlikni tekshirish va bosqichma-bosqich orqaga qaytarish uchun dalil izi sifatida ikki baravar ishlaydi.
+- **Boshqaruv panellari:** Grafana kanonik taxtasini (`docs/examples/sorafs_fetch_dashboard.json`) `docs/examples/sorafs_fetch_alerts.yaml` ogohlantirish qoidalari bilan ishlab chiqarish papkasiga klonlang.
 
-## 5. Communication & Documentation
+## 5. Aloqa va hujjatlar
 
-- Log every deny/boost change in the operations changelog with timestamp, operator, reason, and associated incident.
-- Notify SDK teams when provider weights or retry budgets change to align client-side expectations.
-- After GA completes, update `status.md` with the rollout summary and archive this runbook reference in the release notes.
+- Vaqt tamg'asi, operator, sabab va tegishli hodisa bilan operatsiyalarni o'zgartirish jurnalidagi har bir rad etish/ko'paytirish o'zgarishlarini qayd qiling.
+- Mijoz kutganlarini moslashtirish uchun provayder vazni yoki qayta urinib ko'ring.
+- GA tugallangandan so'ng, `status.md` ni ishlab chiqarish xulosasi bilan yangilang va ushbu runbook ma'lumotnomasini nashr yozuvlarida arxivlang.

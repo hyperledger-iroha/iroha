@@ -7,21 +7,23 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: GAR Jurisdictional Review (SNNet-9)
 sidebar_label: GAR Jurisdictional Review
 description: Signed-off jurisdiction decisions and Blake2b digests to wire into SoraNet compliance configs.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-The SNNet-9 compliance track is now complete. This page lists the signed
-jurisdiction decisions, the Blake2b-256 digests operators must copy into their
-`compliance.attestations` blocks, and the next review dates. Keep the signed
-PDFs in your governance archive; these digests are the canonical fingerprints
-for automation and audits.
+SNNet-9-ի համապատասխանության ուղին այժմ ավարտված է: Այս էջում նշված են ստորագրվածները
+իրավասության որոշումները, Blake2b-256 digests օպերատորները պետք է պատճենեն իրենց մեջ
+`compliance.attestations` արգելափակում է, և հաջորդ վերանայման ամսաթվերը: Պահպանեք ստորագրվածը
+PDF-ներ ձեր կառավարման արխիվում; այս մարսողությունները կանոնական մատնահետքեր են
+ավտոմատացման և աուդիտի համար:
 
-| Jurisdiction | Decision | Memo | Blake2b-256 digest (uppercase hex) | Next review |
-|--------------|----------|------|------------------------------------|-------------|
-| United States | Direct-only transport required (no SoraNet circuits) | `governance/compliance/attestations/us-2027-q2.md` | `1636B0B52286896C4894FA0333CD691D9B3DB7F2B73548EA2EA622B90A09BCF7` | 2027-09-30 |
-| Canada | Direct-only transport required | `governance/compliance/attestations/ca-2027-q2.md` | `52D9D9EE1E43DA0526D8C659AC61C1844858F9A6A74650EA5C04CBD8F8614063` | 2027-09-30 |
-| EU/EEA | Anonymous SoraNet transport allowed with SNNet-8 privacy budgets enforced | `governance/compliance/attestations/eu-2027-q2.md` | `30FDAF718095E87FDFADA6BE3EC1EF9D56DFFDEE97BF4BBEAB9013F7A0963B15` | 2027-09-30 |
+| Իրավասություն | Որոշում | Հուշագիր | Blake2b-256 digest (մեծատառ վեցանկյուն) | Հաջորդ վերանայում |
+|--------------------------|------------------------------------------|-------------|
+| Միացյալ Նահանգներ | Պահանջվում է միայն ուղղակի տրանսպորտ (SoraNet սխեմաներ չկան) | `governance/compliance/attestations/us-2027-q2.md` | `1636B0B52286896C4894FA0333CD691D9B3DB7F2B73548EA2EA622B90A09BCF7` | 2027-09-30 |
+| Կանադա | Պահանջվում է միայն ուղղակի տրանսպորտ | `governance/compliance/attestations/ca-2027-q2.md` | `52D9D9EE1E43DA0526D8C659AC61C1844858F9A6A74650EA5C04CBD8F8614063` | 2027-09-30 |
+| ԵՄ/ԵՏՄ | Անանուն SoraNet տրանսպորտը թույլատրվում է SNNet-8-ի գաղտնիության բյուջեի ուժով | `governance/compliance/attestations/eu-2027-q2.md` | `30FDAF718095E87FDFADA6BE3EC1EF9D56DFFDEE97BF4BBEAB9013F7A0963B15` | 2027-09-30 |
 
-## Deployment snippet
+## Տեղակայման հատված
 
 ```jsonc
 {
@@ -58,15 +60,15 @@ for automation and audits.
 }
 ```
 
-## Audit checklist
+## Աուդիտի ստուգաթերթ
 
-- Attestation digests copied exactly into production configs.
-- `jurisdiction_opt_outs` matches the canonical catalogue.
-- Signed PDFs retained in your governance archive with matching digests.
-- Activation window and approvers captured in the GAR logbook.
-- Next-review reminders scheduled from the table above.
+- Ատեստավորման բովանդակությունը պատճենված է հենց արտադրական կազմաձևերում:
+- `jurisdiction_opt_outs`-ը համապատասխանում է կանոնական կատալոգին:
+- Ստորագրված PDF-ներ, որոնք պահպանվում են ձեր կառավարման արխիվում՝ համապատասխան ամփոփագրերով:
+- Ակտիվացման պատուհանը և հաստատողներն ընդգրկված են GAR մատյանում:
+- Հաջորդ վերանայման հիշեցումները նախատեսված են վերը նշված աղյուսակից:
 
-## See also
+## Տես նաև
 
-- [GAR Operator Onboarding Brief](gar-operator-onboarding)
-- [GAR Compliance Playbook (source)](../../../source/soranet/gar_compliance_playbook.md)
+- [GAR Operator Onboarding Brief] (gar-operator-onboarding)
+- [GAR Compliance Playbook (աղբյուր)] (../../../source/soranet/gar_compliance_playbook.md)

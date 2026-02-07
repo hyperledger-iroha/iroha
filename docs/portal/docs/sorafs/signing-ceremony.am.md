@@ -11,61 +11,62 @@ id: signing-ceremony
 title: Signing Ceremony Replacement
 description: How the Sora Parliament approves and distributes SoraFS chunker fixtures (SF-1b).
 sidebar_label: Signing Ceremony
+translator: machine-google-reviewed
 ---
 
-> Roadmap: **SF-1b — Sora Parliament fixture approvals.**
+> ፍኖተ ካርታ፡ **SF-1b — የሶራ ፓርላማ ቋሚ ማጽደቆች።**
 
-The manual signing ritual used for SoraFS chunker fixtures is retired. All
-approvals now flow through the **Sora Parliament**, the sortition-based DAO that
-governs Nexus. Parliament members bond XOR to gain citizenship, rotate across
-panels, and cast on-chain votes that approve, reject, or roll back fixture
-releases. This guide explains the process and developer tooling.
+ለSoraFS chunker fixtures ጥቅም ላይ የዋለው በእጅ የመፈረም ሥነ ሥርዓት ጡረታ ወጥቷል። ሁሉም
+ማጽደቆች አሁን በ **Sora ፓርላማ** በኩል ይፈስሳሉ፣ በአደራደር ላይ የተመሰረተው DAO ያ
+Nexus ያስተዳድራል። የፓርላማ አባላት XOR ዜግነት ለማግኘት፣ ይሽከረከራሉ።
+ፓነሎች፣ እና የሰንሰለት ድምጾችን ያጸድቁ፣ የማይቀበሉ ወይም የሚመልሱ ዕቃዎችን ይስጡ
+ይለቀቃል. ይህ መመሪያ የሂደቱን እና የገንቢ መሳሪያዎችን ያብራራል.
 
-## Parliament overview
+## የፓርላማ አጠቃላይ እይታ
 
-- **Citizenship** — Operators bond the required XOR to enrol as citizens and
-  become eligible for sortition.
-- **Panels** — Responsibilities are split across rotating panels (Infrastructure,
-  Moderation, Treasury, …). The Infrastructure Panel owns SoraFS fixture
-  approvals.
-- **Sortition & rotation** — Panel seats are re-drawn at the cadence specified in
-  the Parliament constitution so no single group monopolises approvals.
+- ** ዜግነት *** - እንደ ዜጋ ለመመዝገብ ኦፕሬተሮች አስፈላጊውን XOR ያስተሳሰራሉ
+  ለመደርደር ብቁ መሆን።
+- ** ፓነሎች *** - ኃላፊነቶች በሚሽከረከሩ ፓነሎች (መሠረተ ልማት ፣
+  ልከኝነት፣ ግምጃ ቤት፣…) የመሠረተ ልማት ፓነል የSoraFS መግጠሚያ አለው።
+  ማጽደቆች.
+- ** መደርደር እና ማሽከርከር *** — የፓነል መቀመጫዎች በተገለጸው ገለጻ እንደገና ይሳሉ
+  የፓርላማው ሕገ መንግሥት አንድም ቡድን በሞኖፖሊስ አይፀድቅም።
 
-## Fixture approval flow
+## ቋሚ የማጽደቅ ፍሰት
 
-1. **Proposal submission**
-   - The Tooling WG uploads the candidate `manifest_blake3.json` bundle plus
-     fixture diff to the on-chain registry via `sorafs.fixtureProposal`.
-   - The proposal records the BLAKE3 digest, semantic version, and change notes.
-2. **Review & voting**
-   - The Infrastructure Panel receives the assignment through the Parliament task
-     queue.
-   - Panel members inspect CI artefacts, run parity tests, and cast weighted
-     votes on-chain.
-3. **Finalisation**
-   - Once quorum is met, the runtime emits an approval event that includes the
-     canonical manifest digest and Merkle commitment to the fixture payload.
-   - The event is mirrored into the SoraFS registry so clients can fetch the
-     latest Parliament-approved manifest.
-4. **Distribution**
-   - CLI helpers (`cargo xtask sorafs-fetch-fixture`) pull the approved manifest
-     from Nexus RPC. The repository’s JSON/TS/Go constants stay in sync by
-     re-running `export_vectors` and validating the digest against the on-chain
-     record.
+1. **የሃሳብ አቅርቦት**
+   - የ Tooling WG እጩውን `manifest_blake3.json` ጥቅል ፕላስ ይሰቅላል
+     fixture ልዩነት በ `sorafs.fixtureProposal` በኩል በሰንሰለት መዝገብ ላይ።
+   - ፕሮፖዛሉ የBLAKE3 መፍጨትን፣ የትርጉም እትምን እና ማስታወሻዎችን ይቀይራል።
+2. ** ግምገማ እና ድምጽ መስጠት ***
+   - የመሠረተ ልማት ፓነል ምደባውን በፓርላማው በኩል ይቀበላል
+     ወረፋ
+   - የፓነል አባላት የCI artefactsን ይመረምራሉ፣ የተመጣጠነ ሙከራዎችን ያካሂዳሉ እና ክብደታቸውን ይወስዳሉ
+     በሰንሰለት ላይ ድምጾች.
+3. **ማጠናቀቂያ**
+   - አንድ ጊዜ ምልአተ ጉባኤው ከተጠናቀቀ፣ የሩጫ ጊዜው የማረጋገጫ ክስተትን ያመነጫል።
+     ቀኖናዊ አንጸባራቂ መፍጨት እና Merkle ቁርጠኝነት ለቋሚ ክፍያ ጭነት።
+   - ዝግጅቱ ደንበኞች ማምጣት እንዲችሉ በ SoraFS መዝገብ ውስጥ ተንጸባርቋል
+     የቅርብ ጊዜ ፓርላማ የጸደቀ ዝርዝር መግለጫ።
+4. **መከፋፈል**
+   - የ CLI ረዳቶች (`cargo xtask sorafs-fetch-fixture`) የተፈቀደውን አንጸባራቂ ይጎትቱ
+     ከ Nexus RPC. የማከማቻው JSON/TS/Go ቋሚዎች በሥምረት ይቆያሉ።
+     `export_vectors` እንደገና በማስኬድ እና በሰንሰለቱ ላይ ያለውን የምግብ መፍጫ ሂደት በማረጋገጥ ላይ
+     መዝገብ.
 
-## Developer workflow
+## የገንቢ የስራ ፍሰት
 
-- Regenerate fixtures with:
+- የቤት ዕቃዎችን በ:
 
 ```bash
 cargo run -p sorafs_chunker --bin export_vectors
 ```
 
-- Use the Parliament fetch helper to download the approved envelope, verify
-  signatures, and refresh local fixtures. Point `--signatures` at the
-  Parliament-published envelope; the helper resolves the accompanying manifest,
-  recomputes the BLAKE3 digest, and enforces the canonical
-  `sorafs.sf1@1.0.0` profile.
+- የተፈቀደውን ኤንቨሎፕ ለማውረድ የፓርላማ ረዳትን ይጠቀሙ፣ ያረጋግጡ
+  ፊርማዎች እና የአካባቢ መገልገያዎችን ያድሱ። ነጥብ `--signatures` ላይ
+  በፓርላማ የታተመ ፖስታ; ረዳቱ ተጓዳኝ አንጸባራቂውን ይፈታል ፣
+  የ BLAKE3 መፈጨትን እንደገና ያሰላል እና ቀኖናዊውን ያስፈጽማል
+  `sorafs.sf1@1.0.0` መገለጫ።
 
 ```bash
 cargo xtask sorafs-fetch-fixture \
@@ -73,11 +74,11 @@ cargo xtask sorafs-fetch-fixture \
   --out fixtures/sorafs_chunker
 ```
 
-Pass `--manifest` if the manifest lives at a different URL. Unsigned envelopes
-are refused unless `--allow-unsigned` is set for local smoke runs.
+አንጸባራቂው በተለያየ ዩአርኤል ላይ የሚኖር ከሆነ `--manifest` ይለፉ። ያልተፈረሙ ፖስታዎች
+`--allow-unsigned` ለአካባቢው ጭስ ሩጫ ካልተዋቀረ በስተቀር ውድቅ ተደርገዋል።
 
-- When validating a manifest through a staging gateway, target Torii instead of
-  local payloads:
+- በማስተናገጃ መግቢያ በር በኩል አንጸባራቂን በሚያረጋግጡበት ጊዜ ኢ18NT00000007X ሳይሆን ኢላማ ያድርጉ።
+  የሀገር ውስጥ ሸክሞች፡-
 
 ```bash
 sorafs-fetch \
@@ -88,31 +89,31 @@ sorafs-fetch \
   --json-out=reports/staging_gateway.json
 ```
 
-- Local CI no longer requires a `signer.json` roster.
-  `ci/check_sorafs_fixtures.sh` compares the repo state against the latest
-  on-chain commitment and fails when they diverge.
+- የአካባቢ CI ከአሁን በኋላ `signer.json` ዝርዝር አያስፈልግም።
+  `ci/check_sorafs_fixtures.sh` repo ሁኔታን ከቅርብ ጊዜው ጋር ያወዳድራል።
+  በሰንሰለት ላይ ቁርጠኝነት እና ሲለያዩ ይወድቃሉ።
 
-## Governance notes
+## የአስተዳደር ማስታወሻዎች
 
-- The Parliament constitution governs quorum, rotation, and escalation—no
-  crate-level configuration is needed.
-- Emergency rollbacks are handled through the Parliament moderation panel. The
-  Infrastructure Panel files a revert proposal referencing the prior manifest
-  digest, which replaces the release once approved.
-- Historical approvals remain available in the SoraFS registry for forensic
-  replay.
+- የፓርላማው ሕገ መንግሥት ምልአተ ጉባኤን፣ ሽክርክርን፣ እና ጭማሪን ይቆጣጠራል—አይ
+  የሣጥን ደረጃ ማዋቀር ያስፈልጋል።
+- የአደጋ ጊዜ መልሶ ማቋቋሚያ በፓርላማ አወያይ በኩል ይካሄዳል። የ
+  የመሠረተ ልማት ፓነል የቀደመውን አንጸባራቂ የሚያመለክት የተገላቢጦሽ ፕሮፖዛል ያቀርባል
+  መፍጨት፣ ከተፈቀደ በኋላ ልቀቱን የሚተካ።
+- ታሪካዊ ማፅደቆች በ SoraFS መዝገብ ውስጥ ለፎረንሲክ ይገኛሉ
+  እንደገና አጫውት።
 
-## FAQ
+## የሚጠየቁ ጥያቄዎች
 
-- **Where did `signer.json` go?**  
-  It was removed. All signer attribution lives on-chain; `manifest_signatures.json`
-  in the repository is only a developer fixture that must match the latest
-  approval event.
+- ** `signer.json` የት ሄደ?  
+  ተወግዷል። ሁሉም የፈራሚ ባህሪ በሰንሰለት ላይ ይኖራል; `manifest_signatures.json`
+  በማጠራቀሚያው ውስጥ ከቅርብ ጊዜው ጋር መዛመድ ያለበት የገንቢ መሣሪያ ብቻ አለ።
+  የማጽደቅ ክስተት.
 
-- **Do we still require local Ed25519 signatures?**  
-  No. Parliament approvals are stored as on-chain artefacts. Local fixtures exist
-  for reproducibility but are validated against the Parliament digest.
+- ** አሁንም የአካባቢ Ed25519 ፊርማዎችን እንፈልጋለን?**  
+  ቁጥር፡ የፓርላማ ማጽደቂያዎች በሰንሰለት ላይ እንደ ቅርስ ተቀምጠዋል። የአካባቢ መገልገያዎች አሉ።
+  ለዳግም መራባት ግን ከፓርላማ ውሣኔ አንፃር የተረጋገጡ ናቸው።
 
-- **How do teams monitor approvals?**  
-  Subscribe to the `ParliamentFixtureApproved` event or query the registry via
-  Nexus RPC to retrieve the current manifest digest and panel roll call.
+- **ቡድኖች ማጽደቆችን እንዴት ይቆጣጠራሉ?**  
+  ለ`ParliamentFixtureApproved` ክስተት ይመዝገቡ ወይም መዝገቡን በ በኩል ይጠይቁ
+  Nexus RPC የአሁኑን አንጸባራቂ መፍጨት እና የፓነል ጥቅል ጥሪን ለማውጣት።

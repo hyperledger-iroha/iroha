@@ -7,28 +7,29 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 4d1af3021d94540c338c921ea8393a10dd918ee1549965cdc09fbc612c938444
 source_last_modified: "2025-12-29T18:16:35.908874+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Python SDK Quickstart
+# Python SDK အမြန်စတင်ပါ။
 
-The Python SDK (`iroha-python`) mirrors the Rust client helpers so you can
-interact with Torii from scripts, notebooks, or web backends. This quickstart
-covers installation, transaction submission, and event streaming. For deeper
-coverage see `python/iroha_python/README.md` in the repository.
+Python SDK (`iroha-python`) သည် Rust client helpers များကို ထင်ဟပ်စေပြီး သင်လုပ်နိုင်သည်
+scripts၊ မှတ်စုစာအုပ်များ သို့မဟုတ် ဝဘ်နောက်ကွယ်မှ Torii နှင့် အပြန်အလှန် တုံ့ပြန်ပါ။ ဤအမြန်စတင်ပါ။
+တပ်ဆင်မှု၊ ငွေပေးငွေယူ တင်ပြမှု၊ နှင့် ပွဲစဥ်ကြည့်ရှုခြင်းများ ပါဝင်ပါသည်။ နက်နဲသည်
+သိုလှောင်မှုတွင် `python/iroha_python/README.md` ကို ကြည့်ရှုပါ။
 
-## 1. Install
+## 1. ထည့်သွင်းပါ။
 
 ```bash
 pip install iroha-python
 ```
 
-Optional extras:
+ရွေးချယ်နိုင်သော အပိုဆောင်းများ-
 
-- `pip install aiohttp` if you plan to run the asynchronous variants of the
-  streaming helpers.
-- `pip install pynacl` when you need Ed25519 key derivation outside of the SDK.
+- အကယ်၍ သင်သည် `pip install aiohttp` ၏ asynchronous မျိုးကွဲများကို လုပ်ဆောင်ရန် စီစဉ်ထားပါက၊
+  streaming အကူအညီပေးသူများ။
+- SDK ပြင်ပတွင် Ed25519 သော့ဆင်းသက်မှုကို လိုအပ်သောအခါ - `pip install pynacl`။
 
-## 2. Create a client and signers
+## 2. သုံးစွဲသူနှင့် လက်မှတ်ထိုးသူများကို ဖန်တီးပါ။
 
 ```python
 from iroha_python import (
@@ -46,14 +47,14 @@ client = ToriiClient(
 )
 ```
 
-`ToriiClient` accepts additional keyword arguments such as `timeout_ms`,
-`max_retries`, and `tls_config`. The helper `resolve_torii_client_config`
-parses a JSON configuration payload if you want parity with the Rust CLI.
+`ToriiClient` သည် `timeout_ms` ကဲ့သို့သော နောက်ထပ်သော့ချက်စကားလုံး အကြောင်းပြချက်များကို လက်ခံပါသည်။
+`max_retries` နှင့် `tls_config`။ အကူအညီပေးသူ `resolve_torii_client_config`
+Rust CLI နှင့် တူညီလိုပါက JSON configuration payload ကို ခွဲခြမ်းစိတ်ဖြာပါ။
 
-## 3. Submit a transaction
+## 3. ငွေပေးငွေယူတစ်ခု တင်သွင်းပါ။
 
-The SDK ships instruction builders and transaction helpers so you rarely build
-Norito payloads by hand:
+SDK သည် သင်တည်ဆောက်ခဲသော ညွှန်ကြားချက်များကို တည်ဆောက်သူများနှင့် ငွေပေးငွေယူအကူအညီများကို ပို့ဆောင်ပေးပါသည်။
+လက်ဖြင့် Norito
 
 ```python
 from iroha_python import Instruction
@@ -72,15 +73,15 @@ envelope, status = client.build_and_submit_transaction(
 print("Final status:", status)
 ```
 
-`build_and_submit_transaction` returns both the signed envelope and the last
-observed status (e.g., `Committed`, `Rejected`). If you already have a signed
-transaction envelope use `client.submit_transaction_envelope(envelope)` or the
-JSON-centric `submit_transaction_json`.
+`build_and_submit_transaction` သည် လက်မှတ်ရေးထိုးထားသော စာအိတ်နှင့် နောက်ဆုံးကို ပြန်ပေးသည်။
+စောင့်ကြည့်ထားသော အခြေအနေ (ဥပမာ၊ `Committed`၊ `Rejected`)။ မင်းမှာ လက်မှတ်ထိုးပြီးသား
+ငွေပေးငွေယူ စာအိတ် `client.submit_transaction_envelope(envelope)` သို့မဟုတ် အဆိုပါကို အသုံးပြုပါ။
+JSON ဗဟိုပြု `submit_transaction_json`။
 
-## 4. Query state
+## 4. မေးမြန်းမှု အခြေအနေ
 
-All REST endpoints have JSON helpers and many expose typed dataclasses. For
-example, listing domains:
+REST အဆုံးမှတ်များအားလုံးတွင် JSON အထောက်အကူများနှင့် စာရိုက်ထားသည့် ဒေတာအတန်းအစားများစွာရှိသည်။ အဘို့
+ဥပမာ၊ ဒိုမိန်းများကို စာရင်းပြုစုခြင်း-
 
 ```python
 domains = client.list_domains_typed()
@@ -88,13 +89,13 @@ for domain in domains.items:
     print(domain.name)
 ```
 
-Pagination-aware helpers (e.g., `list_accounts_typed`) return an object that
-contains both `items` and `next_cursor`.
+Pagination-aware helpers (ဥပမာ၊ `list_accounts_typed`) သည် အရာဝတ္ထုတစ်ခုကို ပြန်ပေးသည်
+`items` နှင့် `next_cursor` နှစ်မျိုးလုံးပါရှိသည်။
 
-## 5. Stream events
+## 5. အဖြစ်အပျက်များကို တိုက်ရိုက်ကြည့်ရှုပါ။
 
-Torii SSE endpoints are exposed via generators. The SDK automatically resumes
-when `resume=True` and you provide an `EventCursor`.
+Torii SSE အဆုံးမှတ်များကို ဂျင်နရေတာများမှတစ်ဆင့် ဖော်ထုတ်ပါသည်။ SDK သည် အလိုအလျောက် ပြန်လည်စတင်သည်။
+`resume=True` နှင့် သင် `EventCursor` ကို ပေးသောအခါ။
 
 ```python
 from iroha_python import PipelineEventFilterBox, EventCursor
@@ -110,19 +111,19 @@ for event in client.stream_pipeline_blocks(
     print("Block height", event.data.block.height)
 ```
 
-Other convenience methods include `stream_pipeline_transactions`,
-`stream_events` (with typed filter builders), and `stream_verifying_key_events`.
+အခြားအဆင်ပြေသည့်နည်းလမ်းများမှာ `stream_pipeline_transactions`၊
+`stream_events` (ရိုက်ထည့်ထားသော filter တည်ဆောက်သူများ) နှင့် `stream_verifying_key_events`။
 
-## 6. Next steps
+## 6. နောက်အဆင့်များ
 
-- Explore the examples under `python/iroha_python/src/iroha_python/examples/`
-  for end-to-end flows covering governance, ISO bridge helpers, and Connect.
-- Use `create_torii_client` / `resolve_torii_client_config` when you want to
-  bootstrap the client from an `iroha_config` JSON file or environment.
-- For Norito RPC or Connect-specific APIs, check the specialised modules such as
-  `iroha_python.norito_rpc` and `iroha_python.connect`.
+- `python/iroha_python/src/iroha_python/examples/` အောက်တွင် နမူနာများကို စူးစမ်းပါ။
+  အုပ်ချုပ်ရေး၊ ISO တံတားအကူများနှင့် ချိတ်ဆက်ခြင်းတို့ကို အကျုံးဝင်သော အဆုံးမှအဆုံးသို့ စီးဆင်းမှုများအတွက်။
+- သင်လိုသောအခါ `create_torii_client` / `resolve_torii_client_config` ကိုသုံးပါ။
+  `iroha_config` JSON ဖိုင် သို့မဟုတ် ပတ်ဝန်းကျင်မှ client ကို bootstrap လုပ်ပါ။
+- Norito RPC သို့မဟုတ် Connect-specific APIs အတွက်၊ ကဲ့သို့သော အထူးပြု module များကို စစ်ဆေးပါ။
+  `iroha_python.norito_rpc` နှင့် `iroha_python.connect`။
 
-With these building blocks you can exercise Torii from Python without writing
-your own HTTP glue or Norito codecs. As the SDK matures, additional high-level
-builders will be added; consult the README in the `python/iroha_python`
-directory for the latest status and migration notes.
+ဤအဆောက်အဦတုံးများဖြင့် သင်သည် Python မှ Torii ကို စာမရေးဘဲ လေ့ကျင့်ခန်းလုပ်နိုင်သည်။
+သင်၏ကိုယ်ပိုင် HTTP ကော် သို့မဟုတ် Norito ကုဒ်ဒစ်များ။ SDK ကြီးလာသည်နှင့်အမျှ၊ ထပ်လောင်းအဆင့်မြင့်သည်။
+ဆောက်လုပ်ရေးသမားများကို ပေါင်းထည့်ပါမည်။ `python/iroha_python` တွင် README ကို တိုင်ပင်ပါ။
+နောက်ဆုံးအခြေအနေနှင့် ပြောင်းရွှေ့မှုမှတ်စုများအတွက် လမ်းညွှန်။

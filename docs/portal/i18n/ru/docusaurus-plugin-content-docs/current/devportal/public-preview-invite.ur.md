@@ -4,6 +4,8 @@ direction: ltr
 source: docs/portal/docs/devportal/public-preview-invite.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 # پبلک پریویو دعوتی پلے بک
@@ -11,57 +13,57 @@ generator: docs/portal/scripts/sync-i18n.mjs
 ## پروگرام کے مقاصد
 
 یہ پلے بک وضاحت کرتی ہے کہ ریویور آن بورڈنگ ورک فلو فعال ہونے کے بعد پبلک پریویو کیسے اعلان اور چلایا جائے۔
-یہ DOCS-SORA روڈمیپ کو دیانت دار رکھتی ہے کیونکہ ہر دعوت کے ساتھ قابل تصدیق artifacts، سیکیورٹی رہنمائی،
-اور واضح feedback راستہ شامل ہونا یقینی بنایا جاتا ہے۔
+DOCS-SORA может быть использован в качестве дополнительного источника питания. قابل تصدیق артефакты, سیکیورٹی رہنمائی،
+اور واضح Feedback راستہ شامل ہونا یقینی بنایا جاتا ہے۔
 
-- **آڈیئنس:** کمیونٹی ممبرز، پارٹنرز اور maintainers کی curated فہرست جنہوں نے preview acceptable-use پالیسی سائن کی ہے۔
-- **سیلنگز:** default wave size <= 25 ریویورز، 14 دن کی access window، اور 24h کے اندر incident response۔
+- **Удобство:** Удобство использования для сопровождающих, кураторское руководство по предварительному просмотру приемлемого использования. سائن کی ہے۔
+- **Время:** размер волны по умолчанию <= 25 дней, 14 дней в окне доступа и 24 часа в сутки для реагирования на инциденты.
 
-## لانچ گیٹ چیک لسٹ
+## لانچگیٹ چیک لسٹ
 
-کوئی بھی دعوت بھیجنے سے پہلے یہ کام مکمل کریں:
+Вот как можно использовать следующие возможности:
 
-1. تازہ ترین preview artifacts CI میں اپلوڈ ہوں (`docs-portal-preview`,
-   checksum manifest, descriptor, SoraFS bundle)۔
-2. `npm run --prefix docs/portal serve` (checksum-gated) اسی tag پر ٹیسٹ کیا گیا ہو۔
-3. ریویور آن بورڈنگ ٹکٹس approve ہوں اور invite wave سے لنک ہوں۔
-4. سیکیورٹی، observability، اور incident ڈاکس validate ہوں
+1. Предварительный просмотр артефактов CI в режиме предварительного просмотра (`docs-portal-preview`,
+   Манифест контрольной суммы, дескриптор, пакет SoraFS)۔
+2. `npm run --prefix docs/portal serve` (контролируемый контрольной суммой) для тега ٹیسٹ کیا گیا ہو۔
+3. ریویور آن بورڈنگ ٹکٹس утвердить ہوں اور пригласить волну سے لنک ہوں۔
+4. Возможность наблюдения, возможность подтверждения инцидента.
    ([`security-hardening`](./security-hardening.md),
    [`observability`](./observability.md),
    [`incident-runbooks`](./incident-runbooks.md))۔
-5. feedback فارم یا issue template تیار ہو (severity، reproduction steps، screenshots، اور environment info کے فیلڈز شامل ہوں)۔
-6. اعلان کی کاپی Docs/DevRel + Governance نے ریویو کی ہو۔
+5. обратная связь с шаблоном проблемы تیار ہو (серьезность, этапы воспроизведения, снимки экрана, информация об окружающей среде и т. д.)
+6. Поддержка документации/DevRel + управление и контроль
 
 ## دعوتی پیکیج
 
-ہر دعوت میں شامل ہونا چاہیے:
+В качестве примера можно привести:
 
-1. **Verified artifacts** — SoraFS manifest/plan یا GitHub artefact کے لنکس دیں،
-   ساتھ میں checksum manifest اور descriptor بھی دیں۔ verification کمانڈ واضح طور پر لکھیں تاکہ
-   ریویورز site لانچ کرنے سے پہلے اسے چلا سکیں۔
-2. **Serve instructions** — checksum-gated preview کمانڈ شامل کریں:
+1. **Проверенные артефакты** — манифест/план SoraFS. Артефакт GitHub можно просмотреть.
+   Дескриптор контрольной суммы и дескриптор манифеста проверка کمانڈ واضح طور پر لکھیں تاکہ
+   Сайт сайта
+2. **Инструкции по подаче** — предварительный просмотр с контролем контрольной суммы.
 
    ```bash
    DOCS_RELEASE_TAG=preview-<stamp> npm run --prefix docs/portal serve
    ```
 
-3. **Security reminders** — واضح کریں کہ tokens خود بخود expire ہوتے ہیں، لنکس شیئر نہیں کیے جائیں،
-   اور incidents فوراً رپورٹ کیے جائیں۔
-4. **Feedback channel** — issue template/form لنک کریں اور response time expectations واضح کریں۔
-5. **Program dates** — start/end dates، office hours یا syncs، اور اگلی refresh window فراہم کریں۔
+3. **Напоминания о безопасности** — срок действия токенов истекает в ближайшее время, когда срок действия истекает.
+   Происшествия فوراً رپورٹ کیے جائیں۔
+4. **Канал обратной связи** – шаблон/форма сообщения, позволяющая узнать ожидаемое время ответа.
+5. **Даты программы** – даты начала/окончания, часы работы, синхронизация, возможность обновления окна.
 
 نمونہ ای میل
 [`docs/examples/docs_preview_invite_template.md`](../../../examples/docs_preview_invite_template.md)
-میں دستیاب ہے اور یہ requirements پوری کرتا ہے۔ بھیجنے سے پہلے placeholders (dates, URLs, contacts)
+Требования к требованиям پوری کرتا ہے۔ بھیجنے سے پہلے заполнители (даты, URL-адреса, контакты)
 اپ ڈیٹ کریں۔
 
-## پریویو host کو expose کریں
+## پریویو host کو разоблачить کریں
 
-جب تک onboarding مکمل نہ ہو اور change ticket منظور نہ ہو تب تک preview host کو promote نہ کریں۔
-اس سیکشن کے build/publish/verify end-to-end steps کے لئے
-[preview host exposure guide](./preview-host-exposure.md) دیکھیں۔
+جب تک onboarding مکمل نہ ہو اور изменить билет منظور نہ ہو تک предварительного просмотра хоста کو продвигать نہ کریں۔
+Воспользуйтесь сквозными этапами сборки/публикации/проверки.
+[предварительное руководство по воздействию на хост](./preview-host-exposure.md) دیکھیں۔
 
-1. **Build اور پیکیجنگ:** release tag stamp کریں اور deterministic artifacts تیار کریں۔
+1. **Создать сборку:** выпуск метки штампа и детерминированных артефактов.
 
    ```bash
    cd docs/portal
@@ -80,16 +82,14 @@ generator: docs/portal/scripts/sync-i18n.mjs
      --out artifacts/sorafs/preview-descriptor.json
    ```
 
-   pin script `portal.car`, `portal.manifest.*`, `portal.pin.proposal.json`,
-   اور `portal.dns-cutover.json` کو `artifacts/sorafs/` میں لکھتا ہے۔ ان فائلوں کو invite wave
-   کے ساتھ attach کریں تاکہ ہر ریویور وہی bits verify کر سکے۔
+   пин-скрипт `portal.car`, `portal.manifest.*`, `portal.pin.proposal.json`,
+   `portal.dns-cutover.json` или `artifacts/sorafs/`, как показано на рисунке. Если вам нужна волна приглашения
+   Если вы хотите прикрепить несколько битов, проверьте, пожалуйста, проверьте.
 
-2. **Preview alias publish کریں:** کمانڈ کو `--skip-submit` کے بغیر دوبارہ چلائیں
-   (`TORII_URL`, `AUTHORITY`, `PRIVATE_KEY[_FILE]` اور governance-issued alias proof فراہم کریں)۔
-   اسکرپٹ `docs-preview.sora` پر manifest bind کرے گا اور evidence bundle کے لئے
-   `portal.manifest.submit.summary.json` اور `portal.pin.report.json` نکالے گا۔
-
-3. **Deployment probe کریں:** invites بھیجنے سے پہلے alias resolve ہونا اور checksum کا tag سے match ہونا
+2. **Псевдоним предварительного просмотра для публикации:** Выберите `--skip-submit` для публикации
+   (`TORII_URL`, `AUTHORITY`, `PRIVATE_KEY[_FILE]` — подтверждение псевдонима, выданное правительством, فراہم کریں)۔
+   `docs-preview.sora` для привязки манифеста или пакета доказательств.
+   `portal.manifest.submit.summary.json` или `portal.pin.report.json` как вариант3. **Проверка развертывания:** приглашает псевдоним بھیجنے سے پہلے разрешить контрольную сумму и совпадение тега ہونا.
    یقینی بنائیں۔
 
    ```bash
@@ -98,24 +98,24 @@ generator: docs/portal/scripts/sync-i18n.mjs
      --expect-release="$DOCS_RELEASE_TAG"
    ```
 
-   `npm run serve` (`scripts/serve-verified-preview.mjs`) کو fallback کے طور پر handy رکھیں تاکہ
-   اگر preview edge میں مسئلہ ہو تو ریویورز لوکل کاپی چلا سکیں۔
+   `npm run serve` (`scripts/serve-verified-preview.mjs`) — резервный вариант, удобный вариант
+   Предварительный просмотр края میں مسئلہ ہو تو ریویورز لوکل کاپی چلا سکیں۔
 
 ## کمیونیکیشن ٹائم لائن
 
-| دن | ایکشن | Owner |
+| день | ایکشن | Владелец |
 | --- | --- | --- |
-| D-3 | دعوتی کاپی finalize کرنا، artifacts refresh کرنا، verification کا dry-run | Docs/DevRel |
-| D-2 | Governance sign-off + change ticket | Docs/DevRel + Governance |
-| D-1 | template کے ذریعے دعوتیں بھیجیں، tracker میں recipient list اپ ڈیٹ کریں | Docs/DevRel |
-| D | kickoff call / office hours، telemetry dashboards مانیٹر کریں | Docs/DevRel + On-call |
-| D+7 | midpoint feedback digest، blocking issues کی triage | Docs/DevRel |
-| D+14 | wave بند کریں، عارضی رسائی revoke کریں، `status.md` میں خلاصہ شائع کریں | Docs/DevRel |
+| Д-3 | Завершение работы над артефактами, обновление, проверка и пробный прогон | Документы/Разработчики |
+| Д-2 | Подписание руководства + билет на изменение | Документы/DevRel + Управление |
+| Д-1 | Шаблон کے ذریعے دعوتیں کریں, трекер میں список получателей اپ ڈیٹ کریں | Документы/Разработчики |
+| Д | начальный звонок / рабочее время, информационные панели телеметрии مانیٹر کریں | Документы/DevRel + Дежурство |
+| Д+7 | дайджест обратной связи средней точки, проблемы блокировки и сортировка | Документы/Разработчики |
+| Д+14 | волна بند کریں، عارضی رسائی отозвать کریں، `status.md` میں خلاصہ شائع کریں | Документы/Разработчики |
 
-## Access tracking اور telemetry
+## Отслеживание доступа и телеметрия
 
-1. ہر recipient، invite timestamp، اور revocation date کو preview feedback logger کے ساتھ ریکارڈ کریں
-   (دیکھیں [`preview-feedback-log`](./preview-feedback-log)) تاکہ ہر wave ایک ہی evidence trail شیئر کرے:
+1. Получатель, временная метка приглашения, дата отзыва и предварительный просмотр журнала отзывов.
+   (دیکھیں [`preview-feedback-log`](./preview-feedback-log)) تاکہ ہر wave ایک ہی след доказательств شیئر کرے:
 
    ```bash
    # artifacts/docs_portal_preview/feedback_log.json میں نیا invite event شامل کریں
@@ -126,38 +126,38 @@ generator: docs/portal/scripts/sync-i18n.mjs
      --notes "wave-01 seed"
    ```
 
-   Supported events ہیں `invite-sent`, `acknowledged`, `feedback-submitted`,
-   `issue-opened`, اور `access-revoked`۔ log ڈیفالٹ طور پر
-   `artifacts/docs_portal_preview/feedback_log.json` میں موجود ہے؛ اسے invite wave ٹکٹ کے ساتھ
-   consent forms سمیت attach کریں۔ close-out نوٹ سے پہلے summary helper استعمال کریں تاکہ
-   ایک auditable roll-up تیار ہو:
+   Поддерживаемые события: `invite-sent`, `acknowledged`, `feedback-submitted`,
+   `issue-opened`, или `access-revoked`۔ log ڈیفالٹ طور پر
+   `artifacts/docs_portal_preview/feedback_log.json` میں موجود ہے؛ اسے пригласить волну ٹکٹ کے ساتھ
+   формы согласия سمیت прикрепить کریں۔ close-out نوٹ سے پہلے помощник по составлению сводки استعمال کریں تاکہ
+   Сведение, поддающееся аудиту, например:
 
    ```bash
    npm run --prefix docs/portal preview:summary -- --summary-json \
      > artifacts/docs_portal_preview/preview-20250303-summary.json
    ```
 
-   summary JSON ہر wave کے invites، کھلے recipients، feedback counts، اور حالیہ ترین event کے
-   timestamp کو enumerate کرتا ہے۔ helper
+   Сводная волна JSON, приглашения, получатели, обратная связь, информация о событии.
+   временная метка کو перечислить کرتا ہے۔ помощник
    [`scripts/preview-feedback-log.mjs`](../../scripts/preview-feedback-log.mjs)
-   پر مبنی ہے، اس لئے وہی workflow لوکل یا CI میں چل سکتا ہے۔ recap شائع کرتے وقت
+   В этом разделе представлены рабочие процессы, связанные с CI и CI. резюме
    [`docs/examples/docs_preview_feedback_digest.md`](../../../examples/docs_preview_feedback_digest.md)
-   والا digest template استعمال کریں۔
-2. telemetry dashboards کو wave میں استعمال ہونے والے `DOCS_RELEASE_TAG` کے ساتھ tag کریں تاکہ
-   spikes کو invite cohorts سے correlate کیا جا سکے۔
-3. deploy کے بعد `npm run probe:portal -- --expect-release=<tag>` چلائیں تاکہ preview environment
-   درست release metadata advertise کرے۔
-4. کسی بھی incident کو runbook template میں capture کریں اور اسے cohort سے link کریں۔
+   Шаблон дайджеста استعمال کریں۔
+2. Панели телеметрии с волной и тегом `DOCS_RELEASE_TAG` с тегом کریکہ
+   шипы کو пригласить когорты سے коррелировать کیا جا سکے۔
+3. разверните среду предварительного просмотра `npm run probe:portal -- --expect-release=<tag>` и создайте среду предварительного просмотра.
+   درست выпускать метаданные, рекламировать کرے۔
+4. Наличие инцидента или шаблон Runbook, захват данных или когорта, ссылка на ссылку.
 
-## Feedback اور close-out
+## Обратная связь اور закрыть
 
-1. feedback کو shared doc یا issue board میں جمع کریں۔ items کو `docs-preview/<wave>` سے tag کریں تاکہ
-   roadmap owners انہیں آسانی سے query کر سکیں۔
-2. preview logger کی summary output سے wave report بھریں، پھر cohort کو `status.md` میں summarize کریں
-   (participants، بڑے findings، planned fixes) اور اگر DOCS-SORA milestone بدلا ہو تو `roadmap.md` اپ ڈیٹ کریں۔
-3. [`reviewer-onboarding`](./reviewer-onboarding.md) کے offboarding steps follow کریں: access revoke کریں،
-   requests archive کریں، اور participants کا شکریہ ادا کریں۔
-4. اگلی wave کے لئے artifacts refresh کریں، checksum gates دوبارہ چلائیں، اور invite template کو نئی dates سے اپ ڈیٹ کریں۔
+1. Обратная связь, общий документ или доска вопросов элементы کو `docs-preview/<wave>` سے tag کریں تاکہ
+   владельцы дорожной карты انہیں آسانی سے query کر سکیں۔
+2. Регистратор предварительного просмотра, сводный вывод, волновой отчет, выбор когорты, `status.md`, сводный отчет,
+   (участники, полученные результаты, запланированные исправления) اور اگر DOCS-SORA веха بدلا ہو تو `roadmap.md` ڈیٹ کریں۔
+3. [`reviewer-onboarding`](./reviewer-onboarding.md) Следующие шаги по отключению следующие: отозвать доступ.
+   Архив запросов. Участники.
+4. Обновите волну, обновите артефакты, проверьте контрольную сумму, выберите шаблон приглашения, выберите дату и время.
 
-اس playbook کو مسلسل لاگو کرنے سے preview پروگرام auditable رہتا ہے اور Docs/DevRel کو دعوتیں
-اسکیل کرنے کا repeatable طریقہ ملتا ہے جیسے جیسے پورٹل GA کے قریب آتا ہے۔
+اس playbook کو مسلسل لاگو کرنے سے Preview پروگرام Auditable رہتا ہے اور Docs/DevRel کو دعوتیں
+Если вы хотите повторять действия, которые вам нужны, вы можете использовать GA, чтобы сделать это.

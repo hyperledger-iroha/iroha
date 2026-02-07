@@ -8,43 +8,45 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Operator Runbooks Index
 description: Canonical entry point for the migrated SoraFS operator runbooks.
 sidebar_label: Runbook Index
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-> Mirrors the owner ledger that lives under `docs/source/sorafs/runbooks/`.
-> Every new SoraFS operations guide must be linked here once it is published in
-> the portal build.
+> `docs/source/sorafs/runbooks/` дор амьдардаг эзэмшигчийн дэвтэрийг толин тусгал.
+> Шинэ SoraFS үйлдлийн гарын авлага бүрийг нийтэлсэн бол энд холбогдох ёстой.
+> портал бүтээх.
 
-Use this page to verify which runbooks have completed the migration from the
-source path, and the portal copy so reviewers can jump straight to the desired
-guide during the beta preview.
+Энэ хуудсыг ашиглан аль runbook-ээс шилжилтийг хийж гүйцэтгэсэн болохыг шалгана уу
+эх сурвалжийн зам, портал хуулбарыг ашиглан хянагчид хүссэн рүүгээ шууд шилжих боломжтой
+бета урьдчилан үзэх үеийн хөтөч.
 
-## Beta preview host
+## Бета урьдчилан үзэх хост
 
-The DocOps wave has now promoted the reviewer-approved beta preview host at
-`https://docs.iroha.tech/`. When pointing operators or reviewers to a migrated
-runbook, reference that hostname so they exercise the checksum-gated portal
-snapshot. Publishing/rollback procedures live in
+DocOps долгион нь одоо хянагчаар батлагдсан бета урьдчилан үзэх хостыг сурталчилж байна
+`https://docs.iroha.tech/`. Оператор эсвэл тоймчдыг шилжүүлсэн рүү чиглүүлэх үед
+runbook, тухайн хостын нэрийг лавлаж, шалгах нийлбэртэй порталыг ашигладаг
+агшин зуурын зураг. Нийтлэх/буцах процедурууд амьдардаг
 [`devportal/preview-host-exposure`](../devportal/preview-host-exposure.md).
 
-| Runbook | Owner(s) | Portal copy | Source |
+| Runbook | Эзэмшигч(үүд) | Портал хуулбар | Эх сурвалж |
 |---------|----------|-------------|--------|
-| Gateway & DNS kickoff | Networking TL, Ops Automation, Docs/DevRel | [`sorafs/gateway-dns-runbook`](./gateway-dns-runbook.md) | `docs/source/sorafs_gateway_dns_design_runbook.md` |
-| SoraFS operations playbook | Docs/DevRel | [`sorafs/operations-playbook`](./operations-playbook.md) | `docs/source/sorafs/operations_playbook.md` |
-| Capacity reconciliation | Treasury / SRE | [`sorafs/capacity-reconciliation`](./capacity-reconciliation.md) | `docs/source/sorafs/runbooks/capacity_reconciliation.md` |
-| Pin registry ops | Tooling WG | [`sorafs/pin-registry-ops`](./pin-registry-ops.md) | `docs/source/sorafs/pin_registry_ops.md` |
-| Node operations checklist | Storage Team, SRE | [`sorafs/node-operations`](./node-operations.md) | `docs/source/sorafs/runbooks/sorafs_node_ops.md` |
-| Dispute & revocation runbook | Governance Council | [`sorafs/dispute-revocation-runbook`](./dispute-revocation-runbook.md) | `docs/source/sorafs/dispute_revocation_runbook.md` |
-| Staging manifest playbook | Docs/DevRel | [`sorafs/staging-manifest-playbook`](./staging-manifest-playbook.md) | `docs/source/sorafs/staging_manifest_playbook.md` |
-| Taikai anchor observability | Media Platform WG / DA Program / Networking TL | [`sorafs/taikai-anchor-runbook`](./taikai-anchor-runbook.md) | `docs/source/taikai_anchor_monitoring.md` |
+| Gateway & DNS эхлэл | Networking TL, Ops Automation, Docs/DevRel | [`sorafs/gateway-dns-runbook`](./gateway-dns-runbook.md) | `docs/source/sorafs_gateway_dns_design_runbook.md` |
+| SoraFS үйлдлийн дэвтэр | Docs/DevRel | [`sorafs/operations-playbook`](./operations-playbook.md) | `docs/source/sorafs/operations_playbook.md` |
+| Чадавхийг нэгтгэх | Төрийн сан / SRE | [`sorafs/capacity-reconciliation`](./capacity-reconciliation.md) | `docs/source/sorafs/runbooks/capacity_reconciliation.md` |
+| Бүртгэлийн үйлдлүүдийг тогтоох | Багажны WG | [`sorafs/pin-registry-ops`](./pin-registry-ops.md) | `docs/source/sorafs/pin_registry_ops.md` |
+| Зангилааны үйл ажиллагааны хяналтын хуудас | Хадгалах баг, SRE | [`sorafs/node-operations`](./node-operations.md) | `docs/source/sorafs/runbooks/sorafs_node_ops.md` |
+| Маргаан ба хүчингүй болгох runbook | Засаглалын зөвлөл | [`sorafs/dispute-revocation-runbook`](./dispute-revocation-runbook.md) | `docs/source/sorafs/dispute_revocation_runbook.md` |
+| Тайзны манифест тоглох ном | Docs/DevRel | [`sorafs/staging-manifest-playbook`](./staging-manifest-playbook.md) | `docs/source/sorafs/staging_manifest_playbook.md` |
+| Тайкай зангууны ажиглалт | Media Platform WG / DA Program / Networking TL | [`sorafs/taikai-anchor-runbook`](./taikai-anchor-runbook.md) | `docs/source/taikai_anchor_monitoring.md` |
 
-## Verification checklist
+## Баталгаажуулах шалгах хуудас
 
-- [x] Portal build links to this index (sidebar entry).
-- [x] Every migrated runbook lists the canonical source path to keep reviewers
-  aligned during doc reviews.
-- [x] The DocOps preview pipeline blocks merges when a listed runbook is missing
-  from the portal output.
+- [x] Энэ индекс рүү портал үүсгэх холбоосууд (хажуугийн самбарын оруулга).
+- [x] Шилжүүлсэн runbook бүр тоймчдыг хадгалах каноник эх замыг жагсаасан байдаг
+  док-н шалгалтын явцад зэрэгцүүлсэн.
+- [x] Жагсаалтад орсон runbook байхгүй үед DocOps урьдчилан харах дамжуулах хоолойн блокуудыг нэгтгэдэг
+  портал гаралтаас.
 
-Future migrations (e.g., new chaos drills or governance appendices) should add a
-row to the table above and update the DocOps checklist embedded in
+Ирээдүйн шилжилт хөдөлгөөн (жишээ нь, эмх замбараагүй байдлын шинэ дасгалууд эсвэл засаглалын хавсралтууд) нэмэх хэрэгтэй.
+Дээрх хүснэгтийн эгнээнд суулгасан DocOps шалгах хуудсыг шинэчил
 `docs/examples/docs_preview_request_template.md`.

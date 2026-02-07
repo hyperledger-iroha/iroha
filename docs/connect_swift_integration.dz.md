@@ -7,41 +7,36 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 8b937a75e50aa77c02fcab0a11dae1b1cc182f88c179d6f90aa69181afa80d1b
 source_last_modified: "2026-01-05T18:22:23.394597+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-## Integrating NoritoBridgeKit in an Xcode iOS Project
+## ཨེགསི་ཀོཌ་ཨའི་ཨོ་ཨེསི་ལས་འགུལ་ནང་ ནོར་རི་ཊོ་བིརིཇ་ཀིཊ་གཅིག་བསྡོམས་འབད་ནི།
 
-This guide shows how to integrate the Rust Norito bridge (XCFramework) and the Swift wrappers into an iOS app, then exchange Iroha Connect frames over WebSocket using the same Norito codecs as the Rust host.
+ལམ་སྟོན་འདི་གིས་ རསཊ་ I18NT0000000X ཟམ་ (XCFramework) དང་ སུའིཕཊ་གི་ བཀབ་ཆ་ཚུ་ iOS གློག་རིག་ནང་ ག་དེ་སྦེ་ མཉམ་བསྡོམས་འབད་ནི་ཨིན་ན་ སྟོན་ཞིནམ་ལས་ དེ་ལས་ I18NT00000000003X གི་ ཝེབ་སོ་ཀེཊི་གུ་ རསཊི་ཧོསིཊི་དང་གཅིག་ཁར་ Norito གསང་ཡིག་ཚུ་ ལག་ལེན་འཐབ་སྟེ་ གཞི་ཁྲམ་ཚུ་ བརྗེ་སོར་འབད་དགོ།
 
-Prerequisites
-- A NoritoBridge.xcframework zip (built by CI workflow) and the Swift helper `NoritoBridgeKit.swift` (copy the version under `examples/ios/NoritoDemo/Sources` if you are not consuming the demo project directly).
-- Xcode 15+, iOS 13+ target.
+སྔོན་འགྲོའི་ཆ་རྐྱེན།
+- NoritoBridge.xcframework zip (CI ལཱ་གི་རྒྱུན་རིམ་གྱིས་བཟོ་བསྐྲུན་འབད་ཡོདཔ་) དང་ Swift གྲོགས་རམ་པ་ I18NI000000010X (ཁྱོད་ཀྱིས་ བརྡ་སྟོན་ལས་འགུལ་འདི་ཐད་ཀར་དུ་ ཆ་འཇོག་མ་འབད་བ་ཅིན་ ཐོན་རིམ་འདི་ འདྲ་བཤུས་རྐྱབས།)
+- Xcode 15+, iOS 13+ དམིགས་ཚད།
 
-Option A: Swift Package Manager (recommended)
-1) Publish a binary SPM using the `Package.swift.template` in `crates/connect_norito_bridge/` (fill URL and checksum from CI).
-2) In Xcode: File → Add Packages… → Enter the SPM repo URL → Add the `NoritoBridge` product to your target.
-3) Add `NoritoBridgeKit.swift` to your app target (drag into your project, ensure “Copy if needed” is ticked).
+གདམ་ཁ་ཀ་: སོར་བསྒྱུར་ཐུམ་སྒྲིལ་འཛིན་སྐྱོང་པ། (གྲོས་འཆར་བཀོད།)
+༡༽ `Package.swift.template` ལག་ལེན་འཐབ་སྟེ་ I18NI0000000013X (URL fill དང་ CI) ལག་ལེན་འཐབ་སྟེ་ གཉིས་ལྡན་ཨེསི་པི་ཨེམ་ཅིག་ དཔར་བསྐྲུན་འབད་ཡོདཔ་ཨིན།
+༢༽ ཨེགསི་ཀོཌི་ནང་ ཡིག་སྣོད་ → ཐུམ་སྒྲིལ་ཚུ་ཁ་སྐོང་... → ཁྱོད་རའི་དམིགས་གཏད་ལུ་ `NoritoBridge` ཐོན་སྐྱེད་འདི་ ཨེསི་པི་ཨེམ་ repo URL → བཙུགས།
+༣༽ ཁྱོད་རའི་གློག་རིམ་དམིགས་གཏད་ལུ་ I18NI0000015X ཁ་སྐོང་རྐྱབས་ (ཁྱོད་རའི་ལས་འགུལ་ནང་ལུ་འདྲུད་དེ་ “དགོས་མཁོ་ཡོད་མེད་འདྲ་བཤུས་” འདི་རྟགས་བཀལ་དགོ།)
 
-Option B: CocoaPods
-1) Create a Podspec from `NoritoBridge.podspec.template` (fill the `s.source` zip URL).
-2) `pod trunk push NoritoBridge.podspec`.
-3) In your Podfile: `pod 'NoritoBridge'` → `pod install`.
-4) Add `NoritoBridgeKit.swift` to your app target.
+གདམ་ཁ།: ཀོ་ཀོ་པོཌ།
+༡༽ `NoritoBridge.podspec.template` (`s.source` zip URL བཀང་) ལས་ Podspec ཅིག་གསར་བསྐྲུན་འབད།
+༢༽ `pod trunk push NoritoBridge.podspec`.
+༣༽ ཁྱོད་ཀྱི་པོད་ཕའིལ་ནང་: `pod 'NoritoBridge'` → I18NI0000020X.
+༤༽ ཁྱོད་རའི་གློག་རིམ་དམིགས་གཏད་ལུ་ `NoritoBridgeKit.swift` ཁ་སྐོང་འབད།
 
-Imports
-```swift
-import Foundation
-import CryptoKit               // ChaChaPoly / HKDF
-import IrohaSwift              // ConnectClient / ConnectSession / ConnectCrypto
-import NoritoBridge            // Clang module from the XCFramework
-// Ensure NoritoBridgeKit.swift is part of the target
-```
+ནང་འདྲེན་ཚུ།
+I18NF0000004X
 
-### Bootstrapping a Connect session
+### མཐུད་ལམ་ལཱ་ཡུན་ཅིག་བུཊི་སིཊིང་འབད་དོ།
 
-`ConnectClient` handles the WebSocket, while `ConnectSession` orchestrates control
-frames and ciphertext envelopes. The snippet below shows how a dApp would open a session,
-derive Connect keys, and wait for an approval response.
+`ConnectClient` གིས་ ཝེབ་སོ་ཀེཊི་འདི་ འཛིན་སྐྱོང་འཐབ་ཨིན་ དེ་ལས་ I18NI000000023X གིས་ ཚད་འཛིན་ཚད་འཛིན་འབདཝ་ཨིན།
+གཞི་ཁྲམ་དང་ སི་ཕར་ཊེགསི་ ཡིག་ཤུབས་ཚུ། འོག་གི་ཐིག་ཁྲམ་འདི་གིས་ ཌི་ཨེ་པི་གིས་ ལཱ་ཡུན་ཅིག་ག་དེ་སྦེ་ཁ་ཕྱེ་འོང་ག་སྟོནམ་ཨིན།
+འབྲེལ་མཐུན་ལྡེ་མིག་ཚུ་ ཆ་འཇོག་ལན་འདེབས་འབད་ནི་ལུ་སྒུག་སྡོད།
 
 ```swift
 let connectURL = URL(string: "wss://node.example/v1/connect/ws?sid=\(sidB64)&role=app")!
@@ -76,10 +71,10 @@ Task {
 }
 ```
 
-### Sending ciphertext frames (sign requests, etc.)
+### སི་ཕར་ཊེགསི་གཞི་ཁྲམ་ཚུ་གཏང་དོ་ཡོདཔ་ཨིན་ (ཞུ་བ་ཚུ་ ལ་སོགས་པ་ཚུ་)།
 
-When the dApp needs to request a signature it uses the Norito bridge helpers to encode
-an envelope, encrypts the payload with ChaChaPoly, and wraps it in a `ConnectFrame`.
+ཌི་ཨེ་པི་གིས་ མཚན་རྟགས་ཅིག་ ཞུ་བ་འབད་དགོཔ་ད་ དེ་གིས་ Norito ཟམ་གྱི་གྲོགས་རམ་ཚུ་ ལག་ལེན་འཐབ་ཨིན།
+ཡིག་ཤུབས་ཅིག་གིས་ ཆ་ཅ་པོ་ལི་དང་གཅིག་ཁར་ པེ་ལོཌ་འདི་གསང་བཟོ་འབད་དེ་ I18NI000000024X ནང་ལུ་ བཀབ་བཞགཔ་ཨིན།
 
 ```swift
 let bridge = NoritoBridgeKit()
@@ -101,9 +96,9 @@ let frame = ConnectFrame(sessionID: sessionID,
 try await connectClient.send(frame: frame)
 ```
 
-`ConnectAEAD.header` / `ConnectAEAD.nonce` are convenience helpers (see the snippet in
-`docs/connect_swift_ios.md`) built from the shared `connect:v1` header definition. They
-are easy to inline if you prefer not to add another utility:
+`ConnectAEAD.header` / `ConnectAEAD.nonce` འདི་ སྟབས་བདེ་བའི་གྲོགས་རམ་པ་ཨིན།
+`docs/connect_swift_ios.md` གིས་ `connect:v1` མགོ་ཡིག་ངེས་ཚིག་ལས་ བཟོ་བསྐྲུན་འབད་ཡོདཔ་ཨིན། ཁོང
+ཁྱོད་ཀྱིས་ གཞན་མི་མཐུན་རྐྱེན་ཁ་སྐོང་མ་འབད་བ་ཅིན་ ནང་ན་འཇམ་ཏོང་ཏོ་ཨིན།
 
 ```swift
 enum ConnectAEAD {
@@ -127,47 +122,30 @@ enum ConnectAEAD {
 }
 ```
 
-### Receiving / decrypting frames
+### ལེན་པ་ / གཞི་ཁྲམ་ཚུ་ གསང་བཟོ་འབད་དོ།
 
-`ConnectSession` already exposes `nextEnvelope()`, which decrypts payloads when direction
-keys are configured. If you need manual access (for example to match an existing decoder
-pipeline), you can call the lower-level helper:
+I18NI000000029X ཧེ་མ་ལས་རང་ I18NI000000030X གསལ་སྟོན་འབདཝ་ཨིན།
+ལྡེ་མིག་ཚུ་རིམ་སྒྲིག་འབད་ཡོདཔ་ཨིན། ཁྱོད་ལུ་ལག་དེབ་འཛུལ་སྤྱོད་དགོ་པ་ཅིན་ (དཔེར་ན་ ད་ལྟོ་ཡོད་པའི་ཌི་ཀོ་ཌར་ཅིག་དང་མཐུན་སྒྲིག་འབད་ནི་ལུ་
+པའིཔ་ལའིན་), ཁྱོད་ཀྱིས་ དམའ་རིམ་གྱི་གྲོགས་རམ་པ་ལུ་འབོ་ཚུགས།
 
-```swift
-func decryptFrame(_ frame: ConnectFrame,
-                  symmetricKey: SymmetricKey,
-                  sessionID: Data) throws -> ConnectEnvelope {
-    guard case .ciphertext(let payload) = frame.kind else {
-        throw ConnectEnvelopeError.unsupportedFrameKind
-    }
-    let aad = ConnectAEAD.header(sessionID: sessionID,
-                                 direction: frame.direction,
-                                 sequence: frame.sequence)
-    let nonce = ConnectAEAD.nonce(sequence: frame.sequence)
-    let box = try ChaChaPoly.SealedBox(combined: payload.payload)
-    let plaintext = try ChaChaPoly.open(box, using: symmetricKey, authenticating: aad)
-    return try ConnectEnvelope.decode(jsonData: plaintext)
-}
-```
+I18NF0000008X
 
-`NoritoBridgeKit` also exposes helpers such as `decodeCiphertextFrame`, `decodeEnvelopeJson`,
-and `decodeSignResultAlgorithm` for debugging or interoperability testing. For production
-apps, rely on `ConnectSession` and `ConnectEnvelope` so behaviour matches the Rust and
-Android SDKs exactly.
+`NoritoBridgeKit` གིས་ I18NI000000032X, `decodeEnvelopeJson`, བཟུམ་གྱི་གྲོགས་རམ་པ་ཚུ་ཡང་སྟོནམ་ཨིན།
+དང་ `decodeSignResultAlgorithm` རྐྱེན་སེལ་ཡང་ན་ ཕན་ཚུན་འབྲེལ་བའི་བརྟག་དཔྱད་ཀྱི་དོན་ལུ་ཨིན། ཐོན་སྐྱེད་ཀྱི་དོན་ལུ།
+གློག་རིམ་ཚུ་ I18NI000000035X དང་ I18NI0000000036X ལུ་བརྟེན་ཏེ་ སྤྱོད་ལམ་འདི་གིས་ Rust དང་ མཐུན་སྒྲིག་འབདཝ་ཨིན།
+Android SDKs ཏག་ཏག་ཡོད།
 
-## CI validation
+## CI བདེན་དཔང་།
 
-- Before publishing updated bridge artifacts or pushing Connect integrations, run:
+- དུས་མཐུན་བཟོ་ཡོད་པའི་ཟམ་གྱི་ཅ་རྙིང་ཚུ་དཔར་བསྐྲུན་མ་འབད་བའི་ཧེ་མ་ ཡང་ན་ མཐུད་སྦྲེལ་མཉམ་བསྡོམས་ཚུ་ ཨེབ་གཏང་མ་འབད་བའི་ཧེ་མ་ གཡོག་བཀོལ།
 
-  ```bash
-  make swift-ci
-  ```
+  I18NF0000009X
 
-  The target validates fixture parity, checks the dashboard feeds, and renders the CLI
-  summaries locally. In Buildkite the same workflow depends on metadata keys such as
-  `ci/xcframework-smoke:<lane>:device_tag`; confirm the metadata is present after editing
-  pipelines or agent tags so dashboards can attribute results to the correct simulator or
-  StrongBox lane.
-- If the command fails, follow the parity playbook (`docs/source/swift_parity_triage.md`)
-  and inspect the rendered `mobile_ci` output to identify which lane requires regeneration
-  or incident follow-up before retrying.
+  དམིགས་གཏད་འདི་གིས་ བརྟན་བཞུགས་འདྲ་མཉམ་ཚུ་ བདེན་དཔྱད་འབད་དེ་ ཌེཤ་བོརཌི་ཕིཌི་ཚུ་ཞིབ་དཔྱད་འབདཝ་ཨིནམ་དང་ སི་ཨེལ་ཨའི་འདི་ བཀྲམ་སྟོན་འབདཝ་ཨིན།
+  ས་གནས་ནང་ བཅུད་བསྡུས། བཱའིལཌི་ཀི་ཊི་ནང་ ལཱ་གི་རྒྱུན་རིམ་ཅོག་འཐདཔ་འདི་ མེ་ཊ་ཌེ་ཊ་ལྡེ་མིག་ཚུ་ལུ་རག་ལསཔ་ཨིན།
+  `ci/xcframework-smoke:<lane>:device_tag`; ཞུན་དག་འབད་བའི་ཤུལ་ལས་ མེ་ཊ་ཌེ་ཊ་འདི་ ངེས་གཏན་བཟོ།
+  པའིཔ་ལའིན་ཡང་ན་ ལས་ཚབ་ངོ་རྟགས་ཚུ་ དེ་འབདཝ་ལས་ ཌེཤ་བོརཌི་གིས་ གྲུབ་འབྲས་ཚུ་ ངེས་བདེན་ དཔེ་སྟོན་འབད་མི་ལུ་ ཆེད་བརྗོད་འབད་ཚུགས།
+  StrongBox ལམ།
+- བརྡ་བཀོད་འདི་འཐུས་ཤོར་བྱུང་པ་ཅིན་ ཆ་སྙོམས་རྩེད་དེབ་ (I18NI0000038X) ལུ་རྗེས་སུ་འབྲང་།
+  དང་ བཀོད་སྒྲིག་འབད་ཡོད་པའི་ `mobile_ci` ཐོན་འབྲས་འདི་ ལམ་ག་འདི་ བསྐྱར་བཟོ་དགོཔ་ཨིན་ན་ ངོས་འཛིན་འབད་ནི།
+  ཡང་ན་ ལོག་འབད་རྩོལ་མ་བསྐྱེད་པའི་ཧེ་མ་ བྱུང་རྐྱེན་རྗེས་འཇུག་འབད་ནི།

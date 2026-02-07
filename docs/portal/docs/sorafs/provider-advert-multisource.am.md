@@ -7,102 +7,103 @@ generator: scripts/sync_docs_i18n.py
 source_hash: bb0965d4125aa2c3a3d483b63f4b36b1c6bf26406a2fd54e645e7a3c0156c264
 source_last_modified: "2026-01-05T09:28:11.906678+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Multi-Source Provider Adverts & Scheduling
+# ባለብዙ ምንጭ አቅራቢ ማስታወቂያዎች እና መርሐግብር
 
-This page distils the canonical spec in
-[`docs/source/sorafs/provider_advert_multisource.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/provider_advert_multisource.md).
-Use that document for verbatim Norito schemas and changelogs; the portal copy
-keeps operator guidance, SDK notes, and telemetry references close to the rest
-of the SoraFS runbooks.
+ይህ ገጽ ቀኖናዊውን ዝርዝር ወደ ውስጥ ያሰራጫል።
+[`docs/source/sorafs/provider_advert_multisource.md`](I18NU0000009X)።
+ያንን ሰነድ በቃል ለ I18NT0000001X እቅዶች እና የለውጥ ሎግዎች ይጠቀሙ። የፖርታል ቅጂው
+የኦፕሬተር መመሪያን፣ የኤስዲኬ ማስታወሻዎችን እና የቴሌሜትሪ ማጣቀሻዎችን ከቀሪው ጋር ያስቀምጣል።
+የ SoraFS runbooks.
 
-## Norito schema additions
+## Norito የመርሃግብር ተጨማሪዎች
 
-### Range capability (`CapabilityType::ChunkRangeFetch`)
-- `max_chunk_span` – largest contiguous span (bytes) per request, `≥ 1`.
-- `min_granularity` – seek resolution, `1 ≤ value ≤ max_chunk_span`.
-- `supports_sparse_offsets` – permits non-contiguous offsets in one request.
-- `requires_alignment` – when true, offsets must align with `min_granularity`.
-- `supports_merkle_proof` – indicates PoR witness support.
+### ክልል አቅም (`CapabilityType::ChunkRangeFetch`)
+- `max_chunk_span` - በጥያቄ ትልቁ የተከታታይ ስፋት (ባይት)፣ `≥ 1`።
+- `min_granularity` - ጥራት ይፈልጉ ፣ I18NI0000015X።
+- `supports_sparse_offsets` - በአንድ ጥያቄ ውስጥ ቀጣይ ያልሆኑ ማካካሻዎችን ይፈቅዳል።
+- `requires_alignment` - እውነት ሲሆን ማካካሻዎች ከ`min_granularity` ጋር መጣጣም አለባቸው።
+- `supports_merkle_proof` - የPoR ምስክር ድጋፍን ያመለክታል።
 
-`ProviderCapabilityRangeV1::to_bytes` / `from_bytes` enforce canonical encoding
-so gossip payloads remain deterministic.
+`ProviderCapabilityRangeV1::to_bytes` / `from_bytes` ቀኖናዊ ኢንኮዲንግ ያስፈጽማል
+ስለዚህ የሀሜት ሸክሞች ቆራጥነት ይቀራሉ።
 
 ### `StreamBudgetV1`
-- Fields: `max_in_flight`, `max_bytes_per_sec`, optional `burst_bytes`.
-- Validation rules (`StreamBudgetV1::validate`):
-  - `max_in_flight ≥ 1`, `max_bytes_per_sec > 0`.
-  - `burst_bytes`, when present, must be `> 0` and `≤ max_bytes_per_sec`.
+- መስኮች: I18NI0000023X, I18NI0000024X, አማራጭ I18NI0000025X.
+- የማረጋገጫ ደንቦች (`StreamBudgetV1::validate`):
+  - `max_in_flight ≥ 1`፣ `max_bytes_per_sec > 0`።
+  - `burst_bytes`፣ ሲገኝ፣ `> 0` እና `≤ max_bytes_per_sec` መሆን አለበት።
 
 ### `TransportHintV1`
-- Fields: `protocol: TransportProtocol`, `priority: u8` (0–15 window enforced by
+መስኮች፡- `protocol: TransportProtocol`፣ `priority: u8` (0–15 መስኮት በ
   `TransportHintV1::validate`).
-- Known protocols: `torii_http_range`, `quic_stream`, `soranet_relay`,
+- የታወቁ ፕሮቶኮሎች፡ `torii_http_range`፣ `quic_stream`፣ `soranet_relay`፣
   `vendor_reserved`.
-- Duplicate protocol entries per provider are rejected.
+- በአንድ አቅራቢ የተባዙ የፕሮቶኮል ግቤቶች ውድቅ ተደርገዋል።
 
-### `ProviderAdvertBodyV1` additions
-- Optional `stream_budget: Option<StreamBudgetV1>`.
-- Optional `transport_hints: Option<Vec<TransportHintV1>>`.
-- Both fields now flow through `ProviderAdmissionProposalV1`, governance
-  envelopes, CLI fixtures, and telemetric JSON.
+### `ProviderAdvertBodyV1` ተጨማሪዎች
+- አማራጭ `stream_budget: Option<StreamBudgetV1>`.
+- አማራጭ I18NI0000042X.
+- ሁለቱም መስኮች አሁን በ I18NI0000043X, አስተዳደር በኩል ይፈስሳሉ
+  ኤንቨሎፕ፣ የCLI እቃዎች እና ቴሌሜትሪክ JSON።
 
-## Validation & governance binding
+## የማረጋገጫ እና የአስተዳደር አስገዳጅነት
 
-`ProviderAdvertBodyV1::validate` and `ProviderAdmissionProposalV1::validate`
-reject malformed metadata:
+`ProviderAdvertBodyV1::validate` እና `ProviderAdmissionProposalV1::validate`
+የተበላሸ ዲበ ውሂብን ውድቅ ያድርጉ፡
 
-- Range capabilities must decode and satisfy span/granularity limits.
-- Stream budgets / transport hints require a matching
-  `CapabilityType::ChunkRangeFetch` TLV and non-empty hint list.
-- Duplicate transport protocols and invalid priorities raise validation
-  errors before adverts are gossiped.
-- Admission envelopes compare proposal/adverts for range metadata via
-  `compare_core_fields` so mismatched gossip payloads are rejected early.
+- የክልሎች አቅም መፍታት እና የስፋት/የጥራጥሬ ገደቦችን ማርካት አለበት።
+- የዥረት በጀቶች / የመጓጓዣ ፍንጮች ተዛማጅ ያስፈልጋቸዋል
+  `CapabilityType::ChunkRangeFetch` TLV እና ባዶ ያልሆነ ፍንጭ ዝርዝር።
+- የተባዙ የትራንስፖርት ፕሮቶኮሎች እና ልክ ያልሆኑ ቅድሚያዎች ማረጋገጫን ያሳድጋሉ።
+  ማስታወቂያ ከመወራቱ በፊት ስህተቶች።
+- የመግቢያ ፖስታዎች ለክልል ሜታዳታ ፕሮፖዛል/ማስታወቂያ ያወዳድራሉ
+  `compare_core_fields` ስለዚህ የማይዛመዱ የሃሜት ጭነቶች ቀደም ብለው ውድቅ ይደረጋሉ።
 
-Regression coverage lives in
+የድጋፍ ሽፋን ይኖራል
 `crates/sorafs_manifest/src/{provider_advert,provider_admission}.rs`.
 
-## Tooling & fixtures
+## መሳሪያ እና እቃዎች
 
-- Provider advert payloads must include `range_capability`, `stream_budget`, and
-  `transport_hints` metadata. Validate via `/v1/sorafs/providers` responses and
-  admission fixtures; JSON summaries should include the parsed capability,
-  stream budget, and hint arrays for telemetry ingestion.
-- `cargo xtask sorafs-admission-fixtures` surfaces stream budgets and transport
-  hints inside its JSON artefacts so dashboards track feature adoption.
-- Fixtures under `fixtures/sorafs_manifest/provider_admission/` now include:
-  - canonical multi-source adverts,
-  - `multi_fetch_plan.json` so SDK suites can replay a deterministic multi-peer
-    fetch plan.
+- የአቅራቢዎች የማስታወቂያ ጭነቶች `range_capability`፣ `stream_budget`፣ እና ማካተት አለባቸው።
+  `transport_hints` ሜታዳታ። በI18NI0000052X ምላሾች በኩል ያረጋግጡ እና
+  የመግቢያ ዕቃዎች; የJSON ማጠቃለያዎች የተተነተነውን አቅም ማካተት አለባቸው፣
+  የዥረት በጀት፣ እና ለቴሌሜትሪ መግቢያ ፍንጭ ድርድሮች።
+- `cargo xtask sorafs-admission-fixtures` የወለል ንጣፎች በጀቶችን እና መጓጓዣዎችን ያሰራጫሉ።
+  ዳሽቦርዶች የማደጎ ባህሪን ለመከታተል በJSON ቅርሶቹ ውስጥ ፍንጭ ይሰጣል።
+- በ `fixtures/sorafs_manifest/provider_admission/` ስር ያሉ ቋሚዎች አሁን ያካትታሉ፡
+  - ቀኖናዊ ባለብዙ ምንጭ ማስታወቂያዎች ፣
+  - `multi_fetch_plan.json` ስለዚህ የኤስዲኬ ስብስቦች የሚወስን ባለብዙ-አቻን እንደገና ማጫወት ይችላሉ
+    እቅድ ማውጣት.
 
-## Orchestrator & Torii integration
+## ኦርኬስትራ እና Torii ውህደት
 
-- Torii `/v1/sorafs/providers` returns parsed range capability metadata along
-  with `stream_budget` and `transport_hints`. Downgrade warnings fire when
-  providers omit the new metadata, and gateway range endpoints enforce the same
-  constraints for direct clients.
-- The multi-source orchestrator (`sorafs_car::multi_fetch`) now enforces range
-  limits, capability alignment, and stream budgets when assigning work. Unit
-  tests cover chunk-too-large, sparse‑seek, and throttling scenarios.
-- `sorafs_car::multi_fetch` streams downgrade signals (alignment failures,
-  throttled requests) so operators can trace why specific providers were
-  skipped during planning.
+- Torii `/v1/sorafs/providers` የተተነተነ ክልል አቅም ሜታዳታ አብሮ ይመልሳል
+  ከ `stream_budget` እና `transport_hints` ጋር። የማውረድ ማስጠንቀቂያዎች ሲቃጠሉ
+  አቅራቢዎች አዲሱን ሜታዳታ ይተዉታል፣ እና የመተላለፊያ መንገዱ የመጨረሻ ነጥቦችም ይህንኑ ያስገድዳሉ
+  ለቀጥታ ደንበኞች ገደቦች.
+- ባለብዙ ምንጭ ኦርኬስትራ (`sorafs_car::multi_fetch`) አሁን ክልልን ያስፈጽማል
+  ሥራ በሚመድቡበት ጊዜ ገደቦች፣ የችሎታ አሰላለፍ እና የዥረት በጀት ማውጣት። ክፍል
+  ፈተናዎች ቁርጥራጭ-በጣም-ትልቅ፣ በጥቂቱ-መፈለግ እና በጉሮሮ ውስጥ ያሉ ሁኔታዎችን ይሸፍናሉ።
+- `sorafs_car::multi_fetch` ዥረቶች ወደ ታች የማውረድ ምልክቶች (የአሰላለፍ ውድቀቶች፣
+  ስሮትልድ ጥያቄዎች) ስለዚህ ኦፕሬተሮች የተወሰኑ አቅራቢዎች ለምን እንደነበሩ ማወቅ ይችላሉ።
+  በእቅድ ጊዜ ተዘሏል.
 
-## Telemetry reference
+## ቴሌሜትሪ ማጣቀሻ
 
-The Torii range fetch instrumentation feeds the **SoraFS Fetch Observability**
-Grafana dashboard (`dashboards/grafana/sorafs_fetch_observability.json`) and the
-paired alert rules (`dashboards/alerts/sorafs_fetch_rules.yml`).
+የTorii ክልል ማምጫ መሳሪያ የ*SoraFS ፈልጎ ታዛቢነትን ይመገባል።
+Grafana ዳሽቦርድ (`dashboards/grafana/sorafs_fetch_observability.json`) እና እ.ኤ.አ.
+የተጣመሩ የማንቂያ ደንቦች (I18NI0000062X)።
 
-| Metric | Type | Labels | Description |
-|--------|------|--------|-------------|
-| `torii_sorafs_provider_range_capability_total` | Gauge | `feature` (`providers`, `supports_sparse_offsets`, `requires_alignment`, `supports_merkle_proof`, `stream_budget`, `transport_hints`) | Providers advertising range capability features. |
-| `torii_sorafs_range_fetch_throttle_events_total` | Counter | `reason` (`quota`, `concurrency`, `byte_rate`) | Throttled range fetch attempts grouped by policy. |
-| `torii_sorafs_range_fetch_concurrency_current` | Gauge | — | Active guarded streams consuming the shared concurrency budget. |
+| መለኪያ | አይነት | መለያዎች | መግለጫ |
+|--------|-------|----|------------|
+| `torii_sorafs_provider_range_capability_total` | መለኪያ | `feature` (`providers`፣ `supports_sparse_offsets`፣ `requires_alignment`፣ `supports_merkle_proof`፣ `stream_budget`፣ I18NI0000070X) | አቅራቢዎች የማስታወቂያ ክልል ችሎታ ባህሪያት. |
+| `torii_sorafs_range_fetch_throttle_events_total` | ቆጣሪ | `reason` (`quota`፣ `concurrency`፣ `byte_rate`) | ስሮትልድ ክልል ለማምጣት ሙከራዎች በመመሪያ ተቧድነው። |
+| `torii_sorafs_range_fetch_concurrency_current` | መለኪያ | - | የጋራ የተዛማጅ በጀት የሚበሉ ንቁ የተጠበቁ ዥረቶች። |
 
-Example PromQL snippets:
+ምሳሌ PromQL ቅንጥቦች፡
 
 ```promql
 sum(rate(torii_sorafs_range_fetch_throttle_events_total[5m])) by (reason)
@@ -110,6 +111,6 @@ max(torii_sorafs_range_fetch_concurrency_current)
 torii_sorafs_provider_range_capability_total
 ```
 
-Use the throttle counter to confirm quota enforcement before enabling
-multi-source orchestrator defaults, and alert when concurrency approaches the
-stream budget maxima for your fleet.
+ከማንቃትዎ በፊት የኮታ ማስፈጸሙን ለማረጋገጥ ስሮትል ቆጣሪውን ይጠቀሙ
+የብዝሃ-ምንጭ ኦርኬስትራ ነባሪዎች፣ እና ተጓዳኝ ሲቃረብ ያስጠነቅቁ
+የጅረት በጀት ከፍተኛውን ለእርስዎ መርከቦች።

@@ -859,9 +859,9 @@ async fn ws_fallback_connects_and_handshakes() {
                                 )));
                             }
                         }
-                        if let Err(e) = core::pin::Pin::new(&mut self.0).start_send(
-                            tokio_tungstenite::tungstenite::Message::Close(None),
-                        ) {
+                        if let Err(e) = core::pin::Pin::new(&mut self.0)
+                            .start_send(tokio_tungstenite::tungstenite::Message::Close(None))
+                        {
                             return core::task::Poll::Ready(Err(std::io::Error::new(
                                 std::io::ErrorKind::Other,
                                 format!("ws close error: {e}"),

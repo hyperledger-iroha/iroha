@@ -7,28 +7,29 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 4d1af3021d94540c338c921ea8393a10dd918ee1549965cdc09fbc612c938444
 source_last_modified: "2025-12-29T18:16:35.908874+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Python SDK Quickstart
+# པའི་ཐོན་ཨེསི་ཌི་ཀེ་ མགྱོགས་མཐའ།
 
-The Python SDK (`iroha-python`) mirrors the Rust client helpers so you can
-interact with Torii from scripts, notebooks, or web backends. This quickstart
-covers installation, transaction submission, and event streaming. For deeper
-coverage see `python/iroha_python/README.md` in the repository.
+པའི་ཐོན་ཨེསི་ཌི་ཀེ་ (`iroha-python`) གིས་ རཱསི་ཊི་ མཁོ་སྤྲོད་པ་ གྲོགས་རམ་འབད་མི་ཚུ་ མེ་ལོང་ནང་ བཙུགས་ཏེ་ ཁྱོད་ཀྱིས་འབད་ཚུགས།
+ཡིག་གཟུགས་དང་དྲན་དེབ་ ཡང་ན་ ཝེབ་རྒྱབ་ཐག་ཚུ་ལས་ I1NT00000003X དང་ཅིག་ཁར་ འབྲེལ་བ་འཐབ་དགོ། འདི་མགྱོགས་འགོ་ཚུགས།
+གཞི་བཙུགས་དང་ ཚོང་འབྲེལ་ཕུལ་ནི་ དེ་ལས་ བྱུང་ལས་རྒྱུན་ལམ་ཚུ་ ཁྱབ་ཚུགསཔ་ཨིན། གཏིང་ཟབ་པའི་དོན་ལུ།
+ཁྱབ་ཚད་བལྟ། `python/iroha_python/README.md` མཛོད་ཁང་ནང་།
 
-## 1. Install
+## 1. གཞི་བཙུགས་འབད་ནི།
 
 ```bash
 pip install iroha-python
 ```
 
-Optional extras:
+གདམ་ཁ་ཅན་གྱི་ཁ་སྐོང་:
 
-- `pip install aiohttp` if you plan to run the asynchronous variants of the
-  streaming helpers.
-- `pip install pynacl` when you need Ed25519 key derivation outside of the SDK.
+- ཁྱོད་ཀྱིས་ མཉམ་མཐུན་མེད་པའི་འགྱུར་བ་ཚུ་ གཡོག་བཀོལ་ནི་གི་འཆར་གཞི་བརྩམས་ཏེ་ཡོད་པ་ཅིན་ Torii
+  རྒྱུན་སྤེལ་གྱི་གྲོགས་རམ་པ་ཚུ།
+- ཁྱོད་ལུ་ ཨེསི་ཌི་ཀེ་གི་ཕྱི་ཁར་ ཨི་ཌི་༢༥༥༡༩ ལྡེ་མིག་འབྱུང་ཁུངས་དགོ་པའི་སྐབས་ `pip install pynacl` ཨིན།
 
-## 2. Create a client and signers
+## 2. མཁོ་མངགས་དང་མིང་རྟགས་བཀོད་མི་ཅིག་གསར་བསྐྲུན་འབད།
 
 ```python
 from iroha_python import (
@@ -46,14 +47,14 @@ client = ToriiClient(
 )
 ```
 
-`ToriiClient` accepts additional keyword arguments such as `timeout_ms`,
-`max_retries`, and `tls_config`. The helper `resolve_torii_client_config`
-parses a JSON configuration payload if you want parity with the Rust CLI.
+`ToriiClient` གིས་ `timeout_ms` བཟུམ་གྱི་ ལྡེ་མིག་ཚིག་ཡིག་སྒྲུབ་རྟགས་ཁ་སྐོང་ཚུ་ ངོས་ལེན་འབདཝ་ཨིན།
+`max_retries`, དང་ `tls_config`. རོགས་རམ་འབད་མི་ `resolve_torii_client_config`
+ཁྱོད་ཀྱིས་ Rust CLI དང་ཅིག་ཁར་ མཉམ་མཐུན་དགོ་པ་ཅིན་ JSON རིམ་སྒྲིག་སྤྲོད་ལེན་ཅིག་ མིང་དཔྱད་འབདཝ་ཨིན།
 
-## 3. Submit a transaction
+## 3. ཚོང་འབྲེལ་ཅིག་ཕུལ་ནི།
 
-The SDK ships instruction builders and transaction helpers so you rarely build
-Norito payloads by hand:
+ཨེསི་ཌི་ཀེ་གིས་ བཀོད་རྒྱ་བཟོ་བསྐྲུན་པ་དང་ ཚོང་འབྲེལ་གྲོགས་རམ་པ་ཚུ་ སྐྱེལ་འདྲེན་འབདཝ་ལས་ ཁྱོད་ཀྱིས་ དཀོན་དྲགས་སྦེ་བཟོ་བསྐྲུན་འབདཝ་ཨིན།
+Norito ལག་པ་གིས་དངུལ་སྤྲོད་ནི།
 
 ```python
 from iroha_python import Instruction
@@ -72,15 +73,15 @@ envelope, status = client.build_and_submit_transaction(
 print("Final status:", status)
 ```
 
-`build_and_submit_transaction` returns both the signed envelope and the last
-observed status (e.g., `Committed`, `Rejected`). If you already have a signed
-transaction envelope use `client.submit_transaction_envelope(envelope)` or the
-JSON-centric `submit_transaction_json`.
+`build_and_submit_transaction` མིང་རྟགས་བཀོད་ཡོད་པའི་ཡིག་ཤུབས་དང་མཇུག་གཉིས་ཆ་རང་སླར་ལོག་འབདཝ་ཨིན།
+བལྟ་རྟོག་འབད་ཡོད་པའི་གནས་རིམ་ (དཔེར་ན་ `Committed`, `Rejected`). རྟགས་བཀོད་ཡོད་པ་ཅིན།
+བརྗེ་སོར་གྱི་ཡིག་ཤུབས་ལག་ལེན། `client.submit_transaction_envelope(envelope)` ཡང་ན་ th
+JSON-ལྟེ་བ་ `submit_transaction_json`.
 
-## 4. Query state
+## 4. འདྲི་དཔྱད་གནས་སྟངས།
 
-All REST endpoints have JSON helpers and many expose typed dataclasses. For
-example, listing domains:
+REST མཇུག་སྣོད་ཚུ་ཆ་མཉམ་ལུ་ JSON གྲོགས་རམ་པ་དང་ ཡིག་དཔར་རྐྱབས་ཡོད་པའི་གནད་སྡུད་དབྱེ་རིམ་མང་ཤོས་ཅིག་ཡོདཔ་ཨིན། དོན་ལུ
+དཔེར་ན་ ཐོ་ཡིག་མངའ་ཁོངས་ཚུ་:
 
 ```python
 domains = client.list_domains_typed()
@@ -88,13 +89,13 @@ for domain in domains.items:
     print(domain.name)
 ```
 
-Pagination-aware helpers (e.g., `list_accounts_typed`) return an object that
-contains both `items` and `next_cursor`.
+Pagination-appro གྲོགས་རམ་པ་ (དཔེར་ན་ `list_accounts_typed`) དངོས་པོ་ཅིག་ དེ་སླར་ལོག་འབདཝ་ཨིན།
+`items` དང་ `next_cursor` གཉིས་ཀ་ཡོད།
 
-## 5. Stream events
+## 5. རྒྱུན་རིམ་གྱི་བྱུང་རིམ།
 
-Torii SSE endpoints are exposed via generators. The SDK automatically resumes
-when `resume=True` and you provide an `EventCursor`.
+Torii SSE མཐའ་མཚམས་ཚུ་ གློག་ཤུགས་འཕྲུལ་ཆས་བརྒྱུད་དེ་ གསལ་སྟོན་འབད་ཡོདཔ་ཨིན། ཨེསི་ཌི་ཀེ་ རང་བཞིན་གྱིས་ སླར་འབྱུང་འབདཝ་ཨིན།
+དང་ `resume=True` དང་ ཁྱོད་ཀྱིས་ `EventCursor` བྱིནམ་ཨིན།
 
 ```python
 from iroha_python import PipelineEventFilterBox, EventCursor
@@ -110,19 +111,19 @@ for event in client.stream_pipeline_blocks(
     print("Block height", event.data.block.height)
 ```
 
-Other convenience methods include `stream_pipeline_transactions`,
-`stream_events` (with typed filter builders), and `stream_verifying_key_events`.
+གཞན་ཡང་སྟབས་བདེ་བའི་ཐབས་ལམ་ནང་ `stream_pipeline_transactions`, དང་།
+`stream_events` (ཡིག་དཔར་རྐྱབ་ཡོད་པའི་ཚགས་མ་བཟོ་མི་ཚུ་དང་གཅིག་ཁར་) དང་ `stream_verifying_key_events`.
 
-## 6. Next steps
+## 6. གོ་རིམ་རྗེས་མ།
 
-- Explore the examples under `python/iroha_python/src/iroha_python/examples/`
-  for end-to-end flows covering governance, ISO bridge helpers, and Connect.
-- Use `create_torii_client` / `resolve_torii_client_config` when you want to
-  bootstrap the client from an `iroha_config` JSON file or environment.
-- For Norito RPC or Connect-specific APIs, check the specialised modules such as
-  `iroha_python.norito_rpc` and `iroha_python.connect`.
+- `python/iroha_python/src/iroha_python/examples/` འོག་ལུ་དཔེ་ཚུ་བལྟ།
+  མཐའ་མཇུག་ལས་མཇུག་ཚུན་ཚོད་ གཞུང་སྐྱོང་དང་ ISO ཟམ་གྱི་གྲོགས་རམ་པ་ དེ་ལས་ མཐུད་འབྲེལ་གྱི་དོན་ལུ་ཨིན།
+- ཁྱོད་ཀྱིས་དགོ་འདོད་ཡོད་པའི་སྐབས་ `create_torii_client` / `resolve_torii_client_config` ལག་ལེན་འཐབ།
+  མཁོ་སྤྲོད་འབད་མི་འདི་ `iroha_config` JSON ཡིག་སྣོད་ཡང་ན་མཐའ་འཁོར་ལས་ བུཊི་པ་ཨིན།
+- Norito RPC ཡང་ན་ Connect-specific APIs གི་དོན་ལུ་ དམིགས་བསལ་གྱི་ཚད་གཞི་ཚུ་ དཔེར་ན་ བཟུམ།
+  `iroha_python.norito_rpc` དང་ `iroha_python.connect`.
 
-With these building blocks you can exercise Torii from Python without writing
-your own HTTP glue or Norito codecs. As the SDK matures, additional high-level
-builders will be added; consult the README in the `python/iroha_python`
-directory for the latest status and migration notes.
+འདི་དག་གིས་ ཁྱོད་ཀྱིས་ Torii འདི་ བྲིས་མ་དགོ་པར་ པའི་ཐོན་ལས་ ལག་ལེན་འཐབ་ཚུགས།
+ཁྱོད་རའི་ཨེཆ་ཊི་ཊི་པི་གུ་ལུ་ཡང་ན་ Norito གསང་གྲངས་ཚུ། ཨེསི་ཌི་ཀེ་ རྒས་འགྱོཝ་ད་ མཐོ་རིམ་ཁ་སྐོང་ ཁ་སྐོང་།
+བཟོ་བསྐྲུན་པ་ཚུ་ཁ་སྐོང་འབད་འོང་། README འདི་ `python/iroha_python` ནང་ལུ་དང་ འཁྲིལ་དགོ།
+གསར་ཤོས་གནས་རིམ་དང་ གནས་སྤོའི་དྲན་ཐོ་ཚུ་གི་དོན་ལུ་ སྣོད་ཐོ།

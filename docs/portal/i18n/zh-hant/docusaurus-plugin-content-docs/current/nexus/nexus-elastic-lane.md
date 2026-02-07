@@ -8,37 +8,39 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Elastic lane provisioning (NX-7)
 sidebar_label: Elastic Lane Provisioning
 description: Bootstrap workflow for creating Nexus lane manifests, catalog entries, and rollout evidence.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
-This page mirrors `docs/source/nexus_elastic_lane.md`. Keep both copies aligned until the translation sweep lands in the portal.
+:::注意規範來源
+此頁面鏡像 `docs/source/nexus_elastic_lane.md`。保持兩個副本對齊，直到平移掃描落在門戶中。
 :::
 
-# Elastic Lane Provisioning Toolkit (NX-7)
+# 彈性通道配置工具包 (NX-7)
 
-> **Roadmap item:** NX-7 — Elastic lane provisioning tooling  
-> **Status:** Tooling complete — generates manifests, catalog snippets, Norito payloads, smoke tests,
-> and the load-test bundle helper now stitches slot latency gating + evidence manifests so validator
-> load runs can be published without bespoke scripting.
+> **路線圖項目：** NX-7 — 彈性通道配置工具  
+> **狀態：** 工具完成 - 生成清單、目錄片段、Norito 有效負載、冒煙測試、
+> 負載測試包助手現在縫合時隙延遲門控+證據清單，以便驗證器
+> 無需定制腳本即可發布加載運行。
 
-This guide walks operators through the new `scripts/nexus_lane_bootstrap.sh` helper that automates
-lane manifest generation, lane/dataspace catalog snippets, and rollout evidence. The goal is to make
-it easy to spin up new Nexus lanes (public or private) without hand-editing multiple files or
-re-deriving the catalog geometry by hand.
+本指南引導操作員了解新的 `scripts/nexus_lane_bootstrap.sh` 幫助程序，該幫助程序可實現自動化
+通道清單生成、通道/數據空間目錄片段和推出證據。目標是使
+無需手動編輯多個文件即可輕鬆啟動新的 Nexus 通道（公共或專用）或
+手動重新導出目錄幾何形狀。
 
-## 1. Prerequisites
+## 1.先決條件
 
-1. Governance approval for the lane alias, dataspace, validator set, fault tolerance (`f`), and settlement policy.
-2. A finalized validator list (account IDs) and protected namespace list.
-3. Access to the node configuration repository so you can append the generated snippets.
-4. Paths for the lane manifest registry (see `nexus.registry.manifest_directory` and
-   `cache_directory`).
-5. Telemetry contacts/PagerDuty handles for the lane so alerts can be wired as soon as the lane
-   comes online.
+1. 通道別名、數據空間、驗證器集、容錯（`f`）和結算政策的治理批准。
+2. 最終的驗證者列表（帳戶 ID）和受保護的命名空間列表。
+3. 訪問節點配置存儲庫，以便您可以附加生成的片段。
+4. 通道清單註冊表的路徑（請參閱 `nexus.registry.manifest_directory` 和
+   `cache_directory`）。
+5. 車道的遙測觸點/PagerDuty 手柄，以便一旦車道到達即可發出警報
+   上線。
 
-## 2. Generate lane artefacts
+## 2. 生成車道偽影
 
-Run the helper from the repository root:
+從存儲庫根運行幫助程序：
 
 ```bash
 scripts/nexus_lane_bootstrap.sh \
@@ -60,60 +62,60 @@ scripts/nexus_lane_bootstrap.sh \
   --output-dir artifacts/nexus/payments_lane
 ```
 
-Key flags:
+關鍵標誌：
 
-- `--lane-id` must match the new entry’s index in `nexus.lane_catalog`.
-- `--dataspace-alias` and `--dataspace-id/hash` control the dataspace catalog entry (defaults to the
-  lane id when omitted).
-- `--validator` can be repeated or sourced from `--validators-file`.
-- `--route-instruction` / `--route-account` emit ready-to-paste routing rules.
-- `--metadata key=value` (or `--telemetry-contact/channel/runbook`) capture runbook contacts so
-  dashboards immediately list the right owners.
-- `--allow-runtime-upgrades` + `--runtime-upgrade-*` add the runtime-upgrade hook to the manifest
-  when the lane requires extended operator controls.
-- `--encode-space-directory` invokes `cargo xtask space-directory encode` automatically. Pair it with
-  `--space-directory-out` when you want the encoded `.to` file somewhere other than the default.
+- `--lane-id` 必須與 `nexus.lane_catalog` 中新條目的索引匹配。
+- `--dataspace-alias` 和 `--dataspace-id/hash` 控制數據空間目錄條目（默認為
+  車道 ID（省略時）。
+- `--validator` 可以重複或源自 `--validators-file`。
+- `--route-instruction` / `--route-account` 發出可粘貼的路由規則。
+- `--metadata key=value`（或 `--telemetry-contact/channel/runbook`）捕獲 Runbook 聯繫人，以便
+  儀表板立即列出正確的所有者。
+- `--allow-runtime-upgrades` + `--runtime-upgrade-*` 將運行時升級掛鉤添加到清單中
+  當車道需要擴展操作員控制時。
+- `--encode-space-directory` 自動調用 `cargo xtask space-directory encode`。與它配對
+  `--space-directory-out` 當您想要將編碼的 `.to` 文件放在默認值以外的位置時。
 
-The script produces three artefacts inside the `--output-dir` (defaults to the current directory),
-plus an optional fourth when encoding is enabled:
+該腳本在 `--output-dir` 內生成三個工件（默認為當前目錄），
+當啟用編碼時加上可選的第四個：
 
-1. `<slug>.manifest.json` — lane manifest containing the validator quorum, protected namespaces, and
-   optional runtime-upgrade hook metadata.
-2. `<slug>.catalog.toml` — a TOML snippet with `[[nexus.lane_catalog]]`, `[[nexus.dataspace_catalog]]`,
-   and any requested routing rules. Ensure `fault_tolerance` is set on the dataspace entry to size
-   the lane-relay committee (`3f+1`).
-3. `<slug>.summary.json` — audit summary describing the geometry (slug, segments, metadata) plus the
-   required rollout steps and the exact `cargo xtask space-directory encode` command (under
-   `space_directory_encode.command`). Attach this JSON to the onboarding ticket for evidence.
-4. `<slug>.manifest.to` — emitted when `--encode-space-directory` is set; ready for Torii’s
-   `iroha app space-directory manifest publish` flow.
+1. `<slug>.manifest.json` — 包含驗證器仲裁、受保護命名空間和的通道清單
+   可選的運行時升級掛鉤元數據。
+2. `<slug>.catalog.toml` — 包含 `[[nexus.lane_catalog]]`、`[[nexus.dataspace_catalog]]` 的 TOML 片段，
+   以及任何請求的路由規則。確保在數據空間條目上設置 `fault_tolerance` 的大小
+   車道接力委員會 (`3f+1`)。
+3. `<slug>.summary.json` — 描述幾何形狀（塊、段、元數據）以及
+   所需的推出步驟和確切的 `cargo xtask space-directory encode` 命令（在
+   `space_directory_encode.command`）。將此 JSON 附加到入職票據作為證據。
+4. `<slug>.manifest.to` — 當 `--encode-space-directory` 設置時發出；準備好 Torii
+   `iroha app space-directory manifest publish` 流量。
 
-Use `--dry-run` to preview the JSON/ snippets without writing files, and `--force` to overwrite
-existing artefacts.
+使用 `--dry-run` 預覽 JSON/ 片段而不寫入文件，並使用 `--force` 覆蓋
+現有的文物。
 
-## 3. Apply the changes
+## 3. 應用更改
 
-1. Copy the manifest JSON into the configured `nexus.registry.manifest_directory` (and into the cache
-   directory if the registry mirrors remote bundles). Commit the file if manifests are versioned in
-   your configuration repo.
-2. Append the catalog snippet to `config/config.toml` (or the appropriate `config.d/*.toml`). Ensure
-   `nexus.lane_count` is at least `lane_id + 1`, and update any `nexus.routing_policy.rules` that
-   should point at the new lane.
-3. Encode (if you skipped `--encode-space-directory`) and publish the manifest to the Space Directory
-   using the command captured in the summary (`space_directory_encode.command`). This produces the
-   `.manifest.to` payload Torii expects and records the evidence for auditors; submit via
-   `iroha app space-directory manifest publish`.
-4. Run `irohad --sora --config path/to/config.toml --trace-config` and archive the trace output in
-   the rollout ticket. This proves the new geometry matches the generated slug/kura segments.
-5. Restart the validators assigned to the lane once the manifest/catalog changes are deployed. Keep
-   the summary JSON in the ticket for future audits.
+1. 將清單 JSON 複製到配置的 `nexus.registry.manifest_directory` 中（並複製到緩存中）
+   目錄（如果註冊錶鏡像遠程包）。如果清單的版本控制在以下版本，則提交文件
+   你的配置倉庫。
+2. 將目錄片段附加到 `config/config.toml`（或相應的 `config.d/*.toml`）。確保
+   `nexus.lane_count` 至少是 `lane_id + 1`，並更新任何 `nexus.routing_policy.rules`
+   應該指向新車道。
+3. 編碼（如果您跳過了 `--encode-space-directory`）並將清單發佈到空間目錄
+   使用摘要中捕獲的命令 (`space_directory_encode.command`)。這產生了
+   `.manifest.to` 有效負載 Torii 期望並記錄審計員的證據；通過提交
+   `iroha app space-directory manifest publish`。
+4. 運行 `irohad --sora --config path/to/config.toml --trace-config` 並將跟踪輸出存檔於
+   推出票。這證明新的幾何形狀與生成的 slug/kura 段相匹配。
+5. 部署清單/目錄更改後，重新啟動分配給通道的驗證器。保留
+   票證中的摘要 JSON 以供將來審核。
 
-## 4. Build a registry distribution bundle
+## 4. 構建註冊表分發包
 
-Package the generated manifest and overlay so operators can distribute lane governance data without
-editing configs on every host. The bundler helper copies manifests into the canonical layout,
-produces an optional governance catalog overlay for `nexus.registry.cache_directory`, and can emit a
-tarball for offline transfers:
+打包生成的清單和疊加層，以便操作員可以分發車道治理數據，而無需
+在每台主機上編輯配置。捆綁器助手將清單複製到規範佈局中，
+為 `nexus.registry.cache_directory` 生成可選的治理目錄覆蓋，並且可以發出
+離線傳輸的 tarball：
 
 ```bash
 scripts/nexus_lane_registry_bundle.sh \
@@ -124,25 +126,25 @@ scripts/nexus_lane_registry_bundle.sh \
   --bundle-out artifacts/nexus/payments_lane/registry_bundle.tar.gz
 ```
 
-Outputs:
+輸出：
 
-1. `manifests/<slug>.manifest.json` — copy these into the configured
-   `nexus.registry.manifest_directory`.
-2. `cache/governance_catalog.json` — drop into `nexus.registry.cache_directory`. Every `--module`
-   entry becomes a pluggable module definition, enabling governance-module swap-outs (NX-2) by
-   updating the cache overlay instead of editing `config.toml`.
-3. `summary.json` — includes hashes, overlay metadata, and operator instructions.
-4. Optional `registry_bundle.tar.*` — ready for SCP, S3, or artifact trackers.
+1. `manifests/<slug>.manifest.json` — 將這些複製到配置中
+   `nexus.registry.manifest_directory`。
+2. `cache/governance_catalog.json` — 放入 `nexus.registry.cache_directory`。每個 `--module`
+   條目成為可插入模塊定義，通過以下方式啟用治理模塊交換（NX-2）：
+   更新緩存覆蓋而不是編輯 `config.toml`。
+3. `summary.json` — 包括哈希值、覆蓋元數據和操作員指令。
+4. 可選 `registry_bundle.tar.*` — 適用於 SCP、S3 或工件跟踪器。
 
-Sync the entire directory (or the archive) to each validator, extract on air-gapped hosts, and copy
-the manifests + cache overlay into their registry paths before restarting Torii.
+將整個目錄（或存檔）同步到每個驗證器，在氣隙主機上提取，然後復制
+在重新啟動 Torii 之前，將清單 + 緩存覆蓋到其註冊表路徑中。
 
-## 5. Validator smoke tests
+## 5. 驗證器冒煙測試
 
-After Torii restarts, run the new smoke helper to verify the lane reports `manifest_ready=true`,
-metrics expose the expected lane count, and the sealed gauge is clear. Lanes that require manifests
-must expose a non-empty `manifest_path`; the helper now fails immediately when the path is missing so
-every NX-7 deployment record includes the signed manifest evidence:
+Torii 重新啟動後，運行新的煙霧助手來驗證通道報告 `manifest_ready=true`，
+指標顯示了預期的車道數，並且密封的儀表是清晰的。需要清單的車道
+必須公開非空 `manifest_path`；現在，當路徑丟失時，助手會立即失敗，因此
+每個 NX-7 部署記錄都包含簽名的清單證據：
 
 ```bash
 scripts/nexus_lane_smoke.py \
@@ -165,15 +167,15 @@ scripts/nexus_lane_smoke.py \
   --min-slot-samples 10
 ```
 
-Add `--insecure` when testing self-signed environments. The script exits non-zero if the lane is
-missing, sealed, or metrics/telemetry drift from the expected values. Use the
-`--min-block-height`, `--max-finality-lag`, `--max-settlement-backlog`, and
-`--max-headroom-events` knobs to keep per-lane block height/finality/backlog/headroom telemetry
-within your operational envelopes, and couple them with `--max-slot-p95` / `--max-slot-p99`
-(plus `--min-slot-samples`) to enforce the NX‑18 slot-duration targets without leaving the helper.
+測試自簽名環境時添加 `--insecure`。如果通道是，則腳本退出非零
+缺失、密封或指標/遙測偏離預期值。使用
+`--min-block-height`、`--max-finality-lag`、`--max-settlement-backlog` 和
+`--max-headroom-events` 用於保持每通道區塊高度/最終性/積壓/淨空遙測的旋鈕
+在您的操作範圍內，並將它們與 `--max-slot-p95` / `--max-slot-p99` 結合起來
+（加上 `--min-slot-samples`）在不離開助手的情況下強制執行 NX-18 時隙持續時間目標。
 
-For air-gapped validations (or CI) you can replay a captured Torii response instead of hitting a live
-endpoint:
+對於氣隙驗證（或 CI），您可以重放捕獲的 Torii 響應，而不是實時響應
+端點：
 
 ```bash
 scripts/nexus_lane_smoke.py \
@@ -197,16 +199,16 @@ scripts/nexus_lane_smoke.py \
   --min-slot-samples 10
 ```
 
-The recorded fixtures under `fixtures/nexus/lanes/` mirror the artefacts produced by the bootstrap
-helper so new manifests can be linted without bespoke scripting. CI exercises the same flow via
-`ci/check_nexus_lane_smoke.sh` and `ci/check_nexus_lane_registry_bundle.sh`
-(alias: `make check-nexus-lanes`) to prove the NX-7 smoke helper stays aligned with the published
-payload format and to ensure bundle digests/overlays remain reproducible.
+`fixtures/nexus/lanes/` 下記錄的裝置反映了引導程序生成的工件
+幫助器，這樣新的清單就可以在沒有定制腳本的情況下進行檢查。 CI 通過以下方式執行相同的流程
+`ci/check_nexus_lane_smoke.sh` 和 `ci/check_nexus_lane_registry_bundle.sh`
+（別名：`make check-nexus-lanes`）以證明 NX-7 煙霧助手與已發布的數據保持一致
+有效負載格式並確保包摘要/覆蓋保持可再現。
 
-When a lane is renamed, capture the `nexus.lane.topology` telemetry events (for example with
-`journalctl -u irohad -o json | jq 'select(.msg=="nexus.lane.topology")'`) and feed them back into
-the smoke helper. The `--telemetry-file/--from-telemetry` flag accepts the newline-delimited log and
-`--require-alias-migration old:new` asserts that a `alias_migrated` event recorded the rename:
+重命名通道時，捕獲 `nexus.lane.topology` 遙測事件（例如，使用
+`journalctl -u irohad -o json | jq 'select(.msg=="nexus.lane.topology")'`）並將它們反饋到
+煙霧助手。 `--telemetry-file/--from-telemetry` 標誌接受換行符分隔的日誌並
+`--require-alias-migration old:new` 斷言 `alias_migrated` 事件記錄了重命名：
 
 ```bash
 scripts/nexus_lane_smoke.py \
@@ -232,14 +234,14 @@ scripts/nexus_lane_smoke.py \
   --require-alias-migration core:payments
 ```
 
-The `telemetry_alias_migrated.ndjson` fixture bundles the canonical rename sample so CI can verify
-the telemetry parsing path without contacting a live node.
+`telemetry_alias_migrated.ndjson` 夾具捆綁了規範的重命名示例，以便 CI 可以驗證
+遙測解析路徑，無需聯繫活動節點。
 
-## Validator load tests (NX-7 evidence)
+## 驗證器負載測試（NX-7 證據）
 
-Roadmap **NX-7** requires every new lane to ship a reproducible validator load run. Use
-`scripts/nexus_lane_load_test.py` to stitch the smoke checks, slot-duration gates, and slot bundle
-manifest into a single artefact set that governance can replay:
+路線圖 **NX-7** 要求每個新通道都進行可重複的驗證器負載運行。使用
+`scripts/nexus_lane_load_test.py` 用於縫合菸霧檢查、時隙持續時間門和時隙束
+體現為治理可以重播的單個工件集：
 
 ```bash
 scripts/nexus_lane_load_test.py \
@@ -255,26 +257,26 @@ scripts/nexus_lane_load_test.py \
   --out-dir artifacts/nexus/load/payments-2026q2
 ```
 
-The helper enforces the same DA quorum, oracle, settlement buffer, TEU, and slot-duration gates used
-by the smoke helper and writes `smoke.log`, `slot_summary.json`, a slot bundle manifest, and
-`load_test_manifest.json` into the chosen `--out-dir` so load runs can be attached directly to
-rollout tickets without bespoke scripting.
+幫助程序強制使用相同的 DA 仲裁、預言機、結算緩衝區、TEU 和時隙持續時間門
+由煙霧助手編寫 `smoke.log`、`slot_summary.json`、插槽捆綁清單，以及
+`load_test_manifest.json` 到所選的 `--out-dir` 中，因此負載運行可以直接附加到
+無需定制腳本即可推出門票。
 
-## 6. Telemetry & governance follow-ups
+## 6. 遙測和治理後續行動
 
-- Update the lane dashboards (`dashboards/grafana/nexus_lanes.json` and related overlays) with the
-  new lane id and metadata. The generated metadata keys (`contact`, `channel`, `runbook`, etc.) make
-  it simple to pre-fill labels.
-- Wire PagerDuty/Alertmanager rules for the new lane before enabling admission. The `summary.json`
-  next-steps array mirrors the checklist in [Nexus operations](./nexus-operations).
-- Register the manifest bundle in the Space Directory once the validator set is live. Use the same
-  manifest JSON generated by the helper, signed according to the governance runbook.
-- Follow [Sora Nexus operator onboarding](./nexus-operator-onboarding) for smoke tests (FindNetworkStatus, Torii
-  reachability) and capture the evidence with the artefact set produced above.
+- 使用以下內容更新車道儀表板（`dashboards/grafana/nexus_lanes.json` 和相關覆蓋圖）
+  新的車道 ID 和元數據。生成的元數據密鑰（`contact`、`channel`、`runbook` 等）
+  預填充標籤很簡單。
+- 在啟用准入之前，為新車道發送 PagerDuty/Alertmanager 規則。 `summary.json`
+  next-steps 數組鏡像 [Nexus 操作](./nexus-operations) 中的清單。
+- 驗證器集上線後，在空間目錄中註冊清單包。使用相同的
+  由幫助程序生成的清單 JSON，根據治理運行手冊進行簽名。
+- 按照 [Sora Nexus 操作員入門](./nexus-operator-onboarding) 進行冒煙測試（FindNetworkStatus、Torii
+  可達性）並使用上面生成的工件集捕獲證據。
 
-## 7. Dry-run example
+## 7. 試運行示例
 
-To preview the artefacts without writing files:
+要預覽工件而不寫入文件：
 
 ```bash
 scripts/nexus_lane_bootstrap.sh \
@@ -288,14 +290,12 @@ scripts/nexus_lane_bootstrap.sh \
   --dry-run
 ```
 
-The command prints the JSON summary and the TOML snippet to stdout, allowing quick iteration during
-planning.
+該命令將 JSON 摘要和 TOML 片段打印到標準輸出，從而允許在
+規劃。
 
 ---
 
-For additional context see:
-
-- [Nexus operations](./nexus-operations) — operational checklist and telemetry requirements.
-- [Sora Nexus operator onboarding](./nexus-operator-onboarding) — detailed onboarding flow that references the
-  new helper.
-- [Nexus lane model](./nexus-lane-model) — lane geometry, slugs, and storage layout used by the tool.
+有關其他上下文，請參閱：- [Nexus 操作](./nexus-operations) — 操作清單和遙測要求。
+- [Sora Nexus 操作員入門](./nexus-operator-onboarding) — 參考了詳細的入門流程
+  新幫手。
+- [Nexus 通道模型](./nexus-lane-model) — 工具使用的通道幾何形狀、段塊和存儲佈局。

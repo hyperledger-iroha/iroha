@@ -4,6 +4,8 @@ direction: rtl
 source: docs/portal/docs/sorafs/provider-advert-multisource.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 # إعلانات مزودي متعدد المصادر والجدولة
@@ -34,46 +36,44 @@ generator: docs/portal/scripts/sync-i18n.mjs
 ### `TransportHintV1`
 - الحقول: `protocol: TransportProtocol`, `priority: u8` (نافذة 0-15 تفرضها
   `TransportHintV1::validate`).
-- البروتوكولات المعروفة: `torii_http_range`, `quic_stream`, `soranet_relay`,
+- מידע נוסף: `torii_http_range`, `quic_stream`, `soranet_relay`,
   `vendor_reserved`.
 - تُرفض إدخالات البروتوكول المكررة لكل مزود.
 
 ### إضافات `ProviderAdvertBodyV1`
-- `stream_budget` اختياري: `Option<StreamBudgetV1>`.
-- `transport_hints` اختياري: `Option<Vec<TransportHintV1>>`.
+- `stream_budget` אופי: `Option<StreamBudgetV1>`.
+- `transport_hints` אופי: `Option<Vec<TransportHintV1>>`.
 - كلا الحقلين يمران الآن عبر `ProviderAdmissionProposalV1` وأغلفة الحوكمة
   وfixtures الـ CLI وJSON التليمترية.
 
 ## التحقق والربط بالحوكمة
 
-`ProviderAdvertBodyV1::validate` و`ProviderAdmissionProposalV1::validate`
+`ProviderAdvertBodyV1::validate` ו`ProviderAdmissionProposalV1::validate`
 يرفضان البيانات الوصفية غير السليمة:
 
 - يجب أن تُفك قدرات النطاق وتستوفي حدود النطاق/التحبيب.
 - تتطلب stream budgets / transport hints قيمة TLV مطابقة من
   `CapabilityType::ChunkRangeFetch` وقائمة hints غير فارغة.
-- البروتوكولات المكررة والأولويات غير الصالحة تثير أخطاء تحقق قبل بث adverts.
+- פרסומות של פרסומות של פרסומות ותיקיות.
 - تقارن أغلفة القبول proposal/adverts لبيانات النطاق عبر `compare_core_fields`
   حتى تُرفض payloads الـ gossip غير المتطابقة مبكرا.
 
 توجد تغطية الانحدار في
 `crates/sorafs_manifest/src/{provider_advert,provider_admission}.rs`.
 
-## الأدوات وfixtures
+## ציוד ואביזרי
 
 - يجب أن تتضمن payloads إعلانات المزود `range_capability` و`stream_budget` و`transport_hints`.
   تحقّق عبر استجابات `/v1/sorafs/providers` وfixtures القبول؛ يجب أن تتضمن
   ملخصات JSON القدرة المحللة وميزانية البث ومصفوفات hints لابتلاع التليمترية.
-- `cargo xtask sorafs-admission-fixtures` يعرض stream budgets وtransport hints داخل
+- `cargo xtask sorafs-admission-fixtures` תקציבי זרימה ורמזים לתחבורה
   artefacts JSON كي تتابع لوحات المراقبة تبني الميزة.
 - تشمل fixtures تحت `fixtures/sorafs_manifest/provider_admission/` الآن:
   - adverts متعددة المصادر قياسية،
   - `multi_fetch_plan.json` لكي تعيد مجموعات SDK تشغيل خطة fetch متعددة الأقران بشكل حتمي.
 
-## تكامل المُنسق وTorii
-
-- يعيد Torii `/v1/sorafs/providers` بيانات قدرة النطاق المحللة مع
-  `stream_budget` و`transport_hints`. تُطلق تحذيرات downgrade عندما يحذف
+## تكامل المُنسق وTorii- يعيد Torii `/v1/sorafs/providers` بيانات قدرة النطاق المحللة مع
+  `stream_budget` ו`transport_hints`. تُطلق تحذيرات downgrade عندما يحذف
   المزودون البيانات الجديدة، وتطبق نقاط نطاق البوابة القيود نفسها للعملاء المباشرين.
 - يفرض المُنسق متعدد المصادر (`sorafs_car::multi_fetch`) حدود النطاق ومحاذاة
   القدرات وstream budgets عند إسناد العمل. تغطي اختبارات الوحدة سيناريوهات
@@ -87,13 +87,13 @@ generator: docs/portal/scripts/sync-i18n.mjs
 (`dashboards/grafana/sorafs_fetch_observability.json`) وقواعد التنبيه المرافقة
 (`dashboards/alerts/sorafs_fetch_rules.yml`).
 
-| المقياس | النوع | الوسوم | الوصف |
-|---------|-------|--------|-------|
-| `torii_sorafs_provider_range_capability_total` | Gauge | `feature` (`providers`, `supports_sparse_offsets`, `requires_alignment`, `supports_merkle_proof`, `stream_budget`, `transport_hints`) | مزودون يعلنون ميزات قدرة النطاق. |
-| `torii_sorafs_range_fetch_throttle_events_total` | Counter | `reason` (`quota`, `concurrency`, `byte_rate`) | محاولات fetch للنطاق تم تخفيضها حسب السياسة. |
-| `torii_sorafs_range_fetch_concurrency_current` | Gauge | — | تيارات نشطة محكومة تستهلك ميزانية التزامن المشتركة. |
+| المقياس | النوع | אובומי | אוטו |
+|--------|--------|--------|-------|
+| `torii_sorafs_provider_range_capability_total` | מד | `feature` (`providers`, `supports_sparse_offsets`, `requires_alignment`, `supports_merkle_proof`, `stream_budget`, `transport_hints`) | مزودون يعلنون ميزات قدرة النطاق. |
+| `torii_sorafs_range_fetch_throttle_events_total` | מונה | `reason` (`quota`, `concurrency`, `byte_rate`) | محاولات fetch للنطاق تم تخفيضها حسب السياسة. |
+| `torii_sorafs_range_fetch_concurrency_current` | מד | — | تيارات نشطة محكومة تستهلك ميزانية التزامن المشتركة. |
 
-أمثلة PromQL:
+מערכת PromQL:
 
 ```promql
 sum(rate(torii_sorafs_range_fetch_throttle_events_total[5m])) by (reason)

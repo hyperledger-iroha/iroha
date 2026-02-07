@@ -7,21 +7,22 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 8d4569e75fb219979ee7c5e776427336bc43c155a24210af977e7a8e6ee1c8be
 source_last_modified: "2025-12-29T18:16:35.958788+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-//! ISO 20022 clarification prompt templates for roadmap Milestone F3.
+//！路线图 Milestone F3 的 ISO 20022 澄清提示模板。
 
-# ISO 20022 Clarification Prompt Templates
+# ISO 20022 澄清提示模板
 
-These templates help seed requests to LLM (or other assistants) when financial-settlement engineers need quick references from ISO 20022 documentation or market-structure norms. Always include concrete payload samples and cite the specific message families you are working on so responses remain deterministic and audit-friendly.
+当财务结算工程师需要 ISO 20022 文档或市场结构规范的快速参考时，这些模板可帮助向 LLM（或其他助理）提出请求。始终包含具体的有效负载示例并引用您正在处理的特定消息系列，以便响应保持确定性和易于审计。
 
-## Before You Ask
-- Identify the ISO 20022 message (`MsgDefId`, variant, market practice pack) and version.
-- Collect the Norito/ISI context: instruction name, legs, optional parameters, expected execution timeline.
-- Note which artefacts you already have (schema snippet, BR-n validation rule, market practice note).
-- Clarify whether you need regulatory guidance (e.g., CPMI-IOSCO) or operational norms (cut-off windows, liquidity buffers).
+## 在你提问之前
+- 识别 ISO 20022 消息（`MsgDefId`、变体、市场实践包）和版本。
+- 收集 Norito/ISI 上下文：指令名称、分支、可选参数、预期执行时间线。
+- 注意您已经拥有哪些工件（模式片段、BR-n 验证规则、市场实践说明）。
+- 明确是否需要监管指导（例如 CPMI-IOSCO）或操作规范（截止窗口、流动性缓冲）。
 
-## Template 1 – Field Mapping & Semantics
+## 模板 1 – 字段映射和语义
 ```text
 You are LLM acting as an ISO 20022 integration analyst.
 Goal: map {{Norito_instruction_or_field}} in Hyperledger Iroha to ISO 20022 {{message_id}} (version {{version}}).
@@ -38,7 +39,7 @@ Questions:
 Return the answer as a table with `Field`, `ISO Path`, `Rules`, `Notes`.
 ```
 
-## Template 2 – Settlement Workflow & Timeline Clarifications
+## 模板 2 – 结算工作流程和时间表说明
 ```text
 You are LLM advising on DvP/PvP settlement workflows referencing ISO 20022 repo/payments messages.
 Scenario: {{brief_repo_or_pvp_scenario}}, including legs, currencies, and counterparties.
@@ -55,7 +56,7 @@ Questions:
 Deliver the answer as bullet lists grouped by phase, citing ISO references (e.g., sese.023 BR23).
 ```
 
-## Template 3 – Validation Rules & Code Sets
+## 模板 3 – 验证规则和代码集
 ```text
 You are LLM validating ISO 20022 message content.
 Message: {{message_id_version}} for {{business_process}}.
@@ -68,7 +69,7 @@ Tasks:
 Produce the result as a checklist with `Requirement`, `Reference`, `Implementation Hint`.
 ```
 
-## Template 4 – Market-Structure & Regulatory Context
+## 模板 4 – 市场结构和监管环境
 ```text
 You are LLM providing market-structure references for ISO 20022 settlement.
 Region/Market: {{market_or_region}}
@@ -81,7 +82,7 @@ Need:
 Return concise paragraphs with citations and note where operator documentation should reference these rules.
 ```
 
-## Template 5 – Exception Handling & Reconciliation
+## 模板 5 – 异常处理和协调
 ```text
 You are LLM focusing on exception handling for ISO 20022-driven settlements.
 Scenario: {{failure_case}} (e.g., counterparty fails cash leg).
@@ -94,7 +95,7 @@ Questions:
 Respond with a step-by-step outline and map each action to ISO codes.
 ```
 
-## Usage Notes
-- Store filled-in prompts in the issue tracker or design docs to ensure conversations remain auditable.
-- When sharing external references, link to official ISO documentation portals or SMPG extracts; avoid unpublished material.
-- Update this template set whenever new ISO message families or market practices enter scope (e.g., pacs.009, derivatives collateral).
+## 使用说明
+- 将填写的提示存储在问题跟踪器或设计文档中，以确保对话保持可审核性。
+- 共享外部参考时，链接到官方 ISO 文档门户或 SMPG 摘录；避免未发表的材料。
+- 每当新的 ISO 消息系列或市场惯例进入范围（例如 pacs.009、衍生品抵押品）时，更新此模板集。

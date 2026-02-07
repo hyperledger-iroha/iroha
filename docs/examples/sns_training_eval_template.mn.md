@@ -7,39 +7,40 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 0397eec8373494a74060a7244a7f923714723e5feacc4a54374ee4461f0ddde1
 source_last_modified: "2025-12-29T18:16:35.078130+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# SNS Training Evaluation Template
+# SNS сургалтын үнэлгээний загвар
 
-Please distribute this survey immediately after each session. Responses can be
-captured via form tool or Markdown and archived under
+Энэхүү судалгааг хуралдаан бүрийн дараа шууд тараана уу. Хариултууд байж болно
+маягтын хэрэглүүр эсвэл Markdown-аар авч архивласан
 `artifacts/sns/training/<suffix>/<cycle>/feedback/`.
 
-## Session metadata
-- Suffix:
-- Cycle:
-- Language:
-- Date:
-- Facilitator(s):
+## Сеанс мета өгөгдөл
+- дагавар:
+- Цикл:
+- Хэл:
+- Огноо:
+- Сургагч багш(ууд):
 
-## Rating scale
-1 — Poor · 2 — Fair · 3 — Good · 4 — Very good · 5 — Excellent
+## Үнэлгээний хуваарь
+1 — Муу · 2 — Шударга · 3 — Сайн · 4 — Маш сайн · 5 — Маш сайн
 
-| Question | 1 | 2 | 3 | 4 | 5 |
+| Асуулт | 1 | 2 | 3 | 4 | 5 |
 |----------|---|---|---|---|---|
-| Clarity of KPI walkthrough | ☐ | ☐ | ☐ | ☐ | ☐ |
-| Usefulness of labs | ☐ | ☐ | ☐ | ☐ | ☐ |
-| Pace + time allocation | ☐ | ☐ | ☐ | ☐ | ☐ |
-| Localization quality (slides + facilitation) | ☐ | ☐ | ☐ | ☐ | ☐ |
-| Overall confidence entering suffix launch | ☐ | ☐ | ☐ | ☐ | ☐ |
+| KPI-ийн ойлгомжтой байдал | ☐ | ☐ | ☐ | ☐ | ☐ |
+| Лабораторийн ашиг тус | ☐ | ☐ | ☐ | ☐ | ☐ |
+| Хурд + цагийн хуваарилалт | ☐ | ☐ | ☐ | ☐ | ☐ |
+| Локалчлалын чанар (слайд + хөнгөвчлөх) | ☐ | ☐ | ☐ | ☐ | ☐ |
+| Дагаврын эхлэлийг оруулах ерөнхий итгэл | ☐ | ☐ | ☐ | ☐ | ☐ |
 
-## Open questions
-1. Which topic needs more depth?
-2. Were any tools/docs missing from the workbook?
-3. Did the localization meet your expectations? If not, why?
-4. Additional comments / blockers the program should track.
+## Нээлттэй асуултууд
+1. Аль сэдэв илүү гүнзгийрүүлэх шаардлагатай вэ?
+2. Ажлын дэвтэрт ямар нэг хэрэгсэл/баримт бичиг дутуу байсан уу?
+3. Нутагшуулалт таны хүлээлтийг хангаж чадсан уу? Үгүй бол яагаад?
+4. Хөтөлбөрийг хянах ёстой нэмэлт тайлбар / хориглогч.
 
-## Follow-up
-- `[]` Feedback logged in governance tracker (ticket: __________)
-- `[]` Annex export captured (path: ____________________)
-- `[]` Action items assigned (owner + due date)
+## Дагаж мөрдөх
+- `[]` Засаглалын хянагчаар нэвтэрсэн санал хүсэлт (тасалбар: __________)
+- `[]` Хавсралтын экспортыг авсан (зам: ____________________)
+- `[]` Үйлдлийн зүйлс оноосон (эзэмшигч + дуусах хугацаа)

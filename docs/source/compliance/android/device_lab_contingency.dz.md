@@ -7,18 +7,19 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 4016b82d86dc61a9de5e345950d02aeadf26db4cc26777c60db336c57479ba15
 source_last_modified: "2025-12-29T18:16:35.923121+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Device Lab Contingency Log
+# ཐབས་འཕྲུལ་བརྟག་དཔྱད་ཁང་གི་ གློ་བུར་དྲན་ཐོ་།
 
-Record every activation of the Android device-lab contingency plan here.
-Include enough detail for compliance reviews and future readiness audits.
+ནཱ་ལུ་ Android ཐབས་འཕྲུལ་བརྟག་དཔྱད་ཁང་ནང་ གློ་བུར་གྱི་འཆར་གཞི་གི་ ཤུགས་ལྡན་ཆ་མཉམ་ཐོ་བཀོད་འབད།
+བསྟར་སྤྱོད་བསྐྱར་ཞིབ་དང་ མ་འོངས་པའི་གྲ་སྒྲིག་རྩིས་ཞིབ་ཚུ་གི་དོན་ལུ་ ཁ་གསལ་ལངམ་སྦེ་ བཙུགས་དགོ།
 
-| Date | Trigger | Actions Taken | Follow-ups | Owner |
+| ཚེས་གྲངས་ | ཊི་རི་གར་ | བྱ་བ་ཚུ་ བཏོན་ཡོདཔ། | རྗེས་འཇུག་ཚུ་ | ཇོ་བདག་ |
 |------|---------|---------------|------------|-------|
-| 2026-02-11 | Capacity fell to 78% after Pixel 8 Pro lane outage and delayed Pixel 8a delivery (see `android_strongbox_device_matrix.md`). | Promoted Pixel 7 lane to primary CI target, borrowed shared Pixel 6 fleet, scheduled Firebase Test Lab smoke tests for retail-wallet sample, and engaged external StrongBox lab per AND6 plan. | Replace faulty USB-C hub for Pixel 8 Pro (due 2026-02-15); confirm Pixel 8a arrival and rebaseline capacity report. | Hardware Lab Lead |
-| 2026-02-13 | Pixel 8 Pro hub replaced and Galaxy S24 approved, restoring capacity to 85%. | Returned Pixel 7 lane to secondary, re-enabled `android-strongbox-attestation` Buildkite job with tags `pixel8pro-strongbox-a` and `s24-strongbox-a`, updated readiness matrix + evidence log. | Monitor Pixel 8a delivery ETA (still pending); keep spare hub inventory documented. | Hardware Lab Lead |
+| ༢༠༢༦-༠༢-༡༡ | Pixel8 Pro lane མེདཔ་ཐལ་ཞིནམ་ལས་ Pixel8a བཀྲམ་སྤེལ་འདི་ ཕྱིར་འགྱངས་འབད་བའི་ཤུལ་ལས་ ༧༨% ལུ་མར་ཕབ་འགྱོ་ཡོདཔ་ཨིན། | Pixel7 གི་ལམ་འདི་ གཞི་རྟེན་ CI དམིགས་ཚད་དང་ Pixel6 གི་གྲུ་གཟིངས་བགོ་བཤའ་རྐྱབ་མི་ དེ་ལས་ ཕཱ་ཡར་བེསི་བརྟག་དཔྱད་བརྟག་དཔྱད་ཁང་ནང་ལུ་ ཚོང་འབྲེལ་གྱི་དངུལ་གྱི་དཔེ་ཚད་ཀྱི་ བརྟག་དཔྱད་འབད་དེ་ ཕྱི་ཁའི་ StrongBox བརྟག་དཔྱད་ཁང་ AND6 རེ་ལུ་ འབྲེལ་གཏོགས་འབད་ཡོདཔ་ཨིན། | པིག་སེལ་༨ པྲོ་གི་དོན་ལུ་ USB-C ཧབ་ (དུས་ ༢༠༢༦-༠༢-༡༥); Pixel8a ལྷོད་ནི་དང་ བསྐྱར་བཟོ་འབད་ཚུགས་པའི་ ལྕོགས་གྲུབ་སྙན་ཞུ། | མཐུན་རྐྱེན་བརྟག་དཔྱད་ཁང་། |
+| ༢༠༢༦-༠༢-༡༣ | Pixel8 Pro གི་ཚབ་བཙུགས་ཏེ་ GalaxyS24 གིས་ ཆ་འཇོག་འབད་ཡོདཔ་ལས་ ལྕོགས་གྲུབ་འདི་ བརྒྱ་ཆ་༨༥ ལུ་ ཉམས་གསོ་འབད་ཡོདཔ་ཨིན། | པིག་སེལ་༧ ལམ་འདི་ གཞི་རིམ་ལུ་ལོག་སྤྲོད་ཡོདཔ་ཨིན། ལོག་སྟེ་ལྕོགས་ཅན་བཟོ་ཡོདཔ། `android-strongbox-attestation` བཱའིལ་ཀི་ཊི་ལཱ་འདི་ `pixel8pro-strongbox-a` དང་ `s24-strongbox-a`, དུས་མཐུན་བཟོ་ཡོད་པའི་གྲ་སྒྲིག་མེ་ཊིགསི་ + སྒྲུབ་བྱེད་དྲན་ཐོ། | བལྟ་རྟོག་པ་པིག་སེལ་༨ཨེ་ བཀྲམ་སྤེལ་ཨི་ཊི་ཨེ་ (ད་ལྟོ་ཡང་); ཡིག་ཐོག་ལུ་བཀོད་ཡོད་པའི་ ཧབ་ཀྱི་ ཐོ་བཀོད་བཞག་བཞག། | མཐུན་རྐྱེན་བརྟག་དཔྱད་ཁང་། |

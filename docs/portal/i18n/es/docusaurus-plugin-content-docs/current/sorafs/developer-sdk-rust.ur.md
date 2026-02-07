@@ -4,24 +4,26 @@ direction: ltr
 source: docs/portal/docs/sorafs/developer-sdk-rust.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: developer-sdk-rust
-title: Rust SDK snippets
-sidebar_label: Rust snippets
-description: Proof streams اور manifests consume کرنے کے لیے minimal Rust examples۔
+ID: desarrollador-sdk-rust
+título: Fragmentos del SDK de Rust
+sidebar_label: fragmentos de óxido
+Descripción: Los flujos de prueba y los manifiestos consumen una cantidad mínima de ejemplos de Rust.
 ---
 
-:::note مستند ماخذ
+:::nota مستند ماخذ
 :::
 
-اس repository کے Rust crates CLI کو power کرتے ہیں اور custom orchestrators یا services میں embed کیے جا سکتے ہیں۔
-نیچے والے snippets ان helpers کو highlight کرتے ہیں جن کی طلب سب سے زیادہ ہوتی ہے۔
+اس repositorio کے Rust crates CLI کو potencia کرتے ہیں اور orquestadores personalizados یا servicios میں incrustar کیے جا سکتے ہیں۔
+Varios fragmentos y ayudantes y resaltados کرتے ہیں جن کی طلب سب سے زیادہ ہوتی ہے۔
 
-## Proof stream helper
+## Ayudante de flujo de prueba
 
-HTTP response سے metrics aggregate کرنے کے لیے existing proof stream parser reuse کریں:
+Respuesta HTTP y métricas agregadas para la reutilización del analizador de flujo de prueba existente:
 
 ```rust
 use std::error::Error;
@@ -59,45 +61,42 @@ pub fn collect_proof_metrics(response: Response) -> Result<ProofStreamSummary, B
 }
 ```
 
-Full version (tests سمیت) `docs/examples/sorafs_rust_proof_stream.rs` میں ہے۔
-`ProofStreamSummary::to_json()` وہی metrics JSON render کرتا ہے جو CLI دیتا ہے، جس سے
-observability backends یا CI assertions feed کرنا آسان ہوتا ہے۔
+Versión completa (pruebas سمیت) `docs/examples/sorafs_rust_proof_stream.rs` میں ہے۔
+`ProofStreamSummary::to_json()` y métricas de renderizado JSON کرتا ہے جو CLI دیتا ہے، جس سے
+backends de observabilidad یا Feed de aserciones de CI کرنا آسان ہوتا ہے۔
 
-## Multi-source fetch scoring
+## Puntuación de búsqueda de múltiples fuentes
 
-`sorafs_car::multi_fetch` module وہ async fetch scheduler expose کرتا ہے جو CLI استعمال کرتا ہے۔
-`sorafs_car::multi_fetch::ScorePolicy` implement کریں اور `FetchOptions::score_policy` کے ذریعے pass کریں
-تاکہ provider ordering tune ہو سکے۔ Unit test `multi_fetch::tests::score_policy_can_filter_providers`
-custom preferences enforce کرنے کا طریقہ دکھاتا ہے۔
+El módulo `sorafs_car::multi_fetch` y el programador de recuperación asíncrono exponen la configuración de CLI استعمال کرتا ہے۔
+`sorafs_car::multi_fetch::ScorePolicy` implementar کریں اور `FetchOptions::score_policy` کے ذریعے pasar کریں
+تاکہ melodía de pedido del proveedor ہو سکے۔ Prueba unitaria `multi_fetch::tests::score_policy_can_filter_providers`
+las preferencias personalizadas imponen کرنے کا طریقہ دکھاتا ہے۔
 
-Other knobs CLI flags کو mirror کرتے ہیں:
-
-- `FetchOptions::per_chunk_retry_limit` CI runs کے لیے `--retry-budget` flag سے match کرتا ہے
-  جو retries کو جان بوجھ کر constrain کرتے ہیں۔
-- `FetchOptions::global_parallel_limit` کو `--max-peers` کے ساتھ combine کریں تاکہ concurrent
-  providers کی تعداد cap ہو۔
-- `OrchestratorConfig::with_telemetry_region("region")` `sorafs_orchestrator_*` metrics کو tag کرتا ہے،
-  جبکہ `OrchestratorConfig::with_transport_policy` CLI کے `--transport-policy` flag کو mirror کرتا ہے۔
-  `TransportPolicy::SoranetPreferred` CLI/SDK surfaces پر default shipped ہے؛ `TransportPolicy::DirectOnly`
-  صرف downgrade stage کرنے یا compliance directive follow کرنے پر استعمال کریں، اور `SoranetStrict` کو
-  PQ-only pilots کے لیے explicit approval کے ساتھ reserve کریں۔
+Otras perillas Banderas CLI کو mirror کرتے ہیں:- `FetchOptions::per_chunk_retry_limit` CI ejecuta کے لیے `--retry-budget` bandera سے coincidencia کرتا ہے
+  جو reintentos کو جان بوجھ کر restringir کرتے ہیں۔
+- `FetchOptions::global_parallel_limit` کو `--max-peers` کے ساتھ combinar کریں تاکہ concurrente
+  proveedores کی تعداد cap ہو۔
+- `OrchestratorConfig::with_telemetry_region("region")` `sorafs_orchestrator_*` métricas etiqueta کرتا ہے،
+  جبکہ `OrchestratorConfig::with_transport_policy` CLI کے `--transport-policy` bandera کو espejo کرتا ہے۔
+  `TransportPolicy::SoranetPreferred` Superficies CLI/SDK enviadas por defecto ہے؛ `TransportPolicy::DirectOnly`
+  صرف etapa de degradación کرنے یا directiva de cumplimiento siga کرنے پر استعمال کریں، اور `SoranetStrict` کو
+  Pilotos exclusivos de PQ کے لیے aprobación explícita کے ساتھ reserva کریں۔
 - `SorafsGatewayFetchOptions::write_mode_hint =
-  Some(WriteModeHint::UploadPqOnly)` set کریں تاکہ PQ-only uploads force ہوں؛ helper transport/anonymity
-  policies کو خودکار طور پر promote کرے گا جب تک واضح override نہ ہو۔
-- `SorafsGatewayFetchOptions::policy_override` استعمال کریں تاکہ ایک request کے لیے temporary transport
-  یا anonymity tier pin ہو جائے؛ کسی بھی field کے دینے سے brownout demotion skip ہوتا ہے اور اگر
-  requested tier satisfy نہ ہو سکے تو failure آتا ہے۔
-- Python (`sorafs_multi_fetch_local` / `sorafs_gateway_fetch`) اور JavaScript (`sorafsMultiFetchLocal`)
-  bindings اسی scheduler کو reuse کرتے ہیں، اس لیے ان helpers میں `return_scoreboard=true` set کریں تاکہ
-  computed weights chunk receipts کے ساتھ مل سکیں۔
-- `SorafsGatewayScoreboardOptions::telemetry_source_label` OTLP stream کو record کرتا ہے جس نے adoption bundle
-  بنایا تھا۔ اگر omit ہو تو client خودکار طور پر `region:<telemetry_region>` (یا `chain:<chain_id>`) derive کرتا ہے
-  تاکہ metadata میں ہمیشہ descriptive label رہے۔
+  Some(WriteModeHint::UploadPqOnly)` establece que las cargas solo PQ fuerzan ہوں؛ transporte de ayuda/anonimato
+  políticas کو خودکار طور پر promover کرے گا جب تک واضح anular نہ ہو۔
+- `SorafsGatewayFetchOptions::policy_override` استعمال کریں تاکہ ایک solicitud کے لیے transporte temporal
+  یا pin de nivel de anonimato ہو جائے؛ کسی بھی campo کے دینے سے caída de caída omitir degradación ہوتا ہے اور اگر
+  el nivel solicitado satisface نہ ہو سکے تو falla آتا ہے۔
+- Python (`sorafs_multi_fetch_local` / `sorafs_gateway_fetch`) y JavaScript (`sorafsMultiFetchLocal`)
+  enlaces اسی planificador کو reutilización کرتے ہیں، اس لیے ان ayudantes میں `return_scoreboard=true` set کریں تاکہ
+  pesos calculados recibos de fragmentos کے ساتھ مل سکیں۔
+- `SorafsGatewayScoreboardOptions::telemetry_source_label` Transmisión OTLP کو registro کرتا ہے جس نے paquete de adopciónبنایا تھا۔ اگر omitir ہو تو cliente خودکار طور پر `region:<telemetry_region>` (یا `chain:<chain_id>`) derivar کرتا ہے
+  تاکہ metadatos میں ہمیشہ etiqueta descriptiva رہے۔
 
-## Fetch via `iroha::Client`
+## Obtener a través de `iroha::Client`
 
-Rust SDK میں gateway fetch helper شامل ہے؛ manifest کے ساتھ provider descriptors (stream tokens سمیت) فراہم کریں
-اور client کو multi-source fetch drive کرنے دیں:
+Asistente de búsqueda de puerta de enlace Rust SDK میں شامل ہے؛ manifiesto کے ساتھ descriptores de proveedor (stream tokens سمیت) فراہم کریں
+El cliente y la unidad de recuperación de múltiples fuentes son:
 
 ```rust
 use eyre::Result;
@@ -146,18 +145,18 @@ pub async fn fetch_payload(
 }
 ```
 
-جب uploads کو classical relays سے انکار کرنا ہو تو `transport_policy` کو `Some(TransportPolicy::SoranetStrict)`
+جب cargas کو relés clásicos سے انکار کرنا ہو تو `transport_policy` کو `Some(TransportPolicy::SoranetStrict)`
 پر set کریں، یا جب SoraNet کو مکمل bypass کرنا ہو تو `Some(TransportPolicy::DirectOnly)` پر۔
-`scoreboard.persist_path` کو release artifact directory پر point کریں، ضرورت ہو تو `scoreboard.now_unix_secs` fix کریں،
-اور `scoreboard.metadata` میں capture context (fixture labels، Torii target، وغیرہ) شامل کریں تاکہ
-`cargo xtask sorafs-adoption-check` SDKs کے درمیان deterministic JSON consume کرے اور SF-6c والا provenance blob
-include رہے۔ `Client::sorafs_fetch_via_gateway` اب اس metadata کو manifest identifier، optional manifest CID expectation،
-اور `gateway_manifest_provided` flag کے ساتھ augment کرتا ہے via supplied `GatewayFetchConfig`، تاکہ signed manifest envelope
-شامل کرنے والی captures SF-6c evidence requirement پورا کریں بغیر ان fields کو دستی طور پر duplicate کیے۔
+`scoreboard.persist_path` کو directorio de artefactos de lanzamiento پر point کریں، ضرورت ہو تو `scoreboard.now_unix_secs` fix کریں،
+اور `scoreboard.metadata` میں contexto de captura (etiquetas de accesorios, objetivo Torii, وغیرہ) شامل کریں تاکہ
+Los SDK `cargo xtask sorafs-adoption-check` de JSON determinista consumen SF-6c y blob de procedencia.
+incluir رہے۔ `Client::sorafs_fetch_via_gateway` contiene metadatos y identificador de manifiesto, expectativa de CID de manifiesto opcional,
+اور `gateway_manifest_provided` flag کے ساتھ aumentar کرتا ہے a través del `GatewayFetchConfig` suministrado, تاکہ sobre de manifiesto firmado
+شامل کرنے والی captura el requisito de evidencia SF-6c پورا کریں بغیر ان campos کو دستی طور پر duplicado کیے۔
 
-## Manifest helpers
+## Ayudantes manifiestos
 
-`ManifestBuilder` اب بھی Norito payloads programmatically assemble کرنے کا canonical طریقہ ہے:
+`ManifestBuilder` اب بھی Las cargas útiles Norito ensamblan mediante programación کرنے کا canonical طریقہ ہے:
 
 ```rust
 use sorafs_manifest::{ManifestBuilder, ManifestV1, PinPolicy, StorageClass};
@@ -172,6 +171,4 @@ fn build_manifest(bytes: &[u8]) -> Result<ManifestV1, Box<dyn std::error::Error>
     builder.payload(bytes)?;
     Ok(builder.build()?)
 }
-```
-
-جہاں services کو on-the-fly manifests generate کرنے ہوں وہاں builder embed کریں؛ deterministic pipelines کے لیے CLI ابھی بھی recommended path ہے۔
+```Varios servicios y manifiestos sobre la marcha generan کرنے ہوں وہاں incrustar کریں؛ canalizaciones deterministas کے لیے CLI ابھی بھی ruta recomendada ہے۔

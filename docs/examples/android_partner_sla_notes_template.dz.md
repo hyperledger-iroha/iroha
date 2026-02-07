@@ -7,75 +7,69 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 5ca51ec624ebbb4b3760d5f2265d31047cd3b6492e21bdb10a3aa61655ccca69
 source_last_modified: "2025-12-29T18:16:35.069181+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-<!--
-  SPDX-License-Identifier: Apache-2.0
--->
+I18NH0000003X
 
-# Android Partner SLA Discovery Notes — Template
+# Android Partner SLA གསར་འཚོལ་དྲན་ཐོ་ — ཊེམ་པེལེཊ་
 
-Use this template for every AND8 SLA discovery session. Store the filled copy
-under `docs/source/sdk/android/partner_sla_sessions/<partner>/<date>/minutes.md`
-and attach supporting artefacts (questionnaire responses, acknowledgements,
-attachments) in the same directory.
+AND8 SLA གསར་འཚོལ་ལཱ་ཡུན་རེ་རེ་གི་དོན་ལུ་ ཊེམ་པེལེཊི་འདི་ལག་ལེན་འཐབ། བཀང་བའི་འདྲ་བཤུས་བསགས་པ།
+`docs/source/sdk/android/partner_sla_sessions/<partner>/<date>/minutes.md` གི་འོག་ལུ་
+དང་ རྒྱབ་སྐྱོར་འབད་ནིའི་ ཅ་ཆས་ཚུ་ མཉམ་སྦྲགས་འབད་ནི། (དྲི་བ་ལན་གསལ་ ངོས་ལེན་ཚུ།
+attachtens) སྣོད་ཐོ་གཅིག་པའི་ནང་།
 
-```
-Partner: <Name>                      Date: <YYYY-MM-DD>  Time: <UTC>
-Primary contact(s): <names, roles, email>
-Android attendees: <Program Lead / Partner Eng / Support Eng / Compliance>
-Meeting link / ticket: <URL or ID>
-```
+I18NF0000002X
 
-## 1. Agenda & Context
+## 1. ལས་དོན་དང་ནང་དོན་།
 
-- Purpose of the session (pilot scope, release window, telemetry expectations).
-- Reference docs shared ahead of the call (support playbook, release calendar,
+- ལཱ་ཡུན་གྱི་དམིགས་ཡུལ་ (pilot soptory, བཏོན་གཏང་སྒོ་སྒྲིག་, བརྒྱུད་འཕྲིན་རེ་བ་)།
+- འབོད་བརྡ་གི་གདོང་ཁར་བརྗེ་སོར་འབད་མི་ གཞི་བསྟུན་ཡིག་ཆ་ཚུ་ (རྒྱབ་སྐྱོར་རྩེད་དེབ་ གསར་བཏོན་འབད་བའི་ཟླ་ཐོ་།
   telemetry dashboards).
 
-## 2. Workload Overview
+## 2. ལས་ཀའི་གནས་ཚུལ།
 
-| Topic | Notes |
-|-------|-------|
-| Target workloads / chains | |
-| Expected transaction volume | |
-| Critical business windows / blackout periods | |
-| Regulatory regimes (GDPR, MAS, FISC, etc.) | |
-| Required languages / localisation | |
+| དོན་ཚན་ | དྲན་ཐོ། |
+|-------|--|-------------------------------------------------------------------------
+| དམིགས་ཚད་ཀྱི་ལས་ཀ / རྒྱུན་རིམ། | |
+| རེ་བ་བསྐྱེད་པའི་ཚོང་འབྲེལ་འབོར་ཚད་ | |
+| གལ་ཆེ་བའི་ཚོང་ལས་སྒོ་སྒྲིག་ཚུ་ / བེལེཀ་ཨའུཊ་དུས་ཚད། | |
+| ཁྲིམས་ལུགས་ལམ་ལུགས་ (GDPR, MAS, FISC, ལ་སོགས་པ།) | |
+| དགོས་མཁོའི་སྐད་ཡིག་ / ས་གནས་བཟོ་ནི། | |
 
-## 3. SLA Discussion
+## 3. SLA གྲོས་བསྡུར།
 
-| SLA Class | Partner expectation | Delta from baseline? | Action required |
-|-----------|--------------------|----------------------|-----------------|
-| Critical fix (48 h) | | Yes/No | |
-| High-severity (5 business days) | | Yes/No | |
-| Maintenance (30 days) | | Yes/No | |
-| Cutover notice (60 days) | | Yes/No | |
-| Incident communications cadence | | Yes/No | |
+| SLA འཛིན་རིམ། | མཉམ་འབྲེལ་པ་རེ་བ་ | གཞི་རྟེན་ལས་ ཌེལ་ཊ་? | བྱ་བ་དགོས་མཁོ། |
+|------------------------------------------------------------------------------------------------------------ |
+| གལ་ཆེ་བའི་བདེ་སྒྲིག་ (༤༨h) | | ཨིན་/མེན | |
+| ཚབས་ཆེ་ (༥ ༥ ཚོང་ལས་ཉིན) | | ཨིན་/མེན | |
+| བདག་འཛིན་ (ཉིནམ་༣༠) | | ཨིན་/མེན | |
+| ཀ་ཊོ་ཝར་བརྡ་དོན་ (ཉིན་གྲངས་༦༠) | | ཨིན་/མེན | |
+| བྱུང་རྐྱེན་བརྒྱུད་འབྲེལ་གྱི་ གདམ་ཁ། | | ཨིན་/མེན | |
 
-Document any additional SLA clauses requested by the partner (e.g. dedicated
-phone bridge, extra telemetry exports).
+མཉམ་འབྲེལ་པ་གིས་ཞུ་བ་འབད་མི་ ཨེསི་ཨེལ་ཨེ་གི་དོན་ཚན་ཁ་སྐོང་གང་རུང་ཅིག་ ཡིག་ཐོག་ལུ་བཀོད་དགོ། (དཔེར་ན་ བད་ཀན་བསྟུན་གྲོས་འབད་ནི།
+ཁ་པར་ཟམ་ ཕྱིར་གཏོང་ཁ་སྐོང་།)
 
-## 4. Telemetry & Access Requirements
+## 4. བརྒྱུད་འཕྲིན་དང་འཛུལ་སྤྱོད་དགོས་མཁོ།
 
-- Grafana / Prometheus access needs:
-- Log/trace export requirements:
-- Offline evidence or dossier expectations:
+- Grafana / I18NT0000000X འཛུལ་སྤྱོད་དགོས་མཁོ།
+- ཕྱིར་གཏོང་དགོས་མཁོ།
+- ཕྱིར་གཏོང་སྒྲུབ་བྱེད་ ཡང་ན་ ཡིག་ཆ་རེ་བ།
 
-## 5. Compliance & Legal Notes
+## 5. ཚུལ་མཐུན་དང་ཁྲིམས་མཐུན་མཆན།
 
-- Jurisdictional notification requirements (statute + timing).
-- Required legal contacts for incident updates.
-- Data residency constraints / storage requirements.
+- ཁྲིམས་དོན་བརྡ་དོན་དགོས་མཁོ་ (ཁྲིམས་ལུགས་ + དུས་ཚོད་)།
+- བྱུང་རྐྱེན་དུས་མཐུན་བཟོ་ནིའི་དོན་ལུ་ ཁྲིམས་དོན་གྱི་འབྲེལ་བ་འཐབ་ནི།
+- གནད་སྡུད་སྡོད་གནས་བཀག་ཆ་ཚུ་ / གསོག་འཇོག་དགོས་མཁོ་ཚུ།
 
-## 6. Decisions & Action Items
+## 6. ཐག་གཅོད་དང་བྱ་བ་རྣམ་གྲངས།
 
-| Item | Owner | Due | Notes |
-|------|-------|-----|-------|
+| རྣམ་གྲངས་ | ཇོ་བདག་ | འདི་ | དྲན་ཐོ། |
+|-------|-------------------|------------|
 | | | | |
 
-## 7. Acknowledgement
+## 7. ངོས་འཛིན།
 
-- Partner acknowledged baseline SLA? (Y/N)
-- Follow-up acknowledgement method (email / ticket / signature):
-- Attach confirming email or meeting minutes to this directory before closing.
+- མཉམ་འབྲེལ་པ་འདི་གིས་ གཞི་རྟེན་ཨེསི་ཨེལ་ཨེ་འདི་ངོས་ལེན་འབད་ཡི་ག་? (Y/N) དང་།
+- རྗེས་སུ་འཇུག་པའི་ངོས་ལེན་ཐབས་ལམ་ (གློག་འཕྲིན་ / ཤོག་འཛིན་ / མཚན་རྟགས་):
+- ཁ་མ་བསྡམ་པའི་ཧེ་མ་ སྣོད་ཐོ་འདི་ནང་ གློག་འཕྲིན་ཡང་ན་ ཞལ་འཛོམས་སྐར་མ་ཚུ་ ངེས་དཔྱད་འབད་ནི།

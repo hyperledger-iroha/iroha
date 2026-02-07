@@ -7,23 +7,24 @@ generator: scripts/sync_docs_i18n.py
 source_hash: a5ac4be3d387269898112d465ec404490f67c6c2b9267c0a0781d0de70cf783d
 source_last_modified: "2025-12-29T18:16:35.951567+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Docker Builder Image
+# Docker quruvchi tasviri
 
-This container is defined in `Dockerfile.build` and bundles all toolchain
-dependencies required for CI and local release builds. The image now runs as a
-non-root user by default, so Git operations continue to work with Arch Linux’s
-`libgit2` package without resorting to the global `safe.directory` workaround.
+Bu konteyner `Dockerfile.build` da belgilangan va barcha asboblar zanjirini birlashtiradi
+CI va mahalliy relizlar uchun zarur bo'lgan bog'liqliklar. Tasvir endi a sifatida ishlaydi
+sukut bo'yicha root bo'lmagan foydalanuvchi, shuning uchun Git operatsiyalari Arch Linux bilan ishlashda davom etadi
+`safe.directory` global yechimiga murojaat qilmasdan `libgit2` paketi.
 
-## Build arguments
+## Argumentlar yarating
 
-- `BUILDER_USER` – login name created inside the container (default: `iroha`).
-- `BUILDER_UID` – numeric user id (default: `1000`).
-- `BUILDER_GID` – primary group id (default: `1000`).
+- `BUILDER_USER` – konteyner ichida yaratilgan login nomi (standart: `iroha`).
+- `BUILDER_UID` – raqamli foydalanuvchi identifikatori (standart: `1000`).
+- `BUILDER_GID` – asosiy guruh identifikatori (standart: `1000`).
 
-When you mount the workspace from your host, pass matching UID/GID values so
-generated artifacts remain writable:
+Ish maydonini xostingizdan ulaganingizda, mos keladigan UID/GID qiymatlarini o'tkazing
+yaratilgan artefaktlar yozilishi mumkin bo'lib qoladi:
 
 ```bash
 docker build \
@@ -34,14 +35,14 @@ docker build \
   -t iroha-builder .
 ```
 
-The toolchain directories (`/usr/local/rustup`, `/usr/local/cargo`, `/opt/poetry`)
-are owned by the configured user so Cargo, rustup, and Poetry commands remain fully
-functional once the container drops root privileges.
+Asboblar zanjiri kataloglari (`/usr/local/rustup`, `/usr/local/cargo`, `/opt/poetry`)
+konfiguratsiya qilingan foydalanuvchiga tegishli, shuning uchun Yuk, rustup va Poetry buyruqlari to'liq qoladi
+konteyner ildiz huquqlaridan mahrum bo'lgandan keyin ishlaydi.
 
-## Running builds
+## Ishlayotgan tuzilmalar
 
-Attach your workspace to `/workspace` (the container `WORKDIR`) when invoking the
-image. Example:
+Ish joyini `/workspace` (`WORKDIR` konteyneri) ga ulang.
+tasvir. Misol:
 
 ```bash
 docker run --rm -it \
@@ -50,22 +51,22 @@ docker run --rm -it \
   cargo build --workspace
 ```
 
-The image keeps the `docker` group membership so nested Docker commands (e.g.
-`docker buildx bake`) remain available for CI workflows that mount the host PID
-and socket. Adjust group mappings as needed for your environment.
+Tasvir `docker` guruhiga a'zolikni saqlaydi, shuning uchun ichki Docker buyruqlari (masalan,
+`docker buildx bake`) xost PID-ni o'rnatadigan CI ish oqimlari uchun mavjud bo'lib qoladi
+va rozetka. Atrofingiz uchun kerak bo'lganda guruh xaritalarini sozlang.
 
-## Iroha 2 vs Iroha 3 artefacts
+## Iroha 2 va Iroha 3 ta artefakt
 
-The workspace now emits separate binaries per release line to avoid collisions:
-`iroha3`/`iroha3d` (default) and `iroha2`/`iroha2d` (Iroha 2). Use the helpers to
-produce the desired pair:
+Ish maydoni endi to'qnashuvlarni oldini olish uchun har bir reliz qatoriga alohida ikkiliklarni chiqaradi:
+`iroha3`/`iroha3d` (standart) va `iroha2`/`iroha2d` (Iroha 2). Buning uchun yordamchilardan foydalaning
+kerakli juftlikni hosil qiling:
 
-- `make build` (or `BUILD_PROFILE=deploy bash scripts/build_line.sh --i3`) for Iroha 3
-- `make build-i2` (or `BUILD_PROFILE=deploy bash scripts/build_line.sh --i2`) for Iroha 2
+- Iroha 3 uchun `make build` (yoki `BUILD_PROFILE=deploy bash scripts/build_line.sh --i3`)
+- Iroha 2 uchun `make build-i2` (yoki `BUILD_PROFILE=deploy bash scripts/build_line.sh --i2`)
 
-The selector pins the feature sets (`telemetry` + `schema-endpoint` plus the
-line-specific `build-i{2,3}` flag) so Iroha 2 builds cannot accidentally pick up
-Iroha 3-only defaults.
+Selektor xususiyatlar to'plamini (`telemetry` + `schema-endpoint` va
+qatorga xos `build-i{2,3}` bayrog'i) shuning uchun Iroha 2 ta tuzilmalarni tasodifan ololmaydi
+Iroha faqat 3 ta standart.
 
-Release bundles built via `scripts/build_release_bundle.sh` pick the correct binary
-names automatically when `--profile` is set to `iroha2` or `iroha3`.
+`scripts/build_release_bundle.sh` orqali tuzilgan to'plamlar to'g'ri ikkilikni tanlang
+`--profile` `iroha2` yoki `iroha3` ga sozlanganda avtomatik ravishda nomlar.

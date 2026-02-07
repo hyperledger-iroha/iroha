@@ -173,7 +173,7 @@ impl WorkerResources {
         host: Option<&Arc<Mutex<Option<Box<dyn IVMHost + Send>>>>>,
     ) -> Self {
         let (mut vm, template_memory, template_input_bump) = {
-            let template = template.lock().expect("template lock poisoned");
+            let template = template.lock().unwrap_or_else(|err| err.into_inner());
             (
                 template.clone(),
                 template.memory.clone(),
@@ -2375,7 +2375,7 @@ impl IVM {
         });
 
         if let Some(shared_host) = shared_host {
-            let mut guard = shared_host.lock().expect("shared host poisoned");
+            let mut guard = shared_host.lock().unwrap_or_else(|err| err.into_inner());
             self.host = guard.take();
         }
 
@@ -2661,10 +2661,9 @@ impl IVM {
     /// logged on every cycle so that a prover can later reconstruct a trace.
     /// The loop terminates on `HALT` or when an error is encountered.
     pub fn run(&mut self) -> Result<(), VMError> {
-        let mut host = self
-            .host
-            .take()
-            .expect("IVM host must be present while the VM runs");
+        let Some(mut host) = self.host.take() else {
+            return Err(VMError::HostUnavailable);
+        };
         let result = self.run_with_host_ref(host.as_mut());
         self.host = Some(host);
         result
@@ -2789,7 +2788,8 @@ impl IVM {
             // Determine the gas cost for this operation and deduct it.
             // Scale vector op costs by the current logical vector length.
             // Future: include HTM retry penalties if enabled.
-            let cost = gas::cost_of_with_params(instr, self.vector_length, 0);
+            let cost = gas::cost_of_with_params(instr, self.vector_length, 0)
+                .ok_or(VMError::InvalidOpcode((instr & 0xFFFF) as u16))?;
             if unlikely(self.gas_remaining < cost) {
                 return Err(VMError::OutOfGas);
             }
@@ -4872,7 +4872,7 @@ impl IVM {
         {
             let mut host = match self.host.take() {
                 Some(h) => h,
-                None => return Err(VMError::UnknownSyscall(num)),
+                None => return Err(VMError::HostUnavailable),
             };
             let _ = host.syscall(num, self)?;
             self.host = Some(host);
@@ -4926,7 +4926,7 @@ impl IVM {
         {
             let mut host = match self.host.take() {
                 Some(h) => h,
-                None => return Err(VMError::UnknownSyscall(num)),
+                None => return Err(VMError::HostUnavailable),
             };
             let _ = host.syscall(num, self)?;
             self.host = Some(host);

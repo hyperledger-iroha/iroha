@@ -4,6 +4,8 @@ direction: rtl
 source: docs/portal/docs/sorafs/node-client-protocol.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 # بروتوكول عقدة ↔ عميل SoraFS
@@ -33,14 +35,14 @@ generator: docs/portal/scripts/sync-i18n.mjs
 - **سياسة تنوع المسارات** — `min_guard_weight` وحدود fan-out لمجموعات AS/pool و
   `provider_failure_threshold` تجعل جلب multi-peer الحتمي ممكنًا.
 - **معرّفات الملف الشخصي** — يجب على المزوّدين نشر المقبض المعتمد (مثل
-  `sorafs.sf1@1.0.0`)؛ تساعد `profile_aliases` الاختيارية العملاء القدامى على
+  `sorafs.sf1@1.0.0`); تساعد `profile_aliases` الاختيارية العملاء القدامى على
   الترحيل.
 
 ترفض قواعد التحقق stake الصفري، أو قوائم القدرات/العناوين/المواضيع الفارغة،
 أو تواريخ غير مرتبة، أو أهداف QoS مفقودة. تقارن أظرف القبول بين محتوى الإعلان
 والاقتراح (`compare_core_fields`) قبل بث التحديثات.
 
-### امتدادات الجلب بالنطاقات
+### אמט
 
 تتضمن المزوّدات الداعمة للنطاق البيانات التالية:
 
@@ -64,13 +66,11 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 تقبل البوابات طلبات HTTP حتمية تعكس بيانات الإعلانات.
 
-### `GET /v1/sorafs/storage/car/{manifest_id}`
-
-| المتطلب | التفاصيل |
-|---------|----------|
-| **Headers** | `Range` (نافذة واحدة مصطفة مع إزاحات الشرائح)، `dag-scope: block`، `X-SoraFS-Chunker`، `X-SoraFS-Nonce` اختياري، و`X-SoraFS-Stream-Token` base64 إلزامي. |
-| **Responses** | `206` مع `Content-Type: application/vnd.ipld.car`، و`Content-Range` يصف النافذة المقدمة، وبيانات `X-Sora-Chunk-Range`، وإعادة إرسال رؤوس chunker/token. |
-| **Failure modes** | `416` للنطاقات غير المصطفة، `401` للرموز المفقودة/غير الصالحة، `429` عند تجاوز ميزانيات stream/byte. |
+### `GET /v1/sorafs/storage/car/{manifest_id}`| المتطلب | التفاصيل |
+|--------|--------|
+| **כותרות** | I18NIS اختياري، و`X-SoraFS-Stream-Token` base64 إلزامي. |
+| **תגובות** | `206` مع `Content-Type: application/vnd.ipld.car`، و`Content-Range` يصف النافذة المقدمة، وبيانات `X-Sora-Chunk-Range`، وإعادة إرسال צ'אנקר/אסימון. |
+| **מצבי כשל** | `416` للنطاقات غير المصطفة، `401` للرموز المفقودة/غير الصالحة، `429` عند تجاوز ميزانيات stream/byte. |
 
 ### `GET /v1/sorafs/storage/chunk/{manifest_id}/{digest}`
 
@@ -95,7 +95,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 أخطاء شائعة تصل إلى المشغلين/SDKs:
 
-| الخطأ | الوصف |
+| الخطأ | אוטו |
 |-------|-------|
 | `no providers were supplied` | لا توجد إدخالات مؤهلة بعد التصفية. |
 | `no compatible providers available for chunk {index}` | عدم توافق نطاق أو ميزانية لشريحة محددة. |
@@ -124,16 +124,14 @@ generator: docs/portal/scripts/sync-i18n.mjs
   بنمط Norito أو JSON مع proofs اختيارية للـ alias والـ successor؛ تؤدي proofs
   المشوهة إلى `400`، وتُظهر proofs القديمة `503` مع `Warning: 110`، بينما تعيد
   proofs المنتهية تمامًا `412`.
-- نقاط REST (`/v1/sorafs/pin`, `/v1/sorafs/aliases`, `/v1/sorafs/replication`)
+- REST (`/v1/sorafs/pin`, `/v1/sorafs/aliases`, `/v1/sorafs/replication`)
   تتضمن هياكل attestation حتى يتمكن العملاء من التحقق من البيانات مقابل أحدث
-  رؤوس الكتل قبل التنفيذ.
-
-## المراجع
+  رؤوس الكتل قبل التنفيذ.## المراجع
 
 - المواصفة المعتمدة:
   [`docs/source/sorafs_node_client_protocol.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs_node_client_protocol.md)
-- أنواع Norito: `crates/sorafs_manifest/src/{provider_advert,provider_admission}.rs`
+- קוד Norito: `crates/sorafs_manifest/src/{provider_advert,provider_admission}.rs`
 - مساعدات CLI: `crates/iroha_cli/src/commands/sorafs.rs`,
   `crates/sorafs_car/src/bin/sorafs_fetch.rs`
 - مكتبة المُنسِّق: `crates/sorafs_orchestrator`
-- حزمة لوحات المتابعة: `dashboards/grafana/sorafs_fetch_observability.json`
+- מחיר מוצר: `dashboards/grafana/sorafs_fetch_observability.json`

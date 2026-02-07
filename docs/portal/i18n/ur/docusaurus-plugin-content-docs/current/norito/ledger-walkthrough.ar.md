@@ -4,39 +4,41 @@ direction: rtl
 source: docs/portal/docs/norito/ledger-walkthrough.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: جولة في السجل
-description: اعادة انتاج تدفق حتمي register -> mint -> transfer باستخدام CLI `iroha` والتحقق من حالة السجل الناتجة.
-slug: /norito/ledger-walkthrough
+عنوان: ریکارڈ کا دورہ
+تفصیل: ایک لازمی بہاؤ رجسٹر کو دوبارہ پیش کریں -> ٹکسال -> CLI `iroha` کا استعمال کرتے ہوئے منتقلی اور اس کے نتیجے میں رجسٹر کی حیثیت کو چیک کریں۔
+سلگ: /نوریٹو /لیجر واک تھرو
 ---
 
-تكمل هذه الجولة [Norito quickstart](./quickstart.md) عبر توضيح كيفية تعديل حالة السجل وفحصها باستخدام CLI `iroha`. ستسجل تعريف اصل جديدا، وتسك وحدات في حساب المشغل الافتراضي، وتنقل جزءا من الرصيد الى حساب اخر، وتتحقق من المعاملات والممتلكات الناتجة. كل خطوة تعكس التدفقات المغطاة في quickstarts الخاصة ب Rust/Python/JavaScript لتتمكن من التحقق من التطابق بين CLI وسلوك SDK.
+یہ واک تھرو [Norito کوئیک اسٹارٹ] (./quickstart.md) کو CLI `iroha` کا استعمال کرتے ہوئے رجسٹری ریاست میں ترمیم اور معائنہ کرنے کا طریقہ دکھا کر مکمل کرتا ہے۔ آپ ورچوئل آپریٹر اکاؤنٹ میں ایک نئی اثاثہ تعریف ، ٹکسال یونٹوں کو رجسٹر کریں گے ، بیلنس کا کچھ حصہ دوسرے اکاؤنٹ میں منتقل کریں گے ، اور اس کے نتیجے میں لین دین اور ہولڈنگ کی تصدیق کریں گے۔ ہر قدم زنگ/ازگر/جاوا اسکرپٹ کوئیک اسٹارٹ میں ڈھکے ہوئے بہاؤ کو آئینہ دیتا ہے تاکہ آپ سی ایل آئی اور ایس ڈی کے سلوک کے مابین خط و کتابت کی تصدیق کرسکیں۔
 
-## المتطلبات المسبقة
+## شرائط
 
-- اتبع [quickstart](./quickstart.md) لتشغيل شبكة بعقدة واحدة عبر
-  `docker compose -f defaults/docker-compose.single.yml up --build`.
-- تاكد من ان `iroha` (الـ CLI) مبني او محمل وانك تستطيع الوصول الى الـ peer باستخدام `defaults/client.toml`.
-- ادوات اختيارية: `jq` (تنسيق ردود JSON) وصدفة POSIX لمقاطع متغيرات البيئة في الاسفل.
+- ایک سنگل نوڈ نیٹ ورک کے ذریعے چلانے کے لئے [کوئیک اسٹارٹ] (./quickstart.md) پر عمل کریں
+  `docker compose -f defaults/docker-compose.single.yml up --build`۔
+- اس بات کو یقینی بنائیں کہ `iroha` (CLI) بنایا گیا ہے یا بھری ہوئی ہے اور یہ کہ آپ `defaults/client.toml` کا استعمال کرتے ہوئے ہم مرتبہ تک رسائی حاصل کرسکتے ہیں۔
+- اختیاری ٹولز: `jq` (JSON رسپانس فارمیٹ) اور نچلے حصے میں ماحولیاتی متغیر حصوں کے لئے ایک POSIX شیل۔
 
-طوال الدليل، استبدل `$ADMIN_ACCOUNT` و `$RECEIVER_ACCOUNT` بمعرفات الحساب التي تخطط لاستخدامها. يتضمن الـ bundle الافتراضي بالفعل حسابين مشتقين من مفاتيح العرض:
+گائیڈ کے دوران ، `$ADMIN_ACCOUNT` اور `$RECEIVER_ACCOUNT` کو اکاؤنٹ IDs کے ساتھ تبدیل کریں جس کا آپ استعمال کرنے کا ارادہ رکھتے ہیں۔ پہلے سے طے شدہ بنڈل میں پہلے ہی ڈسپلے کی چابیاں سے اخذ کردہ دو حساب کتاب شامل ہیں:
 
 ```sh
 export ADMIN_ACCOUNT="ih58..."
 export RECEIVER_ACCOUNT="ih58..."
 ```
 
-اكد القيم عبر سرد اولى الحسابات:
+پہلے حساب کتاب کی فہرست دے کر اقدار کی تصدیق کریں:
 
 ```sh
 iroha --config defaults/client.toml account list all --limit 5 --table
 ```
 
-## 1. فحص حالة genesis
+## 1. پیدائش کی حیثیت چیک کریں
 
-ابدأ باستكشاف السجل الذي يستهدفه CLI:
+سی ایل آئی کے اہداف کو کس رجسٹری کے اہداف کی کھوج سے شروع کریں:
 
 ```sh
 # Domains المسجلة في genesis
@@ -51,22 +53,22 @@ iroha --config defaults/client.toml account list filter \
 iroha --config defaults/client.toml asset definition list all --table
 ```
 
-تعتمد هذه الاوامر على ردود مدعومة ب Norito، لذا يكون الترشيح والتقسيم حتميين ومتطابقين مع ما تتلقاه SDKs.
+یہ احکامات Norito کے ذریعہ تعاون یافتہ ردعمل پر انحصار کرتے ہیں ، لہذا فلٹرنگ اور پارٹیشننگ ایک متنازعہ اور ایک جیسی ہیں جو SDKs وصول کرتی ہے۔
 
-## 2. تسجيل تعريف اصل
+## 2. اثاثہ کی تعریف کو رجسٹر کریں
 
-انشئ اصلا جديدا قابلا للسك بلا حدود باسم `coffee` داخل نطاق `wonderland`:
+`coffee` کے نام سے ایک نیا لامحدود ٹکسال والا اثاثہ بنائیں `wonderland`:
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
   --id coffee#wonderland
 ```
 
-يطبع CLI hash المعاملة المقدمة (مثلا `0x5f…`). احفظه كي تستعلم عن الحالة لاحقا.
+سی ایل آئی جمع کروائی گئی ٹرانزیکشن ہیش (جیسے `0x5f…`) پرنٹ کرتی ہے۔ بعد میں حیثیت کے بارے میں پوچھ گچھ کرنے کے لئے اسے محفوظ کریں۔
 
-## 3. سك وحدات في حساب المشغل
+## 3. آپریٹر کے اکاؤنٹ میں ٹکسال یونٹ
 
-توجد كميات الاصول تحت الزوج `(asset definition, account)`. اسك 250 وحدة من `coffee#wonderland` في `$ADMIN_ACCOUNT`:
+اثاثوں کی مقدار جوڑی `(asset definition, account)` کے تحت ہے۔ `coffee#wonderland` کے 250 یونٹوں سے `$ADMIN_ACCOUNT` میں پوچھیں:
 
 ```sh
 iroha --config defaults/client.toml asset mint \
@@ -74,13 +76,13 @@ iroha --config defaults/client.toml asset mint \
   --quantity 250
 ```
 
-مرة اخرى احفظ hash المعاملة (`$MINT_HASH`) من خرج CLI. للتحقق من الرصيد نفذ:
+ایک بار پھر ٹرانزیکشن ہیش (`$MINT_HASH`) کو CLI آؤٹ پٹ سے محفوظ کریں۔ توازن کی جانچ پڑتال کے لئے:
 
 ```sh
 iroha --config defaults/client.toml asset list all --limit 5 --table
 ```
 
-او لاستهداف الاصل الجديد فقط:
+یا صرف نئے اثاثہ کو نشانہ بنانا:
 
 ```sh
 iroha --config defaults/client.toml asset list filter \
@@ -88,9 +90,9 @@ iroha --config defaults/client.toml asset list filter \
   --limit 1 | jq .
 ```
 
-## 4. نقل جزء من الرصيد الى حساب اخر
+## 4. توازن کا ایک حصہ کسی دوسرے اکاؤنٹ میں منتقل کریں
 
-انقل 50 وحدة من حساب المشغل الى `$RECEIVER_ACCOUNT`:
+آپریٹر اکاؤنٹ سے 50 یونٹوں کو `$RECEIVER_ACCOUNT` میں منتقل کریں:
 
 ```sh
 iroha --config defaults/client.toml asset transfer \
@@ -99,7 +101,7 @@ iroha --config defaults/client.toml asset transfer \
   --quantity 50
 ```
 
-احفظ hash المعاملة باسم `$TRANSFER_HASH`. استعلم عن الممتلكات في الحسابين للتحقق من الارصدة الجديدة:
+`$TRANSFER_HASH` کے بطور ٹرانزیکشن ہیش کو محفوظ کریں۔ نئے بیلنس کی تصدیق کے لئے دو اکاؤنٹس میں ہولڈنگز کے بارے میں پوچھ گچھ کریں:
 
 ```sh
 iroha --config defaults/client.toml asset list filter \
@@ -109,28 +111,28 @@ iroha --config defaults/client.toml asset list filter \
   "{\"id\":\"coffee#wonderland##${RECEIVER_ACCOUNT}\"}" --limit 1 | jq .
 ```
 
-## 5. التحقق من ادلة السجل
+## 5. لاگ ثبوت کی تصدیق کریں
 
-استخدم الهاشات المحفوظة لتاكيد ان المعاملتين تم التزامهما:
+اس بات کی تصدیق کے لئے محفوظ شدہ ہیشوں کا استعمال کریں کہ دونوں لین دین کا ارتکاب کیا گیا تھا:
 
 ```sh
 iroha --config defaults/client.toml transaction get --hash $MINT_HASH | jq .
 iroha --config defaults/client.toml transaction get --hash $TRANSFER_HASH | jq .
 ```
 
-يمكنك ايضا بث الكتل الحديثة لمعرفة اي كتلة تضمنت التحويل:
+آپ حالیہ بلاکس کو یہ بھی نشر کرسکتے ہیں کہ کس بلاک میں تبدیلی شامل ہے:
 
 ```sh
 # Stream من اخر كتلة والتوقف بعد ~5 ثوان
 iroha --config defaults/client.toml blocks 0 --timeout 5s --table
 ```
 
-تستخدم كل الاوامر اعلاه نفس payloads الخاصة ب Norito التي تستخدمها SDKs. اذا كررت هذا التدفق عبر الكود (انظر quickstarts للـ SDK ادناه)، فستتطابق الهاشات والارصدة ما دمت تستهدف الشبكة نفسها والافتراضات نفسها.
+مذکورہ بالا تمام احکامات SDKs کی طرح Norito پے لوڈ کا استعمال کرتے ہیں۔ اگر آپ اس بہاؤ کو کوڈ کے ذریعے دہراتے ہیں (نیچے ایس ڈی کے کے لئے کوئیک اسٹارٹ ملاحظہ کریں) ، ہیش اور بیلنس اس وقت تک مماثل ہوں گے جب تک کہ وہ ایک ہی نیٹ ورک کو نشانہ بنائیں اور وہی مفروضے بنائیں۔
 
-## روابط تكافؤ SDK
+## SDK برابری کے لنکس
 
-- [Rust SDK quickstart](../sdks/rust) — يوضح تسجيل التعليمات، ارسال المعاملات، واستطلاع الحالة من Rust.
-- [Python SDK quickstart](../sdks/python) — يعرض نفس عمليات register/mint مع مساعدات JSON مدعومة ب Norito.
-- [JavaScript SDK quickstart](../sdks/javascript) — يغطي طلبات Torii، ومساعدات الحوكمة، واغلفة الاستعلامات المtyped.
+-۔
+۔
+۔
 
-نفذ جولة CLI اولا ثم كرر السيناريو باستخدام SDK المفضل لديك للتأكد من تطابق السطحين في هاشات المعاملات والارصدة ومخرجات الاستعلام.
+پہلے CLI واک تھرو کو چلائیں اور پھر اپنے ترجیحی SDK کا استعمال کرتے ہوئے منظر نامے کو دہرائیں تاکہ یہ یقینی بنایا جاسکے کہ دونوں سطحیں ٹرانزیکشن ہیشوں ، توازن اور استفسار کے نتائج سے مماثل ہیں۔

@@ -4,28 +4,30 @@ direction: rtl
 source: docs/portal/docs/intro.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# SORA Nexus Developer Portal میں خوش آمدید
+# SORA Nexus بوابة المطورين رائعة
 
-SORA Nexus developer portal Nexus operators اور Hyperledger Iroha contributors کے لئے interactive documentation، SDK tutorials، اور API references کو یکجا کرتا ہے۔ یہ main docs site کو اس repository سے براہ راست generated specs اور hands-on guides سامنے لا کر مکمل کرتا ہے۔ landing page اب themed Norito/SoraFS entry points، signed OpenAPI snapshots، اور ایک dedicated Norito Streaming reference فراہم کرتا ہے تاکہ contributors root spec کھنگالے بغیر streaming control-plane contract تک پہنچ سکیں۔
+بوابة مطور SORA Nexus مشغلو Nexus ومساهمو Hyperledger Iroha للتوثيق التفاعلي، وبرامج SDK التعليمية، ومراجع واجهة برمجة التطبيقات (API). تم إنشاء موقع المستندات الرئيسي وهو المستودع للحصول على المواصفات والأدلة العملية التي تم إنشاؤها. الصفحة المقصودة اب تحت عنوان Norito/SoraFS نقاط الدخول، لقطات OpenAPI الموقعة، و إيك مخصص Norito مرجع البث فراهام كرتا ہے تاكہ المواصفات الجذرية للمساهمين کھنگالے بگير عقد التحكم في البث پانچ سكيي.
 
-## آپ یہاں کیا کر سکتے ہیں
+## هل يمكنك فعل ذلك
 
-- **Norito سیکھیں** - overview اور quickstart سے آغاز کریں تاکہ serialization model اور bytecode tooling سمجھ سکیں۔
-- **SDKs bootstrap کریں** - JavaScript اور Rust کے quickstarts آج فالو کریں؛ Python، Swift، اور Android guides recipes migrate ہونے کے ساتھ شامل ہوں گے۔
-- **API references دیکھیں** - Torii OpenAPI page تازہ ترین REST specification render کرتا ہے، اور configuration tables canonical Markdown sources کی طرف link کرتے ہیں۔
-- **Deployments تیار کریں** - operational runbooks (telemetry, settlement, Nexus overlays) `docs/source/` سے port ہو رہے ہیں اور migration کے ساتھ اس سائٹ پر آئیں گے۔
+- **رقم Norito** - نظرة عامة وبداية سريعة مع نموذج التسلسل وأدوات الكود الثانوي.
+- **أداة التمهيد لأدوات تطوير البرامج (SDKs)** - البدايات السريعة لـ JavaScript وRust؛ يتم ترحيل وصفات أدلة Python وSwift وAndroid بشكل شامل.
+- **مراجع واجهة برمجة التطبيقات (API)** - Torii OpenAPI صفحة أحدث عرض لمواصفات REST كرتا، وجداول التكوين، مصادر Markdown الأساسية، رابط الرابط.
+- **عمليات النشر التاريخية** - دفاتر التشغيل التشغيلية (القياس عن بعد، والتسوية، وتراكبات Nexus) منفذ `docs/source/`، والترحيل المستمر.
 
-## موجودہ حالت
+## موجودہ حالة
 
-- ✅ themed Docusaurus v3 landing جس میں refreshed typography، gradient-driven hero/cards، اور resource tiles شامل ہیں جو Norito Streaming summary رکھتے ہیں۔
-- ✅ Torii OpenAPI plugin کو `npm run sync-openapi` سے wired کیا گیا ہے، signed snapshot checks اور CSP guards `buildSecurityHeaders` کے ذریعے نافذ ہیں۔
-- ✅ Preview اور probe coverage CI (`docs-portal-preview.yml` + `scripts/portal-probe.mjs`) میں چلتی ہے، اور اب streaming doc، SoraFS quickstarts، اور reference checklists کو artifacts publish ہونے سے پہلے gate کرتی ہے۔
-- ✅ Norito، SoraFS، اور SDK quickstarts کے ساتھ reference sections sidebar میں live ہیں؛ `docs/source/` سے نئی imports (streaming, orchestration, runbooks) جب لکھی جاتی ہیں تو یہاں شامل ہوتی ہیں۔
+- ✅ موضوع Docusaurus v3 هبوط، وهو عبارة عن طباعة محدثة، وبطاقات/بطل يحركها التدرج، وبلاطات موارد تتضمن ملخصًا متدفقًا Norito.
+- ✅ Torii OpenAPI plugin `npm run sync-openapi` هو جهاز سلكي، وشيكات لقطة موقعة وحراس CSP `buildSecurityHeaders` مفعلين.
+- ✅ معاينة وتغطية التحقيق CI (`docs-portal-preview.yml` + `scripts/portal-probe.mjs`) من خلال چلتي ہے، اور اب دفق المستند، SoraFS Quickstarts، وقوائم المراجعة المرجعية التي يتم نشرها من خلال بوابة کرتی.
+- ✅ Norito، SoraFS، وبدء التشغيل السريع لـ SDK، كما يمكن تشغيل الشريط الجانبي للأقسام المرجعية بشكل مباشر؛ `docs/source/` عبارة عن واردات جديدة (البث والتنسيق وسجلات التشغيل) التي تتضمن المزيد من المعلومات.
 
-## شمولیت کیسے کریں
+## الشمولية
 
-- لوکل development commands کے لئے `docs/portal/README.md` دیکھیں (`npm install`, `npm run start`, `npm run build`)۔
-- Content migration tasks `DOCS-*` roadmap items کے ساتھ track کی جاتی ہیں۔ Contributions خوش آمدید ہیں - `docs/source/` سے sections port کریں اور page کو sidebar میں شامل کریں۔
-- اگر آپ کوئی generated artifact (specs, config tables) شامل کریں تو build command دستاویز کریں تاکہ آئندہ contributors اسے آسانی سے refresh کر سکیں۔
+- أوامر تطوير لوکل کے لئے `docs/portal/README.md` دیکھیں (`npm install`, `npm run start`, `npm run build`).
+- مهام ترحيل المحتوى `DOCS-*` عناصر خارطة الطريق التي تتبع البوابة باستمرار. المساهمات مفيدة - `docs/source/` تحتوي على منفذ أقسام وصفحة في الشريط الجانبي.
+- إذا تم إنشاء قطعة أثرية (المواصفات، جداول التكوين) فإنك ستتضمن إمكانية تحديث أمر الإنشاء من قبل المساهمين بسهولة.

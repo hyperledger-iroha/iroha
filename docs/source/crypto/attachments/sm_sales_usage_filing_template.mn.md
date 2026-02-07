@@ -7,90 +7,88 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 14f32b40ff71fa4eef698eac80d8d7dd27104b46b84523d735d054dedea1c47a
 source_last_modified: "2025-12-29T18:16:35.938696+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% SM2/SM3/SM4 Sales & Usage Filing (销售/使用备案) Template
-% Hyperledger Iroha Compliance Working Group
+% SM2/SM3/SM4 Борлуулалт ба ашиглалтын мэдүүлэг (销售/使用备案) Загвар
+% Hyperledger Iroha Дагаж мөрдөх ажлын хэсэг
 % 2026-05-06
 
-# Instructions
+# Заавар
 
-Use this template when filing deployment usage with an SCA office for onshore
-operators. Provide one submission per deployment cluster or data space. Update
-the placeholders with operator-specific details and attach the evidence listed
-in the checklist.
+Хуурай газрын SCA оффист байршуулах ашиглалтын мэдүүлэг гаргахдаа энэ загварыг ашиглана уу
+операторууд. Байршуулах кластер эсвэл өгөгдлийн орон зай тус бүрд нэг мэдүүлэг өгөх. Шинэчлэх
+операторын тусгайлсан дэлгэрэнгүй мэдээлэл бүхий орлуулагчид болон жагсаасан нотлох баримтыг хавсаргана
+шалгах хуудсанд.
 
-# 1. Operator & Deployment Summary
+# 1. Оператор ба байршуулалтын хураангуй
 
-| Field | Value |
+| Талбай | Үнэ цэнэ |
 |-------|-------|
-| Operator name | {{ OPERATOR_NAME }} |
-| Business registration ID | {{ REG_ID }} |
-| Registered address | {{ ADDRESS }} |
-| Primary contact (name / title / email / phone) | {{ CONTACT }} |
-| Deployment identifier | {{ DEPLOYMENT_ID }} |
-| Deployment location(s) | {{ LOCATIONS }} |
-| Filing type | Sales / Usage (销售/使用备案) |
-| Filing date | {{ YYYY-MM-DD }} |
+| Операторын нэр | {{ OPERATOR_NAME }} |
+| Бизнесийн бүртгэлийн ID | {{ REG_ID }} |
+| Бүртгэлтэй хаяг | {{ ХАЯГ }} |
+| Үндсэн холбоо барих хаяг (нэр / гарчиг / имэйл / утас) | {{ ХОЛБОО БАРИХ }} |
+| Байрлуулалтын тодорхойлогч | {{ DEPLOYMENT_ID }} |
+| Байршуулах байршил(ууд) | {{ БАЙРШИЛ }} |
+| Бүртгэлийн төрөл | Борлуулалт / Хэрэглээ (销售/使用备案) |
+| Өргөдлийн огноо | {{ ЖЭЭЖ-АА-ӨГӨ }} |
 
-# 2. Deployment Details
+# 2. Байршуулах дэлгэрэнгүй мэдээлэл
 
-- Software build ID / hash: `{{ BUILD_HASH }}`
-- Build source: {{ BUILD_SOURCE }} (e.g., operator-built from source, vendor-provided binary).
-- Activation date: {{ ACTIVATION_DATE }}
-- Planned maintenance windows: {{ MAINTENANCE_CADENCE }}
-- Node roles participating in SM signing:
-  | Node | Role | SM features enabled | Key vault location |
-  |------|------|---------------------|--------------------|
-  | {{ NODE_ID }} | {{ ROLE }} | {{ FEATURES }} | {{ VAULT }} |
+- Програм хангамж бүтээх ID / хэш: `{{ BUILD_HASH }}`
+- Бүтээлийн эх сурвалж: {{ BUILD_SOURCE }} (жишээ нь, эх сурвалжаас оператор бүтээгдсэн, борлуулагчаас өгсөн хоёртын хувилбар).
+- Идэвхжүүлсэн огноо: {{ ACTIVATION_DATE }}
+- Төлөвлөсөн засвар үйлчилгээний цонхнууд: {{ MAINTENANCE_CADENCE }}
+- SM гарын үсэг зурахад оролцож буй зангилааны үүрэг:
+  | Зангилаа | Үүрэг | SM функцийг идэвхжүүлсэн | Түлхүүр хадгалалтын байршил |
+  |------|------|--------------------|--------------------|
+  | {{ NODE_ID }} | {{ ҮҮРЭГ }} | {{ ОНЦЛОГ }} | {{ VAULT }} |
 
-# 3. Cryptographic Controls
+# 3. Криптографийн хяналт
 
-- Allowed algorithms: {{ ALGORITHMS }} (ensure SM set matches configuration).
-- Key lifecycle summary:
-  | Stage | Description |
+- Зөвшөөрөгдсөн алгоритмууд: {{ ALGORITHMS }} (SM багц тохиргоонд таарч байгаа эсэхийг шалгаарай).
+- Үндсэн амьдралын мөчлөгийн хураангуй:
+  | Үе шат | Тодорхойлолт |
   |-------|-------------|
-  | Generation | {{ KEY_GENERATION }} |
-  | Storage | {{ KEY_STORAGE }} |
-  | Rotation | {{ KEY_ROTATION }} |
-  | Revocation | {{ KEY_REVOCATION }} |
-- Distinct identity (`distid`) policy: {{ DISTID_POLICY }}
-- Configuration excerpt (`crypto` section): provide Norito/JSON snapshot with hashes.
+  | Үе үе | {{ GENERATION }} |
+  | Хадгалах | {{ ТҮЛХҮҮР_ХАДГАЛАХ }} |
+  | Эргүүлэх | {{ KEY_ROTATION }} |
+  | Хүчингүй болгох | {{ ТҮЛХҮҮР_ХУЦАЛТ }} |
+- Тодорхой таних (`distid`) бодлого: {{ DISTID_POLICY }}
+- Тохиргооны ишлэл (`crypto` хэсэг): Norito/JSON агшин агшныг хэшээр хангана.
 
-# 4. Telemetry & Audit Trails
+# 4. Телеметр ба аудитын мөрүүд
 
-- Monitoring endpoints: {{ METRICS_ENDPOINTS }} (`/metrics`, dashboards).
-- Logged metrics: `crypto.sm.verification_total`, `crypto.sm.sign_total`,
-  latency histograms, error counters.
-- Log retention policy: {{ LOG_RETENTION }} (≥ three years recommended).
-- Audit log storage location: {{ AUDIT_STORAGE }}
+- Хяналтын төгсгөлийн цэгүүд: {{ METRICS_ENDPOINTS }} (`/metrics`, хяналтын самбар).
+- Бүртгэгдсэн хэмжигдэхүүн: `crypto.sm.verification_total`, `crypto.sm.sign_total`,
+  хоцрогдлын гистограмм, алдааны тоолуур.
+- Бүртгэл хадгалах бодлого: {{ LOG_RETENTION }} (≥ гурван жил санал болгосон).
+- Аудитын бүртгэлийн хадгалах байршил: {{ AUDIT_STORAGE }}
 
-# 5. Incident Response & Contacts
+# 5. Ослын хариу арга хэмжээ & Холбоо барих хаяг
 
-| Role | Name | Phone | Email | SLA |
+| Үүрэг | Нэр | Утас | Имэйл | SLA |
 |------|------|-------|-------|-----|
-| Security operations lead | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} | {{ SLA }} |
-| Crypto on-call | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} | {{ SLA }} |
-| Legal / compliance | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} | {{ SLA }} |
-| Vendor support (if applicable) | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} | {{ SLA }} |
+| Аюулгүй байдлын үйл ажиллагаа тэргүүлэх | {{ НЭР }} | {{ УТАС }} | {{ EMAIL }} | {{ SLA }} |
+| Crypto on-call | {{ НЭР }} | {{ УТАС }} | {{ EMAIL }} | {{ SLA }} |
+| Хууль эрх зүйн / дагаж мөрдөх | {{ НЭР }} | {{ УТАС }} | {{ EMAIL }} | {{ SLA }} |
+| Борлуулагчийн дэмжлэг (хэрэв байгаа бол) | {{ НЭР }} | {{ УТАС }} | {{ EMAIL }} | {{ SLA }} |
 
-# 6. Attachments Checklist
+# 6. Хавсралтуудыг шалгах хуудас- [ ] Хэштэй тохиргооны агшин зураг (Norito + JSON).
+- [ ] Детерминист бүтээцийн баталгаа (хэш, SBOM, давтагдах байдлын тэмдэглэл).
+- [ ] Телеметрийн хяналтын самбарын экспорт болон дохиоллын тодорхойлолт.
+- [ ] Ослын хариу арга хэмжээний төлөвлөгөө болон дуудлагаар эргүүлэх баримт бичиг.
+- [ ] Операторын сургалтын баталгаа эсвэл runbook хүлээн авсан баримт.
+- [ ] Хүргэсэн олдворуудыг тусгах экспортын хяналтын мэдэгдэл.
+- [ ] Холбогдох гэрээний хэлцлүүд эсвэл бодлогын хөнгөлөлтийн хуулбар.
 
-- [ ] Configuration snapshot (Norito + JSON) with hashes.
-- [ ] Proof of deterministic build (hashes, SBOM, reproducibility notes).
-- [ ] Telemetry dashboard exports and alert definitions.
-- [ ] Incident response plan and on-call rotation document.
-- [ ] Operator training acknowledgement or runbook receipt.
-- [ ] Export-control statement mirroring delivered artefacts.
-- [ ] Copies of relevant contractual agreements or policy waivers.
+# 7. Операторын мэдэгдэл
 
-# 7. Operator Declaration
+> Дээр дурдсан байршуулалт нь БНХАУ-ын сурталчилгаанд нийцэж байгааг бид баталж байна
+> криптографийн зохицуулалт, SM-ийг идэвхжүүлсэн үйлчилгээ нь баримтжуулсан дагуу
+> ослын хариу арга хэмжээ болон телеметрийн бодлого, мөн аудитын олдворууд байх болно
+> гурваас доошгүй жил хадгалагдана.
 
-> We confirm that the deployment listed above complies with PRC commercial
-> cryptography regulations, that SM-enabled services follow the documented
-> incident response and telemetry policies, and that audit artefacts will be
-> retained for at least three years.
-
-- Authorised signer: ________________________
-- Date: ________________________
-
+- Эрх бүхий гарын үсэг зурсан хүн: ________________________
+- Огноо: ______________________

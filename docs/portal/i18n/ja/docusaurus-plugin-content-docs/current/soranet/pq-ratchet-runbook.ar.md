@@ -4,28 +4,30 @@ direction: ltr
 source: docs/portal/docs/soranet/pq-ratchet-runbook.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: pq-ratchet-runbook
-title: تمرين PQ Ratchet في SoraNet
-sidebar_label: دليل PQ Ratchet
-description: خطوات تمرين المناوبة لترقية او خفض سياسة اخفاء الهوية PQ المرحلية مع تحقق telemetry حتمي.
+ID: pq-ratchet-runbook
+タイトル: PQ ラチェット في SoraNet
+サイドバーラベル: PQ ラチェット
+説明: セキュリティ セキュリティ、テレメトリ セキュリティ、およびテレメトリ セキュリティ。
 ---
 
-:::note المصدر القياسي
-تعكس هذه الصفحة `docs/source/soranet/pq_ratchet_runbook.md`. حافظ على النسختين متطابقتين حتى يتم تقاعد الوثائق القديمة.
+:::メモ
+テストは `docs/source/soranet/pq_ratchet_runbook.md` です。 حافظ على النسختين متطابقتين حتى يتم تقاعد الوثائق القديمة。
 :::
 
-## الغرض
+## いいえ
 
-هذا الدليل يوجه تسلسل تمرين الطوارئ لسياسة اخفاء الهوية post-quantum (PQ) المرحلية في SoraNet. يتدرب المشغلون على الترقية (Stage A -> Stage B -> Stage C) وعلى خفض منضبط الى Stage B/A عندما تنخفض امدادات PQ. يتحقق التمرين من telemetry hooks (`sorafs_orchestrator_policy_events_total`, `sorafs_orchestrator_brownouts_total`, `sorafs_orchestrator_pq_ratio_*`) ويجمع artefacts لسجل تدريب الحوادث.
+ポスト量子 (PQ) とソラネット。 (ステージ A -> ステージ B -> ステージ C) ステージ B/A と PQ を比較します。テレメトリ フック (`sorafs_orchestrator_policy_events_total`、`sorafs_orchestrator_brownouts_total`、`sorafs_orchestrator_pq_ratio_*`) のアーティファクトが含まれています。
 
-## المتطلبات
+## いいえ
 
-- احدث binary لـ `sorafs_orchestrator` مع capability-weighting (commit عند او بعد مرجع التمرين المعروض في `docs/source/soranet/reports/pq_ratchet_validation.md`).
-- الوصول الى حزمة Prometheus/Grafana التي تخدم `dashboards/grafana/soranet_pq_ratchet.json`.
-- snapshot اسمي للـ guard directory. اجلب وتحقق من نسخة قبل التمرين:
+- バイナリ `sorafs_orchestrator` 機能重み付け (コミット `docs/source/soranet/reports/pq_ratchet_validation.md`)。
+- Prometheus/Grafana または `dashboards/grafana/soranet_pq_ratchet.json`。
+- スナップショット ガード ディレクトリ。回答:
 
 ```bash
 sorafs_cli guard-directory fetch \
@@ -34,9 +36,9 @@ sorafs_cli guard-directory fetch \
   --expected-directory-hash <directory-hash-hex>
 ```
 
-اذا كان source directory ينشر JSON فقط، فاعد ترميزه الى Norito binary عبر `soranet-directory build` قبل تشغيل helpers التدوير.
+ソース ディレクトリ JSON と Norito バイナリ `soranet-directory build` ヘルパー。
 
-- التقط metadata وجهز مسبقا artefacts تدوير issuer عبر CLI:
+- メタデータとアーティファクトの発行者と CLI:
 
 ```bash
 soranet-directory inspect \
@@ -47,67 +49,67 @@ soranet-directory rotate \
   --keys-out ./artefacts/guard_issuer_rotation --overwrite
 ```
 
-- نافذة تغيير معتمدة من فرق on-call الخاصة بالشبكات والمراقبة.
+- オンコール対応中です。
 
-## خطوات الترقية
+## 認証済み
 
-1. **تدقيق المرحلة**
+1. **評価**
 
-   سجل المرحلة الابتدائية:
+   回答:
 
    ```bash
    sorafs_cli config get --config orchestrator.json sorafs.anonymity_policy
    ```
 
-   توقع `anon-guard-pq` قبل الترقية.
+   `anon-guard-pq` を確認してください。
 
-2. **الترقية الى Stage B (Majority PQ)**
+2. **ステージ B (多数決 PQ)**
 
    ```bash
    sorafs_cli config set --config orchestrator.json \
      sorafs.anonymity_policy anon-majority-pq
    ```
 
-   - انتظر >=5 دقائق حتى تتجدد manifests.
-   - في Grafana (لوحة `SoraNet PQ Ratchet Drill`) اكد ان لوحة "Policy Events" تعرض `outcome=met` للـ `stage=anon-majority-pq`.
-   - التقط لقطة شاشة او JSON للوحة وارفقها بسجل الحوادث.
+   - انتظر >=5 دقائق حتى تتجدد が明示されます。
+   - Grafana (`SoraNet PQ Ratchet Drill`) 「ポリシー イベント」 `outcome=met` `stage=anon-majority-pq`。
+   - JSON 形式のファイル。
 
-3. **الترقية الى Stage C (Strict PQ)**
+3. **ステージ C (厳密な PQ)**
 
    ```bash
    sorafs_cli config set --config orchestrator.json \
      sorafs.anonymity_policy anon-strict-pq
    ```
 
-   - تحقق ان مخططات `sorafs_orchestrator_pq_ratio_*` تتجه الى 1.0.
-   - تاكد ان عداد brownout يبقى ثابتا؛ خلاف ذلك اتبع خطوات الخفض.
+   - `sorafs_orchestrator_pq_ratio_*` 1.0 をインストールします。
+   - ブラウンアウト يبقى ثابتا؛ありがとうございます。
 
-## تمرين الخفض / brownout
+## アーティスト / ブラウンアウト
 
 1. **احداث نقص PQ اصطناعي**
 
-   عطل relays PQ في بيئة playground بتقليم guard directory الى entries كلاسيكية فقط، ثم اعد تحميل cache الخاص بالـ orchestrator:
+   リレー PQ プレイグラウンド ガード ディレクトリ エントリー エントリ セキュリティ キャッシュ オーケストレータ:
 
    ```bash
    sorafs_cli guard-cache prune --config orchestrator.json --keep-classical-only
    ```
 
-2. **مراقبة telemetry الخاصة بـ brownout**
+2. **テレメトリによる電圧低下**
 
-   - Dashboard: لوحة "Brownout Rate" ترتفع فوق 0.
+   - ダッシュボード:「停電率」0。
    - PromQL: `sum(rate(sorafs_orchestrator_brownouts_total{region="$region"}[5m]))`
-   - يجب ان يبلغ `sorafs_fetch` عن `anonymity_outcome="brownout"` مع `anonymity_reason="missing_majority_pq"`.
+   - `sorafs_fetch`、`anonymity_outcome="brownout"`、`anonymity_reason="missing_majority_pq"`。
 
-3. **الخفض الى Stage B / Stage A**
+3. **ステージB / ステージA**
 
    ```bash
    sorafs_cli config set --config orchestrator.json \
      sorafs.anonymity_policy anon-majority-pq
    ```
 
-   اذا بقيت امدادات PQ غير كافية، اخفض الى `anon-guard-pq`. ينتهي التمرين عند استقرار عدادات brownout ويمكن اعادة الترقية.
+   世界は、PQ は、`anon-guard-pq` です。ブラウンアウト、ブラウンアウト。
 
-4. **استعادة guard directory**
+4. **ガードディレクトリ**
 
    ```bash
    sorafs_cli guard-directory import \
@@ -115,14 +117,14 @@ soranet-directory rotate \
      --input ./artefacts/guard_directory_pre_drill.json
    ```
 
-## Telemetry و artefacts
+## テレメトリーとアーティファクト
 
-- **Dashboard:** `dashboards/grafana/soranet_pq_ratchet.json`
-- **تنبيهات Prometheus:** تاكد من ان تنبيه brownout لـ `sorafs_orchestrator_policy_events_total` يبقى دون SLO المعتمد (&lt;5% ضمن اي نافذة 10 دقائق).
-- **Incident log:** ارفق مقتطفات telemetry وملاحظات المشغل الى `docs/examples/soranet_pq_ratchet_fire_drill.log`.
-- **التقاط موقع:** استخدم `cargo xtask soranet-rollout-capture` لنسخ drill log ولوحة النتائج الى `artifacts/soranet_pq_rollout/<timestamp>/`، وحساب BLAKE3 digests، وانتاج `rollout_capture.json` موقع.
+- **ダッシュボード:** `dashboards/grafana/soranet_pq_ratchet.json`
+- **تنبيهات Prometheus:** تاكد من تنبيه ブラウンアウト لـ `sorafs_orchestrator_policy_events_total` يبقى دون SLO المعتمد (<5% ضمن اي نافذة 10 月）。
+- **インシデント ログ:** テレメトリ メッセージ `docs/examples/soranet_pq_ratchet_fire_drill.log`。
+- ** 評価:** 評価 `cargo xtask soranet-rollout-capture` ドリル ログ 評価 `artifacts/soranet_pq_rollout/<timestamp>/` 評価 BLAKE3 ダイジェスト`rollout_capture.json` 。
 
-مثال:
+意味:
 
 ```
 cargo xtask soranet-rollout-capture \
@@ -134,12 +136,12 @@ cargo xtask soranet-rollout-capture \
   --label "drill-2026-02-21"
 ```
 
-ارفق البيانات المولدة والتوقيع بحزمة governance.
+ガバナンスを強化します。
 
-## Rollback
+## ロールバック
 
-اذا كشف التمرين عن نقص PQ حقيقي، ابق على Stage A، اخطر Networking TL، وارفق المقاييس المجمعة مع فروقات guard directory الى متتبع الحوادث. استخدم تصدير guard directory الذي تم التقاطه سابقا لاستعادة الخدمة الطبيعية.
+管理者 PQ 管理者 ステージ A 管理者 ネットワーキング TL 管理者 管理者ディレクトリ 管理者ディレクトリありがとうございます。ガード ディレクトリを確認してください。
 
-:::tip تغطية الانحدار
-`cargo test -p sorafs_orchestrator pq_ratchet_fire_drill_records_metrics` يوفر التحقق الاصطناعي الذي يدعم هذا التمرين.
+:::ヒント
+`cargo test -p sorafs_orchestrator pq_ratchet_fire_drill_records_metrics` يوفر التحقق الاصطناعي الذي يدعم هذا التمرين。
 :::

@@ -11,19 +11,20 @@ id: node-operations
 title: Node Operations Runbook
 sidebar_label: Node Operations Runbook
 description: Validate the embedded `sorafs-node` deployment inside Torii.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
-Mirrors `docs/source/sorafs/runbooks/sorafs_node_ops.md`. Keep both copies aligned across releases.
+::: Canonical Source ကို သတိပြုပါ။
+မှန်ချပ်များ `docs/source/sorafs/runbooks/sorafs_node_ops.md`။ ထုတ်ဝေမှုများတစ်လျှောက် မိတ္တူနှစ်ခုလုံးကို ချိန်ညှိထားပါ။
 :::
 
-## Overview
+## ခြုံငုံသုံးသပ်ချက်
 
-This runbook walks operators through validating an embedded `sorafs-node` deployment inside Torii. Each section maps directly to the SF-3 deliverables: pin/fetch round trips, restart recovery, quota rejection, and PoR sampling.
+ဤ runbook သည် Torii အတွင်း ထည့်သွင်းထားသော `sorafs-node` ကို အတည်ပြုခြင်းဖြင့် အော်ပရေတာများကို လမ်းလျှောက်ပေးပါသည်။ အပိုင်းတစ်ခုစီသည် SF-3 ပေးပို့နိုင်သည့်အရာများထံ တိုက်ရိုက်မြေပုံပြသည်- pin/fetch round trips၊ recovery ပြန်လည်စတင်ခြင်း၊ quota rejection နှင့် PoR နမူနာယူခြင်း။
 
-## 1. Prerequisites
+## 1. ကြိုတင်လိုအပ်ချက်များ
 
-- Enable the storage worker in `torii.sorafs.storage`:
+- `torii.sorafs.storage` တွင် သိုလှောင်မှုဝန်ထမ်းကို ဖွင့်ပါ-
 
   ```toml
   [torii.sorafs.storage]
@@ -41,13 +42,13 @@ This runbook walks operators through validating an embedded `sorafs-node` deploy
   por_success_alpha = 0.25
   ```
 
-- Ensure the Torii process has read/write access to `data_dir`.
-- Confirm the node advertises the expected capacity via `GET /v1/sorafs/capacity/state` once a declaration is recorded.
-- When smoothing is enabled, dashboards expose both the raw and smoothed GiB·hour/PoR counters to highlight jitter-free trends alongside spot values.
+- Torii လုပ်ငန်းစဉ်သည် `data_dir` သို့ ဖတ်ရှု/ရေးနိုင်ခွင့်ရှိကြောင်း သေချာပါစေ။
+- ကြေငြာချက်တစ်ခုမှတ်တမ်းတင်သည်နှင့်တစ်ပြိုင်နက် node သည်မျှော်လင့်ထားသောစွမ်းရည်ကို `GET /v1/sorafs/capacity/state` မှတစ်ဆင့်ကြေငြာကြောင်းအတည်ပြုပါ။
+- ချောမွေ့မှုကို ဖွင့်ထားသောအခါ၊ ဒက်ရှ်ဘုတ်များသည် အကြမ်းထည်နှင့် ချောမွေ့သော GiB·hour/PoR ကောင်တာများကို အစက်အပြောက်တန်ဖိုးများနှင့်အတူ တုန်လှုပ်မှုမရှိသော ခေတ်ရေစီးကြောင်းများကို မီးမောင်းထိုးပြရန် ထုတ်ဖော်ပြသသည်။
 
-### CLI Dry Run (Optional)
+### CLI Dry Run (ချန်လှပ်ထားနိုင်သည်)
 
-Before exposing HTTP endpoints you can sanity-check the storage backend with the bundled CLI.【crates/sorafs_node/src/bin/sorafs-node.rs#L1】
+HTTP အဆုံးမှတ်များကို ထုတ်ဖော်ခြင်းမပြုမီ စုစည်းထားသော CLI ဖြင့် သိုလှောင်မှုနောက်ကွယ်ကို သေချာစစ်ဆေးနိုင်ပါသည်။ 【crates/sorafs_node/src/bin/sorafs-node.rs#L1】
 
 ```bash
 cargo run -p sorafs_node --bin sorafs-node ingest \
@@ -62,21 +63,21 @@ cargo run -p sorafs_node --bin sorafs-node export \
   --payload-out ./out/payload.bin
 ```
 
-The commands print Norito JSON summaries and refuse chunk-profile or digest mismatches, making them useful for CI smoke checks ahead of Torii wiring.【crates/sorafs_node/tests/cli.rs#L1】
+ညွှန်ကြားချက်များသည် Norito JSON အနှစ်ချုပ်များကို print ထုတ်ပြီး အတုံးအခဲများ ပရိုဖိုင်း သို့မဟုတ် မကိုက်ညီမှုများကို ချေဖျက်ရန် ငြင်းဆိုခြင်းဖြင့် ၎င်းတို့သည် Torii ဝိုင်ယာကြိုးများမတိုင်မီ CI မီးခိုးစစ်ဆေးမှုများအတွက် အသုံးဝင်စေပါသည်။【crates/sorafs_node/tests/cli.rs#L1】
 
-Once Torii is live you can retrieve the same artefacts via HTTP:
+Torii ကို တိုက်ရိုက်လွှင့်ပြီးသည်နှင့် HTTP မှတစ်ဆင့် အလားတူပစ္စည်းများကို သင်ရယူနိုင်သည်-
 
 ```bash
 curl -s http://$TORII/v1/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
 curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
 ```
 
-Both endpoints are served by the embedded storage worker, so CLI smoke tests and gateway probes stay in sync.【crates/iroha_torii/src/sorafs/api.rs#L1207】【crates/iroha_torii/src/sorafs/api.rs#L1259】
+အဆုံးမှတ်နှစ်ခုလုံးကို မြှုပ်ထားသည့် သိုလှောင်မှုဝန်ထမ်းက ဆောင်ရွက်ပေးသည်၊ ထို့ကြောင့် CLI မီးခိုးစမ်းသပ်မှုများနှင့် ဂိတ်ဝေးစုံစမ်းစစ်ဆေးမှုများသည် တစ်ပြိုင်တည်းရှိနေပါသည်။【crates/iroha_torii/src/sorafs/api.rs#L1207】【crates/iroha_torii/src/sorafs/api.rs#L1259】
 
-## 2. Pin → Fetch Round Trip
+## 2. Pin → အသွားအပြန်ခရီးကို ရယူပါ။
 
-1. Produce a manifest + payload bundle (for example with `iroha app sorafs toolkit pack ./payload.bin --manifest-out manifest.to --car-out payload.car --json-out manifest_report.json`).
-2. Submit the manifest with base64 encoding:
+1. manifest + payload bundle (ဥပမာ `iroha app sorafs toolkit pack ./payload.bin --manifest-out manifest.to --car-out payload.car --json-out manifest_report.json`) ကို ထုတ်လုပ်ပါ။
+2. base64 ကုဒ်ဖြင့် မန်နီးဖက်စ်ကို တင်ပြပါ-
 
    ```bash
    curl -X POST http://$TORII/v1/sorafs/storage/pin \
@@ -84,8 +85,8 @@ Both endpoints are served by the embedded storage worker, so CLI smoke tests and
      -d @pin_request.json
    ```
 
-   The request JSON must contain `manifest_b64` and `payload_b64`. A successful response returns `manifest_id_hex` and the payload digest.
-3. Fetch the pinned data:
+   တောင်းဆိုချက် JSON တွင် `manifest_b64` နှင့် `payload_b64` ပါဝင်ရပါမည်။ အောင်မြင်သောတုံ့ပြန်မှုသည် `manifest_id_hex` နှင့် payload digest ကို ပြန်ပေးသည်။
+3. ပင်ထိုးထားသောဒေတာကို ရယူပါ-
 
    ```bash
    curl -X POST http://$TORII/v1/sorafs/storage/fetch \
@@ -97,26 +98,26 @@ Both endpoints are served by the embedded storage worker, so CLI smoke tests and
      }'
    ```
 
-   Base64-decode the `data_b64` field and verify it matches the original bytes.
+   Base64- `data_b64` အကွက်ကို ကုဒ်ဝှက်ပြီး မူရင်းဘိုက်များနှင့် ကိုက်ညီကြောင်း အတည်ပြုပါ။
 
-## 3. Restart Recovery Drill
+## 3. Recovery Drill ကို ပြန်လည်စတင်ပါ။
 
-1. Pin at least one manifest as above.
-2. Restart the Torii process (or the entire node).
-3. Re-submit the fetch request. The payload must still be retrievable and the returned digest must match the pre-restart value.
-4. Inspect `GET /v1/sorafs/storage/state` to confirm `bytes_used` reflects the persisted manifests after the reboot.
+1. အထက်ဖော်ပြပါအတိုင်း အနည်းဆုံး manifest တစ်ခုကို ပင်ထိုးပါ။
+2. Torii လုပ်ငန်းစဉ် (သို့မဟုတ် node တစ်ခုလုံး) ကို ပြန်လည်စတင်ပါ။
+3. ထုတ်ယူမှုတောင်းဆိုချက်ကို ပြန်လည်တင်ပြပါ။ ပေးဆောင်မှုအား ပြန်လည်ထုတ်ယူနိုင်ဆဲဖြစ်ရမည်ဖြစ်ပြီး ပြန်ပေးသည့်အညွှန်းသည် ကြိုတင်ပြန်လည်စတင်သည့်တန်ဖိုးနှင့် ကိုက်ညီရပါမည်။
+4. ပြန်လည်စတင်ပြီးနောက် ဆက်ရှိနေသော သရုပ်များကို ထင်ဟပ်စေသည့် `bytes_used` ကို အတည်ပြုရန် `GET /v1/sorafs/storage/state` ကို စစ်ဆေးပါ။
 
 ## 4. Quota Rejection Test
 
-1. Temporarily lower `torii.sorafs.storage.max_capacity_bytes` to a small value (for example the size of a single manifest).
-2. Pin one manifest; the request should succeed.
-3. Attempt to pin a second manifest of similar size. Torii must reject the request with HTTP `400` and an error message containing `storage capacity exceeded`.
-4. Restore the normal capacity limit when finished.
+1. `torii.sorafs.storage.max_capacity_bytes` ကို သေးငယ်သော တန်ဖိုးတစ်ခု (ဥပမာ မန်နီးဖက်စ်တစ်ခု၏ အရွယ်အစား) သို့ ယာယီလျှော့ချပါ။
+2. one manifest ကို ပင်ထိုးပါ။ တောင်းဆိုမှုအောင်မြင်ရမည်။
+3. အလားတူအရွယ်အစားရှိသော ဒုတိယဖော်ပြချက်ကို ပင်ထိုးရန်ကြိုးစားပါ။ Torii သည် HTTP `400` နှင့် `storage capacity exceeded` ပါဝင်သော အမှားအယွင်းမက်ဆေ့ဂျ်ဖြင့် တောင်းဆိုချက်ကို ငြင်းပယ်ရပါမည်။
+4. ပြီးသွားသောအခါတွင် ပုံမှန်စွမ်းရည်ကန့်သတ်ချက်ကို ပြန်လည်ရယူပါ။
 
 ## 5. PoR Sampling Probe
 
-1. Pin a manifest.
-2. Request a PoR sample:
+1. မန်နီးဖက်စ်တစ်ခုကို ပင်ထိုးပါ။
+2. PoR နမူနာကို တောင်းဆိုပါ-
 
    ```bash
    curl -X POST http://$TORII/v1/sorafs/storage/por-sample \
@@ -128,21 +129,19 @@ Both endpoints are served by the embedded storage worker, so CLI smoke tests and
      }'
    ```
 
-3. Verify the response contains `samples` with the requested count and that each proof validates against the stored manifest root.
+3. တုံ့ပြန်ချက်တွင် တောင်းဆိုထားသော အရေအတွက်နှင့်အတူ `samples` ပါဝင်ကြောင်း အတည်ပြုပြီး အထောက်အထားတစ်ခုစီသည် သိမ်းဆည်းထားသော manifest အမြစ်နှင့် ဆန့်ကျင်ဘက်ဖြစ်ကြောင်း အတည်ပြုသည်။
 
-## 6. Automation Hooks
+## 6. Automation ချိတ်များ
 
-- CI / smoke tests can reuse the targeted checks added in:
+- CI / မီးခိုးစမ်းသပ်မှုများတွင် ထည့်သွင်းထားသော ပစ်မှတ်ထားသော စစ်ဆေးမှုများကို ပြန်လည်အသုံးပြုနိုင်သည်-
 
   ```bash
   cargo test -p sorafs_node --test pin_workflows
-  ```
-
-  which covers `pin_fetch_roundtrip`, `pin_survives_restart`, `pin_quota_rejection`, and `por_sampling_returns_verified_proofs`.
-- Dashboards should track:
+  ````pin_fetch_roundtrip`၊ `pin_survives_restart`၊ `pin_quota_rejection` နှင့် `por_sampling_returns_verified_proofs` တို့ ပါဝင်ပါသည်။
+- ဒက်ရှ်ဘုတ်များသည် ခြေရာခံသင့်သည်-
   - `torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
-  - `torii_sorafs_storage_pin_queue_depth` and `torii_sorafs_storage_fetch_inflight`
-  - PoR success/failure counters surfaced via `/v1/sorafs/capacity/state`
-  - Settlement publish attempts via `sorafs_node_deal_publish_total{result=success|failure}`
+  - `torii_sorafs_storage_pin_queue_depth` နှင့် `torii_sorafs_storage_fetch_inflight`
+  - `/v1/sorafs/capacity/state` မှတစ်ဆင့် PoR အောင်မြင်မှု/ကျရှုံးမှုကောင်တာများ ပေါ်လာသည်။
+  - `sorafs_node_deal_publish_total{result=success|failure}` မှတစ်ဆင့် ဖြေရှင်းရန် ကြိုးစားမှုများ ထုတ်ဝေခြင်း။
 
-Following these drills ensures the embedded storage worker can ingest data, survive restarts, respect configured quotas, and generate deterministic PoR proofs before the node advertises capacity to the wider network.
+ဤလေ့ကျင့်ခန်းများကို လိုက်နာခြင်းဖြင့် မြှပ်နှံထားသော သိုလှောင်မှုလုပ်သားသည် ဒေတာထည့်သွင်းနိုင်ခြင်း၊ ပြန်လည်စတင်ခြင်းများကို ရှင်သန်နိုင်စေခြင်း၊ ပြင်ဆင်သတ်မှတ်ထားသော ခွဲတမ်းများကို လေးစားလိုက်နာနိုင်ပြီး node သည် ပိုမိုကျယ်ပြန့်သောကွန်ရက်သို့ စွမ်းရည်မကြော်ငြာမီ တိကျသေချာသော PoR အထောက်အထားများကို ထုတ်လုပ်နိုင်မည်ဖြစ်သည်။

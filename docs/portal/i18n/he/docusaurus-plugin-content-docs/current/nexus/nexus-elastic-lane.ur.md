@@ -4,29 +4,31 @@ direction: rtl
 source: docs/portal/docs/nexus/nexus-elastic-lane.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: nexus-elastic-lane
+מזהה: nexus-elastic-lane
 title: لچکدار lane پروویژنگ (NX-7)
 sidebar_label: لچکدار lane پروویژنگ
 description: Nexus lane manifests، catalog entries، اور rollout evidence بنانے کے لئے bootstrap ورک فلو۔
 ---
 
-:::note Canonical Source
+:::הערה מקור קנוני
 یہ صفحہ `docs/source/nexus_elastic_lane.md` کی عکاسی کرتا ہے۔ جب تک ترجمہ پورٹل تک نہیں پہنچتا، دونوں کاپیوں کو aligned رکھیں۔
 :::
 
 # لچکدار lane پروویژنگ ٹول کٹ (NX-7)
 
 > **Roadmap item:** NX-7 - لچکدار lane پروویژنگ tooling  
-> **Status:** tooling مکمل - manifests، catalog snippets، Norito payloads، smoke tests بناتا ہے،
+> **סטטוס:** כלי עבודה - מניפסטים, קטעי קטלוג, עומסי Norito, בדיקות עשן
 > اور load-test bundle helper اب slot latency gating + evidence manifests کو جوڑتا ہے تاکہ validators کے load runs
 > بغیر مخصوص scripting کے شائع کیے جا سکیں۔
 
-یہ گائیڈ operators کو نئے `scripts/nexus_lane_bootstrap.sh` helper کے ذریعے لے جاتی ہے جو lane manifest generation، lane/dataspace catalog snippets، اور rollout evidence کو خودکار بناتا ہے۔ مقصد یہ ہے کہ نئی Nexus lanes (public یا private) متعدد فائلیں دستی طور پر edit کیے بغیر اور catalog geometry دوبارہ ہاتھ سے derive کیے بغیر آسانی سے بنائی جا سکیں۔
+אופרטורים של `scripts/nexus_lane_bootstrap.sh` מסייעים ב-2000 מערכות מידע על יצירת מניפסטים של נתיבים, קטעי קטלוג של נתיבים/מרחב נתונים, והפצת קטלוגים, עדויות بناتا ہے۔ مقصد یہ ہے کہ نئی Nexus lanes (public یا private) متعدد فائلیں دستی طور پر edit کیے بغیر اور catalog geometry دوبارہ ہاتھ سے derive کیے بغیر آسانی سے بنائی جا سکیں۔
 
-## 1. Prerequisites
+## 1. דרישות מוקדמות
 
 1. lane alias، dataspace، validator set، fault tolerance (`f`)، اور settlement policy کے لئے governance approval۔
 2. validators کی حتمی فہرست (account IDs) اور protected namespaces کی فہرست۔
@@ -34,9 +36,9 @@ description: Nexus lane manifests، catalog entries، اور rollout evidence ب
 4. lane manifest registry کے لئے paths (دیکھیں `nexus.registry.manifest_directory` اور `cache_directory`).
 5. lane کے لئے telemetry contacts/PagerDuty handles تاکہ alerts lane کے online ہوتے ہی wired ہو سکیں۔
 
-## 2. lane artefacts بنائیں
+## 2. חפצי אמנות בנתיב
 
-repository root سے helper چلائیں:
+שורש המאגר של עוזר:
 
 ```bash
 scripts/nexus_lane_bootstrap.sh \
@@ -58,19 +60,17 @@ scripts/nexus_lane_bootstrap.sh \
   --output-dir artifacts/nexus/payments_lane
 ```
 
-Key flags:
+דגלי מפתח:
 
 - `--lane-id` کو `nexus.lane_catalog` میں نئے entry کے index سے match ہونا چاہیے۔
-- `--dataspace-alias` اور `--dataspace-id/hash` dataspace catalog entry کو control کرتے ہیں (omit ہونے پر default lane id استعمال ہوتا ہے).
+- `--dataspace-alias` או `--dataspace-id/hash` הזנת קטלוג של מרחב נתונים ובקרת הגדרות (השמטת מזהה מסלול ברירת המחדל של מסלול ברירת מחדל).
 - `--validator` کو repeat کیا جا سکتا ہے یا `--validators-file` سے پڑھا جا سکتا ہے۔
 - `--route-instruction` / `--route-account` ready-to-paste routing rules emit کرتے ہیں۔
 - `--metadata key=value` (یا `--telemetry-contact/channel/runbook`) runbook contacts capture کرتے ہیں تاکہ dashboards درست owners دکھائیں۔
 - `--allow-runtime-upgrades` + `--runtime-upgrade-*` runtime-upgrade hook کو manifest میں شامل کرتے ہیں جب lane کو extended operator controls درکار ہوں۔
-- `--encode-space-directory` خودکار طور پر `cargo xtask space-directory encode` چلاتا ہے۔ `--space-directory-out` کے ساتھ استعمال کریں جب `.to` فائل کو default کے علاوہ کسی اور جگہ رکھنا ہو۔
+- `--encode-space-directory` خودکار طور پر `cargo xtask space-directory encode` چلاتا ہے۔ `--space-directory-out` יש לך את `.to` כברירת מחדל. ü.
 
-اس اسکرپٹ سے `--output-dir` کے اندر تین artefacts بنتے ہیں (default موجودہ directory ہے)، اور encoding فعال ہونے پر ایک چوتھا بھی بنتا ہے:
-
-1. `<slug>.manifest.json` - lane manifest جس میں validator quorum، protected namespaces، اور runtime-upgrade hook metadata شامل ہو سکتا ہے۔
+اس اسکرپٹ سے `--output-dir` کے اندر تین artefacts بنتے ہیں (default موجودہ directory ہے)، اور encoding فعال ہونے پر ایک چوتھا بھی بنتا ہے:1. `<slug>.manifest.json` - lane manifest جس میں validator quorum، protected namespaces، اور runtime-upgrade hook metadata شامل ہو سکتا ہے۔
 2. `<slug>.catalog.toml` - ایک TOML snippet جس میں `[[nexus.lane_catalog]]`, `[[nexus.dataspace_catalog]]`, اور مطلوبہ routing rules ہوتے ہیں۔ dataspace entry میں `fault_tolerance` لازمی طور پر set کریں تاکہ lane-relay committee (`3f+1`) درست سائز ہو۔
 3. `<slug>.summary.json` - audit summary جو geometry (slug, segments, metadata) کے ساتھ required rollout steps اور `cargo xtask space-directory encode` کا exact command ( `space_directory_encode.command` کے تحت) بیان کرتا ہے۔ اسے onboarding ticket کے ساتھ evidence کے طور پر attach کریں۔
 4. `<slug>.manifest.to` - `--encode-space-directory` فعال ہونے پر بنتا ہے؛ Torii کے `iroha app space-directory manifest publish` flow کے لئے ready ہے۔
@@ -98,18 +98,16 @@ scripts/nexus_lane_registry_bundle.sh \
   --bundle-out artifacts/nexus/payments_lane/registry_bundle.tar.gz
 ```
 
-Outputs:
+פלטים:
 
 1. `manifests/<slug>.manifest.json` - انہیں configured `nexus.registry.manifest_directory` میں کاپی کریں۔
-2. `cache/governance_catalog.json` - `nexus.registry.cache_directory` میں رکھیں۔ ہر `--module` entry ایک pluggable module definition بن جاتی ہے، جس سے governance-module swap-outs (NX-2) ممکن ہوتے ہیں اور صرف cache overlay اپ ڈیٹ کرنا پڑتا ہے، `config.toml` میں ترمیم نہیں۔
+2. `cache/governance_catalog.json` - `nexus.registry.cache_directory` ‏ ہر `--module` entry ایک pluggable module definition بن جاتی ہے، جس سے governance-module swap-outs (NX-2) ممکن ہوتے ہیں اور صرف cache overlay اپ ڈیٹ کرنا پڑتا ہے، `config.toml` میں ترمیم نہیں۔
 3. `summary.json` - hashes، overlay metadata، اور operator instructions شامل ہیں۔
 4. Optional `registry_bundle.tar.*` - SCP، S3، یا artifact trackers کے لئے ready۔
 
-مکمل directory (یا archive) کو ہر validator تک sync کریں، air-gapped hosts پر extract کریں، اور Torii restart سے پہلے manifests + cache overlay کو ان کی registry paths میں کاپی کریں۔
+مکمل directory (یا archive) کو ہر validator تک sync کریں، air-gapped hosts پر extract کریں، اور Torii restart سے پہلے manifests + cache overlay کو ان کی נתיבי רישום
 
-## 5. Validator smoke tests
-
-Torii restart کے بعد نیا smoke helper چلائیں تاکہ lane `manifest_ready=true` رپورٹ کرے، metrics میں expected lane count نظر آئے، اور sealed gauge صاف ہو۔ جن lanes کو manifests درکار ہوں انہیں non-empty `manifest_path` ظاہر کرنا چاہیے؛ helper اب path غائب ہونے پر فوراً fail ہوتا ہے تاکہ ہر NX-7 deployment میں signed manifest evidence شامل ہو:
+## 5. בדיקות עשן אימותTorii restart کے بعد نیا smoke helper چلائیں تاکہ lane `manifest_ready=true` رپورٹ کرے، metrics میں expected lane count نظر آئے، اور sealed gauge صاف ہو۔ جن lanes کو manifests درکار ہوں انہیں non-empty `manifest_path` ظاہر کرنا چاہیے؛ helper اب path غائب ہونے پر فوراً fail ہوتا ہے تاکہ ہر NX-7 deployment میں signed manifest evidence شامل ہو:
 
 ```bash
 scripts/nexus_lane_smoke.py \
@@ -132,7 +130,7 @@ scripts/nexus_lane_smoke.py \
   --min-slot-samples 10
 ```
 
-Self-signed environments میں ٹیسٹ کرتے وقت `--insecure` شامل کریں۔ اگر lane غائب ہو، sealed ہو، یا metrics/telemetry expected values سے drift کریں تو script non-zero exit کرتا ہے۔ `--min-block-height`, `--max-finality-lag`, `--max-settlement-backlog`, اور `--max-headroom-events` استعمال کریں تاکہ lane-level block height/finality/backlog/headroom telemetery آپ کے operational envelope میں رہے، اور `--max-slot-p95` / `--max-slot-p99` (ساتھ `--min-slot-samples`) کے ساتھ ملا کر NX-18 slot-duration targets helper کے اندر ہی enforce کریں۔
+Self-signed environments میں ٹیسٹ کرتے وقت `--insecure` شامل کریں۔ اگر lane غائب ہو، sealed ہو، یا metrics/telemetry expected values ​​سے drift کریں تو script non-zero exit کرتا ہے۔ `--min-block-height`, `--max-finality-lag`, `--max-settlement-backlog`, אוור `--max-headroom-events` אויר הפעלה בלוק ברמת נתיב גובה/חדר גב/סופיות של בלוק בלוק/גבוה ראשי envelope میں رہے، اور `--max-slot-p95` / `--max-slot-p99` (ساتھ `--min-slot-samples`) کے ساتھ ملا کر NX-18 slot-duration targets helper کے اندر ہی enforce کریں۔
 
 Air-gapped validations (یا CI) کے لئے آپ live endpoint پر جانے کے بجائے captured Torii response replay کر سکتے ہیں:
 

@@ -4,131 +4,125 @@ direction: rtl
 source: docs/portal/docs/sorafs/operations-playbook.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: operations-playbook
-title: Playbook de operaciones de SoraFS
-sidebar_label: Playbook de operaciones
-description: Guias de respuesta a incidentes y procedimientos de drills de caos para operadores de SoraFS.
+المعرف: قواعد اللعبة التي تمارسها العمليات
+العنوان: Playbook de Operations de SoraFS
+Sidebar_label: دليل العمليات
+الوصف: تعليمات الاستجابة للحوادث وإجراءات تدريبات المساعدة لمشغلي SoraFS.
 ---
 
-:::note Fuente canónica
-Esta página refleja el runbook mantenido en `docs/source/sorafs_ops_playbook.md`. Mantén ambas copias sincronizadas hasta que el conjunto de documentación Sphinx se migre por completo.
+:::ملاحظة فوينتي كانونيكا
+تعكس هذه الصفحة دليل التشغيل المحتفظ به في `docs/source/sorafs_ops_playbook.md`. حافظ على النسخ المتزامنة حتى يتم نقل مجموعة وثائق أبو الهول بالكامل.
 :::
 
-## Referencias clave
+##المراجع المفتاح
 
-- Activos de observabilidad: consulta los dashboards de Grafana en `dashboards/grafana/` y las reglas de alerta de Prometheus en `dashboards/alerts/`.
-- Catálogo de métricas: `docs/source/sorafs_observability_plan.md`.
-- Superficies de telemetría del orquestador: `docs/source/sorafs_orchestrator_plan.md`.
+- أنشطة المراقبة: راجع لوحات المعلومات Grafana و`dashboards/grafana/` وقواعد التنبيه Prometheus و`dashboards/alerts/`.
+- كتالوج المقاييس: `docs/source/sorafs_observability_plan.md`.
+- سطوح القياس عن بعد لجهاز orquestador: `docs/source/sorafs_orchestrator_plan.md`.
 
-## Matriz de escalamiento
+## ماتريز دي escalamiento| الأولوية | أمثلة على الضياع | مدير تحت الطلب | النسخ الاحتياطي | نوتاس |
+|----------|-------------------------------------|--|--------|-------|
+| ص1 | إجمالي البوابة العالمية، معدل السقوط > 5% (15 دقيقة)، تراكم النسخ المتماثلة كل 10 دقائق | تخزين SRE | إمكانية الملاحظة TL | قم بإدراج نصيحة الحكومة إذا كان التأثير فائقًا لمدة 30 دقيقة. |
+| ص2 | توفير SLO لوقت الاستجابة الإقليمي للبوابة، وهو جزء من عمليات الاحتفاظ بالأداة بدون تأثير SLA | إمكانية الملاحظة TL | تخزين SRE | مواصلة الطرح حتى يظهر حظر جديد. |
+| ص3 | تنبيهات بشأن عدم وجود انتقادات (عدم صلاحية البيانات، السعة 80-90%) | فرز المدخول | نقابة العمليات | الحل التالي هو الحل. |
 
-| Prioridad | Ejemplos de disparo | On-call principal | Backup | Notas |
-|----------|---------------------|------------------|--------|-------|
-| P1 | Caída global del gateway, tasa de fallos PoR > 5% (15 min), backlog de replicación duplicándose cada 10 min | Storage SRE | Observability TL | Involucra al consejo de gobernanza si el impacto supera 30 min. |
-| P2 | Incumplimiento de SLO de latencia regional del gateway, pico de reintentos del orquestador sin impacto de SLA | Observability TL | Storage SRE | Continúa el rollout pero bloquea nuevos manifests. |
-| P3 | Alertas no críticas (staleness de manifests, capacidad 80–90%) | Triage de intake | Ops guild | Resolver en el siguiente día hábil. |
+## صندوق البوابة / تدهور القدرة على التوفر
 
-## Caída del gateway / disponibilidad degradada
+**الكشف**
 
-**Detección**
+- التنبيهات: `SoraFSGatewayAvailabilityDrop`، `SoraFSGatewayLatencySlo`.
+- لوحة القيادة: `dashboards/grafana/sorafs_gateway_overview.json`.
 
-- Alertas: `SoraFSGatewayAvailabilityDrop`, `SoraFSGatewayLatencySlo`.
-- Dashboard: `dashboards/grafana/sorafs_gateway_overview.json`.
+**الإجراءات الوسيطة**
 
-**Acciones inmediatas**
+1. قم بتأكيد الرصيد (المزود الوحيد مقابل الأسطول) عبر لوحة طلبات المساعدة.
+2. قم بتغيير إدخال Torii إلى موردين بلا موردين (إذا كان مزودًا متعددًا) وقم بتنشيط `sorafs_gateway_route_weights` في تكوين العمليات (`docs/source/sorafs_gateway_self_cert.md`).
+3. إذا كان جميع الموردين متأثرين، فيمكنهم استخدام خيار "الجلب المباشر" الاحتياطي لعملاء CLI/SDK (`docs/source/sorafs_node_client_protocol.md`).
 
-1. Confirma el alcance (proveedor único vs flota) vía el panel de tasa de solicitudes.
-2. Cambia el enrutamiento de Torii a proveedores sanos (si es multi-proveedor) activando `sorafs_gateway_route_weights` en la config de ops (`docs/source/sorafs_gateway_self_cert.md`).
-3. Si todos los proveedores están afectados, habilita el fallback de “direct fetch” para clientes CLI/SDK (`docs/source/sorafs_node_client_protocol.md`).
+**الفرز**- قم بمراجعة استخدام رمز الدفق الأمامي إلى `sorafs_gateway_stream_token_limit`.
+- فحص سجلات البوابة بحثًا عن أخطاء TLS أو الدخول.
+- قم بتشغيل `scripts/telemetry/run_schema_diff.sh` للتأكد من أن الملف المصدر عبر البوابة يتزامن مع الإصدار المنتظر.
 
-**Triage**
+**خيارات العلاج**
 
-- Revisa la utilización del token de stream frente a `sorafs_gateway_stream_token_limit`.
-- Inspecciona logs del gateway por errores de TLS o de admisión.
-- Ejecuta `scripts/telemetry/run_schema_diff.sh` para asegurar que el esquema exportado por el gateway coincide con la versión esperada.
+- استعادة عملية البوابة الفعالة فقط؛ تجنب إعادة توجيه جميع الصواريخ العنقودية التي سقطت على العديد من الموردين.
+- زيادة الحد الأقصى من الرموز المميزة للبث بنسبة 10-15% بشكل مؤقت في حالة تأكيد التشبع.
+- قم بإعادة إنشاء الشهادة الذاتية (`scripts/sorafs_gateway_self_cert.sh`) من خلال التثبيت.
 
-**Opciones de remediación**
+**ما بعد الحادث**
 
-- Reinicia solo el proceso de gateway afectado; evita reciclar todo el cluster salvo que fallen varios proveedores.
-- Aumenta el límite de tokens de stream en 10–15% de forma temporal si se confirma saturación.
-- Reejecuta el self-cert (`scripts/sorafs_gateway_self_cert.sh`) tras la estabilización.
+- قم بالتسجيل بعد الوفاة P1 باستخدام `docs/source/sorafs/postmortem_template.md`.
+- قم ببرمجة أداة تهدئة للمتابعة إذا كان العلاج يتطلب تدخلات يدوية.
 
-**Post-incidente**
+## بيكو دي فالوس دي بروباس (PoR / PoTR)
 
-- Registra un postmortem P1 usando `docs/source/sorafs/postmortem_template.md`.
-- Programa un drill de caos de seguimiento si la remediación requirió intervenciones manuales.
+**الكشف**
 
-## Pico de fallos de pruebas (PoR / PoTR)
+- التنبيهات: `SoraFSProofFailureSpike`، `SoraFSPoTRDeadlineMiss`.
+- لوحة القيادة: `dashboards/grafana/sorafs_proof_integrity.json`.
+- القياس عن بعد: `torii_sorafs_proof_stream_events_total` والأحداث `sorafs.fetch.error` مع `provider_reason=corrupt_proof`.
 
-**Detección**
+**الإجراءات الوسيطة**
 
-- Alertas: `SoraFSProofFailureSpike`, `SoraFSPoTRDeadlineMiss`.
-- Dashboard: `dashboards/grafana/sorafs_proof_integrity.json`.
-- Telemetría: `torii_sorafs_proof_stream_events_total` y eventos `sorafs.fetch.error` con `provider_reason=corrupt_proof`.
+1. قم بإيداع البيانات الجديدة من خلال سجل البيانات (`docs/source/sorafs/manifest_pipeline.md`).
+2. إخطار الحوكمة بإيقاف حوافز الموردين المتأثرين.
 
-**Acciones inmediatas**
+**الفرز**
 
-1. Congela nuevas admisiones de manifests marcando el registro de manifests (`docs/source/sorafs/manifest_pipeline.md`).
-2. Notifica a Governance para pausar incentivos de los proveedores afectados.
+- قم بمراجعة عمق فجوة التحديات أمام `sorafs_node_replication_backlog_total`.
+- التحقق من صحة خط أنابيب الاختبار (`crates/sorafs_node/src/potr.rs`) للإطلاع على أحدث الأخبار.
+- مقارنة إصدارات البرامج الثابتة للموردين مع سجل المشغلين.**خيارات العلاج**
 
-**Triage**
+- قم بإظهار إعادات PoR باستخدام `sorafs_cli proof stream` بالبيان الأحدث.
+- إذا استمرت الاختبارات بشكل متسق، فقم بإزالة مورد المجموعة النشطة من سجل الإدارة واحتفظ بلوحة تسجيل النتائج الخاصة بالـ Orquestador.
 
-- Revisa la profundidad de la cola de desafíos PoR frente a `sorafs_node_replication_backlog_total`.
-- Valida el pipeline de verificación de pruebas (`crates/sorafs_node/src/potr.rs`) para despliegues recientes.
-- Compara versiones de firmware de proveedores con el registro de operadores.
+**ما بعد الحادث**
 
-**Opciones de remediación**
+- قم بتنفيذ سيناريو الحفر قبل نشر الإنتاج التالي.
+- احصل على تدريبات على مصنع ما بعد الوفاة وقم بتحديث قائمة تأهيل الموردين.
 
-- Dispara replays de PoR usando `sorafs_cli proof stream` con el manifest más reciente.
-- Si las pruebas fallan consistentemente, elimina el proveedor del conjunto activo actualizando el registro de gobernanza y forzando el refresco de scoreboards del orquestador.
+## استعادة النسخ المتماثل / زيادة حجم الأعمال المتراكمة
 
-**Post-incidente**
+**الكشف**
 
-- Ejecuta el escenario de drill de caos PoR antes del siguiente deploy a producción.
-- Captura aprendizajes en la plantilla de postmortem y actualiza el checklist de calificación de proveedores.
-
-## Retraso de replicación / crecimiento del backlog
-
-**Detección**
-
-- Alertas: `SoraFSReplicationBacklogGrowing`, `SoraFSCapacityPressure`. Importa
-  `dashboards/alerts/sorafs_capacity_rules.yml` y ejecuta
+- التنبيهات: `SoraFSReplicationBacklogGrowing`، `SoraFSCapacityPressure`. هام
+  `dashboards/alerts/sorafs_capacity_rules.yml` وقم بالتشغيل
   `promtool test rules dashboards/alerts/tests/sorafs_capacity_rules.test.yml`
-  antes de la promoción para que Alertmanager refleje los umbrales documentados.
-- Dashboard: `dashboards/grafana/sorafs_capacity_health.json`.
-- Métricas: `sorafs_node_replication_backlog_total`, `sorafs_node_manifest_refresh_age_seconds`.
+  قبل الترويج لكي يعرض Alertmanager المظلات الموثقة.
+- لوحة القيادة: `dashboards/grafana/sorafs_capacity_health.json`.
+- المقاييس: `sorafs_node_replication_backlog_total`، `sorafs_node_manifest_refresh_age_seconds`.
 
-**Acciones inmediatas**
+**الإجراءات الوسيطة**
 
-1. Verifica el alcance del backlog (proveedor único o flota) y pausa tareas de replicación no esenciales.
-2. Si el backlog es aislado, reasigna temporalmente nuevos pedidos a proveedores alternos mediante el scheduler de replicación.
+1. التحقق من رصيد الأعمال المتراكمة (المزود الوحيد للأسطول) وإيقاف فترات النسخ غير الضرورية.
+2. إذا تم تأجيل التراكم، قم بإعادة تصميم الطلبات الجديدة مؤقتًا إلى موردين بديلين من خلال جدولة النسخ المتماثل.
 
-**Triage**
+**الفرز**
 
-- Inspecciona la telemetría del orquestador por ráfagas de reintentos que puedan escalar el backlog.
-- Confirma que los targets de almacenamiento tienen suficiente headroom (`sorafs_node_capacity_utilisation_percent`).
-- Revisa cambios recientes de configuración (actualizaciones de perfiles de chunk, cadencia de proofs).
+- فحص جهاز القياس عن بعد من خلال عمليات إعادة التدوير التي يمكن من خلالها تصعيد الأعمال المتراكمة.
+- تأكد من أن أهداف التخزين بها مساحة كافية للرأس (`sorafs_node_capacity_utilisation_percent`).
+- مراجعة أحدث تغييرات التكوين (تحديث ملفات تعريف القطعة، وتسلسل الأدلة).**خيارات العلاج**
 
-**Opciones de remediación**
+- قم بتشغيل `sorafs_cli` باستخدام الخيار `--rebalance` لإعادة توزيع المحتوى.
+- قم برفع عمال النسخ أفقيًا للمورد المتأثر.
+- قم بإلغاء تحديث البيانات لإعادة ضبط النوافذ TTL.
 
-- Ejecuta `sorafs_cli` con la opción `--rebalance` para redistribuir contenido.
-- Escala horizontalmente los workers de replicación para el proveedor afectado.
-- Dispara un refresh de manifests para realinear las ventanas TTL.
+**ما بعد الحادث**
 
-**Post-incidente**
+- برنامج تدريبات القدرة المعززة بالسقوط من خلال تشبع الموردين.
+- تحديث وثائق النسخ المتماثل SLA على `docs/source/sorafs_node_client_protocol.md`.
 
-- Programa un drill de capacidad enfocado en fallos por saturación de proveedores.
-- Actualiza la documentación de SLA de replicación en `docs/source/sorafs_node_client_protocol.md`.
+## إيقاع تدريبات الاسترخاء
 
-## Cadencia de drills de caos
-
-- **Trimestral**: simulación combinada de caída de gateway + tormenta de reintentos del orquestador.
-- **Semestral**: inyección de fallos PoR/PoTR en dos proveedores con recuperación.
-- **Chequeo mensual**: escenario de retraso de replicación usando manifests de staging.
-- Registra los drills en el log compartido (`ops/drill-log.md`) via:
+- **Trimestral**: محاكاة مجمعة لسلسلة البوابة + عذاب استعادة الأوركيستادور.
+- **نصف سنوي**: حقن المغذيات PoR/PoTR لدى الموردين أثناء التعافي.
+- **Checko mensual**: سيناريو إعادة النسخ باستخدام بيانات التدريج.
+- قم بتسجيل التدريبات في السجل المشترك (`ops/drill-log.md`) عبر:
 
   ```bash
   scripts/telemetry/log_sorafs_drill.sh \
@@ -141,15 +135,13 @@ Esta página refleja el runbook mantenido en `docs/source/sorafs_ops_playbook.md
     --link "docs/source/sorafs/postmortem_template.md"
   ```
 
-- Valida el log antes de los commits con:
+- التحقق من صحة السجل قبل ارتكاب الأخطاء:
 
   ```bash
   scripts/telemetry/validate_drill_log.sh
   ```
 
-- Usa `--status scheduled` para drills futuros, `pass`/`fail` para ejecuciones completas, y `follow-up` cuando queden acciones abiertas.
-- Sobrescribe el destino con `--log` para dry-runs o verificación automatizada; sin eso el script sigue actualizando `ops/drill-log.md`.
+- الولايات المتحدة الأمريكية `--status scheduled` للتدريبات المستقبلية، `pass`/`fail` للتنفيذ الكامل، و`follow-up` عندما يتم فتح الإجراءات.
+- قم بكتابة الوجهة باستخدام `--log` لعمليات التشغيل الجافة أو التحقق التلقائي؛ ومع ذلك، يتم تحديث البرنامج النصي `ops/drill-log.md`.
 
-## Plantilla de postmortem
-
-Usa `docs/source/sorafs/postmortem_template.md` para cada incidente P1/P2 y para retrospectivas de drills de caos. La plantilla cubre cronologia, cuantificación de impacto, factores contribuyentes, acciones correctivas y tareas de verificación de seguimiento.
+## نبتة ما بعد الوفاةالولايات المتحدة الأمريكية `docs/source/sorafs/postmortem_template.md` لكل حادثة P1/P2 ولمراجعة تدريبات الاسترخاء. تتضمن المجموعة التسلسل الزمني، وقياس التأثير، والعوامل المساهمة، والإجراءات التصحيحية، وخطط التحقق من المتابعة.

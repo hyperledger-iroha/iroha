@@ -7,14 +7,15 @@ generator: scripts/sync_docs_i18n.py
 source_hash: c5c959bd6654d095d2b3785a02e9c2ec162e699ad985b342760b952e38766a66
 source_last_modified: "2025-12-29T18:16:35.069812+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Data Availability Manifest Governance Packet (Template)
+# ဒေတာရရှိနိုင်မှု မန်နီးဖက်စ် အုပ်ချုပ်မှုပက်ကတ် (ပုံစံ)
 
-Use this template when Parliament panels review DA manifests for subsidies,
-takedowns, or retention changes (roadmap DA-10). Copy the Markdown into the
-governance ticket, fill in the placeholders, and attach the completed file
-alongside the signed Norito payloads and CI artefacts referenced below.
+ထောက်ပံ့ကြေးများအတွက် DA manifests များကို လွှတ်တော်အကန့်များမှ သုံးသပ်သည့်အခါ ဤပုံစံခွက်ကို အသုံးပြုပါ။
+ဖြုတ်ချခြင်း သို့မဟုတ် ထိန်းသိမ်းထားသော အပြောင်းအလဲများ (လမ်းပြမြေပုံ DA-10)။ Markdown ကို Copy ကူးလိုက်ပါ။
+အုပ်ချုပ်မှုလက်မှတ်၊ နေရာကိုင်ဆောင်ထားသူကို ဖြည့်ပြီး ပြီးပြည့်စုံသော ဖိုင်ကို ပူးတွဲပါ။
+အောက်တွင်ဖော်ပြထားသော Norito payloads နှင့် CI artefacts များနှင့်အတူ
 
 ```markdown
 ## Manifest Metadata
@@ -73,6 +74,6 @@ alongside the signed Norito payloads and CI artefacts referenced below.
 - [ ] Buffer telemetry snapshot (`iroha_settlement_buffer_xor`)
 ```
 
-Archive every completed packet under the Governance DAG entry for the vote so
-subsequent reviews can reference the manifest digest without repeating the full
-ceremony.【docs/source/governance_playbook.md:24】
+မဲပေးရန်အတွက် Governance DAG ထည့်သွင်းမှုအောက်တွင် ပြီးပြည့်စုံသော packet တိုင်းကို သိမ်းဆည်းပါ။
+နောက်ဆက်တွဲသုံးသပ်ချက်များသည် အပြည့်အစုံကို ထပ်တလဲလဲမလုပ်ဘဲ ထင်ရှားသောအချေအတင်ကို ကိုးကားနိုင်သည်။
+အခမ်းအနား။【docs/source/governance_playbook.md:24】

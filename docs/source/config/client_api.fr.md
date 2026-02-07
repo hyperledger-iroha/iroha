@@ -6,26 +6,27 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: fa548ec31fe928decc5c23719472618ff97f4eb45b084f9f9084df82b96cfac6
 source_last_modified: "2026-01-03T18:07:57.683798+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-## Client API Configuration Reference
+## Référence de configuration de l'API client
 
-This document tracks the Torii client-facing configuration knobs that are
-surfaces through `iroha_config::parameters::user::Torii`. The section below
-focuses on the Norito-RPC transport controls introduced for NRPC-1; future
-client API settings should extend this file.
+Ce document suit les boutons de configuration côté client Torii qui sont
+surfaces via `iroha_config::parameters::user::Torii`. La rubrique ci-dessous
+se concentre sur les contrôles de transport Norito-RPC introduits pour NRPC-1 ; avenir
+les paramètres de l'API client doivent étendre ce fichier.
 
 ### `torii.transport.norito_rpc`
 
-| Key | Type | Default | Description |
+| Clé | Tapez | Par défaut | Descriptif |
 |-----|------|---------|-------------|
-| `enabled` | `bool` | `true` | Master switch that enables binary Norito decoding. When `false`, Torii rejects every Norito-RPC request with `403 norito_rpc_disabled`. |
-| `stage` | `string` | `"disabled"` | Rollout tier: `disabled`, `canary`, or `ga`. Stages drive admission decisions and `/rpc/capabilities` output. |
-| `require_mtls` | `bool` | `false` | Enforces mTLS for Norito-RPC transport: when `true`, Torii rejects Norito-RPC requests that do not carry an mTLS marker header (e.g. `X-Forwarded-Client-Cert`). The flag is surfaced via `/rpc/capabilities` so SDKs can warn on misconfigured environments. |
-| `allowed_clients` | `array<string>` | `[]` | Canary allowlist. When `stage = "canary"`, only requests carrying an `X-API-Token` header present in this list are accepted. |
+| `enabled` | `bool` | `true` | Commutateur principal qui permet le décodage binaire Norito. Lorsque `false`, Torii rejette chaque requête Norito-RPC avec `403 norito_rpc_disabled`. |
+| `stage` | `string` | `"disabled"` | Niveau de déploiement : `disabled`, `canary` ou `ga`. Les étapes déterminent les décisions d’admission et la sortie `/rpc/capabilities`. |
+| `require_mtls` | `bool` | `false` | Applique mTLS pour le transport Norito-RPC : lorsque `true`, Torii rejette les requêtes Norito-RPC qui ne comportent pas d'en-tête de marqueur mTLS (par exemple, `X-Forwarded-Client-Cert`). L'indicateur apparaît via `/rpc/capabilities` afin que les SDK puissent avertir en cas d'environnements mal configurés. |
+| `allowed_clients` | `array<string>` | `[]` | Liste verte des Canaries. Lorsque `stage = "canary"`, seules les requêtes portant un en-tête `X-API-Token` présent dans cette liste sont acceptées. |
 
-Example configuration:
+Exemple de configuration :
 
 ```toml
 [torii.transport.norito_rpc]
@@ -35,16 +36,16 @@ stage = "canary"
 allowed_clients = ["alpha-canary-token", "beta-canary-token"]
 ```
 
-Stage semantics:
+Sémantique de l'étape :
 
-- **disabled** — Norito-RPC is unavailable even if `enabled = true`. Clients
-  receive `403 norito_rpc_disabled`.
-- **canary** — Requests must include an `X-API-Token` header that matches one
-  of the `allowed_clients`. All other requests receive `403
+- **désactivé** — Norito-RPC n'est pas disponible même si `enabled = true`. Clientèle
+  recevez `403 norito_rpc_disabled`.
+- **canary** — Les requêtes doivent inclure un en-tête `X-API-Token` qui correspond à celui-ci.
+  du `allowed_clients`. Toutes les autres demandes reçoivent `403
   norito_rpc_canary_denied`.
-- **ga** — Norito-RPC is available to every authenticated caller (subject to the
-  usual rate and pre-auth limits).
+- **ga** — Norito-RPC est disponible pour chaque appelant authentifié (sous réserve des
+  taux habituel et limites de préautorisation).
 
-Operators can update these values dynamically through `/v1/config`. Each change
-is reflected immediately in `/rpc/capabilities`, allowing SDKs and observability
-dashboards to show the live transport posture.
+Les opérateurs peuvent mettre à jour ces valeurs de manière dynamique via `/v1/config`. Chaque changement
+se reflète immédiatement dans `/rpc/capabilities`, permettant les SDK et l'observabilité
+des tableaux de bord pour montrer la posture du transport en direct.

@@ -10,41 +10,42 @@ translation_last_reviewed: 2026-02-07
 id: nexus-fee-model
 title: Nexus fee model updates
 description: Mirror of `docs/source/nexus_fee_model.md`, documenting the lane settlement receipts and reconciliation surfaces.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
-This page mirrors `docs/source/nexus_fee_model.md`. Keep both copies aligned while Japanese, Hebrew, Spanish, Portuguese, French, Russian, Arabic, and Urdu translations migrate.
+::: Eslatma Kanonik manba
+Bu sahifa `docs/source/nexus_fee_model.md`ni aks ettiradi. Yapon, ibroniy, ispan, portugal, frantsuz, rus, arab va urdu tillariga tarjimalar koʻchib oʻtayotganda ikkala nusxani ham tekislang.
 :::
 
-# Nexus Fee Model Updates
+# Nexus to'lov modeli yangilanishi
 
-The unified settlement router now captures deterministic per-lane receipts so
-operators can reconcile gas debits against the Nexus fee model.
+Yagona hisob-kitob marshrutizatori endi har bir tarmoqli deterministik tushumlarni oladi
+operatorlar gaz debetlarini Nexus to'lov modeliga solishtirishlari mumkin.
 
-- For the full router architecture, buffer policy, telemetry matrix, and rollout
-  sequencing see `docs/settlement-router.md`. That guide explains how the
-  parameters documented here tie into the NX-3 roadmap deliverable and how SREs
-  should monitor the router in production.
-- Gas asset configuration (`pipeline.gas.units_per_gas`) includes a
-  `twap_local_per_xor` decimal, a `liquidity_profile` (`tier1`, `tier2`,
-  or `tier3`), and a `volatility_class` (`stable`, `elevated`, `dislocated`).
-  These flags feed the settlement router so the resulting XOR
-  quote matches the canonical TWAP and haircut tier for the lane.
-- Every transaction that pays gas records a `LaneSettlementReceipt`.  Each
-  receipt stores the caller-provided source identifier, the local micro-amount,
-  the XOR due immediately, the XOR expected after the haircut, the realised
-  variance (`xor_variance_micro`), and the block timestamp in milliseconds.
-- Block execution aggregates receipts per lane/dataspace and publishes them
-  via `lane_settlement_commitments` in `/v1/sumeragi/status`.  The totals
-  expose `total_local_micro`, `total_xor_due_micro`, and
-  `total_xor_after_haircut_micro` summed over the block for nightly
-  reconciliation exports.
-- A new `total_xor_variance_micro` counter tracks how much safety margin was
-  consumed (difference between the due XOR and the post-haircut expectation),
-  and `swap_metadata` documents the deterministic conversion parameters
-  (TWAP, epsilon, liquidity profile, and volatility_class) so auditors can
-  verify the quote inputs independent of runtime configuration.
+- Routerning to'liq arxitekturasi, bufer siyosati, telemetriya matritsasi va ishlab chiqarish uchun
+  ketma-ketlik `docs/settlement-router.md` ga qarang. Ushbu qo'llanma qanday ekanligini tushuntiradi
+  Bu yerda hujjatlashtirilgan parametrlar NX-3 yoʻl xaritasi yetkazib berilishi va qanday SRE bilan bogʻliq
+  ishlab chiqarishda marshrutizatorni kuzatishi kerak.
+- Gaz aktivlari konfiguratsiyasi (`pipeline.gas.units_per_gas`) a kiradi
+  `twap_local_per_xor` kasrli, `liquidity_profile` (`tier1`, `tier2`,
+  yoki `tier3`) va `volatility_class` (`stable`, `elevated`, `dislocated`).
+  Ushbu bayroqlar hisob-kitob routerini oziqlantiradi, natijada XOR hosil bo'ladi
+  Iqtibos kanonik TWAP va chiziq uchun soch turmagi darajasiga mos keladi.
+- Gaz to'laydigan har bir tranzaksiyada `LaneSettlementReceipt` qayd etiladi.  Har bir
+  kvitansiya qo'ng'iroq qiluvchi tomonidan taqdim etilgan manba identifikatorini, mahalliy mikro-summani,
+  XOR darhol to'lanadi, XOR soch kesilganidan keyin kutilgan, amalga oshirilgan
+  dispersiya (`xor_variance_micro`) va blok vaqt tamg'asi millisekundlarda.
+- Blok ijrosi har bir qator/ma'lumotlar maydoni bo'yicha tushumlarni jamlaydi va ularni nashr etadi
+  `lane_settlement_commitments` orqali `/v1/sumeragi/status` da.  Jami
+  `total_local_micro`, `total_xor_due_micro` va
+  `total_xor_after_haircut_micro` tungi blokda yakunlandi
+  muvofiqlashtirish eksporti.
+- Yangi `total_xor_variance_micro` hisoblagichi xavfsizlik chegarasi qancha ekanligini kuzatib boradi
+  iste'mol qilingan (kerakli XOR va soch kesishdan keyingi kutish o'rtasidagi farq),
+  va `swap_metadata` deterministik konvertatsiya parametrlarini hujjatlashtiradi
+  (TWAP, epsilon, likvidlik profili va volatilite_sinfi).
+  ish vaqti konfiguratsiyasidan qat'i nazar, taklif kiritishlarini tekshiring.
 
-Consumers can watch `lane_settlement_commitments` alongside the existing lane
-and dataspace commitment snapshots to verify that fee buffers, haircut tiers,
-and swap execution match the configured Nexus fee model.
+Iste'molchilar `lane_settlement_commitments` ni mavjud bo'lak bilan birga tomosha qilishlari mumkin
+toʻlov buferlari, soch turmagi darajalari,
+va almashtirishni amalga oshirish sozlangan Nexus to'lov modeliga mos keladi.

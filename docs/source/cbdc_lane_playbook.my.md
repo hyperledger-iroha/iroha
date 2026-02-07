@@ -10,33 +10,34 @@ translation_last_reviewed: 2026-02-07
 title: CBDC Lane Playbook
 sidebar_label: CBDC Lane Playbook
 description: Reference configuration, whitelist flow, and compliance evidence for permissioned CBDC lanes on SORA Nexus.
+translator: machine-google-reviewed
 ---
 
 # CBDC Private Lane Playbook (NX-6)
 
-> **Roadmap linkage:** NX-6 (CBDC private lane template & whitelist flow) and NX-14 (Nexus runbooks).  
+> **လမ်းပြမြေပုံ ချိတ်ဆက်မှု-** NX-6 (CBDC သီးသန့်လမ်းသွား နမူနာပုံစံနှင့် လမ်းကြောင်းခွင့်ပြုစာရင်း) နှင့် NX-14 (Nexus runbooks)။  
 > **Owners:** Financial Services WG, Nexus Core WG, Compliance WG.  
-> **Status:** Drafting — implementation hooks exist across `crates/iroha_data_model::nexus`, `crates/iroha_core::governance::manifest`, and `integration_tests/tests/nexus/lane_registry.rs`, but the CBDC-specific manifests, whitelists, and operator runbooks were missing. This playbook documents the reference configuration and onboarding workflow so CBDC deployments can proceed deterministically.
+> **အခြေအနေ-** မူကြမ်းရေးဆွဲခြင်း — `crates/iroha_data_model::nexus`၊ `crates/iroha_core::governance::manifest` နှင့် `integration_tests/tests/nexus/lane_registry.rs` တွင် အကောင်အထည်ဖော်မှုချိတ်များ ရှိနေသော်လည်း CBDC သီးသန့်ဖော်ပြချက်များ၊ ခွင့်ပြုချက်စာရင်းများနှင့် အော်ပရေတာ runbook များ ပျောက်ဆုံးနေပါသည်။ ဤပြခန်းစာအုပ်တွင် CBDC ဖြန့်ကျက်မှုများကို အဆုံးအဖြတ်အတိုင်း ဆက်လက်လုပ်ဆောင်နိုင်စေရန် ရည်ညွှန်းဖွဲ့စည်းပုံနှင့် စတင်လုပ်ဆောင်ခြင်းလုပ်ငန်းအသွားအလာတို့ကို မှတ်တမ်းတင်ထားသည်။
 
-## Scope & Roles
+## နယ်ပယ်နှင့် အခန်းကဏ္ဍ
 
-- **Central bank lane (“CBDC lane”):** Permissioned validators, custodial settlement buffers, and programmable-money policies. Runs as a restricted dataspace + lane pair with its own governance manifest.
-- **Wholesale/retail bank dataspaces:** Participant DS that hold UAIDs, receive capability manifests, and may be whitelisted for atomic AXT with the CBDC lane.
-- **Programmable-money dApps:** External DS that consume CBDC flows through `ComposabilityGroup` routing once whitelisted.
-- **Governance & compliance:** Parliament (or equivalent module) approves lane manifests, capability manifests, and whitelist changes; compliance stores evidence bundles alongside Norito manifests.
+- ** Central bank lane ("CBDC lane"):** ခွင့်ပြုချက်ရရှိထားသူများ၊ အုပ်ထိန်းမှုဆိုင်ရာ အခြေချရေးကြားခံများနှင့် ပရိုဂရမ်ထုတ်နိုင်သော ငွေကြေးမူဝါဒများ။ ၎င်း၏ကိုယ်ပိုင်အုပ်ချုပ်မှုဖော်ပြချက်နှင့်အတူ ကန့်သတ်ဒေတာနေရာ + လမ်းသွားတွဲအဖြစ် လုပ်ဆောင်သည်။
+- **လက်ကား/လက်လီဘဏ်ဒေတာနေရာများ-** UAIDs များကိုင်ဆောင်ထားသော ပါဝင်သူ DS သည် စွမ်းဆောင်ရည်ပြသမှုများကို လက်ခံရရှိကာ CBDC လမ်းကြောနှင့်အတူ အဏုမြူ AXT အတွက် တရားဝင်စာရင်းသွင်းခံရနိုင်သည်။
+- **Programmable-money dApps-** CBDC စားသုံးသော ပြင်ပ DS သည် `ComposabilityGroup` လမ်းကြောင်းကို တရားဝင်စာရင်းသွင်းပြီးသည်နှင့် ဖြတ်သန်းစီးဆင်းသည်။
+- **အုပ်ချုပ်မှုနှင့် လိုက်နာမှု-** ပါလီမန် (သို့မဟုတ် တူညီသော သင်ခန်းစာ) သည် လမ်းကြောဆိုင်ရာ သရုပ်ပြမှုများ၊ လုပ်ဆောင်နိုင်မှု သရုပ်ပြမှုများ၊ နှင့် အဖြူရောင်စာရင်း ပြောင်းလဲမှုများကို အတည်ပြုသည်။ လိုက်နာမှု သည် Norito manifests နှင့်အတူ အထောက်အထားအစုအဝေးများကို သိမ်းဆည်းထားသည်။
 
-**Dependencies**
+**မှီခိုမှု**
 
-1. Lane catalog + dataspace catalog wiring (`docs/source/nexus_lanes.md`, `defaults/nexus/config.toml`).
-2. Lane manifest enforcement (`crates/iroha_core/src/governance/manifest.rs`, queue gating in `crates/iroha_core/src/queue.rs`).
-3. Capability manifests + UAIDs (`crates/iroha_data_model/src/nexus/manifest.rs`).
-4. Scheduler TEU quotas + metrics (`integration_tests/tests/scheduler_teu.rs`, `docs/source/telemetry.md`).
+1. Lane catalog + dataspace catalog wiring (`docs/source/nexus_lanes.md`, `defaults/nexus/config.toml`)။
+2. လမ်းကြောဆိုင်ရာ သက်သေပြခြင်း (`crates/iroha_core/src/governance/manifest.rs`၊ `crates/iroha_core/src/queue.rs`) တွင် တန်းစီစောင့်ဆိုင်းခြင်း။
+3. စွမ်းဆောင်ရည် ထင်ရှားသည် + UAIDs (`crates/iroha_data_model/src/nexus/manifest.rs`)။
+4. စီစဉ်ပေးသူ TEU ခွဲတမ်း + မက်ထရစ်များ (`integration_tests/tests/scheduler_teu.rs`၊ `docs/source/telemetry.md`)။
 
-## 1. Reference Lane Layout
+## 1. အကိုးအကား လမ်းသွယ် အပြင်အဆင်
 
-### 1.1 Lane catalog & dataspace entries
+### 1.1 လမ်းသွယ် ကက်တလောက်နှင့် ဒေတာနေရာ ထည့်သွင်းမှုများ
 
-Add dedicated entries to `[[nexus.lane_catalog]]` and `[[nexus.dataspace_catalog]]`. The example below extends `defaults/nexus/config.toml` with a CBDC lane that reserves 1 500 TEU per slot and throttles starvation to six slots, plus matching dataspace aliases for wholesale banks and retail wallets.
+`[[nexus.lane_catalog]]` နှင့် `[[nexus.dataspace_catalog]]` သို့ သီးသန့်ထည့်သွင်းမှုများကို ထည့်ပါ။ အောက်ဖော်ပြပါဥပမာသည် `defaults/nexus/config.toml` အား အပေါက်တစ်ခုလျှင် 1500 TEU သိမ်းဆည်းထားပြီး ငတ်မွတ်ခေါင်းပါးမှုကို တွန်းလှန်ပေးသည့် အကွက်ခြောက်ခုအပြင် လက်ကားဘဏ်များနှင့် လက်လီပိုက်ဆံအိတ်များအတွက် ဒေတာနေရာအမည်တူများနှင့် ကိုက်ညီသောဒေတာနေရာကို တိုးချဲ့ထားသည်။
 
 ```toml
 lane_count = 5
@@ -87,14 +88,14 @@ instruction = "cbdc::*"
 description = "Route CBDC contracts to the restricted lane"
 ```
 
-**Notes**
+**မှတ်ချက်**
 
-- `metadata.scheduler.teu_capacity` and `metadata.scheduler.starvation_bound_slots` feed the TEU gauges exercised by `integration_tests/tests/scheduler_teu.rs`. Operators must keep them in sync with acceptance results so `nexus_scheduler_lane_teu_capacity` matches the template.
-- Every dataspace alias above must appear in governance manifests and capability manifests (see below) so admission rejects drift automatically.
+- `metadata.scheduler.teu_capacity` နှင့် `metadata.scheduler.starvation_bound_slots` သည် `integration_tests/tests/scheduler_teu.rs` ကျင့်သုံးသော TEU တိုင်းထွာများကို ကျွေးမွေးသည်။ အော်ပရေတာများသည် ၎င်းတို့အား လက်ခံမှုရလဒ်များနှင့် ထပ်တူပြုထားရမည်ဖြစ်ပြီး `nexus_scheduler_lane_teu_capacity` သည် ပုံစံပလိတ်နှင့် ကိုက်ညီပါသည်။
+- အထက်ဖော်ပြပါ dataspace alias တိုင်းသည် အုပ်ချုပ်မှုဖော်ပြချက်များနှင့် လုပ်ဆောင်နိုင်စွမ်းကို ထင်ရှားစေရမည် (အောက်တွင်ကြည့်ပါ) ထို့ကြောင့် ဝင်ခွင့်သည် အလိုအလျောက်ပျံ့လွင့်မှုကို ပယ်ချပါသည်။
 
-### 1.2 Lane manifest skeleton
+### 1.2 လမ်းကြော ထင်ရှားသော အရိုးစု
 
-Lane manifests live under the directory configured via `nexus.registry.manifest_directory` (see `crates/iroha_config/src/parameters/actual.rs`). File names should match lane aliases (`cbdc.manifest.json`). The schema mirrors the governance manifest tests in `integration_tests/tests/nexus/lane_registry.rs`.
+Lane သည် `nexus.registry.manifest_directory` (`crates/iroha_config/src/parameters/actual.rs` ကိုကြည့်ပါ)။ ဖိုင်အမည်များသည် လမ်းသွားနာမည်တူများ (`cbdc.manifest.json`) နှင့် ကိုက်ညီသင့်ပါသည်။ အစီအစဉ်သည် `integration_tests/tests/nexus/lane_registry.rs` တွင် အုပ်ချုပ်မှုဆိုင်ရာ ထင်ရှားသောစစ်ဆေးမှုများကို ထင်ဟပ်စေသည်။
 
 ```json
 {
@@ -140,16 +141,14 @@ Lane manifests live under the directory configured via `nexus.registry.manifest_
 }
 ```
 
-Key requirements:
+အဓိကလိုအပ်ချက်များ-- အတည်ပြုပေးသူများသည် ** ကက်တလောက်တွင်ရှိသော IH58 အကောင့် ID များ (`@domain` မပါ၀င်ပါ၊ `@domain` ကို ထပ်ဖြည့်ပါ)** ဖြစ်ရမည်** ဖြစ်ရမည်။ `quorum` ကို multisig threshold (≥2) သို့ သတ်မှတ်ပါ။
+- Protected namespaces များကို `Queue::push` (`crates/iroha_core/src/queue.rs` တွင်ကြည့်ပါ) ဖြင့် ပြဋ္ဌာန်းထားသောကြောင့် CBDC စာချုပ်များအားလုံး `gov_namespace` + `gov_contract_id` ကို သတ်မှတ်ရပါမည်။
+- `composability_group` အကွက်များသည် `docs/source/nexus.md` §8.6 တွင်ဖော်ပြထားသော schema ကိုလိုက်နာသည်။ ပိုင်ရှင် (CBDC လမ်းသွား) သည် whitelist နှင့် quotas ကို ပေးဆောင်သည်။ Whitelisted DS manifests သည် `group_id_hex` + `activation_epoch` ကိုသာ သတ်မှတ်ပါသည်။
+- မန်နီးဖက်စ်ကို ကူးယူပြီးနောက်၊ `LaneManifestRegistry::from_config` တင်ကြောင်းအတည်ပြုရန် `cargo test -p integration_tests nexus::lane_registry -- --nocapture` ကိုဖွင့်ပါ။
 
-- Validators **must** be canonical IH58 account IDs (no `@domain`; append `@domain` only as an explicit routing hint) that exist in the catalog. Set `quorum` to the multisig threshold (≥2).
-- Protected namespaces are enforced by `Queue::push` (see `crates/iroha_core/src/queue.rs`), so all CBDC contracts must specify `gov_namespace` + `gov_contract_id`.
-- `composability_group` fields follow the schema described in `docs/source/nexus.md` §8.6; the owner (CBDC lane) supplies the whitelist and quotas. Whitelisted DS manifests only specify the `group_id_hex` + `activation_epoch`.
-- After copying the manifest, run `cargo test -p integration_tests nexus::lane_registry -- --nocapture` to confirm `LaneManifestRegistry::from_config` loads it.
+### 1.3 စွမ်းရည်ပြသမှုများ (UAID မူဝါဒများ)
 
-### 1.3 Capability manifests (UAID policies)
-
-Capability manifests (`AssetPermissionManifest` in `crates/iroha_data_model/src/nexus/manifest.rs`) bind a `UniversalAccountId` to deterministic allowances. Publish them via the Space Directory so banks and dApps can fetch signed policies.
+စွမ်းဆောင်ရည် ထင်ရှားသည် (`crates/iroha_data_model/src/nexus/manifest.rs` တွင် `AssetPermissionManifest`) သည် `UniversalAccountId` ကို သတ်မှတ်သည့် ထောက်ပံ့ကြေးများကို စည်းနှောင်ထားသည်။ ဘဏ်များနှင့် dApps များသည် လက်မှတ်ရေးထိုးထားသော မူဝါဒများကို ရယူနိုင်ရန် Space Directory မှတစ်ဆင့် ၎င်းတို့ကို ထုတ်ဝေပါ။
 
 ```json
 {
@@ -192,31 +191,29 @@ Capability manifests (`AssetPermissionManifest` in `crates/iroha_data_model/src/
 }
 ```
 
-- Deny rules win even when an allow rule matches (`ManifestVerdict::Denied`), so place all explicit denies after the relevant allows.
-- Use `AllowanceWindow::PerSlot` for atomic payment handles and `PerMinute`/`PerDay` for rolling customer limits.
-- A single manifest per UAID/dataspace suffices; activations and expiries enforce policy rotation cadence.
-- The lane runtime now expires manifests automatically once `expiry_epoch` is reached,
-  so operations teams simply monitor `SpaceDirectoryEvent::ManifestExpired`,
-  archive the `nexus_space_directory_revision_total` delta, and verify Torii shows
-  `status = "Expired"`. The CLI `manifest expire` command remains available for
-  manual overrides or evidence backfills.
+- ခွင့်ပြုထားသောစည်းမျဉ်း (`ManifestVerdict::Denied`) နှင့် ကိုက်ညီသည့်တိုင် စည်းမျဉ်းများကို ငြင်းဆိုခြင်းဖြင့် အနိုင်ရပါက သက်ဆိုင်ရာ ခွင့်ပြုပြီးနောက် ပြတ်သားစွာ ငြင်းဆိုမှုများအားလုံးကို ထားလိုက်ပါ။
+- ဖောက်သည်ကန့်သတ်ချက်များကို လှည့်ပတ်ရန်အတွက် အနုမြူငွေပေးချေမှုလက်ကိုင်များအတွက် `AllowanceWindow::PerSlot` နှင့် `PerMinute`/`PerDay` ကို အသုံးပြုပါ။
+- UAID/dataspace တစ်ခုချင်းအတွက် မန်နီးဖက်စ်တစ်ခု လုံလောက်ပါသည်။ လုပ်ဆောင်ချက်များနှင့် သက်တမ်းကုန်ဆုံးမှုများသည် မူဝါဒလည်ပတ်မှုပုံစံကို ကျင့်သုံးသည်။
+- ယခုအခါ `expiry_epoch` ကိုရောက်ရှိသည်နှင့်တစ်ပြိုင်နက် လမ်းကြောဖွင့်ချိန်သည် အလိုအလျောက် သက်တမ်းကုန်ဆုံးသွားပါသည်။
+  ထို့ကြောင့် စစ်ဆင်ရေးအဖွဲ့များသည် `SpaceDirectoryEvent::ManifestExpired` ကို စောင့်ကြည့်ရုံသာ၊
+  `nexus_space_directory_revision_total` မြစ်ဝကျွန်းပေါ်ဒေသကို သိမ်းဆည်းပြီး Torii ရှိုးများကို အတည်ပြုပါ
+  `status = "Expired"`။ CLI `manifest expire` အမိန့်သည် ဆက်လက်အသုံးပြုနိုင်ပါသည်။
+  လူကိုယ်တိုင် အစားထိုးမှုများ သို့မဟုတ် အထောက်အထားများ ဖြည့်စွက်မှုများ။
 
 ## 2. Bank Onboarding & Whitelist Workflow
 
-| Phase | Owner(s) | Actions | Evidence |
-|-------|----------|---------|----------|
-| 0. Intake | CBDC PMO | Collect KYC dossier, technical DS manifest, validator list, UAID mapping. | Intake ticket, signed DS manifest draft. |
-| 1. Governance approval | Parliament / Compliance | Review intake pack, countersign `cbdc.manifest.json`, approve `AssetPermissionManifest`. | Signed governance minutes, manifest commit hash. |
-| 2. Capability issuance | CBDC lane ops | Encode manifests via `norito::json::to_string_pretty`, store under Space Directory, notify operators. | Manifest JSON + norito `.to` file, BLAKE3 digest. |
-| 3. Whitelist activation | CBDC lane ops | Append DSID to `composability_group.whitelist`, bump `activation_epoch`, distribute manifest; update dataspace routing if needed. | Diff of manifest, `kagami config diff` output, governance approval ID. |
-| 4. Rollout validation | QA Guild / Ops | Run integration tests, TEU load tests, and programmable-money replay (see below). | `cargo test` logs, TEU dashboards, programmable-money fixture results. |
-| 5. Evidence archive | Compliance WG | Bundle manifests, approvals, capability digests, test outputs, and Prometheus scrapes under `artifacts/nexus/cbdc_<stamp>/`. | Evidence tarball, checksum file, council sign-off. |
+| အဆင့် | ပိုင်ရှင်(များ) | လုပ်ဆောင်ချက်များ | အထောက်အထား |
+|---------|----------|---------|----------|
+| 0. စားသုံးမှု | CBDC PMO | KYC စာရွက်စာတမ်း၊ နည်းပညာဆိုင်ရာ DS မန်နီးဖက်စ်၊ အတည်ပြုသူစာရင်း၊ UAID မြေပုံကို စုဆောင်းပါ။ | ဝင်ခွင့်လက်မှတ်၊ DS manifest မူကြမ်းကို ရေးထိုးထားသည်။ |
+| 1. အုပ်ချုပ်မှုအတည်ပြုချက် | လွှတ်တော် / လိုက်နာမှု | စားသုံးမှုအထုပ်ကို ပြန်လည်သုံးသပ်ပါ၊ တံဆိပ် `cbdc.manifest.json`၊ `AssetPermissionManifest` ကို အတည်ပြုပါ။ | လက်မှတ်ရေးထိုးထားသော အုပ်ချုပ်မှုမိနစ်များ၊ ဖော်ပြပါ ဟက်ရှ်။ |
+| 2. စွမ်းဆောင်ရည်ထုတ်ပေးခြင်း | CBDC လမ်းကြော ops | `norito::json::to_string_pretty` မှတစ်ဆင့် ကုဒ်နံပါတ်ကို ကုဒ်ဖော်ပြခြင်း၊ Space Directory အောက်တွင် သိမ်းဆည်းပါ၊ အော်ပရေတာများကို အကြောင်းကြားပါ။ | Manifest JSON + norito `.to` ဖိုင်၊ BLAKE3 မှတ်တမ်း။ |
+| 3. Whitelist အသက်သွင်းခြင်း | CBDC လမ်းကြော ops | DSID ကို `composability_group.whitelist` သို့ ပေါင်းထည့်ပါ၊ bump `activation_epoch`၊ မန်နီးဖက်စ်ကို ဖြန့်ဝေပါ။ လိုအပ်ပါက dataspace routing ကို update လုပ်ပါ။ | ထင်ရှားသော ကွဲပြားမှု၊ `kagami config diff` ထုတ်ပေးမှု၊ အုပ်ချုပ်မှုအတည်ပြုချက် ID။ |
+| 4. တရားဝင်အတည်ပြုချက် | QA Guild / Ops | ပေါင်းစည်းမှုစမ်းသပ်မှုများ၊ TEU ဝန်စမ်းသပ်မှုများနှင့် ပရိုဂရမ်သွင်းနိုင်သော-ငွေပြန်ဖွင့်ခြင်းတို့ကို လုပ်ဆောင်ပါ (အောက်တွင်ကြည့်ပါ)။ | `cargo test` မှတ်တမ်းများ၊ TEU ဒက်ရှ်ဘုတ်များ၊ ပရိုဂရမ်ထုတ်နိုင်သော ငွေကြေးဆိုင်ရာ ရလဒ်များ။ |
+| 5. အထောက်အထား မော်ကွန်း | လိုက်နာမှု WG | အစုအဝေးဖော်ပြချက်များ၊ အတည်ပြုချက်များ၊ စွမ်းရည်အချေအတင်များ၊ စမ်းသပ်မှုရလဒ်များနှင့် `artifacts/nexus/cbdc_<stamp>/` အောက်တွင် Prometheus ခြစ်ခြင်းများ။ | စာရွက်စာတမ်း၊ ချက်လက်မှတ်ဖိုင်၊ ကောင်စီလက်မှတ်ထိုးခြင်း |
 
-### Audit bundle helper
-
-Use the `iroha app space-directory manifest audit-bundle` helper from the Space Directory
-playbook to snapshot each capability manifest before filing the evidence packet.
-Provide the manifest JSON (or `.to` payload) and dataspace profile:
+### စာရင်းစစ်အတွဲအကူSpace Directory မှ `iroha app space-directory manifest audit-bundle` အထောက်အကူကို အသုံးပြုပါ။
+အထောက်အထားအစုံအလင်ကို မတင်ပြမီ စွမ်းရည်တစ်ခုစီကို လျှပ်တစ်ပြက်ရိုက်ရန် playbook။
+manifest JSON (သို့မဟုတ် `.to` payload) နှင့် dataspace ပရိုဖိုင်ကို ပေးပါ။
 
 ```bash
 iroha app space-directory manifest audit-bundle \
@@ -226,24 +223,24 @@ iroha app space-directory manifest audit-bundle \
   --notes "CBDC wholesale refresh"
 ```
 
-The command emits canonical JSON/Norito/hash copies alongside
-`audit_bundle.json`, which records the UAID, dataspace id, activation/expiry
-epochs, manifest hash, and profile audit hooks while enforcing the required
-`SpaceDirectoryEvent` subscriptions. Drop the bundle inside the evidence
-directory so auditors and regulators can replay the exact bytes later.
+ညွှန်ကြားချက်သည် Canonical JSON/Norito/hash ကော်ပီများနှင့်အတူ ထုတ်လွှတ်သည်
+UAID၊ dataspace id၊ activation/expiry ကို မှတ်တမ်းတင်သည့် `audit_bundle.json`
+လိုအပ်သည့်အရာများကို ပြဋ္ဌာန်းနေစဉ် အပိုင်းများ၊ ထင်ရှားသော hash နှင့် ပရိုဖိုင်စာရင်းစစ်ချိတ်များ
+`SpaceDirectoryEvent` စာရင်းသွင်းမှုများ။ အထောက်အထား အစုအဝေးကို ချထားပါ။
+စာရင်းစစ်များနှင့် စည်းကမ်းထိန်းသိမ်းရေးမှူးများသည် နောက်ပိုင်းတွင် အတိအကျ bytes ပြန်ဖွင့်နိုင်သောကြောင့် လမ်းညွှန်။
 
-### 2.1 Commands & validations
+### 2.1 ညွှန်ကြားချက်များနှင့် အတည်ပြုချက်များ
 
-1. **Lane manifests:** `cargo test -p integration_tests nexus::lane_registry -- --nocapture lane_manifest_registry_loads_fixture_manifests`.
-2. **Scheduler quotas:** `cargo test -p integration_tests scheduler_teu -- queue_teu_backlog_matches_metering queue_routes_transactions_across_configured_lanes`.
-3. **Manual smoke:** `irohad --sora --config configs/soranexus/nexus/config.toml --chain 0000…` with manifest directory pointing to the CBDC files, then hit `/v1/sumeragi/status` and verify `lane_governance.manifest_ready=true` for the CBDC lane.
-4. **Whitelist consistency test:** `cargo test -p integration_tests nexus::cbdc_whitelist -- --nocapture` exercises `integration_tests/tests/nexus/cbdc_whitelist.rs`, parsing `fixtures/space_directory/profile/cbdc_lane_profile.json` and the referenced capability manifests to ensure every whitelist entry’s UAID, dataspace, activation epoch, and allowance list matches the Norito manifests under `fixtures/space_directory/capability/`. Attach the test log to the NX-6 evidence bundle whenever the whitelist or manifests change.
+1. **လမ်းကြော ထင်ရှားသည်-** `cargo test -p integration_tests nexus::lane_registry -- --nocapture lane_manifest_registry_loads_fixture_manifests`။
+2. **စီစဉ်သူခွဲတမ်း-** `cargo test -p integration_tests scheduler_teu -- queue_teu_backlog_matches_metering queue_routes_transactions_across_configured_lanes`။
+3. **Manual smoke-** `irohad --sora --config configs/soranexus/nexus/config.toml --chain 0000…` သည် CBDC ဖိုင်များကိုညွှန်ပြသည့် manifest directory ပါရှိသော၊ ထို့နောက် `/v1/sumeragi/status` ကိုနှိပ်ပြီး CBDC လမ်းကြောအတွက် `lane_governance.manifest_ready=true` ကိုအတည်ပြုပါ။
+4. **Whitelist တစ်ပြေးညီစမ်းသပ်မှု-** `cargo test -p integration_tests nexus::cbdc_whitelist -- --nocapture` လေ့ကျင့်ခန်း `integration_tests/tests/nexus/cbdc_whitelist.rs`၊ `fixtures/space_directory/profile/cbdc_lane_profile.json` ကို ပိုင်းခြားပြီး ကိုးကားထားသည့် စွမ်းရည်သည် အဖြူစာရင်းထဲ ထည့်သွင်းမှု၏ UAID၊ ဒေတာနေရာလွတ်၊ အသက်ဝင်သည့် အပိုင်း 5X နှင့် I10NT0000000 အောက်တွင် တူညီကြောင်း သေချာစေရန် ရည်ညွှန်းထားသော စွမ်းဆောင်ရည်ကို ထင်ရှားစေသည်။ `fixtures/space_directory/capability/`။ စစ်ဆေးမှုမှတ်တမ်းကို NX-6 အထောက်အထားအစုအဝေးတွင် အဖြူရောင်စာရင်း သို့မဟုတ် ဖော်ပြချက်များ ပြောင်းလဲသည့်အခါတိုင်း ပူးတွဲပါ။
 
-### 2.2 CLI snippets
+### 2.2 CLI အတိုအထွာများ
 
-- Generate UAID + manifest skeleton via `cargo run -p iroha_cli -- manifest cbdc --uaid <hash> --dataspace 11 --template cbdc_wholesale`.
-- Publish capability manifest to Torii (Space Directory) using `iroha app space-directory manifest publish --manifest cbdc_wholesale.manifest.to` (or `--manifest-json cbdc_wholesale.manifest.json`); the submitting account must hold `CanPublishSpaceDirectoryManifest` for the CBDC dataspace.
-- Publish via HTTP if the ops desk is running remote automation:
+- `cargo run -p iroha_cli -- manifest cbdc --uaid <hash> --dataspace 11 --template cbdc_wholesale` မှတစ်ဆင့် UAID + ထင်ရှားသောအရိုးစုကို ဖန်တီးပါ။
+- `iroha app space-directory manifest publish --manifest cbdc_wholesale.manifest.to` (သို့မဟုတ် `--manifest-json cbdc_wholesale.manifest.json`) ကို အသုံးပြု၍ Torii (Space Directory) သို့ ထုတ်ဝေနိုင်မှု ထင်ရှားသည်။ တင်သွင်းသည့်အကောင့်သည် CBDC ဒေတာနေရာအတွက် `CanPublishSpaceDirectoryManifest` ကို ကိုင်ထားရပါမည်။
+- ops desk သည် အဝေးမှ အလိုအလျောက်စနစ် လုပ်ဆောင်နေပါက HTTP မှတဆင့် ထုတ်ဝေပါ-
 
   ```bash
   curl -X POST https://torii.soranexus/v1/space-directory/manifests \
@@ -256,10 +253,10 @@ directory so auditors and regulators can replay the exact bytes later.
           }'
   ```
 
-  Torii returns `202 Accepted` once the publish transaction is queued; the same
-  CIDR/API-token gates apply and the on-chain permission requirement matches the
-  CLI workflow.
-- Emergency revocation can be issued remotely by POSTing to Torii:
+  Torii သည် ထုတ်ဝေမှုငွေလွှဲခြင်းကို တန်းစီထားသည်နှင့်တပြိုင်နက် `202 Accepted` ကို ပြန်ပေးသည်။ အတူတူပါပဲ။
+  CIDR/API-တိုကင်ဂိတ်များ သက်ရောက်ပြီး ကွင်းဆက်ခွင့်ပြုချက်လိုအပ်ချက်နှင့် ကိုက်ညီပါသည်။
+  CLI အလုပ်အသွားအလာ။
+- Torii သို့ ပို့စ်တင်ခြင်းဖြင့် အဝေးမှ အရေးပေါ် ရုတ်သိမ်းခြင်းကို ထုတ်ပေးနိုင်ပါသည်။
 
   ```bash
   curl -X POST https://torii.soranexus/v1/space-directory/manifests/revoke \
@@ -274,58 +271,54 @@ directory so auditors and regulators can replay the exact bytes later.
           }'
   ```
 
-  Torii returns `202 Accepted` once the revoke transaction is queued; the same
-  CIDR/API-token gates apply as other app endpoints, and `CanPublishSpaceDirectoryManifest`
-  is still required on-chain.
-- Rotate whitelist membership: edit `cbdc.manifest.json`, bump `activation_epoch`, and redeploy via secure copy to all validators; `LaneManifestRegistry` hot-reloads on the configured poll interval.
+  Torii သည် `202 Accepted` သည် ငွေလွှဲခြင်းကို ရုပ်သိမ်းပြီးသည်နှင့် တန်းစီနေသည်၊ အတူတူပါပဲ။
+  CIDR/API-တိုကင်ဂိတ်များသည် အခြားအက်ပ် အဆုံးမှတ်များအဖြစ် သက်ရောက်ပြီး `CanPublishSpaceDirectoryManifest`
+  ကွင်းဆက်တွင် လိုအပ်နေသေးသည်။
+- ခွင့်ပြုထားသောစာရင်းတွင် အဖွဲ့ဝင်ခြင်းကို လှည့်ပါ- `cbdc.manifest.json` ကိုတည်းဖြတ်ပါ၊ Bum `activation_epoch` နှင့် လုံခြုံသောမိတ္တူကို အတည်ပြုသူအားလုံးထံ ပြန်လည်အသုံးချပါ။ `LaneManifestRegistry` ပြင်ဆင်သတ်မှတ်ထားသော မဲရုံကြားကာလတွင် ဟော့-ပြန်တင်မှုများ။
 
-## 3. Compliance Evidence Bundle
+## 3. လိုက်နာမှု အထောက်အထား အစုအဝေး
 
-Store artefacts under `artifacts/nexus/cbdc_rollouts/<YYYYMMDDThhmmZ>/` and attach the digest to the governance ticket.
+`artifacts/nexus/cbdc_rollouts/<YYYYMMDDThhmmZ>/` အောက်တွင် ရှေးဟောင်းပစ္စည်းများကို သိမ်းဆည်းပြီး အုပ်ချုပ်မှုလက်မှတ်တွင် မှတ်တမ်းကို ပူးတွဲပါ။
 
-| File | Description |
-|------|-------------|
-| `cbdc.manifest.json` | Signed lane manifest with whitelist diff (before/after). |
-| `capability/<uaid>.manifest.json` & `.to` | Norito + JSON capability manifests for each UAID. |
-| `compliance/kyc_<bank>.pdf` | Regulator-facing KYC attestation. |
-| `metrics/nexus_scheduler_lane_teu_capacity.prom` | Prometheus scrape proving TEU headroom. |
-| `tests/cargo_test_nexus_lane_registry.log` | Log from the manifest test run. |
-| `tests/cargo_test_scheduler_teu.log` | Log proving TEU routing passes. |
-| `programmable_money/axt_replay.json` | Replay transcript demonstrating programmable-money interoperability (see section 4). |
-| `approvals/governance_minutes.md` | Signed approval minutes referencing manifest hash + activation epoch. |
+| ဖိုင် | ဖော်ပြချက် |
+|--------|-------------|
+| `cbdc.manifest.json` | ခွင့်ပြုထားသောစာရင်းကွဲပြားမှု (ရှေ့/နောက်) ဖြင့် လက်မှတ်ထိုးထားသော လမ်းကြောကို ထင်ရှားစေသည်။ |
+| `capability/<uaid>.manifest.json` & `.to` | Norito + JSON စွမ်းရည်သည် UAID တစ်ခုစီအတွက် ဖော်ပြသည်။ |
+| `compliance/kyc_<bank>.pdf` | Regulator-facing KYC ထောက်ခံချက်။ |
+| `metrics/nexus_scheduler_lane_teu_capacity.prom` | Prometheus TEU ခေါင်းခန်းကို သက်သေပြသည့်ခြစ် |
+| `tests/cargo_test_nexus_lane_registry.log` | မန်နီးဖက်စ် အစမ်းပြေးမှုမှ မှတ်တမ်း။ |
+| `tests/cargo_test_scheduler_teu.log` | TEU လမ်းကြောင်း ဖြတ်သန်းမှုများကို သက်သေပြသည့် မှတ်တမ်း။ |
+| `programmable_money/axt_replay.json` | ပရိုဂရမ်-ငွေကြေး အပြန်အလှန်လုပ်ဆောင်နိုင်မှုကို သရုပ်ပြသည့် စာသားမှတ်တမ်းကို ပြန်ဖွင့်ပါ (အပိုင်း 4 ကိုကြည့်ပါ)။ |
+| `approvals/governance_minutes.md` | လက်မှတ်ရေးထိုးထားသော အတည်ပြုချက်မိနစ်များကို ဖော်ပြခြင်း hash + activation ကာလ။ |**အတည်ပြုချက် script-** `ci/check_cbdc_rollout.sh` ကို အုပ်ချုပ်မှု လက်မှတ်တွင် မတွဲမီ အထောက်အထား အစုအဝေး ပြီးမြောက်ကြောင်း အခိုင်အမာ အတည်ပြုရန်။ ကူညီသူသည် `cbdc.manifest.json` တစ်ခုစီအတွက် `artifacts/nexus/cbdc_rollouts/` (သို့မဟုတ် `CBDC_ROLLOUT_BUNDLE=<path>`) ကို စကင်န်ဖတ်ပြီး သရုပ်ဖော်ခြင်း/ပေါင်းစပ်နိုင်မှုအုပ်စုကို ခွဲခြမ်းစိတ်ဖြာပြီး မန်နီးဖက်စ်တစ်ခုစီတွင် `.to` ဖိုင်နှင့် ကိုက်ညီသော `.to` ဖိုင်ကို စစ်ဆေးပြီး၊ 50018NIX အတွက် စစ်ဆေးမှုများ၊ မက်ထရစ်များ ပေါင်း `cargo test` မှတ်တမ်းများကို ခြစ်ပြီး ပရိုဂရမ်-ငွေဖြင့် ပြန်ဖွင့်သည့် JSON ကို အတည်ပြုပြီး အတည်ပြုချက် မိနစ်များကို အသက်ဝင်စေသည့် အပိုင်းကို ကိုးကားပြီး ထင်ရှားသော hash ကို သေချာစေသည်။ နောက်ဆုံး Rev သည် NX-6 တွင်ဖော်ပြထားသော ဘေးကင်းရေးရထားများကိုပါ ထည့်သွင်းပေးသည်- ကော်ရမ်သည် ကြေညာထားသော တရားဝင်သတ်မှတ်မှုထက် မကျော်လွန်နိုင်ပါ၊ ကာကွယ်ထားသော namespaces များသည် အချည်းနှီးမဟုတ်သော စာကြောင်းများဖြစ်ရမည်၊ စွမ်းဆောင်ရည်ဖော်ပြချက်များသည် `activation_epoch`/`expiry_epoch` အတွဲများကို ကောင်းမွန်စွာပုံစံဖြင့် တိုးမြှင့်ကြောင်း ကြေငြာရပါမည်။ `Allow`/`Deny` အထူးပြုလုပ်ချက်များ။ `fixtures/nexus/cbdc_rollouts/` အောက်တွင် နမူနာ အထောက်အထား ထုပ်ပိုးခြင်းကို ပေါင်းစပ်စမ်းသပ်မှု `integration_tests/tests/nexus/cbdc_rollout_bundle.rs` ဖြင့် ကျင့်သုံးပြီး မှန်ကန်သော အထောက်အထားကို CI သို့ ကြိုးဖြင့် ချိတ်ဆက်ထားသည်။
 
-**Validation script:** run `ci/check_cbdc_rollout.sh` to assert the evidence bundle is complete before attaching it to the governance ticket. The helper scans `artifacts/nexus/cbdc_rollouts/` (or `CBDC_ROLLOUT_BUNDLE=<path>`) for every `cbdc.manifest.json`, parses the manifest/composability group, verifies each capability manifest has a matching `.to` file, checks for `kyc_*.pdf` attestations, confirms the TEU metrics scrape plus `cargo test` logs, validates the programmable-money replay JSON, and ensures the approval minutes cite the activation epoch and manifest hash. The latest rev also enforces safety rails called out in NX-6: quorum cannot exceed the declared validator set, protected namespaces must be non-empty strings, and capability manifests must declare monotonically increasing `activation_epoch`/`expiry_epoch` pairs with well-formed `Allow`/`Deny` effects. A sample evidence pack under `fixtures/nexus/cbdc_rollouts/` is exercised by the integration test `integration_tests/tests/nexus/cbdc_rollout_bundle.rs`, keeping the validator wired into CI.
+## 4. Programmable-Money အပြန်အလှန်လုပ်ဆောင်နိုင်မှု
 
-## 4. Programmable-Money Interoperability
+ဘဏ်တစ်ခု (dataspace 11) နှင့် လက်လီ dApp (dataspace 12) နှစ်ခုလုံးကို တူညီသော `ComposabilityGroupId` တွင် တရားဝင်စာရင်းသွင်းပြီးသည်နှင့်၊ ပရိုဂရမ်ထုတ်နိုင်သော ငွေကြေးစီးဆင်းမှုများသည် `docs/source/nexus.md` §8.6 မှ AXT ပုံစံအတိုင်း လိုက်နာပါသည်-
 
-Once a bank (dataspace 11) and retail dApp (dataspace 12) are both whitelisted in the same `ComposabilityGroupId`, programmable-money flows follow the AXT pattern from `docs/source/nexus.md` §8.6:
+1. လက်လီရောင်းချသည့် dApp သည် ၎င်း၏ UAID + AXT အချေအတင်နှင့် ချိတ်ဆက်ထားသော ပိုင်ဆိုင်မှုလက်ကိုင်တစ်ခုကို တောင်းဆိုသည်။ CBDC လမ်းကြောသည် `AssetPermissionManifest::evaluate` မှတစ်ဆင့် လက်ကိုင်ကို အတည်ပြုသည် (အနိုင်ရခြင်း၊ ထောက်ပံ့ကြေးများ ပြဋ္ဌာန်းထားသည်)။
+2. DS နှစ်ခုလုံးသည် တူညီသောပေါင်းစပ်နိုင်မှုအုပ်စုကိုကြေငြာထားသောကြောင့် လမ်းကြောင်းသည် ၎င်းတို့အား အဏုမြူပါဝင်ရန်အတွက် CBDC လမ်းကြောသို့ ပြိုကျသွားသည် (`LaneRoutingPolicy` သည် နှစ်ဦးနှစ်ဖက်ခွင့်ပြုထားသောစာရင်းတွင် `group_id` ကိုအသုံးပြုသည်)။
+3. ကွပ်မျက်စဉ်အတွင်း၊ CBDC DS သည် ၎င်း၏ဆားကစ်အတွင်း AML/KYC အထောက်အထားများကို ပြဋ္ဌာန်းသည် (`use_asset_handle` pseudocode in `nexus.md`)၊ dApp DS သည် CBDC အစိတ်စိတ်အမွှာမွှာအောင်မြင်ပြီးမှသာ ဒေသတွင်းစီးပွားရေးအခြေအနေကို အပ်ဒိတ်လုပ်သည်။
+4. အထောက်အထားပစ္စည်း (FASTPQ + DA ကတိကဝတ်များ) သည် CBDC လမ်းကြောတွင် တည်ရှိနေပါသည်။ ပေါင်းစည်း-လယ်ဂျာတွင် ထည့်သွင်းမှုများသည် လျှို့ဝှက်ဒေတာပေါက်ကြားခြင်းမရှိဘဲ ကမ္ဘာ့နိုင်ငံတော်၏ အဆုံးအဖြတ်ကို ထိန်းသိမ်းထားသည်။
 
-1. Retail dApp requests an asset handle bound to its UAID + AXT digest. The CBDC lane verifies the handle via `AssetPermissionManifest::evaluate` (deny wins, allowances enforced).
-2. Both DS declare the same composability group so routing collapses them into the CBDC lane for atomic inclusion (`LaneRoutingPolicy` uses `group_id` when mutually whitelisted).
-3. During execution, the CBDC DS enforces AML/KYC proofs inside its circuit (`use_asset_handle` pseudocode in `nexus.md`), while the dApp DS updates local business state only after the CBDC fragment succeeds.
-4. Proof material (FASTPQ + DA commitments) stays confined to the CBDC lane; merge-ledger entries keep the global state deterministic without leaking private data.
+programmable-money replay archive တွင်-
 
-The programmable-money replay archive should include:
-
-- AXT descriptor + handle request/responses.
-- Norito-encoded transaction envelope.
-- Resulting receipts (happy path, deny path).
-- Telemetry snippets for `telemetry::fastpq.execution_mode`, `nexus_scheduler_lane_teu_slot_committed`, and `lane_commitments`.
+- AXT ဖော်ပြချက် + တောင်းဆိုချက်/တုံ့ပြန်မှုများကို ကိုင်တွယ်ပါ။
+- Norito-ကုဒ်ဝှက်ထားသော ငွေပေးငွေယူစာအိတ်။
+- ရလဒ်လက်ခံဖြတ်ပိုင်းများ (မင်္ဂလာလမ်း၊ ငြင်းပယ်လမ်းကြောင်း)။
+- `telemetry::fastpq.execution_mode`၊ `nexus_scheduler_lane_teu_slot_committed` နှင့် `lane_commitments` အတွက် Telemetry အတိုအထွာများ။
 
 ## 5. Observability & Runbooks
 
-- **Metrics:** Monitor `nexus_scheduler_lane_teu_capacity`, `nexus_scheduler_lane_teu_slot_committed`, `nexus_scheduler_lane_teu_deferral_total{reason}`, `governance_manifest_admission_total`, and `lane_governance_sealed_total` (see `docs/source/telemetry.md`).
-- **Dashboards:** Extend `docs/source/grafana_scheduler_teu.json` with a CBDC lane row; add panels for whitelist churn (annotations every activation epoch) and capability expiry pipelines.
-- **Alerts:** Trigger when `rate(nexus_scheduler_lane_teu_deferral_total{reason="cap_exceeded"}[5m]) > 0` for 15 minutes or when `lane_governance.manifest_ready=false` persists beyond one poll interval.
-- **Runbook pointers:** Link to protected-namespace guidance in `docs/source/governance_api.md` and programmable-money troubleshooting in `docs/source/nexus.md`.
+- **Metrics-** Monitor `nexus_scheduler_lane_teu_capacity`, `nexus_scheduler_lane_teu_slot_committed`, `nexus_scheduler_lane_teu_deferral_total{reason}`, `governance_manifest_admission_total`, နှင့် `lane_governance_sealed_total` (`docs/source/telemetry.md` ကိုကြည့်ပါ)။
+- **ဒိုင်ခွက်များ-** CBDC လမ်းသွားအတန်းဖြင့် `docs/source/grafana_scheduler_teu.json` ကို တိုးချဲ့ပါ။ whitelist churn အတွက် panels များထည့်ပါ (အသက်သွင်းသည့်အချိန်တိုင်းတွင် မှတ်ချက်များ) နှင့် သက်တမ်းကုန်ဆုံးနိုင်သော ပိုက်လိုင်းများ ပါဝင်သည်။
+- **သတိပေးချက်များ-** `rate(nexus_scheduler_lane_teu_deferral_total{reason="cap_exceeded"}[5m]) > 0` ကို 15 မိနစ်ကြာသည့်အခါ သို့မဟုတ် `lane_governance.manifest_ready=false` သည် စစ်တမ်းကာလတစ်ခုထက် ကျော်လွန်နေသည့်အခါ အစပျိုးပါ။
+- **Runbook ညွှန်ပြချက်များ-** `docs/source/governance_api.md` တွင် ကာကွယ်ထားသော-namespace လမ်းညွှန်ချက်နှင့် `docs/source/nexus.md` တွင် ပရိုဂရမ်ထုတ်နိုင်သော ငွေကြေးပြဿနာဖြေရှင်းခြင်းသို့ လင့်ခ်ချိတ်ပါ။
 
-## 6. Acceptance Checklist
+## 6. လက်ခံမှုစစ်ဆေးစာရင်း- [ ] CBDC လမ်းကြောကို `nexus.lane_catalog` တွင် TEU မက်တာဒေတာဖြင့် TEU စမ်းသပ်မှုများနှင့် ကိုက်ညီကြောင်း ကြေညာထားသည်။
+- [ ] `cbdc.manifest.json` ကို `cargo test -p integration_tests nexus::lane_registry` မှတစ်ဆင့် အတည်ပြုထားသော မန်နီးဖက်စ်လမ်းညွှန်တွင် ပါရှိသည့် `cbdc.manifest.json` ကို လက်မှတ်ရေးထိုးခဲ့သည်။
+- [ ] စွမ်းဆောင်ရည်ကို UAID တိုင်းအတွက် ထုတ်ပြန်ပြီး Space Directory တွင် သိမ်းဆည်းထားသည်။ ယူနစ်စစ်ဆေးမှုများ (`crates/iroha_data_model/src/nexus/manifest.rs`) မှတစ်ဆင့် အတည်ပြုထားသော ရှေ့တန်းကို ငြင်းပယ်/ခွင့်ပြုပါ။
+- [ ] အုပ်ချုပ်မှုခွင့်ပြုချက် ID၊ `activation_epoch` နှင့် Prometheus အထောက်အထားများဖြင့် မှတ်တမ်းတင်ထားသော Whitelist activation
+- [ ] Programmable-money replay ကို သိမ်းဆည်းပြီး၊ ထုတ်ပေးခြင်း၊ ငြင်းဆိုခြင်းနှင့် စီးဆင်းမှုများကို ခွင့်ပြုခြင်းတို့ကို ကိုင်တွယ်သရုပ်ပြခြင်း။
+- [ ] အထောက်အထားအစုအဝေးကို 🈯 မှ 🈺 မှ 🈺 မှ ဘွဲ့ရပြီးသည်နှင့် `status.md` မှ အုပ်ချုပ်မှုလက်မှတ်မှ လင့်ခ်ချိတ်ထားသော cryptographic digest ဖြင့် အပ်လုဒ်လုပ်ထားသော အထောက်အထားအတွဲ။
 
-- [ ] CBDC lane declared in `nexus.lane_catalog` with TEU metadata matching TEU tests.
-- [ ] Signed `cbdc.manifest.json` present in the manifest directory, validated via `cargo test -p integration_tests nexus::lane_registry`.
-- [ ] Capability manifests issued for every UAID and stored in Space Directory; deny/allow precedence verified via unit tests (`crates/iroha_data_model/src/nexus/manifest.rs`).
-- [ ] Whitelist activation recorded with governance approval ID, `activation_epoch`, and Prometheus evidence.
-- [ ] Programmable-money replay archived, demonstrating handle issuance, denial, and allow flows.
-- [ ] Evidence bundle uploaded with cryptographic digest, linked from governance ticket and `status.md` once NX-6 graduates from 🈯 to 🈺.
-
-Following this playbook satisfies the documentation deliverable for NX-6 and unblocks future roadmap items (NX-12/NX-15) by providing a deterministic template for CBDC lane configuration, whitelist onboarding, and programmable-money interoperability.
+ဤပြခန်းစာအုပ်ကို လိုက်နာခြင်းဖြင့် NX-6 အတွက် ပေးပို့နိုင်သော စာရွက်စာတမ်းအား ကျေနပ်စေပြီး CBDC လမ်းကြောဖွဲ့စည်းမှုပုံစံ၊ တရားဝင်စာရင်းသွင်းနိုင်မှုနှင့် ပရိုဂရမ်လုပ်နိုင်သော ငွေကြေး အပြန်အလှန်လုပ်ဆောင်နိုင်မှုတို့အတွက် တိကျသောပုံစံကို ပေးခြင်းဖြင့် အနာဂတ်လမ်းပြမြေပုံပါအရာများ (NX-12/NX-15) ကို ပိတ်ဆို့သွားပါမည်။

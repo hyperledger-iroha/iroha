@@ -7,48 +7,49 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 1b453559c05401edc11894e585c8d5ca4b678d4667c1cef0415582e1f7de8246
 source_last_modified: "2025-12-29T18:16:35.087502+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Economic Analysis - 2025-10 -> 2025-11 Shadow Run
+# དཔལ་འབྱོར་དབྱེ་དཔྱད། - ༢༠༢༥-༡༠ -> ༢༠༢༥-༡༡
 
-Source artefact: `docs/examples/soranet_incentive_shadow_run.json` (signature +
-public key in the same directory). The simulation replayed 60 epochs per relay
-with the reward engine pinned to `RewardConfig` recorded in
+འབྱུང་ཁུངས་ཅ་ལག་: `docs/examples/soranet_incentive_shadow_run.json` (མཚན་རྟགས་ +
+མི་མང་ལྡེ་མིག་ སྣོད་ཐོ་གཅིག་ནང་)། དཔེ་སྟོན་འདི་གིས་ རི་ལེ་རེ་ལུ་ དུས་སྐབས་༦༠ བསྐྱར་རྩེད་འབད་ཡོདཔ་ཨིན།
+2 2 2013 བར་དུ་ཐོ་འགོད་བྱས་པའི་ `RewardConfig` ལ་གསོལ་འདེབས་བྱས་ཡོད།
 `reward_config.json`.
 
-## Distribution Summary
+## བཀྲམ་སྤེལ།
 
-- **Total payouts:** 5,160 XOR over 360 rewarded epochs.
-- **Fairness envelope:** Gini coefficient 0.121; top relay share 23.26%
-  (well below the 30% governance guardrail).
-- **Availability:** fleet average 96.97%, all relays remained above 94%.
-- **Bandwidth:** fleet average 91.20%, with the lowest performer at 87.23%
-  during planned maintenance; penalties were applied automatically.
-- **Compliance noise:** 9 warning epochs and 3 suspensions were observed and
-  translated into payout reductions; no relay exceeded the 12-warning cap.
-- **Operational hygiene:** no metrics snapshots were skipped due to missing
-  config, bonds, or duplicates; no calculator errors were emitted.
+- **གླ་ཆ་ཡོངས་བསྡོམས་:** ༥,༡༦༠ XOR ༣༦༠ ལས་ལྷག་པའི་ གླ་ཆ་ཐོབ་པའི་དུས་རབས།
+- **དྲང་བདེན་གྱི་ཡིག་ཤུབས་:** གི་ནི་འཇལ་ཚད་ ༠.༡༢༡; མཐོ་རིམ་རི་ལེ་བགོ་བཤའ་ ༢༣.༢༦%
+  (ལེགས་ཆ། ༣༠% གཞུང་སྐྱོང་སྲུང་སྐྱོབ།)
+- **ཐོབ་ཚུགསཔ་:** ཆ་སྙོམས་ ༩༦.༩༧%, རི་ལེ་ཆ་མཉམ་ ༩༤% ལས་ལྷག་སྟེ་ལུས་ཡོདཔ་ཨིན།
+- **Bandwidth:** གྲུ་གཟིངས་ཆ་སྙོམས་ ༩༡.༢༠%, དང་མཉམ་པའི་ལས་དོན་དམའ་ཤོས་འདི་ ༨༧.༢༣% ལུ་ཡོདཔ་ཨིན།
+  འཆར་གཞི་བརྩམ་ཡོད་པའི་ ཉམས་བཅོས་འབད་བའི་སྐབས་; ཉེས་ཆད་ཚུ་ རང་བཞིན་གྱིས་ ལག་ལེན་འཐབ་ཡོདཔ་ཨིན།
+- **འགྲུལ་བསྐྱོད་ཀྱི་སྐད་ཆ།:** 9 ཉེན་བརྡའི་དུས་ཚིགས་དང་ མཚམས་འཇོག་ ༣ བལྟ་ཡོད།
+  དངུལ་ཕོགས་མར་ཕབ་ནང་ སྐད་སྒྱུར་འབད་ཡོདཔ། ༡༢-ཉེན་བརྡ་༡༢ ལས་བརྒལ་མ་བཏུབ།
+- **བཀོལ་སྤྱོད་ཀྱི་འཕྲོད་བསྟེན་:** མེད་མི་ལུ་བརྟེན་ མེཊིཀ་གི་པར་ཚུ་ གོམ་འགྱོ་ཡོདཔ་ཨིན།
+  རིམ་སྒྲིག་དང་ བུན་ཚབ་ ཡང་ན་ འདྲ་བཤུས་ཚུ། རྩིས་འཕྲུལ་གྱི་འཛོལ་བ་ཚུ་ བཏོན་གཏང་མ་ཚུགས།
 
-## Observations
+## ལྟ་རྟོག།
 
-- Suspensions correspond to epochs where relays entered maintenance mode. The
-  payout engine emitted zero payouts for those epochs while preserving the
-  audit trail in the shadow-run JSON.
-- Warning penalties shaved 2% off the affected payouts; the resulting
-  distribution still converges thanks to the uptime/bandwidth weights (650/350
-  per mille).
-- Bandwidth variance tracks the anonymised guard heatmap. The lowest performer
-  (`6666...6666`) retained 620 XOR across the window, above the 0.6x floor.
-- Latency-sensitive alerts (`SoranetRelayLatencySpike`) remained below warning
-  thresholds throughout the window; correlated dashboards are captured under
+- མཚམས་འཇོག་ཚུ་ རྒྱུན་སྐྱོང་འབད་ཡོད་པའི་ རྒྱུན་སྐྱོང་ཐབས་ལམ་ཡོད་པའི་ དུས་སྐབས་ཚུ་ལུ་ མཐུན་སྒྲིག་འབདཝ་ཨིན། ཚིག༌ཕྲད
+  འཕྲུལ་ཆས་འདི་ དུས་སྐབས་དེ་ཚུ་གི་དོན་ལུ་ ཀླད་ཀོར་གྱི་གླ་ཆ་ཚུ་ བཏོན་ཡོདཔ་ཨིན།
+  གྱིབ་མ་གིས་གཡོག་བཀོལ་མི་ JSON ནང་ལུ་ རྩིས་ཞིབ་ལམ་སྟོན།
+- ཉེན་བརྡའི་ཉེས་ཆད་ཚུ་གིས་ གནོད་སྐྱོན་བྱུང་མི་ གླ་ཆ་ཚུ་ལས་ བརྒྱ་ཆ་༢ བཤུབ་བཏང་ཡོདཔ། གྲུབ་མཐའ ོ།
+  བཀྲམ་སྤེལ་འདི་ད་ལྟོ་ཡང་ ཡར་འཕར་གྱི་དུས་ཚོད་/བཱན་ཌི་ཝིཌི་ཊི་ལྗིད་ཚད་ (༦༥༠/༣༥༠) ལུ་བརྟེན་ཏེ་ མཉམ་བསྡོམས་འབདཝ་ཨིན།
+  རེ རེ ) .
+- བཱན་ཝིཌ་ འགྱུར་ལྡོག་འདི་གིས་ མིང་མ་བཀོད་པའི་ ཉེན་སྲུངཔ་དྲོད་ཀྱི་སབ་ཁྲ་འདི་ བརྟག་ཞིབ་འབདཝ་ཨིན། དམའ་ཤོས་འཁྲབ་སྟོན་པ་འདི།
+  (`6666...6666`) གིས་ ༦༢༠ XOR འདི་ སྒོ་སྒྲིག་བདའ་སྟེ་ ༠.༦x གི་ཐོག་ཁར་ བཞག་སྟེ་ཡོདཔ་ཨིན།
+- འཕྲོ་བརླག་ཡོད་པའི་ཉེན་བརྡ་ (I18NI000000005X) ཉེན་བརྡ་འོག་ལུ་ལུས་ཡོདཔ།
+  སྒོ་སྒྲིག་ནང་འཁོད་ལུ་ ཚད་གཞི་ཚུ། འབྲེལ་མཐུད་འབད་ཡོད་པའི་ ཌེཤ་བོརཌི་ཚུ་ འོག་ལུ་བཀོད་དེ་ཡོད།
   `dashboards/grafana/soranet_incentives.json`.
 
-## Recommended Actions Before GA
+## འོས་སྦྱོར་འབད་ཡོད་པའི་བྱ་བ་ GA གི་ཧེ་མ་ལུ།
 
-1. Keep running monthly shadow replays and update the artefact set and this
-   analysis if the fleet composition changes.
-2. Gate automatic payouts on the Grafana alert suite referenced in the roadmap
-   (`dashboards/alerts/soranet_incentives_rules.yml`); copy screenshots into the
-   governance minutes when seeking renewal.
-3. Re-run the economic stress test if base reward, uptime/bandwidth weights, or
-   the compliance penalty changes by >=10%.
+༡ ཟླ་རིམ་གྱིབ་མ་བསྐྱར་རྩེད་ཚུ་ གཡོག་བཀོལ་ཞིནམ་ལས་ ཅ་རྙིང་ཆ་ཚན་དང་ འདི་དུས་མཐུན་བཟོ་དགོ།
+   དབྱེ་དཔྱད་འབད་བ་ཅིན་ མཚོ་གྲུ་གི་གྲུབ་ཆ་འདི་བསྒྱུར་བཅོས་འགྱོཝ་ཨིན།
+2. ལམ་གྱི་ས་ཁྲ་ནང་ Grafana དྲན་སྐུལ་ཆས་ཆས་གུ་ཡོད་པའི་ གཱེཊ་རང་འགུལ་གླ་ཆ་ཚུ།
+   (`dashboards/alerts/soranet_incentives_rules.yml`); འདྲ་བཤུས་ནང་ལུ་གསལ་གཞིའི་པར་ཚུ་ཚུ།
+   བསྐྱར་གསོ་འཚོལ་བའི་སྐབས།
+༣ གཞི་རྟེན་ཁེ་འབབ་དང་ དུས་ཚོད་ཡར་འཕར་/བཱན་ཝིཌ་ལྗིད་ཚད་ཚུ་ཨིན་པ་ཅིན་ དཔལ་འབྱོར་གྱི་གནོན་ཤུགས་བརྟག་དཔྱད་འདི་ ལོག་སྟེ་འབད།
+   བསྟར་སྤྱོད་ཀྱི་ཉེས་ཆད་བསྒྱུར་བཅོས་འདི་ >=༡༠% གིས་བཏབ།

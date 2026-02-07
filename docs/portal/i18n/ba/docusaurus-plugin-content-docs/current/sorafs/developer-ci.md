@@ -8,19 +8,21 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraFS CI Recipes
 sidebar_label: CI Recipes
 description: Run the SoraFS CLI inside GitHub and GitLab pipelines with keyless signing.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
-:::
+:::иҫкәртергә канонлы сығанаҡ
+::: 1990 й.
 
-# CI Recipes
+# CI Рецептар
 
-SoraFS pipelines benefit from deterministic chunking, manifest signing, and
-proof verification. The `sorafs_cli` command surface keeps those steps portable
-across CI providers. This page highlights the canonical recipes and points to
-ready-to-use templates.
+I18NT000000002X торбалары детерминистик өлөштәр, асыҡ ҡул ҡуйыу һәм
+иҫбатлаусы раҫлау. I18NI000000007X командаһы өҫтө шул аҙымдарҙы портатив тота
+CI провайдерҙары буйынса. Был биттә канон рецепттары айырып күрһәтә һәм
+әҙер шаблондар.
 
-## GitHub Actions (keyless)
+## GitHub ғәмәлдәре (классһыҙ)
 
 ```yaml
 name: sorafs-artifacts
@@ -93,11 +95,11 @@ jobs:
           path: artifacts/
 ```
 
-Key points:
+Төп балл:
 
-- No static signing keys are stored; OIDC tokens are fetched on-demand.
-- Artefacts (CAR, manifest, bundle, proof summaries) are uploaded for review.
-- The job reuses the same Norito schemas used in production rollouts.
+- Бер ниндәй ҙә статик ҡул ҡуйыу асҡыстары һаҡланмай; OIDC токендары ихтыяж буйынса алынған.
+- Артфакттар (CAR, асыҡ, өйөм, иҫбатлау резюмеһы) тикшерелгән өсөн тейәлгән.
+- Эш етештереүҙе таратыуҙа ҡулланылған шул уҡ I18NT000000001X схемаларын ҡабаттан файҙалана.
 
 ## GitLab CI
 
@@ -133,15 +135,15 @@ sorafs:publish:
       - artifacts/
 ```
 
-- Provision `SIGSTORE_ID_TOKEN` via GitLab’s workload identity federation or a
-  sealed secret before executing the publish stage.
-- Failure of any CLI step causes the pipeline to halt, preserving consistent
-  artefacts.
+- I18NI000000008X аша GitLab’s эш йөкләмәһе федерацияһы йәки а
+  нәшриәтте баҫтырып сығарыр алдынан герметизацияланған сер.
+- теләһә ниндәй CLI аҙымы етешмәүе торба үткәргес туҡтатыуға килтерә, эҙмә-эҙлекле һаҡлау
+  артефакттары.
 
-## Additional resources
+## Өҫтәмә ресурстар
 
-- End-to-end templates (includes Bash helpers, federated identity configuration,
-  and clean-up steps): `docs/examples/sorafs_ci.md`
-- CLI reference covering every option: `docs/source/sorafs_cli.md`
-- Governance/alias requirements prior to submission:
+- осона тиклем шаблондар (Баш ярҙамсыларын үҙ эсенә ала, федерацияланған шәхес конфигурацияһы,
+  һәм таҙартыу аҙымдары): `docs/examples/sorafs_ci.md` X
+- CLI һылтанмаһы һәр вариантты ҡаплай: `docs/source/sorafs_cli.md`
+- Идара итеү/псевдоним талаптары тапшырыу алдынан:
   `docs/source/sorafs/provider_admission_policy.md`

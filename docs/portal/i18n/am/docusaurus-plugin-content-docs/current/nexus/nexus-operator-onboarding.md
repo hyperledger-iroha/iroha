@@ -7,86 +7,88 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Sora Nexus data-space operator onboarding
 description: Mirror of `docs/source/sora_nexus_operator_onboarding.md`, tracking the end-to-end release checklist for Nexus operators.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
-This page mirrors `docs/source/sora_nexus_operator_onboarding.md`. Keep both copies aligned until the localized editions arrive in the portal.
-:::
+::: ማስታወሻ ቀኖናዊ ምንጭ
+ይህ ገጽ `docs/source/sora_nexus_operator_onboarding.md` ያንጸባርቃል። የተተረጎሙ እትሞች በፖርታሉ ላይ እስኪደርሱ ድረስ ሁለቱንም ቅጂዎች አንድ ላይ ያቆዩዋቸው።
+::
 
-# Sora Nexus Data-Space Operator Onboarding
+# Sora Nexus ዳታ-ስፔስ ኦፕሬተር ተሳፍሮ ላይ
 
-This guide captures the end-to-end flow Sora Nexus data-space operators must follow once a release is announced. It complements the dual-track runbook (`docs/source/release_dual_track_runbook.md`) and the artefact selection note (`docs/source/release_artifact_selection.md`) by describing how to align downloaded bundles/images, manifests, and configuration templates with the global lane expectations before bringing a node online.
+ይህ መመሪያ የሶራ Nexus ዳታ-ቦታ ኦፕሬተሮች አንድ ጊዜ መውጣቱ ከተገለጸ በኋላ ከጫፍ እስከ ጫፍ ያለውን ፍሰት ይይዛል። በመስመር ላይ መስቀለኛ መንገድ ከማምጣቱ በፊት የወረዱ ቅርቅቦችን/ምስሎችን፣ መግለጫዎችን እና የውቅረት አብነቶችን እንዴት ማቀናጀት እንደሚቻል በመግለጽ ባለሁለት ትራክ Runbook (`docs/source/release_dual_track_runbook.md`) እና የስነ ጥበብ ምርጫ ማስታወሻን (`docs/source/release_artifact_selection.md`) ያሟላል።
 
-## Audience & prerequisites
-- You have been approved by the Nexus Program and received your data-space assignment (lane index, data-space ID/alias, and routing policy requirements).
-- You can access the signed release artefacts published by Release Engineering (tarballs, images, manifests, signatures, public keys).
-- You have generated or received production key material for your validator/observer role (Ed25519 node identity; BLS consensus key + PoP for validators; plus any confidential feature toggles).
-- You can reach the existing Sora Nexus peers that will bootstrap your node.
+## ታዳሚዎች እና ቅድመ ሁኔታዎች
+- በI18NT0000003X ፕሮግራም ተቀባይነት አግኝተሃል እና የውሂብ-ቦታ ምደባህን ተቀብለሃል (የሌይን መረጃ ጠቋሚ፣ የዳታ-ቦታ መታወቂያ/ተለዋጭ ስም፣ እና የማዛወር ፖሊሲ መስፈርቶች)።
+- በተለቀቀው ምህንድስና የታተሙትን የተፈረሙ የተለቀቁ ቅርሶች (ታርቦሎች፣ ምስሎች፣ መግለጫዎች፣ ፊርማዎች፣ የህዝብ ቁልፎች) ማግኘት ይችላሉ።
+- ለእርስዎ አረጋጋጭ/ተመልካች ሚና (Ed25519 መስቀለኛ መንገድ መታወቂያ፣ BLS የጋራ ስምምነት ቁልፍ + ፖፕ ለአረጋጋጮች፣ እና ማንኛውም ሚስጥራዊ ባህሪ መቀያየር) የማምረቻ ቁልፍ ቁሳቁስ ፈጥረዋል ወይም ተቀብለዋል።
+- መስቀለኛ መንገድዎን የሚጭኑትን የሶራ Nexus አቻዎችን መድረስ ይችላሉ።
 
-## Step 1 — Confirm the release profile
-1. Identify the network alias or chain ID you were given.
-2. Run `scripts/select_release_profile.py --network <alias>` (or `--chain-id <id>`) on a checkout of this repository. The helper consults `release/network_profiles.toml` and prints the profile to deploy. For Sora Nexus the response must be `iroha3`. For any other value, stop and contact Release Engineering.
-3. Note the version tag the release announcement referenced (e.g. `iroha3-v3.2.0`); you will use it to fetch artefacts and manifests.
+## ደረጃ 1 - የመልቀቂያውን መገለጫ ያረጋግጡ
+1. የተሰጠዎትን የአውታረ መረብ ስም ወይም ሰንሰለት መታወቂያ ይለዩ።
+2. በዚህ ማከማቻ ቼክ ላይ I18NI0000021X (ወይም I18NI0000022X) ያሂዱ። ረዳቱ I18NI0000023Xን ያማክራል እና ፕሮፋይሉን ለማሰማራት ያትማል። ለሶራ I18NT0000005X ምላሹ `iroha3` መሆን አለበት። ለሌላ ማንኛውም እሴት፣ ያቁሙ እና የመልቀቂያ ምህንድስናን ያነጋግሩ።
+3. የተጠቀሰውን የመልቀቂያ ማስታወቂያ (ለምሳሌ `iroha3-v3.2.0`) ስሪቱን መለያ ይስጡ። ቅርሶችን እና መግለጫዎችን ለማምጣት ትጠቀማለህ።
 
-## Step 2 — Retrieve and validate artefacts
-1. Download the `iroha3` bundle (`<profile>-<version>-<os>.tar.zst`) and its companion files (`.sha256`, optional `.sig/.pub`, `<profile>-<version>-manifest.json`, and `<profile>-<version>-image.json` if you deploy containers).
-2. Validate integrity before unpacking:
+## ደረጃ 2 - ቅርሶችን ሰርስሮ አረጋግጥ
+1. `iroha3` ጥቅል (`<profile>-<version>-<os>.tar.zst`) እና ተጓዳኝ ፋይሎችን (`.sha256`፣ አማራጭ `.sig/.pub`፣ `<profile>-<version>-manifest.json`፣ እና I18NI000000031X) ያውርዱ።
+2. ከማሸግዎ በፊት ታማኝነትን ያረጋግጡ፡-
    ```bash
    sha256sum -c iroha3-<version>-linux.tar.zst.sha256
    openssl dgst -sha256 -verify iroha3-<version>-linux.tar.zst.pub \
        -signature iroha3-<version>-linux.tar.zst.sig \
        iroha3-<version>-linux.tar.zst
    ```
-   Replace `openssl` with the organisation-approved verifier if you use a hardware-backed KMS.
-3. Inspect `PROFILE.toml` inside the tarball and the JSON manifests to confirm:
+   በሃርድዌር የሚደገፍ KMS ከተጠቀሙ `openssl` በድርጅቱ የጸደቀ አረጋጋጭ ይተኩ።
+3. I18NI0000033X በታርቦል ውስጥ ይመርምሩ እና JSON ለማረጋገጥ ይገለጣል፡-
    - `profile = "iroha3"`
-   - The `version`, `commit`, and `built_at` fields match the release announcement.
-   - The OS/architecture match your deployment target.
-4. If you use the container image, repeat the hash/signature verification for `<profile>-<version>-<os>-image.tar` and confirm the image ID recorded in `<profile>-<version>-image.json`.
+   - የ `version`፣ `commit` እና I18NI0000037X መስኮች ከተለቀቀው ማስታወቂያ ጋር ይዛመዳሉ።
+   - ስርዓተ ክወናው/ሥነ ሕንፃው ከተሰማራበት ኢላማ ጋር ይዛመዳል።
+4. የመያዣውን ምስል ከተጠቀሙ ለ`<profile>-<version>-<os>-image.tar` ሃሽ/ፊርማ ማረጋገጫ ይድገሙት እና በ`<profile>-<version>-image.json` ውስጥ የተመዘገበውን የምስል መታወቂያ ያረጋግጡ።
 
-## Step 3 — Stage configuration from templates
-1. Extract the bundle and copy `config/` to the location where the node will read its configuration.
-2. Treat the files under `config/` as templates:
-   - Replace `public_key`/`private_key` with your production Ed25519 keys. Remove private keys from disk if the node will source them from an HSM; update the config to point at the HSM connector instead.
-   - Adjust `trusted_peers`, `network.address`, and `torii.address` so they reflect your reachable interfaces and the bootstrap peers you were assigned.
-   - Update `client.toml` with the operator-facing Torii endpoint (including TLS configuration if applicable) and the credentials you provision for operational tooling.
-3. Keep the chain ID provided in the bundle unless Governance explicitly instructs otherwise—the global lane expects a single canonical chain identifier.
-4. Plan to start the node with the Sora profile flag: `irohad --sora --config <path>`. The configuration loader will reject SoraFS or multi-lane settings when the flag is absent.
+## ደረጃ 3 - የደረጃ ውቅር ከአብነት
+1. ጥቅሉን አውጥተው `config/` ወደ መስቀለኛ መንገድ አወቃቀሩን ወደሚያነብበት ቦታ ይቅዱ።
+2. በ`config/` ስር ያሉ ፋይሎችን እንደ አብነት ይያዙ፡-
+   - `public_key`/I18NI0000043X በምርትህ Ed25519 ቁልፎች ተካ። መስቀለኛ መንገድ ከኤች.ኤም.ኤም. የሚያወጣቸው ከሆነ የግል ቁልፎችን ከዲስክ ያስወግዱ; በምትኩ HSM አያያዥ ላይ ለመጠቆም ውቅሩን አዘምን።
+   - `trusted_peers`፣ `network.address`፣ እና I18NI0000046X አስተካክል በዚህም የእርስዎን ሊደረስባቸው የሚችሉ በይነገጾች እና የተመደብክበትን ቡትስትራፕ እኩዮችህን እንዲያንጸባርቁ አድርግ።
+   - `client.toml`ን ከኦፕሬተሩ ከሚመለከተው Torii የመጨረሻ ነጥብ (የሚመለከተው ከሆነ የቲኤልኤስ ውቅርን ጨምሮ) እና ለስራ ማስኬጃ መሳሪያዎች ያቀረቡትን ምስክርነቶች ያዘምኑ።
+3. አስተዳደር በግልፅ ካላስተማረ በስተቀር የቀረበውን የሰንሰለት መታወቂያ በጥቅሉ ውስጥ ያቆዩት - አለም አቀፍ መስመር አንድ ነጠላ ቀኖናዊ ሰንሰለት መለያ ይጠብቃል።
+4. መስቀለኛ መንገድን በሶራ ፕሮፋይል ባንዲራ ለመጀመር ያቅዱ፡ `irohad --sora --config <path>`። ባንዲራ በማይኖርበት ጊዜ የውቅረት ጫኚው SoraFS ወይም ባለብዙ መስመር ቅንብሮችን ውድቅ ያደርጋል።
 
-## Step 4 — Align data-space metadata and routing
-1. Edit `config/config.toml` so the `[nexus]` section matches the data-space catalogue the Nexus Council provided:
-   - `lane_count` must equal the total lanes enabled in the current epoch.
-   - Every entry in `[[nexus.lane_catalog]]` and `[[nexus.dataspace_catalog]]` must contain a unique `index`/`id` and the agreed aliases. Do not delete the existing global entries; add your delegated aliases if the council assigned additional data-spaces.
-   - Ensure each dataspace entry includes `fault_tolerance (f)`; lane-relay committees are sized at `3f+1`.
-2. Update `[[nexus.routing_policy.rules]]` to capture the policy you were given. The default template routes governance instructions to lane `1` and contract deployments to lane `2`; append or modify rules so traffic destined for your data-space is forwarded to the correct lane and alias. Coordinate with Release Engineering before changing rule order.
-3. Review `[nexus.da]`, `[nexus.da.audit]`, and `[nexus.da.recovery]` thresholds. Operators are expected to keep the council-approved values; only adjust them if an updated policy was ratified.
-4. Record the final configuration in your operations tracker. The dual-track release runbook requires attaching the effective `config.toml` (with secrets redacted) to the onboarding ticket.
+## ደረጃ 4 - የውሂብ-ቦታ ሜታዳታ እና ማዘዋወርን አሰልፍ
+1. `config/config.toml` ያርትዑ ስለዚህ የ`[nexus]` ክፍል ከውሂብ-ቦታ ካታሎግ ከቀረበው Nexus ምክር ቤት ጋር ይዛመዳል፡
+   - `lane_count` አሁን ባለው ዘመን የነቁትን አጠቃላይ መስመሮች እኩል መሆን አለበት።
+   - በ`[[nexus.lane_catalog]]` እና I18NI0000053X ውስጥ ያለው እያንዳንዱ ግቤት ልዩ I18NI0000054X/`id` እና የተስማሙ ስሞችን መያዝ አለበት። ያሉትን ዓለም አቀፍ ግቤቶችን አይሰርዙ; ምክር ቤቱ ተጨማሪ የውሂብ ቦታዎችን ከሰጠ የተወከሉ ተለዋጭ ስሞችዎን ያክሉ።
+   - እያንዳንዱ የውሂብ ቦታ ግቤት `fault_tolerance (f)` ማካተቱን ያረጋግጡ; የሌይን ማስተላለፊያ ኮሚቴዎች መጠን `3f+1` ነው።
+2. የተሰጡዎትን ፖሊሲ ለመያዝ I18NI0000058X ያዘምኑ። ነባሪው አብነት የአስተዳደር መመሪያዎችን ወደ መስመር መስመር `1` እና የውል ስምምነቶችን ወደ መስመር I18NI0000060X; ለእርስዎ ውሂብ-ቦታ የታሰበ ትራፊክ ወደ ትክክለኛው መስመር እና ተለዋጭ ስም እንዲተላለፍ ህጎችን ጨምር ወይም ቀይር። የመተዳደሪያ ደንብን ከመቀየርዎ በፊት ከተለቀቀው ምህንድስና ጋር ያስተባበሩ።
+3. `[nexus.da]`፣ I18NI0000062X እና I18NI0000063X ጣራዎችን ይገምግሙ። ኦፕሬተሮች በካውንስሉ የፀደቁ እሴቶችን እንዲጠብቁ ይጠበቃሉ; የዘመነ መመሪያ ከጸደቀ ብቻ አስተካክላቸው።
+4. በኦፕሬሽን መከታተያዎ ውስጥ የመጨረሻውን ውቅር ይመዝግቡ። ባለሁለት ትራክ መልቀቅ Runbook ውጤታማውን `config.toml` (ምስጢሮች ከተደረጉት ጋር) ከቦርዲንግ ትኬት ጋር ማያያዝን ይጠይቃል።
 
-## Step 5 — Pre-flight validation
-1. Run the built-in configuration validator before joining the network:
+## ደረጃ 5 - የቅድመ-በረራ ማረጋገጫ
+1. አውታረ መረቡን ከመቀላቀልዎ በፊት አብሮ የተሰራውን የውቅር አረጋጋጭ ያሂዱ፡-
    ```bash
    ./bin/irohad --sora --config config/config.toml --trace-config
    ```
-   This prints the resolved configuration and fails early if catalogue/routing entries are inconsistent or if genesis and config disagree.
-2. If you deploy containers, run the same command inside the image after loading it with `docker load -i <profile>-<version>-<os>-image.tar` (remember to include `--sora`).
-3. Check logs for warnings about placeholder lane/data-space identifiers. If any appear, revisit Step 4—production deployments must not rely on the placeholder IDs that ship with the templates.
-4. Execute your local smoke procedure (e.g., submit a `FindNetworkStatus` query with `iroha_cli`, confirm telemetry endpoints expose `nexus_lane_state_total`, and verify streaming keys are rotated or imported as required).
+   ይህ የተፈታውን ውቅረት ያትማል እና ካታሎግ/ማዘዋወሪያ ግቤቶች የማይጣጣሙ ከሆኑ ወይም ዘፍጥረት እና ውቅረት ካልተስማሙ ቀደም ብሎ አይሳካም።
+2. ኮንቴይነሮችን ካሰማራ, `docker load -i <profile>-<version>-<os>-image.tar` ን ከጫኑ በኋላ በምስሉ ውስጥ ተመሳሳይ ትዕዛዝ ያሂዱ (`--sora` ን ማካተት እንዳለብዎ ያስታውሱ).
+3. ስለ ቦታ ያዥ ሌይን/የውሂብ-ቦታ ለዪዎች ማስጠንቀቂያ ለማግኘት ምዝግብ ማስታወሻዎችን ይመልከቱ። ማንኛውም ከታየ፣ ደረጃ 4ን እንደገና ይጎብኙ—የምርት ማሰማራት አብነቶችን ይዘው በሚላኩ የቦታ ያዥ መታወቂያዎች ላይ መተማመን የለባቸውም።
+4. የአካባቢዎን የጭስ አሰራር ሂደት ያስፈጽሙ (ለምሳሌ፡- የI18NI0000067X መጠይቅን ከI18NI0000068X ጋር ያቅርቡ፣የቴሌሜትሪ የመጨረሻ ነጥቦችን ያረጋግጡ `nexus_lane_state_total` እና የዥረት ቁልፎች መዞራቸውን ወይም እንደአስፈላጊነቱ ከውጭ መምጣታቸውን ያረጋግጡ)።
 
-## Step 6 — Cutover and hand-off
-1. Store the verified `manifest.json` and signature artifacts in the release ticket so auditors can reproduce your checks.
-2. Notify Nexus Operations that the node is ready to be introduced; include:
-   - Node identity (peer ID, hostnames, Torii endpoint).
-   - Effective lane/data-space catalogue and routing policy values.
-   - Hashes of the binaries/images you verified.
-3. Coordinate the final peer admission (gossip seeds and lane assignment) with `@nexus-core`. Do not join the network until you receive approval; Sora Nexus enforces deterministic lane occupancy and requires an updated admissions manifest.
-4. After the node is live, update your runbooks with any overrides you introduced and note the release tag so the next iteration can start from this baseline.
+## ደረጃ 6 - መቁረጫ እና እጅ ማውጣት
+1. ኦዲተሮች ቼኮችዎን ማባዛት እንዲችሉ የተረጋገጡ I18NI0000070X እና የፊርማ ቅርሶችን በመልቀቂያ ትኬት ውስጥ ያከማቹ።
+2. መስቀለኛ መንገድ ለመተዋወቅ ዝግጁ መሆኑን ለI18NT0000007X ኦፕሬሽኖች ያሳውቁ; ያካትቱ፡
+   - የመስቀለኛ መንገድ ማንነት (የአቻ መታወቂያ፣ የአስተናጋጅ ስሞች፣ Torii የመጨረሻ ነጥብ)።
+   - ውጤታማ የሌይን/የመረጃ-ቦታ ካታሎግ እና የማዞሪያ መመሪያ እሴቶች።
+   - ያረጋገጡዋቸው የሁለትዮሽ/ምስሎች Hashes።
+3. የመጨረሻውን የአቻ ቅበላ (የሐሜት ዘሮች እና የሌይን ምደባ) ከI18NI0000071X ጋር ማስተባበር። ፈቃድ እስኪያገኙ ድረስ አውታረ መረቡን አይቀላቀሉ; Sora Nexus የሚወስን ሌይን መኖርን ያስፈጽማል እና የዘመነ የመግቢያ ሰነድ ያስፈልገዋል።
+4. መስቀለኛ መንገድ ቀጥታ ከሆነ በኋላ፣ ካስተዋወቋቸው ማናቸውንም መሻሮች ጋር Runbooks ያዘምኑ እና የመልቀቂያ መለያውን ያስተውሉ ቀጣዩ ድግግሞሽ ከዚህ መነሻ መስመር ይጀምራል።
 
-## Reference checklist
-- [ ] Release profile validated as `iroha3`.
-- [ ] Bundle/image hashes and signatures verified.
-- [ ] Keys, peer addresses, and Torii endpoints updated to production values.
-- [ ] Nexus lane/dataspace catalogue and routing policy match council assignment.
-- [ ] Configuration validator (`irohad --sora --config … --trace-config`) passes without warnings.
-- [ ] Manifests/signatures archived in the onboarding ticket and Ops notified.
+## የማጣቀሻ ዝርዝር
+- [ ] የመልቀቂያ መገለጫ እንደ `iroha3` ተረጋግጧል።
+- [ ] ቅርቅብ/ምስል ሃሽ እና ፊርማዎች ተረጋግጠዋል።
+- [ ] ቁልፎች፣ የአቻ አድራሻዎች፣ እና Torii የመጨረሻ ነጥቦች ወደ ምርት ዋጋዎች ተዘምነዋል።
+- [ ] Nexus ሌይን/ዳታ ቦታ ካታሎግ እና ማዘዋወር ፖሊሲ የምክር ቤት ምደባ።
+- [ ] የማዋቀር አረጋጋጭ (`irohad --sora --config … --trace-config`) ያለ ማስጠንቀቂያ ያልፋል።
+- [ ] መግለጫዎች/ፊርማዎች በመሳፈሪያ ትኬት ውስጥ ተቀምጠዋል እና ኦፕስ ማሳወቂያ ደረሰ።
 
-For broader context on Nexus migration phases and telemetry expectations, review [Nexus transition notes](./nexus-transition-notes).
+ለሰፋፊ አውድ በI18NT0000010X የፍልሰት ደረጃዎች እና የቴሌሜትሪ ተስፋዎች፣ [Nexus የሽግግር ማስታወሻዎች](./nexus-transition-notes) ይገምግሙ።

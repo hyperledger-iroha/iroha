@@ -7,50 +7,50 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 6742d2b87b8fbbc1493c5ae2704147b0f8d5d23af78004c2c9a112fe881efb11
 source_last_modified: "2025-12-29T18:16:35.937402+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% SM2/SM3/SM4 Export-Control Statement Template
-% Hyperledger Iroha Compliance Working Group
+% SM2/SM3/SM4 ექსპორტის კონტროლის განცხადების შაბლონი
+% Hyperledger Iroha შესაბამისობის სამუშაო ჯგუფი
 % 2026-05-06
 
-# Usage
+#გამოყენება
 
-Embed this statement in release notes, manifests, or legal correspondence when
-distributing SM-enabled artefacts. Update the placeholders to match the release,
-jurisdiction, and applicable license exceptions. Retain a signed copy with the
-release checklist.
+ჩადეთ ეს განცხადება გამოშვების შენიშვნებში, მანიფესტებში ან იურიდიულ მიმოწერაში, როდესაც
+SM-ზე ჩართული არტეფაქტების გავრცელება. განაახლეთ ჩანაცვლების ველები გამოშვების შესატყვისად,
+იურისდიქცია და მოქმედი სალიცენზიო გამონაკლისები. შეინახეთ ხელმოწერილი ასლი
+გამოშვების საკონტროლო სია.
 
-# Statement
+#განცხადება
 
-> **Product:** Hyperledger Iroha {{ RELEASE_VERSION }} (`{{ ARTEFACT_ID }}`)
+> **პროდუქტი:** Hyperledger Iroha {{ RELEASE_VERSION }} (`{{ ARTEFACT_ID }}`)
 >
-> **Algorithms Included:** SM2 digital signature, SM3 hashing, SM4 symmetric
-> encryption (GCM/CCM)
+> ** მოყვება ალგორითმები: ** SM2 ციფრული ხელმოწერა, SM3 ჰეშინგი, SM4 სიმეტრიული
+> დაშიფვრა (GCM/CCM)
 >
-> **Export Classification:** United States EAR Category 5, Part 2 (5D002.c.1);
-> European Union Regulation 2021/821 Annex 1, 5D002.
+> **ექსპორტის კლასიფიკაცია:** შეერთებული შტატების EAR კატეგორია 5, ნაწილი 2 (5D002.c.1);
+> ევროკავშირის რეგულაცია 2021/821 დანართი 1, 5D002.
 >
-> **License Exception(s):** {{ LICENSE_EXCEPTION }} (e.g., ENC §740.17(b)(2),
-> TSU §740.13 for source distribution).
+> **ლიცენზიის გამონაკლისი(ები):** {{ LICENSE_EXCEPTION }} (მაგ., ENC §740.17(b)(2),
+> თსუ §740.13 წყაროს განაწილებისთვის).
 >
-> **Distribution Scope:** {{ DISTRIBUTION_SCOPE }} (e.g., “Global, excluding
-> embargoed territories listed in 15 CFR 746”).
+> **დისტრიბუციის სფერო:** {{ DISTRIBUTION_SCOPE }} (მაგ., „გლობალური, გამოკლებით
+> ემბარგოს ქვეშ მყოფი ტერიტორიები ჩამოთვლილი 15 CFR 746”).
 >
-> **Operator Obligations:** Recipients must comply with applicable export,
-> import, and usage regulations. Deployments within the People’s Republic of
-> China require product and usage filings with the State Cryptography
-> Administration and adherence to mainland data residency requirements.
+> **ოპერატორის ვალდებულებები: ** მიმღებებმა უნდა შეასრულონ შესაბამისი ექსპორტი,
+> იმპორტისა და გამოყენების წესები. განლაგება სახალხო რესპუბლიკაში
+> ჩინეთი მოითხოვს პროდუქტის და გამოყენების შეტანას სახელმწიფო კრიპტოგრაფიით
+> ადმინისტრირება და მატერიკზე მონაცემების რეზიდენტობის მოთხოვნების დაცვა.
 >
-> **Contact:** {{ LEGAL_CONTACT_NAME }} — {{ LEGAL_CONTACT_EMAIL }} /
+> **კონტაქტი:** {{ LEGAL_CONTACT_NAME }} — {{ LEGAL_CONTACT_EMAIL }} /
 > {{ LEGAL_CONTACT_PHONE }}
 >
-> This statement accompanies the cryptography compliance checklist and filing
-> templates provided in `docs/source/crypto/sm_compliance_brief.md`. Retain this
-> document and associated filings for a minimum of three years.
+> ეს განცხადება თან ახლავს კრიპტოგრაფიის შესაბამისობის საკონტროლო სიას და წარდგენას
+> შაბლონები მოცემულია `docs/source/crypto/sm_compliance_brief.md`-ში. შეინახეთ ეს
+> დოკუმენტი და მასთან დაკავშირებული ფაილები მინიმუმ სამი წლის განმავლობაში.
 
-# Signature
+#ხელმოწერა
 
-- Authorised representative: ________________________
-- Title: ________________________
-- Date: ________________________
-
+- უფლებამოსილი წარმომადგენელი: _______________________
+- სათაური: _______________________
+- თარიღი: _______________________

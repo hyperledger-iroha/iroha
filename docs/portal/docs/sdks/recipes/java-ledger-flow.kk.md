@@ -10,28 +10,29 @@ translation_last_reviewed: 2026-02-07
 title: Java ledger flow recipe
 description: Drive the register → mint → transfer demo using the IrohaAndroid JVM library.
 slug: /sdks/recipes/java-ledger-flow
+translator: machine-google-reviewed
 ---
 
-import SampleDownload from '@site/src/components/SampleDownload';
+SampleDownload файлын '@site/src/components/SampleDownload' ішінен импорттау;
 
-This recipe targets the desktop/JVM variant of the `java/iroha_android` module.
-It mirrors the CLI walkthrough by registering an asset definition, minting into
-the admin account, transferring to a second account, and printing the resulting
-balance.
+Бұл рецепт `java/iroha_android` модулінің жұмыс үстелі/JVM нұсқасына бағытталған.
+Ол актив анықтамасын тіркеу, енгізу арқылы CLI қадамын көрсетеді
+әкімші тіркелгісі, екінші тіркелгіге көшіру және нәтижені басып шығару
+теңгерім.
 
-<SampleDownload
+<Үлгі жүктеп алу
   href="/sdk-recipes/java/src/main/java/ledger/LedgerFlow.java"
   filename="src/main/java/ledger/LedgerFlow.java"
-  description="Download the complete Java example to import into your IDE or project template."
+  description="IDE немесе жоба үлгісіне импорттау үшін толық Java мысалын жүктеп алыңыз."
 />
 
-## 1. Register the asset definition (CLI)
+## 1. Актив анықтамасын (CLI) тіркеңіз
 
 ```bash
 iroha --config defaults/client.toml asset definition register --id coffee#wonderland
 ```
 
-## 2. Export credentials
+## 2. Тіркелгі деректерін экспорттау
 
 ```bash
 # raw 32-byte Ed25519 private key in hex (without multicodec prefix)
@@ -40,10 +41,10 @@ export ADMIN_ACCOUNT="ih58..."
 export RECEIVER_ACCOUNT="ih58..."
 ```
 
-> Use `iroha_cli tools crypto private-key export --raw --private-key <multihash>` if you
-> need to strip the multihash prefix from the default config.
+> Егер қажет болса, `iroha_cli tools crypto private-key export --raw --private-key <multihash>` пайдаланыңыз
+> әдепкі конфигурациядан мультихэш префиксін алып тастау керек.
 
-## 3. Add dependencies
+## 3. Тәуелділіктерді қосыңыз
 
 ```kts title="build.gradle.kts"
 dependencies {
@@ -52,7 +53,7 @@ dependencies {
 }
 ```
 
-## 4. Example program
+## 4. Мысал бағдарлама
 
 ```java title="src/main/java/ledger/LedgerFlow.java"
 package ledger;
@@ -178,10 +179,10 @@ public final class LedgerFlow {
 }
 ```
 
-Compile with your preferred build tool (`./gradlew :java:iroha_android:assemble && ./gradlew run`).
+Қалаған құрастыру құралымен (`./gradlew :java:iroha_android:assemble && ./gradlew run`) құрастырыңыз.
 
-## 5. Verify parity
+## 5. Тепе-теңдікті тексеріңіз
 
-- Inspect the transaction hashes via `iroha --config defaults/client.toml transaction get --hash <hash>`.
-- Fetch balances with the CLI (`asset list filter '{"id":"coffee#wonderland##<account>"}'`).
-- Compare results with the Rust/Python/JavaScript/Swift recipes to ensure every SDK produces identical Norito payloads for the demo flow.
+- `iroha --config defaults/client.toml transaction get --hash <hash>` арқылы транзакция хэштерін тексеріңіз.
+- CLI (`asset list filter '{"id":"coffee#wonderland##<account>"}'`) көмегімен баланстарды алу.
+- Әрбір SDK демо ағыны үшін бірдей Norito пайдалы жүктемелерді шығаратынына көз жеткізу үшін нәтижелерді Rust/Python/JavaScript/Swift рецептерімен салыстырыңыз.

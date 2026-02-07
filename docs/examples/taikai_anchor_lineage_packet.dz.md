@@ -7,35 +7,34 @@ generator: scripts/sync_docs_i18n.py
 source_hash: a2037fed472e37a06559e7cd871c1b916b514b9804f309413fc369d5ded662b6
 source_last_modified: "2025-12-29T18:16:35.095373+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-<!--
-  SPDX-License-Identifier: Apache-2.0
--->
+I18NH0000009X
 
-# Taikai Anchor Lineage Packet Template (SN13-C)
+# ཏའི་ཀའི་ཨེན་ཀོར་རིམ་ཐིག་སྒྲོམ་གྱི་ཊེམ་པེལེཊ་ (SN13-C)
 
-Roadmap item **SN13-C — Manifests & SoraNS anchors** requires every alias
-rotation to ship a deterministic evidence bundle. Copy this template into your
-rollout artefact directory (for example
-`artifacts/taikai/anchor/<event>/<alias>/<timestamp>/packet.md`) and replace
-the placeholders before submitting the packet to governance.
+རོ་ཌི་མེཔ་རྣམ་གྲངས་ **SN13-C — མ་ཕེསཊ་དང་སོ་ར་ཨེན་ཨེསི་ཨེན་ཀོར་** ལུ་ མིང་གཞན་རེ་རེ་དགོཔ་ཨིན།
+ཐག་གཅོད་ཀྱི་སྒྲུབ་བྱེད་ཀྱི་བང་སྒྲིག་ཅིག་བཏང་ནི། ཊེམ་པེལེཊི་འདི་ཁྱོད་ཀྱི་ནང་ལུ་འདྲ་བཤུས་རྐྱབས།
+རོལ་ཆ་ཅ་མཛོད་སྣོད་ཐོ།(དཔེར་ན་ རྗེས་སོར་ཅ་མཛོད་སྣོད་ཐོ།
+`artifacts/taikai/anchor/<event>/<alias>/<timestamp>/packet.md` དང་ཚབ་མ།
+ཐུམ་སྒྲིལ་འདི་ གཞུང་སྐྱོང་ལུ་མ་ཕུལ་བའི་ཧེ་མ་ ས་གནས་འཛིན་མི་ཚུ།
 
-## 1. Metadata
+## 1. མེ་ཏ་ཌེ་ཊ་
 
-| Field | Value |
-|-------|-------|
-| Event ID | `<taikai.event.launch-2026-07-10>` |
-| Stream / rendition | `<main-stage>` |
-| Alias namespace / name | `<sora / docs>` |
-| Evidence directory | `artifacts/taikai/anchor/<event>/<alias>/2026-07-10T18-00Z/` |
-| Operator contact | `<name + email>` |
-| GAR / RPT ticket | `<governance ticket or GAR digest>` |
+| ཕིལཌ་ | གནས་གོང་ |
+|-------|--|-------------------------------------------------------------------------
+| བྱུང་རིམ་ཨའི་ཌི་ | `<taikai.event.launch-2026-07-10>` |
+| རྒྱུན་ལམ་ / བརྡ་བཀོད་ | `<main-stage>` |
+| མིང་གཞན་ / མིང་ | `<sora / docs>` |
+| སྒྲུབ་བྱེད་ཀྱི་སྣོད་ཐོ། | `artifacts/taikai/anchor/<event>/<alias>/2026-07-10T18-00Z/` |
+| བཀོལ་སྤྱོད་འབྲེལ་བ་འཐབ་ནི། | `<name + email>` |
+| GAR / RPT ཤོག་འཛིན་ | `<governance ticket or GAR digest>` |
 
-## Bundle helper (optional)
+## བུནཌལ་རོགས་སྐྱོར་ (གདམ་ཁ་ཅན།)
 
-Copy the spool artefacts and emit a JSON (optionally signed) summary before
-filling in the remaining sections:
+ཕུན་ཚོགས་གླིང་གི་ ཅ་རྙིང་ཚུ་འདྲ་བཤུས་རྐྱབས་ཞིནམ་ལས་ ༼གདམ་ཁ་ཅན་སྦེ་མཚན་རྟགས་བཀོད་ཡོདཔ་༽ བཅུད་བསྡུས་ཅིག་ དེ་གི་ཧེ་མ་ལས་ བཏོནམ་ཨིན།
+ལྷག་ལུས་དབྱེ་ཚན་ཚུ་ནང་བཀང་ནི།
 
 ```bash
 cargo xtask taikai-anchor-bundle \
@@ -45,88 +44,83 @@ cargo xtask taikai-anchor-bundle \
   --signing-key <hex-ed25519-optional>
 ```
 
-The helper pulls `taikai-anchor-request-*`, `taikai-trm-state-*`,
-`taikai-lineage-*`, envelopes, and sentinels out of the Taikai spool directory
-(`config.da_ingest.manifest_store_dir/taikai`) so the evidence folder already
-contains the exact files referenced below.
+གྲོགས་རམ་པ་འདི་གིས་ `taikai-anchor-request-*`, `taikai-trm-state-*`, འཐེན་དོ་ཡོདཔ་ཨིན།
+I18NI000000019X ཏའི་ཀའི་ སྤུ་ནོལ་སྣོད་ཐོ་ལས་ ཡིག་ཤུབས་དང་ བརྡ་རྟགས་ཚུ་ ཕྱིར་ཐོན་འབདཝ་ཨིན།
+(I18NI000000020X) དེ་འབདཝ་ལས་ སྒྲུབ་བྱེད་སྣོད་འཛིན་འདི་ཧེ་མ་ལས་རང་ཨིན།
+གཤམ་ལུ་གཞི་བསྟུན་འབད་ཡོད་པའི་ཡིག་སྣོད་ངོ་མ་ཚུ་ཡོདཔ་ཨིན།
 
-## 2. Lineage ledger & hint
+## 2. རིམ་འགྲོས་ལེར་དང་བརྡ་སྟོན་པ།
 
-Attach both the on-disk lineage ledger and the hint JSON Torii wrote for this
-window. These come directly from
-`config.da_ingest.manifest_store_dir/taikai/taikai-trm-state-<alias>.json` and
-`taikai-lineage-<lane>-<epoch>-<sequence>-<storage_ticket>-<fingerprint>.json`.
+འདི་གི་དོན་ལུ་ ཌིཀསི་གུ་ཡོད་པའི་ རིགས་རྒྱུད་ཀྱི་རྩིས་ཁྲ་དང་ བརྡ་སྟོན་ JSON I18NT0000003X གཉིས་ཆ་ར་ མཉམ་སྦྲགས་འབད།
+སྒོང༌སྒྲིག། འདི་ཚུ་ཐད་ཀར་དུ་འོངམ་ཨིན།
+`config.da_ingest.manifest_store_dir/taikai/taikai-trm-state-<alias>.json` དང་།
+I18NI0000002X.
 
-| Artefact | File | SHA-256 | Notes |
-|----------|------|---------|-------|
-| Lineage ledger | `taikai-trm-state-docs.json` | `<sha256>` | Proves the previous manifest digest/window. |
-| Lineage hint | `taikai-lineage-l1-140-6a-b2b.json` | `<sha256>` | Captured before uploading to SoraNS anchor. |
+| ཅ་ཆས། | ཡིག་སྣོད་ | SHA-256 | དྲན་ཐོ། |
+|------------------------------------------------ |
+| རིམ་འགྲོས་ལེ་ཇར་ | I18NI0000023X | `<sha256>` | ཧེ་མའི་མངོན་རྟགས་ བཞུ་ནི་/སྒོ་སྒྲིག་འདི་བདེན་སྦྱོར་འབདཝ་ཨིན། |
+| རིམ་འགྲོས་བརྡ་སྟོན་ | I18NI0000025X | `<sha256>` | SoraNS anchor ལུ་ སྐྱེལ་བཙུགས་མ་འབད་བའི་ཧེ་མ་ བཟུང་ཡོདཔ། |
 
 ```bash
 sha256sum artifacts/taikai/anchor/<event>/<alias>/<ts>/taikai-trm-state-*.json \
   | tee artifacts/taikai/anchor/<event>/<alias>/<ts>/hashes/lineage.sha256
 ```
 
-## 3. Anchor payload capture
+## 3. ཨེན་ཀོར་པེ་ལོཌ་འཛིན་བཟུང་།
 
-Record the POST payload that Torii delivered to the anchor service. The payload
-includes `envelope_base64`, `ssm_base64`, `trm_base64`, and the inline
-`lineage_hint` object; audits rely on this capture to prove the hint that was
-sent to SoraNS. Torii now writes this JSON automatically as
+18NT00000004X འདི་ གཞི་བཙུགས་འབད་མི་ཞབས་ཏོག་ལུ་ བཀྲམ་སྤེལ་འབད་མི་ POST pathles འདི་ཐོ་བཀོད་འབད། སྤྲོད་ལེན་འདི།
+I18NI000000027X, `ssm_base64`, `trm_base64`, དང་ ནང་ཐིག་ཚུ་ཚུདཔ་ཨིན།
+`lineage_hint` དངོས་པོ་; རྩིས་ཞིབ་འདི་ འཛིན་བཟུང་འདི་ལུ་བརྟེན་ཏེ་ བརྡ་སྟོན་འདི་ བདེན་ཁུངས་བཀལ་ཡོདཔ་ཨིན།
+སོ་ར་ཨེན་ཨེསི་ལུ་བཏང་ཡོདཔ། Torii ད་ལྟ་ JSON འདི་རང་བཞིན་གྱིས་བྲིས།
 `taikai-anchor-request-<lane>-<epoch>-<sequence>-<ticket>-<fingerprint>.json`
-inside the Taikai spool directory (`config.da_ingest.manifest_store_dir/taikai/`), so
-operators can copy it directly instead of scraping HTTP logs.
+ཐའེ་ཀའི་ སྤུ་ནོལ་སྣོད་ཐོ་ (`config.da_ingest.manifest_store_dir/taikai/`), དེ་བཞིན་
+བཀོལ་སྤྱོད་པ་ཚུ་གིས་ ཨེཆ་ཊི་ཊི་པི་དྲན་དེབ་ཚུ་ བཏོན་གཏང་ནིའི་ཚབ་ལུ་ ཐད་ཀར་དུ་འདྲ་བཤུས་རྐྱབ་ཚུགས།
 
-| Artefact | File | SHA-256 | Notes |
-|----------|------|---------|-------|
-| Anchor POST | `requests/2026-07-10T18-00Z.json` | `<sha256>` | Raw request copied from `taikai-anchor-request-*.json` (Taikai spool). |
+| ཅ་ཆས། | ཡིག་སྣོད་ | SHA-256 | དྲན་ཐོ། |
+|------------------------------------------------ |
+| ཨེན་ཀོར་ པི་ཨོ་ཨེསི་ཊི་ | I18NI0000033X | I18NI0000034X | ཞུ་བ་ངོ་མ་འདི་ `taikai-anchor-request-*.json` (ཊའི་ཀཱའི་སྤུ་ན) ལས་འདྲ་བཤུས་རྐྱབ་ཡོདཔ་ཨིན། |
 
-## 4. Manifest digest acknowledgement
+## 4. ངོ་མཚར་བའྱི་བའྱི་ཁས་ལེན།
 
-| Field | Value |
-|-------|-------|
-| New manifest digest | `<hex digest>` |
-| Previous manifest digest (from hint) | `<hex digest>` |
-| Window start / end | `<start seq> / <end seq>` |
-| Acceptance timestamp | `<ISO8601>` |
+| ཕིལཌ་ | གནས་གོང་ |
+|-------|--|-------------------------------------------------------------------------
+| མངོན་གསལ་གསརཔ་ བཞུ་ | `<hex digest>` |
+| ཧེ་མའི་མངོན་གསལ་ཅན་གྱི་ འཇུ་བྱེད་ (བརྡ་སྟོན་ལས་) | `<hex digest>` |
+| སྒོ་སྒྲིག་འགོ་བཙུགས་/ མཇུག་བསྡུ། | `<start seq> / <end seq>` |
+| ངོས་ལེན་གྱི་དུས་ཚོད་མཚོན་རྟགས་ | I18NI0000039X |
 
-Reference the ledger/hint hashes recorded above so reviewers can verify the
-window that was superseded.
+གོང་ལུ་ཐོ་བཀོད་འབད་ཡོད་པའི་ ལག་དེབ་/hint hashes གི་གཞི་བསྟུན་འབད་དེ་ བསྐྱར་ཞིབ་འབད་མི་ཚུ་གིས་ བདེན་དཔྱད་འབད་ཚུགས།
+སྒོ་སྒྲིག་འདི་ ཚབ་སྦེ་ བཀལ་ཡོདཔ་ཨིན།
 
-## 5. Metrics / `taikai_alias_rotations`
+## 5. མེ་ཊིག་ / I18NI0000040X
 
-- `taikai_trm_alias_rotations_total` snapshot: `<Prometheus query + export path>`
-- `/status taikai_alias_rotations` dump (per alias): `<file path + hash>`
+- I18NI0000041X པར་ལེན་: `<Prometheus query + export path>`
+- `/status taikai_alias_rotations` གད་སྙིགས་ (རེ་ལུ་): `<file path + hash>`
 
-Provide the Prometheus/Grafana export or `curl` output that shows the counter
-increment and the `/status` array for this alias.
+གྱངས་ཁ་བཀོད་མི་འདི་སྟོན་མི་ I18NT000000001X/Grafana ཕྱིར་འདྲེན་ཡང་ན་ I18NI0000000045X ཐོན་འབྲས་འདི་བྱིན།
+ཡར་འཕར་དང་ I18NI000000046X ཨེ་རེ་འདི་ མིང་གཞན་ཚུ་གི་དོན་ལུ་ཨིན།
 
-## 6. Manifest for the evidence directory
+## 6. བདེན་དཔང་སྣོད་ཐོའི་ཆེད་ཆེན།
 
-Generate a deterministic manifest of the evidence directory (spool files,
-payload capture, metrics snapshots) so governance can verify every hash without
-unpacking the archive.
+སྒྲུབ་བྱེད་སྣོད་ཐོ་གི་ གཏན་འཁེལ་གསལ་སྟོན་ཅིག་ བཟོ་བཏོན་འབད། (སྒུལ་ཤུགས་ཡིག་སྣོད་ཚུ།
+གླ་ཆ་ལེན་ནི་དང་ མེ་ཊིག་པར་ལེན་ཚུ་) དེ་འབདཝ་ལས་ གཞུང་སྐྱོང་འདི་གིས་ ཧ་ཤི་ག་ར་མེད་པར་ བདེན་དཔྱད་འབད་ཚུགས།
+གཏན་མཛོད་འདི་ ཕྱེ་ནི།
 
-```bash
-python3 scripts/repo_evidence_manifest.py \
-  --root artifacts/taikai/anchor/<event>/<alias>/<ts> \
-  --agreement-id <event/alias/window> \
-  --output artifacts/taikai/anchor/<event>/<alias>/<ts>/manifest.json
-```
+I18NF0000008X
 
-| Artefact | File | SHA-256 | Notes |
-|----------|------|---------|-------|
-| Evidence manifest | `manifest.json` | `<sha256>` | Attach this to the governance packet / GAR. |
+| ཅ་ཆས། | ཡིག་སྣོད་ | SHA-256 | དྲན་ཐོ། |
+|------------------------------------------------ |
+| སྒྲུབ་བྱེད་ཀྱི་མངོན་རྟགས་ | I18NI0000047X | I18NI0000048X | འདི་གཞུང་སྐྱོང་ཐུམ་སྒྲིལ་ / GAR ལུ་མཉམ་སྦྲགས་འབད། |
 
-## 7. Checklist
+## 7. བརྟག་ཐོ་།
 
-- [ ] Lineage ledger copied + hashed.
-- [ ] Lineage hint copied + hashed.
-- [ ] Anchor POST payload captured and hashed.
-- [ ] Manifest digest table filled in.
-- [ ] Metrics snapshots exported (`taikai_trm_alias_rotations_total`, `/status`).
-- [ ] Manifest generated with `scripts/repo_evidence_manifest.py`.
-- [ ] Packet uploaded to governance with hashes + contact info.
+- [ ] རིམ་འགྲོས་ལག་དེབ་འདྲ་བཤུས་ + ཧམ་ཤོས།
+- [ ] རིམ་འགྲོས་བརྡ་སྟོན་འདྲ་བཤུས་ + མགོ་སྐོར་གཏོང་བ།
+- [ ] ཨེན་ཀོར་ POST པེ་ལོཌ་བཟུང་ཞིནམ་ལས་ མགུ་སྐོར་རྐྱབ་ཡོདཔ།
+- [ ] ཁྱད་ཆོས་ཅན་གྱི་ཟས་འཇུ་ཐིག་ཁྲམ་བཀང་ཡོད།
+- [ ] མེ་ཊིགསི་ ཕྱིར་གཏོང་ (`taikai_trm_alias_rotations_total`, I18NI000000050X).
+- [ ] I18NI0000051X དང་བཅས་བཟོ་བྱུང་།
+- [ ] ཤོག་བུའི་ཐུམ་སྒྲིལ་འདི་ ཧེ་ཤེ་སི་ + འབྲེལ་གཏུག་བརྡ་དོན་དང་གཅིག་ཁར་ གཞུང་སྐྱོང་ལུ་ སྐྱེལ་བཙུགས་འབད་ཡོདཔ།
 
-Maintaining this template for every alias rotation keeps the SoraNS governance
-bundle reproducible and ties lineage hints directly to the GAR/RPT evidence.
+འདི་གི་དོན་ལུ་ ཊེམ་པེལེཊི་འདི་ བསྒྱིར་ཚད་ག་ར་གི་དོན་ལུ་ རྒྱུན་སྐྱོང་འཐབ་མི་འདི་གིས་ སོ་རནསི་གཞུང་སྐྱོང་འདི་ བཞགཔ་ཨིན།
+bundle reproducible དང་ རིགས་བརྒྱུད་ཀྱི་ རིགས་བརྒྱུད་ཀྱི་ བརྡ་སྟོན་ཚུ་ ཐད་ཀར་དུ་ GAR/RPT སྒྲུབ་བྱེད་ལུ་ བཏོནམ་ཨིན།

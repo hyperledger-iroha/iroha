@@ -4,151 +4,141 @@ direction: rtl
 source: docs/portal/docs/sorafs/node-client-protocol.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Protocole nœud ↔ client SoraFS
+# البروتوكول الجديد ↔ العميل SoraFS
 
-Ce guide résume la définition canonique du protocole dans
+يلخص هذا الدليل التعريف القانوني للبروتوكول
 [`docs/source/sorafs_node_client_protocol.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs_node_client_protocol.md).
-Utilisez la spécification upstream pour les layouts Norito au niveau octet et
-les changelogs ; la copie du portail garde les points opérationnels près du
-reste des runbooks SoraFS.
+استخدم المواصفات الأولية للتخطيطات Norito على المستوى الثماني وما إلى ذلك
+سجلات التغيير ; تحافظ نسخة الباب على النقاط التشغيلية الموجودة أمامك
+بقية دفاتر التشغيل SoraFS.
 
-## Adverts fournisseur et validation
+## الإعلانات fournisseur والتحقق من صحتها
 
-Les fournisseurs SoraFS diffusent des payloads `ProviderAdvertV1` (voir
-`crates/sorafs_manifest::provider_advert`) signés par l'opérateur gouverné. Les
-adverts fixent les métadonnées de découverte et les garde-fous que l'orchestrateur
-multi-source applique à l'exécution.
+يقوم الموردون SoraFS بنشر الحمولات الصافية `ProviderAdvertV1` (العرض
+`crates/sorafs_manifest::provider_advert`) مُوقع من قبل المشغل الحكومي. ليه
+الإعلانات تثبت les métadonnées de découverte و les garde-fous que l'orchesstrateur
+تطبيق متعدد المصادر للتنفيذ.- **مدة الصلاحية** — `issued_at < expires_at ≤ issued_at + 86 400 s`. ليه
+  يجب أن يقوم الموردون بتفكيك كل 12 ساعة.
+- **TLV de capacité** — تعلن قائمة TLV عن ميزات النقل
+  (Torii، QUIC+Noise، relais SoraNet، بائع الملحقات). الرموز غير معروفة
+  يمكن أن يتم تجاهله عندما `allow_unknown_capabilities = true`، التالي
+  توصيات الشحوم.
+- **مؤشرات جودة الخدمة** — المستوى `availability` (ساخن/دافئ/بارد)، الحد الأقصى لزمن الوصول
+  الاسترداد والحد من التوافق وميزانية خيارات البث. جودة الخدمة تفعل ذلك
+  يتم محاذاة القياس عن بعد ويتم تدقيقه عند الدخول.
+- **نقاط النهاية وموضوعات الالتقاء** — عناوين URL للخدمة الملموسة
+  Métadonnées TLS/ALPN، بالإضافة إلى الموضوعات التي يتم اكتشافها لدى العملاء
+  يجب أن يكون الأمر كذلك عند إنشاء مجموعات الحماية.
+- **سياسة التنوع الكيميائي** — `min_guard_weight`، أغطية التفرع
+  يقدم AS/pool و`provider_failure_threshold` عمليات الجلب الممكنة
+  محددات متعددة الأقران.
+- **معرفات الملف الشخصي** — يجب أن يكشف الموردون عن المقبض
+  كانونيك (على سبيل المثال `sorafs.sf1@1.0.0`)؛ مساعد خيارات `profile_aliases`
+  العملاء القدماء يهاجرون.تم رفض قواعد التحقق من الصحة، وقوائم مقاطع الفيديو الخاصة بالإمكانات،
+نقاط النهاية أو الموضوعات أو فترات زمنية محددة أو أهداف جودة الخدمة. ليه
+مغلفات القبول تقارن بين مجموعة الإعلان والاقتراح
+(`compare_core_fields`) قبل نشر أخبار اليوم.
 
-- **Durée de validité** — `issued_at < expires_at ≤ issued_at + 86 400 s`. Les
-  fournisseurs doivent rafraîchir toutes les 12 heures.
-- **TLV de capacités** — la liste TLV annonce les fonctionnalités transport
-  (Torii, QUIC+Noise, relais SoraNet, extensions vendor). Les codes inconnus
-  peuvent être ignorés lorsque `allow_unknown_capabilities = true`, en suivant
-  les recommandations GREASE.
-- **Indices QoS** — tier de `availability` (Hot/Warm/Cold), latence maximale de
-  récupération, limite de concurrence et budget de stream optionnel. La QoS doit
-  s'aligner sur la télémétrie observée et est auditée lors de l'admission.
-- **Endpoints et topics de rendezvous** — URLs de service concrètes avec
-  métadonnées TLS/ALPN, plus les topics de découverte auxquels les clients
-  doivent s'abonner lors de la construction des guard sets.
-- **Politique de diversité de chemin** — `min_guard_weight`, caps de fan-out
-  AS/pool et `provider_failure_threshold` rendent possibles les fetches
-  déterministes multi-peer.
-- **Identifiants de profil** — les fournisseurs doivent exposer le handle
-  canonique (ex. `sorafs.sf1@1.0.0`) ; des `profile_aliases` optionnels aident
-  les anciens clients à migrer.
+### ملحقات الجلب الاسمية
 
-Les règles de validation rejettent stake zéro, listes vides de capabilities,
-endpoints ou topics, durées mal ordonnées, ou objectifs QoS manquants. Les
-enveloppes d'admission comparent les corps d'advert et de proposition
-(`compare_core_fields`) avant de diffuser des mises à jour.
+يشمل الموردون ذوو الكفاءات العناصر التالية:
 
-### Extensions de fetch par plages
-
-Les fournisseurs avec capacité range incluent les métadonnées suivantes :
-
-| Champ | Objectif |
+| بطل | موضوعي |
 |-------|----------|
-| `CapabilityType::ChunkRangeFetch` | Déclare `max_chunk_span`, `min_granularity` et les flags d'alignement/preuve. |
-| `StreamBudgetV1` | Envelope optionnelle de concurrence/throughput (`max_in_flight`, `max_bytes_per_sec`, `burst` optionnel). Requiert une capacité range. |
-| `TransportHintV1` | Préférences de transport ordonnées (ex. `torii_http_range`, `quic_stream`, `soranet_relay`). Les priorités vont de `0–15` et les doublons sont rejetés. |
+| `CapabilityType::ChunkRangeFetch` | قم بتعريف `max_chunk_span` و`min_granularity` وعلامات المحاذاة/الدقة. |
+| `StreamBudgetV1` | خيار المغلف للتزامن/الإنتاجية (`max_in_flight`، `max_bytes_per_sec`، `burst` optionnel). تتطلب نطاق السعة. |
+| `TransportHintV1` | تفضيلات النقل ordonnées (مثال: `torii_http_range`، `quic_stream`، `soranet_relay`). تم رفض الأولويات الخاصة بـ `0–15` والمضاعفات. |
 
-Support tooling :
+أدوات الدعم:
 
-- Les pipelines d'advert fournisseur doivent valider capacité range, stream
-  budget et transport hints avant d'émettre des payloads déterministes pour les
-  audits.
-- `cargo xtask sorafs-admission-fixtures` regroupe des adverts multi-source
-  canoniques avec des fixtures de downgrade dans
+- توفر خطوط الأنابيب الإعلانية نطاقًا صالحًا للسعة والتدفق
+  تلميحات حول الميزانية والنقل قبل تحديد الحمولات الصافية لهم
+  عمليات التدقيق.
+- `cargo xtask sorafs-admission-fixtures` إعادة تجميع الإعلانات متعددة المصادر
+  Canoniques avec des Installations de downgrade dans
   `fixtures/sorafs_manifest/provider_admission/`.
-- Les adverts range qui omettent `stream_budget` ou `transport_hints` sont
-  rejetés par les loaders CLI/SDK avant planification, alignant le harness
-  multi-source sur les attentes d'admission Torii.
+- تتراوح الإعلانات التي تحتوي على `stream_budget` أو `transport_hints`
+  تم رفضه بواسطة محمل CLI/SDK للتخطيط المسبق ومحاذاة الحزام
+  مصادر متعددة حول تنبيهات القبول Torii.
 
-## Endpoints range du gateway
-
-Les gateways acceptent des requêtes HTTP déterministes qui reflètent les
+## نطاق نقاط النهاية بوابة دوتقبل البوابات طلبات HTTP التي تحددها
 métadonnées des adverts.
 
-### `GET /v1/sorafs/storage/car/{manifest_id}`
+###`GET /v1/sorafs/storage/car/{manifest_id}`
 
-| Exigence | Détails |
-|----------|---------|
-| **Headers** | `Range` (fenêtre unique alignée sur les offsets de chunks), `dag-scope: block`, `X-SoraFS-Chunker`, `X-SoraFS-Nonce` optionnel, et `X-SoraFS-Stream-Token` base64 obligatoire. |
-| **Réponses** | `206` avec `Content-Type: application/vnd.ipld.car`, `Content-Range` décrivant la fenêtre servie, métadonnées `X-Sora-Chunk-Range`, et headers chunker/token renvoyés. |
-| **Modes d'échec** | `416` pour plages mal alignées, `401` pour tokens manquants/invalides, `429` lorsque les budgets stream/octet sont dépassés. |
+| الضرورة | التفاصيل |
+|----------|--------|
+| **العناوين** | `Range` (نافذة فريدة محاذية لإزاحات القطع)، و`dag-scope: block`، و`X-SoraFS-Chunker`، وخيار `X-SoraFS-Nonce`، و`X-SoraFS-Stream-Token` base64 إلزامي. |
+| **الردود** | `206` مع `Content-Type: application/vnd.ipld.car`، `Content-Range` يتم إنشاء نافذة الخدمة، والتحويلات `X-Sora-Chunk-Range`، ومقسم الرؤوس/الرمز المميز. |
+| **أوضاع الفحص** | `416` للبطاقات غير المحاذاة، `401` للرموز المميزة المفقودة/غير الصالحة، `429` عندما يتم إلغاء تدفق الميزانيات/الثمانية. |
 
-### `GET /v1/sorafs/storage/chunk/{manifest_id}/{digest}`
+###`GET /v1/sorafs/storage/chunk/{manifest_id}/{digest}`
 
-Fetch d'un seul chunk avec les mêmes headers, plus le digest déterministe du
-chunk. Utile pour les retries ou les téléchargements forensiques quand les
-slices CAR sont inutiles.
+جلب قطعة واحدة باستخدام الرؤوس المماثلة، بالإضافة إلى تحديد الملخص
+قطعة. مفيد لإعادة المحاولات أو التنزيلات الجنائية أثناء قيامك بذلك
+شرائح CAR sont inutiles.
 
-## Workflow de l'orchestrateur multi-source
+## سير عمل منسق متعدد المصادر
 
-Quand le fetch multi-source SF-6 est activé (CLI Rust via `sorafs_fetch`,
-SDKs via `sorafs_orchestrator`) :
+عندما يكون الجلب متعدد المصادر SF-6 نشطًا (CLI Rust via `sorafs_fetch`,
+مجموعات SDK عبر `sorafs_orchestrator`):1. **Collecter les Entrées** — فك شفرة خطة قطع البيان، واستعادتها
+   آخر الإعلانات، وخيارات تمرير لقطة عن بعد
+   (`--telemetry-json` أو `TelemetrySnapshot`).
+2. **إنشاء لوحة نتائج** — قيمة `Orchestrator::build_scoreboard`
+   الأهلية وتسجيل أسباب الرفض؛ `sorafs_fetch --scoreboard-out`
+   تستمر لو JSON.
+3. **مخطط القطع** — `fetch_with_scoreboard` (ou `--plan`) يفرض القطع
+   نطاق القيود، تدفق الميزانيات، الحد الأقصى لإعادة المحاولة/النظير (`--retry-budget`،
+   `--max-peers`) وتم إنشاء نطاق رمزي دفق على البيان لكل منها
+   طلب.
+4. **التحقق من صحة الرسالة** — تتضمن الطلعات `chunk_receipts` وآخرون
+   `provider_reports`; السيرة الذاتية CLI المستمرة `provider_reports`,
+   `chunk_receipts` و`ineligible_providers` للحزم المسبقة.
 
-1. **Collecter les entrées** — décoder le plan de chunks du manifest, récupérer
-   les derniers adverts, et optionnellement passer un snapshot de télémétrie
-   (`--telemetry-json` ou `TelemetrySnapshot`).
-2. **Construire un scoreboard** — `Orchestrator::build_scoreboard` évalue
-   l'éligibilité et enregistre les raisons de rejet ; `sorafs_fetch --scoreboard-out`
-   persiste le JSON.
-3. **Planifier les chunks** — `fetch_with_scoreboard` (ou `--plan`) impose les
-   contraintes range, budgets stream, caps de retry/peer (`--retry-budget`,
-   `--max-peers`) et émet un stream token scope sur le manifest pour chaque
-   requête.
-4. **Vérifier les reçus** — les sorties incluent `chunk_receipts` et
-   `provider_reports`; les résumés CLI persistent `provider_reports`,
-   `chunk_receipts` et `ineligible_providers` pour les bundles de preuves.
+الأخطاء التي تم إصلاحها من قبل المشغلين/مجموعات SDK:
 
-Erreurs courantes remontées aux opérateurs/SDKs :
+| خطأ | الوصف |
+|--------|------------|
+| `no providers were supplied` | يمكن إدخالها بعد الترشيح. |
+| `no compatible providers available for chunk {index}` | حدث خطأ في الميزانية أو الميزانية بسبب جزء محدد. |
+| `retry budget exhausted after {attempts}` | قم بتعزيز `--retry-budget` أو إثبات الأقران بشكل صحيح. |
+| `no healthy providers remaining` | يتم إلغاء تنشيط جميع الموردين بعد إجراء عمليات فحص متكررة. |
+| `streaming observer failed` | لو الكاتب CAR المصب avorté. |
+| `orchestrator invariant violated` | قم بالتقاط البيان ولوحة النتائج ولقطات القياس عن بعد وJSON CLI للفرز. |
 
-| Erreur | Description |
-|--------|-------------|
-| `no providers were supplied` | Aucune entrée éligible après filtrage. |
-| `no compatible providers available for chunk {index}` | Erreur de plage ou de budget pour un chunk spécifique. |
-| `retry budget exhausted after {attempts}` | Augmentez `--retry-budget` ou évincez les peers en échec. |
-| `no healthy providers remaining` | Tous les fournisseurs sont désactivés après des échecs répétés. |
-| `streaming observer failed` | Le writer CAR downstream a avorté. |
-| `orchestrator invariant violated` | Capturez manifest, scoreboard, snapshot de télémétrie et JSON CLI pour le triage. |
+## Télémétrie et preuves- المقاييس المنبعثة من الأوركسترا :  
+  `sorafs_orchestrator_active_fetches`، `sorafs_orchestrator_fetch_duration_ms`،
+  `sorafs_orchestrator_retries_total`، `sorafs_orchestrator_provider_failures_total`
+  (taggées par Manifest/région/fournisseur). تعريف `telemetry_region` en
+  قم بتكوين ou عبر علامات CLI لتقسيم لوحات المعلومات حسب الأسطول.
+- تتضمن السيرة الذاتية لجلب CLI/SDK لوحة النتائج JSON المستمرة والنتائج
+  de Chunks et les Rapports fournisseurs الذين يقومون بالرحلة في الحزم
+  تم البدء في بوابات SF-6/SF-7.
+- بوابة معالجات ليه مكشوفة `telemetry::sorafs.fetch.lifecycle|retry|provider_failure|error`
+  لكي تقوم لوحات المعلومات SRE بربط القرارات المنسقة بها
+  خادم السلوك.
 
-## Télémétrie et preuves
+## مساعدو CLI et REST
 
-- Métriques émises par l'orchestrateur :  
-  `sorafs_orchestrator_active_fetches`, `sorafs_orchestrator_fetch_duration_ms`,
-  `sorafs_orchestrator_retries_total`, `sorafs_orchestrator_provider_failures_total`
-  (taggées par manifest/région/fournisseur). Définissez `telemetry_region` en
-  config ou via flags CLI pour partitionner les dashboards par flotte.
-- Les résumés de fetch CLI/SDK incluent le scoreboard JSON persisté, les reçus
-  de chunks et les rapports fournisseurs qui doivent voyager dans les bundles
-  de rollout pour les gates SF-6/SF-7.
-- Les handlers gateway exposent `telemetry::sorafs.fetch.lifecycle|retry|provider_failure|error`
-  pour que les dashboards SRE corrèlent les décisions orchestrateur avec le
-  comportement serveur.
+- `iroha app sorafs pin list|show` و`alias list` و`replication list` حاصروا الملفات
+  نقاط النهاية REST du pin-registry et impriment du Norito JSON brut avec blocks
+  شهادة للتدقيق.
+- `iroha app sorafs storage pin` و`torii /v1/sorafs/pin/register` مقبول
+  بيانات Norito ou JSON، بالإضافة إلى إثباتات الأسماء المستعارة للخيارات والخلفاء؛
+  البراهين النموذجية غير الصحيحة `400`، البراهين القديمة المكشوفة `503` مع
+  `Warning: 110`، والإثباتات منتهية الصلاحية مرة أخرى `412`.
+- نقاط النهاية REST (`/v1/sorafs/pin`، `/v1/sorafs/aliases`،
+  `/v1/sorafs/replication`) تتضمن هياكل المصادقة التي ستساعدك
+  يتحقق العملاء من البيانات باستخدام آخر رؤوس الكتلة قبل البدء.
 
-## Aides CLI et REST
-
-- `iroha app sorafs pin list|show`, `alias list` et `replication list` emballent les
-  endpoints REST du pin-registry et impriment du Norito JSON brut avec blocs
-  d'attestation pour l'audit.
-- `iroha app sorafs storage pin` et `torii /v1/sorafs/pin/register` acceptent des
-  manifests Norito ou JSON, plus des proofs d'alias optionnels et des successors ;
-  des proofs mal formés renvoient `400`, des proofs obsolètes exposent `503` avec
-  `Warning: 110`, et des proofs expirés renvoient `412`.
-- Les endpoints REST (`/v1/sorafs/pin`, `/v1/sorafs/aliases`,
-  `/v1/sorafs/replication`) incluent des structures d'attestation pour que les
-  clients vérifient les données avec les derniers headers de bloc avant d'agir.
-
-## Références
-
-- Spécification canonique :
+## مراجع- المواصفات الكنسي :
   [`docs/source/sorafs_node_client_protocol.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs_node_client_protocol.md)
-- Types Norito : `crates/sorafs_manifest/src/{provider_advert,provider_admission}.rs`
-- Aides CLI : `crates/iroha_cli/src/commands/sorafs.rs`,
+- الأنواع Norito : `crates/sorafs_manifest/src/{provider_advert,provider_admission}.rs`
+- مساعدي CLI: `crates/iroha_cli/src/commands/sorafs.rs`،
   `crates/sorafs_car/src/bin/sorafs_fetch.rs`
-- Crate orchestrateur : `crates/sorafs_orchestrator`
-- Pack dashboards : `dashboards/grafana/sorafs_fetch_observability.json`
+- منسق الصندوق: `crates/sorafs_orchestrator`
+- حزمة لوحات المعلومات: `dashboards/grafana/sorafs_fetch_observability.json`

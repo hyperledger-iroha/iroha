@@ -4,28 +4,30 @@ direction: rtl
 source: docs/portal/docs/norito/examples/call-transfer-asset.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
 slug: /norito/examples/call-transfer-asset
 title: Kotodama سے ہوسٹ ٹرانسفر کال کریں
 description: دکھاتا ہے کہ Kotodama انٹری پوائنٹ کس طرح ہوسٹ کی `transfer_asset` انسٹرکشن کو inline میٹا ڈیٹا ویلیڈیشن کے ساتھ کال کر سکتا ہے۔
-source: crates/ivm/docs/examples/08_call_transfer_asset.ko
+מקור: crates/ivm/docs/examples/08_call_transfer_asset.ko
 ---
 
-دکھاتا ہے کہ Kotodama انٹری پوائنٹ کس طرح ہوسٹ کی `transfer_asset` انسٹرکشن کو inline میٹا ڈیٹا ویلیڈیشن کے ساتھ کال کر سکتا ہے۔
+עמודים 18NT00000002X מכשירי רשת ב-`transfer_asset` מכשירי קו בליין ڈیٹا ویلیڈیشن کے ساتھ کال کر سکتا ہے۔
 
 ## لیجر واک تھرو
 
 - کنٹریکٹ اتھارٹی (مثلا `ih58...`) کو اس اثاثے سے فنڈ کریں جسے وہ منتقل کرے گی اور اتھارٹی کو `CanTransfer` رول یا مساوی اجازت دیں۔
-- `call_transfer_asset` انٹری پوائنٹ کال کریں تاکہ کنٹریکٹ اکاؤنٹ سے `ih58...` کو 5 یونٹس منتقل ہوں، یہ اس طریقے کی عکاسی کرتا ہے کہ آن چین آٹومیشن ہوسٹ کالز کو لپیٹ سکتی ہے۔
-- `FindAccountAssets` یا `iroha_cli ledger assets list --account ih58...` کے ذریعے بیلنس دیکھیں اور ایونٹس چیک کریں تاکہ تصدیق ہو کہ میٹا ڈیٹا گارڈ نے ٹرانسفر کانٹیکسٹ لاگ کیا ہے۔
+- `call_transfer_asset` אוניברסלי 18NI000000014X ہوں، یہ اس طریقے کی عکاسی کرتا ہے کہ آن چین آٹومیشن ہوسٹ کالز کو لپیٹ سکتی ہے۔
+- `FindAccountAssets` ו-`iroha_cli ledger assets list --account ih58...` גירסה לתקשורת. ہو کہ میٹا ڈیٹا گارڈ نے ٹرانسفر کانٹیکسٹ لاگ کیا ہے۔
 
-## متعلقہ SDK گائیڈز
+## תוכנות SDK
 
-- [Rust SDK quickstart](/sdks/rust)
-- [Python SDK quickstart](/sdks/python)
-- [JavaScript SDK quickstart](/sdks/javascript)
+- [התחלה מהירה של SDK של חלודה](/sdks/rust)
+- [התחלה מהירה של Python SDK](/sdks/python)
+- [התחלה מהירה של JavaScript SDK](/sdks/javascript)
 
 [Kotodama سورس ڈاؤن لوڈ کریں](/norito-snippets/call-transfer-asset.ko)
 

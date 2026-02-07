@@ -10,13 +10,14 @@ translation_last_reviewed: 2026-02-07
 title: JavaScript SDK quickstart
 description: Build transactions, stream events, and drive Connect previews with `@iroha/iroha-js`.
 slug: /sdks/javascript
+translator: machine-google-reviewed
 ---
 
-`@iroha/iroha-js` is the canonical Node.js package for interacting with Torii. It
-bundles Norito builders, Ed25519 helpers, pagination utilities, and a resilient
-HTTP/WebSocket client so you can mirror the CLI flows from TypeScript.
+`@iroha/iroha-js` ከ Torii ጋር ለመገናኘት ቀኖናዊው Node.js ጥቅል ነው። እሱ
+ጥቅሎች Norito ግንበኞች፣ Ed25519 ረዳቶች፣ የገጽታ ግንባታ መገልገያዎች እና ተከላካይ
+የCLI ፍሰቶችን ከTyScript ን ማንጸባረቅ እንድትችል HTTP/WebSocket ደንበኛ።
 
-## Installation
+## መጫን
 
 ```bash
 npm install @iroha/iroha-js
@@ -24,10 +25,10 @@ npm install @iroha/iroha-js
 npm run build:native
 ```
 
-The build step wraps `cargo build -p iroha_js_host`. Ensure the toolchain from
-`rust-toolchain.toml` is available locally before running `npm run build:native`.
+የግንባታ ደረጃ `cargo build -p iroha_js_host` ይጠቀልላል። የመሳሪያውን ሰንሰለት ከ
+`rust-toolchain.toml` I18NI0000040X ከመሮጥዎ በፊት በአገር ውስጥ ይገኛል።
 
-## Key management
+## ቁልፍ አስተዳደር
 
 ```ts
 import {
@@ -48,10 +49,10 @@ const derived = publicKeyFromPrivate(privateKey);
 console.assert(Buffer.compare(derived, publicKey) === 0);
 ```
 
-## Build transactions
+## ግብይቶችን ይገንቡ
 
-Norito instruction builders normalise identifiers, metadata, and quantities so
-encoded transactions match the Rust/CLI payloads.
+Norito መመሪያ ገንቢዎች መለያዎችን፣ ዲበ ዳታ እና መጠኖችን መደበኛ ያደርጋሉ።
+ኮድ የተደረገባቸው ግብይቶች ከ Rust/CLI ጭነት ጋር ይዛመዳሉ።
 
 ```ts
 import {
@@ -80,11 +81,11 @@ const { signedTransaction } = buildMintAndTransferTransaction({
 });
 ```
 
-## Torii client configuration
+## Torii ደንበኛ ውቅር
 
-`ToriiClient` accepts retry/timeout knobs that mirror `iroha_config`. Use
-`resolveToriiClientConfig` to merge a camelCase config object (normalize
-`iroha_config` first), env overrides, and inline options.
+`ToriiClient` `iroha_config` የሚያንፀባርቁ ድጋሚ መሞከር/የጊዜ ማብቂያ ቁልፎችን ይቀበላል። ተጠቀም
+`resolveToriiClientConfig` የግመል ኬዝ ውቅር ነገርን ለማዋሃድ (መደበኛ ማድረግ)
+`iroha_config` መጀመሪያ)፣ env ይሽራል፣ እና የመስመር ውስጥ አማራጮች።
 
 ```ts
 import { ToriiClient, resolveToriiClientConfig } from "@iroha/iroha-js";
@@ -115,31 +116,31 @@ const torii = new ToriiClient(
 );
 ```
 
-Environment variables for local dev:
+የአካባቢ ተለዋዋጮች ለአካባቢያዊ ዴቭ፡
 
-| Variable | Purpose |
-|----------|---------|
-| `IROHA_TORII_TIMEOUT_MS` | Request timeout (milliseconds). |
-| `IROHA_TORII_MAX_RETRIES` | Maximum retry attempts. |
-| `IROHA_TORII_BACKOFF_INITIAL_MS` | Initial retry backoff. |
-| `IROHA_TORII_BACKOFF_MULTIPLIER` | Exponential backoff multiplier. |
-| `IROHA_TORII_MAX_BACKOFF_MS` | Maximum retry delay. |
-| `IROHA_TORII_RETRY_STATUSES` | Comma-separated HTTP status codes to retry. |
-| `IROHA_TORII_RETRY_METHODS` | Comma-separated HTTP methods to retry. |
-| `IROHA_TORII_API_TOKEN` | Adds `X-API-Token`. |
-| `IROHA_TORII_AUTH_TOKEN` | Adds `Authorization: Bearer …` header. |
+| ተለዋዋጭ | ዓላማ |
+|-------|--------|
+| `IROHA_TORII_TIMEOUT_MS` | የጊዜ ማብቂያ ጠይቅ (ሚሊሰከንዶች)። |
+| `IROHA_TORII_MAX_RETRIES` | ከፍተኛው የድጋሚ ሙከራዎች። |
+| `IROHA_TORII_BACKOFF_INITIAL_MS` | መጀመሪያ እንደገና ይሞክሩ። |
+| `IROHA_TORII_BACKOFF_MULTIPLIER` | ገላጭ የኋላ ማባዛት። |
+| `IROHA_TORII_MAX_BACKOFF_MS` | ከፍተኛው የድጋሚ ሙከራ መዘግየት። |
+| `IROHA_TORII_RETRY_STATUSES` | እንደገና ለመሞከር በነጠላ ሰረዝ የተለያዩ የኤችቲቲፒ ሁኔታ ኮዶች። |
+| `IROHA_TORII_RETRY_METHODS` | እንደገና ለመሞከር በነጠላ ሰረዝ የተለዩ HTTP ዘዴዎች። |
+| `IROHA_TORII_API_TOKEN` | `X-API-Token` ይጨምራል። |
+| `IROHA_TORII_AUTH_TOKEN` | `Authorization: Bearer …` ራስጌ ያክላል። |
 
-Retry profiles mirror Android defaults and are exported for parity checks:
-`DEFAULT_TORII_CLIENT_CONFIG`, `DEFAULT_RETRY_PROFILE_PIPELINE`,
-`DEFAULT_RETRY_PROFILE_STREAMING`. See `docs/source/sdk/js/torii_retry_policy.md`
-for the endpoint-to-profile mapping and the parameters governance audits during
+እንደገና ይሞክሩ መገለጫዎች የአንድሮይድ ነባሪዎችን ያንፀባርቃሉ እና ለተመጣጣኝ ፍተሻዎች ወደ ውጭ ይላካሉ፡
+`DEFAULT_TORII_CLIENT_CONFIG`፣ `DEFAULT_RETRY_PROFILE_PIPELINE`፣
+`DEFAULT_RETRY_PROFILE_STREAMING`. `docs/source/sdk/js/torii_retry_policy.md` ይመልከቱ
+ለመጨረሻ ነጥብ-መገለጫ ካርታ እና ግቤቶች የአስተዳደር ኦዲት ወቅት
 JS4/JS7.
 
-## Iterable lists & pagination
+## ሊደረጉ የሚችሉ ዝርዝሮች እና የገጽ መግለጫዎች
 
-Pagination helpers mirror the Python SDK ergonomics for `/v1/accounts`,
-`/v1/domains`, `/v1/assets/definitions`, NFTs, balances, asset holders, and the
-account transaction history.
+የገጽታ ረዳቶች የ Python SDK ergonomics ለI18NI0000060X ያንጸባርቃሉ፣
+`/v1/domains`፣ `/v1/assets/definitions`፣ ኤንኤፍቲዎች፣ ሚዛኖች፣ የንብረት መያዣዎች እና
+የመለያ ግብይት ታሪክ።
 
 ```ts
 const { items, total } = await torii.listDomains({
@@ -178,22 +179,22 @@ const holders = await torii.listAssetHolders("rose#wonderland", {
 console.log(balances.items, txs.items, holders.items);
 ```
 
-## Offline allowances & verdict metadata
+## ከመስመር ውጭ ድጎማዎች እና ዲበ ውሂብን ይወስኑ
 
-Offline allowance responses expose the enriched ledger metadata up-front —
-`expires_at_ms`, `policy_expires_at_ms`, `refresh_at_ms`, `verdict_id_hex`,
-`attestation_nonce_hex`, and `remaining_amount` are returned alongside the raw
-record so dashboards don’t have to decode the embedded Norito payloads. The new
-countdown helpers (`deadline_kind`, `deadline_state`, `deadline_ms`,
-`deadline_ms_remaining`) highlight the next expiring deadline (refresh → policy
-→ certificate) so UI badges can warn operators whenever an allowance has
-<24 h remaining. The SDK
-mirrors the REST filters exposed by `/v1/offline/allowances`:
-`certificateExpiresBeforeMs/AfterMs`, `policyExpiresBeforeMs/AfterMs`,
-`verdictIdHex`, `attestationNonceHex`, `refreshBeforeMs/AfterMs`, and the
-`requireVerdict` / `onlyMissingVerdict` booleans. Invalid combinations (for
-example `onlyMissingVerdict` + `verdictIdHex`) are rejected locally before Torii
-is called.
+ከመስመር ውጭ አበል ምላሾች የበለፀገውን የሂሳብ መዝገብ ሜታዳታ ከፊት ለፊት ያጋልጣሉ -
+`expires_at_ms`፣ `policy_expires_at_ms`፣ `refresh_at_ms`፣ `verdict_id_hex`፣
+`attestation_nonce_hex` እና I18NI0000068X ከጥሬው ጋር ተመልሰዋል
+መዝገብ ስለዚህ ዳሽቦርዶች የተካተቱትን I18NT0000004X ጭነት መፍታት የለባቸውም። አዲሱ
+ቆጠራ ረዳቶች (I18NI0000069X፣ I18NI0000070X፣ I18NI0000071X፣
+`deadline_ms_remaining`) የሚቀጥለውን የማለቂያ ቀነ-ገደብ ያደምቃል (አድስ → ፖሊሲ
+→ ሰርተፍኬት) ስለዚህ የUI ባጆች አበል በሚኖርበት ጊዜ ኦፕሬተሮችን ሊያስጠነቅቁ ይችላሉ።
+<24 ሰአት ይቀራል። ኤስዲኬ
+በ `/v1/offline/allowances` የተጋለጡትን የ REST ማጣሪያዎች ያንጸባርቃል:
+`certificateExpiresBeforeMs/AfterMs`፣ `policyExpiresBeforeMs/AfterMs`፣
+`verdictIdHex`፣ `attestationNonceHex`፣ `refreshBeforeMs/AfterMs`፣ እና እ.ኤ.አ.
+`requireVerdict` / `onlyMissingVerdict` ቡሊያንስ። ልክ ያልሆኑ ጥምሮች (ለ
+ለምሳሌ `onlyMissingVerdict` + `verdictIdHex`) ከ Torii በፊት በአገር ውስጥ ውድቅ ተደርጓል
+ይባላል።
 
 ```ts
 const { items: allowances } = await torii.listOfflineAllowances({
@@ -212,14 +213,14 @@ for (const entry of allowances) {
 }
 ```
 
-## Offline top-ups (issue + register)
+## ከመስመር ውጭ ገንዘብ መሙላት (ችግር + መመዝገብ)
 
-Use the top-up helpers when you want to issue a certificate and immediately
-register it on-ledger. The SDK verifies the issued and registered certificate
-IDs match before returning, and the response includes both payloads. There is
-no dedicated top-up endpoint; the helper chains the issue + register calls. If
-you already have a signed certificate, call `registerOfflineAllowance` (or
-`renewOfflineAllowance`) directly.
+የምስክር ወረቀት ለመስጠት ሲፈልጉ እና ወዲያውኑ ከፍተኛ አጋዥዎችን ይጠቀሙ
+በመዝገብ ላይ ያስመዝግቡት። ኤስዲኬ የተሰጠውን እና የተመዘገበውን የምስክር ወረቀት ያረጋግጣል
+መታወቂያዎች ከመመለሳቸው በፊት ይዛመዳሉ፣ እና ምላሹ ሁለቱንም ጭነቶች ያካትታል። አለ።
+ምንም የተለየ የመጨመሪያ ነጥብ የለም; ረዳቱ ጉዳዩን ያሰራል + ጥሪዎችን ይመዝገቡ። ከሆነ
+ቀደም ሲል የተፈረመ የምስክር ወረቀት አልዎት፣ ወደ `registerOfflineAllowance` ይደውሉ (ወይም
+`renewOfflineAllowance`) በቀጥታ።
 
 ```ts
 const topUp = await torii.topUpOfflineAllowance({
@@ -241,11 +242,11 @@ const renewed = await torii.topUpOfflineAllowanceRenewal(
 console.log(renewed.registration.certificate_id_hex);
 ```
 
-## Torii queries & streaming (WebSockets)
+## Torii መጠይቆች እና ዥረት (WebSockets)
 
-Query helpers expose status, Prometheus metrics, telemetry snapshots, and event
-streams using the Norito filter grammar. Streaming automatically upgrades to
-WebSockets and resumes when the retry budget allows.
+የጥያቄ ረዳቶች ሁኔታን፣ I18NT00000000 ሜትሪክስ፣ የቴሌሜትሪ ቅጽበተ-ፎቶዎችን እና ክስተትን ያጋልጣሉ
+የI18NT0000005X ማጣሪያ ሰዋሰው በመጠቀም ዥረቶች። በዥረት መልቀቅ በራስ-ሰር ይሻሻላል
+የድጋሚ ሙከራ በጀቱ ሲፈቅድ WebSockets እና ከቆመበት ይቀጥላል።
 
 ```ts
 const status = await torii.getSumeragiStatus();
@@ -265,18 +266,18 @@ for await (const event of torii.streamEvents({
 abort.abort(); // closes the underlying WebSocket cleanly
 ```
 
-Use `streamBlocks`, `streamTransactions`, or `streamTelemetry` for the other
-WebSocket endpoints. All streaming helpers surface retry attempts, so hook the
-`onReconnect` callback to feed dashboards and alerting.
+ለሌላው `streamBlocks`፣ `streamTransactions`፣ ወይም `streamTelemetry` ይጠቀሙ
+WebSocket የመጨረሻ ነጥቦች. ሁሉም የዥረት ረዳቶች እንደገና ሞክሩ፣ ስለዚህ ያያይዙት።
+ዳሽቦርዶችን ለመመገብ እና ለማስጠንቀቅ `onReconnect` መልሶ መደወል።
 
-## Explorer snapshots & QR payloads
+## ኤክስፕሎረር ቅጽበተ-ፎቶዎች እና የQR ጭነቶች
 
-Explorer telemetry provides typed helpers for the `/v1/explorer/metrics` and
-`/v1/explorer/accounts/{account_id}/qr` endpoints so dashboards can replay the
-same snapshots that power the portal. `getExplorerMetrics()` normalises the
-payload and returns `null` when the route is disabled. Pair it with
-`getExplorerAccountQr()` whenever you need IH58 (preferred)/sora (second-best) literals plus inline
-SVG for share buttons.
+ኤክስፕሎረር ቴሌሜትሪ ለ`/v1/explorer/metrics` እና የተተየቡ ረዳቶችን ያቀርባል
+ዳሽቦርዶች እንደገና መጫወት እንዲችሉ `/v1/explorer/accounts/{account_id}/qr` የመጨረሻ ነጥቦች
+ፖርታሉን የሚያንቀሳቅሱ ተመሳሳይ ቅጽበተ-ፎቶዎች። `getExplorerMetrics()` መደበኛ ያደርገዋል
+መንገዱ ሲቋረጥ `null` ይጭናል እና ይመልሳል። ጋር ያጣምሩት።
+`getExplorerAccountQr()` በሚፈልጉበት ጊዜ ሁሉ IH58 (የተመረጡ)/ሶራ (ሁለተኛ-ምርጥ) ቀጥተኛ እና የመስመር ላይ
+SVG ለማጋራት አዝራሮች።
 
 ```ts
 import { promises as fs } from "node:fs";
@@ -300,20 +301,20 @@ console.log(
 );
 ```
 
-Passing `addressFormat: "compressed"` mirrors Explorer’s default compressed
-selectors; omit the override for the preferred IH58 output or request `ih58_qr`
-when you need the QR-safe variant. The compressed literal is the second-best
-Sora-only option for UX. The helper always returns the canonical identifier,
-the selected literal, and metadata (network prefix, QR version/modules, error
-correction tier, and inline SVG), so CI/CD can publish the same payloads that
-the Explorer surfaces without calling bespoke converters.
+ማለፍ `addressFormat: "compressed"` መስተዋቶች የአሳሽ ነባሪ የታመቀ
+መራጮች; ለተመረጠው የIH58 ውፅዓት መሻርን ያስወግዱ ወይም `ih58_qr` ይጠይቁ
+የQR-አስተማማኝ ልዩነት ሲፈልጉ። የታመቀው ቃል በቃል ሁለተኛው-ምርጥ ነው።
+የሶራ-ብቻ አማራጭ ለ UX። ረዳቱ ሁል ጊዜ ቀኖናዊ መለያውን ይመልሳል ፣
+የተመረጠው ቀጥተኛ እና ሜታዳታ (የአውታረ መረብ ቅድመ ቅጥያ፣ የQR ስሪት/ሞዱሎች፣ ስህተት
+የእርምት እርከን፣ እና የመስመር ውስጥ SVG)፣ ስለዚህ CI/CD ያንን ተመሳሳይ የክፍያ ጭነቶች ማተም ይችላል።
+ጠያቂ መቀየሪያዎችን ሳይጠራ ኤክስፕሎረር ይሸፍናል።
 
-## Connect sessions & queueing
+## ክፍለ-ጊዜዎችን እና ሰልፍን ያገናኙ
 
-The Connect helpers mirror `docs/source/connect_architecture_strawman.md`. The
-fastest path to a preview-ready session is `bootstrapConnectPreviewSession`,
-which stitches together deterministic SID/URI generation and the Torii
-registration call.
+የግንኙነት አጋዥዎች I18NI0000096X መስታወት። የ
+ለቅድመ እይታ ዝግጁ ክፍለ ጊዜ ፈጣኑ መንገድ `bootstrapConnectPreviewSession` ነው፣
+የሚወስነው SID/URI ትውልድ እና Torii አንድ ላይ የሚገጣጠም
+የምዝገባ ጥሪ.
 
 ```ts
 import {
@@ -336,25 +337,25 @@ console.log("wallet QR", preview.walletUri);
 console.log("Connect tokens", tokens?.wallet, tokens?.app);
 ```
 
-- Pass `register: false` when you only need deterministic URIs for QR/deeplink
-  previews.
-- `generateConnectSid` stays available when you need to derive session ids
-  without minting URIs.
-- Directional keys and ciphertext envelopes come from the native bridge; when
-  unavailable the SDK falls back to the JSON codec and throws
+ለQR/Deplink ቆራጥ ዩአርአይዎች ሲፈልጉ `register: false` ይለፉ
+  ቅድመ እይታዎች.
+- የክፍለ-ጊዜ መታወቂያዎችን ማግኘት ሲፈልጉ `generateConnectSid` እንዳለ ይቆያል
+  ዩአርአይዎችን ሳይፈጥሩ።
+- የአቅጣጫ ቁልፎች እና የምስጢር ጽሑፍ ፖስታዎች ከአገሬው ተወላጅ ድልድይ ይመጣሉ; መቼ ነው።
+  አይገኝም ኤስዲኬ ወደ JSON ኮዴክ ተመልሶ ይጥላል
   `ConnectQueueError.bridgeUnavailable`.
-- Offline buffers are stored as Norito `.to` blobs in IndexedDB. Monitor queue
-  state via the emitted `ConnectQueueError.overflow(limit)` /
-  `.expired(ttlMs)` errors and feed `connect.queue_depth` telemetry as outlined
-  in the roadmap.
+- ከመስመር ውጭ ማቋቋሚያዎች በ IndexedDB ውስጥ እንደ Norito `.to` blobs ተቀምጠዋል። ወረፋ ይከታተሉ
+  ግዛት በተለቀቀው I18NI0000102X /
+  `.expired(ttlMs)` ስህተቶች እና ምግብ `connect.queue_depth` ቴሌሜትሪ እንደተገለፀው
+  በመንገድ ካርታው ውስጥ.
 
-### Connect registry & policy snapshots
+### የመመዝገቢያ እና የፖሊሲ ቅጽበተ-ፎቶዎችን ያገናኙ
 
-Platform operators can introspect and update the Connect registry without
-leaving Node.js. `iterateConnectApps()` pages through the registry, while
-`getConnectStatus()` and `getConnectAppPolicy()` expose the runtime counters and
-current policy envelope. `updateConnectAppPolicy()` accepts camelCase fields,
-so you can stage the same JSON payload that Torii expects.
+የፕላትፎርም ኦፕሬተሮች የግንኙን መዝገቡን ያለሱ ማየት እና ማዘመን ይችላሉ።
+Node.js ትቶ `iterateConnectApps()` ገጾች በመመዝገቢያ በኩል, ሳለ
+`getConnectStatus()` እና `getConnectAppPolicy()` የሩጫ ሰዓት ቆጣሪዎችን ያጋልጣሉ እና
+የአሁኑ ፖሊሲ ፖስታ. `updateConnectAppPolicy()` የግመል ኬዝ መስኮችን ይቀበላል ፣
+Torii የሚጠብቀውን ተመሳሳይ የ JSON ጭነት ደረጃ ማድረግ ይችላሉ።
 
 ```ts
 const status = await torii.getConnectStatus();
@@ -376,17 +377,17 @@ if ((policy.wsPerIpMaxSessions ?? 0) < 5) {
 }
 ```
 
-Always capture the latest `getConnectStatus()` snapshot before applying
-mutations—the governance checklist requires evidence that policy updates start
-from the fleet’s current limits.
+ከማመልከትዎ በፊት ሁልጊዜ የቅርብ ጊዜውን I18NI0000109X ቅጽበታዊ ገጽ እይታን ያንሱ
+ሚውቴሽን—የአስተዳደር ማረጋገጫ ዝርዝሩ የፖሊሲ ማሻሻያ መጀመሩን የሚያሳይ ማስረጃ ያስፈልገዋል
+ከመርከቦቹ ወቅታዊ ገደቦች.
 
-### Connect WebSocket dialling
+### የዌብሶኬት መደወያ ያገናኙ
 
-`ToriiClient.openConnectWebSocket()` assembles the canonical
-`/v1/connect/ws` URL (including `sid`, `role`, and token parameters), upgrades
-`http→ws` / `https→wss`, and hands the final URL to whichever WebSocket
-implementation you supply. Browsers automatically reuse the global
-`WebSocket`. Node.js callers should pass a constructor such as `ws`:
+`ToriiClient.openConnectWebSocket()` ቀኖናውን ይሰበስባል
+`/v1/connect/ws` URL (I18NI0000112X፣ `role`፣ እና የማስመሰያ መለኪያዎችን ጨምሮ)፣ ማሻሻያዎች
+`http→ws`/`https→wss`፣ እና የመጨረሻውን ዩአርኤል ለየትኛው ዌብሶኬት አስረክቡ።
+እርስዎ የሚያቀርቡት ትግበራ. አሳሾች በራስ ሰር አለምአቀፉን እንደገና ይጠቀማሉ
+`WebSocket`. Node.js ደዋዮች እንደ `ws` ያለ ግንበኛ ማለፍ አለባቸው፡
 
 ```ts
 import WebSocket from "ws";
@@ -422,19 +423,19 @@ socket.addEventListener("message", (event) => {
 });
 ```
 
-When you only need the URL, call `torii.buildConnectWebSocketUrl(params)` or the
-top-level `buildConnectWebSocketUrl(baseUrl, params)` helper and reuse the
-resulting string in a custom transport/queue.
+ዩአርኤሉን ብቻ ሲፈልጉ፣ `torii.buildConnectWebSocketUrl(params)` ይደውሉ ወይም ይደውሉ
+ከፍተኛ-ደረጃ `buildConnectWebSocketUrl(baseUrl, params)` አጋዥ እና እንደገና ይጠቀሙ
+በብጁ ማጓጓዣ/ወረፋ ውስጥ የውጤት ሕብረቁምፊ።
 
-Looking for a complete CLI-oriented sample? The
-[Connect preview recipe](./recipes/javascript-connect-preview.md) includes a
-runnable script plus telemetry guidance that mirrors the roadmap deliverable for
-documenting the Connect queue + WebSocket flow.
+የተሟላ CLI-ተኮር ናሙና ይፈልጋሉ? የ
+[የቅድመ እይታ አዘገጃጀትን ያገናኙ](./recipes/javascript-connect-preview.md) ሀን ያካትታል
+ሊሄድ የሚችል ስክሪፕት እና የቴሌሜትሪ መመሪያ የሚቀርበውን የመንገድ ካርታ የሚያንፀባርቅ ነው።
+የግንኙነት ወረፋ + የዌብሶኬት ፍሰትን መመዝገብ።
 
-### Queue telemetry & alerting
+### ወረፋ ቴሌሜትሪ እና ማንቂያ
 
-Wire queue metrics directly into the helper surfaces so dashboards can mirror
-the roadmap KPIs.
+ዳሽቦርዶች ማንጸባረቅ እንዲችሉ የሽቦ ወረፋ መለኪያዎች በቀጥታ ወደ ረዳት ፎቆች
+የመንገድ ካርታ KPIs.
 
 ```ts
 import { bootstrapConnectPreviewSession, ConnectQueueError } from "@iroha/iroha-js";
@@ -458,17 +459,17 @@ async function dialWithTelemetry(client: ToriiClient) {
 }
 ```
 
-`ConnectQueueError#toConnectError()` converts queue failures into the generic
-`ConnectError` taxonomy so shared HTTP/WebSocket interceptors can emit the
-standard `connect.queue_depth`, `connect.queue_overflow_total`, and
-`connect.queue_expired_total` metrics referenced throughout the roadmap.
+`ConnectQueueError#toConnectError()` የወረፋ ውድቀቶችን ወደ አጠቃላይ ይለውጣል
+`ConnectError` ታክሶኖሚ ስለዚህ የተጋሩ HTTP/WebSocket interceptors
+መደበኛ `connect.queue_depth`፣ `connect.queue_overflow_total`፣ እና
+`connect.queue_expired_total` ሜትሪክስ በፍኖተ ካርታው በሙሉ ተጠቅሷል።
 
-## Streaming watchers & event cursors
+## የዥረት ተመልካቾች እና የክስተት ጠቋሚዎች
 
-`ToriiClient.streamEvents()` exposes `/v1/events/sse` as an async iterator with automatic
-retries, so Node/Bun CLIs can tail pipeline activity the same way the Rust CLI does.
-Persist the `Last-Event-ID` cursor alongside your runbook artefacts so operators can
-resume a stream without skipping events when a process restarts.
+`ToriiClient.streamEvents()` `/v1/events/sse` እንደ ያልተመሳሰለ ድግግሞሽ አውቶማቲክ ያጋልጣል
+እንደገና ይሞክራል፣ ስለዚህ Node/Bun CLIs Rust CLI በሚያደርገው መንገድ የቧንቧ መስመር እንቅስቃሴን ሊጭኑ ይችላሉ።
+ኦፕሬተሮች እንዲችሉ የ`Last-Event-ID` ጠቋሚውን ከRunbook artefactsዎ ጎን ያቆዩ
+ሂደቱ እንደገና ሲጀመር ክስተቶችን ሳይዘለሉ ዥረቱን ይቀጥሉ።
 
 ```ts
 import fs from "node:fs/promises";
@@ -498,35 +499,33 @@ for await (const event of torii.streamEvents({
 }
 ```
 
-- Switch `PIPELINE_STATUS` (for example `Pending`, `Applied`, or `Approved`) or set
-  `STREAM_FILTER_JSON` to replay the same filters the CLI accepts.
-- `STREAM_MAX_EVENTS=0 node ./recipes/streaming.mjs` keeps the iterator alive until a
-  signal is received; pass `STREAM_MAX_EVENTS=25` when you only need the first few events
-  for a smoke test.
-- `ToriiClient.streamSumeragiStatus()` mirrors the same interface for
-  `/v1/sumeragi/status/sse` so consensus telemetry can be tailed separately, and the
-  iterator honours `Last-Event-ID` the same way.
-- See `javascript/iroha_js/recipes/streaming.mjs` for a turnkey CLI (cursor persistence,
-  env-var filter overrides, and `extractPipelineStatusKind` logging) used in the JS4
-  streaming/WebSocket roadmap deliverable.
+- `PIPELINE_STATUS` ቀይር (ለምሳሌ I18NI0000129X፣ `Applied`፣ ወይም `Approved`) ወይም አዘጋጅ
+  `STREAM_FILTER_JSON` CLI የሚቀበላቸውን ተመሳሳይ ማጣሪያዎች እንደገና ለማጫወት።
+- `STREAM_MAX_EVENTS=0 node ./recipes/streaming.mjs` ተደጋጋሚውን እስከ ሀ
+  ምልክት ተቀብሏል; የመጀመሪያዎቹን ክስተቶች ብቻ ሲፈልጉ `STREAM_MAX_EVENTS=25` ማለፍ
+  ለጭስ ምርመራ.
+- `ToriiClient.streamSumeragiStatus()` መስተዋቶች ተመሳሳይ በይነገጽ ለ
+  `/v1/sumeragi/status/sse` ስለዚህ የጋራ መግባባት ቴሌሜትሪ ለብቻው ሊደረደር ይችላል ፣ እና
+  iterator `Last-Event-ID` በተመሳሳይ መንገድ ያከብራል።
+- ለመታጠፊያ CLI (የጠቋሚ ጽናት፣) `javascript/iroha_js/recipes/streaming.mjs` ይመልከቱ።
+  env-var ማጣሪያ ይሽራል፣ እና `extractPipelineStatusKind` ሎግንግ) በJS4 ውስጥ ጥቅም ላይ ይውላል።
+  ዥረት/WebSocket የመንገድ ካርታ ሊደርስ ይችላል።
 
-## UAID portfolios & Space Directory
+## የ UAID ፖርትፎሊዮዎች እና የጠፈር ማውጫ
 
-The Space Directory APIs surface the Universal Account ID (UAID) lifecycle. The
-helpers accept `uaid:<hex>` literals or raw 64-hex digests (LSB=1) and
-canonicalise them before submitting requests:
+የስፔስ ማውጫ ኤፒአይዎች ሁለንተናዊ መለያ መታወቂያ (UAID) የህይወት ኡደት ላይ ናቸው። የ
+ረዳቶች `uaid:<hex>` በቀጥታ ወይም ጥሬ ባለ 64-ሄክስ መፍጨት (LSB=1) ይቀበላሉ እና
+ጥያቄዎችን ከማቅረቡ በፊት ቀኖናዊ አድርጋቸው፡-
 
-- `getUaidPortfolio(uaid, { assetId })` aggregates balances per dataspace,
-  grouping asset holdings by canonical account IDs; pass `assetId` to filter the
-  portfolio down to a single asset instance.
-- `getUaidBindings(uaid, { addressFormat })` enumerates every dataspace ↔ account
-  binding (`addressFormat: "compressed"` returns the `sora…` literals).
-- `getUaidManifests(uaid, { dataspaceId })` returns each capability manifest,
-  lifecycle status, and bound accounts for auditing.
-
-For operator evidence packs, manifest publish/revoke flows, and SDK migration
-guidance, follow the Universal Account Guide (`docs/source/universal_accounts_guide.md`)
-alongside these client helpers so the portal and source documentation remain in sync.
+- `getUaidPortfolio(uaid, { assetId })` ሒሳቦች በአንድ የውሂብ ቦታ፣
+  የንብረት ይዞታዎችን በካኖናዊ መለያ መታወቂያዎች ማቧደን; ለማጣራት `assetId` ማለፍ
+  ፖርትፎሊዮ ወደ ነጠላ ንብረት ምሳሌ።
+- `getUaidBindings(uaid, { addressFormat })` ሁሉንም የውሂብ ቦታ ↔ መለያ ይዘረዝራል።
+  ማሰሪያ (`addressFormat: "compressed"` የ `sora…` ቃል በቃል ይመልሳል)።
+- `getUaidManifests(uaid, { dataspaceId })` እያንዳንዱን የችሎታ መግለጫ ይመልሳል ፣
+  የሕይወት ዑደት ሁኔታ፣ እና ለኦዲት የታሰሩ ሂሳቦች።ለኦፕሬተር ማስረጃዎች ጥቅሎች፣ የህትመት ፍሰቶችን አንጸባራቂ ማተም/መሻር እና የኤስዲኬ ፍልሰት
+መመሪያ፣ ሁለንተናዊ መለያ መመሪያን ተከተል (`docs/source/universal_accounts_guide.md`)
+ከእነዚህ የደንበኛ ረዳቶች ጎን ለጎን ፖርታል እና የምንጭ ሰነዱ እንደተመሳሰሉ ይቆያሉ።
 
 ```ts
 import { promises as fs } from "node:fs";
@@ -547,11 +546,11 @@ const manifests = await torii.getUaidManifests(uaid, { dataspaceId: 11 });
 console.log("manifests", manifests.manifests[0].manifest.entries.length);
 ```
 
-Operators can also rotate manifests or execute emergency deny-wins flows without
-dropping to the CLI. Both helpers accept an optional `{ signal }` object so
-long-running submissions can be cancelled with `AbortController`; non-object
-options or non-`AbortSignal` inputs raise a synchronous `TypeError` before the
-request hits Torii:
+ኦፕሬተሮች እንዲሁ ማኒፌክቶችን ማሽከርከር ወይም የአደጋ መካድ-አሸናፊዎችን ፍሰት ያለሱ ማከናወን ይችላሉ።
+ወደ CLI መጣል. ሁለቱም ረዳቶች እንደ አማራጭ `{ signal }` ነገር ይቀበላሉ።
+የረዥም ጊዜ ማቅረቢያዎች በ `AbortController` ሊሰረዙ ይችላሉ; ያልሆነ ነገር
+አማራጮች ወይም `AbortSignal` ያልሆኑ ግብዓቶች የተመሳሰለ `TypeError` ያሳድጋሉ
+ጥያቄ Torii ይደርሳል:
 
 ```ts
 import { promises as fs } from "node:fs";
@@ -586,45 +585,45 @@ await torii.revokeSpaceDirectoryManifest(
 );
 ```
 
-`publishSpaceDirectoryManifest()` accepts either raw manifest JSON (matching the
-fixtures under `fixtures/space_directory/`) or any object that serialises to the
-same structure. `privateKey`, `privateKeyHex`, or `privateKeyMultihash` map to
-the `ExposedPrivateKey` field Torii expects and default to the `ed25519`
-algorithm when no prefix is supplied. Both requests return once Torii enqueues
-the instruction (`202 Accepted`), at which point the ledger will emit the
-matching `SpaceDirectoryEvent`.
+`publishSpaceDirectoryManifest()` ጥሬ አንጸባራቂ JSONን ይቀበላል (ከ
+በ `fixtures/space_directory/`) ወይም በተከታታይ የሚቀርብ ማንኛውም ዕቃ
+ተመሳሳይ መዋቅር. `privateKey`፣ `privateKeyHex`፣ ወይም `privateKeyMultihash` ካርታ ወደ
+የ `ExposedPrivateKey` መስክ Torii ይጠብቃል እና ነባሪ `ed25519`
+ምንም ቅድመ ቅጥያ በማይሰጥበት ጊዜ አልጎሪዝም. ሁለቱም ጥያቄዎች አንዴ I18NT0000016X ወረፋዎች ይመለሳሉ
+መመሪያው (`202 Accepted`) ፣ በዚህ ጊዜ የሂሳብ ደብተር ያወጣል።
+ተዛማጅ `SpaceDirectoryEvent`.
 
-## Governance & ISO bridge
+## አስተዳደር እና አይኤስኦ ድልድይ
 
-`ToriiClient` exposes the governance APIs for inspecting contracts, staging
-proposals, submitting ballots (plain or ZK), rotating the council, and calling
+`ToriiClient` የአስተዳደር ኤፒአይዎችን ኮንትራቶችን ለመፈተሽ ያጋልጣል።
+ፕሮፖዛል፣ የምርጫ ካርዶችን (ሜዳ ወይም ዜድኬ) ማቅረብ፣ ምክር ቤቱን ማዞር እና መጥራት
 `governanceFinalizeReferendumTyped` /
-`governanceEnactProposalTyped` without hand-written DTOs. ISO&nbsp;20022 helpers
-follow the same pattern via `buildPacs008Message`/`buildPacs009Message` and the
-`submitIso*`/`waitForIsoMessageStatus` trio.
+`governanceEnactProposalTyped` ያለ በእጅ የተፃፉ DTOs። ISO 20022 ረዳቶች
+በ `buildPacs008Message`/I18NI0000165X እና በ
+`submitIso*`/`waitForIsoMessageStatus` ትሪዮ።
 
-See the [governance & ISO bridge recipe](./recipes/javascript-governance-iso.md)
-for CLI-ready samples plus pointers back to the full field guide in
+[የአስተዳደር እና የአይኤስኦ ድልድይ አሰራር](./recipes/javascript-governance-iso.md) ይመልከቱ
+ለ CLI ዝግጁ የሆኑ ናሙናዎች እና ጠቋሚዎች ወደ ሙሉ የመስክ መመሪያ ይመለሱ
 `docs/source/sdk/js/governance_iso_examples.md`.
 
-## RBC sampling & delivery evidence
+## RBC ናሙና እና ማቅረቢያ ማስረጃ
 
-The JS roadmap also requires Roadrunner Block Commitment (RBC) sampling so operators can
-prove that the block they fetched through Sumeragi matches the chunk proofs they verify.
-Use the built-in helpers instead of building payloads by hand:
+የJS ፍኖተ ካርታ ኦፕሬተሮች እንዲችሉ የRoadrunner Block Commitment (RBC) ናሙና ያስፈልገዋል
+በ Sumeragi ያመጡት ብሎክ ከሚያረጋግጡት ቁርጥራጭ ማረጋገጫዎች ጋር የሚዛመድ መሆኑን ያረጋግጡ።
+ጭነትን በእጅ ከመገንባት ይልቅ አብሮ የተሰሩ ረዳቶችን ይጠቀሙ፡-
 
-1. `getSumeragiRbcSessions()` mirrors `/v1/sumeragi/rbc/sessions`, and
-   `findRbcSamplingCandidate()` auto-selects the first delivered session with a block hash
-   (the integration suite falls back to it whenever
-   `IROHA_TORII_INTEGRATION_RBC_SAMPLE` is unset).
-2. `ToriiClient.buildRbcSampleRequest(session, overrides)` normalises `{blockHash,height,view}`
-   plus optional `{count,seed,apiToken}` overrides so malformed hex or negative integers never
-   reach Torii.
-3. `sampleRbcChunks()` POSTs the request to `/v1/sumeragi/rbc/sample`, returning chunk proofs
-   and Merkle paths (`samples[].chunkHex`, `chunkRoot`, `payloadHash`) you should archive with
-   the rest of your adoption evidence.
-4. `getSumeragiRbcDelivered(height, view)` captures the cohort’s delivery metadata so auditors
-   can replay the proof end-to-end.
+1. `getSumeragiRbcSessions()` መስተዋቶች I18NI0000170X፣ እና
+   `findRbcSamplingCandidate()` በብሎክ ሃሽ የመጀመሪያውን የተላከ ክፍለ ጊዜ በራስ-ሰር ይመርጣል
+   (የውህደት ክፍሉ በማንኛውም ጊዜ ወደ እሱ ይመለሳል
+   `IROHA_TORII_INTEGRATION_RBC_SAMPLE` አልተቀናበረም)።
+2. `ToriiClient.buildRbcSampleRequest(session, overrides)` መደበኛ `{blockHash,height,view}`
+   ሲደመር አማራጭ `{count,seed,apiToken}` በጣም የተበላሹ ሄክስ ወይም አሉታዊ ኢንቲጀር ፈጽሞ ይሽራል
+   Torii ይድረሱ።
+3. `sampleRbcChunks()` ጥያቄውን ወደ `/v1/sumeragi/rbc/sample` ይለጠፋል፣ የቁርጥ ማስረጃዎችን ይመልሳል።
+   እና Merkle ዱካዎች (I18NI0000178X፣ `chunkRoot`፣ `payloadHash`) በማህደር ማስቀመጥ አለቦት
+   ቀሪው የጉዲፈቻ ማስረጃዎ።
+4. `getSumeragiRbcDelivered(height, view)` ኦዲተሮች እንዲያደርጉ የቡድኑን የመላኪያ ሜታዳታ ይይዛል
+   ማስረጃውን ከጫፍ እስከ ጫፍ መድገም ይችላል።
 
 ```js
 import assert from "node:assert";
@@ -658,23 +657,23 @@ console.log(
 );
 ```
 
-Persist both responses under the artefact root you submit to governance. Override the
-auto-selected session via `RBC_SAMPLE_JSON='{"height":123,"view":4,"blockHash":"0x…"}'`
-whenever you need to probe a specific block, and treat failures to fetch RBC snapshots as a
-pre-flight gating error rather than silently downgrading to direct mode.
+ሁለቱንም ምላሾች ለአስተዳደር በሚያስገቡት አርቲፊሻል ስር ይቆዩ። ይሽረው
+በ`RBC_SAMPLE_JSON='{"height":123,"view":4,"blockHash":"0x…"}'` በኩል በራስ-የተመረጠ ክፍለ ጊዜ
+አንድን የተወሰነ ብሎክ ለመመርመር በሚፈልጉበት ጊዜ እና RBC ቅጽበተ-ፎቶዎችን ለማምጣት አለመሳካቶችን እንደ ሀ
+በፀጥታ ወደ ቀጥታ ሁነታ ከማውረድ ይልቅ የቅድመ በረራ ጌቲንግ ስህተት።
 
-## Testing & CI
+## ሙከራ እና CI
 
-1. Cache cargo and npm artifacts.
-2. Run `npm run build:native`.
-3. Execute `npm test` (or `node --test` for smoke jobs).
+1. የመሸጎጫ ጭነት እና npm ቅርሶች።
+2. `npm run build:native` አሂድ.
+3. `npm test` (ወይም `node --test` ለጭስ ስራዎች) ያስፈጽሙ.
 
-The reference GitHub Actions workflow lives in
+የማመሳከሪያው GitHub Actions የስራ ፍሰት ይኖራል
 `docs/source/examples/iroha_js_ci.md`.
 
-## Next steps
+## ቀጣይ እርምጃዎች
 
-- Review the generated types in `javascript/iroha_js/index.d.ts`.
-- Explore the recipes under `javascript/iroha_js/recipes/`.
-- Pair `ToriiClient` with the Norito quickstart to inspect payloads alongside
-  SDK calls.
+- በ `javascript/iroha_js/index.d.ts` ውስጥ የተፈጠሩትን ዓይነቶች ይገምግሙ።
+- የምግብ አዘገጃጀቱን በ `javascript/iroha_js/recipes/` ስር ያስሱ።
+- የክፍያ ጭነቶችን ከጎን ለመመርመር `ToriiClient`ን ከI18NT0000007X ፈጣን ጅምር ጋር ያጣምሩ
+  የኤስዲኬ ጥሪዎች።

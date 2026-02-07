@@ -7,124 +7,120 @@ generator: scripts/sync_docs_i18n.py
 source_hash: bcf280df1e00065199d386e07b9fd67d8f94c4046d73cfa3b63d1eec18228cd8
 source_last_modified: "2026-01-22T16:26:46.570453+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 # IVM Syscall ABI
 
-This document defines the IVM syscall numbers, pointer-ABI calling conventions, reserved number ranges, and the canonical table of contract-facing syscalls used by Kotodama lowering. It complements `ivm.md` (architecture) and `kotodama_grammar.md` (language).
+Այս փաստաթուղթը սահմանում է IVM syscall համարները, ցուցիչ-ABI կանչերի պայմանագրերը, վերապահված թվերի միջակայքերը և պայմանագրային երեսպատման syscals-ի կանոնական աղյուսակը, որն օգտագործվում է Kotodama իջեցման միջոցով: Այն լրացնում է `ivm.md` (ճարտարապետություն) և `kotodama_grammar.md` (լեզու):
 
-Versioning
-- The set of recognized syscalls depends on the bytecode header `abi_version` field. The first release accepts only `abi_version = 1`; other values are rejected at admission. Unknown numbers for the active `abi_version` deterministically trap with `E_SCALL_UNKNOWN`.
-- Runtime upgrades keep `abi_version = 1` and do not expand syscall or pointer‑ABI surfaces.
-- Syscall gas costs are part of the versioned gas schedule bound to the bytecode header version. See `ivm.md` (Gas policy).
+Տարբերակում
+- Ճանաչված syscalls-ի հավաքածուն կախված է բայթկոդի վերնագրի `abi_version` դաշտից: Առաջին թողարկումն ընդունում է միայն `abi_version = 1`; այլ արժեքները մերժվում են ընդունելության ժամանակ: Անհայտ թվերը ակտիվ `abi_version`-ի համար դետերմինիստականորեն թակարդում են `E_SCALL_UNKNOWN`-ով:
+- Runtime-ի թարմացումները պահպանում են `abi_version = 1`-ը և չեն ընդլայնում syscall կամ ցուցիչ-ABI մակերեսները:
+- Syscall գազի ծախսերը հանդիսանում են գազի տարբերակված ժամանակացույցի մի մասը, որը կապված է բայթկոդի վերնագրի տարբերակին: Տես `ivm.md` (Գազային քաղաքականություն):
 
-Numbering ranges
-- `0x00..=0x1F`: VM core/utility (debug/exit helpers are available under `CoreHost`; remaining dev helpers are mock-host only).
-- `0x20..=0x5F`: Iroha core ISI bridge (stable in ABI v1).
-- `0x60..=0x7F`: extension ISIs gated by protocol features (still part of ABI v1 when enabled).
-- `0x80..=0xFF`: host/crypto helpers and reserved slots; only numbers present in the ABI v1 allowlist are accepted.
+Համարակալման միջակայքերը
+- `0x00..=0x1F`. VM միջուկ/կոմունալ (վրիպազերծման/ելքի օգնականները հասանելի են `CoreHost`-ի ներքո, մշակողի մնացած օգնականները միայն կեղծ հոսթ են):
+- `0x20..=0x5F`: Iroha միջուկային ISI կամուրջ (կայուն ABI v1-ում):
+- `0x60..=0x7F`. ընդլայնման ISI-ները փակված են պրոտոկոլային հատկանիշներով (միացված լինելու դեպքում դեռևս մաս է կազմում ABI v1):
+- `0x80..=0xFF`՝ հյուրընկալող/կրիպտո օգնականներ և վերապահված սլոտներ; Ընդունվում են միայն ABI v1 թույլտվությունների ցանկում առկա համարները:
 
-Durable helpers (ABI v1)
-- The durable state helper syscalls (0x50–0x5A: STATE_{GET,SET,DEL}, ENCODE/DECODE_INT, BUILD_PATH_*, JSON/SCHEMA encode/decode) are part of the V1 ABI and included in `abi_hash` computation.
-- CoreHost wires STATE_{GET,SET,DEL} to WSV-backed durable smart-contract state; dev/test hosts may persist locally but must preserve identical syscall semantics.
+Երկարակյաց օգնականներ (ABI v1)
+- Երկարատև վիճակի օգնական համակարգերը (0x50–0x5A: STATE_{GET,SET,DEL}, ENCODE/DECODE_INT, BUILD_PATH_*, JSON/SCHEMA կոդավորում/վերծանում) V1 ABI-ի մի մասն են և ներառված են `abi_hash` հաշվարկում:
+- CoreHost լարերը STATE_{GET,SET,DEL} WSV-ով ապահովված կայուն խելացի պայմանագրային վիճակի; dev/test hosts-ը կարող է պահպանվել տեղում, բայց պետք է պահպանի նույնական syscall իմաստաբանությունը:
 
-Pointer‑ABI calling convention (smart‑contract syscalls)
-- Arguments are placed in registers `r10+` as raw `u64` values or as pointers into the INPUT region to immutable Norito TLV envelopes (e.g., `AccountId`, `AssetDefinitionId`, `Name`, `Json`, `NftId`).
-- Scalar return values are the `u64` returned from the host. Pointer results are written by the host into `r10`.
+Pointer-ABI զանգերի կոնվենցիա (խելացի պայմանագրային համակարգեր)
+- Փաստարկները տեղադրվում են `r10+` գրանցամատյաններում որպես `u64` հում արժեքներ կամ որպես ցուցիչներ INPUT տարածաշրջանում դեպի անփոփոխ Norito TLV ծրարներ (օրինակ՝ Norito `Name`, `Json`, `NftId`):
+- Scalar վերադարձի արժեքներն են `u64`-ը, որը վերադարձվել է հոսթից: Ցուցիչի արդյունքները գրվում են հյուրընկալողի կողմից `r10`-ում:
 
-Canonical syscall table (subset)
+Կանոնական syscall աղյուսակ (ենթաբազմություն)| Hex | Անունը | Փաստարկներ (`r10+`-ում) | Վերադարձներ | Գազ (հիմք + փոփոխական) | Ծանոթագրություններ |
+|------|-------------------------------------------------------------------------- ------------------------|
+| 0x1A | SET_ACCOUNT_DETAIL | `&AccountId`, `&Name`, `&Json` | `u64=0` | `G_set_detail + bytes(val)` | Հաշվի համար մանրամասն գրում է |
+| 0x22 | MINT_ASSET | `&AccountId`, `&AssetDefinitionId`, `&NoritoBytes(Numeric)` | `u64=0` | `G_mint` | Դրամահատարաններ `amount` ակտիվների հաշվին |
+| 0x23 | ԱՅՐՎԱԾ_ԱԿՏԻՎ | `&AccountId`, `&AssetDefinitionId`, `&NoritoBytes(Numeric)` | `u64=0` | `G_burn` | Այրվում է `amount` հաշվից |
+| 0x24 | ՏՐԱՆՍՖԵՐ_ԱԿՏԻՎ | `&AccountId(from)`, `&AccountId(to)`, `&AssetDefinitionId`, `&NoritoBytes(Numeric)` | `u64=0` | `G_transfer` | `amount` փոխանցումներ հաշիվների միջև |
+| 0x29 | TRANSFER_V1_BATCH_BEGIN | – | `u64=0` | `G_transfer` | Սկսեք FASTPQ փոխանցման խմբաքանակի շրջանակը |
+| 0x2A | TRANSFER_V1_BATCH_END | – | `u64=0` | `G_transfer` | Լվացեք կուտակված FASTPQ փոխանցման խմբաքանակ |
+| 0x2B | TRANSFER_V1_BATCH_APPLY | `r10=&NoritoBytes(TransferAssetBatch)` | `u64=0` | `G_transfer` | Կիրառել Norito կոդավորված փաթեթը մեկ syscall-ում |
+| 0x25 | NFT_MINT_ASSET | `&NftId`, `&AccountId(owner)` | `u64=0` | `G_nft_mint_asset` | Գրանցում է նոր NFT |
+| 0x26 | NFT_TRANSFER_ASSET | `&AccountId(from)`, `&NftId`, `&AccountId(to)` | `u64=0` | `G_nft_transfer_asset` | Փոխանցում է NFT-ի սեփականությունը |
+| 0x27 | NFT_SET_METADATA | `&NftId`, `&Json` | `u64=0` | `G_nft_set_metadata` | Թարմացնում է NFT մետատվյալները |
+| 0x28 | NFT_BURN_ASSET | `&NftId` | `u64=0` | `G_nft_burn_asset` | Այրում (ոչնչացնում է) NFT |
+| 0xA1 | SMARTCONTRACT_EXECUTE_QUERY| `r10=&NoritoBytes(QueryRequest)` | `r10=ptr (&NoritoBytes(QueryResponse))` | `G_scq + per_item*items + per_byte*bytes(resp)` | Կրկնվող հարցումները կատարվում են ժամանակավոր. `QueryRequest::Continue` մերժված |
+| 0xA2 | CREATE_NFTS_FOR_ALL_USERS | – | `u64=count` | `G_create_nfts_for_all` | Օգնական; հատկանշական դարպասներով || 0xA3 | SET_SMARTCONTRACT_EXECUTION_DEPTH | `depth:u64` | `u64=prev` | `G_set_depth` | Ադմին; հատկանշական դարպասներով |
+| 0xA4 | GET_AUTHORITY | – (հաղորդավարը գրում է արդյունքը) | `&AccountId`| `G_get_auth` | Հյուրընկալողը ցուցիչ է գրում ընթացիկ հեղինակությանը `r10` |
+| 0xF7 | GET_MERKLE_PATH | `addr:u64`, `out_ptr:u64`, կամընտիր `root_out:u64` | `u64=len` | `G_mpath + len` | Գրում է ուղի (տերև→ արմատ) և կամընտիր արմատային բայթեր |
+| 0xFA | GET_MERKLE_COMPACT | `addr:u64`, `out_ptr:u64`, կամընտիր `depth_cap:u64`, կամընտիր `root_out:u64` | `u64=depth` | `G_mpath + depth` | `[u8 depth][u32 dirs_le][u32 count][count*32 siblings]` |
+| 0xFF | GET_REGISTER_MERKLE_COMPACT| `reg_index:u64`, `out_ptr:u64`, կամընտիր `depth_cap:u64`, կամընտիր `root_out:u64` | `u64=depth` | `G_mpath + depth` | Նույն կոմպակտ դասավորությունը ռեգիստրի պարտավորության համար |
 
-| Hex  | Name                       | Arguments (in `r10+`)                                                   | Returns     | Gas (base + variable)        | Notes |
-|------|----------------------------|-------------------------------------------------------------------------|-------------|------------------------------|-------|
-| 0x1A | SET_ACCOUNT_DETAIL         | `&AccountId`, `&Name`, `&Json`                                          | `u64=0`     | `G_set_detail + bytes(val)`  | Writes a detail for the account |
-| 0x22 | MINT_ASSET                 | `&AccountId`, `&AssetDefinitionId`, `&NoritoBytes(Numeric)`             | `u64=0`     | `G_mint`                     | Mints `amount` of asset to account |
-| 0x23 | BURN_ASSET                 | `&AccountId`, `&AssetDefinitionId`, `&NoritoBytes(Numeric)`             | `u64=0`     | `G_burn`                     | Burns `amount` from account |
-| 0x24 | TRANSFER_ASSET             | `&AccountId(from)`, `&AccountId(to)`, `&AssetDefinitionId`, `&NoritoBytes(Numeric)` | `u64=0`     | `G_transfer`                 | Transfers `amount` between accounts |
-| 0x29 | TRANSFER_V1_BATCH_BEGIN    | –                                                                       | `u64=0`     | `G_transfer`                 | Begin FASTPQ transfer batch scope |
-| 0x2A | TRANSFER_V1_BATCH_END      | –                                                                       | `u64=0`     | `G_transfer`                 | Flush accumulated FASTPQ transfer batch |
-| 0x2B | TRANSFER_V1_BATCH_APPLY    | `r10=&NoritoBytes(TransferAssetBatch)`                                  | `u64=0`     | `G_transfer`                 | Apply a Norito-encoded batch in a single syscall |
-| 0x25 | NFT_MINT_ASSET             | `&NftId`, `&AccountId(owner)`                                           | `u64=0`     | `G_nft_mint_asset`           | Registers a new NFT |
-| 0x26 | NFT_TRANSFER_ASSET         | `&AccountId(from)`, `&NftId`, `&AccountId(to)`                          | `u64=0`     | `G_nft_transfer_asset`       | Transfers ownership of NFT |
-| 0x27 | NFT_SET_METADATA           | `&NftId`, `&Json`                                                       | `u64=0`     | `G_nft_set_metadata`         | Updates NFT metadata |
-| 0x28 | NFT_BURN_ASSET             | `&NftId`                                                                | `u64=0`     | `G_nft_burn_asset`           | Burns (destroys) an NFT |
-| 0xA1 | SMARTCONTRACT_EXECUTE_QUERY| `r10=&NoritoBytes(QueryRequest)`                                        | `r10=ptr (&NoritoBytes(QueryResponse))` | `G_scq + per_item*items + per_byte*bytes(resp)` | Iterable queries run ephemerally; `QueryRequest::Continue` rejected |
-| 0xA2 | CREATE_NFTS_FOR_ALL_USERS  | –                                                                       | `u64=count` | `G_create_nfts_for_all`      | Helper; feature‑gated |
-| 0xA3 | SET_SMARTCONTRACT_EXECUTION_DEPTH | `depth:u64`                                                         | `u64=prev`  | `G_set_depth`                | Admin; feature‑gated |
-| 0xA4 | GET_AUTHORITY              | – (host writes result)                                                  | `&AccountId`| `G_get_auth`                 | Host writes pointer to current authority into `r10` |
-| 0xF7 | GET_MERKLE_PATH            | `addr:u64`, `out_ptr:u64`, optional `root_out:u64`                      | `u64=len`   | `G_mpath + len`             | Writes path (leaf→root) and optional root bytes |
-| 0xFA | GET_MERKLE_COMPACT         | `addr:u64`, `out_ptr:u64`, optional `depth_cap:u64`, optional `root_out:u64` | `u64=depth` | `G_mpath + depth`           | `[u8 depth][u32 dirs_le][u32 count][count*32 siblings]` |
-| 0xFF | GET_REGISTER_MERKLE_COMPACT| `reg_index:u64`, `out_ptr:u64`, optional `depth_cap:u64`, optional `root_out:u64` | `u64=depth` | `G_mpath + depth`           | Same compact layout for register commitment |
+Գազի կիրառում
+- CoreHost-ը լրացուցիչ գազ է գանձում ISI համակարգերի համար՝ օգտագործելով հայրենի ISI ժամանակացույցը; FASTPQ խմբաքանակի փոխանցումները գանձվում են յուրաքանչյուր մուտքի համար:
+- ZK_VERIFY syscalls-ը նորից օգտագործում է գազի ստուգման գաղտնի ժամանակացույցը (բազային + ապացույցի չափս):
+- SMARTCONTRACT_EXECUTE_QUERY գանձումների բազան + յուրաքանչյուր ապրանքի + մեկ բայթի համար; տեսակավորումը բազմապատկում է յուրաքանչյուր ապրանքի արժեքը, իսկ չտեսակավորված հաշվանցումները ավելացնում են մեկ ապրանքի համար տուգանք:
 
-Gas enforcement
-- CoreHost charges extra gas for ISI syscalls using the native ISI schedule; FASTPQ batch transfers are charged per entry.
-- ZK_VERIFY syscalls reuse the confidential verification gas schedule (base + proof size).
-- SMARTCONTRACT_EXECUTE_QUERY charges base + per-item + per-byte; sorting multiplies per-item cost and unsorted offsets add a per-item penalty.
+Նշումներ
+- Բոլոր ցուցիչի արգումենտները հղում են կատարում Norito TLV ծրարներին INPUT տարածաշրջանում և վավերացված են առաջին ապահղման դեպքում (`E_NORITO_INVALID` սխալի դեպքում):
+- Բոլոր մուտացիաները կիրառվում են Iroha-ի ստանդարտ կատարողի միջոցով (`CoreHost`-ի միջոցով), ոչ թե ուղղակիորեն VM-ի կողմից:
+- Գազի ճշգրիտ հաստատունները (`G_*`) սահմանվում են ակտիվ գազի գրաֆիկով. տես `ivm.md`:
 
-Notes
-- All pointer arguments reference Norito TLV envelopes in the INPUT region and are validated on first dereference (`E_NORITO_INVALID` on error).
-- All mutations are applied via Iroha’s standard executor (through `CoreHost`), not directly by the VM.
-- Exact gas constants (`G_*`) are defined by the active gas schedule; see `ivm.md`.
+Սխալներ
+- `E_SCALL_UNKNOWN`. syscall համարը չի ճանաչվում ակտիվ `abi_version`-ի համար:
+- Մուտքի վավերացման սխալները տարածվում են որպես VM թակարդներ (օրինակ՝ `E_NORITO_INVALID` սխալ ձևավորված TLV-ների համար):
 
-Errors
-- `E_SCALL_UNKNOWN`: syscall number not recognized for the active `abi_version`.
-- Input validation errors propagate as VM traps (e.g., `E_NORITO_INVALID` for malformed TLVs).
+Խաչաձև հղումներ
+- Ճարտարապետություն և VM իմաստաբանություն՝ `ivm.md`
+- Լեզուն և ներկառուցված քարտեզագրում՝ `docs/source/kotodama_grammar.md`
 
-Cross‑references
-- Architecture and VM semantics: `ivm.md`
-- Language and builtin mapping: `docs/source/kotodama_grammar.md`
+Սերնդի նշում
+- Syscall հաստատունների ամբողջական ցանկը կարող է ստեղծվել աղբյուրից՝
+  - `make docs-syscalls` → գրում է `docs/source/ivm_syscalls_generated.md`
+  - `make check-docs` → հաստատում է, որ ստեղծված աղյուսակը արդիական է (օգտակար CI-ում)
+- Վերոնշյալ ենթաբազմությունը մնում է ընտրված, կայուն աղյուսակ պայմանագրային երևացող syscals-ների համար:
 
-Generation note
-- A complete list of syscall constants can be generated from source with:
-  - `make docs-syscalls` → writes `docs/source/ivm_syscalls_generated.md`
-  - `make check-docs` → verifies the generated table is up to date (useful in CI)
-- The subset above remains a curated, stable table for contract-facing syscalls.
+## Ադմինիստրատոր/Դեր TLV Օրինակներ (հեղինակային հաղորդավար)
 
-## Admin/Role TLV Examples (Mock Host)
-
-This section documents the TLV shapes and minimal JSON payloads accepted by the mock WSV host for admin‑style syscalls used in tests. All pointer arguments follow the pointer‑ABI (Norito TLV envelopes placed in INPUT). Production hosts may use richer schemas; these examples aim to clarify types and basic shapes.
-
-- REGISTER_PEER / UNREGISTER_PEER
-  - Args: `r10=&Json`
-  - Example JSON: `{ "peer": "peer-id-or-info" }`
-  - CoreHost note: `REGISTER_PEER` expects a `RegisterPeerWithPop` JSON object with `peer` + `pop` bytes (optional `activation_at`, `expiry_at`, `hsm`); `UNREGISTER_PEER` accepts a peer-id string or `{ "peer": "..." }`.
+Այս բաժինը ներկայացնում է TLV ձևերը և նվազագույն JSON ծանրաբեռնվածությունը, որոնք ընդունվել են կեղծ WSV հոսթի կողմից թեստերում օգտագործվող ադմինիստրատորի ոճի համակարգերի համար: Բոլոր ցուցիչի արգումենտները հետևում են ցուցիչ-ABI-ին (Norito TLV ծրարները տեղադրված են INPUT-ում): Արտադրության կազմակերպիչները կարող են օգտագործել ավելի հարուստ սխեմաներ. այս օրինակները նպատակ ունեն պարզաբանել տեսակներն ու հիմնական ձևերը:- REGISTER_PEER / UNREGISTER_PEER
+  - Արգս՝ `r10=&Json`
+  - Օրինակ JSON՝ `{ "peer": "peer-id-or-info" }`
+  - CoreHost նշում. `REGISTER_PEER`-ն ակնկալում է `RegisterPeerWithPop` JSON օբյեկտ՝ `peer` + `pop` բայթերով (ըստ ցանկության `activation_at`, I1818NI00001); `UNREGISTER_PEER` ընդունում է peer-id տողը կամ `{ "peer": "..." }`:
 
 - CREATE_TRIGGER / REMOVE_TRIGGER / SET_TRIGGER_ENABLED
   - CREATE_TRIGGER:
-    - Args: `r10=&Json`
-    - Minimal JSON: `{ "name": "t1" }` (additional fields ignored by the mock)
+    - Արգս՝ `r10=&Json`
+    - Նվազագույն JSON՝ `{ "name": "t1" }` (հավելյալ դաշտերը անտեսված են կեղծիքի կողմից)
   - REMOVE_TRIGGER:
-    - Args: `r10=&Name` (trigger name)
-  - SET_TRIGGER_ENABLED:
-    - Args: `r10=&Name`, `r11=enabled:u64` (0 = disabled, non‑zero = enabled)
-  - CoreHost note: `CREATE_TRIGGER` expects a full trigger spec (base64 Norito `Trigger` string or
-    `{ "id": "<trigger_id>", "action": ... }` with `action` as a base64 Norito `Action` string or
-    a JSON object), and `SET_TRIGGER_ENABLED` toggles the trigger metadata key `__enabled` (missing
-    defaults to enabled).
+    - Արգեր՝ `r10=&Name` (գործանի անվանումը)
+  - SET_TRIGGER_ENABLED՝
+    - Արգեր՝ `r10=&Name`, `r11=enabled:u64` (0 = անջատված է, ոչ զրոյական = միացված է)
+  - CoreHost նշում. `CREATE_TRIGGER`-ն ակնկալում է գործարկման ամբողջական հատկանիշ (base64 Norito `Trigger` տող կամ
+    `{ "id": "<trigger_id>", "action": ... }` `action`-ով որպես հիմք64 Norito `Action` տողով կամ
+    JSON օբյեկտ), և `SET_TRIGGER_ENABLED`-ը փոխում է գործարկման մետատվյալների բանալին `__enabled` (բացակայում է
+    լռելյայն միացված է):
 
-- Roles: CREATE_ROLE / DELETE_ROLE / GRANT_ROLE / REVOKE_ROLE
+- Դերեր՝ CREATE_ROLE / DELETE_ROLE / GRANT_ROLE / REVOKE_ROLE
   - CREATE_ROLE:
-    - Args: `r10=&Name` (role name), `r11=&Json` (permissions set)
-    - JSON accepts either key `"perms"` or `"permissions"`, each a string array of permission names.
-    - Examples:
+    - Արգեր՝ `r10=&Name` (դերերի անվանում), `r11=&Json` (թույլտվությունները սահմանված են)
+    - JSON-ն ընդունում է `"perms"` կամ `"permissions"` ստեղնը, որոնցից յուրաքանչյուրը թույլտվությունների անունների տողային զանգված է:
+    - Օրինակներ.
       - `{ "perms": [ "mint_asset:rose#wonder" ] }`
       - `{ "permissions": [ "read_assets:ih58...", "transfer_asset:rose#wonder" ] }`
-    - Supported permission name prefixes in the mock:
+    - Աջակցված թույլտվության անվան նախածանցները ծաղրում.
       - `register_domain`, `register_account`, `register_asset_definition`
       - `read_assets:<account_id>`
       - `mint_asset:<asset_definition_id>`
       - `burn_asset:<asset_definition_id>`
       - `transfer_asset:<asset_definition_id>`
   - DELETE_ROLE:
-    - Args: `r10=&Name`
-    - Fails if any account is still assigned this role.
+    - Արգս՝ `r10=&Name`
+    - Չհաջողվեց, եթե որևէ հաշվի այս դերը դեռ վերապահված է:
   - GRANT_ROLE / REVOKE_ROLE:
-    - Args: `r10=&AccountId` (subject), `r11=&Name` (role name)
-  - CoreHost note: permission JSON may be a full `Permission` object (`{ "name": "...", "payload": ... }`) or a string (payload defaults to `null`); `GRANT_PERMISSION`/`REVOKE_PERMISSION` accept `&Name` or `&Json(Permission)`.
+    - Արգեր՝ `r10=&AccountId` (առարկա), `r11=&Name` (դերային անվանում)
+  - CoreHost նշում. JSON-ի թույլտվությունը կարող է լինել ամբողջական `Permission` օբյեկտ (`{ "name": "...", "payload": ... }`) կամ տող (լռելյայն լռելյայն է `null`); `GRANT_PERMISSION`/`REVOKE_PERMISSION` ընդունում `&Name` կամ `&Json(Permission)`:
 
-- Unregister ops (domain/account/asset): invariants (mock)
-  - UNREGISTER_DOMAIN (`r10=&DomainId`) fails if accounts or asset definitions exist in the domain.
-  - UNREGISTER_ACCOUNT (`r10=&AccountId`) fails if the account has non‑zero balances or owns NFTs.
-  - UNREGISTER_ASSET (`r10=&AssetDefinitionId`) fails if any balances exist for the asset.
+- Չգրանցել գործառնությունները (տիրույթ/հաշիվ/ակտիվ). անփոփոխ (հեղինակային)
+  - UNREGISTER_DOMAIN (`r10=&DomainId`) ձախողվում է, եթե տիրույթում գոյություն ունեն հաշիվներ կամ ակտիվների սահմանումներ:
+  - UNREGISTER_ACCOUNT (`r10=&AccountId`) ձախողվում է, եթե հաշիվն ունի ոչ զրոյական մնացորդներ կամ ունի NFT-ներ:
+  - UNREGISTER_ASSET (`r10=&AssetDefinitionId`) ձախողվում է, եթե ակտիվի համար մնացորդներ կան:
 
-Notes
-- These examples reflect the mock WSV host used in tests; real node hosts may expose richer admin schemas or require additional validation. The pointer‑ABI rules still apply: TLVs must be in INPUT, version=1, type IDs must match, and payload hashes must validate.
+Նշումներ
+- Այս օրինակները արտացոլում են թեստերում օգտագործվող WSV-ի կեղծ հոսթինգը. իրական հանգույցի հոսթերները կարող են բացահայտել ավելի հարուստ ադմինիստրատորի սխեմաներ կամ պահանջել լրացուցիչ վավերացում: Ցուցիչ-ABI-ի կանոնները դեռ գործում են. TLV-ները պետք է լինեն INPUT-ում, տարբերակ=1, տիպի ID-ները պետք է համընկնեն, իսկ օգտակար բեռնվածքի հեշերը պետք է վավերացվեն:

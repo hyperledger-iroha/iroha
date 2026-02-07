@@ -10,21 +10,22 @@ translation_last_reviewed: 2026-02-07
 title: Python ledger flow recipe
 description: Reproduce the register → mint → transfer flow against the dev network using `iroha-python`.
 slug: /sdks/recipes/python-ledger-flow
+translator: machine-google-reviewed
 ---
 
-import SampleDownload from '@site/src/components/SampleDownload';
+SampleDownload-ı '@site/src/components/SampleDownload'dan idxal edin;
 
-This Python snippet mirrors the [CLI ledger walkthrough](../../norito/ledger-walkthrough.md)
-and the [Rust recipe](./rust-ledger-flow.md). It uses the default Docker
-compose network plus the demo credentials bundled in `defaults/client.toml`.
+Bu Python fraqmenti [CLI kitabçasının gedişini](../../norito/ledger-walkthrough.md) əks etdirir
+və [Pas resepti](./rust-ledger-flow.md). Defolt Docker istifadə edir
+şəbəkə üstəgəl `defaults/client.toml`-də yığılmış demo etimadnaməsini tərtib edin.
 
-<SampleDownload
+<Nümunə Yüklə
   href="/sdk-recipes/python/ledger_flow.py"
-  filename="ledger_flow.py"
-  description="Download the script showcased in this recipe to run it without copying code by hand."
+  fayl adı = "ledger_flow.py"
+  description="Əl ilə kodu kopyalamadan işə salmaq üçün bu reseptdə nümayiş olunan skripti yükləyin."
 />
 
-## Prerequisites
+## İlkin şərtlər
 
 ```bash
 pip install iroha-python
@@ -33,7 +34,7 @@ export RECEIVER_ACCOUNT="ih58..."
 export ADMIN_PRIVATE_KEY="802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
 ```
 
-## Example script
+## Nümunə skript
 
 ```python title="ledger_flow.py"
 import os
@@ -103,12 +104,12 @@ for asset in result.items:
         print("Receiver holds", asset.value, "units of", asset.id.definition)
 ```
 
-Run with `python ledger_flow.py`. The output should report the transaction hash
-(from the receipt payload) followed by the new receiver balance. If the asset definition already exists,
-the register instruction is rejected while the mint/transfer continue to succeed.
+`python ledger_flow.py` ilə işləyin. Çıxış əməliyyat hashını bildirməlidir
+(qəbzin faydalı yükündən) sonra yeni alıcı balansı. Aktiv tərifi artıq mövcuddursa,
+nağd/köçürmə müvəffəqiyyətlə davam edərkən qeydiyyat təlimatı rədd edilir.
 
-## Verify parity
+## Pariteti yoxlayın
 
-Use the same CLI commands from the Norito walkthrough to cross-check hashes and
-balances. When you run the JavaScript and Rust recipes, all three SDKs should
-agree on transaction hashes and Norito payloads for the shared flow.
+Haşları çarpaz yoxlamaq üçün Norito keçidindəki eyni CLI əmrlərindən istifadə edin və
+balanslar. JavaScript və Rust reseptlərini işə saldığınız zaman hər üç SDK olmalıdır
+paylaşılan axın üçün tranzaksiya həşləri və Norito faydalı yükləri ilə razılaşın.

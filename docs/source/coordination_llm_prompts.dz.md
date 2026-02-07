@@ -7,18 +7,19 @@ generator: scripts/sync_docs_i18n.py
 source_hash: cc5499372cc9b188384254f0bf05386d81a1a57e0388d74ad2ae698e0ab9945e
 source_last_modified: "2025-12-29T18:16:35.936935+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# LLM Coordination Prompts
+# LLM མཉམ་འབྲེལ་བརྡ་སྟོན།
 
-## Purpose
+## དགོས༌དོན
 
-These prompt templates help engineers quickly gather clarifications from @mtakemiya
-when roadmap items leave open questions. Copy one of the sections below into the
-LLM thread, replace the bracketed placeholders, and include relevant file or
-line references so context stays anchored.
+འདི་ཚུ་གིས་ ཊེམ་པེལེཊི་ཚུ་གིས་ བཟོ་རིག་པ་ཚུ་ལུ་ མགྱོགས་པ་རང་ @mtamiya ལས་ གསལ་བཤད་ཚུ་བསྡུ་ནི་ལུ་ ཕན་ཐོགཔ་ཨིན།
+ལམ་གྱི་ས་ཁྲ་ཅ་ཆས་ཚུ་ ཁ་ཕྱེ་བའི་སྐབས། གཤམ་གྱི་དོན་ཚན་གཅིག་འདྲ་བཤུས་རྐྱབས།
+LLM ཐགསཔ་དང་ གུག་ཤད་ས་གནས་འཛིན་མི་ཚུ་ ཚབ་བཙུགས་ནི་དང་ འབྲེལ་ཡོད་ཡིག་སྣོད་ ཡང་ན་ བཙུགས་ནི།
+གྲལ་ཐིག་ཚུ་གཞི་བསྟུན་འབདཝ་ལས་ སྐབས་དོན་འདི་ གཞི་བཙུགས་འབད་དེ་སྡོད།
 
-## Architecture Or Design Decisions
+## བཟོ་རིག་ཡང་ན་བཟོ་བཀོད་ཐག་གཅོད།
 
 ````markdown
 We need clarification on an open design point from the roadmap.
@@ -39,7 +40,7 @@ Could you provide the expected decision or additional constraints so we can
 finish the implementation?
 ````
 
-## Configuration Or Operator Guidance
+## རིམ་སྒྲིག་ཡང་ན་ བཀོལ་སྤྱོད་ལམ་སྟོན་པ།
 
 ````markdown
 We are documenting configuration/operator guidance and need input.
@@ -54,7 +55,7 @@ Questions:
 Any specific wording or runbook steps you would like us to include?
 ````
 
-## Cryptography Or Protocol Primitives
+## ཀྲོབ་མདའ་ཡང་ན་ མཐུན་གྲོས་ཀྱི་གཙོ་རིམ།
 
 ````markdown
 Before implementing the next cryptographic/protocol task, we need domain input.
@@ -69,7 +70,7 @@ Clarifications requested:
 Are there mandatory references or acceptance criteria we must observe?
 ````
 
-## Test Vectors Or Fixtures
+## བརྟགས་པའི་བརྟག་དཔྱད་ཡང་ན་ བདེ་སྒྲིག་ཚུ།
 
 ````markdown
 We are preparing tests/fixtures for [feature]. Could you confirm the expected
@@ -84,7 +85,7 @@ Do we have canonical test data, or should we synthesise vectors using the
 current spec? Please confirm so we can keep CI deterministic.
 ````
 
-## Release Engineering Or Process
+## བཟོ་རིག་ ཡང་ན་ ལས་རིམ།
 
 ````markdown
 Clarification needed on release/coordination steps for [feature or milestone].

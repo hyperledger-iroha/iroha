@@ -9,74 +9,75 @@ source_last_modified: "2025-12-29T18:16:35.982646+00:00"
 translation_last_reviewed: 2026-02-07
 title: Red-Team Drill Report Template
 summary: Copy this file for every MINFO-9 drill to capture metadata, evidence, and remediation actions.
+translator: machine-google-reviewed
 ---
 
-> **How to use:** duplicate this template to `docs/source/ministry/reports/<YYYY-MM>-mod-red-team-<scenario>.md` immediately after each drill. Keep filenames lowercase, hyphenated, and aligned with the drill ID logged in Alertmanager.
+> **如何使用：** 每次練習後立即將此模板複製到 `docs/source/ministry/reports/<YYYY-MM>-mod-red-team-<scenario>.md`。保持文件名小寫、連字符並與 Alertmanager 中記錄的鑽取 ID 對齊。
 
-# Red-Team Drill Report — `<SCENARIO NAME>`
+# 紅隊演習報告 — `<SCENARIO NAME>`
 
-- **Drill ID:** `<YYYYMMDD>-<scenario>`
-- **Date & window:** `<YYYY-MM-DD HH:MMZ – HH:MMZ>`
-- **Scenario class:** `smuggling | bribery | gateway | ...`
-- **Operators:** `<names / handles>`
-- **Dashboards frozen from commit:** `<git SHA>`
-- **Evidence bundle:** `artifacts/ministry/red-team/<YYYY-MM>/<scenario>/`
-- **SoraFS CID (optional):** `<cid>`  
-- **Related roadmap items:** `MINFO-9`, plus any linked tickets.
+- **鑽頭 ID：** `<YYYYMMDD>-<scenario>`
+- **日期和窗口：** `<YYYY-MM-DD HH:MMZ – HH:MMZ>`
+- **場景類別：** `smuggling | bribery | gateway | ...`
+- **運營商：** `<names / handles>`
+- **儀表板因提交而凍結：** `<git SHA>`
+- **證據包：** `artifacts/ministry/red-team/<YYYY-MM>/<scenario>/`
+- **SoraFS CID（可選）：** `<cid>`  
+- **相關路線圖項目：** `MINFO-9`，以及任何鏈接的票證。
 
-## 1. Objectives & Entry Conditions
+## 1. 目標和進入條件
 
-- **Primary objectives**
+- **主要目標**
   - `<e.g. Verify denylist TTL enforcement under smuggling attack>`
-- **Prerequisites confirmed**
-  - `emergency_canon_policy.md` version `<tag>`
-  - `dashboards/grafana/ministry_moderation_overview.json` digest `<sha256>`
-  - Override authority on-call: `<name>`
+- **先決條件已確認**
+  - `emergency_canon_policy.md` 版本 `<tag>`
+  - `dashboards/grafana/ministry_moderation_overview.json` 摘要 `<sha256>`
+  - 覆蓋權限待命：`<name>`
 
-## 2. Execution Timeline
+## 2. 執行時間線
 
-| Timestamp (UTC) | Actor | Action / Command | Result / Notes |
-|-----------------|-------|------------------|----------------|
+|時間戳 (UTC) |演員 |行動/命令|結果/註釋|
+|----------------|--------------------|--------------------------------|----------------|
 |  |  |  |  |
 
-> Include Torii request IDs, chunk hashes, override approvals, and Alertmanager links.
+> 包括 Torii 請求 ID、塊哈希、覆蓋批准和 Alertmanager 鏈接。
 
-## 3. Observations & Metrics
+## 3. 觀察和指標
 
-| Metric | Target | Observed | Pass/Fail | Notes |
-|--------|--------|----------|-----------|-------|
-| Alert response latency | `<X> min` | `<Y> min` | ✅/⚠️ |  |
-| Moderation detection rate | `>= <value>` |  |  |  |
-| Gateway anomaly detection | `Alert fired` |  |  |  |
+|公制|目標|觀察|通過/失敗 |筆記|
+|--------|--------|----------|------------|--------|
+|警報響應延遲| `<X> min` | `<Y> min` | ✅/⚠️ |  |
+|審核檢測率 | `>= <value>` |  |  |  |
+|網關異常檢測| `Alert fired` |  |  |  |
 
 - `Grafana export:` `artifacts/.../dashboards/ministry_moderation_overview.json`
 - `Alert bundle:` `artifacts/.../alerts/ministry_moderation_rules.yml`
 - `Norito manifests:` `<path>`
 
-## 4. Findings & Remediation
+## 4. 調查結果與補救措施
 
-| Severity | Finding | Owner | Target Date | Status / Link |
-|----------|---------|-------|-------------|---------------|
-| High |  |  |  |  |
+|嚴重性 |尋找|業主|目標日期 |狀態/鏈接|
+|----------|---------|--------|-------------|----------------|
+|高|  |  |  |  |
 
-Document how calibration manifests, denylist policies, or SDK/tooling must change. Link to GitHub/Jira issues and note blocked/unblocked states.
+記錄校準清單、拒絕名單策略或 SDK/工具必須如何更改。鏈接到 GitHub/Jira 問題並記下阻止/未阻止狀態。
 
-## 5. Governance & Approvals
+## 5. 治理和批准
 
-- **Incident commander sign-off:** `<name / timestamp>`
-- **Governance council review date:** `<meeting id>`
-- **Follow-up checklist:** `[ ] status.md updated`, `[ ] roadmap row updated`, `[ ] transparency packet annotated`
+- **事件指揮官簽字：** `<name / timestamp>`
+- **管理委員會審查日期：** `<meeting id>`
+- **後續檢查清單：** `[ ] status.md updated`、`[ ] roadmap row updated`、`[ ] transparency packet annotated`
 
-## 6. Attachments
+## 6. 附件
 
-- `[ ] CLI logbook (`logs/<file>.md`)`
+- `[ ] CLI logbook (`logs/.md`)`
 - `[ ] Dashboard JSON export`
 - `[ ] Alertmanager history`
 - `[ ] SoraFS manifest / CAR`
 - `[ ] Override audit log`
 
-Mark each attachment with `[x]` once uploaded to the evidence bundle and SoraFS snapshot.
+一旦上傳到證據包和 SoraFS 快照，就用 `[x]` 標記每個附件。
 
 ---
 
-_Last updated: {{ date | default("2026-02-20") }}_
+_最後更新：{{ 日期 |默認（“2026-02-20”）}}_

@@ -4,86 +4,88 @@ direction: rtl
 source: docs/portal/docs/devportal/preview-feedback/w1/log.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: preview-feedback-w1-log
-title: Log de feedback e telemetria W1
-sidebar_label: Log W1
-description: Roster agregado, checkpoints de telemetria e notas de reviewers para a primeira onda de preview de parceiros.
+المعرف: معاينة ردود الفعل W1-سجل
+العنوان: سجل التعليقات والقياس عن بعد W1
+Sidebar_label: سجل W1
+الوصف: قائمة مجمعة ونقاط تفتيش القياس عن بعد وملاحظات المراجعين للعرض الأول عند معاينة الأجزاء.
 ---
 
-Este log mantem o roster de convites, checkpoints de telemetria e feedback de reviewers para o
-**preview de parceiros W1** que acompanha as tarefas de aceitacao em
-[`preview-feedback/w1/plan.md`](./plan.md) e a entrada do tracker da onda em
-[`../../preview-invite-tracker.md`](../../preview-invite-tracker.md). Atualize quando um convite for enviado,
-um snapshot de telemetria for registrado ou um item de feedback for triado para que reviewers de governanca possam
-reproduzir as evidencias sem perseguir tickets externos.
+هذا السجل يعتني بقائمة المكالمات ونقاط التفتيش للقياس عن بعد وتعليقات المراجعين
+**معاينة العروض W1** المصاحبة لمهام التناول
+[`preview-feedback/w1/plan.md`](./plan.md) وإدخال المتعقب من أجلك
+[`../../preview-invite-tracker.md`](../../preview-invite-tracker.md). قم بالتحديث عندما تدعو إلى إرسالها،
+لقطة من القياس عن بعد للتسجيل أو عنصر من التعليقات لـ Triado حتى يتمكن المراجعون من إدارة الأمور
+قم بإعادة إنتاج الأدلة دون تتبع التذاكر الخارجية.
 
-## Roster da coorte
+## قائمة كورتي
 
-| Partner ID | Ticket de solicitacao | NDA recebido | Convite enviado (UTC) | Ack/primeiro login (UTC) | Status | Notas |
+| معرف الشريك | تذكرة التماس | NDA recebido | كونفيت إنفيادو (UTC) | تسجيل الدخول إلى Ack/primeiro (UTC) | الحالة | نوتاس |
 | --- | --- | --- | --- | --- | --- | --- |
-| partner-w1-01 | `DOCS-SORA-Preview-REQ-P01` | OK 2025-04-03 | 2025-04-12 15:00 | 2025-04-12 15:11 | Concluido 2025-04-26 | sorafs-op-01; focado em evidencia de paridade dos docs do orchestrator. |
-| partner-w1-02 | `DOCS-SORA-Preview-REQ-P02` | OK 2025-04-03 | 2025-04-12 15:03 | 2025-04-12 15:15 | Concluido 2025-04-26 | sorafs-op-02; validou cross-links Norito/telemetria. |
-| partner-w1-03 | `DOCS-SORA-Preview-REQ-P03` | OK 2025-04-04 | 2025-04-12 15:06 | 2025-04-12 15:18 | Concluido 2025-04-26 | sorafs-op-03; executou drills de failover multi-source. |
-| partner-w1-04 | `DOCS-SORA-Preview-REQ-P04` | OK 2025-04-04 | 2025-04-12 15:09 | 2025-04-12 15:21 | Concluido 2025-04-26 | torii-int-01; revisao do cookbook Torii `/v1/pipeline` + Try it. |
-| partner-w1-05 | `DOCS-SORA-Preview-REQ-P05` | OK 2025-04-05 | 2025-04-12 15:12 | 2025-04-12 15:23 | Concluido 2025-04-26 | torii-int-02; acompanhou a atualizacao do screenshot Try it (docs-preview/w1 #2). |
-| partner-w1-06 | `DOCS-SORA-Preview-REQ-P06` | OK 2025-04-05 | 2025-04-12 15:15 | 2025-04-12 15:26 | Concluido 2025-04-26 | sdk-partner-01; feedback de cookbooks JS/Swift + sanity checks do ISO bridge. |
-| partner-w1-07 | `DOCS-SORA-Preview-REQ-P07` | OK 2025-04-11 | 2025-04-12 15:18 | 2025-04-12 15:29 | Concluido 2025-04-26 | sdk-partner-02; compliance aprovado 2025-04-11, focado em notas de Connect/telemetria. |
-| partner-w1-08 | `DOCS-SORA-Preview-REQ-P08` | OK 2025-04-11 | 2025-04-12 15:21 | 2025-04-12 15:33 | Concluido 2025-04-26 | gateway-ops-01; auditou o guia ops do gateway + fluxo anonimo do proxy Try it. |
+| شريك-w1-01 | `DOCS-SORA-Preview-REQ-P01` | موافق 2025-04-03 | 2025-04-12 15:00 | 2025-04-12 15:11 | الخاتمة 2025-04-26 | سورافس-المرجع-01؛ ركز على أدلة إثبات مستندات المنسق. |
+| شريك-w1-02 | `DOCS-SORA-Preview-REQ-P02` | موافق 2025-04-03 | 2025-04-12 15:03 | 2025-04-12 15:15 | الخاتمة 2025-04-26 | سورافس-المرجع-02؛ وصلات متقاطعة صالحة Norito/telemetria. |
+| شريك-w1-03 | `DOCS-SORA-Preview-REQ-P03` | موافق 2025-04-04 | 2025-04-12 15:06 | 2025-04-12 15:18 | الخاتمة 2025-04-26 | سورافس-المرجع-03؛ تنفيذ تدريبات تجاوز الفشل متعدد المصادر. |
+| شريك-w1-04 | `DOCS-SORA-Preview-REQ-P04` | موافق 2025-04-04 | 2025-04-12 15:09 | 2025-04-12 15:21 | الخاتمة 2025-04-26 | توري-int-01; مراجعة كتاب الطبخ Torii `/v1/pipeline` + جربه. |
+| شريك-w1-05 | `DOCS-SORA-Preview-REQ-P05` | موافق 2025-04-05 | 2025-04-12 15:12 | 2025-04-12 15:23 | الخاتمة 2025-04-26 | توري-int-02; acompanhou a atualizacao do Screenshot جربه (docs-preview/w1 #2). |
+| شريك-w1-06 | `DOCS-SORA-Preview-REQ-P06` | موافق 2025-04-05 | 2025-04-12 15:15 | 2025-04-12 15:26 | الخاتمة 2025-04-26 | SDK-شريك-01; ردود الفعل على كتب الطبخ JS/Swift + عمليات التحقق من السلامة من خلال جسر ISO. |
+| شريك-w1-07 | `DOCS-SORA-Preview-REQ-P07` | موافق 2025-04-11 | 2025-04-12 15:18 | 2025-04-12 15:29 | الخاتمة 2025-04-26 | SDK-شريك-02; تمت الموافقة على الامتثال بتاريخ 11-04-2025، وقم بالتركيز على ملاحظات Connect/telemetria. |
+| شريك-w1-08 | `DOCS-SORA-Preview-REQ-P08` | موافق 2025-04-11 | 2025-04-12 15:21 | 2025-04-12 15:33 | الخاتمة 2025-04-26 | بوابة العمليات-01؛ Auditou o guia ops do gate + Fluxo anonimo do proxy جربه. |
 
-Preencha os timestamps de **Convite enviado** e **Ack** assim que o email de saida for emitido.
-Ancore os horarios no cronograma UTC definido no plano W1.
+احصل على الطوابع الزمنية من **Convite Envoyado** و **Ack** حتى تتمكن من مراسلتنا عبر البريد الإلكتروني من أجل إرسالها.
+Ancore os horarios no cronograma UTC محدد في خطة W1.
 
-## Checkpoints de telemetria
+## نقاط التفتيش للقياس عن بعد
 
-| Timestamp (UTC) | Dashboards / probes | Responsavel | Resultado | Artefato |
+| الطابع الزمني (التوقيت العالمي) | لوحات العدادات / المجسات | الرد | النتيجة | ارتيفاتو |
 | --- | --- | --- | --- | --- |
-| 2025-04-06 18:05 | `docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals` | Docs/DevRel + Ops | Tudo verde | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250406` |
-| 2025-04-06 18:20 | Transcript de `npm run manage:tryit-proxy -- --stage preview-w1` | Ops | Staged | `artifacts/docs_preview/W1/preview-2025-04-12/tryit/OPS-TRYIT-147.log` |
-| 2025-04-12 14:45 | Dashboards acima + `probe:portal` | Docs/DevRel + Ops | Snapshot pre-invite, sem regressao | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250412` |
-| 2025-04-19 17:55 | Dashboards acima + diff de latencia do proxy Try it | Docs/DevRel lead | Checkpoint de meio aprovado (0 alertas; latencia Try it p95=410 ms) | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250419` |
-| 2025-04-26 16:25 | Dashboards acima + probe de saida | Docs/DevRel + Governance liaison | Snapshot de saida, zero alertas pendentes | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250426` |
+| 2025-04-06 18:05 | `docs.preview.integrity`، `TryItProxyErrors`، `DocsPortal/GatewayRefusals` | مستندات/DevRel + Ops | تودو فيردي | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250406` |
+| 2025-04-06 18:20 | نسخة من `npm run manage:tryit-proxy -- --stage preview-w1` | العمليات | نظموا | `artifacts/docs_preview/W1/preview-2025-04-12/tryit/OPS-TRYIT-147.log` |
+| 2025-04-12 14:45 | لوحات المعلومات أعلى + `probe:portal` | مستندات/DevRel + Ops | لقطة دعوة مسبقة، بدون تراجع | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250412` |
+| 2025-04-19 17:55 | لوحات المعلومات أعلاه + فرق زمن الوصول للوكيل جربها | مستندات/DevRel الرصاص | نقطة تفتيش أفضل (0 تنبيهات؛ وقت الاستجابة جربها p95=410 مللي ثانية) | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250419` |
+| 2025-04-26 16:25 | لوحات العدادات هنا + مسبار صيدا | Docs/DevRel + اتصال الحوكمة | لقطة سعيدة، صفر تنبيهات معلقة | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250426` |
 
-As amostras diarias de office hours (2025-04-13 -> 2025-04-25) estao agrupadas como exports NDJSON + PNG em
-`artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/` com nomes de arquivo
-`docs-preview-integrity-<date>.json` e screenshots correspondentes.
+كما amostras diarias de ساعات العمل (2025-04-13 -> 2025-04-25) estao agrupadas como Exports NDJSON + PNG em
+`artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/` بأسماء الملف
+`docs-preview-integrity-<date>.json` ولقطات الشاشة للمراسلين.
 
-## Log de feedback e issues
+## سجل المشكلات المتعلقة بالتعليقات
 
-Use esta tabela para resumir achados enviados por reviewers. Vincule cada entrada ao ticket GitHub/discuss
-mais o formulario estruturado capturado via
+استخدم هذه اللوحة لاستئناف إرسال المراجعين. Vincule cada intrada ao Ticket GitHub/discuss
+مزيد من الصيغة تم التقاطها عبر
 [`docs/examples/docs_preview_feedback_form.md`](../../../../../examples/docs_preview_feedback_form.md).
 
-| Referencia | Severidade | Responsavel | Status | Notas |
+| المرجعية | قطع | الرد | الحالة | نوتاس |
 | --- | --- | --- | --- | --- |
-| `docs-preview/w1 #1` | Low | Docs-core-02 | Resolvido 2025-04-18 | Esclareceu o wording de nav do Try it + ancora de sidebar (`docs/source/sorafs/tryit.md` atualizado com novo label). |
-| `docs-preview/w1 #2` | Low | Docs-core-03 | Resolvido 2025-04-19 | Screenshot do Try it + legenda atualizados conforme pedido; artefato `artifacts/docs_preview/W1/preview-2025-04-12/feedback/partner-w1-05/screenshot-diff.png`. |
-| - | Info | Docs/DevRel lead | Fechado | Comentarios restantes foram apenas Q&A; capturados no formulario de feedback de cada parceiro sob `artifacts/docs_preview/W1/preview-2025-04-12/feedback/`. |
+| `docs-preview/w1 #1` | منخفض | مستندات-core-02 | حل 2025-04-18 | قم بإعلان صياغة التنقل جربها + قم بإضافة الشريط الجانبي (`docs/source/sorafs/tryit.md` تم تحديثه بملصق جديد). |
+| `docs-preview/w1 #2` | منخفض | مستندات-core-03 | حل 2025-04-19 | لقطة الشاشة: جربها + أسطورة تم تحديثها وفقًا للطلب؛ ارتيفاتو `artifacts/docs_preview/W1/preview-2025-04-12/feedback/partner-w1-05/screenshot-diff.png`. |
+| - | معلومات | مستندات/DevRel الرصاص | فيشادو | تعليقات باقية على الأسئلة والأجوبة؛ لم يتم التقاط صيغة ردود الفعل من كل قطعة من `artifacts/docs_preview/W1/preview-2025-04-12/feedback/`. |
 
-## Acompanhamento de knowledge check e surveys
+## مرافقة المعرفة والتحقق من الدراسات الاستقصائية
 
-1. Registre as notas do quiz (meta >=90%) para cada reviewer; anexe o CSV exportado ao lado dos artefatos de convite.
-2. Colete as respostas qualitativas do survey capturadas no template de feedback e espelhe em
+1. قم بالتسجيل كملاحظات في الاختبار (الوصفية > = 90%) لكل مراجع؛ يتم تصدير ملحق ملف CSV إلى مجموعة من أدوات الدعوة.
+2. احصل على ردود نوعية من خلال استطلاعات الرأي دون قالب التعليقات وشاركها
    `artifacts/docs_preview/W1/preview-2025-04-12/surveys/`.
-3. Agende chamadas de remediation para quem estiver abaixo do limite e registre aqui.
+3. جدول مكالمات الإصلاح حتى يتم إنهاء الحد والتسجيل هنا.
 
-Todos os oito reviewers marcaram >=94% no knowledge check (CSV:
-`artifacts/docs_preview/W1/preview-2025-04-12/feedback/w1-quiz-scores.csv`). Nenhuma chamada de remediation
-foi necessaria; exports de survey para cada parceiro vivem em
+مراجعو Todos os oito marcaram >=94% لم يتم التحقق من المعرفة (CSV:
+`artifacts/docs_preview/W1/preview-2025-04-12/feedback/w1-quiz-scores.csv`). نينهوما معالجة العلاج
+ضروري؛ صادرات المسح لكل قطعة من الحياة
 `artifacts/docs_preview/W1/preview-2025-04-12/surveys/<partner-id>/summary.json`.
 
-## Inventario de artefatos
+## مخزون التحف
 
-- Bundle preview descriptor/checksum: `artifacts/docs_preview/W1/preview-2025-04-12/descriptor.json`
-- Resumo de probe + link-check: `artifacts/docs_preview/W1/preview-2025-04-12/preflight-summary.json`
-- Log de mudanca do proxy Try it: `artifacts/docs_preview/W1/preview-2025-04-12/tryit/OPS-TRYIT-147.log`
-- Exports de telemetria: `artifacts/docs_preview/W1/preview-2025-04-12/grafana/<date>/`
-- Bundle diario de telemetria de office hours: `artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/`
-- Exports de feedback + survey: colocar pastas por reviewer em
+- واصف/المجموع الاختباري لمعاينة الحزمة: `artifacts/docs_preview/W1/preview-2025-04-12/descriptor.json`
+- ملخص المسبار + فحص الارتباط: `artifacts/docs_preview/W1/preview-2025-04-12/preflight-summary.json`
+- Log de mudanca do proxy جربه: `artifacts/docs_preview/W1/preview-2025-04-12/tryit/OPS-TRYIT-147.log`
+- صادرات القياس عن بعد: `artifacts/docs_preview/W1/preview-2025-04-12/grafana/<date>/`
+- حزمة مذكرات القياس عن بعد لساعات العمل: `artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/`
+- تصدير ردود الفعل + المسح: تلوين المعكرونة للمراجعة
   `artifacts/docs_preview/W1/preview-2025-04-12/feedback/<partner-id>/`
-- CSV e resumo do knowledge check: `artifacts/docs_preview/W1/preview-2025-04-12/feedback/w1-quiz-scores.csv`
+- ملخص CSV وفحص المعرفة: `artifacts/docs_preview/W1/preview-2025-04-12/feedback/w1-quiz-scores.csv`
 
-Mantenha o inventario sincronizado com o issue do tracker. Anexe hashes ao copiar artefatos para o ticket de governanca
-para que auditores verifiquem os arquivos sem acesso de shell.
+قم بحفظ المخزون المتزامن مع إصدار المتتبع. قم بإضافة تجزئات لنسخ المصنوعات لتذكرة الإدارة
+حتى يتمكن المدققون من التحقق من الملفات دون الوصول إلى Shell.

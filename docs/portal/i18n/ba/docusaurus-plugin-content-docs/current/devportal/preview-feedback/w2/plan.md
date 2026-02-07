@@ -8,39 +8,41 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: W2 community intake plan
 sidebar_label: W2 plan
 description: Intake, approvals, and evidence checklist for the community preview cohort.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-| Item | Details |
+| Элемент | Ентекле |
 | --- | --- |
-| Wave | W2 — Community reviewers |
-| Target window | Q3 2025 week 1 (tentative) |
-| Artefact tag (planned) | `preview-2025-06-15` |
-| Tracker issue | `DOCS-SORA-Preview-W2` |
+| Тулҡын | W2 — Йәмәғәтселек рецензенттары |
+| Маҡсатлы тәҙрә | 2025 йылдың 1-се аҙнаһы 1 (тентатив) |
+| Артефакт билдәһе (планлаштырылған) | `preview-2025-06-15` |
+| Трекер мәсьәләһе | `DOCS-SORA-Preview-W2` |
 
-## Objectives
+## Маҡсаттар
 
-1. Define the community intake criteria and vetting workflow.
-2. Obtain governance approval for the proposed roster and acceptable-use addendum.
-3. Refresh the checksum-verified preview artefact and telemetry bundle for the new window.
-4. Stage the Try it proxy + dashboards ahead of invite dispatch.
+1. Йәмәғәтселек критерийҙарын билдәләү һәм эш ағымын тикшергән.
+2. Тәҡдим ителгән исемлек өсөн идара итеүҙе раҫлау һәм ҡабул итеү-ҡулланыу өҫтәмәһе.
+3. Яңы тәҙрә өсөн тикшерелгән суммаға тикшерелгән алдан ҡарау артефакт һәм телеметрия өйөмөн яңыртыу.
+4. Сәхнәгә Тырышып ҡарағыҙ, уны прокси + приборҙар таҡталары саҡырыу диспетчер алдынан.
 
-## Task breakdown
+## Эш өҙөлгән
 
-| ID | Task | Owner | Due | Status | Notes |
+| ID | Эш | Хужа | Ауыр | Статус | Иҫкәрмәләр |
 | --- | --- | --- | --- | --- | --- |
-| W2-P1 | Draft community intake criteria (eligibility, max slots, CoC requirements) and circulate to governance | Docs/DevRel lead | 2025‑05‑15 | ✅ Completed | Intake policy merged into `DOCS-SORA-Preview-W2` and endorsed at the 2025‑05‑20 council meeting. |
-| W2-P2 | Update request template with community-specific questions (motivation, availability, localization needs) | Docs-core-01 | 2025‑05‑18 | ✅ Completed | `docs/examples/docs_preview_request_template.md` now includes the Community section, referenced in the intake form. |
-| W2-P3 | Secure governance approval for the intake plan (meeting vote + recorded minutes) | Governance liaison | 2025‑05‑22 | ✅ Completed | Vote passed unanimously on 2025‑05‑20; minutes + roll call linked in `DOCS-SORA-Preview-W2`. |
-| W2-P4 | Schedule Try it proxy staging + telemetry capture for the W2 window (`preview-2025-06-15`) | Docs/DevRel + Ops | 2025‑06‑05 | ✅ Completed | Change ticket `OPS-TRYIT-188` approved and executed 2025‑06‑09 02:00–04:00 UTC; Grafana screenshots archived with ticket. |
-| W2-P5 | Build/verify new preview artefact tag (`preview-2025-06-15`) and archive descriptor/checksum/probe logs | Portal TL | 2025‑06‑07 | ✅ Completed | `scripts/preview_wave_preflight.sh --tag preview-2025-06-15 ...` ran 2025‑06‑10; outputs stored under `artifacts/docs_preview/W2/preview-2025-06-15/`. |
-| W2-P6 | Assemble community invite roster (≤25 reviewers, staged batches) with governance-approved contact info | Community manager | 2025‑06‑10 | ✅ Completed | First cohort of 8 community reviewers approved; request IDs `DOCS-SORA-Preview-REQ-C01…C08` logged in the tracker. |
+| W2-P1 | Сказник йәмәғәт критерийҙары (хоҡуҡлы, макс слот, CoC талаптары) һәм идара итеүгә әйләнеш | Док/ДевРел лидеры | 2025‐05‐15 | ✅ Төҙөлгән | Ҡабул итеү сәйәсәте `DOCS-SORA-Preview-W2` берләштерелгән һәм 2025-05‐20 советы ултырышында хупланған. |
+| W2-P2 | Яңыртыу запрос шаблон менән йәмәғәтселек-конкрет һорауҙар (мотивация, доступность, локализация ихтыяждары) | Док-ядро-01 | 2025‐05‐18 | ✅ Төҙөлгән | `docs/examples/docs_preview_request_template.md` хәҙер йәмәғәт бүлеген үҙ эсенә ала, уларҙы ҡабул итеү формаһында һылтанма. |
+| W2-Р3 | Имен идара итеү раҫлау өсөн ҡабул итеү планы (татыу осрашыу + теркәлгән минут) | Идара итеү бәйләнеше | 2025‐05‐22 | ✅ Төҙөлгән | 2025 йылдың 05‐20-се көнө тауыш биргән тауышы; минут + ролл шылтыратыу бәйләнгән I18NI000000012X. |
+| W2-Р4 | График тырышып ҡарағыҙ, ул прокси стадияһында + телеметрия тотоу өсөн W2 тәҙрә (`preview-2025-06-15`) | Док/ДевРель + Ops | 2025‐06‐05 | ✅ Төҙөлгән | 2025 йылда 02:009:00–04:00UTC раҫланған һәм башҡарылған I18NI0000014X; I18NT000000000X скриншоттар архивланған билет. |
+| W2-Р5 | Төҙөү/яңы алдан ҡарау артефакт билдәһе (`preview-2025-06-15`) һәм архив дескрипторы/чекум/зонд журналдары | Портал ТЛ | 2025‐06‐07 | ✅ Төҙөлгән | `scripts/preview_wave_preflight.sh --tag preview-2025-06-15 ...` 2025‐06‐10 йүгерҙе; I18NI000000017X аҫтында һаҡланған сығыштар. |
+| W2-P6 | Йыйыу йәмәғәтселеге составында составҡа саҡыра (≤25 рецензенттар, сәхнәләштерелгән партиялар) менән идара итеү-раҫланған контакт мәғлүмәттәре | Йәмәғәт менеджеры | 2025‐06‐10 | ✅ Төҙөлгән | йәмәғәтселек рецензентының беренсе когортаһы раҫланған; запрос IDs I18NI000000018X трекер логин. |
 
-## Evidence checklist
+## Дәлилдәр тикшерелгән исемлек
 
-- [x] Governance approval record (meeting notes + vote link) attached to `DOCS-SORA-Preview-W2`.
-- [x] Updated request template committed under `docs/examples/`.
-- [x] `preview-2025-06-15` descriptor, checksum log, probe output, link report, and Try it proxy transcript stored under `artifacts/docs_preview/W2/`.
-- [x] Grafana screenshots (`docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals`) captured for the W2 preflight window.
-- [x] Invite roster table with reviewer IDs, request tickets, and approval timestamps populated before dispatch (see tracker W2 section).
+- [x] Идара итеү раҫлау яҙмаһы (осрашыу иҫкәрмәләр + тауыш һылтанмаһы) беркетелгән I18NI0000000019X.
+- [x] Яңыртылған запрос ҡалыптары буйынса ҡылынған I18NI000000020X.
+- [x] I18NI000000021X дескрипторы, чемпионерҙар суммаһы журналы, зонд сығарыу, һылтанма отчеты һәм I18NI000000022X буйынса һаҡланған прокси-транзик стенограммаһын һынап ҡарағыҙ.
+- [x] I18NT000000001X скриншоттары (`docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals`) W2 осоу алдынан тәҙрә өсөн тотолған.
+- [x] Ҡабул итеү таблицаһы менән рецензент идентификаторҙары, билеттар һорап, һәм раҫлау ваҡыт маркалары диспетчер алдынан тултырылған (ҡара: трекер W2 бүлеге).
 
-Keep this plan updated; the tracker references it so the DOCS-SORA roadmap can see exactly what remains before W2 invitations go out.
+Был планды яңыртыу; трекер уға һылтанмалар, шулай итеп, DOCS-I18NT000000007X юл картаһы аныҡ күрә ала, нимә ҡала, әлегә тиклем W2 саҡырыуҙары һүндерелгән.

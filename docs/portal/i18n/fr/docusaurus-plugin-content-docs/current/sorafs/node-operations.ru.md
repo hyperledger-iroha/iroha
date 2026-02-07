@@ -4,28 +4,30 @@ direction: ltr
 source: docs/portal/docs/sorafs/node-operations.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: node-operations
-title: Ранбук операций узла
-sidebar_label: Ранбук операций узла
-description: Проверка встроенного деплоя `sorafs-node` внутри Torii.
+identifiant : opérations de nœud
+titre : Ранбук операций узла
+sidebar_label : Ранбук операций узла
+description : Proverberka встроенного деплоя `sorafs-node` внутри Torii.
 ---
 
 :::note Канонический источник
-Эта страница отражает `docs/source/sorafs/runbooks/sorafs_node_ops.md`. Держите обе копии синхронизированными, пока устаревший набор документации Sphinx не будет выведен из обращения.
+Cette page correspond à `docs/source/sorafs/runbooks/sorafs_node_ops.md`. Vous pouvez utiliser des copies de synchronisation pour créer des documents sur Sphinx et vous n'en avez pas besoin.
 :::
 
 ## Обзор
 
-Этот ранбук проводит операторов через проверку встроенного деплоя `sorafs-node` внутри
-Torii. Каждый раздел напрямую соответствует deliverables SF-3: циклам pin/fetch,
-восстановлению после перезапуска, отказу по квоте и PoR-сэмплингу.
+Ce projet fournit aux opérateurs la preuve du déploiement `sorafs-node` à l'intérieur
+Torii. Каждый раздел напрямую соответствует livrables SF-3 : broche/extraction de lampe,
+Après l'achat, vous devrez acheter des billets et utiliser le PoR.
 
-## 1. Предварительные условия
+## 1. Votre hôtel précédent
 
-- Включите storage worker в `torii.sorafs.storage`:
+- Voir le travailleur de stockage dans `torii.sorafs.storage` :
 
   ```toml
   [torii.sorafs.storage]
@@ -43,17 +45,17 @@ Torii. Каждый раздел напрямую соответствует del
   por_success_alpha = 0.25
   ```
 
-- Убедитесь, что процесс Torii имеет доступ на чтение/запись к `data_dir`.
+- Pour que le processus Torii soit téléchargé/installé sur `data_dir`.
 - Подтвердите, что узел объявляет ожидаемую ёмкость через
-  `GET /v1/sorafs/capacity/state` после записи декларации.
-- При включённом сглаживании дашборды показывают как сырые, так и сглаженные
+  `GET /v1/sorafs/capacity/state` suite à cette déclaration.
+- Lors de l'ouverture des frontières du bord, vous pourrez trouver le sang, ainsi que le liquide.
   счётчики GiB·hour/PoR, чтобы подчёркивать тренды без джиттера рядом с
   мгновенными значениями.
 
-### Пробный запуск CLI (опционально)
+### Problème de démarrage de la CLI (officiellement)
 
-Перед открытием HTTP эндпоинтов можно провести sanity-check backend хранения с
-помощью поставляемого CLI.【crates/sorafs_node/src/bin/sorafs-node.rs#L1】
+Avant l'ouverture des ports HTTP, vous pouvez prouver la fonctionnalité backend de vérification de l'intégrité du backend
+Utilisez la CLI.【crates/sorafs_node/src/bin/sorafs-node.rs#L1】
 
 ```bash
 cargo run -p sorafs_node --bin sorafs-node ingest \
@@ -66,16 +68,14 @@ cargo run -p sorafs_node --bin sorafs-node export \
   --manifest-id <hex> \
   --manifest-out ./out/manifest.to \
   --payload-out ./out/payload.bin
-```
+```Les commandes permettent d'obtenir le code JSON Norito et de modifier les paramètres de profil ou
+digest, ce qui est prévu pour les solutions anti-fumée CI avant la publication Torii.【crates/sorafs_node/tests/cli.rs#L1】
 
-Команды выводят Norito JSON-резюме и отвергают несовпадения профиля чанков или
-digest, что делает их полезными для CI smoke-проверок перед подключением Torii.【crates/sorafs_node/tests/cli.rs#L1】
+### Répétition PoR-доказательства
 
-### Репетиция PoR-доказательства
-
-Операторы теперь могут локально воспроизводить артефакты PoR, выпущенные governance,
-прежде чем загружать их в Torii. CLI использует тот же путь ingest `sorafs-node`, так
-что локальные прогоны показывают те же ошибки валидации, которые вернул бы HTTP API.
+Les opérateurs теперь могут локально воспроизводить артефакты PoR, выпущенные gouvernance,
+avant de les télécharger dans Torii. La CLI permet d'ingérer `sorafs-node`, ainsi
+Ce sont des programmes locaux qui vous permettent de valider, via l'API HTTP.
 
 ```bash
 cargo run -p sorafs_node --bin sorafs-node ingest por \
@@ -85,28 +85,26 @@ cargo run -p sorafs_node --bin sorafs-node ingest por \
   --verdict ./fixtures/sorafs_manifest/por/verdict_v1.to
 ```
 
-Команда выводит JSON-резюме (digest манифеста, id провайдера, digest доказательства,
-количество сэмплов, опциональный результат verdict). Укажите `--manifest-id=<hex>`,
-чтобы убедиться, что сохранённый манифест совпадает с digest вызова, и
-`--json-out=<path>`, когда нужно архивировать резюме вместе с исходными артефактами
-как доказательство для аудита. Добавление `--verdict` позволяет отрепетировать полный
-цикл вызов → доказательство → вердикт в офлайне до обращения к HTTP API.
+La commande affiche le fichier JSON (digest manifesta, id провайдера, digest доказательства,
+количество сэмплов, опциональный результат verdict). Prenez `--manifest-id=<hex>`,
+чтобы убедиться, что сохранённый manifeste совпадает с digest вызова, и
+`--json-out=<path>`, vous ne pouvez pas archiver votre CV avec vos articles d'art
+как доказательство для аудита. La mise à jour `--verdict` permet de désactiver le courant
+Cliquez sur → Documentation → Consultez la page d'accueil de l'API HTTP.
 
-После запуска Torii можно получить те же артефакты через HTTP:
+Après avoir téléchargé Torii, vous pouvez utiliser les articles correspondant à HTTP :
 
 ```bash
 curl -s http://$TORII/v1/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
 curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
 ```
 
-Оба эндпоинта обслуживаются встроенным storage worker, поэтому CLI smoke-тесты и
-пробы gateway остаются синхронизированными.【crates/iroha_torii/src/sorafs/api.rs#L1207】【crates/iroha_torii/src/sorafs/api.rs#L1259】
+Pour une entreprise travaillant dans le secteur du stockage, des tests de fumée CLI et
+La passerelle est actuellement synchronisée.【crates/iroha_torii/src/sorafs/api.rs#L1207】【crates/iroha_torii/src/sorafs/api.rs#L1259】
 
-## 2. Цикл Pin → Fetch
-
-1. Сформируйте пакет manifest + payload (например, с помощью
+## 2. Cliquez sur la broche → Récupérer1. Formez le manifeste du paquet + la charge utile (par exemple, avec cela).
    `iroha app sorafs toolkit pack ./payload.bin --manifest-out manifest.to --car-out payload.car --json-out manifest_report.json`).
-2. Отправьте manifest в кодировке base64:
+2. Ouvrez le manifeste dans le code base64 :
 
    ```bash
    curl -X POST http://$TORII/v1/sorafs/storage/pin \
@@ -114,8 +112,8 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
      -d @pin_request.json
    ```
 
-   JSON запроса должен содержать `manifest_b64` и `payload_b64`. Успешный ответ
-   возвращает `manifest_id_hex` и digest payload.
+   JSON doit utiliser `manifest_b64` et `payload_b64`. Réponse claire
+   возвращает `manifest_id_hex` et digest payload.
 3. Получите закреплённые данные:
 
    ```bash
@@ -128,30 +126,30 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
      }'
    ```
 
-   Декодируйте поле `data_b64` из base64 и проверьте, что оно совпадает с исходными байтами.
+   Décodez le pôle `data_b64` en base64 et vérifiez qu'il est uniquement compatible avec vos batteries.
 
-## 3. Тренировка восстановления после перезапуска
+## 3. Entraînement après la mise en service
 
-1. Закрепите как минимум один manifest, как описано выше.
-2. Перезапустите процесс Torii (или весь узел).
-3. Повторно отправьте запрос fetch. Payload должен по-прежнему извлекаться, а digest в
+1. Prenez le minimum de manifeste, comme vous le souhaitez.
+2. Exécutez le processus Torii (ou votre utilisation).
+3. Повторно отправьте запрос fetch. La charge utile est maintenant disponible, un résumé dans
    ответе должен совпасть с предшествующим перезапуску.
-4. Проверьте `GET /v1/sorafs/storage/state`, чтобы убедиться, что `bytes_used` отражает
-   сохранённые manifests после перезагрузки.
+4. Vérifiez le `GET /v1/sorafs/storage/state` pour savoir ce que `bytes_used` indique.
+   сохранённые se manifeste après перезагрузки.
 
-## 4. Тест отказа по квоте
+## 4. Testez votre achat
 
-1. Временно снизьте `torii.sorafs.storage.max_capacity_bytes` до малого значения
-   (например, размера одного manifest).
-2. Закрепите один manifest; запрос должен пройти успешно.
-3. Попробуйте закрепить второй manifest сопоставимого размера. Torii должен отклонить
-   запрос с HTTP `400` и сообщением об ошибке, содержащим `storage capacity exceeded`.
-4. По завершении восстановите обычный предел ёмкости.
+1. Vérifiez simplement le `torii.sorafs.storage.max_capacity_bytes` pour le petit détail
+   (par exemple, размера одного manifeste).
+2. Закрепите один manifeste; запрос должен пройти успешно.
+3. Попробуйте закрепить второй manifest сопоставимого размера. Torii pour l'ouverture
+   En utilisant HTTP `400` et en utilisant le code `storage capacity exceeded`.
+4. Lorsque vous avez besoin d'aide, veuillez vous assurer que le produit est prêt à l'emploi.
 
-## 5. Проба PoR-сэмплинга
+## 5. Probab PoR-сэмплинга
 
-1. Закрепите manifest.
-2. Запросите PoR-выборку:
+1. Закрепите manifeste.
+2. Choisissez PoR-выборку :
 
    ```bash
    curl -X POST http://$TORII/v1/sorafs/storage/por-sample \
@@ -161,27 +159,25 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
        "count": 4,
        "seed": 12345
      }'
-   ```
+   ```3. Vérifiez que vous êtes en train d'afficher `samples` avec le colis et ce que vous avez acheté.
+   доказательство валидируется относительно корня сохранённого manifesta.
 
-3. Проверьте, что в ответе есть `samples` с запрошенным количеством и что каждое
-   доказательство валидируется относительно корня сохранённого манифеста.
+## 6. Les automatismes
 
-## 6. Хуки автоматизации
-
-- CI / smoke-тесты могут повторно использовать целевые проверки, добавленные в:
+- Les tests CI/fumée peuvent généralement utiliser certaines preuves, adaptées à :
 
   ```bash
   cargo test -p sorafs_node --test pin_workflows
   ```
 
-  которые покрывают `pin_fetch_roundtrip`, `pin_survives_restart`, `pin_quota_rejection`
-  и `por_sampling_returns_verified_proofs`.
-- Дашборды должны отслеживать:
-  - `torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
-  - `torii_sorafs_storage_pin_queue_depth` и `torii_sorafs_storage_fetch_inflight`
+  porte-clés `pin_fetch_roundtrip`, `pin_survives_restart`, `pin_quota_rejection`
+  et `por_sampling_returns_verified_proofs`.
+- Les Daschbords должны отслеживать:
+  -`torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
+  - `torii_sorafs_storage_pin_queue_depth` et `torii_sorafs_storage_fetch_inflight`
   - счётчики успехов/неудач PoR, публикуемые через `/v1/sorafs/capacity/state`
-  - попытки публикации settlement через `sorafs_node_deal_publish_total{result=success|failure}`
+  - Règlement des publications populaires par `sorafs_node_deal_publish_total{result=success|failure}`
 
-Следование этим упражнениям гарантирует, что встроенный storage worker способен
-ингестировать данные, переживать перезапуски, соблюдать заданные квоты и генерировать
-детерминированные PoR-доказательства до того, как узел объявит ёмкость широкой сети.
+Assurez-vous de bénéficier de la garantie que le travailleur de stockage professionnel a accepté
+ingestirovatь данные, переживать перезапуски, соблюдать заданные квоты и генерировать
+Déterminez le PoR-доказательства до того, как узел объявит ёмкость широкой сети.

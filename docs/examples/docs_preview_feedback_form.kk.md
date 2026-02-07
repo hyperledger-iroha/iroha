@@ -7,62 +7,63 @@ generator: scripts/sync_docs_i18n.py
 source_hash: afb7e51ddc0b7e819f2cbf3888aadf907b0e0010c676cb44af648f9f4818f8f5
 source_last_modified: "2025-12-29T18:16:35.071058+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Docs preview feedback form (W1 partner wave)
+# Docs алдын ала қарау кері байланыс нысаны (W1 серіктес толқыны)
 
-Use this template when collecting feedback from W1 reviewers. Duplicate it per
-partner, fill the metadata, and store the completed copy under
+W1 шолушыларынан пікір жинау кезінде осы үлгіні пайдаланыңыз. Оны қайталаңыз
+серіктес, метадеректерді толтырыңыз және аяқталған көшірмені астында сақтаңыз
 `artifacts/docs_preview/W1/preview-2025-04-12/feedback/<partner-id>/`.
 
-## Reviewer metadata
+## Шолушының метадеректері
 
-- **Partner ID:** `partner-w1-XX`
-- **Request ticket:** `DOCS-SORA-Preview-REQ-PXX`
-- **Invite sent (UTC):** `YYYY-MM-DD hh:mm`
-- **Acknowledged checksum (UTC):** `YYYY-MM-DD hh:mm`
-- **Primary focus areas:** (for example _SoraFS orchestrator docs_, _Torii ISO flows_)
+- **Серіктес идентификаторы:** `partner-w1-XX`
+- **Билетті сұрау:** `DOCS-SORA-Preview-REQ-PXX`
+- **Шақыру жіберілді (UTC):** `YYYY-MM-DD hh:mm`
+- **Белгілі бақылау сомасы (UTC):** `YYYY-MM-DD hh:mm`
+- **Негізгі фокус аймақтары:** (мысалы, _SoraFS оркестрінің құжаттары_, _Torii ISO ағындары_)
 
-## Telemetry & artefact confirmations
+## Телеметрия және артефакт растаулары
 
-| Checklist item | Result | Evidence |
+| Бақылау тізімінің элементі | Нәтиже | Дәлелдер |
 | --- | --- | --- |
-| Checksum verification | ✅ / ⚠️ | Path to log (e.g., `build/checksums.sha256`) |
-| Try it proxy smoke test | ✅ / ⚠️ | `npm run manage:tryit-proxy …` transcript snippet |
-| Grafana dashboard review | ✅ / ⚠️ | Screenshot path(s) |
-| Portal probe report review | ✅ / ⚠️ | `artifacts/docs_preview/.../preflight-summary.json` |
+| Бақылау сомасын тексеру | ✅ / ⚠️ | Журналға жол (мысалы, `build/checksums.sha256`) |
+| Прокси түтін сынағы | ✅ / ⚠️ | `npm run manage:tryit-proxy …` транскрипт үзіндісі |
+| Grafana бақылау тақтасын шолу | ✅ / ⚠️ | Скриншот жол(дары) |
+| Порталды тексеру есебін шолу | ✅ / ⚠️ | `artifacts/docs_preview/.../preflight-summary.json` |
 
-Add rows for any additional SLOs a reviewer inspects.
+Шолушы тексеретін кез келген қосымша SLO үшін жолдарды қосыңыз.
 
-## Feedback log
+## Кері байланыс журналы
 
-| Area | Severity (info/minor/major/blocker) | Description | Suggested fix or question | Tracker issue |
+| Аудан | Ауырлығы (info/minor/major/blocker) | Сипаттама | Ұсынылған түзету немесе сұрақ | Трекер мәселесі |
 | --- | --- | --- | --- | --- |
 | | | | | |
 
-Reference the GitHub issue or internal ticket in the last column so the preview
-tracker can tie remediation items back to this form.
+Алдын ала қарау үшін соңғы бағандағы GitHub мәселесіне немесе ішкі билетке сілтеме жасаңыз
+трекер қалпына келтіру элементтерін осы пішінге қайта байланыстыра алады.
 
-## Survey summary
+## Сауалнама қорытындысы
 
-1. **How confident are you in the checksum guidance and invite process?** (1–5)
-2. **Which docs were the most/least helpful?** (short answer)
-3. **Were there any blockers accessing the Try it proxy or telemetry dashboards?**
-4. **Is additional localisation or accessibility content required?**
-5. **Any other comments before GA?**
+1. **Бақылау сомасының нұсқауы мен шақыру процесіне қаншалықты сенімдісіз?** (1–5)
+2. **Қандай құжаттар ең көп/кем көмектесті?** (қысқа жауап)
+3. **Try It проксиіне немесе телеметрия бақылау тақталарына кіретін блоктаушылар болды ма?**
+4. **Қосымша локализация немесе арнайы мүмкіндіктер мазмұны қажет пе?**
+5. **GA алдында кез келген басқа пікірлер бар ма?**
 
-Capture short answers and attach raw survey exports if you use an external form.
+Сыртқы пішінді пайдалансаңыз, қысқа жауаптарды жазып алыңыз және өңделмеген сауалнаманы экспорттаңыз.
 
-## Knowledge check
+## Білімді тексеру
 
-- Score: `__/10`
-- Incorrect questions (if any): `[#1, #4, …]`
-- Follow-up actions (if score < 9/10): remediation call scheduled? y/n
+- Балл: `__/10`
+- Дұрыс емес сұрақтар (бар болса): `[#1, #4, …]`
+- Кейінгі әрекеттер (егер балл < 9/10 болса): түзету қоңырауы жоспарланған ба? ж/н
 
-## Sign-off
+## Шығу
 
-- Reviewer name & timestamp:
-- Docs/DevRel reviewer & timestamp:
+- Шолушының аты және уақыт белгісі:
+- Docs/DevRel шолушысы және уақыт белгісі:
 
-Store the signed copy with the associated artefacts so auditors can replay the
-wave without additional context.
+Аудиторлар қайта ойнатуы үшін қол қойылған көшірмені байланысты артефактілермен бірге сақтаңыз
+қосымша контекстсіз толқын.

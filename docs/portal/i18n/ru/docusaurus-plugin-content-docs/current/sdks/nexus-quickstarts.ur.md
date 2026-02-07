@@ -4,9 +4,11 @@ direction: ltr
 source: docs/portal/docs/sdks/nexus-quickstarts.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-مکمل quickstart `docs/source/nexus_sdk_quickstarts.md` میں موجود ہے۔ یہ پورٹل خلاصہ مشترکہ پیشگی تقاضوں اور ہر SDK کے کمانڈز کو نمایاں کرتا ہے تاکہ ڈویلپرز اپنی سیٹ اپ جلدی جانچ سکیں۔
+Краткое руководство по `docs/source/nexus_sdk_quickstarts.md`. Используйте встроенный SDK, чтобы получить больше информации о SDK. ہے تاکہ ڈویلپرز اپنی سیٹ اپ جلدی جانچ سکیں۔
 
 ## مشترکہ سیٹ اپ
 
@@ -17,9 +19,9 @@ export NEXUS_CHAIN_ID="iroha3"
 export NEXUS_TRUSTED_PUBKEY="<peer-public-key>"
 ```
 
-Nexus کنفیگریشن بنڈل ڈاؤن لوڈ کریں، ہر SDK کی ڈپینڈنسیاں انسٹال کریں، اور یقینی بنائیں کہ TLS سرٹیفکیٹس ریلیز پروفائل سے میل کھاتے ہیں (دیکھیے `docs/source/sora_nexus_operator_onboarding.md`).
+Nexus Может быть использован SDK или SDK. Используйте TLS, чтобы получить доступ к данным по TLS. (دیکھیے `docs/source/sora_nexus_operator_onboarding.md`).
 
-## Rust
+## Ржавчина
 
 ```bash
 cargo run --bin nexus_quickstart \
@@ -28,7 +30,7 @@ cargo run --bin nexus_quickstart \
   --chain "${NEXUS_CHAIN_ID}"
 ```
 
-حوالہ: `docs/source/sdk/rust.md`
+Сообщение: `docs/source/sdk/rust.md`
 
 ## JavaScript / TypeScript
 
@@ -36,9 +38,9 @@ cargo run --bin nexus_quickstart \
 npm run demo:nexus
 ```
 
-اسکرپٹ اوپر والی ماحولیات متغیرات کے ساتھ `ToriiClient` بناتا ہے اور تازہ ترین بلاک پرنٹ کرتا ہے۔
+Для получения дополнительной информации обратитесь к `ToriiClient`. ترین بلاک پرنٹ کرتا ہے۔
 
-## Swift
+## Свифт
 
 ```bash
 make swift-nexus-demo
@@ -46,7 +48,7 @@ make swift-nexus-demo
 
 `IrohaSwift` کے `Torii.Client` سے `FindNetworkStatus` حاصل کرتا ہے۔
 
-## Android
+## Андроид
 
 ```bash
 ./gradlew :iroha-android:nexusQuickstartTest \
@@ -54,9 +56,9 @@ make swift-nexus-demo
   -PNEXUS_PIPELINE_URL="${NEXUS_PIPELINE_URL}"
 ```
 
-منظم ڈیوائس ٹیسٹ چلاتا ہے جو Nexus کے staging endpoint کو ہٹ کرتا ہے۔
+Если вы хотите использовать промежуточную конечную точку Nexus, вы можете использовать промежуточную конечную точку.
 
-## CLI
+## интерфейс командной строки
 
 ```bash
 iroha_cli app nexus quickstart \
@@ -67,8 +69,8 @@ iroha_cli app nexus quickstart \
 
 ## مسئلہ حل
 
-- TLS ناکامیاں -> Nexus ریلیز tarball سے CA بنڈل کی توثیق کریں۔
-- `ERR_UNKNOWN_LANE` -> جب multi-lane routing نافذ ہو تو `--lane-id`/`--dataspace-id` دیں۔
-- `ERR_SETTLEMENT_PAUSED` -> واقعہ عمل کے لیے [Nexus operations](../nexus/nexus-operations) دیکھیں؛ ممکن ہے گورننس نے lane روک دی ہو۔
+- TLS-файл -> Nexus tarball سے CA بنڈل کی توثیق کریں۔
+- `ERR_UNKNOWN_LANE` -> Многополосная маршрутизация в `--lane-id`/`--dataspace-id` دیں۔
+- `ERR_SETTLEMENT_PAUSED` -> واقعہ عمل کے لیے [Nexus операции](../nexus/nexus-operations) دیکھیں؛ ممکن ہے گورننس نے переулок روک دی ہو۔
 
-مزید سیاق و سباق اور SDK مخصوص وضاحتوں کے لیے `docs/source/nexus_sdk_quickstarts.md` دیکھیں۔
+Загрузите и установите SDK для использования с `docs/source/nexus_sdk_quickstarts.md`.

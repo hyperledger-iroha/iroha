@@ -8,19 +8,21 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraFS CI Recipes
 sidebar_label: CI Recipes
 description: Run the SoraFS CLI inside GitHub and GitLab pipelines with keyless signing.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
+:::注意規範來源
 :::
 
-# CI Recipes
+# CI 食譜
 
-SoraFS pipelines benefit from deterministic chunking, manifest signing, and
-proof verification. The `sorafs_cli` command surface keeps those steps portable
-across CI providers. This page highlights the canonical recipes and points to
-ready-to-use templates.
+SoraFS 管道受益於確定性分塊、清單簽名和
+證明驗證。 `sorafs_cli` 命令界面使這些步驟保持便攜
+跨 CI 提供商。本頁重點介紹了規範食譜並指出
+即用型模板。
 
-## GitHub Actions (keyless)
+## GitHub 操作（無密鑰）
 
 ```yaml
 name: sorafs-artifacts
@@ -93,11 +95,11 @@ jobs:
           path: artifacts/
 ```
 
-Key points:
+要點：
 
-- No static signing keys are stored; OIDC tokens are fetched on-demand.
-- Artefacts (CAR, manifest, bundle, proof summaries) are uploaded for review.
-- The job reuses the same Norito schemas used in production rollouts.
+- 不存儲靜態簽名密鑰； OIDC 令牌是按需獲取的。
+- 上傳工件（CAR、清單、捆綁、證明摘要）以供審核。
+- 該作業重複使用生產部署中使用的相同 Norito 架構。
 
 ## GitLab CI
 
@@ -133,15 +135,15 @@ sorafs:publish:
       - artifacts/
 ```
 
-- Provision `SIGSTORE_ID_TOKEN` via GitLab’s workload identity federation or a
-  sealed secret before executing the publish stage.
-- Failure of any CLI step causes the pipeline to halt, preserving consistent
-  artefacts.
+- 通過 GitLab 的工作負載身份聯合或
+  在執行發布階段之前密封秘密。
+- 任何 CLI 步驟的失敗都會導致管道停止，從而保持一致
+  文物。
 
-## Additional resources
+## 其他資源
 
-- End-to-end templates (includes Bash helpers, federated identity configuration,
-  and clean-up steps): `docs/examples/sorafs_ci.md`
-- CLI reference covering every option: `docs/source/sorafs_cli.md`
-- Governance/alias requirements prior to submission:
+- 端到端模板（包括 Bash 助手、聯合身份配置、
+  和清理步驟）：`docs/examples/sorafs_ci.md`
+- CLI 參考涵蓋每個選項：`docs/source/sorafs_cli.md`
+- 提交前的治理/別名要求：
   `docs/source/sorafs/provider_admission_policy.md`

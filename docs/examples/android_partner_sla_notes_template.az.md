@@ -7,18 +7,19 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 5ca51ec624ebbb4b3760d5f2265d31047cd3b6492e21bdb10a3aa61655ccca69
 source_last_modified: "2025-12-29T18:16:35.069181+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Android Partner SLA Discovery Notes — Template
+# Android Partner SLA Discovery Notes — Şablon
 
-Use this template for every AND8 SLA discovery session. Store the filled copy
-under `docs/source/sdk/android/partner_sla_sessions/<partner>/<date>/minutes.md`
-and attach supporting artefacts (questionnaire responses, acknowledgements,
-attachments) in the same directory.
+Hər AND8 SLA kəşf sessiyası üçün bu şablondan istifadə edin. Doldurulmuş nüsxəni saxlayın
+`docs/source/sdk/android/partner_sla_sessions/<partner>/<date>/minutes.md` altında
+və dəstəkləyici artefaktları əlavə edin (anket cavabları, təşəkkürlər,
+əlavələr) eyni kataloqda.
 
 ```
 Partner: <Name>                      Date: <YYYY-MM-DD>  Time: <UTC>
@@ -27,55 +28,55 @@ Android attendees: <Program Lead / Partner Eng / Support Eng / Compliance>
 Meeting link / ticket: <URL or ID>
 ```
 
-## 1. Agenda & Context
+## 1. Gündəlik və Kontekst
 
-- Purpose of the session (pilot scope, release window, telemetry expectations).
-- Reference docs shared ahead of the call (support playbook, release calendar,
-  telemetry dashboards).
+- Sessiyanın məqsədi (pilot əhatə dairəsi, buraxılış pəncərəsi, telemetriya gözləntiləri).
+- Zəngdən əvvəl paylaşılan istinad sənədləri (dəstək kitabçası, buraxılış təqvimi,
+  telemetriya panelləri).
 
-## 2. Workload Overview
+## 2. İş yükünün icmalı
 
-| Topic | Notes |
+| Mövzu | Qeydlər |
 |-------|-------|
-| Target workloads / chains | |
-| Expected transaction volume | |
-| Critical business windows / blackout periods | |
-| Regulatory regimes (GDPR, MAS, FISC, etc.) | |
-| Required languages / localisation | |
+| Hədəf iş yükləri / zəncirlər | |
+| Gözlənilən əməliyyat həcmi | |
+| Kritik iş pəncərələri / qaralma dövrləri | |
+| Tənzimləmə rejimləri (GDPR, MAS, FISC və s.) | |
+| Tələb olunan dillər / lokalizasiya | |
 
-## 3. SLA Discussion
+## 3. SLA Müzakirəsi
 
-| SLA Class | Partner expectation | Delta from baseline? | Action required |
-|-----------|--------------------|----------------------|-----------------|
-| Critical fix (48 h) | | Yes/No | |
-| High-severity (5 business days) | | Yes/No | |
-| Maintenance (30 days) | | Yes/No | |
-| Cutover notice (60 days) | | Yes/No | |
-| Incident communications cadence | | Yes/No | |
+| SLA Class | Tərəfdaş gözləntisi | Başlanğıcdan Delta? | Tədbir tələb olunur |
+|----------|--------------------|----------------------|-----------------|
+| Kritik düzəliş (48 saat) | | Bəli/Xeyr | |
+| Yüksək ciddilik (5 iş günü) | | Bəli/Xeyr | |
+| Baxım (30 gün) | | Bəli/Xeyr | |
+| Kəsmə bildirişi (60 gün) | | Bəli/Xeyr | |
+| Hadisə rabitə kadansı | | Bəli/Xeyr | |
 
-Document any additional SLA clauses requested by the partner (e.g. dedicated
-phone bridge, extra telemetry exports).
+Tərəfdaşın tələb etdiyi hər hansı əlavə SLA müddəalarını sənədləşdirin (məsələn, ayrılmış
+telefon körpüsü, əlavə telemetriya ixracı).
 
-## 4. Telemetry & Access Requirements
+## 4. Telemetriya və Giriş Tələbləri
 
-- Grafana / Prometheus access needs:
-- Log/trace export requirements:
-- Offline evidence or dossier expectations:
+- Grafana / Prometheus giriş tələbləri:
+- İxrac tələblərini qeyd edin/izləyin:
+- Offline sübut və ya dosye gözləntiləri:
 
-## 5. Compliance & Legal Notes
+## 5. Uyğunluq və Hüquqi Qeydlər
 
-- Jurisdictional notification requirements (statute + timing).
-- Required legal contacts for incident updates.
-- Data residency constraints / storage requirements.
+- Yurisdiksiyaya aid bildiriş tələbləri (qanun + vaxt).
+- Hadisə yeniləmələri üçün tələb olunan hüquqi əlaqə.
+- Məlumat rezidentliyi məhdudiyyətləri / saxlama tələbləri.
 
-## 6. Decisions & Action Items
+## 6. Qərarlar və Fəaliyyət Maddələri
 
-| Item | Owner | Due | Notes |
+| Maddə | Sahibi | Vaxtı | Qeydlər |
 |------|-------|-----|-------|
 | | | | |
 
-## 7. Acknowledgement
+## 7. Təşəkkür
 
-- Partner acknowledged baseline SLA? (Y/N)
-- Follow-up acknowledgement method (email / ticket / signature):
-- Attach confirming email or meeting minutes to this directory before closing.
+- Tərəfdaş əsas SLA-nı qəbul etdi? (Y/N)
+- Təqibin təsdiqi üsulu (e-poçt / bilet / imza):
+- Bağlamadan əvvəl təsdiq e-poçtunu və ya görüş protokolunu bu kataloqa əlavə edin.

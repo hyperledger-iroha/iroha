@@ -7,47 +7,49 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Sora Name Service Suffix Catalog
 sidebar_label: Suffix catalog
 description: Canonical allowlist of SNS suffixes, stewards, and pricing knobs for `.sora`, `.nexus`, and `.dao`.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Sora Name Service Suffix Catalog
+# Сора Исем хеҙмәте ялғау каталогы
 
-The SNS roadmap tracks every approved suffix (SN-1/SN-2). This page mirrors the
-source-of-truth catalog so operators running registrars, DNS gateways, or wallet
-tooling can load the same parameters without scraping status docs.
+SNS юл картаһы һәр раҫланған ялғауҙарҙы күҙәтә (SN-1/SN-2). Был бит көҙгөләй
+хәҡиҡәт каталогы шулай операторҙар эшләй, регистраторҙар, DNS шлюздары, йәки янсыҡ
+инструментация тейәп була шул уҡ параметрҙарҙы ҡырҡып статус docs.
 
-- **Snapshot:** [`docs/examples/sns/suffix_catalog_v1.json`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/examples/sns/suffix_catalog_v1.json)
-- **Consumers:** `iroha sns policy`, SNS onboarding kits, KPI dashboards, and
-  DNS/Gateway release scripts all read the same JSON bundle.
-- **Statuses:** `active` (registrations allowed), `paused` (temporarily gated),
-  `revoked` (announced but not currently available).
+- **Snapshot:** [I18NI000000003X] (I18NU0000002X)
+- **Ҡулланыусылар:** I18NI000000004X, SNS onboarding комплекттары, KPI приборҙар таҡтаһы, һәм
+  DNS/Chapaway скрипттар сығарыу бөтәһе лә бер үк JSON өйөмөн уҡый.
+- **Статус:** `active` (теркәүҙәр рөхсәт), I18NI0000006X (ваҡытлыса ҡапҡалы),
+  `revoked` (иғлан, әммә әлеге ваҡытта мөмкин түгел).
 
-## Catalog schema
+## Каталог схемаһы
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `suffix` | string | Human-readable suffix with leading dot. |
-| `suffix_id` | `u16` | Identifier stored on-ledger in `SuffixPolicyV1::suffix_id`. |
-| `status` | enum | `active`, `paused`, or `revoked` describing launch readiness. |
-| `steward_account` | string | Account responsible for stewardship (matches registrar policy hooks). |
-| `fund_splitter_account` | string | Account that receives payments before routing per `fee_split`. |
-| `payment_asset_id` | string | Asset used for settlement (`xor#sora` for the initial cohort). |
-| `min_term_years` / `max_term_years` | integer | Purchase term bounds from the policy. |
-| `grace_period_days` / `redemption_period_days` | integer | Renewal safety windows enforced by Torii. |
-| `referral_cap_bps` | integer | Maximum referral carve-out allowed by governance (basis points). |
-| `reserved_labels` | array | Governance-protected label objects `{label, assigned_to, release_at_ms, note}`. |
-| `pricing` | array | Tier objects with `label_regex`, `base_price`, `auction_kind`, and duration bounds. |
-| `fee_split` | object | `{treasury_bps, steward_bps, referral_max_bps, escrow_bps}` basis-point split. |
-| `policy_version` | integer | Monotonic counter incremented whenever governance edits the policy. |
+| Ялан | Тип | Тасуирлама |
+|------|------|-------------|
+| `suffix` | еп | Кеше уҡый торған ялғау менән етәксе нөктә. |
+| `suffix_id` | `u16` | Идентификатор I18NI000000011X-та легаль һаҡлаған. |
+| I18NI0000012X | anum | `active`, I18NI0000014X, йәки `revoked` старт әҙерлеген һүрәтләү. |
+| `steward_account` | еп | Стеуардшип өсөн яуаплы иҫәп (сәйәси сәйәсәт ҡармаҡтары тиң). |
+| `fund_splitter_account` | еп | Иҫәп, түләүҙәр ала, маршрутлаштырыу алдынан I18NI000000018X. |
+| `payment_asset_id` | еп | Активтар өсөн ҡулланыла иҫәп-хисап (I18NI000000020X өсөн тәүге когорта). |
+| `min_term_years` / I18NI000000022X | бөтөн һан | Сәйәсәттән һатып алыу термины сиктәре. |
+| `grace_period_days` / I18NI000000024X | бөтөн һан | Яңыртыу хәүефһеҙлеге тәҙрәләре I18NT0000000000X менән нығытылған. |
+| `referral_cap_bps` | бөтөн һан | Максималь йүнәлтмә уйып-аут рөхсәт идара итеү (нигеҙендә нөктәләр). |
+| `reserved_labels` | массив | Идара итеү менән һаҡланған лейбл объекттары I18NI000000027X. |
+| `pricing` | массив | `label_regex` менән яруслы объекттар, `base_price`, `auction_kind`, оҙайлылыҡ сиктәре. |
+| `fee_split` | объекты | `{treasury_bps, steward_bps, referral_max_bps, escrow_bps}` нигеҙ-нөктә бүленеше. |
+| `policy_version` | бөтөн һан | Монотонный счетчик өҫтәү ҡасан идара итеү сәйәсәтте мөхәррирләй. |
 
-## Current catalog
+## Ағымдағы каталог
 
-| Suffix | ID (`hex`) | Steward | Fund splitter | Status | Payment asset | Referral cap (bps) | Term (min – max years) | Grace / Redemption (days) | Pricing tiers (regex → base price / auction) | Reserved labels | Fee split (T/S/R/E bps) | Policy version |
-|--------|------------|---------|---------------|--------|---------------|--------------------|--------------------------|---------------------------|----------------------------------------------|-----------------|-------------------------|----------------|
-| `.sora` | `0x0001` | `ih58...` | `ih58...` | Active | `xor#sora` | 500 | 1 – 5 | 30 / 60 | `T0: ^[a-z0-9]{3,}$ → 120 XOR (Vickrey)` | `treasury → ih58...` | `7000 / 3000 / 1000 / 0` | 1 |
-| `.nexus` | `0x0002` | `ih58...` | `ih58...` | Paused | `xor#sora` | 300 | 1 – 3 | 15 / 30 | `T0: ^[a-z0-9]{4,}$ → 480 XOR (Vickrey)`<br>`T1: ^[a-z]{2}$ → 4000 XOR (Dutch floor 500)` | `treasury → ih58...`, `guardian → ih58...` | `6500 / 2500 / 800 / 200` | 2 |
-| `.dao` | `0x0003` | `ih58...` | `ih58...` | Revoked | `xor#sora` | 0 | 1 – 2 | 30 / 30 | `T0: ^[a-z0-9]{3,}$ → 60 XOR (Vickrey)` | `dao (held for future release)` | `9000 / 1000 / 0 / 0` | 0 |
+| Ялғау | ID (I18NI000000035X) | Стюард | Фонд сплиттеры | Статус | Түләү активы | Йүнәлтмә ҡапҡасы (бпс) | Термин (мин–– макс йыл) | Грейс / Ҡотҡарыу (көндәр) | Хаҡтар ярустары (регекс → база хаҡы / аукцион) | Һаҡланған ярлыҡтар | Түләү бүленеш (Т/С/Р/Е bps) | Сәйәсәт версияһы |
+|-------|-----------|-------------------------|--------|-------------------------------- -------|-------------------------------------------|------------------------------------ ----------------|--------------------------------------------------------------------------- --|----------------|-------------------------|------------------|
+| `.sora` | `0x0001` | `ih58...` | `ih58...` | Әүҙем | `xor#sora` | 500 | 1 – 5 | 30 / 60 | `T0: ^[a-z0-9]{3,}$ → 120 XOR (Vickrey)` | `treasury → ih58...` | `7000 / 3000 / 1000 / 0` | 1 |
+| `.nexus` | `0x0002` | `ih58...` | `ih58...` | Пауза | `xor#sora` | 300 | 1––3 | 15 / 30 | `T0: ^[a-z0-9]{4,}$ → 480 XOR (Vickrey)`<br>I18NI000000050X | `treasury → ih58...`, I18NI000000052X | `6500 / 2500 / 800 / 200` | 2 |
+| `.dao` | `0x0003` | `ih58...` | `ih58...` | Ҡайтарыу | `xor#sora` | 0 | 1––2 | 30 / 30 | `T0: ^[a-z0-9]{3,}$ → 60 XOR (Vickrey)` | `dao (held for future release)` | `9000 / 1000 / 0 / 0` | 0 |
 
-## JSON excerpt
+## JSON өҙөк
 
 ```json
 {
@@ -77,12 +79,12 @@ tooling can load the same parameters without scraping status docs.
 }
 ```
 
-## Automation notes
+## Автоматлаштырыу иҫкәрмәләре
 
-1. Load the JSON snapshot and hash/sign it before distributing to operators.
-2. Registrar tooling should surface the `suffix_id`, term limits, and pricing
-   from the catalog whenever a request hits `/v1/sns/*`.
-3. DNS/Gateway helpers read the reserved label metadata when generating GAR
-   templates so DNS responses stay aligned with governance controls.
-4. KPI annex jobs tag dashboard exports with suffix metadata so alerts match the
-   launch state recorded here.
+1. Йыйып JSON снимок һәм хеш/билдәләп, уны таратыу алдынан операторҙар.
+2. Регистратор инструменттары тейеш өҫкө I18NI0000000062X, срок сиктәре, һәм хаҡтар .
+   каталогтан ҡасан да булһа запрос I18NI000000063X һуҡты.
+3. DNS/Шлюз ярҙамсылары генерациялағанда запастағы ярлыҡ метамағлүмәттәрен уҡый.
+   ҡалыптар шулай DNS яуаптар идара итеү контроле менән тура килә ҡала.
+4. KPI ҡушымта эш урындары тег приборҙар таҡтаһы экспорты менән суффикс метамағлүмәттәр шулай иҫкәртмәләр тап килә
+   старт дәүләте бында теркәлгән.

@@ -7,64 +7,65 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 06dcd662ffb2b22a13d9cd5418f5d2e8e64a4cdadb71a054488ce75b1eb96188
 source_last_modified: "2025-12-29T18:16:35.094764+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# SNNet-10 Stage-Gate Report (T?_→T?_)
+# SNNet-10 階段門報告 (T?_→T?_)
 
-> Replace every placeholder (items in angle brackets) before submission. Keep
-> the section headers so governance automation can parse the file.
+> 提交前替換每個佔位符（尖括號中的項目）。保留
+> 節標題，以便治理自動化可以解析文件。
 
-## 1. Metadata
+## 1. 元數據
 
-| Field | Value |
-|-------|-------|
-| Promotion | `<T0→T1 or T1→T2>` |
-| Reporting window | `<YYYY-MM-DD → YYYY-MM-DD>` |
-| Relays in scope | `<count + IDs or “see appendix A”>` |
-| Primary contact | `<name/email/Matrix handle>` |
-| Submission archive | `<snnet10-stage-gate-YYYYMMDD.tar.zst>` |
-| Archive SHA-256 | `<sha256:...>` |
+|領域|價值|
+|--------|--------|
+|促銷| `<T0→T1 or T1→T2>` |
+|舉報窗口| `<YYYY-MM-DD → YYYY-MM-DD>` |
+|範圍內的繼電器 | `<count + IDs or “see appendix A”>` |
+|主要聯繫人 | `<name/email/Matrix handle>` |
+|提交存檔 | `<snnet10-stage-gate-YYYYMMDD.tar.zst>` |
+|存檔 SHA-256 | `<sha256:...>` |
 
-## 2. Metrics summary
+## 2. 指標總結
 
-| Metric | Observed | Threshold | Pass? | Source |
-|--------|----------|-----------|-------|--------|
-| Circuit success ratio | `<0.000>` | ≥0.95 | ☐ / ☑ | `reports/metrics-report.json` |
-| Fetch brownout ratio | `<0.000>` | ≤0.01 | ☐ / ☑ | `reports/metrics-report.json` |
-| GAR mix variance | `<+0.0%>` | ≤±10% | ☐ / ☑ | `reports/metrics-report.json` |
-| PoW p95 seconds | `<0.0 s>` | ≤3 s | ☐ / ☑ | `telemetry/pow_window.json` |
-| Latency p95 | `<0 ms>` | <200 ms | ☐ / ☑ | `telemetry/latency_window.json` |
-| PQ ratio (avg) | `<0.00>` | ≥ target | ☐ / ☑ | `telemetry/pq_summary.json` |
+|公制|觀察|門檻|經過？ |來源 |
+|--------|----------|------------|--------|--------|
+|電路成功率| `<0.000>` | ≥0.95 | ○ / ☑ | `reports/metrics-report.json` |
+|獲取掉電率| `<0.000>` | ≤0.01 | ○ / ☑ | `reports/metrics-report.json` |
+| GAR 混合方差 | `<+0.0%>` | ≤±10% | ○ / ☑ | `reports/metrics-report.json` |
+| PoW p95 秒 | `<0.0 s>` | ≤3秒| ○ / ☑ | `telemetry/pow_window.json` |
+|延遲 p95 | `<0 ms>` | <200 毫秒 | ○ / ☑ | `telemetry/latency_window.json` |
+| PQ 比率（平均）| `<0.00>` | ≥目標| ○ / ☑ | `telemetry/pq_summary.json` |
 
-**Narrative:** `<summaries of anomalies, mitigations, overrides>`
+**敘述：** `<summaries of anomalies, mitigations, overrides>`
 
-## 3. Drill & incident log
+## 3. 演習和事件日誌
 
-| Timestamp (UTC) | Region | Type | Alert ID | Mitigation summary |
-|-----------------|--------|------|----------|--------------------|
+|時間戳 (UTC) |地區 |類型 |警報 ID |緩解總結|
+|----------------|--------|------|----------|--------------------|
 | `<YYYY-MM-DD HH:MM>` | `<region>` | `Brownout drill` | `<alert://...>` | `<restored anon-guard-pq in 3m12s>` |
 
-## 4. Attachments and hashes
+## 4. 附件和哈希值
 
-| Artefact | Path | SHA-256 |
+|文物|路徑| SHA-256 |
 |----------|------|---------|
-| Metrics snapshot | `reports/metrics-window.json` | `<sha256>` |
-| Metrics report | `reports/metrics-report.json` | `<sha256>` |
-| Guard rotation transcripts | `evidence/guard_rotation/*.log` | `<sha256>` |
-| Exit bonding manifests | `evidence/exit_bonds/*.to` | `<sha256>` |
-| Drill logs | `evidence/drills/*.md` | `<sha256>` |
-| MASQUE readiness (T1→T2) | `reports/masque-readiness.md` | `<sha256 or n/a>` |
-| Rollback plan (T1→T2) | `reports/downgrade_plan.md` | `<sha256 or n/a>` |
+|指標快照 | `reports/metrics-window.json` | `<sha256>` |
+|指標報告| `reports/metrics-report.json` | `<sha256>` |
+|後衛輪換成績單| `evidence/guard_rotation/*.log` | `<sha256>` |
+|退出綁定清單 | `evidence/exit_bonds/*.to` | `<sha256>` |
+|鑽井日誌| `evidence/drills/*.md` | `<sha256>` |
+|面具準備（T1→T2）| `reports/masque-readiness.md` | `<sha256 or n/a>` |
+|回滾計劃（T1→T2）| `reports/downgrade_plan.md` | `<sha256 or n/a>` |
 
-## 5. Approvals
+## 5. 批准
 
-| Role | Name | Signed (Y/N) | Notes |
-|------|------|--------------|-------|
-| Networking TL | `<name>` | ☐ / ☑ | `<comments>` |
-| Governance rep | `<name>` | ☐ / ☑ | `<comments>` |
-| SRE delegate | `<name>` | ☐ / ☑ | `<comments>` |
+|角色 |名稱 |簽名（是/否）|筆記|
+|------|------|--------------|--------|
+|網絡 TL | `<name>` | ○ / ☑ | `<comments>` |
+|治理代表| `<name>` | ○ / ☑ | `<comments>` |
+| SRE 代表 | `<name>` | ○ / ☑ | `<comments>` |
 
-## Appendix A — Relay roster
+## 附錄 A — 接力名單
 
 ```
 - relay-id-001 (AS64496, region=SJC)
@@ -72,7 +73,7 @@ translation_last_reviewed: 2026-02-07
 ...
 ```
 
-## Appendix B — Incident summaries
+## 附錄 B — 事件摘要
 
 ```
 <Detailed context for any incidents or overrides referenced above.>

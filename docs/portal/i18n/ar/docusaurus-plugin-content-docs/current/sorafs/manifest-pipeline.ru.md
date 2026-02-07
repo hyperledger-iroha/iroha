@@ -4,52 +4,52 @@ direction: rtl
 source: docs/portal/docs/sorafs/manifest-pipeline.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Чанкинг SoraFS → Pipeline манифестов
+# التحويل SoraFS → بيان خط الأنابيب
 
-Этот материал дополняет quickstart и описывает полный пайплайн, который превращает сырые
-байты в манифесты Norito, пригодные для Pin Registry SoraFS. Текст адаптирован из
-[`docs/source/sorafs/manifest_pipeline.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/manifest_pipeline.md);
-обращайтесь к этому документу за канонической спецификацией и журналом изменений.
+تعمل هذه المواد على دعم التشغيل السريع وتشير إلى خط عادي كامل والذي يمكن تحويله إلى سلك
+البيانات الموجودة في البيانات Norito، متصلة بـ Pin Registry SoraFS. محول النص من
+[`docs/source/sorafs/manifest_pipeline.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/manifest_pipeline.md)؛
+قم بالاطلاع على هذه الوثيقة الخاصة بالمواصفات القانونية والمجلة المتغيرة.
 
-## 1. Детерминированный чанкинг
+## 1. تحديد التغيير
 
-SoraFS использует профиль SF-1 (`sorafs.sf1@1.0.0`): роллинг-хэш, вдохновленный FastCDC, с
-минимальным размером чанка 64 KiB, целевым 256 KiB, максимальным 512 KiB и маской разрыва
-`0x0000ffff`. Профиль зарегистрирован в `sorafs_manifest::chunker_registry`.
+SoraFS يستخدم ملف التعريف SF-1 (`sorafs.sf1@1.0.0`): المتداول، سريع الحركة، FastCDC، مع
+الحد الأدنى لمساحة 64 كيلو بايت، والتليفزيون 256 كيلو بايت، والحد الأقصى 512 كيلو بايت، ومساحة مخفية
+`0x0000ffff`. الملف الشخصي заregistrirovan в `sorafs_manifest::chunker_registry`.
 
-### Хелперы Rust
+### مساعدات الصدأ
 
-- `sorafs_car::CarBuildPlan::single_file` – Выдает смещения, длины и BLAKE3-дайджесты чанков
-  при подготовке метаданных CAR.
-- `sorafs_car::ChunkStore` – Стримит payloads, сохраняет метаданные чанков и выводит дерево
-  выборки Proof-of-Retrievability (PoR) 64 KiB / 4 KiB.
-- `sorafs_chunker::chunk_bytes_with_digests` – Библиотечный helper, лежащий под обеими CLI.
+- `sorafs_car::CarBuildPlan::single_file` – عرض الإعدادات والخطوط ومنافذ BLAKE3
+  مع السيارة المجهزة.
+- `sorafs_car::ChunkStore` – تقليل الحمولات وتأمين الصناديق التحويلية وإخراج الأموال
+  выборки إثبات الاسترجاع (PoR) 64 كيلو بايت / 4 كيلو بايت.
+- `sorafs_chunker::chunk_bytes_with_digests` – المساعد المكتبي، المتوافق مع CLI.
 
-### Инструменты CLI
+### أدوات CLI
 
 ```bash
 cargo run -p sorafs_chunker --bin sorafs-chunk-dump -- ./payload.bin \
   > chunk-plan.json
 ```
 
-JSON содержит упорядоченные смещения, длины и дайджесты чанков. Сохраняйте план при сборке
-манифестов или спецификаций выборки для оркестратора.
+يقوم JSON بتوفير التنسيقات الجيدة والخطوط والأدوات المساعدة. ضع خطة الرعاية في الرياضة
+البيانات أو الخيارات المحددة للمنسق.
 
 ### Свидетели PoR
 
-`ChunkStore` предоставляет `--por-proof=<chunk>:<segment>:<leaf>` и `--por-sample=<count>`,
-чтобы аудиторы могли запрашивать детерминированные наборы свидетелей. Сочетайте эти флаги с
-`--por-proof-out` или `--por-sample-out`, чтобы записать JSON.
+`ChunkStore` يمثل `--por-proof=<chunk>:<segment>:<leaf>` و`--por-sample=<count>`،
+لكي يتمكن المدققون من تحديد أنواع المدققين. تعلم هذه الأعلام مع
+`--por-proof-out` أو `--por-sample-out` لتسجل JSON.
 
-## 2. Обернуть манифест
+## 2. بيان شامل`ManifestBuilder` يتبع القنوات التحويلية ذات الحوكمة المرغوبة:
 
-`ManifestBuilder` объединяет метаданные чанков с вложениями governance:
-
-- Корневой CID (dag-cbor) и коммитменты CAR.
-- Доказательства alias и claims возможностей провайдеров.
-- Подписи совета и опциональные метаданные (например, build IDs).
+- Конневой CID (dag-cbor) والتزامات السيارة.
+- Доказательства الاسم المستعار والمطالبات بإمكانية إثباتها.
+- تقديم الأفكار والطرق الاختيارية (على سبيل المثال، معرفات البناء).
 
 ```bash
 cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
@@ -60,56 +60,52 @@ cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
   --json-out=payload.report.json
 ```
 
-Важные выходные данные:
+البيانات المهمة:
 
-- `payload.manifest` – Norito-кодированные байты манифеста.
-- `payload.report.json` – Сводка для людей/автоматизации, включая `chunk_fetch_specs`,
-  `payload_digest_hex`, дайджесты CAR и метаданные alias.
-- `payload.manifest_signatures.json` – Конверт, содержащий BLAKE3-дайджест манифеста,
-  SHA3-дайджест плана чанков и отсортированные подписи Ed25519.
+- `payload.manifest` – Norito بيان بيانات التشفير.
+- `payload.report.json` – مياه للأشخاص/الأتمتة، بما في ذلك `chunk_fetch_specs`،
+  `payload_digest_hex`، дадесты CAR والاسم المستعار المتغير.
+- `payload.manifest_signatures.json` - تحويل، بيان توصيل BLAKE3،
+  SHA3-Diggest Planan Chankovs and Outsortiovannыe Ed25519.
 
-Используйте `--manifest-signatures-in`, чтобы проверить конверты от внешних подписантов перед
-перезаписью, и `--chunker-profile-id` или `--chunker-profile=<handle>` для фиксации выбора
-реестра.
+استخدم `--manifest-signatures-in` للتحقق من التحويلات من البريد الإلكتروني الحالي
+للتخصيص و `--chunker-profile-id` أو `--chunker-profile=<handle>` لاختيار التحديد
+ريسترا.
 
-## 3. Публикация и pinning
+## 3. النشر والتثبيت1. **التنفيذ في الحوكمة** – قم بإدراج بيان الأداء وتحويل الفكرة المكملة إلى ما تريده
+   دبوس يمكن أن يكون صديقا. مدقق الحسابات الداخلي يتابع خطة SHA3 للتحكم في الوقت المناسب مع
+   بيان الصفحة.
+2. **تحميل الحمولات** – تحميل أرشيف CAR (ومؤشر اختياري CAR)، محمي في
+   بيان في Pin Registry. لاحظ أن البيان والسيارة يستخدمان واحدًا وهو أيضًا قسم البحث الجنائي.
+3. **تسجيل القياسات عن بعد** – يتم جلب محتوي JSON وPoR والمقاييس المفضلة
+   المصنوعات اليدوية. تقوم بتزويد مشغلي لوحات المفاتيح وتساعد على الاتصال
+   مشاكل بدون زيادة الحمولات.
 
-1. **Отправка в governance** – Передайте дайджест манифеста и конверт подписей совету, чтобы
-   pin мог быть принят. Внешним аудиторам следует хранить SHA3-дайджест плана чанков рядом с
-   дайджестом манифеста.
-2. **Пиннинг payloads** – Загрузите архив CAR (и опциональный индекс CAR), указанный в
-   манифесте, в Pin Registry. Убедитесь, что манифест и CAR используют один и тот же корневой CID.
-3. **Запись телеметрии** – Сохраните JSON-отчет, свидетелей PoR и любые метрики fetch в
-   релизных артефактах. Эти записи питают операторские дашборды и помогают воспроизводить
-   проблемы без загрузки больших payloads.
+## 4. خيارات المحاكاة لعدد قليل من المطورين
 
-## 4. Симуляция выборки от нескольких провайдеров
-
-`cargo run -p sorafs_car --bin sorafs_fetch -- --plan=payload.report.json \
+`تشغيل البضائع -p sorafs_car --bin sorafs_fetch -- --plan=payload.report.json \
   --provider=alpha=providers/alpha.bin --provider=beta=providers/beta.bin#4@3 \
-  --output=payload.bin --json-out=fetch_report.json`
+  --output=payload.bin --json-out=fetch_report.json`- `#<concurrency>` يزيد من توازي المعالج (`#4` آخر).
+- `@<weight>` يقوم بتخطيط التخطيط; في التشجيع 1.
+- `--max-peers=<n>` يقوم بإلغاء تأمين مقدمي الطلبات الذين يخططون للمغادرة عندما
+  الإخطار يثير المزيد من المرشحين الذين يحتاجون إليهم.
+- `--expect-payload-digest` و `--expect-payload-len` يحميان من هذه البيانات.
+- `--provider-advert=name=advert.to` التحقق من القدرة على الاستخدام قبل الاستخدام
+  في المحاكاة.
+- `--retry-budget=<n>` يعيد توجيه رأس شانك (في العمق: 3)، لCI
+  لقد حدث الانحدار الشديد أثناء الاختبار.
 
-- `#<concurrency>` увеличивает параллелизм на провайдера (`#4` выше).
-- `@<weight>` настраивает смещение планирования; по умолчанию 1.
-- `--max-peers=<n>` ограничивает число провайдеров, запланированных на запуск, когда
-  обнаружение возвращает больше кандидатов, чем нужно.
-- `--expect-payload-digest` и `--expect-payload-len` защищают от тихой порчи данных.
-- `--provider-advert=name=advert.to` проверяет возможности провайдера перед использованием
-  в симуляции.
-- `--retry-budget=<n>` переопределяет число повторов на чанк (по умолчанию: 3), чтобы CI
-  быстрее выявляла регрессии при тестировании отказов.
+`fetch_report.json` مقاييس تجميعية (`chunk_retry_total`, `provider_failure_rate`,
+و ر. د.)، دعم تأكيدات CI والملاحظة.
 
-`fetch_report.json` выводит агрегированные метрики (`chunk_retry_total`, `provider_failure_rate`,
-и т. д.), подходящие для CI-ассертов и наблюдаемости.
+## 5.السجل والحوكمة
 
-## 5. Обновления реестра и governance
+قبل المقترحات الجديدة للملف الشخصيchunker:
 
-При предложении новых профилей chunker:
+1. أدخل الواصف في `sorafs_manifest::chunker_registry_data`.
+2. احصل على `docs/source/sorafs/chunker_registry.md` والرحلات الجوية.
+3. قم بإعادة إنشاء الصور (`export_vectors`) وقم بطباعة بيانات التسليم.
+4. تنفيذ الميثاق الجيد مع الحوكمة المكملة.
 
-1. Подготовьте дескриптор в `sorafs_manifest::chunker_registry_data`.
-2. Обновите `docs/source/sorafs/chunker_registry.md` и связанные чартеры.
-3. Перегенерируйте фикстуры (`export_vectors`) и зафиксируйте подписанные манифесты.
-4. Отправьте отчет о соответствии чартеру с подписями governance.
-
-Автоматизации следует предпочитать канонические handles (`namespace.name@semver`) и
-возвращаться к числовым ID только при необходимости обратной совместимости.
+الأتمتة التالية تقترح المقابض الكنسي (`namespace.name@semver`) و
+لقد تم التعبير عن معرف أنيق فقط من خلال المعرفة المتقنة.

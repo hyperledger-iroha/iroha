@@ -7,82 +7,81 @@ generator: scripts/sync_docs_i18n.py
 source_hash: da8a99adbbcf1d8b209a25da32e256c0dad2860633f373d7410a3a91d790c938
 source_last_modified: "2026-01-21T19:17:13.236818+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# IVM Architecture Refactor Plan
+# IVM 架構重構計劃
 
-This plan captures the short-term milestones for reshaping the Iroha Virtual Machine
-(IVM) into clearer layers while preserving security and performance characteristics.
-It focuses on isolating responsibilities, making host integrations safer, and
-preparing the Kotodama language stack for extraction into a standalone crate.
+該計劃抓住了重塑 Iroha 虛擬機的短期里程碑
+(IVM) 進入更清晰的層，同時保留安全性和性能特徵。
+它側重於隔離職責，使主機集成更安全，以及
+準備 Kotodama 語言堆棧以提取到獨立的 crate 中。
 
-## Goals
+## 目標
 
-1. **Layered runtime façade** – introduce an explicit runtime interface so the VM
-   core can be embedded behind a narrow trait and alternative front-ends can evolve
-   without touching internal modules.
-2. **Host/syscall boundary  hardening** – route syscall dispatch through a
-   dedicated adapter that enforces ABI policy and pointer validation before any host
-   code executes.
-3. **Language/tooling separation** – move Kotodama specific code to a new crate and
-   keep only the bytecode execution surface in `ivm`.
-4. **Configuration cohesion** – unify acceleration and feature toggles so they are
-   driven through `iroha_config`, removing environment-based knobs in production
-   paths.
+1. **分層運行時外觀** – 引入顯式運行時接口，以便 VM
+   核心可以嵌入到狹窄的特徵後面，並且替代的前端可以發展
+   無需接觸內部模塊。
+2. **主機/系統調用邊界強化** – 通過路由系統調用調度
+   專用適配器，在任何主機之前強制執行 ABI 策略和指針驗證
+   代碼執行。
+3. **語言/工具分離** – 將 Kotodama 特定代碼移至新 crate 並
+   僅將字節碼執行面保留在 `ivm` 中。
+4. **配置內聚** – 統一加速和功能切換，以便它們
+   通過 `iroha_config` 驅動，消除生產中基於環境的旋鈕
+   路徑。
 
-## Phase Breakdown
+## 階段分解
 
-### Phase 1 – Runtime façade (in progress)
-- Add a `runtime` module that defines a `VmEngine` trait describing lifecycle
-  operations (`load_program`, `execute`, host plumbing).
-- Teach `IVM` to implement the trait.  This keeps the existing struct but allows
-  consumers (and future tests) to depend on the interface instead of concrete
-  types.
-- Start shedding direct module re-exports from `lib.rs` so callers import via the
-  façade when possible.
+### 第 1 階段 – 運行時外觀（正在進行中）
+- 添加 `runtime` 模塊，該模塊定義描述生命週期的 `VmEngine` 特徵
+  操作（`load_program`、`execute`、主機管道）。
+- 教 `IVM` 實現該特徵。  這保留了現有的結構，但允許
+  消費者（和未來的測試）依賴於接口而不是具體的
+  類型。
+- 開始放棄從 `lib.rs` 的直接模塊重新導出，以便調用者通過
+  盡可能使用外觀。
 
-**Security / performance impact**: The façade restricts direct access to internal
-state; only safe entry points are exposed.  This makes it easier to audit host
-interactions and reason about gas or TLV handling.
+**安全/性能影響**：外觀限制對內部的直接訪問
+狀態；僅暴露安全入口點。  這使得審核主機變得更容易
+關於氣體或 TLV 處理的相互作用和原因。
 
-### Phase 2 – Syscall dispatcher
-- Introduce a `SyscallDispatcher` component that wraps `IVMHost` and enforces ABI
-  policy and pointer validation once, in one location.
-- Migrate the default host and mock hosts to use the dispatcher, removing
-  duplicated validation logic.
-- Make dispatcher pluggable so hosts can supply custom instrumentation without
-  bypassing safety checks.
-- Provide a `SyscallDispatcher::shared(...)` helper so cloned VMs can forward
-  syscalls through a shared `Arc<Mutex<..>>` host without each worker building
-  bespoke wrappers.
+### 第 2 階段 – 系統調用調度程序
+- 引入一個 `SyscallDispatcher` 組件，該組件包裝 `IVMHost` 並強制執行 ABI
+  策略和指針在一個位置驗證一次。
+- 遷移默認主機和模擬主機以使用調度程序，刪除
+  重複的驗證邏輯。
+- 使調度程序可插拔，以便主機可以提供自定義儀器，而無需
+  繞過安全檢查。
+- 提供 `SyscallDispatcher::shared(...)` 幫助程序，以便克隆的虛擬機可以轉發
+  通過共享 `Arc<Mutex<..>>` 主機進行系統調用，無需每個工作人員構建
+  定制包裝紙。
 
-**Security / performance impact**: Centralised gating protects against hosts that
-forget to call `is_syscall_allowed`, and it allows future caching of pointer
-validations for repeated syscalls.
+**安全/性能影響**：集中控制可防止主機
+忘記調用 `is_syscall_allowed`，它允許將來緩存指針
+重複系統調用的驗證。
 
-### Phase 3 – Kotodama extraction
-- Kotodama compiler extracted to `crates/kotodama_lang` (from `crates/ivm/src/kotodama`).
-- Provide a minimal bytecode API that the VM consumes (`compile_to_ivm_bytecode`).
+### 第 3 階段 – Kotodama 提取
+- Kotodama 編譯器提取到 `crates/kotodama_lang`（來自 `crates/ivm/src/kotodama`）。
+- 提供 VM 使用的最小字節碼 API (`compile_to_ivm_bytecode`)。
 
-**Security / performance impact**: Decoupling lowers the attack surface of the VM
-core and allows language innovation without risking interpreter regressions.
+**安全/性能影響**：解耦降低了虛擬機的攻擊面
+核心並允許語言創新，而不會有解釋器回歸的風險。### 第 4 階段 – 配置整合
+- 通過 `iroha_config` 預設的線程加速選項（例如，啟用 GPU 後端），同時保留現有環境覆蓋（`IVM_DISABLE_CUDA`、`IVM_DISABLE_METAL`）作為運行時終止開關。
+- 通過新外觀公開 `RuntimeConfig` 對象，以便主機選擇
+  明確的確定性加速政策。
 
-### Phase 4 – Configuration consolidation
-- Thread acceleration options through `iroha_config` presets (e.g., enabling GPU backends) while keeping the existing environment overrides (`IVM_DISABLE_CUDA`, `IVM_DISABLE_METAL`) as runtime kill switches.
-- Expose a `RuntimeConfig` object through the new façade so hosts select
-  deterministic acceleration policies explicitly.
+**安全/性能影響**：消除基於環境的切換避免靜默
+配置漂移並確保跨部署的確定性行為。
 
-**Security / performance impact**: Eliminating env-based toggles avoids silent
-configuration drift and ensures deterministic behaviour across deployments.
+## 接下來的步驟
 
-## Immediate next steps
+- 通過添加外觀特徵並更新高級調用站點來完成第一階段
+  依賴它。
+- 審核公共再導出，以確保僅使用外觀和有意公開的 API
+  從板條箱中洩漏出來。
+- 在單獨的模塊中對系統調用調度程序 API 進行原型設計並遷移
+  驗證後默認主機。
 
-- Finish Phase 1 by adding the façade trait and updating high-level call sites to
-  depend on it.
-- Audit public re-exports to ensure only the façade and deliberately public APIs
-  leak out of the crate.
-- Prototype the syscall dispatcher API in a separate module and migrate the
-  default host once validated.
-
-Progress on each phase will be tracked in `status.md` once the implementation is
-underway.
+一旦實施，每個階段的進展將在 `status.md` 中跟踪
+正在進行中。

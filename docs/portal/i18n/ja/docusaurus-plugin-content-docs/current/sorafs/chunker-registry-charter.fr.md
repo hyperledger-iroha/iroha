@@ -4,60 +4,62 @@ direction: ltr
 source: docs/portal/docs/sorafs/chunker-registry-charter.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: chunker-registry-charter
-title: Charte du registre chunker SoraFS
-sidebar_label: Charte registre chunker
-description: Charte de gouvernance pour les soumissions et approbations de profils chunker.
+ID: チャンカーレジストリチャーター
+タイトル: 登録チャンカー SoraFS
+Sidebar_label: チャート レジストリ チャンカー
+説明: 申請とプロファイルの承認を求める統治憲章。
 ---
 
-:::note Source canonique
-Cette page reflète `docs/source/sorafs/chunker_registry_charter.md`. Gardez les deux copies synchronisées jusqu'à la retraite complète du set Sphinx hérité.
+:::note ソースカノニク
+Cette ページは `docs/source/sorafs/chunker_registry_charter.md` を参照します。 Gardez les deux は、スフィンクスのヘリテージ セットを完全に再現したものをコピーします。
 :::
 
-# Charte de gouvernance du registre chunker SoraFS
+# 登録チャンカー SoraFS の統治権限
 
-> **Ratifiée :** 2025-10-29 par le Sora Parliament Infrastructure Panel (voir
-> `docs/source/sorafs/council_minutes_2025-10-29.md`). Tout amendement exige un
-> vote de gouvernance formel ; les équipes d'implémentation doivent traiter ce document comme
-> normatif jusqu'à l'approbation d'une charte de remplacement.
+> **批准者 :** 2025-10-29 ソラ議会インフラパネル (投票)
+> `docs/source/sorafs/council_minutes_2025-10-29.md`)。 Tout 修正 exige un
+> 正式な統治に投票する。反逆者の実装に関するドキュメントの実装
+> 再配置の承認の基準。
 
-Cette charte définit le processus et les rôles pour faire évoluer le registre chunker SoraFS.
-Elle complète le [Guide de création des profils chunker](./chunker-profile-authoring.md) en décrivant comment de nouveaux
-profils sont proposés, revus, ratifiés et finalement dépréciés.
+SoraFS のプロセスと登録チャンカーのルールを決定します。
+Elle complète le [プロファイル チャンカー作成ガイド](./chunker-profile-authoring.md) の新しいコメント
+プロフィール、提案、承認、批准、最終決定の廃止。
 
-## Portée
+## ポルテ
 
-La charte s'applique à chaque entrée de `sorafs_manifest::chunker_registry` et
-à tout tooling qui consomme le registre (manifest CLI, provider-advert CLI,
-SDKs). Elle impose les invariants d'alias et de handle vérifiés par
+`sorafs_manifest::chunker_registry` et のチャート アップリケ、チャック エントレ
+登録ツール (マニフェスト CLI、プロバイダー広告 CLI、
+SDK)。エルは、不変条件を別名とハンドルの検証に適用します
 `chunker_registry::ensure_charter_compliance()` :
 
-- Les ID de profil sont des entiers positifs qui augmentent de façon monotone.
+- モノトーンの機能を強化するためのプロファイルを作成します。
 - Le handle canonique `namespace.name@semver` **doit** apparaître en première
-- Les chaînes d'alias sont trimées, uniques et ne collisionnent pas avec les handles
-  canoniques d'autres entrées.
+- さまざまな問題、ユニークな問題、および衝突問題を解決します
+  canoniques d'autres のメインディッシュ。
 
-## Rôles
+## ロール
 
-- **Auteur(s)** – préparent la proposition, régénèrent les fixtures et collectent les
-  preuves de déterminisme.
-- **Tooling Working Group (TWG)** – valide la proposition à l'aide des checklists
-  publiées et s'assure que les invariants du registre sont respectés.
-- **Governance Council (GC)** – examine le rapport du TWG, signe l'enveloppe de la proposition
-  et approuve les calendriers de publication/dépréciation.
-- **Storage Team** – maintient l'implémentation du registre et publie
-  les mises à jour de documentation.
+- **作者** – 提案の準備、備品およびコレクションの保存
+  決定主義の準備。
+- **ツーリング ワーキング グループ (TWG)** – チェックリストに関する提案の有効性
+  出版者は、登録上の不変性を尊重します。
+- **ガバナンス評議会 (GC)** – TWG の関係、提案の署名を検討する
+  出版物/減価償却のカレンダーを承認します。
+- **ストレージ チーム** – 登録および公開の実装を保守します
+  レ・ミス・ア・ジュール・ド・ドキュメンテーション。
 
-## Flux du cycle de vie
+## 流動サイクルの変動
 
-1. **Soumission de la proposition**
+1. **提案の提案**
    - L'auteur exécute la checklist de validation du guide d'auteur et crée
-     un JSON `ChunkerProfileProposalV1` sous
-     `docs/source/sorafs/proposals/`.
-   - Inclure la sortie CLI de :
+     un JSON `ChunkerProfileProposalV1` ソース
+     `docs/source/sorafs/proposals/`。
+   - 出撃時の CLI を含める:
      ```bash
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
@@ -65,61 +67,59 @@ SDKs). Elle impose les invariants d'alias et de handle vérifiés par
      cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
        --chunker-profile=<handle> --json-out=-
      ```
-   - Soumettre une PR contenant fixtures, proposition, rapport de déterminisme et
-     mises à jour du registre.
+   - さまざまな PR コンテンツの備品、提案、決定主義などの関係
+     登録ミス。
 
-2. **Revue tooling (TWG)**
-   - Rejouer la checklist de validation (fixtures, fuzz, pipeline manifest/PoR).
-   - Exécuter `cargo test -p sorafs_car --chunker-registry` et vérifier que
-     `ensure_charter_compliance()` passe avec la nouvelle entrée.
-   - Vérifier que le comportement du CLI (`--list-profiles`, `--promote-profile`, streaming
-     `--json-out=-`) reflète les alias et handles mis à jour.
-   - Produire un court rapport résumant les constats et le statut pass/fail.
+2. **レビューツール (TWG)**
+   - 検証のチェックリストを作成します (フィクスチャ、ファズ、パイプライン マニフェスト/PoR)。
+   - 実行者 `cargo test -p sorafs_car --chunker-registry` と検証者
+     `ensure_charter_compliance()` 最高の新人料理です。
+   - CLI の検証機能 (`--list-profiles`、`--promote-profile`、ストリーミング)
+     `--json-out=-`) 別名を参照し、不在時の対応を行います。
+   - 法廷関係の履歴書および統計の合否を判断します。
 
-3. **Approbation du conseil (GC)**
-   - Examiner le rapport TWG et les métadonnées de la proposition.
-   - Signer le digest de la proposition (`blake3("sorafs-chunker-profile-v1" || bytes)`)
-     et ajouter les signatures à l'enveloppe du conseil maintenue avec les fixtures.
-   - Consigner le résultat du vote dans les minutes de gouvernance.
+3. **承認デュコンセイユ (GC)**
+   - TWG と提案のメタドンの関係を審査する者。
+   - 提案の署名者ファイル (`blake3("sorafs-chunker-profile-v1" || bytes)`)
+     そして、備品の管理を維持するための署名を管理します。
+   - 管理者の投票結果の管理者。
 
-4. **Publication**
-   - Fusionner la PR en mettant à jour :
-     - `sorafs_manifest::chunker_registry_data`.
-     - Documentation (`chunker_registry.md`, guides d'auteur/conformité).
-     - Fixtures et rapports de déterminisme.
-   - Notifier les opérateurs et équipes SDK du nouveau profil et du rollout prévu.
+4. **出版物**
+   - 1 時間ごとに PR を行うフュージョンナー :
+     - `sorafs_manifest::chunker_registry_data`。
+     - ドキュメント (`chunker_registry.md`、規格ガイド/適合ガイド)。
+     - 決定性と関係性。
+   - 通知者は、新しいプロファイルとロールアウト前の SDK の操作と準備を行います。
 
-5. **Dépréciation / Retrait**
-   - Les propositions qui remplacent un profil existant doivent inclure une fenêtre de publication
-     double (périodes de grâce) et un plan d'upgrade.
-   - Après expiration de la fenêtre de grâce, marquer le profil remplacé comme déprécié
-     dans le registre et mettre à jour le ledger de migration.
+5. **減価償却/買戻し**
+   - 出版物の公開を含むプロファイルの存在に関する提案は存在しません
+     ダブル (期間延長) とアップグレードの計画。
+   - 期限切れ後のフェネートル ドゥ グレース、マルケ ル プロファイル コンメ ドプレシエ
+     移行の登録および管理。
 
-6. **Changements d'urgence**
-   - Les suppressions ou hotfixes exigent un vote du conseil à la majorité.
-   - Le TWG doit documenter les étapes de mitigation des risques et mettre à jour le journal d'incident.
+6. **緊急の変化**
+   - 多数決での投票を中止し、ホットフィックスを早急に削除してください。
+   - Le TWG は、事件の危険性を軽減するための記録を作成します。
 
-## Attentes tooling
+## アテントツール
 
-- `sorafs_manifest_chunk_store` et `sorafs_manifest_stub` exposent :
-  - `--list-profiles` pour l'inspection du registre.
-  - `--promote-profile=<handle>` pour générer le bloc de métadonnées canonique utilisé
-    lors de la promotion d'un profil.
-  - `--json-out=-` pour streamer les rapports vers stdout, permettant des logs de revue
-    reproductibles.
-- `ensure_charter_compliance()` est invoqué au démarrage dans les binaires concernés
-  (`manifest_chunk_store`, `provider_advert_stub`). Les tests CI doivent échouer si
-  de nouvelles entrées violent la charte.
+- `sorafs_manifest_chunk_store` および `sorafs_manifest_stub` 暴露:
+  - `--list-profiles` 登録検査を行ってください。
+  - `--promote-profile=<handle>` は、ブロック ド メタドンネの一般的な使用法を提供します
+    プロモーションとプロフィール。
+  - `--json-out=-` ストリーマーの関係と標準出力、レビューのログの永続化
+    再生産可能。
+- `ensure_charter_compliance()` 問題に関する問題を解決するための呼び出し
+  (`manifest_chunk_store`、`provider_advert_stub`)。 CI のテストをテストします。
+  de nouvelles entrées 暴力的な la charte。
 
-## Registre
-
-- Stocker tous les rapports de déterminisme dans `docs/source/sorafs/reports/`.
+## 登録- ストッカーは、`docs/source/sorafs/reports/` に関する決定的な関係を示します。
 - Les minutes du conseil référant aux décisions chunker vivent sous
-  `docs/source/sorafs/migration_ledger.md`.
-- Mettre à jour `roadmap.md` et `status.md` après chaque changement majeur du registre.
+  `docs/source/sorafs/migration_ledger.md`。
+- 不可抗力の登録変更後の法定期間 `roadmap.md` および `status.md`。
 
-## Références
+## 参照
 
-- Guide de création : [Guide de création des profils chunker](./chunker-profile-authoring.md)
-- Checklist de conformité : `docs/source/sorafs/chunker_conformance.md`
-- Référence du registre : [Registre des profils chunker](./chunker-registry.md)
+- 作成ガイド: [プロファイルチャンカー作成ガイド](./chunker-profile-authoring.md)
+- 適合チェックリスト: `docs/source/sorafs/chunker_conformance.md`
+- 登録参照: [プロファイルチャンカーの登録](./chunker-registry.md)

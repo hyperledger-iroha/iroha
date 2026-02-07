@@ -8,21 +8,23 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraFS Orchestrator Operations Runbook
 sidebar_label: Orchestrator Ops Runbook
 description: Step-by-step operational guide for rolling out, monitoring, and rolling back the multi-source orchestrator.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
-:::
+::: ማስታወሻ ቀኖናዊ ምንጭ
+::
 
-This runbook guides SREs through preparing, rolling out, and operating the multi-source fetch orchestrator. It complements the developer guide with procedures tuned for production rollouts, including staged enablement and peer blacklisting.
+ይህ Runbook የባለብዙ-ምንጭ ፈልሳፊ ኦርኬስትራውን በማዘጋጀት፣ በመልቀቅ እና በማንቀሳቀስ SREዎችን ይመራቸዋል። የገንቢ መመሪያውን ለምርት ልቀቶች ከተስተካከሉ ሂደቶች ጋር ያሟላል።
 
-> **See also:** The [Multi-Source Rollout Runbook](./multi-source-rollout.md) focuses on fleet-wide rollout waves and emergency provider denial. Reference it for governance / staging coordination while using this document for day-to-day orchestrator operations.
+> ** በተጨማሪ ይመልከቱ፡** የ[ባለብዙ-ምንጭ ልቀት Runbook](./multi-source-rollout.md) የሚያተኩረው መርከቦችን በሚዘረጋ የታቀፉ ሞገዶች እና የድንገተኛ አደጋ አቅራቢዎች ውድቅ ላይ ነው። ይህንን ሰነድ ለዕለት ተዕለት የኦርኬስትራ ስራዎች በሚጠቀሙበት ጊዜ ለአስተዳደር/ዝግጅት ማስተባበር ያመልክቱ።
 
-## 1. Pre-flight Checklist
+## 1. የቅድመ በረራ ማረጋገጫ ዝርዝር
 
-1. **Collect provider inputs**
-   - Latest provider adverts (`ProviderAdvertV1`) and telemetry snapshot for the target fleet.
-   - Payload plan (`plan.json`) derived from the manifest under test.
-2. **Render a deterministic scoreboard**
+1. **የአቅራቢ ግብአቶችን ሰብስብ**
+   - ለታለመው መርከቦች የቅርብ ጊዜ የአቅራቢ ማስታወቂያዎች (`ProviderAdvertV1`) እና የቴሌሜትሪ ቅጽበታዊ ገጽ እይታ።
+   - የመጫኛ እቅድ (I18NI0000004X) በሙከራ ላይ ካለው አንጸባራቂ የተገኘ።
+2. ** የሚወስን የውጤት ሰሌዳ ይስጡ**
 
    ```bash
    sorafs_fetch \
@@ -35,30 +37,30 @@ This runbook guides SREs through preparing, rolling out, and operating the multi
      --json-out artifacts/session.summary.json
    ```
 
-   - Validate that `artifacts/scoreboard.json` lists every production provider as `eligible`.
-   - Archive the summary JSON alongside the scoreboard; auditors rely on the chunk retry counters when certifying the change request.
-3. **Dry-run with fixtures** — Exercise the same command against the public fixtures in `docs/examples/sorafs_ci_sample/` to ensure the orchestrator binary matches the expected version before touching production payloads.
+   - I18NI0000005X እያንዳንዱን የምርት አቅራቢ እንደ `eligible` መዘረዘሩን ያረጋግጡ።
+   - JSON ማጠቃለያውን ከውጤት ሰሌዳው ጋር በማህደር ያስቀምጡ; ኦዲተሮች የለውጥ ጥያቄውን በሚያረጋግጡበት ጊዜ እንደገና በመሞከር ቆጣሪዎች ላይ ይተማመናሉ።
+3. ** በደረቅ አሂድ ከመሳሪያዎች ጋር *** - የኦርኬስትራ ሁለትዮሽ የምርት ጭነት ጭነት ከመንካትዎ በፊት ከተጠበቀው ስሪት ጋር መዛመዱን ለማረጋገጥ በ `docs/examples/sorafs_ci_sample/` ውስጥ በሕዝብ መጫዎቻዎች ላይ ተመሳሳይ ትእዛዝ ያድርጉ።
 
-## 2. Staged Rollout Procedure
+## 2. የታቀደ ልቀት ሂደት
 
-1. **Canary stage (≤2 providers)**
-   - Rebuild the scoreboard and run with `--max-peers=2` to clamp the orchestrator to a small subset.
-   - Monitor:
+1. ** የካናሪ ደረጃ (≤2 አቅራቢዎች)**
+   - የውጤት ሰሌዳውን እንደገና ይገንቡ እና ኦርኬስትራውን ወደ ትንሽ ንዑስ ስብስብ ለመጠቅለል በ `--max-peers=2` ያሂዱ።
+   - ተቆጣጠር:
      - `sorafs_orchestrator_active_fetches`
      - `sorafs_orchestrator_fetch_failures_total{reason!="retry"}`
      - `sorafs_orchestrator_retries_total`
-   - Proceed once retry rates remain below 1% for a complete manifest fetch and no provider accumulates failures.
-2. **Ramp stage (50% providers)**
-   - Increase `--max-peers` and rerun with a fresh telemetry snapshot.
-   - Persist every run with `--provider-metrics-out` and `--chunk-receipts-out`. Retain the artefacts for ≥7 days.
-3. **Full rollout**
-   - Remove `--max-peers` (or set it to the full eligible count).
-   - Enable orchestrator mode in client deployments: distribute the persisted scoreboard and configuration JSON via your configuration management system.
-   - Update dashboards to display `sorafs_orchestrator_fetch_duration_ms` p95/p99 and retry histograms per region.
+   - አንድ ጊዜ ቀጥል ለተሟላ አንጸባራቂ ለማምጣት ተመኖች ከ1% በታች ይቀራሉ እና ምንም አቅራቢ ውድቀቶችን አያከማችም።
+2. **የራምፕ ደረጃ (50% አቅራቢዎች)**
+   - `--max-peers` ይጨምሩ እና በአዲስ የቴሌሜትሪ ቅጽበታዊ ፎቶ ያሂዱ።
+   - እያንዳንዱን ሩጫ በI18NI0000013X እና `--chunk-receipts-out` ቀጥል። ቅርሶቹን ለ≥7 ቀናት ያቆዩ።
+3. **ሙሉ ልቀት**
+   - `--max-peers` አስወግድ (ወይም ወደ ሙሉ ብቁ ቆጠራ ያዋቅሩት)።
+   - በደንበኛ ማሰማራቶች ውስጥ የኦርኬስትራ ሁነታን ያንቁ፡ የቀጠለውን የውጤት ሰሌዳ እና ውቅር JSON በእርስዎ የውቅር አስተዳደር ስርዓት በኩል ያሰራጩ።
+   - `sorafs_orchestrator_fetch_duration_ms` p95/p99 ለማሳየት ዳሽቦርዶችን ያዘምኑ እና በየክልሉ ሂስቶግራም ይሞክሩ።
 
-## 3. Peer Blacklisting & Boosting
+## 3. የእኩዮች መመዝገብ እና መጨመር
 
-Use the CLI’s scoring policy overrides to triage unhealthy providers without waiting for governance updates.
+የአስተዳደር ዝመናዎችን ሳይጠብቁ ጤናማ ያልሆኑ አቅራቢዎችን ለመለየት የCLI የውጤት አሰጣጥ ፖሊሲን ይጠቀሙ።
 
 ```bash
 sorafs_fetch \
@@ -72,33 +74,33 @@ sorafs_fetch \
   --json-out artifacts/override.summary.json
 ```
 
-- `--deny-provider` removes the listed alias from consideration for the current session.
-- `--boost-provider=<alias>=<weight>` raises the provider’s scheduler weight. Values are additive to the normalised scoreboard weight and apply only to the local run.
-- Record overrides in the incident ticket and attach the JSON outputs so the owning team can reconcile state once the underlying issue is fixed.
+- `--deny-provider` ለአሁኑ ክፍለ ጊዜ ከግምት ውስጥ የተዘረዘሩትን ተለዋጭ ስሞች ያስወግዳል።
+- `--boost-provider=<alias>=<weight>` የአቅራቢውን የጊዜ ሰሌዳ ክብደት ከፍ ያደርገዋል. እሴቶች ለተለመደው የውጤት ሰሌዳ ክብደት ተጨማሪ ናቸው እና ለአካባቢው ሩጫ ብቻ ይተገበራሉ።
+- በአደጋው ​​ትኬት ውስጥ መሻሮችን ይመዝግቡ እና የJSON ውጤቶችን ያያይዙ ስለዚህ ዋናው ጉዳይ ከተስተካከለ በኋላ የባለቤትነት ቡድኑ ሁኔታውን ማስታረቅ ይችላል።
 
-For permanent changes, amend the source telemetry (mark the offender penalised) or refresh the advert with updated stream budgets before clearing the CLI overrides.
+ለቋሚ ለውጦች የCLI መሻሮችን ከማጽዳትዎ በፊት የምንጭ ቴሌሜትሪውን ያሻሽሉ (ወንጀለኛው እንደተቀጣ ምልክት ያድርጉበት) ወይም ማስታወቂያውን በተዘመኑ የዥረት በጀቶች ያድሱ።
 
-## 4. Failure Triage
+## 4. አለመሳካት Triage
 
-When a fetch fails:
+ማምጣት ሳይሳካ ሲቀር፡-
 
-1. Capture the following artefacts before rerunning:
+1. ከመድገምዎ በፊት የሚከተሉትን ቅርሶች ይያዙ፡-
    - `scoreboard.json`
    - `session.summary.json`
    - `chunk_receipts.json`
    - `provider_metrics.json`
-2. Inspect `session.summary.json` for the human-readable error string:
-   - `no providers were supplied` → verify provider paths and adverts.
-   - `retry budget exhausted ...` → increase `--retry-budget` or remove unstable peers.
-   - `no compatible providers available ...` → audit the offending provider’s range capability metadata.
-3. Correlate the provider name with `sorafs_orchestrator_provider_failures_total` and create a follow-up ticket if the metric spikes.
-4. Replay the fetch offline with `--scoreboard-json` and the captured telemetry to reproduce the failure deterministically.
+2. በሰው ሊነበብ ለሚችለው የስህተት ሕብረቁምፊ I18NI0000023X መርምር፡
+   - `no providers were supplied` → የአቅራቢ መንገዶችን እና ማስታወቂያዎችን ያረጋግጡ።
+   - `retry budget exhausted ...` → `--retry-budget` ይጨምሩ ወይም ያልተረጋጉ እኩዮችን ያስወግዱ።
+   - `no compatible providers available ...` → የአጥፊውን አቅራቢ ክልል አቅም ሜታዳታ ኦዲት ያድርጉ።
+3. የአቅራቢውን ስም ከ`sorafs_orchestrator_provider_failures_total` ጋር ያዛምዱ እና ሜትሪክ ሹል ከሆነ የመከታተያ ትኬት ይፍጠሩ።
+4. ውድቀቱን በቆራጥነት ለማባዛት ማውጣቱን ከመስመር ውጭ በ`--scoreboard-json` እና በተያዘው ቴሌሜትሪ እንደገና ያጫውቱ።
 
-## 5. Rollback
+## 5. ወደ ኋላ መመለስ
 
-To revert an orchestrator rollout:
+የኦርኬስትራ ልቀትን ለመመለስ፡-
 
-2. Remove any `--boost-provider` overrides so the scoreboard reverts to neutral weighting.
-3. Continue scraping the orchestrator metrics for at least one day to confirm no residual fetches are in-flight.
+2. የውጤት ሰሌዳው ወደ ገለልተኛ ክብደት እንዲመለስ ማንኛውንም የI18NI0000030X መሻሮችን ያስወግዱ።
+3. ምንም ቀሪ ፈልሳፊዎች በበረራ ላይ አለመኖራቸውን ለማረጋገጥ ቢያንስ ለአንድ ቀን የኦርኬስትራ መለኪያዎችን መቧቀስዎን ይቀጥሉ።
 
-Maintaining disciplined artefact capture and staged rollouts ensures the multi-source orchestrator can be operated safely across heterogeneous provider fleets while keeping observability and audit requirements intact.
+በሥነ-ሥርዓት የታገዘ የቅርስ ቀረጻ እና የታቀዱ ልቀቶችን ማቆየት የባለብዙ ምንጭ ኦርኬስትራ በተለያዩ አቅራቢ መርከቦች ላይ ደህንነቱ በተጠበቀ ሁኔታ እንዲሠራ እና የታዛቢነት እና የኦዲት መስፈርቶችን ጠብቆ እንዲቆይ ያረጋግጣል።

@@ -4,51 +4,53 @@ direction: ltr
 source: docs/portal/docs/sorafs/runbooks-index.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: runbooks-index
-title: Índice de runbooks de operadores
+id: índice de runbooks
+título: Índice de runbooks de operadores
 sidebar_label: Índice de runbooks
-description: Punto de entrada canónico para los runbooks de operadores de SoraFS migrados.
+description: Ponto de entrada canônico para runbooks de operadores de SoraFS migrados.
 ---
 
-> Refleja el registro de responsables que vive en `docs/source/sorafs/runbooks/`.
-> Cada nueva guía de operaciones de SoraFS debe enlazarse aquí una vez que se publique en
-> el build del portal.
+> Reflita sobre o registro de responsáveis que vivem em `docs/source/sorafs/runbooks/`.
+> Cada novo guia de operações de SoraFS deve ser lido aqui uma vez que for publicado em
+> a construção do portal.
 
-Usa esta página para verificar qué runbooks han completado la migración desde el
-árbol de documentación heredado al portal. Cada entrada enumera la titularidad, la
-ruta de origen canónica y la copia en el portal para que los revisores puedan
-saltar directamente a la guía deseada durante la vista previa beta.
+Use esta página para verificar quais runbooks completaram a migração do
+árvore de documentação herdada do portal. Cada entrada enumera la titularidad, la
+rota de origem canônica e a cópia no portal para que os revisores possam
+saltar diretamente para o guia desejado durante a vista anterior beta.
 
-## Host de vista previa beta
+## Host da vista anterior beta
 
-La oleada DocOps ya promovió el host de vista previa beta aprobado por los revisores en
-`https://docs.iroha.tech/`. Al dirigir a operadores o revisores a un runbook migrado,
-referencia ese hostname para que usen la instantánea del portal protegida por checksum.
-Los procedimientos de publicación/rollback viven en
+O oleado DocOps promoveu o host da vista anterior beta aprovado pelos revisores em
+`https://docs.iroha.tech/`. Ao dirigir operadores ou revisores de um runbook migrado,
+refere-se a esse nome de host para usar o instante do portal protegido por checksum.
+Os procedimentos de publicação/reversão ocorrem em
 [`devportal/preview-host-exposure`](../devportal/preview-host-exposure.md).
 
-| Runbook | Propietario(s) | Copia en el portal | Fuente |
+| Caderno | Proprietário(s) | Copiar no portal | Fonte |
 |---------|----------------|-------------------|--------|
-| Arranque de gateway y DNS | Networking TL, Ops Automation, Docs/DevRel | [`sorafs/gateway-dns-runbook`](./gateway-dns-runbook.md) | `docs/source/sorafs_gateway_dns_design_runbook.md` |
-| Playbook de operaciones de SoraFS | Docs/DevRel | [`sorafs/operations-playbook`](./operations-playbook.md) | `docs/source/sorafs/operations_playbook.md` |
-| Conciliación de capacidad | Treasury / SRE | [`sorafs/capacity-reconciliation`](./capacity-reconciliation.md) | `docs/source/sorafs/runbooks/capacity_reconciliation.md` |
-| Operaciones del registro de pins | Tooling WG | [`sorafs/pin-registry-ops`](./pin-registry-ops.md) | `docs/source/sorafs/pin_registry_ops.md` |
-| Checklist de operaciones de nodo | Storage Team, SRE | [`sorafs/node-operations`](./node-operations.md) | `docs/source/sorafs/runbooks/sorafs_node_ops.md` |
-| Runbook de disputas y revocaciones | Governance Council | [`sorafs/dispute-revocation-runbook`](./dispute-revocation-runbook.md) | `docs/source/sorafs/dispute_revocation_runbook.md` |
-| Playbook de manifiestos en staging | Docs/DevRel | [`sorafs/staging-manifest-playbook`](./staging-manifest-playbook.md) | `docs/source/sorafs/staging_manifest_playbook.md` |
-| Observabilidad del ancla Taikai | Media Platform WG / DA Program / Networking TL | [`sorafs/taikai-anchor-runbook`](./taikai-anchor-runbook.md) | `docs/source/taikai_anchor_monitoring.md` |
+| Configuração de gateway e DNS | TL de rede, automação de operações, Docs/DevRel | [`sorafs/gateway-dns-runbook`](./gateway-dns-runbook.md) | `docs/source/sorafs_gateway_dns_design_runbook.md` |
+| Manual de operações de SoraFS | Documentos/DevRel | [`sorafs/operations-playbook`](./operations-playbook.md) | `docs/source/sorafs/operations_playbook.md` |
+| Conciliação de capacidade | Tesouraria / SRE | [`sorafs/capacity-reconciliation`](./capacity-reconciliation.md) | `docs/source/sorafs/runbooks/capacity_reconciliation.md` |
+| Operações de registro de pins | GT Ferramentaria | [`sorafs/pin-registry-ops`](./pin-registry-ops.md) | `docs/source/sorafs/pin_registry_ops.md` |
+| Checklist de operações de nó | Equipe de armazenamento, SRE | [`sorafs/node-operations`](./node-operations.md) | `docs/source/sorafs/runbooks/sorafs_node_ops.md` |
+| Runbook de disputas e revogações | Conselho de Governança | [`sorafs/dispute-revocation-runbook`](./dispute-revocation-runbook.md) | `docs/source/sorafs/dispute_revocation_runbook.md` |
+| Manual de manifestação em encenação | Documentos/DevRel | [`sorafs/staging-manifest-playbook`](./staging-manifest-playbook.md) | `docs/source/sorafs/staging_manifest_playbook.md` |
+| Observabilidade do anel Taikai | GT Plataforma de Mídia / Programa DA / Networking TL | [`sorafs/taikai-anchor-runbook`](./taikai-anchor-runbook.md) | `docs/source/taikai_anchor_monitoring.md` |
 
-## Checklist de verificación
+## Checklist de verificação
 
-- [x] El build del portal enlaza este índice (entrada en la barra lateral).
-- [x] Cada runbook migrado enumera la ruta de origen canónica para mantener a los revisores
-  alineados durante las revisiones de documentación.
-- [x] El pipeline de vista previa de DocOps bloquea los merges cuando falta un runbook
-  listado en la salida del portal.
+- [x] A construção do portal enlaza é este índice (entrada na barra lateral).
+- [x] Cada runbook migrado enumera a rota de origem canônica para manter os revisores
+  alinhados durante as revisões da documentação.
+- [x] O pipeline de vista anterior do DocOps bloqueia as mesclagens quando falta um runbook
+  listado na saída do portal.
 
-Las migraciones futuras (p. ej., nuevos simulacros de caos o apéndices de gobernanza)
-deben añadir una fila a la tabla anterior y actualizar la checklist de DocOps incorporada en
+Las migraciones futuras (p. ej., novos simulacros de caos ou apêndices de governo)
+você deve adicionar um arquivo à tabela anterior e atualizar a lista de verificação de DocOps incluída em
 `docs/examples/docs_preview_request_template.md`.

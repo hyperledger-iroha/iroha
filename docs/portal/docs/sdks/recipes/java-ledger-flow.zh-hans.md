@@ -10,28 +10,29 @@ translation_last_reviewed: 2026-02-07
 title: Java ledger flow recipe
 description: Drive the register → mint → transfer demo using the IrohaAndroid JVM library.
 slug: /sdks/recipes/java-ledger-flow
+translator: machine-google-reviewed
 ---
 
-import SampleDownload from '@site/src/components/SampleDownload';
+从“@site/src/components/SampleDownload”导入 SampleDownload；
 
-This recipe targets the desktop/JVM variant of the `java/iroha_android` module.
-It mirrors the CLI walkthrough by registering an asset definition, minting into
-the admin account, transferring to a second account, and printing the resulting
-balance.
+本配方针对 `java/iroha_android` 模块的桌面/JVM 变体。
+它通过注册资产定义、铸造成来反映 CLI 演练
+管理员帐户，转移到第二个帐户，并打印结果
+平衡。
 
-<SampleDownload
+<样本下载
   href="/sdk-recipes/java/src/main/java/ledger/LedgerFlow.java"
-  filename="src/main/java/ledger/LedgerFlow.java"
-  description="Download the complete Java example to import into your IDE or project template."
+  文件名=“src/main/java/ledger/LedgerFlow.java”
+  description="下载完整的 Java 示例以导入到您的 IDE 或项目模板中。"
 />
 
-## 1. Register the asset definition (CLI)
+## 1. 注册资产定义（CLI）
 
 ```bash
 iroha --config defaults/client.toml asset definition register --id coffee#wonderland
 ```
 
-## 2. Export credentials
+## 2.导出凭证
 
 ```bash
 # raw 32-byte Ed25519 private key in hex (without multicodec prefix)
@@ -40,10 +41,10 @@ export ADMIN_ACCOUNT="ih58..."
 export RECEIVER_ACCOUNT="ih58..."
 ```
 
-> Use `iroha_cli tools crypto private-key export --raw --private-key <multihash>` if you
-> need to strip the multihash prefix from the default config.
+> 如果您有以下情况，请使用 `iroha_cli tools crypto private-key export --raw --private-key <multihash>`
+> 需要从默认配置中删除多哈希前缀。
 
-## 3. Add dependencies
+## 3.添加依赖
 
 ```kts title="build.gradle.kts"
 dependencies {
@@ -52,7 +53,7 @@ dependencies {
 }
 ```
 
-## 4. Example program
+## 4. 示例程序
 
 ```java title="src/main/java/ledger/LedgerFlow.java"
 package ledger;
@@ -178,10 +179,10 @@ public final class LedgerFlow {
 }
 ```
 
-Compile with your preferred build tool (`./gradlew :java:iroha_android:assemble && ./gradlew run`).
+使用您首选的构建工具 (`./gradlew :java:iroha_android:assemble && ./gradlew run`) 进行编译。
 
-## 5. Verify parity
+## 5. 验证奇偶性
 
-- Inspect the transaction hashes via `iroha --config defaults/client.toml transaction get --hash <hash>`.
-- Fetch balances with the CLI (`asset list filter '{"id":"coffee#wonderland##<account>"}'`).
-- Compare results with the Rust/Python/JavaScript/Swift recipes to ensure every SDK produces identical Norito payloads for the demo flow.
+- 通过 `iroha --config defaults/client.toml transaction get --hash <hash>` 检查交易哈希。
+- 使用 CLI (`asset list filter '{"id":"coffee#wonderland##<account>"}'`) 获取余额。
+- 将结果与 Rust/Python/JavaScript/Swift 配方进行比较，以确保每个 SDK 为演示流程生成相同的 Norito 有效负载。

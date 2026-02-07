@@ -6,36 +6,37 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: df3e3ac15baf47a6c53001acabcac7987a2386c2b772b1d8625eb60598f95a60
 source_last_modified: "2026-01-03T18:08:01.691568+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% Iroha 3 SLO Harness
+% Iroha 3 רתמת SLO
 
-The Iroha 3 release line carries explicit SLOs for the critical Nexus paths:
+שורת השחרור Iroha 3 נושאת SLOs מפורשים עבור הנתיבים הקריטיים של Nexus:
 
-- finality slot duration (NX‑18 cadence)
-- proof verification (commit certs, JDG attestations, bridge proofs)
-- proof endpoint handling (Axum path proxy via verification latency)
-- fee and staking paths (payer/sponsor and bond/slash flows)
+- משך משבצת סופי (NX-18 קצב)
+- אימות הוכחה (אישורי התחייבות, אישורי JDG, הוכחות גשר)
+- הוכחה לטיפול בנקודת קצה (פרוקסי נתיב Axum באמצעות חביון אימות)
+- מסלולי עמלות והימור (תזרימי משלם/נותן ואג"ח/חותך)
 
-## Budgets
+## תקציבים
 
-Budgets live in `benchmarks/i3/slo_budgets.json` and map directly to the bench
-scenarios in the I3 suite. Objectives are per‑call p99 targets:
+תקציבים חיים ב-`benchmarks/i3/slo_budgets.json` וממפים ישירות לספסל
+תרחישים בסוויטת I3. היעדים הם יעדי p99 לכל שיחה:
 
-- Fee/staking: 50 ms per call (`fee_payer`, `fee_sponsor`, `staking_bond`, `staking_slash`)
-- Commit cert / JDG / bridge verify: 80 ms (`commit_cert_verify`, `jdg_attestation_verify`,
+- עמלה/הימור: 50ms לשיחה (`fee_payer`, `fee_sponsor`, `staking_bond`, `staking_slash`)
+- אישור התחייבות / JDG / אימות גשר: 80ms (`commit_cert_verify`, `jdg_attestation_verify`,
   `bridge_proof_verify`)
-- Commit cert assembly: 80 ms (`commit_cert_assembly`)
-- Access scheduler: 50 ms (`access_scheduler`)
-- Proof endpoint proxy: 120 ms (`torii_proof_endpoint`)
+- הרכבת אישור התחייבות: 80ms (`commit_cert_assembly`)
+- מתזמן גישה: 50ms (`access_scheduler`)
+- פרוקסי הוכחה לנקודת קצה: 120ms (`torii_proof_endpoint`)
 
-Burn-rate hints (`burn_rate_fast`/`burn_rate_slow`) encode the 14.4/6.0
-multi-window ratios for paging vs. ticket alerts.
+רמזים לקצב צריבה (`burn_rate_fast`/`burn_rate_slow`) מקודדים את ה-14.4/6.0
+יחסי ריבוי חלונות להתראות מול התראות על כרטיסים.
 
-## Harness
+## רתמה
 
-Run the harness via `cargo xtask i3-slo-harness`:
+הפעל את הרתמה באמצעות `cargo xtask i3-slo-harness`:
 
 ```bash
 cargo xtask i3-slo-harness \
@@ -44,30 +45,30 @@ cargo xtask i3-slo-harness \
   --out-dir artifacts/i3_slo/latest
 ```
 
-Outputs:
+פלטים:
 
-- `bench_report.json|csv|md` — raw I3 bench suite results (git hash + scenarios)
-- `slo_report.json|md` — SLO evaluation with pass/fail/budget-ratio per target
+- `bench_report.json|csv|md` - תוצאות גולמיות של חבילת ספסל I3 (git hash + תרחישים)
+- `slo_report.json|md` - הערכת SLO עם יחס מעבר/נכשל/תקציב לכל יעד
 
-The harness consumes the budgets file and enforces `benchmarks/i3/slo_thresholds.json`
-during the bench run to fail fast when a target regresses.
+הרתמה צורכת את קובץ התקציבים ואוכפת את `benchmarks/i3/slo_thresholds.json`
+במהלך ריצת הספסל להיכשל במהירות כאשר מטרה נסוגה.
 
-## Telemetry and dashboards
+## טלמטריה ודשבורדים
 
-- Finality: `histogram_quantile(0.99, rate(iroha_slot_duration_ms_bucket[5m]))`
-- Proof verification: `histogram_quantile(0.99, sum by (le) (rate(zk_verify_latency_ms_bucket{status="Verified"}[5m])))`
+- סופיות: `histogram_quantile(0.99, rate(iroha_slot_duration_ms_bucket[5m]))`
+- אימות הוכחה: `histogram_quantile(0.99, sum by (le) (rate(zk_verify_latency_ms_bucket{status="Verified"}[5m])))`
 
-Grafana starter panels live in `dashboards/grafana/i3_slo.json`. Prometheus
-burn-rate alerts are provided in `dashboards/alerts/i3_slo_burn.yml` with the
-budgets above baked in (finality 2s, proof verify 80 ms, proof endpoint proxy
-120 ms).
+לוחות המתנע Grafana חיים ב-`dashboards/grafana/i3_slo.json`. Prometheus
+התראות על קצב צריבה מסופקות ב-`dashboards/alerts/i3_slo_burn.yml` עם ה-
+תקציבים לעיל אפויים (סופיות 2s, אימות הוכחה 80ms, הוכחת proxy של נקודת קצה
+120ms).
 
-## Operational notes
+## הערות תפעוליות
 
-- Run the harness in nightlies; publish `artifacts/i3_slo/<stamp>/slo_report.md`
-  alongside the bench artefacts for governance evidence.
-- If a budget fails, use the bench markdown to identify the scenario, then drill
-  into the matching Grafana panel/alert to correlate with live metrics.
-- Proof endpoint SLOs use the verification latency as a proxy to avoid per-route
-  cardinality blowup; the benchmark target (120 ms) matches the retention/DoS
-  guardrails on the proof API.
+- הפעל את הרתמה בשידורי לילה; פרסם את `artifacts/i3_slo/<stamp>/slo_report.md`
+  לצד הספסל חפצי אומנות לראיות ממשל.
+- אם תקציב נכשל, השתמש בסימון הספסל כדי לזהות את התרחיש ולאחר מכן תרגיל
+  לתוך הלוח/התראה התואם Grafana כדי לתאם עם מדדים חיים.
+- SLOs הוכחה של נקודות קצה משתמשים בהשהיית האימות כפרוקסי כדי להימנע מכל מסלול
+  פיצוץ קרדינליות; יעד ההשוואה (120ms) תואם לשמירה/DoS
+  מעקות בטיחות ב-API ההוכחה.

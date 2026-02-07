@@ -6,50 +6,51 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: dffc2cf6c6e59f54d1fc22136ba93f75466509c699a4361a381bf7e0ce0d1dda
 source_last_modified: "2026-01-03T18:07:57.089544+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# SM Feature Rollout & Telemetry Checklist
+# Lista de verificación de telemetría e implementación de funciones SM
 
-This checklist helps SRE and operator teams enable the SM (SM2/SM3/SM4) feature
-set safely once the audit and compliance gates are cleared. Follow this document
-alongside the configuration brief in `docs/source/crypto/sm_program.md` and the
-legal/export guidance in `docs/source/crypto/sm_compliance_brief.md`.
+Esta lista de verificación ayuda a los equipos de SRE y operadores a habilitar la función SM (SM2/SM3/SM4)
+configurar de forma segura una vez que se hayan superado los controles de auditoría y cumplimiento. Sigue este documento
+junto con el resumen de configuración en `docs/source/crypto/sm_program.md` y el
+orientación legal/exportación en `docs/source/crypto/sm_compliance_brief.md`.
 
-## 1. Pre-flight Readiness
-- [ ] Confirm the workspace release notes show `sm` as verify-only or signing,
-      depending on the rollout stage.
-- [ ] Verify the fleet is running binaries built from a commit that includes the
-      SM telemetry counters and configuration knobs. (Target release TBD; track
-      in the rollout ticket.)
-- [ ] Run `scripts/sm_perf.sh --tolerance 0.25` on a staging node (per target
-      architecture) and archive the summary output. The script now auto-selects
-      the scalar baseline as a comparison target for acceleration modes
-      (`--compare-tolerance` defaults to 5.25 while the SM3 NEON work lands);
-      investigate or block the rollout if either the primary or comparison
-      guard fails. When capturing on Linux/aarch64 Neoverse hardware, pass
+## 1. Preparación previa al vuelo
+- [] Confirme que las notas de la versión del espacio de trabajo muestren `sm` como de solo verificación o firma,
+      dependiendo de la etapa de implementación.
+- [] Verifique que la flota esté ejecutando binarios creados a partir de una confirmación que incluya el
+      Contadores de telemetría SM y botones de configuración. (Lanzamiento objetivo por determinar; seguimiento
+      en el ticket de lanzamiento.)
+- [] Ejecute `scripts/sm_perf.sh --tolerance 0.25` en un nodo de prueba (por objetivo
+      arquitectura) y archivar el resultado resumido. El script ahora se selecciona automáticamente
+      la línea de base escalar como objetivo de comparación para los modos de aceleración
+      (`--compare-tolerance` tiene el valor predeterminado 5.25 mientras aterriza el SM3 NEON);
+      investigar o bloquear el lanzamiento si el principal o el de comparación
+      la guardia falla. Al capturar en hardware Linux/aarch64 Neoverse, pase
       `--baseline crates/iroha_crypto/benches/sm_perf_baseline_aarch64_unknown_linux_gnu_<mode>.json --write-baseline`
-      to overwrite the exported `m3-pro-native` medians with the host’s capture
-      before shipping.
-- [ ] Ensure `status.md` and the rollout ticket record the compliance filings for
-      any nodes operating in jurisdictions that require them (see compliance brief).
-- [ ] Prepare KMS/HSM updates if validators will store SM signing keys in
-      hardware modules.
+      para sobrescribir las medianas `m3-pro-native` exportadas con la captura del host
+      antes del envío.
+- [] Asegúrese de que `status.md` y el ticket de implementación registren las presentaciones de cumplimiento para
+      cualquier nodo que opere en jurisdicciones que los requieran (consulte el informe de cumplimiento).
+- [] Prepare actualizaciones de KMS/HSM si los validadores almacenarán las claves de firma de SM en
+      módulos de hardware.
 
-## 2. Configuration Changes
-1. Run the xtask helper to generate the SM2 key inventory and ready-to-paste snippet:
+## 2. Cambios de configuración
+1. Ejecute el asistente xtask para generar el inventario de claves SM2 y el fragmento listo para pegar:
    ```bash
    cargo xtask sm-operator-snippet \
      --distid CN12345678901234 \
      --json-out sm2-key.json \
      --snippet-out client-sm2.toml
    ```
-   Use `--snippet-out -` (and optionally `--json-out -`) to stream the outputs to stdout when you just need to inspect them.
-   If you prefer to drive the lower-level CLI commands manually, the equivalent flow is:
+   Utilice `--snippet-out -` (y opcionalmente `--json-out -`) para transmitir las salidas a la salida estándar cuando solo necesite inspeccionarlas.
+   Si prefiere ejecutar los comandos CLI de nivel inferior manualmente, el flujo equivalente es:
    ```bash
    cargo run -p iroha_cli --features sm -- \
      crypto sm2 keygen \
@@ -63,9 +64,9 @@ legal/export guidance in `docs/source/crypto/sm_compliance_brief.md`.
      --snippet-output client-sm2.toml \
      --emit-json --quiet
    ```
-   If `jq` is unavailable, open `sm2-key.json`, copy the `private_key_hex` value, and pass it directly to the export command.
-2. Add the resulting snippet to each node’s configuration (values shown for the
-   verify-only stage; adjust per environment and keep the keys sorted as shown):
+   Si `jq` no está disponible, abra `sm2-key.json`, copie el valor `private_key_hex` y páselo directamente al comando de exportación.
+2. Agregue el fragmento resultante a la configuración de cada nodo (los valores se muestran para el
+   etapa de solo verificación; ajuste por entorno y mantenga las claves ordenadas como se muestra):
 ```toml
 [crypto]
 default_hash = "sm3-256"
@@ -73,74 +74,70 @@ allowed_signing = ["ed25519", "sm2"]   # remove "sm2" to stay in verify-only mod
 sm2_distid_default = "1234567812345678"
 # enable_sm_openssl_preview = true  # optional: only when deploying the OpenSSL/Tongsuo path
 ```
-3. Restart the node and confirm `crypto.sm_helpers_available` and (if you enabled the preview backend) `crypto.sm_openssl_preview_enabled` surface as expected in:
+3. Reinicie el nodo y confirme la superficie `crypto.sm_helpers_available` y (si habilitó el backend de vista previa) `crypto.sm_openssl_preview_enabled` como se esperaba en:
    - `/status` JSON (`"crypto":{"sm_helpers_available":true,"sm_openssl_preview_enabled":true,...}`).
-   - The rendered `config.toml` for each node.
-4. Update manifests/genesis entries to add SM algorithms to the allow-list if
-   signing is enabled later in the rollout. When using `--genesis-manifest-json`
-   without a pre-signed genesis block, `irohad` now seeds the runtime crypto
-   snapshot directly from the manifest’s `crypto` block—ensure the manifest is
-   checked into your change plan before rolling forward.
-
-## 3. Telemetry & Monitoring
-- Scrape Prometheus endpoints and ensure the following counters/gauges appear:
+   - El `config.toml` renderizado para cada nodo.
+4. Actualice las entradas de manifiestos/génesis para agregar algoritmos SM a la lista de permitidos si
+   la firma se habilita más adelante en la implementación. Cuando se utiliza `--genesis-manifest-json`
+   sin un bloque de génesis prefirmado, `irohad` ahora genera la criptografía en tiempo de ejecución
+   instantánea directamente desde el bloque `crypto` del manifiesto; asegúrese de que el manifiesto esté
+   verificó su plan de cambios antes de continuar.## 3. Telemetría y monitoreo
+- Elimine los puntos finales Prometheus y asegúrese de que aparezcan los siguientes contadores/medidores:
   - `iroha_sm_syscall_total{kind="verify"}`
   - `iroha_sm_syscall_total{kind="hash"}`
   - `iroha_sm_syscall_total{kind="seal|open",mode="gcm|ccm"}`
-  - `iroha_sm_openssl_preview` (0/1 gauge reporting the preview toggle state)
+  - `iroha_sm_openssl_preview` (medidor 0/1 que informa el estado de alternancia de vista previa)
   - `iroha_sm_syscall_failures_total{kind="verify|hash|seal|open",reason="..."}`
-- Hook signing path once SM2 signing is enabled; add counters for
-  `iroha_sm_sign_total` and `iroha_sm_sign_failures_total`.
-- Create Grafana dashboards/alerts for:
-  - Spikes in failure counters (window 5m).
-  - Sudden drops in SM syscall throughput.
-  - Differences between nodes (e.g., mismatched enablement).
+- Ruta de firma de enlace una vez habilitada la firma SM2; agregar contadores para
+  `iroha_sm_sign_total` y `iroha_sm_sign_failures_total`.
+- Crear paneles/alertas Grafana para:
+  - Picos en contadores de fallos (ventana 5m).
+  - Caídas repentinas en el rendimiento de las llamadas al sistema SM.
+  - Diferencias entre nodos (por ejemplo, habilitación no coincidente).
 
-## 4. Rollout Steps
-| Phase | Actions | Notes |
+## 4. Pasos de implementación
+| Fase | Acciones | Notas |
 |-------|---------|-------|
-| Verify-only | Update `crypto.default_hash` to `sm3-256`, leave `allowed_signing` without `sm2`, monitor verification counters. | Goal: exercise SM verification paths without risking consensus divergence. |
-| Mixed Signing Pilot | Allow limited SM signing (subset of validators); monitor signing counters and latency. | Ensure fallback to Ed25519 remains available; halt if telemetry shows mismatches. |
-| GA Signing | Extend `allowed_signing` to include `sm2`, update manifests/SDKs, and publish final runbook. | Requires closed audit findings, updated compliance filings, and stable telemetry. |
+| Sólo verificación | Actualice `crypto.default_hash` a `sm3-256`, deje `allowed_signing` sin `sm2`, monitoree los contadores de verificación. | Objetivo: ejercitar rutas de verificación SM sin correr el riesgo de divergencia en el consenso. |
+| Piloto de Fichaje Mixto | Permitir firma SM limitada (subconjunto de validadores); monitorear los contadores de firmas y la latencia. | Asegúrese de que el respaldo a Ed25519 siga estando disponible; detenerse si la telemetría muestra discrepancias. |
+| Firma GA | Amplíe `allowed_signing` para incluir `sm2`, actualice manifiestos/SDK y publique el runbook final. | Requiere resultados de auditoría cerrados, presentaciones de cumplimiento actualizadas y telemetría estable. |
 
-### Readiness Reviews
-- **Verify-only readiness (SM-RR1).** Convene Release Eng, Crypto WG, Ops, and Legal. Require:
-  - `status.md` notes compliance filing status + OpenSSL provenance.
-  - `docs/source/crypto/sm_program.md` / `sm_compliance_brief.md` / this checklist updated within the last release window.
-  - `defaults/genesis` or the environment-specific manifest shows `crypto.allowed_signing = ["ed25519","sm2"]` and `crypto.default_hash = "sm3-256"` (or the verify-only variant without `sm2` if still in stage one).
-  - `scripts/sm_openssl_smoke.sh` + `scripts/sm_interop_matrix.sh` logs attached to the rollout ticket.
-  - Telemetry dashboard (`iroha_sm_*`) reviewed for steady-state behaviour.
-- **Signing pilot readiness (SM-RR2).** Additional gates:
-  - Audit report for RustCrypto SM stack closed or RFC for compensating controls signed by Security.
-  - Operator runbooks (facility-specific) updated with signing fallback/rollback steps.
-  - Genesis manifests for the pilot cohort include `allowed_signing = ["ed25519","sm2"]` and the allow-list is mirrored in each node configuration.
-  - Exit/rollback plan documented (switch `allowed_signing` back to Ed25519, restore manifests, reset dashboards).
-- **GA readiness (SM-RR3).** Requires positive pilot report, updated compliance filings for all validator jurisdictions, signed telemetry baselines, and release ticket approval from Release Eng + Crypto WG + Ops/Legal triad.
+### Revisiones de preparación
+- **Verificar solo la preparación (SM-RR1).** Convocar a Release Eng, Crypto WG, Ops y Legal. Requerir:
+  - `status.md` observa el estado de presentación de cumplimiento + procedencia de OpenSSL.
+  - `docs/source/crypto/sm_program.md` / `sm_compliance_brief.md` / esta lista de verificación se actualizó en la última ventana de lanzamiento.
+  - `defaults/genesis` o el manifiesto específico del entorno muestra `crypto.allowed_signing = ["ed25519","sm2"]` e `crypto.default_hash = "sm3-256"` (o la variante de solo verificación sin `sm2` si todavía está en la etapa uno).
+  - Registros `scripts/sm_openssl_smoke.sh` + `scripts/sm_interop_matrix.sh` adjuntos al ticket de implementación.
+  - Panel de telemetría (`iroha_sm_*`) revisado para comprobar su comportamiento en estado estable.
+- **Firma de preparación del piloto (SM-RR2).** Puertas adicionales:
+  - Informe de auditoría de stack de RustCrypto SM cerrado o RFC para controles de compensación firmados por Seguridad.
+  - Runbooks del operador (específicos de la instalación) actualizados con pasos de respaldo/reversión de firma.
+  - Los manifiestos de Génesis para la cohorte piloto incluyen `allowed_signing = ["ed25519","sm2"]` y la lista de permitidos se refleja en la configuración de cada nodo.
+  - Plan de salida/reversión documentado (cambiar `allowed_signing` nuevamente a Ed25519, restaurar manifiestos, restablecer paneles).
+- **Preparación GA (SM-RR3).** Requiere un informe piloto positivo, presentaciones de cumplimiento actualizadas para todas las jurisdicciones de validadores, líneas base de telemetría firmadas y aprobación del ticket de lanzamiento por parte de la tríada Release Eng + Crypto WG + Ops/Legal.## 5. Lista de verificación de embalaje y cumplimiento
+- **Agrupe artefactos de OpenSSL/Tongsuo.** Envíe bibliotecas compartidas OpenSSL/Tongsuo 3.0+ (`libcrypto`/`libssl`) con cada paquete de validación o documente la dependencia exacta del sistema. Registre la versión, los indicadores de compilación y las sumas de verificación SHA256 en el manifiesto de lanzamiento para que los auditores puedan rastrear la compilación del proveedor.
+- **Verificar durante CI.** Agregue un paso de CI que ejecute `scripts/sm_openssl_smoke.sh` en los artefactos empaquetados en cada plataforma de destino. El trabajo debe fallar si el indicador de vista previa está habilitado pero el proveedor no se puede inicializar (faltan encabezados, algoritmo no compatible, etc.).
+- **Publicar notas de cumplimiento.** Actualice las notas de la versión / `status.md` con la versión del proveedor incluida, referencias de control de exportaciones (GM/T, GB/T) y cualquier presentación específica de jurisdicción requerida para los algoritmos SM.
+- **Actualizaciones del runbook del operador.** Documente el flujo de actualización: prepare los nuevos objetos compartidos, reinicie los pares con `crypto.enable_sm_openssl_preview = true`, confirme el campo `/status` y el indicador `iroha_sm_openssl_preview` cambie a `true` y mantenga un plan de reversión (cambie la bandera de configuración o revierta el paquete) si la telemetría de vista previa se desvía en toda la flota.
+- **Retención de evidencia.** Archive los registros de compilación y las certificaciones de firma para los paquetes OpenSSL/Tongsuo junto con los artefactos de lanzamiento del validador para que futuras auditorías puedan reproducir la cadena de procedencia.
 
-## 5. Packaging & Compliance Checklist
-- **Bundle OpenSSL/Tongsuo artifacts.** Ship OpenSSL/Tongsuo 3.0+ shared libraries (`libcrypto`/`libssl`) with every validator package or document the exact system dependency. Record the version, build flags, and SHA256 checksums in the release manifest so auditors can trace the supplier build.
-- **Verify during CI.** Add a CI step that executes `scripts/sm_openssl_smoke.sh` against the packaged artifacts on each target platform. The job must fail if the preview flag is enabled but the provider cannot be initialised (missing headers, unsupported algorithm, etc.).
-- **Publish compliance notes.** Update release notes / `status.md` with the bundled provider version, export-control references (GM/T, GB/T), and any jurisdiction-specific filings required for SM algorithms.
-- **Operator runbook updates.** Document the upgrade flow: stage the new shared objects, restart peers with `crypto.enable_sm_openssl_preview = true`, confirm the `/status` field and `iroha_sm_openssl_preview` gauge flip to `true`, and keep a rollback plan (flip the config flag or revert the package) if preview telemetry deviates across the fleet.
-- **Evidence retention.** Archive the build logs and signing attestations for the OpenSSL/Tongsuo packages alongside the validator release artefacts so future audits can reproduce the provenance chain.
+## 6. Respuesta a incidentes
+- **Picos de falla de verificación:** Revertir a una compilación sin soporte SM o eliminar `sm2`
+  desde `allowed_signing` (revirtiendo `default_hash` según sea necesario) y conmutando por error al anterior
+  liberación mientras se investiga. Capture cargas útiles fallidas, hashes comparativos y registros de nodos.
+- **Regresiones de rendimiento:** Compare las métricas de SM con las líneas de base de Ed25519/SHA2.
+  Si la ruta intrínseca de ARM causa divergencia, configure `crypto.sm_intrinsics = "force-disable"`
+  (alternancia de función pendiente de implementación) e informar los resultados.
+- **Brechas de telemetría:** Si faltan contadores o no se actualizan, presente un problema
+  contra Release Engineering; no continúe con un despliegue más amplio hasta que el espacio
+  está resuelto.
 
-## 6. Incident Response
-- **Verification failure spikes:** Roll back to a build without SM support or remove `sm2`
-  from `allowed_signing` (reverting `default_hash` as needed) and fail over to the previous
-  release while investigating. Capture failed payloads, comparative hashes, and node logs.
-- **Performance regressions:** Compare SM metrics with Ed25519/SHA2 baselines.
-  If ARM intrinsic path causes divergence, set `crypto.sm_intrinsics = "force-disable"`
-  (feature toggle pending implementation) and report findings.
-- **Telemetry gaps:** If counters are missing or not updating, file an issue
-  against Release Engineering; do not proceed with wider rollout until the gap
-  is resolved.
+## 7. Plantilla de lista de verificación
+- [] Configuración preparada y reiniciada por el par.
+- [ ] Contadores de telemetría visibles y paneles de control configurados.
+- [ ] Cumplimiento/medidas legales registradas.
+- [] Fase de implementación aprobada por Crypto WG / Release TL.
+- [ ] Revisión posterior a la implementación completada y hallazgos documentados.
 
-## 7. Checklist Template
-- [ ] Configuration staged and peer restarted.
-- [ ] Telemetry counters visible and dashboards configured.
-- [ ] Compliance/legal steps recorded.
-- [ ] Rollout phase approved by Crypto WG / Release TL.
-- [ ] Post-rollout review completed and findings documented.
-
-Maintain this checklist in the rollout ticket and update `status.md` when the
-fleet transitions between phases.
+Mantenga esta lista de verificación en el ticket de implementación y actualice `status.md` cuando
+transiciones de flota entre fases.

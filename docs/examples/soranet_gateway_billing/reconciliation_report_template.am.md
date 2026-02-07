@@ -7,41 +7,42 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 5c10cd7eda24260bfd1319c7b8ac23dba2a1c8a1cb39ea49f0f1a64427ca15db
 source_last_modified: "2025-12-29T18:16:35.086260+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# SoraGlobal Gateway Billing Reconciliation
+# የሶራግሎባል ጌትዌይ የሂሳብ አከፋፈል ማስታረቅ
 
-- **Window:** `<from>/<to>`
-- **Tenant:** `<tenant-id>`
-- **Catalog Version:** `<catalog-version>`
-- **Usage Snapshot:** `<path or hash>`
-- **Guardrails:** soft cap `<soft-cap-xor> XOR`, hard cap `<hard-cap-xor> XOR`, alert threshold `<alert-threshold>%`
-- **Payer -> Treasury:** `<payer>` -> `<treasury>` in `<asset-definition>`
-- **Total Due:** `<total-xor> XOR` (`<total-micros>` micro-XOR)
+- ** መስኮት: ** `<from>/<to>`
+- ** ተከራይ: *** `<tenant-id>`
+- ** ካታሎግ ስሪት: ** `<catalog-version>`
+- ** የአጠቃቀም ቅጽበታዊ ገጽ እይታ: ** `<path or hash>`
+- **ጠባቂዎች፡** ለስላሳ ኮፍያ `<soft-cap-xor> XOR`፣ ጠንካራ ካፕ `<hard-cap-xor> XOR`፣ የማንቂያ ገደብ `<alert-threshold>%`
+- ** ከፋይ -> ግምጃ ቤት፡** `<payer>` -> `<treasury>` በ`<asset-definition>`
+- ** ጠቅላላ ክፍያ:** I18NI0000011X (`<total-micros>` ማይክሮ-XOR)
 
-## Line Item Checks
-- [ ] Usage entries cover only catalog meter ids and valid billing regions
-- [ ] Quantity units match catalog definitions (requests, GiB, ms, etc.)
-- [ ] Region multipliers and discount tiers applied as per catalog
-- [ ] CSV/Parquet exports match the JSON invoice line items
+## የመስመር ንጥል ፍተሻዎች
+- [ ] የአጠቃቀም ግቤቶች የካታሎግ ሜትር መታወቂያዎችን እና ትክክለኛ የሂሳብ አከፋፈል ክልሎችን ብቻ ይሸፍናሉ።
+- [ ] የመጠን አሃዶች ከካታሎግ ፍቺዎች (ጥያቄዎች፣ ጂቢ፣ ኤምኤስ፣ ወዘተ) ጋር ይዛመዳሉ።
+- [ ] የክልል ማባዣዎች እና የቅናሽ ደረጃዎች በካታሎግ ተተግብረዋል።
+- [ ] CSV/ፓርኬት ወደ ውጭ መላክ ከJSON የክፍያ መጠየቂያ መስመር ዕቃዎች ጋር ይዛመዳል
 
-## Guardrail Evaluation
-- [ ] Soft cap alert threshold reached? `<yes/no>` (attach alert evidence if yes)
-- [ ] Hard cap exceeded? `<yes/no>` (if yes, attach override approval)
-- [ ] Minimum invoice floor satisfied
+## Guardrail ግምገማ
+- [ ] ለስላሳ ቆብ ማንቂያ ጣራ ላይ ደርሷል? `<yes/no>` (አዎ ከሆነ የማንቂያ ማስረጃን ያያይዙ)
+- [ ] ጠንካራ ካፕ ታልፏል? `<yes/no>` (አዎ ከሆነ፣ መሻር ማጽደቅን ያያይዙ)
+- [ ] ዝቅተኛው የክፍያ መጠየቂያ ወለል ረክቷል።
 
-## Ledger Projection
-- [ ] Transfer batch total equals `total_micros` in invoice
-- [ ] Asset definition matches billing currency
-- [ ] Payer and treasury accounts match tenant and operator of record
-- [ ] Norito/JSON artefacts attached for audit replay
+## የመመዝገቢያ ትንበያ
+- [] የዝውውር ባች ጠቅላላ `total_micros` ደረሰኝ ውስጥ እኩል ነው።
+- [ ] የንብረት ትርጉም ከክፍያ ምንዛሬ ጋር ይዛመዳል
+- [ ] ከፋይ እና የግምጃ ቤት ሒሳቦች ከተከራይ እና ከመዝገብ ኦፕሬተር ጋር ይጣጣማሉ
+- [ ] Norito/JSON ቅርሶች ለኦዲት መልሶ ማጫወት ተያይዘዋል
 
-## Dispute/Adjustment Notes
-- Observed variance: `<variance detail>`
-- Proposed adjustment: `<delta and rationale>`
-- Supporting evidence: `<logs/dashboards/alerts>`
+## ሙግት/ማስተካከያ ማስታወሻዎች
+- የታየ ልዩነት: `<variance detail>`
+- የታቀደ ማስተካከያ: `<delta and rationale>`
+- ደጋፊ ማስረጃ: `<logs/dashboards/alerts>`
 
-## Approvals
-- Billing analyst: `<name + signature>`
-- Treasury reviewer: `<name + signature>`
-- Governance packet hash: `<hash/reference>`
+## ማጽደቆች
+- የሂሳብ አከፋፈል ተንታኝ፡ `<name + signature>`
+- የግምጃ ቤት ገምጋሚ፡- `<name + signature>`
+- የአስተዳደር ፓኬት ሃሽ፡ `<hash/reference>`

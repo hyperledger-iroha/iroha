@@ -11,62 +11,63 @@ id: developer-sdk-index
 title: SoraFS SDK Guides
 sidebar_label: SDK Guides
 description: Language-specific snippets for integrating SoraFS artefacts.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
+::: Каноник эх сурвалжийг анхаарна уу
 :::
 
-Use this hub to track the per-language helpers that ship with the SoraFS toolchain.
-For Rust-specific snippets jump to [Rust SDK snippets](./developer-sdk-rust.md).
+SoraFS хэрэгслийн гинжтэй хамт ирдэг хэл тус бүрийн туслахуудыг хянахын тулд энэ төвийг ашиглана уу.
+Зэвийн тусгай хэсгүүдийн хувьд [Rust SDK snippets](./developer-sdk-rust.md) руу очно уу.
 
-## Language helpers
+## Хэлний туслахууд
 
-- **Python** — `sorafs_multi_fetch_local` (local orchestrator smoke tests) and
-  `sorafs_gateway_fetch` (gateway E2E exercises) now accept an optional
-  `telemetry_region` plus a `transport_policy` override
-  (`"soranet-first"`, `"soranet-strict"`, or `"direct-only"`), mirroring the CLI
-  rollout knobs. When a local QUIC proxy spins up,
-  `sorafs_gateway_fetch` returns the browser manifest under
-  `local_proxy_manifest` so tests can hand the trust bundle to browser adapters.
-- **JavaScript** — `sorafsMultiFetchLocal` mirrors the Python helper, returning
-  payload bytes and receipt summaries, while `sorafsGatewayFetch` exercises
-  Torii gateways, threads local proxy manifests, and exposes the same
-  telemetry/transport overrides as the CLI.
-- **Rust** — services can embed the scheduler directly via
-  `sorafs_car::multi_fetch`; see the [Rust SDK snippets](./developer-sdk-rust.md)
-  reference for proof-stream helpers and orchestrator integration.
-- **Android** — `HttpClientTransport.sorafsGatewayFetch(…)` reuses the Torii HTTP
-  executor and honours `GatewayFetchOptions`. Combine it with
-  `ClientConfig.Builder#setSorafsGatewayUri` and the PQ upload hint
-  (`setWriteModeHint(WriteModeHint.UPLOAD_PQ_ONLY)`) when uploads must stick to
-  PQ-only paths.
+- **Python** — `sorafs_multi_fetch_local` (орон нутгийн оркестрын утааны туршилт) болон
+  `sorafs_gateway_fetch` (Gateway E2E дасгалууд) одоо нэмэлт сонголтыг хүлээн зөвшөөрч байна.
+  `telemetry_region` дээр нэмэх нь `transport_policy` дарсан
+  (`"soranet-first"`, `"soranet-strict"`, эсвэл `"direct-only"`), CLI-г толин тусгал
+  эргүүлэх товчлуурууд. Орон нутгийн QUIC прокси эргэх үед,
+  `sorafs_gateway_fetch` доорх хөтчийн манифестийг буцаана
+  `local_proxy_manifest` тул тест нь хөтчийн адаптеруудад итгэлцлийн багцыг өгөх боломжтой.
+- **JavaScript** — `sorafsMultiFetchLocal` нь Python туслагчийг харуулж, буцаж ирдэг
+  ачааны байт болон хүлээн авсан хураангуй, харин `sorafsGatewayFetch` дасгал
+  Torii гарцууд, локал прокси манифестуудыг дамжуулж, ижил зүйлийг ил гаргадаг
+  телеметрийн/тээврийн хэрэглүүрийг CLI гэж дарна.
+- **Rust** — үйлчилгээнүүд нь хуваарийг шууд дамжуулан оруулах боломжтой
+  `sorafs_car::multi_fetch`; [Rust SDK хэсгүүдийг](./developer-sdk-rust.md) үзнэ үү
+  proof-stream туслахууд болон найруулагчийн интеграцийн лавлагаа.
+- **Android** — `HttpClientTransport.sorafsGatewayFetch(…)` нь Torii HTTP-г дахин ашигладаг
+  гүйцэтгэгч, хүндэт `GatewayFetchOptions`. Үүнтэй хослуул
+  `ClientConfig.Builder#setSorafsGatewayUri` болон PQ байршуулах зөвлөмж
+  (`setWriteModeHint(WriteModeHint.UPLOAD_PQ_ONLY)`) байршуулалт нь хадгалагдах ёстой
+  Зөвхөн PQ замууд.
 
-## Scoreboard and policy knobs
+## Онооны самбар болон бодлогын товчлуурууд
 
-Both the Python (`sorafs_multi_fetch_local`) and JavaScript
-(`sorafsMultiFetchLocal`) helpers expose the telemetry-aware scheduler scoreboard
-used by the CLI:
+Python (`sorafs_multi_fetch_local`) болон JavaScript хоёулаа
+(`sorafsMultiFetchLocal`) туслахууд телеметрийг мэддэг хуваарилагчийн онооны самбарыг харуулж байна
+CLI ашигладаг:
 
-- Production binaries enable the scoreboard by default; set `use_scoreboard=True`
-  (or provide `telemetry` entries) when replaying fixtures so the helper derives
-  weighted provider ordering from advert metadata and recent telemetry snapshots.
-- Set `return_scoreboard=True` to receive the computed weights alongside chunk
-  receipts so CI logs can capture diagnostics.
-- Use `deny_providers` or `boost_providers` arrays to reject peers or add a
-  `priority_delta` when the scheduler selects providers.
-- Keep the default `"soranet-first"` posture unless staging a downgrade; supply
-  `"direct-only"` only when a compliance region must avoid relays or when
-  rehearsing the SNNet-5a fallback, and reserve `"soranet-strict"` for PQ-only
-  pilots with governance approval.
-- Gateway helpers also expose `scoreboardOutPath` and `scoreboardNowUnixSecs`.
-  Set `scoreboardOutPath` to persist the computed scoreboard (mirrors the CLI
-  `--scoreboard-out` flag) so `cargo xtask sorafs-adoption-check` can validate
-  SDK artefacts, and use `scoreboardNowUnixSecs` when fixtures need a stable
-  `assume_now` value for reproducible metadata. In the JavaScript helper you
-  can additionally set `scoreboardTelemetryLabel`/`scoreboardAllowImplicitMetadata`;
-  when the label is omitted it derives `region:<telemetryRegion>` (falling back
-  to `sdk:js`). The Python helper automatically emits `telemetry_source="sdk:python"`
-  whenever it persists a scoreboard and keeps implicit metadata disabled.
+- Үйлдвэрлэлийн хоёртын файлууд нь онооны самбарыг анхдагчаар идэвхжүүлдэг; `use_scoreboard=True` тохируулна
+  (эсвэл `telemetry` оруулгуудыг өгнө үү) туслагчийг гаргахын тулд бэхэлгээг дахин тоглуулах үед
+  зар сурталчилгааны мета өгөгдөл болон сүүлийн үеийн телеметрийн агшин зуурын зургуудаас жигнэсэн үйлчилгээ үзүүлэгчийн захиалга.
+- Тооцоолсон жинг хэсгүүдийн хажууд хүлээн авахын тулд `return_scoreboard=True`-г тохируулна уу.
+  хүлээн авсан тул CI бүртгэл нь оношилгоог бичих боломжтой.
+- `deny_providers` эсвэл `boost_providers` массивуудыг ашиглан үе тэнгийнхнээсээ татгалзах эсвэл нэмэх
+  Төлөвлөгч үйлчилгээ үзүүлэгчдийг сонгох үед `priority_delta`.
+- Зэрэглэлийг бууруулаагүй л бол `"soranet-first"`-ийн өгөгдмөл байрлалыг хадгалах; нийлүүлэлт
+  `"direct-only"` зөвхөн дагаж мөрдөх бүс нь релеээс зайлсхийх ёстой эсвэл хэзээ
+  SNNet-5a нөөцийг давтаж, `"soranet-strict"`-г зөвхөн PQ-д зориулж нөөцлөх
+  засаглалын зөвшөөрөлтэй нисгэгчид.
+- Gateway туслахууд нь мөн `scoreboardOutPath` болон `scoreboardNowUnixSecs`-г ил гаргадаг.
+  Тооцоолсон онооны самбарыг үргэлжлүүлэхийн тулд `scoreboardOutPath`-г тохируулна уу (CLI-г тусгана).
+  `--scoreboard-out` туг) тул `cargo xtask sorafs-adoption-check` баталгаажуулах боломжтой
+  SDK олдворууд ба бэхэлгээнд тогтвортой байх шаардлагатай үед `scoreboardNowUnixSecs` ашиглана уу.
+  Хуулбарлах боломжтой мета өгөгдлийн `assume_now` утга. JavaScript туслагч дээр та
+  нэмэлт `scoreboardTelemetryLabel`/`scoreboardAllowImplicitMetadata` тохируулж болно;
+  шошгыг орхигдуулсан үед `region:<telemetryRegion>` (буцаж байна
+  `sdk:js`). Python туслагч автоматаар `telemetry_source="sdk:python"` ялгаруулдаг
+  онооны самбар хэвээр байх ба далд мета өгөгдлийг идэвхгүй байлгах бүрт.
 
 ```python
 result = sorafs_multi_fetch_local(

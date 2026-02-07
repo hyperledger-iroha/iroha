@@ -4,30 +4,32 @@ direction: rtl
 source: docs/portal/docs/norito/examples/register-and-mint.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-slug: /norito/examples/register-and-mint
-title: ڈومین رجسٹر کریں اور اثاثے منٹ کریں
-description: اجازت یافتہ ڈومین تخلیق، اثاثہ رجسٹریشن اور ڈیٹرمنسٹک منٹنگ کو ظاہر کرتا ہے۔
-source: crates/ivm/docs/examples/13_register_and_mint.ko
+سبيكة: /norito/examples/register-and-mint
+العنوان: مسجل الويب والأثاث
+الوصف: سمح بتخليق اليافعة، وتسجيل الأثاث وجميع أنواع الأنسجة.
+المصدر: صناديق/ivm/docs/examples/13_register_and_mint.ko
 ---
 
-اجازت یافتہ ڈومین تخلیق، اثاثہ رجسٹریشن اور ڈیٹرمنسٹک منٹنگ کو ظاہر کرتا ہے۔
+سمح لليافتين بالتخلي عن الأثاث التسجيلي وجميع أنواع الأنسجة.
 
-## لیجر واک تھرو
+## ليجر واک تھرو
 
-- یقینی بنائیں کہ منزل اکاؤنٹ (مثلا `ih58...`) موجود ہے، جو ہر SDK quickstart کے سیٹ اپ مرحلے کی عکاسی کرتا ہے۔
-- `register_and_mint` انٹری پوائنٹ کال کریں تاکہ ROSE اثاثہ ڈیفینیشن بنے اور ایک ہی ٹرانزیکشن میں Alice کو 250 یونٹس منٹ ہوں۔
-- `client.request(FindAccountAssets)` یا `iroha_cli ledger assets list --account ih58...` کے ذریعے بیلنس چیک کریں تاکہ منٹنگ کی کامیابی کی تصدیق ہو۔
+- هذا هو التطبيق المنزلي (مثل `ih58...`) الموجود، وهو عبارة عن SDK Quickstart وهو عبارة عن رحلة مستمرة.
+- `register_and_mint` بطاقة ائتمان عبر الإنترنت من ROSE وهي عبارة عن أثاث من إيفينشن وأليس 250 يونيو.
+- `client.request(FindAccountAssets)` أو `iroha_cli ledger assets list --account ih58...` هو ذريعة واحدة لفحص كريات الدم البيضاء.
 
-## متعلقہ SDK گائیڈز
+## مواضيع ذات صلة SDK
 
-- [Rust SDK quickstart](/sdks/rust)
-- [Python SDK quickstart](/sdks/python)
-- [JavaScript SDK quickstart](/sdks/javascript)
+- [البدء السريع لـ Rust SDK](/sdks/rust)
+- [البدء السريع لـ Python SDK](/sdks/python)
+- [البدء السريع لـ JavaScript SDK](/sdks/javascript)
 
-[Kotodama سورس ڈاؤن لوڈ کریں](/norito-snippets/register-and-mint.ko)
+[Kotodama تنزيل التنزيل](/norito-snippets/register-and-mint.ko)
 
 ```text
 // Register a new asset and mint some to the specified account.

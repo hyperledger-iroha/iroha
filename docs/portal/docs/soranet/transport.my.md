@@ -11,25 +11,26 @@ id: transport
 title: SoraNet transport overview
 sidebar_label: Transport Overview
 description: Handshake, salt rotation, and capability guidance for the SoraNet anonymity overlay.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
+::: Canonical Source ကို သတိပြုပါ။
 :::
 
-SoraNet is the anonymity overlay that backs SoraFS range fetches, Norito RPC streaming, and future Nexus data lanes. The transport program (roadmap items **SNNet-1**, **SNNet-1a**, and **SNNet-1b**) defined a deterministic handshake, post-quantum (PQ) capability negotiation, and salt rotation plan so every relay, client, and gateway observes the same security posture.
+SoraNet သည် SoraFS အပိုင်းအခြားကို ထုတ်ယူမှု၊ Norito RPC ထုတ်လွှင့်မှုနှင့် အနာဂတ် Nexus ဒေတာလမ်းကြောင်းများကို ကျောထောက်နောက်ခံပေးသည့် အမည်ဝှက်အလွှာတစ်ခုဖြစ်သည်။ သယ်ယူပို့ဆောင်ရေးပရိုဂရမ် (လမ်းပြမြေပုံပါအရာများ **SNNet-1**၊ **SNNet-1a** နှင့် **SNNet-1b**) သည် တိကျသေချာသောလက်ဆွဲနှုတ်ဆက်ခြင်း၊ ကွမ်တမ်လွန် (PQ) ညှိနှိုင်းမှုစွမ်းရည်နှင့် ဆားလည်ပတ်မှုအစီအစဉ်ကို သတ်မှတ်ထားသောကြောင့် relay၊ client နှင့် gateway တိုင်းသည် တူညီသောလုံခြုံရေးအနေအထားကို စောင့်ကြည့်သည်။
 
-## Goals & network model
+## ရည်မှန်းချက်များနှင့် ကွန်ရက်ပုံစံ
 
-- Build three-hop circuits (entry → middle → exit) over QUIC v1 so abusive peers never reach Torii directly.
-- Layer a Noise XX *hybrid* handshake (Curve25519 + Kyber768) on top of QUIC/TLS to bind session keys to the TLS transcript.
-- Require capability TLVs that advertise PQ KEM/signature support, relay role, and protocol version; GREASE unknown types to keep future extensions deployable.
-- Rotate blinded-content salts daily and pin guard relays for 30 days so directory churn cannot deanonymize clients.
-- Keep cells fixed at 1024 B, inject padding/dummy cells, and export deterministic telemetry so downgrade attempts are caught quickly.
+- QUIC v1 တွင် သုံး-ဟော့ဆားကစ်များ (အဝင် → အလယ် → ထွက်ပေါက်) ကို တည်ဆောက်ပါ ထို့ကြောင့် ရိုင်းစိုင်းသော ရွယ်တူများသည် Torii ကို တိုက်ရိုက် မရောက်ပါ။
+- Session keys များကို TLS စာသားမှတ်တမ်းတွင် ချိတ်ဆက်ရန် QUIC/TLS ၏ထိပ်တွင် Noise XX *hybrid* လက်ဆွဲခြင်း (Curve25519 + Kyber768) ကို အလွှာထားပါ။
+- PQ KEM/လက်မှတ်ပံ့ပိုးမှု၊ ထပ်လောင်းအခန်းကဏ္ဍနှင့် ပရိုတိုကောဗားရှင်းကို ကြော်ငြာသည့် စွမ်းရည် TLV များ လိုအပ်သည်။ အနာဂတ် extension များကို အသုံးပြုနိုင်စေရန်အတွက် အမည်မသိအမျိုးအစားများကို ဆီလိမ်းပါ။
+- မျက်စိကွယ်သောဆားပါဝင်မှုများသောဆားများကိုနေ့စဥ်လှည့်၍ ရက် 30 ကြာ pin guard relay များကိုပြုလုပ်ခြင်းဖြင့် directory churn သည် clients များကိုအမည်ဝှက်မထားနိုင်ပါ။
+- ဆဲလ်များကို 1024B တွင် ပြင်ဆင်ထားပါ၊ padding/dummy ဆဲလ်များကို ထိုးသွင်းကာ အဆုံးအဖြတ်ပေးသော တယ်လီမီတာကို ထုတ်ယူ၍ အဆင့်နှိမ့်ရန်ကြိုးပမ်းမှုများကို လျင်မြန်စွာဖမ်းမိနိုင်စေရန်။
 
-## Handshake pipeline (SNNet-1a)
+## လက်ဆွဲပိုက်လိုင်း (SNNet-1a)
 
-1. **QUIC/TLS envelope** – clients dial relays over QUIC v1 and complete a TLS 1.3 handshake using Ed25519 certificates signed by the governance CA. The TLS exporter (`tls-exporter("soranet handshake", 64)`) seeds the Noise layer so the transcripts are inseparable.
-2. **Noise XX hybrid** – protocol string `Noise_XXhybrid_25519+Kyber768_AESGCM_SHA256` with prologue = TLS exporter. Message flow:
+1. **QUIC/TLS စာအိတ်** – QUIC v1 တွင် ဖောက်သည်များက ဖုန်းခေါ်ဆိုသည့် ထပ်ဆင့်ဆင့်ခေါ်မှုများနှင့် အုပ်ချုပ်မှု CA မှ လက်မှတ်ရေးထိုးထားသော Ed25519 လက်မှတ်များကို အသုံးပြု၍ TLS1.3 လက်ဆွဲနှုတ်ဆက်ခြင်းကို အပြီးသတ်ပါ။ TLS တင်ပို့သူ (`tls-exporter("soranet handshake", 64)`) သည် Noise အလွှာကို မျိုးစေ့ချပေးသောကြောင့် စာသားများကို ခွဲခြား၍မရပါ။
+2. **Noise XX hybrid** – prologue with `Noise_XXhybrid_25519+Kyber768_AESGCM_SHA256` = TLS တင်ပို့သူ။ မက်ဆေ့ခ်ျစီးဆင်းမှု-
 
    ```
    -> e, s
@@ -37,9 +38,9 @@ SoraNet is the anonymity overlay that backs SoraFS range fetches, Norito RPC str
    -> ee, se, pq_ciphertext
    ```
 
-   Curve25519 DH output and both Kyber encapsulations are mixed into the final symmetric keys. Failure to negotiate PQ material aborts the handshake outright—no classical-only fallback is permitted.
+   Curve25519 DH output နှင့် Kyber encapsulation နှစ်ခုလုံးကို နောက်ဆုံး symmetric keys များတွင် ရောနှောထားသည်။ PQ အကြောင်းအရာကို ညှိနှိုင်းရန် ပျက်ကွက်ပါက လက်ဆွဲနှုတ်ဆက်ခြင်းကို ပြတ်ပြတ်သားသား ပျက်ပြယ်စေသည်—ဂန္ထဝင်သီးသန့် တုံ့ပြန်မှုကို ခွင့်မပြုပါ။
 
-3. **Puzzle tickets & tokens** – relays can demand an Argon2id proof-of-work ticket before `ClientHello`. Tickets are length-prefixed frames that carry the hashed Argon2 solution and expire within the policy bounds:
+3. **ပဟေဠိလက်မှတ်များနှင့် တိုကင်များ** – ထပ်လောင်းများသည် `ClientHello` မတိုင်မီ Argon2id အလုပ်အထောက်အထားလက်မှတ်တစ်ခု တောင်းဆိုနိုင်သည်။ လက်မှတ်များသည် hashed Argon2 ဖြေရှင်းချက်ကို သယ်ဆောင်ပြီး မူဝါဒဘောင်အတွင်း သက်တမ်းကုန်ဆုံးသည့် အရှည်-ရှေ့ဆက်ဘောင်များဖြစ်သည်-
 
    ```norito
    struct PowTicketV1 {
@@ -51,15 +52,15 @@ SoraNet is the anonymity overlay that backs SoraFS range fetches, Norito RPC str
    }
    ```
 
-   Admission tokens prefixed with `SNTK` bypass puzzles when an ML-DSA-44 signature from the issuer validates against the active policy and revocation list.
+   ထုတ်ပေးသူထံမှ ML-DSA-44 လက်မှတ်သည် အသက်ဝင်သောမူဝါဒနှင့် ပြန်လည်ရုပ်သိမ်းခြင်းစာရင်းကို သက်သေပြသည့်အခါ `SNTK` ဖြင့် ရှေ့ဆုံးပြထားသော ဝင်ခွင့်တိုကင်များ။
 
-4. **Capability TLV exchange** – the final Noise payload transports the capability TLVs described below. Clients abort the connection if any mandatory capability (PQ KEM/signature, role, or version) is missing or mismatched with the directory entry.
+4. **စွမ်းဆောင်ရည် TLV လဲလှယ်ခြင်း** – နောက်ဆုံး Noise payload သည် အောက်တွင်ဖော်ပြထားသော စွမ်းရည် TLV များကို ပို့ဆောင်ပေးပါသည်။ မဖြစ်မနေလုပ်ဆောင်နိုင်စွမ်း (PQ KEM/လက်မှတ်၊ အခန်းကဏ္ဍ သို့မဟုတ် ဗားရှင်း) ပျောက်ဆုံးနေပါက သို့မဟုတ် လမ်းညွှန်ထည့်သွင်းမှုနှင့် မကိုက်ညီပါက ဖောက်သည်များသည် ချိတ်ဆက်မှုကို ပျက်ပြယ်စေပါသည်။
 
-5. **Transcript logging** – relays log the transcript hash, TLS fingerprint, and TLV contents to feed downgrade detectors and compliance pipelines.
+5. **Transcript logging** – relay သည် transcript hash, TLS fingerprint, and TLV contents များကို အဆင့်နှိမ့်ချသည့် detectors များနှင့် လိုက်လျောညီထွေရှိသော ပိုက်လိုင်းများကို ကျွေးမွေးသည်။
 
-## Capability TLVs (SNNet-1c)
+## စွမ်းရည် TLVs (SNNet-1c)
 
-Capabilities reuse a fixed `typ/length/value` TLV envelope:
+စွမ်းရည်များသည် ပုံသေ `typ/length/value` TLV စာအိတ်ကို ပြန်လည်အသုံးပြုသည်-
 
 ```norito
 struct CapabilityTLV {
@@ -69,48 +70,48 @@ struct CapabilityTLV {
 }
 ```
 
-Defined types today:
+ယနေ့သတ်မှတ်ထားသောအမျိုးအစားများ
 
-- `snnet.pqkem` – Kyber level (`kyber768` for the current rollout).
-- `snnet.pqsig` – PQ signature suite (`ml-dsa-44`).
-- `snnet.role` – relay role (`entry`, `middle`, `exit`, `gateway`).
-- `snnet.version` – protocol version identifier.
-- `snnet.grease` – random filler entries in the reserved range to ensure future TLVs are tolerated.
+- `snnet.pqkem` – Kyber အဆင့် (လက်ရှိထွက်ရှိမှုအတွက် `kyber768`)။
+- `snnet.pqsig` – PQ လက်မှတ်တွဲ (`ml-dsa-44`)။
+- `snnet.role` – ထပ်လောင်းအခန်းကဏ္ဍ (`entry`၊ `middle`၊ `exit`၊ `gateway`)။
+- `snnet.version` – ပရိုတိုကော ဗားရှင်းသတ်မှတ်မှု။
+- `snnet.grease` - အနာဂတ် TLVs များကို သည်းခံနိုင်စေရန် သေချာစေရန် သီးသန့်အကွာအဝေးရှိ ကျပန်းဖြည့်သွင်းမှုများ။
 
-Clients maintain an allow-list of required TLVs and fail handshakes that omit or downgrade them. Relays publish the same set in their directory microdescriptor so validation is deterministic.
+ဖောက်သည်များသည် လိုအပ်သော TLV များ၏ ခွင့်ပြုစာရင်းကို ထိန်းသိမ်းထားပြီး ၎င်းတို့ကို ချန်လှပ်ထား သို့မဟုတ် အဆင့်နှိမ့်ပေးသော လက်ဆွဲနှုတ်ဆက်ခြင်းများ မအောင်မြင်ပါ။ Relays များသည် ၎င်းတို့၏ directory microdescriptor တွင် တူညီသောအစုံကို ထုတ်ဝေသည်ဖြစ်သောကြောင့် validation သည် အဆုံးအဖြတ်ဖြစ်သည်။
 
-## Salt rotation & CID blinding (SNNet-1b)
+## ဆားလည်ပတ်ခြင်းနှင့် CID မျက်စိကွယ်ခြင်း (SNNet-1b)
 
-- Governance publishes a `SaltRotationScheduleV1` record with `(epoch_id, salt, valid_after, valid_until)` values. Relays and gateways fetch the signed schedule from the directory publisher.
-- Clients apply the new salt at `valid_after`, keep the previous salt for a 12 h grace period, and retain a 7-epoch history to tolerate delayed updates.
-- Canonical blinded identifiers use:
+- အုပ်ချုပ်ရေးသည် `(epoch_id, salt, valid_after, valid_until)` တန်ဖိုးများဖြင့် `SaltRotationScheduleV1` မှတ်တမ်းကို ထုတ်ဝေသည်။ Relay များနှင့် gateways များသည် directory publisher မှ လက်မှတ်ရေးထိုးထားသော အချိန်ဇယားကို ရယူပါသည်။
+- ဖောက်သည်များသည် `valid_after` တွင်ဆားအသစ်ကိုအသုံးပြုကာ၊ ယခင်ဆားကို 12 နာရီကြာအောင်ထိန်းသိမ်းထားကာ နှောင့်နှေးနေသောအပ်ဒိတ်များကိုသည်းခံရန် 7 ကာလမှတ်တမ်းကိုထိန်းသိမ်းထားသည်။
+- Canonical blinded identifiers များကို အသုံးပြုသည်-
 
   ```
   cache_key = BLAKE3("soranet.blinding.canonical.v1" ∥ salt ∥ cid)
   ```
 
-  Gateways accept the blinded key via `Sora-Req-Blinded-CID` and echo it in `Sora-Content-CID`. Circuit/request blinding (`CircuitBlindingKey::derive`) ships in `iroha_crypto::soranet::blinding`.
-- If a relay misses an epoch, it halts new circuits until it downloads the schedule and emits a `SaltRecoveryEventV1`, which on-call dashboards treat as a paging signal.
+  Gateway များသည် `Sora-Req-Blinded-CID` မှတစ်ဆင့် မျက်စိကွယ်သောသော့ကို လက်ခံပြီး `Sora-Content-CID` တွင် သံယောင်လိုက်ပါသည်။ Circuit/request blinding (`CircuitBlindingKey::derive`) သည် `iroha_crypto::soranet::blinding` တွင် တင်ပို့သည်။
+- relay သည် အပိုင်းတစ်ခု လွတ်သွားပါက၊ ၎င်းသည် အချိန်ဇယားကို ဒေါင်းလုဒ်လုပ်ကာ `SaltRecoveryEventV1` ကို ထုတ်လွှတ်သည်အထိ ဆားကစ်အသစ်များကို ရပ်တန့်စေကာ ဖုန်းခေါ်ဆိုမှုဆိုင်ရာ ဒက်ရှ်ဘုတ်များသည် စာမျက်နှာအချက်ပြမှုတစ်ခုအဖြစ် သတ်မှတ်ပေးသည့် `SaltRecoveryEventV1` ကို ထုတ်လွှတ်မည်ဖြစ်သည်။
 
-## Directory data & guard policy
+## လမ်းညွှန်ဒေတာ & အစောင့်မူဝါဒ
 
-- Microdescriptors carry relay identity (Ed25519 + ML-DSA-65), PQ keys, capability TLVs, region tags, guard eligibility, and the currently advertised salt epoch.
-- Clients pin guard sets for 30 days and persist `guard_set` caches alongside the signed directory snapshot. CLI and SDK wrappers surface the cache fingerprint so rollout evidence can be attached to change reviews.
+- Microdescriptors များသည် relay အထောက်အထား (Ed25519 + ML-DSA-65)၊ PQ သော့များ၊ စွမ်းရည် TLVs၊ ဒေသတဂ်များ၊ အကာအကွယ်အရည်အချင်းပြည့်မီမှုနှင့် လက်ရှိကြော်ငြာထားသော ဆားခေတ်ကို သယ်ဆောင်ထားပါသည်။
+- ဖောက်သည်များသည် ရက်ပေါင်း 30 ကြာ pin guard သတ်မှတ်ပြီး လက်မှတ်ထိုးထားသော လမ်းညွှန်လျှပ်တစ်ပြက်နှင့်အတူ `guard_set` ကက်ရှ်များကို ဆက်လက်ထားရှိပါ။ CLI နှင့် SDK ထုပ်ပိုးမှုများသည် ကက်ရှ်လက်ဗွေကို ပေါ်လွင်စေသောကြောင့် ပြောင်းလဲခြင်းဆိုင်ရာ အထောက်အထားများကို ပြန်လည်သုံးသပ်ခြင်းတွင် ပူးတွဲထည့်သွင်းနိုင်ပါသည်။
 
-## Telemetry & rollout checklist
+## Telemetry & rollout စစ်ဆေးမှုစာရင်း
 
-- Metrics to export before production:
+- ထုတ်လုပ်ခြင်းမပြုမီ တင်ပို့ရန် မက်ထရစ်များ
   - `soranet_handshake_success_total{role}`
   - `soranet_handshake_failure_total{reason}`
   - `soranet_handshake_latency_seconds`
   - `soranet_capability_mismatch_total`
   - `soranet_salt_rotation_lag_seconds`
-- Alert thresholds live alongside the salt rotation SOP SLO matrix (`docs/source/soranet_salt_plan.md#slo--alert-matrix`) and must be mirrored in Alertmanager before the network is promoted.
-- Alerts: >5 % failure rate over 5 minutes, salt lag >15 minutes, or capability mismatches observed in production.
-- Rollout steps:
-  1. Exercise relay/client interoperability tests on staging with the hybrid handshake and PQ stack enabled.
-  2. Rehearse the salt rotation SOP (`docs/source/soranet_salt_plan.md`) and attach drill artefacts to the change record.
-  3. Enable capability negotiation in the directory, then roll out to entry relays, middle relays, exits, and finally clients.
-  4. Record guard cache fingerprints, salt schedules, and telemetry dashboards for each phase; attach the evidence bundle to `status.md`.
+- သတိပေးချက်အဆင့်များသည် ဆားလည်ပတ်မှု SOP SLO မက်ထရစ် (`docs/source/soranet_salt_plan.md#slo--alert-matrix`) နှင့် ယှဉ်တွဲနေထိုင်ပြီး ကွန်ရက်ကို ရာထူးတိုးမတိုးမီ Alertmanager တွင် ရောင်ပြန်ဟပ်နေရပါမည်။
+- သတိပေးချက်များ- 5 မိနစ်အတွင်း ပျက်ကွက်မှုနှုန်း > 5%၊ ဆားနောက်ကျခြင်း > 15 မိနစ် သို့မဟုတ် ထုတ်လုပ်မှုတွင် တွေ့ရှိထားသည့် စွမ်းဆောင်ရည် မကိုက်ညီမှုများ။
+- စတင်ခြင်းအဆင့်များ-
+  1. ဟိုက်ဘရစ်လက်ဆွဲနှုတ်ဆက်ခြင်းနှင့် PQ အစုအဝေးကို ဖွင့်ထားခြင်းဖြင့် အဆင့်ဆင့်လုပ်ဆောင်ခြင်းအပေါ် လေ့ကျင့်ခန်းပြန်ပေး/ဖောက်သည် အပြန်အလှန်လုပ်ဆောင်နိုင်မှုစမ်းသပ်မှုများ။
+  2. ဆားလည်ပတ်မှု SOP (`docs/source/soranet_salt_plan.md`) ကို အစမ်းလေ့ကျင့်ပြီး ပြောင်းလဲမှု မှတ်တမ်းတွင် တူးထားသော ပစ္စည်းများကို ပူးတွဲပါ။
+  3. လမ်းညွှန်တွင် ညှိနှိုင်းဆွေးနွေးမှုကို ဖွင့်ပါ၊ ထို့နောက် အဝင်ထပ်ဆင့်များ၊ အလယ်ထပ်ဆင့်များ၊ ထွက်ပေါက်များနှင့် နောက်ဆုံးဖောက်သည်များထံ ဖြန့်ပါ။
+  4. အဆင့်တစ်ခုစီအတွက် guard cache လက်ဗွေများ၊ ဆားအချိန်ဇယားများနှင့် telemetry dashboards များကို မှတ်တမ်းတင်ပါ။ အထောက်အထားအစုအဝေးကို `status.md` သို့ ပူးတွဲပါ။
 
-Following this checklist lets operator, client, and SDK teams adopt SoraNet transports in lockstep while meeting the determinism and audit requirements captured in the SNNet roadmap.
+ဤစစ်ဆေးမှုစာရင်းကို လိုက်နာခြင်းဖြင့် အော်ပရေတာများ၊ ဖောက်သည်များနှင့် SDK အဖွဲ့များသည် SNNet လမ်းပြမြေပုံတွင် ဖမ်းယူထားသော အဆုံးအဖြတ်နှင့် စာရင်းစစ်လိုအပ်ချက်များကို ဖြည့်ဆည်းပေးနေစဉ် SoraNet သယ်ယူပို့ဆောင်မှုများကို လော့ခ်ချသည့်အဆင့်တွင် လက်ခံနိုင်စေပါသည်။

@@ -6,83 +6,81 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Agenda Council Workflow
 description: Validate proposals, deduplicate fingerprints, and publish deterministic sortition output for the citizen agenda council (MINFO-2).
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-import CodeBlock from '@theme/CodeBlock';
-import sortitionSummary from '@site/docs/examples/ministry/agenda_sortition_summary_example.json';
+импорт CodeBlock '@тема/Кодеблок';
+импорт сорттарға '@site/docs/миҫалдар/министрлыҡ/avenda_sortiation_summary_example.json';
 
-const summary = sortitionSummary;
+констив резюме = сорттарға бүлергә Йыртҡыс;
 
-function SortitionSummaryTable({rows}) {
-  return (
-    <table>
-      <thead>
-        <tr>
-          <th>Slot</th>
-          <th>Member</th>
-          <th>Role</th>
-          <th>Org</th>
-          <th>Weight</th>
-          <th>Entropy (truncated)</th>
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((row, index) => (
-          <tr key={`${row.member_id}-${row.draw_position}`}>
-            <td>{index + 1}</td>
-            <td><code>{row.member_id}</code></td>
-            <td>{row.role}</td>
-            <td>{row.organization}</td>
-            <td>{row.weight}</td>
-            <td><code>{row.draw_entropy_hex.slice(0, 16)}…</code></td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
+функцияһы Sortition SummaryTable({рәттәр}) {
+  кире бирергә (
+    
+      
+        .
+          Слот
+          Ағзаһы
+          Роль
+          Орг
+          Ауырлыҡ
+          Энтропия (ҡыҫҡарылған)
+        .
+      
+      
+        {рәт.марк((рәт, индекс) => (
+          
+            {индекс + 1}
+            {рәт-ағзаһы_id}
+            {рау.роле}
+            {рәт.организация}
+            {рәт.ауыр}
+            
+          .
+        ))}.
+      
+    
   );
-}
+}.
 
-## Overview
+## Обзор
 
-Roadmap item **MINFO-2** requires a deterministic path from proposal linting to
-public sortition evidence so anyone can confirm how a case reached the agenda
-council. This page wires the previously landed CLI helpers directly into the
-developer portal so proposers, auditors, and platform teams can follow the same
-checklist without spelunking the mono-repo.
+Юл картаһы пункты **МИНФО-2** 2012 йылға тиклем тәҡдим ителгән тәҡдимдән детерминистик юл талап итә.
+йәмәғәт сорттарға дәлилдәр, шулай итеп, һәр кем раҫлай ала, нисек эш көн тәртибенә еткән
+совет. Был бит сымдар элек ерләнгән CLI ярҙамсылары туранан-тура инә
+produter порталы шулай тәҡдим итеүселәр, аудиторҙар, һәм платформа командалары шул уҡ үтәй ала
+тикшерелгән исемлек моно-репо spelunkingһыҙ.
 
-The workflow covers three repeatable steps:
+Эш ағымы өс ҡабатланған аҙымды үҙ эсенә ала:.
+   тапшырыу алдынан модерация сиратына еткәнсе.
+2. Баҫма дубликат-реестр хиттар менән бер рәттән тәҡдим менән бер рәттән совет хеҙмәткәрҙәре ала
+   эҙ элекке осраҡтарҙа детерминизмды юғалтмайынса.
+3. Сортировка ярҙамсыһын эшләтергә, Меркл иҫбатлау өйөмөн тотоп, һәм өҫкө the
+   һайланған исемлек эсендә портал, шулай итеп, граждандар реплей низағ.
 
-1. Validate `AgendaProposalV1` payloads locally and reject duplicate hashes
-   before the submission reaches the moderation queue.
-2. Publish duplicate-registry hits alongside the proposal so council staff can
-   trace earlier cases without losing determinism.
-3. Run the sortition helper, capture the Merkle proof bundle, and surface the
-   selected roster inside the portal so citizens can replay the draw.
+Бөтә ярҙамсылар ҙа `cargo xtask ministry-agenda`-та йәшәй; I18NT00000000000Х схемаһы 1990 й.
+документлаштырылған `docs/source/ministry/agenda_council_proposal.md` буйынса.
 
-All helpers live in `cargo xtask ministry-agenda`; the Norito schema is
-documented under `docs/source/ministry/agenda_council_proposal.md`.
+## 1. Урындағы тәҡдимдәрҙе раҫлау
 
-## 1. Validate proposals locally
+CLI ҡулланыу өсөн линт JSON файҙалы йөк һәм раҫлау, тип дәлилдәр талап итә (хэш
+ғаиләләре, һеңдереүҙең оҙонлоғо, тел тегы, тапшырыусы бәйләнеш) бар. 1990 й.
+валидатор I18NT0000000003X ингестия юлы менән код менән уртаҡлаша, шуға күрә тәҡдим үткән
+бында шулай уҡ портал аша тейәгәндә үтәсәк.
 
-Use the CLI to lint JSON payloads and assert that required evidence (hash
-families, digest lengths, language tag, submitter contact) is present. The
-validator shares code with the Torii ingestion path, so a proposal that passes
-here will also pass when uploaded through the portal.
+{` йөк xtask министрлыҡ-көнсығыш раҫлау \\.
+  --тәҡдим docs/миҫалдар/министрлыҡ/agnda_posal_example.json \\.
+  --реестр docs/миҫалдар/министрлыҡ/agnda_duplication_registry.json`}
 
-<CodeBlock language="bash">{`cargo xtask ministry-agenda validate \\
-  --proposal docs/examples/ministry/agenda_proposal_example.json \\
-  --registry docs/examples/ministry/agenda_duplicate_registry.json`}</CodeBlock>
+- Тарихи файҙалы йөктәрҙе бүлгәндә `--allow-registry-conflicts` өҫтәү; яңы
+  тапшырыуҙар тиҙ уңышһыҙлыҡҡа осрарға тейеш, ҡасан бармаҡ эҙҙәре инде бар.
+- Миҫалдар каталогы һылтанма тәҡдимен һәм реестрын суднолар, шулай итеп, SDKs ала
+  форматы ҡабул итеү ҡаты кодлаусы шәхси файҙалы йөктәрһеҙ.
 
-- Add `--allow-registry-conflicts` when triaging historical payloads; new
-  submissions should fail fast when a fingerprint already exists.
-- The examples directory ships the reference proposal and registry so SDKs can
-  adopt the format without hard-coding private payloads.
-
-## 2. Publish duplicate-registry context
-
-Every accepted proposal includes the registry digest that was consulted before
-ingest. Capture the SoraFS CID or Torii manifest path for that registry and add
-it to your submission metadata so council reviewers can verify the same JSON.
+## 2. Баҫма дубликаттар-реестр контексыҠабул ителгән һәр тәҡдимгә 2020 йылға тиклем консультациялар үткәрелгән реестр һеңдереүҙе үҙ эсенә ала.
+ингест. I18NT000000001X CID йәки I18NT00000000004X был реестр һәм өҫтәү өсөн манифест юлында.
+был һеҙҙең тапшырыу метамағлүмәттәре шулай совет рецензенттарын раҫлай ала, шул уҡ JSON.
 
 ```json title="Duplicate registry (excerpt)"
 {
@@ -97,81 +95,76 @@ it to your submission metadata so council reviewers can verify the same JSON.
 }
 ```
 
-When the CLI reports a collision, the portal shows the linked proposal IDs so
-operators can merge or reject resubmissions deterministically.
+Ҡасан CLI бәрелеш тураһында хәбәр итә, портал күрһәтә, бәйләнгән тәҡдим идентификаторҙары шулай
+операторҙары берләштерә йәки кире ҡағыуҙы кире ҡаға ала детерминистик.
 
-## 3. Run and publish the sortition summary
+## 3. Йүгереп һәм баҫтырып сығарыу сортировка резюме
 
-Once a docket is ready, run the deterministic sortition helper. It consumes the
-roster JSON, seed, and target slot count, then emits a Merkle-proof-backed
-summary. The summary JSON is what the portal renders in the **Council draw**
-panel.
+Докет әҙер булғандан һуң, детерминистик сорттарға ярҙам итеүсе эшләгеҙ. Ул ҡуллана
+исемлеге JSON, орлоҡ, һәм маҡсатлы слот иҫәбе, һуңынан сығара Меркл-иҫбат
+һығымта. Йәмғеһе JSON - был портал рендерҙары **Совет һыҙмаһы**
+панель.
 
-<CodeBlock language="bash">{`cargo xtask ministry-agenda sortition \\
-  --roster docs/examples/ministry/agenda_council_roster.json \\
-  --slots 3 \\
-  --seed 0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef \\
-  --output artifacts/ministry/sortition/2026-03-12.json`}</CodeBlock>
+{` йөк xtask министрлыҡ-көн тәртибе сортировка \\.
+  --исемле docs/миҫалдар/министрлыҡ/agnda_concil_roster.json \\.
+  --слот 3 \\.
+  - орлоҡ 0x0123456789abcdef01234567891234567897896789бcdef \\
+  --сығарыу артефакттары/министрлыҡ/сербиәт/2026-03-12.json`}
 
-Store the resulting JSON on SoraFS (or alongside the signed agenda packet) and
-link the CID in the proposal tracker. The developer portal consumes the same
-JSON structure; the example below renders the bundled
+Һөҙөмтәлә барлыҡҡа килгән JSON I18NT000000002X (йәки ҡул ҡуйылған көн тәртибе пакеты менән бер рәттән) һәм
+һылтанма CID тәҡдим трекер. Төҙөүсе порталы шул уҡ ҡуллана
+JSON структураһы; аҫтағы миҫал өйөмдө күрһәтә
 `agenda_sortition_summary_example.json`.
 
-### Example council draw
+### Миҫал советы йәрәбә
+  
+    .
+      Бар
+      Ҡиммәт
+    .
+  
+  
+    .
+      Алгоритм
+      {йомлолоҡ.алгоритм}
+    .
+    .
+      Рестер һеңдергән (BLAKE3)
+      {summary.roster_digest.blake3_hex}
+    .
+    .
+      Рестер һеңдергән (SHA-256)
+      {summary.roster_digest.sha256_гекс}
+    .
+    .
+      Сед
+      {йомлолоҡ.seed_hex}
+    .
+    .
+      Слоттар
+      {йомлолоҡ.слоттар}
+    .
+    .
+      Рөхсәт ителгән ағзалар
+      {йомшаҡ
+    .
+    .
+      Меркл тамыры
+      {йомлолоҡ.merkle_root_hex}.
+  
 
-<table>
-  <thead>
-    <tr>
-      <th>Field</th>
-      <th>Value</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td>Algorithm</td>
-      <td><code>{summary.algorithm}</code></td>
-    </tr>
-    <tr>
-      <td>Roster digest (BLAKE3)</td>
-      <td><code>{summary.roster_digest.blake3_hex}</code></td>
-    </tr>
-    <tr>
-      <td>Roster digest (SHA-256)</td>
-      <td><code>{summary.roster_digest.sha256_hex}</code></td>
-    </tr>
-    <tr>
-      <td>Seed</td>
-      <td><code>{summary.seed_hex}</code></td>
-    </tr>
-    <tr>
-      <td>Slots</td>
-      <td>{summary.slots}</td>
-    </tr>
-    <tr>
-      <td>Eligible members</td>
-      <td>{summary.eligible_members}</td>
-    </tr>
-    <tr>
-      <td>Merkle root</td>
-      <td><code>{summary.merkle_root_hex}</code></td>
-    </tr>
-  </tbody>
-</table>
 
-<SortitionSummaryTable rows={summary.selected} />
 
-Each selected member includes:
 
-- `draw_entropy_hex` (32 BLAKE3 bytes) so anyone can recompute the RNG output.
-- `eligible_index` and `original_index` so auditors can prove that opt-outs were
-  honored.
-- A Merkle proof covering the roster leaf; reproducing the tree confirms the
-  roster published inside the packet matches the draw.
+Һәр һайланған ағза үҙ эсенә ала:
 
-### Decision log
+- `draw_entropy_hex` (32 BLAKE3 байт) шулай итеп, һәр кем РНГ сығышын яңынан иҫәпләй ала.
+- I18NI000000014X һәм I18NI000000015X, шуға күрә аудиторҙар иҫбатлай ала, тип, опт-аут .
+  хөрмәтле.
+- Меркл ростер япрағын ҡаплаған дәлилдәр; ағасты үрсетергә 2012 йылғы .
+  ростер баҫылып сыҡҡан эсендә пакет матчтары ничья.
 
-When the council votes on a proposal, attach the decision memo and the
-sortition summary CID to the governance action (Torii `/v1/gov/*` entry). Portal
-pages link the memo, the vote tally, and the JSON shown above so every action
-contains the full evidence chain required by **MINFO-2**.
+### Ҡарар журналыСовет тәҡдим буйынса тауыш биргәндә, ҡарар ҡабул итеү памяткаһын беркетегеҙ һәм
+сортировка резюме CID идара итеү ғәмәлдәре (Torii I18NI0000016X инеү). Портал
+биттәр һылтанма памятка, тауыш бирергә иҫәп, һәм JSON өҫтә күрһәтелгән, шулай итеп, һәр ғәмәл
+составында тулы дәлилдәр сылбырын үҙ эсенә ала **МИНФО-2**.

@@ -10,42 +10,43 @@ translation_last_reviewed: 2026-02-07
 title: Ledger Walkthrough
 description: Reproduce a deterministic register → mint → transfer flow with the `iroha` CLI and verify the resulting ledger state.
 slug: /norito/ledger-walkthrough
+translator: machine-google-reviewed
 ---
 
-This walkthrough complements the [Norito quickstart](./quickstart.md) by showing
-how to mutate and inspect ledger state with the `iroha` CLI. You will register a
-new asset definition, mint some units into the default operator account, transfer
-part of the balance to another account, and verify the resulting transactions
-and holdings. Each step mirrors the flows covered in the Rust/Python/JavaScript
-SDK quickstarts so you can confirm parity between CLI and SDK behaviour.
+Այս ուղեցույցը լրացնում է [Norito արագ մեկնարկը](./quickstart.md)՝ ցույց տալով.
+ինչպես մուտացիայի ենթարկել և ստուգել մատյանային վիճակը `iroha` CLI-ով: Դուք գրանցվելու եք ա
+ակտիվների նոր սահմանում, որոշ միավորներ մուտքագրել լռելյայն օպերատորի հաշվին, փոխանցում
+մնացորդի մի մասը մեկ այլ հաշվի վրա և ստուգեք արդյունքում ստացված գործարքները
+և հոլդինգներ: Յուրաքանչյուր քայլ արտացոլում է Rust/Python/JavaScript-ով ծածկված հոսքերը
+SDK-ն արագ մեկնարկում է, որպեսզի կարողանաք հաստատել հավասարությունը CLI-ի և SDK-ի վարքագծի միջև:
 
-## Prerequisites
+## Նախադրյալներ
 
-- Follow the [quickstart](./quickstart.md) to boot the single-peer network via
+- Հետևեք [արագ մեկնարկին] (./quickstart.md)՝ մեկ հասակակից ցանցը բեռնելու համար
   `docker compose -f defaults/docker-compose.single.yml up --build`.
-- Ensure `iroha` (the CLI) is built or downloaded and that you can reach the
-  peer using `defaults/client.toml`.
-- Optional helpers: `jq` (formatting JSON responses) and a POSIX shell for the
-  environment-variable snippets used below.
+- Համոզվեք, որ `iroha` (CLI) կառուցված կամ ներբեռնված է, և որ դուք կարող եք հասնել
+  հասակակից՝ օգտագործելով `defaults/client.toml`:
+- Լրացուցիչ օգնականներ՝ `jq` (ձևաչափող JSON պատասխաններ) և POSIX կեղև՝
+  շրջակա միջավայրի փոփոխական հատվածներ, որոնք օգտագործվում են ստորև:
 
-Throughout the guide, replace `$ADMIN_ACCOUNT` and `$RECEIVER_ACCOUNT` with the
-account IDs you plan to use. The defaults bundle already includes two accounts
-derived from the demo keys:
+Ամբողջ ուղեցույցում `$ADMIN_ACCOUNT` և `$RECEIVER_ACCOUNT` փոխարինեք
+հաշվի ID-ները, որոնք նախատեսում եք օգտագործել: Կանխադրված փաթեթն արդեն ներառում է երկու հաշիվ
+ստացված ցուցադրական ստեղներից.
 
 ```sh
 export ADMIN_ACCOUNT="ih58..."
 export RECEIVER_ACCOUNT="ih58..."
 ```
 
-Confirm the values by listing the first few accounts:
+Հաստատեք արժեքները՝ թվարկելով առաջին մի քանի հաշիվները.
 
 ```sh
 iroha --config defaults/client.toml account list all --limit 5 --table
 ```
 
-## 1. Inspect the genesis state
+## 1. Ստուգեք ծագման վիճակը
 
-Start by exploring the ledger the CLI is targeting:
+Սկսեք ուսումնասիրելով այն մատյանը, որը CLI-ին ուղղված է.
 
 ```sh
 # Domains registered in genesis
@@ -60,26 +61,26 @@ iroha --config defaults/client.toml account list filter \
 iroha --config defaults/client.toml asset definition list all --table
 ```
 
-These commands rely on Norito-backed responses, so filtering and pagination are
-deterministic and match what the SDKs receive.
+Այս հրամանները հիմնված են Norito պատասխանների վրա, ուստի զտումը և էջավորումը կատարվում են
+որոշիչ և համընկնում է այն, ինչ ստանում են SDK-ները:
 
-## 2. Register an asset definition
+## 2. Գրանցեք ակտիվի սահմանում
 
-Create a new, infinitely mintable asset called `coffee` inside the `wonderland`
-domain:
+`wonderland`-ի ներսում ստեղծեք `coffee` նոր, անվերջ արդյունահանվող ակտիվ:
+տիրույթ:
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
   --id coffee#wonderland
 ```
 
-The CLI prints the submitted transaction hash (for example,
-`0x5f…`). Save it so you can query the status later.
+CLI-ն տպում է ներկայացված գործարքի հեշը (օրինակ՝
+`0x5f…`): Պահպանեք այն, որպեսզի ավելի ուշ կարողանաք հարցնել կարգավիճակը:
 
-## 3. Mint units into the operator account
+## 3. Մուտքագրեք միավորներ օպերատորի հաշվին
 
-Asset quantities live under the `(asset definition, account)` pair. Mint 250
-units of `coffee#wonderland` into `$ADMIN_ACCOUNT`:
+Ակտիվների քանակները ապրում են `(asset definition, account)` զույգի ներքո: Անանուխ 250
+`coffee#wonderland`-ի միավորները `$ADMIN_ACCOUNT`-ի մեջ.
 
 ```sh
 iroha --config defaults/client.toml asset mint \
@@ -87,14 +88,14 @@ iroha --config defaults/client.toml asset mint \
   --quantity 250
 ```
 
-Again, capture the transaction hash (`$MINT_HASH`) from the CLI output. To
-double-check the balance, run:
+Կրկին վերցրեք գործարքի հեշը (`$MINT_HASH`) CLI ելքից: Դեպի
+կրկնակի ստուգեք մնացորդը, գործարկեք.
 
 ```sh
 iroha --config defaults/client.toml asset list all --limit 5 --table
 ```
 
-or, to target just the new asset:
+կամ ուղղակի նոր ակտիվը թիրախավորելու համար՝
 
 ```sh
 iroha --config defaults/client.toml asset list filter \
@@ -102,9 +103,9 @@ iroha --config defaults/client.toml asset list filter \
   --limit 1 | jq .
 ```
 
-## 4. Transfer part of the balance to another account
+## 4. Մնացորդի մի մասը փոխանցեք այլ հաշվի
 
-Move 50 units from the operator account to `$RECEIVER_ACCOUNT`:
+Տեղափոխեք 50 միավոր օպերատորի հաշվից դեպի `$RECEIVER_ACCOUNT`.
 
 ```sh
 iroha --config defaults/client.toml asset transfer \
@@ -113,8 +114,8 @@ iroha --config defaults/client.toml asset transfer \
   --quantity 50
 ```
 
-Save the transaction hash as `$TRANSFER_HASH`. Query the holdings on both
-accounts to verify the new balances:
+Պահպանեք գործարքի հեշը որպես `$TRANSFER_HASH`: Հարցրեք երկուսի ունեցվածքը
+հաշիվներ՝ նոր մնացորդները ստուգելու համար.
 
 ```sh
 iroha --config defaults/client.toml asset list filter \
@@ -124,35 +125,35 @@ iroha --config defaults/client.toml asset list filter \
   "{\"id\":\"coffee#wonderland##${RECEIVER_ACCOUNT}\"}" --limit 1 | jq .
 ```
 
-## 5. Verify ledger evidence
+## 5. Ստուգեք մատյանային ապացույցները
 
-Use the saved hashes to confirm that both transactions committed:
+Օգտագործեք պահպանված հեշերը՝ հաստատելու, որ երկու գործարքներն էլ կատարվել են.
 
 ```sh
 iroha --config defaults/client.toml transaction get --hash $MINT_HASH | jq .
 iroha --config defaults/client.toml transaction get --hash $TRANSFER_HASH | jq .
 ```
 
-You can also stream recent blocks to see which block included the transfer:
+Կարող եք նաև հեռարձակել վերջին բլոկները՝ տեսնելու, թե որ բլոկն է ներառել փոխանցումը.
 
 ```sh
 # Stream from the latest block and stop after ~5 seconds
 iroha --config defaults/client.toml blocks 0 --timeout 5s --table
 ```
 
-Every command above uses the same Norito payloads as the SDKs. If you replicate
-this flow via code (see the SDK quickstarts below), the hashes and balances will
-line up as long as you target the same network and defaults.
+Վերևում գտնվող յուրաքանչյուր հրաման օգտագործում է նույն Norito ծանրաբեռնվածությունը, ինչ SDK-ները: Եթե դուք կրկնում եք
+այս հոսքը կոդի միջոցով (տես ստորև բերված SDK-ի արագ մեկնարկները), հեշերն ու մնացորդները կկատարվեն
+հերթ կանգնել այնքան ժամանակ, քանի դեռ թիրախավորում եք նույն ցանցը և լռելյայն:
 
-## SDK parity links
+## SDK հավասարության հղումներ
 
-- [Rust SDK quickstart](../sdks/rust) — demonstrates registering instructions,
-  submitting transactions, and polling status from Rust.
-- [Python SDK quickstart](../sdks/python) — shows the same register/mint
-  operations with Norito-backed JSON helpers.
-- [JavaScript SDK quickstart](../sdks/javascript) — covers Torii requests,
-  governance helpers, and typed query wrappers.
+- [Rust SDK quickstart] (../sdks/rust) — ցույց է տալիս գրանցման հրահանգները,
+  գործարքների ներկայացում և հարցման կարգավիճակ Rust-ից:
+- [Python SDK արագ մեկնարկ] (../sdks/python) - ցույց է տալիս նույն ռեգիստրը/անանուխը
+  գործողություններ Norito-ով ապահովված JSON օգնականներով:
+- [JavaScript SDK արագ մեկնարկ] (../sdks/javascript) — ծածկում է Torii հարցումները,
+  կառավարման օգնականներ և մուտքագրված հարցումների փաթաթաններ:
 
-Run the CLI walkthrough first, then repeat the scenario with your preferred SDK
-to make sure both surfaces agree on transaction hashes, balances, and query
-outputs.
+Սկզբում գործարկեք CLI քայլը, ապա կրկնեք սցենարը ձեր նախընտրած SDK-ով
+համոզվելու համար, որ երկու մակերեսները համաձայն են գործարքի հեշերի, մնացորդների և հարցումների վերաբերյալ
+ելքեր։

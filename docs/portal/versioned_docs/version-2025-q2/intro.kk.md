@@ -7,41 +7,42 @@ generator: scripts/sync_docs_i18n.py
 source_hash: e797879d1f77c8cfd62fcc67874d584f6bdeee9395faafe52fc33f26ce2e6a21
 source_last_modified: "2025-12-29T18:16:35.904811+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Welcome to the SORA Nexus Developer Portal
+# SORA Nexus әзірлеуші порталына қош келдіңіз
 
-The SORA Nexus developer portal bundles interactive documentation, SDK
-tutorials, and API references for Nexus operators and Hyperledger Iroha
-contributors. It complements the main docs site by surfacing hands-on guides
-and generated specs directly from this repository.
+SORA Nexus әзірлеуші порталы интерактивті құжаттама, SDK жинақтарын береді
+оқулықтар және Nexus операторлары мен Hyperledger Iroha үшін API сілтемелері
+салымшылар. Ол практикалық нұсқаулықтарды көрсету арқылы негізгі құжаттар сайтын толықтырады
+және спецификацияларды тікелей осы репозиторийден жасады.
 
-## What you can do here
+## Мұнда не істеуге болады
 
-- **Learn Norito** – start with the overview and quickstart to understand the
-  serialization model and bytecode tooling.
-- **Bootstrap SDKs** – follow quickstarts for JavaScript and Rust today; Python,
-  Swift, and Android guides will join them as recipes are migrated.
-- **Browse API references** – the Torii OpenAPI page renders the latest REST
-  specification, and configuration tables link back to the canonical Markdown
-  sources.
-- **Prepare deployments** – operational runbooks (telemetry, settlement, Nexus
-  overlays) are being ported from `docs/source/` and will land in this site as
-  the migration progresses.
+- **Norito үйреніңіз** – шолудан бастаңыз және түсіну үшін жылдам бастаңыз.
+  сериялау үлгісі және байт-код құралдары.
+- **Bootstrap SDKs** – бүгін JavaScript және Rust үшін жылдам бастауларды орындаңыз; Python,
+  Swift және Android гидтері рецепттер тасымалданған кезде оларға қосылады.
+- ** API сілтемелерін шолу** – Torii OpenAPI беті соңғы REST нұсқасын көрсетеді
+  спецификация және конфигурация кестелері канондық Markdown бағдарламасына қайта сілтеме жасайды
+  көздері.
+- **Орналастыруларды дайындаңыз** – операциялық жұмыс кітаптары (телеметрия, есеп айырысу, Nexus
+  қабаттасуы) `docs/source/` құрылғысынан тасымалдануда және осы сайтта келесідей болады
+  көші-қоны жүріп жатыр.
 
-## Current status
+## Ағымдағы күй
 
-- ✅ Docusaurus v3 scaffolding with live pages for Norito and SDK quickstarts.
-- ✅ Torii OpenAPI plugin wired to `npm run sync-openapi`.
-- ⏳ Migrating the remaining guides from `docs/source/`.
-- ⏳ Adding preview builds and linting to the documentation CI.
+- ✅ Norito және SDK жылдам іске қосуларына арналған тікелей беттері бар Docusaurus v3 тіреуіші.
+- ✅ Torii OpenAPI плагині `npm run sync-openapi` сымына қосылған.
+- ⏳ Қалған бағыттағыштарды `docs/source/` ішінен тасымалдау.
+- ⏳ CI құжаттамасына алдын ала қарау құрастырулары мен линтингтерді қосу.
 
-## Getting involved
+## Қатысу
 
-- See `docs/portal/README.md` for local development commands (`npm install`,
+- Жергілікті әзірлеу командаларын `docs/portal/README.md` қараңыз (`npm install`,
   `npm run start`, `npm run build`).
-- Content migration tasks are tracked alongside the `DOCS-*` roadmap items.
-  Contributions are welcome—port sections from `docs/source/` and add the page
-  to the sidebar.
-- If you add a generated artifact (specs, config tables), document the build
-  command so future contributors can refresh it easily.
+- Мазмұнды тасымалдау тапсырмалары `DOCS-*` жол картасы элементтерімен қатар бақыланады.
+  Жарналар қабылданады — `docs/source/` порт бөлімдері және бетті қосыңыз
+  бүйірлік тақтаға.
+- Жасалған артефактты (спецификациялар, конфигурация кестелері) қоссаңыз, құрастыруды құжаттаңыз
+  пәрмені болашақ үлескерлер оны оңай жаңарта алады.

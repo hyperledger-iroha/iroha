@@ -7,39 +7,40 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 89be62d7bb2bb79fd994d207489d310ef4c997be53447fbee8ac1f7b758d3beb
 source_last_modified: "2025-12-29T18:16:35.978367+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Impact Assessment Tooling (MINFO‑4b)
+# གནོད་སྐྱོན་བརྟག་དཔྱད་ལག་ཆས་ (MINFO‐‑4b)
 
-Roadmap reference: **MINFO‑4b — Impact assessment tooling.**  
-Owner: Governance Council / Analytics
+ལམ་སྟོན་གཞི་བསྟུན་: **ཨེམ་ཨའི་ཨེཕ་ཨོ་‐༤བི་ — གནོད་སྐྱོན་བརྟག་དཔྱད་ལག་ཆ།**  
+ཇོ་བདག་: གཞུང་སྐྱོང་ཚོགས་སྡེ་ / དབྱེ་དཔྱད།
 
-This note documents the `cargo xtask ministry-agenda impact` command that now
-produces the automated hash-family diff required for referendum packets. The
-tool consumes validated Agenda Council proposals, the duplicate registry, and
-an optional denylist/policy snapshot so reviewers can see exactly which
-fingerprints are new, which collide with existing policy, and how many entries
-each hash family contributes.
+དྲན་འཛིན་འདི་གིས་ ད་ལྟོ་དེ་སྦེ་ `cargo xtask ministry-agenda impact` བརྡ་བཀོད་འདི་ཡིག་ཆ་བཟོཝ་ཨིན།
+གིས་ སྤྱིར་བཏང་འོས་འཚམ་གྱི་ཐུམ་སྒྲིལ་ཚུ་གི་དོན་ལུ་ དགོ་པའི་ རང་བཞིན་གྱི་ ཧ་ཤི་བཟའ་ཚང་གི་ ཁྱབ་སྤེལ་འདི་ བཏོནམ་ཨིན། ཚིག༌ཕྲད
+ལག་ཆས་ཚུ་ བདེན་དཔྱད་འབད་ཡོད་པའི་ གྲོས་གཞི་ཚོགས་སྡེ་གི་གྲོས་འཆར་དང་ འདྲ་བཤུས་ཐོ་བཀོད་ དེ་ལས་ དང་།
+གདམ་ཁ་ཅན་གྱི་ཐོ་ཡིག་མེད་པའི་/སྲིད་དོན་གྱི་པར་བཤུས་འདི་བསྐྱར་ཞིབ་འབད་མི་ཚུ་གིས་ ག་འདི་ ངེས་བདེན་སྦེ་མཐོང་ཚུགས།
+མཛུབ་མོ་གི་པར་ཚུ་ གསརཔ་ཨིནམ་ད་ དེ་གིས་ ད་ལྟོ་ཡོད་པའི་སྲིད་བྱུས་དང་ ཁ་ཐུག་རྐྱབ་སྟེ་ ཐོ་བཀོད་ག་དེམ་ཅིག་ཡོདཔ་ཨིན་ན་ཚུ་ཨིན་པས།
+ཧ་ཤི་བཟའ་ཚང་རེ་རེ་གིས་ ཕན་གྲོགས་འབདཝ་ཨིན།
 
-## Inputs
+## ཨིན་པུཊི་ཚུ།
 
-1. **Agenda proposals.** One or more files that follow
+1. **གྲོས་གཞི་གྲོས་འཆར་ཚུ།།** རྗེས་སུ་འབྲང་བའི་ཡིག་སྣོད་གཅིག་ཡང་ན་མང་།
    [`docs/source/ministry/agenda_council_proposal.md`](agenda_council_proposal.md).
-   Pass them explicitly with `--proposal <path>` or point the command at a
-   directory via `--proposal-dir <dir>` and every `*.json` file under that path
-   is included.
-2. **Duplicate registry (optional).** A JSON file matching
-   `docs/examples/ministry/agenda_duplicate_registry.json`. Conflicts are
-   reported under `source = "duplicate_registry"`.
-3. **Policy snapshot (optional).** A lightweight manifest that lists every
-   fingerprint already enforced by GAR/Ministry policy. The loader expects the
-   schema shown below (see
+   དེ་ཚུ་གསལ་ཏོག་ཏོ་སྦེ་ `--proposal <path>` དང་ཅིག་ཁར་ ཡང་ན་ བརྡ་བཀོད་འདི་ ཅིག་ ལུ་དཔག་དགོ།
+   སྣོད་ཐོ་ `--proposal-dir <dir>` དང་ འགྲུལ་ལམ་དེ་གི་འོག་ལུ་ `*.json` ཡིག་སྣོད་རེ་རེ་བཞིན་ བརྒྱུད་དེ་ཨིན།
+   འདི་ཚུད་ཡོད།
+2. **འདྲ་བཤུས་ཐོ་བཀོད་ (གདམ་ཁ་ཅན་)** ཇེ་ཨེསི་ཨོ་ཨེན་ཡིག་སྣོད་མཐུན་སྒྲིག་འབད་མི།
+   `docs/examples/ministry/agenda_duplicate_registry.json`. འཁྲུག་རྩོད་ཚུ་ནི།
+   `source = "duplicate_registry"` འོག་ལུ་སྙན་ཞུ་འབད་ཡོདཔ་ཨིན།
+3. **སྲིད་དོན་གྱི་པར་ལེན་ (གདམ་ཁ་ཅན་)** ལྗིད་ཚད་འཇམ་པོ་ཅིག་གིས་ ག་ར་ཐོ་བཀོད་འབདཝ་ཨིན།
+   མཛུབ་མོ་གི་པར་རིས་འདི་ ཇི་ཨར་/ལྷན་ཁག་སྲིད་བྱུས་ཀྱིས་ བསྟར་སྤྱོད་འབད་ཡོདཔ་ཨིན། མངོན་གསལ་པ་གིས་རེ་བ་བསྐྱེདཔ་ཨིན།
+   གཤམ་གསལ་གྱི་ལས་འཆར་ (se) དང་།
    [`docs/examples/ministry/policy_snapshot_example.json`](../../examples/ministry/policy_snapshot_example.json)
-   for a complete sample):
+   དཔེ་ཚད་ཆ་ཚང་ཅིག་གི་དོན་ལུ་):
 
 ```json
 {
@@ -56,10 +57,10 @@ each hash family contributes.
 }
 ```
 
-Any entry whose `hash_family:hash_hex` fingerprint matches a proposal target is
-reported under `source = "policy_snapshot"` with the referenced `policy_id`.
+གྲོས་འཆར་དམིགས་ཚད་དང་མཐུན་པའི་ `hash_family:hash_hex` མཛུབ་མོ་གི་པར་རིས།
+`source = "policy_snapshot"` འོག་ལུ་ གཞི་བསྟུན་ `policy_id` གི་ཐོག་ལས་ སྙན་ཞུ་འབད་ཡོདཔ་ཨིན།
 
-## Usage
+## ལག་ལེན།
 
 ```bash
 cargo xtask ministry-agenda impact \
@@ -69,8 +70,8 @@ cargo xtask ministry-agenda impact \
   --out artifacts/ministry/impact/AC-2026-001.json
 ```
 
-Additional proposals can be appended via repeated `--proposal` flags or by
-supplying a directory that contains an entire referendum batch:
+གྲོས་འཆར་ཁ་སྐོང་ཚུ་ བསྐྱར་ལོག་འབད་དེ་ `--proposal` དར་ཆ་ ཡང་ན་ 1.
+འོས་འཚམ་གྱི་ཚད་གཞི་ཆ་མཉམ་ཡོད་པའི་སྣོད་ཐོ་ཅིག་བཀྲམ་སྤེལ་འབད་ནི།
 
 ```bash
 cargo xtask ministry-agenda impact \
@@ -79,12 +80,12 @@ cargo xtask ministry-agenda impact \
   --out artifacts/ministry/impact/2026-03-31.json
 ```
 
-The command prints the generated JSON to stdout when `--out` is omitted.
+བརྡ་བཀོད་འདི་གིས་ `--out` བཏོན་བཏང་པའི་སྐབས་ stdout ལུ་ བརྡ་བཀོད་འབདཝ་ཨིན།
 
-## Output
+## ཐོན་འབྲས་
 
-The report is a signed-off artefact (record it under the referendum packet’s
-`artifacts/ministry/impact/` directory) with the following structure:
+སྙན་ཞུ་འདི་ མཚན་རྟགས་བཀོད་ཡོད་པའི་ དངོས་པོ་ཅིག་ཨིན།
+འོག་གི་གཞི་བཀོད་དང་གཅིག་ཁར་ `artifacts/ministry/impact/` སྣོད་ཐོ་།
 
 ```json
 {
@@ -125,13 +126,13 @@ The report is a signed-off artefact (record it under the referendum packet’s
 }
 ```
 
-Attach this JSON to every referendum dossier alongside the neutral summary so
-panelists, jurors, and governance observers can see the exact blast radius of
-each proposal. The output is deterministic (sorted by hash family) and safe to
-include in CI/runbooks; if the duplicate registry or policy snapshot changes,
-rerun the command and attach the refreshed artefact before the vote opens.
+འདི་ཡང་ བར་ལམ་གྱི་བཅུད་བསྡུས་དང་གཅིག་ཁར་ འོས་འདེམས་ཀྱི་ཡིག་ཆ་ག་ར་ལུ་ JSON མཉམ་སྦྲགས་འབད།
+ཚོགས་ཆུང་དང་ཁྲིམས་དཔོན་ དེ་ལས་ གཞུང་སྐྱོང་ལྟ་རྟོག་པ་ཚུ་གིས་ འགས་རྫས་ཀྱི་སྒོར་ཕྱེད་བར་ཐིག་འདི་ མཐོང་ཚུགས།
+གྲོས་འཆར། ཐོན་འབྲས་འདི་ གཏན་འབེབས་ (ཧེཤ་བཟའ་ཚང་གིས་ དབྱེ་སེལ་འབད་ཡོདཔ་) དང་ ཉེན་སྲུང་ཡོདཔ་ཨིན།
+CI/runbooks ནང་ཚུད་ཡོད། ཐོ་བཀོད་འདྲ་བཤུས་ཡང་ན་ སྲིད་བྱུས་ཀྱི་ པར་ཚུ་བསྒྱུར་བཅོས་འབད་བ་ཅིན་ ལུ།
+བཀའ་རྒྱ་འདི་ ལོག་སྟེ་ར་ ཚོགས་རྒྱན་མ་ཕྱེ་བའི་ཧེ་མ་ བསྐྱར་གསོ་འབད་བའི་ ཅ་ཆས་ཚུ་ མཉམ་སྦྲགས་འབད།
 
-> **Next step:** feed the generated impact report into
-> [`cargo xtask ministry-panel packet`](referendum_packet.md) so the
-> `ReferendumPacketV1` dossier contains both the hash-family breakdown and the
-> detailed conflict list for the proposal under review.
+> **ཤུལ་མམ་གྱི་རིམ་པ་:** བཟོ་བཏོན་འབད་ཡོད་པའི་གནོད་པ་སྙན་ཞུ་འདི་ ནང་ལུ།
+> [I`cargo xtask ministry-panel packet`](referendum_packet.md) དེ་འབདཝ་ལས་
+> `ReferendumPacketV1` ཡིག་ཆ་ནང་ ཧེཤ་བཟའ་ཚང་གི་ བརྡབ་གསིག་དང་ གཉིས་ཀ་ཡོད།
+> བསྐྱར་ཞིབ་འབད་བའི་བསྒང་ཡོད་མི་ གྲོས་འཆར་གྱི་དོན་ལུ་ ཁ་གསལ་གྱི་འཁྲུག་རྩོད་ཀྱི་ཐོ་ཡིག།

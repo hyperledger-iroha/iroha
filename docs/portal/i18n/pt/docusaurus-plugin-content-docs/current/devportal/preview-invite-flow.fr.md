@@ -4,92 +4,92 @@ direction: ltr
 source: docs/portal/docs/devportal/preview-invite-flow.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Flux d'invitation preview
+# Visualização do fluxo de convite
 
-## Objectif
+## Objetivo
 
-L'element de roadmap **DOCS-SORA** cite l'onboarding des relecteurs et le programme d'invitations preview public comme derniers bloqueurs avant la sortie de beta. Cette page decrit comment ouvrir chaque vague d'invitations, quels artefacts doivent etre livres avant d'envoyer les invites et comment prouver que le flux est auditable. Utilisez-la avec:
+O elemento de roteiro **DOCS-SORA** cita a integração dos usuários e a visualização pública do programa de convites como os bloqueios anteriores antes da saída beta. Esta página decrita comentário ouvrir cada vago d'invitations, quels artefatos doivent etre livres antes de enviar os convites e comentar provar que o fluxo é auditável. Use-o com:
 
-- [`devportal/reviewer-onboarding`](./reviewer-onboarding.md) pour la gestion par relecteur.
-- [`devportal/preview-integrity-plan`](./preview-integrity-plan.md) pour les garanties de checksum.
-- [`devportal/observability`](./observability.md) pour les exports de telemetrie et hooks d'alerting.
+- [`devportal/reviewer-onboarding`](./reviewer-onboarding.md) para gerenciamento por refletor.
+- [`devportal/preview-integrity-plan`](./preview-integrity-plan.md) para garantias de soma de verificação.
+- [`devportal/observability`](./observability.md) para exportações de telemetria e ganchos de alerta.
 
-## Plan des vagues
+## Plano de vagas
 
-| Vague | Audience | Criteres d'entree | Criteres de sortie | Notes |
+| Vago | Público | Critérios de entrada | Critérios de surtida | Notas |
 | --- | --- | --- | --- | --- |
-| **W0 - Maintainers core** | Maintainers Docs/SDK validant le contenu jour un. | Equipe GitHub `docs-portal-preview` peuplee, gate checksum `npm run serve` en vert, Alertmanager silencieux 7 jours. | Tous les docs P0 relus, backlog tague, aucun incident bloquant. | Sert a valider le flux; pas d'email d'invitation, seulement partage des artefacts preview. |
-| **W1 - Partners** | Operateurs SoraFS, integrateurs Torii, relecteurs gouvernance sous NDA. | W0 termine, termes juridiques approuves, proxy Try-it en staging. | Sign-off partners collecte (issue ou formulaire signe), telemetrie montre <=10 relecteurs concurrents, pas de regressions securite pendant 14 jours. | Imposer template d'invitation + tickets de demande. |
-| **W2 - Communaute** | Contributeurs selectionnes depuis la liste d'attente communaute. | W1 termine, drills d'incidents repetes, FAQ publique mise a jour. | Feedback digere, >=2 releases doc expediees via pipeline preview sans rollback. | Limiter invites concurrentes (<=25) et batcher chaque semaine. |
+| **W0 - Núcleo de mantenedores** | Mantenedores Docs/SDK validam o conteúdo do dia. | Equipe GitHub `docs-portal-preview` pessoa, gate checksum `npm run serve` em verde, Alertmanager silencioso 7 dias. | Todos os documentos P0 relus, backlog tage, nenhum incidente bloqueado. | Insira um validador para o fluxo; sem e-mail de convite, apenas parte da visualização dos artefatos. |
+| **W1 - Parceiros** | Operadores SoraFS, integradores Torii, relecteurs gouvernance sous NDA. | Termine W0, termos jurídicos aprovados, proxy Try-it en staging. | Sign-off Partners Collecte (issue ou formulaire signe), telemetrie montre <=10 relecteurs concurrents, pas de regressions securite pendente 14 dias. | Modelo de convite impostor + tickets de demanda. |
+| **W2 - Comunauta** | Os colaboradores são selecionados a partir da lista de atendimento comunitário. | Termine W1, exercícios de incidentes repetidos, FAQ publique mise a jour. | Comentários adicionais, >=2 libera expedições de documentos por meio da visualização do pipeline sem reversão. | Limiter convida concorrentes (<=25) e batcher toda semana. |
 
-Documentez quelle vague est active dans `status.md` et dans le tracker des demandes preview afin que la gouvernance voie le statut d'un coup d'oeil.
+Documente quelle vague está ativo em `status.md` e no rastreador de pré-visualização de demandas para que o governo voie o estatuto de um golpe de Estado.
 
-## Checklist preflight
+## Pré-impressão da lista de verificação
 
-Terminez ces actions **avant** de planifier des invitations pour une vague:
+Termine essas ações **avant** de planejar convites para uma vaga:
 
-1. **Artefacts CI disponibles**
-   - Dernier `docs-portal-preview` + descriptor charge par `.github/workflows/docs-portal-preview.yml`.
-   - Pin SoraFS note dans `docs/portal/docs/devportal/deploy-guide.md` (descriptor de cutover present).
-2. **Application du checksum**
-   - `docs/portal/scripts/serve-verified-preview.mjs` invoque via `npm run serve`.
-   - Instructions `scripts/preview_verify.sh` testees sur macOS + Linux.
-3. **Baseline telemetrie**
+1. **Artefatos CI disponíveis**
+   - Dernier `docs-portal-preview` + descritor de carga par `.github/workflows/docs-portal-preview.yml`.
+   - Pin SoraFS nota em `docs/portal/docs/devportal/deploy-guide.md` (descritor de cutover presente).
+2. **Aplicação da soma de verificação**
+   - `docs/portal/scripts/serve-verified-preview.mjs` invocado via `npm run serve`.
+   - Instruções `scripts/preview_verify.sh` testadas no macOS + Linux.
+3. **Telemetria de linha de base**
    - `dashboards/grafana/docs_portal.json` montre un trafic Try it sain et l'alerte `docs.preview.integrity` est au vert.
-   - Derniere annexe de `docs/portal/docs/devportal/observability.md` mise a jour avec des liens Grafana.
-4. **Artefacts gouvernance**
-   - Issue du invite tracker prete (une issue par vague).
-   - Template de registre des relecteurs copie (voir [`docs/examples/docs_preview_request_template.md`](../../../examples/docs_preview_request_template.md)).
-   - Approbations legales et SRE requises attachees a l'issue.
+   - Derniere annexe de `docs/portal/docs/devportal/observability.md` mise a jour com des gravam Grafana.
+4. **Governança de artefatos**
+   - Problema do rastreador de convite prete (um problema vago).
+   - Modelo de registro de cópia de refletores (veja [`docs/examples/docs_preview_request_template.md`](../../../examples/docs_preview_request_template.md)).
+   - Approbations legales et SRE requer adidos a l'issue.
 
-Enregistrez l'achevement du preflight dans le invite tracker avant d'envoyer le moindre email.
+Registre o sucesso do pré-voo no rastreador de convites antes de enviar mais e-mails.
 
-## Etapes du flux
+## Étapes du flux
 
-1. **Selectionner les candidats**
-   - Tirer depuis la liste d'attente ou la file partners.
-   - S'assurer que chaque candidat a un template de demande complete.
-2. **Approuver l'acces**
-   - Assigner un approbateur a l'issue du invite tracker.
-   - Verifier les prerequis (CLA/contrat, usage acceptable, brief securite).
-3. **Envoyer les invitations**
-   - Completer les placeholders de [`docs/examples/docs_preview_invite_template.md`](../../../examples/docs_preview_invite_template.md) (`<preview_tag>`, `<request_ticket>`, contacts).
-   - Joindre le descriptor + hash d'archive, l'URL de staging Try it et les canaux support.
-   - Stocker l'email final (ou transcript Matrix/Slack) dans l'issue.
-4. **Suivre l'onboarding**
-   - Mettre a jour le invite tracker avec `invite_sent_at`, `expected_exit_at`, et le statut (`pending`, `active`, `complete`, `revoked`).
+1. **Selecionando os candidatos**
+   - Tire a lista de contatos ou os parceiros de arquivo.
+   - Certifique-se de que cada candidato tenha um modelo de demanda completo.
+2. **Aprovar acesso**
+   - Atribua um aprovador ao rastreador de problemas do convite.
+   - Verificador de pré-requisitos (CLA/contrato, uso aceitável, breve segurança).
+3. **Envie os convites**
+   - Preencha os espaços reservados de [`docs/examples/docs_preview_invite_template.md`](../../../examples/docs_preview_invite_template.md) (`<preview_tag>`, `<request_ticket>`, contatos).
+   - Junte o descritor + hash do arquivo, o URL de teste Try it e os canais de suporte.
+   - Armazene o e-mail final (ou transcrição Matrix/Slack) na edição.
+4. **Siga a integração**
+   - Instale agora o rastreador de convites com `invite_sent_at`, `expected_exit_at` e o status (`pending`, `active`, `complete`, `revoked`).
    - Lier la demande d'entree du relecteur pour auditabilite.
-5. **Surveiller la telemetrie**
-   - Surveiller `docs.preview.session_active` et les alertes `TryItProxyErrors`.
-   - Ouvrir un incident si la telemetrie devie du baseline et enregistrer le resultat a cote de l'entree d'invitation.
-6. **Collecter le feedback et sortir**
-   - Clore les invitations lorsque le feedback arrive ou que `expected_exit_at` est atteint.
-   - Mettre a jour l'issue de vague avec un court resume (constats, incidents, prochaines actions) avant de passer au cohort suivant.
+5. **Vigilante da telemetria**
+   - Vigilante `docs.preview.session_active` e os alertas `TryItProxyErrors`.
+   - Abra um incidente no desvio de telemetria da linha de base e registre o resultado na parte de entrada do convite.
+6. **Colete os comentários e classifique**
+   - Fechar os convites quando o feedback chegar ou que `expected_exit_at` for confirmado.
+   - Mettre a jour a questão da vaga com um currículo judicial (constatações, incidentes, ações prochaines) antes de passar para a coorte seguinte.
 
-## Evidence & reporting
-
-| Artefact | Ou stocker | Cadence de mise a jour |
+## Evidências e relatórios| Artefato | Ou estocador | Cadência de mise a jour |
 | --- | --- | --- |
-| Issue du invite tracker | Projet GitHub `docs-portal-preview` | Mettre a jour apres chaque invite. |
-| Export du roster relecteurs | Registre lie dans `docs/portal/docs/devportal/reviewer-onboarding.md` | Hebdomadaire. |
-| Snapshots telemetrie | `docs/source/sdk/android/readiness/dashboards/<date>/` (reutiliser le bundle telemetrie) | Par vague + apres incidents. |
-| Digest feedback | `docs/portal/docs/devportal/preview-feedback/<wave>/summary.md` (creer un dossier par vague) | Dans les 5 jours suivant la sortie de vague. |
-| Note de reunion gouvernance | `docs/portal/docs/devportal/preview-invite-notes/<date>.md` | A remplir avant chaque sync gouvernance DOCS-SORA. |
+| Problema do rastreador de convite | Projeto GitHub `docs-portal-preview` | Mettre a jour apres cada convite. |
+| Exportação de refletores de lista | Registre-se em `docs/portal/docs/devportal/reviewer-onboarding.md` | Hebdomadaire. |
+| Telemetria de instantâneos | `docs/source/sdk/android/readiness/dashboards/<date>/` (reutilizar o pacote telemétrico) | Par vague + incidentes après. |
+| Resumir feedback | `docs/portal/docs/devportal/preview-feedback/<wave>/summary.md` (criar um dossiê por vago) | Nos 5 dias seguintes à saída de vaga. |
+| Nota de reunião de governança | `docs/portal/docs/devportal/preview-invite-notes/<date>.md` | Uma solução para cada controle de sincronização DOCS-SORA. |
 
 Lancez `cargo xtask docs-preview summary --wave <wave_label> --json artifacts/docs_portal_preview/<wave_label>_summary.json`
-apres chaque batch pour produire un digest lisible par machine. Joignez le JSON rendu a l'issue de vague pour que les relecteurs gouvernance confirment les comptes d'invitations sans rejouer tout le log.
+depois de cada lote para produzir um resumo listável por máquina. Participe do JSON rendendo a emissão de vaga para que os relecteurs gouvernance confirmem as contas de convites sem rejouer todo o log.
 
-Joignez la liste de preuves a `status.md` a chaque fin de vague afin que l'entree roadmap puisse etre mise a jour rapidement.
+Acesse a lista de recomendações para `status.md` e algumas coisas vagas até que o roteiro principal possa ser feito rapidamente.
 
-## Criteres de rollback et de pause
+## Critérios de reversão e pausa
 
-Mettez en pause le flux d'invitations (et notifiez la gouvernance) lorsque l'un des cas suivants survient:
+Faça uma pausa no fluxo de convites (e notifique o governo) durante os seguintes casos sobreviventes:
 
-- Incident proxy Try it ayant necessite un rollback (`npm run manage:tryit-proxy`).
-- Fatigue d'alertes: >3 alert pages pour les endpoints preview-only sur 7 jours.
-- Ecart de conformite: invitation envoyee sans termes signes ou sans enregistrement du template de demande.
-- Risque d'integrite: mismatch de checksum detecte par `scripts/preview_verify.sh`.
+- Proxy de incidente Experimente antes de precisar de uma reversão (`npm run manage:tryit-proxy`).
+- Fadiga de alertas: >3 páginas de alerta para visualização dos endpoints apenas durante 7 dias.
+- Ecart de conformite: convite enviado sem assinatura ou sem registro do modelo de demanda.
+- Risco de integridade: detecção de incompatibilidade de soma de verificação par `scripts/preview_verify.sh`.
 
-Reprenez uniquement apres avoir documente la remediation dans le invite tracker et confirme que le dashboard telemetrie est stable au moins 48 heures.
+Repita apenas depois de documentar a correção no rastreador de convites e confirme se a telemetria do painel está estável por menos de 48 horas.

@@ -7,47 +7,48 @@ generator: scripts/sync_docs_i18n.py
 source_hash: f2dd292b7d15b449f3cec1b79343387a8c23beef3a163367bd5fa8ced8593aae
 source_last_modified: "2025-12-29T18:16:35.986892+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 # MOCHI Bundle Tooling
 
-MOCHI ships with a lightweight packaging workflow so developers can produce a
-portable desktop bundle without wiring bespoke CI scripts. The `xtask`
-subcommand handles compilation, layout, hashing, and (optionally) archive
-creation in one shot.
+MOCHI იგზავნება მსუბუქი შეფუთვის სამუშაო პროცესით, რათა დეველოპერებმა შეძლონ ა
+პორტატული დესკტოპის ნაკრები შეკვეთილი CI სკრიპტების გაყვანილობის გარეშე. `xtask`
+ქვებრძანება ამუშავებს კომპილაციას, განლაგებას, ჰეშინგს და (სურვილისამებრ) არქივს
+შექმნა ერთ კადრში.
 
-## Generating a bundle
+## პაკეტის გენერირება
 
 ```bash
 cargo xtask mochi-bundle
 ```
 
-By default the command builds release binaries, assembles the bundle under
-`target/mochi-bundle/`, and emits a `mochi-<os>-<arch>-release.tar.gz` archive
-alongside a deterministic `manifest.json`. The manifest lists every file with
-its size and SHA-256 hash so CI pipelines can re-run verification or publish
-attestations. The helper ensures both the `mochi` desktop shell and the
-workspace `kagami` binary are present so genesis generation works out of the
-box.
+ნაგულისხმევად, ბრძანება აყალიბებს გამოშვების ბინარებს, აწყობს პაკეტს ქვეშ
+`target/mochi-bundle/` და გამოსცემს `mochi-<os>-<arch>-release.tar.gz` არქივს
+დეტერმინისტულ `manifest.json`-თან ერთად. მანიფესტში ჩამოთვლილია ყველა ფაილი
+მისი ზომა და SHA-256 ჰეში, რათა CI მილსადენებმა შეძლონ გადამოწმების ხელახლა გაშვება ან გამოქვეყნება
+ატესტაციები. დამხმარე უზრუნველყოფს როგორც `mochi` დესკტოპის გარსს, ასევე
+სამუშაო სივრცე `kagami` ორობითი არსებობს, ამიტომ გენეზის გენერაცია მუშაობს გარეთ
+ყუთი.
 
-### Flags
+### დროშები
 
-| Flag                | Description                                                                 |
-|---------------------|-----------------------------------------------------------------------------|
-| `--out <dir>`       | Override the output directory (defaults to `target/mochi-bundle`).         |
-| `--profile <name>`  | Build with a specific Cargo profile (e.g., `debug` for tests).              |
-| `--no-archive`      | Skip the `.tar.gz` archive, leaving only the prepared folder.               |
-| `--kagami <path>`   | Use an explicit `kagami` binary instead of building `iroha_kagami`.         |
-| `--matrix <path>`   | Append bundle metadata to a JSON matrix for CI provenance tracking.         |
-| `--smoke`           | Run `mochi --help` from the packaged bundle as a basic execution gate.      |
-| `--stage <dir>`     | Copy the finished bundle (and archive, when present) into a staging folder. |
+| დროშა | აღწერა |
+|--------------------------------------------------------------------------------------------
+| `--out <dir>` | გამომავალი დირექტორია (ნაგულისხმევი `target/mochi-bundle`).         |
+| `--profile <name>` | აგებულია კონკრეტული ტვირთის პროფილით (მაგ. `debug` ტესტებისთვის).              |
+| `--no-archive` | გამოტოვეთ `.tar.gz` არქივი და დატოვეთ მხოლოდ მომზადებული საქაღალდე.               |
+| `--kagami <path>` | გამოიყენეთ მკაფიო `kagami` ორობითი `iroha_kagami` აგების ნაცვლად.         |
+| `--matrix <path>` | ნაკრების მეტამონაცემების დამატება JSON მატრიცაში CI წარმოშობის თვალთვალის მიზნით.         |
+| `--smoke` | გაუშვით `mochi --help` შეფუთული ნაკრებიდან, როგორც ძირითადი შესრულების კარი.      |
+| `--stage <dir>` | დააკოპირეთ დასრულებული პაკეტი (და დაარქივეთ, როდესაც არსებობს) დადგმის საქაღალდეში. |
 
-`--stage` is intended for CI pipelines where each build agent uploads its
-artefacts to a shared location. The helper recreates the bundle directory and
-copies the generated archive into the staging directory so publish jobs can
-collect platform-specific outputs without shell scripting.
+`--stage` განკუთვნილია CI მილსადენებისთვის, სადაც თითოეული აგენტი ატვირთავს თავის
+არტეფაქტები საერთო ადგილას. დამხმარე ხელახლა ქმნის bundle დირექტორიას და
+აკოპირებს გენერირებულ არქივს დადგმის დირექტორიაში, რათა გამოაქვეყნოს სამუშაოები
+შეაგროვეთ პლატფორმის სპეციფიკური შედეგები ჭურვის სკრიპტის გარეშე.
 
-The layout inside the bundle is intentionally simple:
+პაკეტის შიგნით განლაგება განზრახ მარტივია:
 
 ```
 bin/mochi              # egui desktop executable
@@ -60,9 +61,9 @@ manifest.json          # generated file manifest with SHA-256 digests
 
 ### Runtime overrides
 
-The packaged `mochi` executable accepts command-line overrides for the most
-common supervisor settings. Use these flags instead of editing
-`config/local.toml` when experimenting:
+შეფუთული `mochi` შესრულებადი ყველაზე მეტად იღებს ბრძანების ხაზის უგულებელყოფას
+ზედამხედველის საერთო პარამეტრები. გამოიყენეთ ეს დროშები რედაქტირების ნაცვლად
+`config/local.toml` ექსპერიმენტების დროს:
 
 ```
 ./bin/mochi --data-root ./data --profile four-peer-bft \
@@ -70,16 +71,16 @@ common supervisor settings. Use these flags instead of editing
     --irohad /path/to/irohad --kagami /path/to/kagami
 ```
 
-Any CLI value takes precedence over `config/local.toml` entries and environment
-variables.
+ნებისმიერ CLI მნიშვნელობას აქვს უპირატესობა `config/local.toml` ჩანაწერებზე და გარემოზე
+ცვლადები.
 
-## Snapshot automation
+## Snapshot ავტომატიზაცია
 
-`manifest.json` records the generation timestamp, target triple, Cargo profile,
-and the complete file inventory. Pipelines can diff the manifest to detect when
-new artefacts appear, upload the JSON alongside release assets, or audit the
-hashes before promoting a bundle to operators.
+`manifest.json` აღრიცხავს თაობის დროის ნიშანს, სამიზნე სამჯერ, ტვირთის პროფილს,
+და ფაილის სრული ინვენტარი. მილსადენებს შეუძლიათ განასხვავონ მანიფესტი იმის დასადგენად, როდის
+გამოჩნდება ახალი არტეფაქტები, ატვირთეთ JSON გამოშვების აქტივებთან ერთად, ან აუდიტით
+ჰეშები ოპერატორებისთვის პაკეტის დაწინაურებამდე.
 
-The helper is idempotent: re-running the command updates the manifest and
-overwrites the previous archive, keeping `target/mochi-bundle/` as the single
-source of truth for the latest bundle on the current machine.
+დამხმარე იდემპოტენტურია: ბრძანების ხელახლა გაშვება განაახლებს მანიფესტს და
+გადაწერს წინა არქივს, ინახავს `target/mochi-bundle/` როგორც ერთს
+სიმართლის წყარო უახლესი პაკეტისთვის მიმდინარე აპარატზე.

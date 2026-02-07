@@ -4,92 +4,92 @@ direction: ltr
 source: docs/portal/docs/devportal/preview-invite-flow.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Flujo de invitaciones de preview
+# プレビューへの招待状
 
-## Proposito
+## プロポジト
 
-El item del roadmap **DOCS-SORA** identifica el onboarding de revisores y el programa de invitaciones de preview publico como los bloqueadores finales antes de que el portal salga de beta. Esta pagina describe como abrir cada ola de invitaciones, que artefactos deben enviarse antes de mandar invites y como demostrar que el flujo es auditable. Usala junto con:
+ロードマップ **DOCS-SORA** の項目は、オンボーディングの改訂とプレビュー公開プログラムの招待を特定し、ポータル サルガのベータ版を公開します。このページでは、招待状の内容について説明し、試聴可能なデモを招待したり、招待状を作成したりできます。ウサラジュントコン:
 
-- [`devportal/reviewer-onboarding`](./reviewer-onboarding.md) para el manejo por revisor.
-- [`devportal/preview-integrity-plan`](./preview-integrity-plan.md) para garantias de checksum.
-- [`devportal/observability`](./observability.md) para exports de telemetria y hooks de alertas.
+- [`devportal/reviewer-onboarding`](./reviewer-onboarding.md) パラ エル マネホ ポート リバイザ。
+- [`devportal/preview-integrity-plan`](./preview-integrity-plan.md) チェックサムのパラメータ。
+- [`devportal/observability`](./observability.md) テレメトリのエクスポートとアラートのフック。
 
-## Plan de olas
+## デオラスを計画する
 
-| Ola | Audiencia | Criterios de entrada | Criterios de salida | Notas |
+|オラ |オーディエンシア |参加基準 |サリダの基準 |メモ |
 | --- | --- | --- | --- | --- |
-| **W0 - Maintainers core** | Maintainers de Docs/SDK validando contenido del dia uno. | Equipo GitHub `docs-portal-preview` poblado, gate de checksum en `npm run serve` en verde, Alertmanager silencioso por 7 dias. | Todos los docs P0 revisados, backlog etiquetado, sin incidentes bloqueantes. | Se usa para validar el flujo; no hay email de invitacion, solo se comparten los artefactos de preview. |
-| **W1 - Partners** | Operadores SoraFS, integradores Torii, revisores de gobernanza bajo NDA. | W0 cerrado, terminos legales aprobados, proxy Try-it en staging. | Sign-off de partners (issue o formulario firmado) recogido, telemetria muestra <=10 revisores concurrentes, sin regresiones de seguridad por 14 dias. | Aplicar plantilla de invitacion + tickets de solicitud. |
-| **W2 - Comunidad** | Contribuidores seleccionados de la lista de espera de la comunidad. | W1 cerrado, drills de incidentes ensayados, FAQ publico actualizado. | Feedback digerido, >=2 releases de documentacion enviados via pipeline de preview sin rollback. | Limitar invitaciones concurrentes (<=25) y agrupar semanalmente. |
+| **W0 - メンテナ コア** |ドキュメント/SDK の管理者が内容を検証します。 | Equipo GitHub `docs-portal-preview` ポブラド、`npm run serve` のチェックサム ゲート、7 つの直径のアラート マネージャー サイレンシオソ。 | Todos los docs P0 の見直し、バックログのエチケット、犯罪事件の不正行為。 |安全性を確認してください。招待状にメ​​ールを送信する必要はありません。プレビューの詳細を確認して、ソロで作業する必要はありません。 |
+| **W1 - パートナー** |オペラドール SoraFS、インテグレーター Torii、政府秘密保持契約の改訂。 | W0 セラード、法律上の終点、プロキシ Try-it ステージング。 |パートナーのサインオフ (会社の発行) 認識、テレメトリア ムエストラ <=10 の同時改訂、14 ディアスでの罪の回帰。 |植物の招待状 + チケットの請求。 |
+| **W2 - コミュニティ** |投稿者はコミュニティのリストの選択を行います。 | W1 セラード、緊急事態の訓練、実際の状況に関するよくある質問。 |フィードバック ディジェリド、ロールバックとプレビューのパイプラインを介して文書化された環境を 2 つ以上リリースします。 |同時に招待できる制限 (<=25) と継続的な管理。 |
 
-Documenta que ola esta activa en `status.md` y en el tracker de solicitudes de preview para que la gobernanza vea el estado de un vistazo.
+`status.md` のドキュメントは、安全な状況を確認するためのプレビュー用の追跡サービスです。
 
-## Checklist de preflight
+## プリフライトのチェックリスト
 
-Completa estas acciones **antes** de programar invitaciones para una ola:
+プログラムの招待状の**条件**を完了してください:
 
-1. **Artefactos de CI disponibles**
-   - El ultimo `docs-portal-preview` + descriptor cargado por `.github/workflows/docs-portal-preview.yml`.
-   - Pin de SoraFS anotado en `docs/portal/docs/devportal/deploy-guide.md` (descriptor de cutover presente).
-2. **Enforcement de checksum**
-   - `docs/portal/scripts/serve-verified-preview.mjs` invocado via `npm run serve`.
-   - Instrucciones de `scripts/preview_verify.sh` probadas en macOS + Linux.
-3. **Baseline de telemetria**
-   - `dashboards/grafana/docs_portal.json` muestra trafico Try it saludable y la alerta `docs.preview.integrity` esta en verde.
-   - Ultimo apendice de `docs/portal/docs/devportal/observability.md` actualizado con enlaces de Grafana.
-4. **Artefactos de gobernanza**
-   - Issue del invite tracker listo (una issue por ola).
-   - Plantilla de registro de revisores copiada (ver [`docs/examples/docs_preview_request_template.md`](../../../examples/docs_preview_request_template.md)).
-   - Aprobaciones legales y de SRE requeridas adjuntas a la issue.
+1. **CI 担当者向けの成果物**
+   - 最大 `docs-portal-preview` + 記述子カルガド ポル `.github/workflows/docs-portal-preview.yml`。
+   - `docs/portal/docs/devportal/deploy-guide.md` の SoraFS のピン (カットオーバーの記述子)。
+2. **チェックサムの強制**
+   - `npm run serve` 経由で `docs/portal/scripts/serve-verified-preview.mjs` を呼び出します。
+   - macOS + Linux での `scripts/preview_verify.sh` の手順。
+3. **テレメトリのベースライン**
+   - `dashboards/grafana/docs_portal.json` 交通渋滞 `docs.preview.integrity` 最高の交通情報をお試しください。
+   - `docs/portal/docs/devportal/observability.md` の実際の Grafana に関する付録。
+4. **ゴベルナンザの工芸品**
+   - 招待トラッカー リストを発行します (番号を発行しません)。
+   - Plantilla de registro de revisores copiada (ver [`docs/examples/docs_preview_request_template.md`](../../../examples/docs_preview_request_template.md))。
+   - 問題に応じて、SRE の法的対応と補助的な要求。
 
-Registra la finalizacion del preflight en el invite tracker antes de enviar cualquier correo.
+フライト前に最終的な登録を行って、トラッカーを招待して、実際の環境を確認してください。
 
-## Pasos del flujo
+## パソス・デル・フルホ
 
-1. **Seleccionar candidatos**
-   - Extraer de la hoja de espera o cola de partners.
-   - Asegurar que cada candidato tenga la plantilla de solicitud completa.
-2. **Aprobar acceso**
-   - Asignar un aprobador a la issue del invite tracker.
-   - Verificar prerequisitos (CLA/contrato, uso aceptable, brief de seguridad).
-3. **Enviar invitaciones**
-   - Completar los placeholders de [`docs/examples/docs_preview_invite_template.md`](../../../examples/docs_preview_invite_template.md) (`<preview_tag>`, `<request_ticket>`, contactos).
-   - Adjuntar el descriptor + hash del archive, URL de staging de Try it, y canales de soporte.
-   - Guardar el email final (o transcript de Matrix/Slack) en la issue.
-4. **Rastrear onboarding**
-   - Actualizar el invite tracker con `invite_sent_at`, `expected_exit_at`, y estado (`pending`, `active`, `complete`, `revoked`).
-   - Enlazar la solicitud de ingreso del revisor para auditabilidad.
-5. **Monitorear telemetria**
-   - Vigilar `docs.preview.session_active` y alertas `TryItProxyErrors`.
-   - Abrir un incidente si la telemetria se desvia del baseline y registrar el resultado junto a la entrada de invitacion.
-6. **Recolectar feedback y cerrar**
-   - Cerrar invitaciones cuando el feedback llegue o `expected_exit_at` se cumpla.
-   - Actualizar la issue de la ola con un resumen corto (hallazgos, incidentes, siguientes acciones) antes de pasar al siguiente cohorte.
+1. **候補者の選択**
+   - エクストラ・デ・ラ・ホハ・デ・エスペラ・オ・コーラ・デ・パートナー。
+   - 完全なプランティージャの候補を見つけることができます。
+2. **アプロバーアクセソ**
+   - 招待トラッカーの問題を報告します。
+   - 前提条件の検証 (CLA/コントラート、使用可能、簡単な説明)。
+3. **羨ましいご招待**
+   - [`docs/examples/docs_preview_invite_template.md`](../../../examples/docs_preview_invite_template.md) (`<preview_tag>`、`<request_ticket>`、コンタクト) のプレースホルダーが完全に失われています。
+   - 補助的な記述子 + アーカイブのハッシュ、URL のステージング、試してみてください。
+   - 問題に関する最終メール (Matrix/Slack のトランスクリプト) を保護します。
+4. **Rastear のオンボーディング**
+   - `invite_sent_at`、`expected_exit_at`、および確立 (`pending`、`active`、`complete`、`revoked`) のトラッカーを招待します。
+   - 監査に関する監査の要求。
+5. **監視テレメトリ**
+   - `docs.preview.session_active` と `TryItProxyErrors` として警告します。
+   - ベースラインとレジストラからの招待状の登録結果を基に、テレメトリーで発生した出来事を報告します。
+6. **フィードバックとセラーを収集**
+   - `expected_exit_at` のフィードバック ファイルを参照してください。
+   - 再開されたコルト (ハラスゴス、事件、緊急事態) に関する問題を実際に解決します。
 
-## Evidencia y reportes
-
-| Artefacto | Donde guardar | Cadencia de actualizacion |
+## 証拠とレポート|アーティファクト |ドンデ・ガーダー |実際のカデンシア |
 | --- | --- | --- |
-| Issue del invite tracker | Proyecto GitHub `docs-portal-preview` | Actualizar despues de cada invite. |
-| Export del roster de revisores | Registro enlazado en `docs/portal/docs/devportal/reviewer-onboarding.md` | Semanal. |
-| Snapshots de telemetria | `docs/source/sdk/android/readiness/dashboards/<date>/` (reusar bundle de telemetria) | Por ola + despues de incidentes. |
-| Digest de feedback | `docs/portal/docs/devportal/preview-feedback/<wave>/summary.md` (crear carpeta por ola) | Dentro de 5 dias tras salir de la ola. |
-| Nota de reunion de gobernanza | `docs/portal/docs/devportal/preview-invite-notes/<date>.md` | Completar antes de cada sync de gobernanza DOCS-SORA. |
+|招待状トラッカーの発行 |プロジェクト GitHub `docs-portal-preview` |招待状を実際に入手します。 |
+|改訂名簿をエクスポート | `docs/portal/docs/devportal/reviewer-onboarding.md` で登録 |セマナル。 |
+|テレメトリアのスナップショット | `docs/source/sdk/android/readiness/dashboards/<date>/` (テレメトリの再利用バンドル) |ポル・オラ+事件の起こり。 |
+|フィードバックのダイジェスト | `docs/portal/docs/devportal/preview-feedback/<wave>/summary.md` (クリアカーペットポルオラ) | 5 つのディアス トラス サリル デ ラ オラのデントロ。 |
+|ゴベルナンザの再会について | `docs/portal/docs/devportal/preview-invite-notes/<date>.md` | DOCS-SORA の同期が完了しました。 |
 
-Ejecuta `cargo xtask docs-preview summary --wave <wave_label> --json artifacts/docs_portal_preview/<wave_label>_summary.json`
-despues de cada lote para producir un digest legible por maquinas. Adjunta el JSON renderizado a la issue de la ola para que los revisores de gobernanza confirmen los conteos de invitaciones sin reproducir todo el log.
+エジェクタ `cargo xtask docs-preview summary --wave <wave_label> --json artifacts/docs_portal_preview/<wave_label>_summary.json`
+マキナの読みやすいダイジェストを作成しないでください。補助的な JSON レンダリングは、問題を解決するために問題の見直しを確認し、招待状のコンテオスを確認し、ログを再現します。
 
-Adjunta la lista de evidencia a `status.md` cada vez que una ola termine para que la entrada del roadmap pueda actualizarse rapido.
+`status.md` の証拠のリストは、ロードマップの実際の急速な進行状況を確認するために必要です。
 
-## Criterios de rollback y pausa
+## ロールバックと一時停止の基準
 
 Pausa el flujo de invitaciones (y notifica a gobernanza) cuando ocurra cualquiera de estos casos:
 
-- Un incidente de proxy Try it que requirio rollback (`npm run manage:tryit-proxy`).
-- Fatiga de alertas: >3 alert pages para endpoints solo de preview dentro de 7 dias.
-- Brecha de cumplimiento: invitacion enviada sin terminos firmados o sin registrar la plantilla de solicitud.
-- Riesgo de integridad: mismatch de checksum detectado por `scripts/preview_verify.sh`.
+- プロキシの未発生のロールバックを試してください (`npm run manage:tryit-proxy`)。
+- アラートの詳細: エンドポイントごとに 3 つ以上のアラート ページがあり、7 つのディアでプレビューが表示されます。
+- 報告書: 登録者からの登録を依頼するための招待状。
+- 統合の問題: `scripts/preview_verify.sh` のチェックサム検出の不一致。
 
-Reanuda solo despues de documentar la remediacion en el invite tracker y confirmar que el dashboard de telemetria este estable por al menos 48 horas.
+Reanuda は、48 時間にわたって、トラッカーを招待してテレメトリのダッシュボードを確認し、修復を記録します。

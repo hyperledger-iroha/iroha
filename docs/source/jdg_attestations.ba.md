@@ -7,33 +7,34 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 459e8ed4612da7cfa68053e4e299b2f68e7620d4f3b98a8a721ebf8327829ea1
 source_last_modified: "2026-01-08T21:57:18.412403+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# JDG Attestations: Guard, Rotation, and Retention
+# JDG аттестациялары: Гвардия, әйләнеш, һәм һаҡлау
 
-This note documents the v1 JDG attestation guard that now ships in `iroha_core`.
+Был иҫкәрмәлә v1 JDG аттестация һаҡсыһы документы, хәҙер `iroha_core`-та ташый.
 
-- **Committee manifests:** Norito-encoded `JdgCommitteeManifest` bundles carry per-dataspace rotation
-  schedules (`committee_id`, ordered members, threshold, `activation_height`, `retire_height`).
-  Manifests are loaded with `JdgCommitteeSchedule::from_path` and enforce strictly increasing
-  activation heights with an optional grace overlap (`grace_blocks`) between retiring/activating
-  committees.
-- **Attestation guard:** `JdgAttestationGuard` enforces dataspace binding, expiry, stale bounds,
-  committee id/threshold matching, signer membership, supported signature schemes, and optional
-  SDN validation via `JdgSdnEnforcer`. Size caps, max lag, and allowed signature schemes are
-  constructor parameters; `validate(attestation, dataspace, current_height)` returns the active
-  committee or a structured error.
-  - `scheme_id = 1` (`simple_threshold`): per-signer signatures, optional signer bitmap.
-  - `scheme_id = 2` (`bls_normal_aggregate`): single pre-aggregated BLS-normal signature over the
-    attestation hash; signer bitmap optional, defaults to all signers in the attestation. BLS
-    aggregate validation requires a valid PoP per committee member in the manifest; missing or
-    invalid PoPs reject the attestation.
-  Configure the allow-list via `governance.jdg_signature_schemes`.
-- **Retention store:** `JdgAttestationStore` tracks attestations per dataspace with a configurable
-  per-dataspace cap, pruning oldest entries on insert. Call `for_dataspace` or
-  `for_dataspace_and_epoch` to retrieve audit/replay bundles.
-- **Tests:** Unit coverage now exercises valid committee selection, unknown signer rejection, stale
-  attestation rejection, unsupported scheme ids, and retention pruning. See
+- **Коммиттейниктар күрһәтә:** Norito-кодланған `JdgCommitteeManifest` өйөмдәре пер-мәғлүмәттәр әйләнешен йөрөтә
+  графиктары (`committee_id`, ағзаларға бойороҡ бирҙе, сик, `activation_height`, `retire_height`).
+  Манифесттары `JdgCommitteeSchedule::from_path` менән тейәлгән һәм ҡәтғи рәүештә арта.
+  активлаштырыу бейеклеге менән опциональ рәхмәт ҡапланыу (`grace_blocks`) араһында пенсияға сығыу/активация
+  комитеттары.
+- **Аттестация һаҡсыһы:** `JdgAttestationGuard` мәғлүмәттәр киңлегендә бәйләү, ғәмәлдән сығыу, иҫке сиктәр,
+  комитет id/варал тап килтереп, ҡул ҡуйыусы ағзалыҡ, ҡултамға схемалары ярҙам итә, һәм факультатив
+  SDN раҫлау аша `JdgSdnEnforcer`. Размер ҡапҡас, макс лаг, һәм рөхсәт ителә ҡултамға схемалары булып тора
+  конструктор параметрҙары; `validate(attestation, dataspace, current_height)` әүҙем ҡайтара
+  комитет йәки структуралы хата.
+  - `scheme_id = 1` (`simple_threshold`): пер-спечитовка ҡултамғалары, опциональ ҡултамға битмап.
+  - `scheme_id = 2` (`bls_normal_aggregate`): берҙән-бер алдан агрегацияланған BLS-нормаль ҡултамғаһы.
+    аттестация хеш; ҡул ҡуйыусы битмап факультатив, стандарттар бөтә ҡул ҡуйыусылар аттестацияла. БЛС
+    агрегат раҫлау дөрөҫ PoP талап итә, комитет ағзаһы өсөн манифест; юҡ йәки
+    дөрөҫ булмаған PoPs аттестацияны кире ҡаға.
+  Рөхсәт-исемлеген `governance.jdg_signature_schemes` аша конфигурациялау.
+- **Һаҡлау магазины:** `JdgAttestationStore` тректар аттестацияһы бер мәғлүмәт киңлеге менән конфигурацияланған
+  пер-мәғлүмәттәр ҡапҡасы, вставка өҫтөндә иң боронғо яҙмаларҙы ҡырҡып. `for_dataspace` йәки 1990 й.
+  `for_dataspace_and_epoch` аудит алыу өсөн/реплей өйөмдәре.
+- **Һынауҙар:** Блокты яҡтыртыу хәҙер дөрөҫ комитет һайлау, билдәһеҙ ҡул ҡуйыусы кире ҡағыу, стале
+  аттестация кире ҡағыу, ярҙамһыҙ схема ids, һәм һаҡлау ҡырҡыу. Күрергә
   `crates/iroha_core/src/jurisdiction.rs`.
 
-The guard rejects schemes outside the configured allow-list.
+Һаҡсы конфигурацияланған рөхсәт исемлегенән ситтәге схемаларҙы кире ҡаға.

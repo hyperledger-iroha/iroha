@@ -4,20 +4,22 @@ direction: rtl
 source: docs/portal/docs/sorafs/developer-index.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: developer-index
-title: أدلة مطوري SoraFS
-description: صفحة البداية لتوثيق مطوري SoraFS والعينات ومراجع الأتمتة.
-sidebar_label: نظرة عامة للمطورين
+المعرف: فهرس المطور
+العنوان: الدليل المطوري SoraFS
+الوصف: صفحة البداية لتوثيق مطوري SoraFS والعينات ومراجع التصميم.
+Sidebar_label: نظرة عامة للمطورين
 ---
 
-:::note المصدر المعتمد
-تعكس هذه الصفحة `docs/source/sorafs/developer/index.md`. احرص على إبقاء النسختين متزامنتين إلى أن يتم إيقاف الوثائق القديمة.
+:::ملحوظة المصدر مؤهل
+احترام هذه الصفحة `docs/source/sorafs/developer/index.md`. احرص على التأكد من النسختين متزامنتين إلى أن يتم إيقاف الوثائق القديمة.
 :::
 
-# أدلة مطوري SoraFS
+#فك مطوري SoraFS
 
 ```{toctree}
 :caption: البدء

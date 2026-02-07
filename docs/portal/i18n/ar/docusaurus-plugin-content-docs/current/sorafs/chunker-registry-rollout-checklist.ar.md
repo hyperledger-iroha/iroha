@@ -4,98 +4,98 @@ direction: rtl
 source: docs/portal/docs/sorafs/chunker-registry-rollout-checklist.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: chunker-registry-rollout-checklist
-title: قائمة تحقق لإطلاق سجل chunker لسوراFS
-sidebar_label: قائمة تحقق لإطلاق chunker
-description: خطة إطلاق خطوة بخطوة لتحديثات سجل chunker.
+المعرف: قائمة التحقق من تسجيل المقطع
+العنوان: قائمة تحقق سجل chunker لسورافس
+Sidebar_label: قائمة تحقق طموحها
+الوصف: خطة مفصلة لتحديث سجل Chunker.
 ---
 
-:::note المصدر المعتمد
-تعكس `docs/source/sorafs/chunker_registry_rollout_checklist.md`. احرص على إبقاء النسختين متزامنتين إلى أن يتم إيقاف مجموعة توثيق Sphinx القديمة.
+:::ملحوظة المصدر مؤهل
+احترام `docs/source/sorafs/chunker_registry_rollout_checklist.md`. احرص على جميع النسختين متزامنتين إلى أن يتم إيقاف مجموعة Sphinx القديمة.
 :::
 
-# قائمة تحقق لإطلاق سجل SoraFS
+#قائمة تحقق سجل SoraFS
 
-تجمع هذه القائمة الخطوات المطلوبة لترقية ملف chunker جديد أو حزمة قبول مزوّد
-من مرحلة المراجعة إلى الإنتاج بعد التصديق على ميثاق الحوكمة.
+العديد من هذه الخطوات الأساسية إلى ملف Chunker الجديد أو الحزمة المقبولة
+من مرحلة المراجعة إلى الإنتاج بعد التصديق على ميثاق الـ و.
 
-> **النطاق:** ينطبق على كل الإصدارات التي تعدل
-> `sorafs_manifest::chunker_registry` أو أظرف قبول المزوّدين أو حزم الـ fixtures
-> المعتمدة (`fixtures/sorafs_chunker/*`).
+> **النطاق:** ينطبق على جميع الاختلافات التي يتم تعديلها
+> `sorafs_manifest::chunker_registry` أو أظرف يقبل المحاسبين أو حزم الـ Installations
+> معتمد (`fixtures/sorafs_chunker/*`).
 
-## 1. تحقق ما قبل الإطلاق
+## 1. تحقق مما سبق
 
-1. أعد توليد الـ fixtures وتحقق من الحتمية:
+1. إنشاء الـ التركيبات والتحقق من الحتمية:
    ```bash
    cargo run --locked -p sorafs_chunker --bin export_vectors
    cargo test -p sorafs_chunker --offline vectors
    ci/check_sorafs_fixtures.sh
    ```
-2. تأكد من أن بصمات الحتمية في
-   `docs/source/sorafs/reports/sf1_determinism.md` (أو تقرير الملف المعني)
+2. التأكد من أن البصمات الحتمية في
+   `docs/source/sorafs/reports/sf1_determinism.md` (أو إقرار الملف الشامل)
    تتطابق مع الآثار المُعاد توليدها.
 3. تأكد من أن `sorafs_manifest::chunker_registry` يبنى مع
    `ensure_charter_compliance()` عبر:
    ```bash
    cargo test -p sorafs_manifest --lib chunker_registry::tests::ensure_charter_compliance
    ```
-4. حدّث ملف اقتراح الحزمة:
-   - `docs/source/sorafs/proposals/<profile>.json`
-   - إدخال محاضر المجلس في `docs/source/sorafs/council_minutes_*.md`
-   - تقرير الحتمية
+4. تحديث ملف الصندوق:
+   -`docs/source/sorafs/proposals/<profile>.json`
+   - الحجم محاضر المجلس في `docs/source/sorafs/council_minutes_*.md`
+   - تقرير الحامية
 
-## 2. اعتماد الحوكمة
+## 2. الاعتماد على
 
-1. قدّم تقرير Tooling Working Group وdigest الاقتراح إلى Sora Parliament Infrastructure Panel.
-2. سجّل تفاصيل الموافقة في
+1. تقرير مجموعة عمل الأدوات وملخص الاقتراحات المقدمة إلى لجنة البنية التحتية لبرلمان سورا.
+2. سجل تفاصيل الموافقة في
    `docs/source/sorafs/council_minutes_YYYY-MM-DD.md`.
-3. انشر الظرف الموقّع من البرلمان بجوار الـ fixtures:
+3. نشر الظرف الموقّع من البرلمان بجوار الـ التركيبات:
    `fixtures/sorafs_chunker/manifest_signatures.json`.
-4. تحقق من إمكانية الوصول إلى الظرف عبر مساعد جلب الحوكمة:
+4. التحقق من إمكانية الوصول إلى الظرف عبر مساعد الـ تور:
    ```bash
    cargo xtask sorafs-fetch-fixture \
      --signatures <url-or-path-to-manifest_signatures.json> \
      --out fixtures/sorafs_chunker
    ```
 
-## 3. إطلاق staging
+## 3. التدريج الحرارجع إلى [دليل مانيفست الـstaging](./staging-manifest-playbook) للحصول على شرح المفصل.
 
-ارجع إلى [دليل مانيفست الـstaging](./staging-manifest-playbook) للحصول على شرح مفصل.
-
-1. انشر Torii مع تفعيل discovery الخاص بـ `torii.sorafs` وتشغيل enforcement للقبول
+1. انشر Torii مع تفعيل الاكتشاف الخاص بـ `torii.sorafs` وتشغيل التنفيذ للقبول
    (`enforce_admission = true`).
-2. ادفع أظرف قبول المزوّدين المعتمدة إلى دليل سجل staging المشار إليه في
+2. ادفع أظرف يقبل المحاسبين المعتمد إلى دليل سجل التدريج المشار إليه في
    `torii.sorafs.discovery.admission.envelopes_dir`.
-3. تحقق من انتشار إعلانات المزوّد عبر واجهة discovery:
+3. تحقق من انتشار إعلانات المنظم عبر واجهة الاكتشاف:
    ```bash
    curl -sS http://<torii-host>/v1/sorafs/providers | jq .
    ```
-4. اختبر نقاط manifest/plan مع رؤوس الحوكمة:
+4. اختبر نقاط/خطة البيان/الشبكة:
    ```bash
    sorafs-fetch --plan fixtures/chunk_fetch_specs.json \
      --gateway-provider "...staging config..." \
      --gateway-manifest-id <manifest-hex> \
      --gateway-chunker-handle sorafs.sf1@1.0.0
    ```
-5. تأكد من أن لوحات التليمترية (`torii_sorafs_*`) وقواعد التنبيه تعرض الملف الجديد
+5. تأكد من أن اللوحات التليميترية (`torii_sorafs_*`) وقواعد التنبيه لإصدار الملف الجديد
    دون أخطاء.
 
-## 4. إطلاق الإنتاج
+##4.تخصيص الإنتاج
 
-1. كرر خطوات staging على عقد Torii الإنتاجية.
-2. أعلن نافذة التفعيل (التاريخ/الوقت، فترة السماح، خطة التراجع) لقنوات المشغلين وSDK.
-3. ادمج PR الإصدار الذي يتضمن:
-   - Fixtures وظرفًا محدثين
-   - تغييرات الوثائق (مراجع الميثاق، تقرير الحتمية)
-   - تحديث roadmap/status
-4. ضع وسم الإصدار وأرشف القطع الموقعة لأغراض provenance.
+1. كرر خطوات التدريج على العقد Torii.
+2.شركة نافذة التفعيل (التاريخ/الوقت، فترة لذلك، خطة السماء) لقنوات تشغيل وSDK.
+3. تم دمج نسخة العلاقات العامة التي تشمل:
+   - تركيبات ورفًا محدثين
+   - تفاصيل الوثائق (مراجع الميثاق، تقرير الحتمية)
+   - تحديث خريطة الطريق/الحالة
+4. ضع "أبحث عن حل لكشف قطع الموقع" من حيث المصدر.
 
-## 5. تدقيق ما بعد الإطلاق
+## 5.دقيق ما بعد الاكتشاف
 
-1. التقط المقاييس النهائية (عدادات discovery، معدل نجاح fetch، هيستوغرامات
-   الأخطاء) بعد 24 ساعة من الإطلاق.
-2. حدّث `status.md` بملخص قصير ورابط لتقرير الحتمية.
-3. سجّل أي مهام متابعة (مثل إرشادات إضافية لكتابة الملفات) في `roadmap.md`.
+1.بروتوكول المقاييس النهائية (عدادات الاكتشاف، نجاح نجاح الجلب، هيستوغرامات
+   سبب) بعد 24 ساعة من الفشل.
+2. التحديث `status.md` بملخص مختصر ورابط لتقرير الحتمية.
+3. سجل أي مهمة متابعة (مثل الإرشادات الإضافية والملفات) في `roadmap.md`.

@@ -11,49 +11,50 @@ id: chunker-registry
 title: SoraFS Chunker Profile Registry
 sidebar_label: Chunker Registry
 description: Profile IDs, parameters, and negotiation plan for the SoraFS chunker registry.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
-:::
+::: ማስታወሻ ቀኖናዊ ምንጭ
+::
 
-## SoraFS Chunker Profile Registry (SF-2a)
+## SoraFS Chunker መገለጫ መዝገብ ቤት (SF-2a)
 
-The SoraFS stack negotiates chunking behaviour via a small, namespaced registry.
-Each profile assigns deterministic CDC parameters, semver metadata, and the
-expected digest/multicodec used in manifests and CAR archives.
+የSoraFS ቁልል በትንሽ ስም በተሰየመ መዝገብ የመቁረጥ ባህሪን ይደራደራል።
+እያንዳንዱ መገለጫ የሚወስን የሲዲሲ መለኪያዎችን፣ ሴምቨር ሜታዳታን እና የ
+የሚጠበቀው ዳይጀስት/መልቲኮዴክ በማኒፌስት እና በ CAR መዛግብት ውስጥ ጥቅም ላይ ይውላል።
 
-Profile authors should consult
+የመገለጫ ደራሲዎች ማማከር አለባቸው
 [`docs/source/sorafs/chunker_profile_authoring.md`](./chunker-profile-authoring.md)
-for the required metadata, validation checklist, and proposal template before
-submitting new entries. Once governance has approved a change, follow the
-[registry rollout checklist](./chunker-registry-rollout-checklist.md) and the
-[staging manifest playbook](./staging-manifest-playbook) to promote
-the fixtures through staging and production.
+ከዚህ በፊት ለሚፈለገው ሜታዳታ፣ የማረጋገጫ ዝርዝር እና የፕሮፖዛል አብነት
+አዲስ ግቤቶችን ማስገባት. አንዴ አስተዳደር ለውጡን ካፀደቀ፣ ይከተሉ
+[የመዝገቢያ ልቀት ዝርዝር](./chunker-registry-rollout-checklist.md) እና የ
+[ማሳያ ማጫወቻ መጽሐፍ](./staging-manifest-playbook) ለማስተዋወቅ
+እቃዎቹን በማዘጋጀት እና በማምረት.
 
-### Profiles
+### መገለጫዎች
 
-| Namespace | Name | SemVer | Profile ID | Min (bytes) | Target (bytes) | Max (bytes) | Break mask | Multihash | Aliases | Notes |
-|-----------|------|--------|------------|-------------|----------------|-------------|------------|-----------|---------|-------|
-| `sorafs`  | `sf1` | `1.0.0` | `1` | 65 536 | 262 144 | 524 288 | `0x0000ffff` | `0x1f` (BLAKE3-256) | `["sorafs.sf1@1.0.0"]` | Canonical profile used in SF-1 fixtures |
+| የስም ቦታ | ስም | SemVer | የመገለጫ መታወቂያ | ደቂቃ (ባይት) | ዒላማ (ባይት) | ከፍተኛ (ባይት) | ጭንብል መስበር | መልቲሃሽ | ተለዋጭ ስሞች | ማስታወሻ |
+|--------|-------|--------|------------|------------|
+| `sorafs` | `sf1` | `1.0.0` | `1` | 65536 | 262144 | 524288 | `0x0000ffff` | `0x1f` (BLAKE3-256) | `["sorafs.sf1@1.0.0"]` | በ SF-1 ዕቃዎች ውስጥ ጥቅም ላይ የዋለ ቀኖናዊ መገለጫ |
 
-The registry lives in code as `sorafs_manifest::chunker_registry` (governed by [`chunker_registry_charter.md`](./chunker-registry-charter.md)). Each entry
-is expressed as a `ChunkerProfileDescriptor` with:
+መዝገቡ እንደ I18NI0000022X (በ[`chunker_registry_charter.md`](./chunker-registry-charter.md) የሚተዳደር በኮድ ነው የሚኖረው። እያንዳንዱ ግቤት
+እንደ `ChunkerProfileDescriptor` ተገልጿል፡
 
-* `namespace` – logical grouping of related profiles (e.g., `sorafs`).
-* `name` – human-readable profile label (`sf1`, `sf1-fast`, …).
-* `semver` – semantic version string for the parameter set.
-* `profile` – the actual `ChunkProfile` (min/target/max/mask).
-* `multihash_code` – the multihash used when producing chunk digests (`0x1f`
-  for the SoraFS default).
+* `namespace` - ተዛማጅ መገለጫዎች አመክንዮአዊ ስብስብ (ለምሳሌ `sorafs`)።
+* `name` - በሰው ሊነበብ የሚችል የመገለጫ መለያ (`sf1`፣ `sf1-fast`፣ …)።
+* `semver` - ለትርጉም ስብስብ የፍቺ ስሪት ሕብረቁምፊ።
+* `profile` - ትክክለኛው `ChunkProfile` (ደቂቃ / ዒላማ / ከፍተኛ / ጭንብል).
+* `multihash_code` - የ chunk digestes ለማምረት ጥቅም ላይ የሚውለው መልቲሃሽ (`0x1f`)
+  ለ SoraFS ነባሪ)።
 
-The manifest serializes profiles via `ChunkingProfileV1`. The structure records
-the registry metadata (namespace, name, semver) alongside the raw CDC
-parameters and the alias list shown above. Consumers should first attempt a
-registry lookup by `profile_id` and fall back to the inline parameters when
-unknown IDs appear. Registry charter rules require the canonical handle
-(`namespace.name@semver`) to be the first entry in `profile_aliases`.
+አንጸባራቂው መገለጫዎችን በ`ChunkingProfileV1` በኩል ተከታታይ ያደርገዋል። መዋቅሩ ይመዘግባል
+የመዝገብ ሜታዳታ (ስም ቦታ፣ ስም፣ ሴምቨር) ከጥሬው ሲዲሲ ጋር
+መለኪያዎች እና ከላይ የሚታየው ተለዋጭ ዝርዝር። ሸማቾች መጀመሪያ መሞከር አለባቸው ሀ
+የመመዝገቢያ ፍለጋ በI18NI0000036X እና ወደ የመስመር ውስጥ መለኪያዎች ይመለሱ
+ያልታወቁ መታወቂያዎች ይታያሉ። የመመዝገቢያ ቻርተር ደንቦች ቀኖናዊውን እጀታ ይጠይቃሉ
+(`namespace.name@semver`) በ `profile_aliases` ውስጥ የመጀመሪያው ግቤት ለመሆን።
 
-To inspect the registry from tooling, run the helper CLI:
+መዝገቡን ከመሳሪያነት ለመመርመር፣ አጋዥውን CLI ያሂዱ፡-
 
 ```
 $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
@@ -81,7 +82,7 @@ To inspect a specific PoR witness, provide chunk/segment/leaf indices and
 optionally persist the proof to disk:
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
+$ የካርጎ ሩጫ -p sorafs_manifest --ቢን sorafs_manifest_chunk_store -- ./docs.tar \
     --por-proof=0:0:0 --por-proof-out=leaf.proof.json
 ```
 
@@ -94,7 +95,7 @@ registered aliases) that can be pasted into `chunker_registry_data.rs` when
 promoting a new default profile:
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
+$ የካርጎ ሩጫ -p sorafs_manifest --ቢን sorafs_manifest_chunk_store -- \
     --promote-profile=sorafs.sf1@1.0.0
 ```
 
@@ -107,7 +108,7 @@ To validate an existing proof against a payload, pass the path via
 matches the computed root):
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
+$ የካርጎ ሩጫ -p sorafs_manifest --ቢን sorafs_manifest_chunk_store -- ./docs.tar \
     --por-proof-verify=leaf.proof.json
 ```
 
@@ -116,10 +117,10 @@ output path. The CLI guarantees deterministic ordering (`splitmix64` seeded)
 and will transparently truncate when the request exceeds the available leaves:
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
+$ የካርጎ ሩጫ -p sorafs_manifest --ቢን sorafs_manifest_chunk_store -- ./docs.tar \
     --por-sample=8 --por-sample-seed=0xfeedface --por-sample-out=por.samples.json
 
-The manifest stub mirrors the same data, which is convenient when scripting `--chunker-profile-id` selection in pipelines. Both chunk store CLIs also accept the canonical handle form (`--profile=sorafs.sf1@1.0.0`) so build scripts can avoid hard-coding numeric IDs:
+አንጸባራቂው ስቱብ ተመሳሳይ ውሂብን ያንጸባርቃል፣ ይህም `--chunker-profile-id` ምርጫን በቧንቧ ሲጽፉ ምቹ ነው። ሁለቱም የመደብር ማከማቻ CLIዎች ቀኖናዊውን መያዣ ቅጽ (`--profile=sorafs.sf1@1.0.0`) ይቀበላሉ ስለዚህ ስክሪፕቶችን ይገንቡ ጠንካራ ኮድ የቁጥር መታወቂያዎችን ያስወግዳሉ፡
 
 ```
 $ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- --list-chunker-profiles
@@ -139,12 +140,12 @@ $ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- --list-chunker-prof
 ]
 ```
 
-The `handle` field (`namespace.name@semver`) matches what the CLIs accept via
-`--profile=…`, making it safe to copy directly into automation.
+የ`handle` መስክ (`namespace.name@semver`) CLIs ከሚቀበሉት ጋር ይዛመዳል።
+`--profile=…` ፣ በቀጥታ ወደ አውቶሜትድ ለመቅዳት ደህንነቱ የተጠበቀ ያደርገዋል።
 
-### Negotiating Chunkers
+### ቸንከር መደራደር
 
-Gateways and clients advertise supported profiles via provider adverts:
+መግቢያ መንገዶች እና ደንበኞች የሚደገፉ መገለጫዎችን በአቅራቢ ማስታወቂያዎች ያስተዋውቃሉ፡-
 
 ```
 ProviderAdvertBodyV1 {
@@ -154,30 +155,30 @@ ProviderAdvertBodyV1 {
 }
 ```
 
-Multi-source chunk scheduling is announced via the `range` capability. The
-CLI accepts it with `--capability=range[:streams]`, where the optional numeric
-suffix encodes the provider's preferred range-fetch concurrency (for example,
-`--capability=range:64` advertises a 64-stream budget). When omitted, consumers
-fall back to the general `max_streams` hint published elsewhere in the advert.
+ባለብዙ-ምንጭ ቻንክ መርሐግብር በ`range` አቅም በኩል ይፋ ሆኗል። የ
+CLI ከ I18NI0000045X ጋር ይቀበላል፣የአማራጭ ቁጥር
+ቅጥያ የአቅራቢውን ተመራጭ ክልል-ማምጣትን (ለምሳሌ፦
+`--capability=range:64` ባለ 64-ዥረት በጀት ያስተዋውቃል)። ሲቀሩ ሸማቾች
+በማስታወቂያው ላይ ሌላ ቦታ ወደታተመው አጠቃላይ I18NI0000047X ፍንጭ ይመለሱ።
 
-When requesting CAR data, clients should send an `Accept-Chunker` header listing
-supported `(namespace, name, semver)` tuples in preference order:
+የCAR ውሂብን ሲጠይቁ ደንበኞች የ`Accept-Chunker` አርዕስት ዝርዝር መላክ አለባቸው።
+የሚደገፉ `(namespace, name, semver)` tuples በምርጫ ቅደም ተከተል፡
 
 ```
 Accept-Chunker: sorafs.sf1;version=1.0.0
 ```
 
-Gateways select a mutually supported profile (defaulting to `sorafs.sf1@1.0.0`)
-and reflect the decision via the `Content-Chunker` response header. Manifests
-embed the chosen profile so downstream nodes can validate the chunk layout
-without relying on HTTP negotiation.
+ጌትዌይስ በጋራ የሚደገፍ መገለጫን ምረጥ (ወደ `sorafs.sf1@1.0.0` ነባሪ)
+እና ውሳኔውን በI18NI0000051X ምላሽ ራስጌ በኩል ያንጸባርቁ። ይገለጣል
+የታችኛው አንጓዎች የተቆራረጠውን አቀማመጥ ማረጋገጥ እንዲችሉ የተመረጠውን መገለጫ ይክቱ
+በኤችቲቲፒ ድርድር ላይ ሳንተማመን።
 
-### Conformance
+### ስምምነት
 
-* The `sorafs.sf1@1.0.0` profile maps to the public fixtures in
-  `fixtures/sorafs_chunker` and the corpora registered under
-  `fuzz/sorafs_chunker`. End-to-end parity is exercised in Rust, Go, and Node
-  via the provided tests.
-* `chunker_registry::lookup_by_profile` asserts that the descriptor parameters
-  match `ChunkProfile::DEFAULT` to guard accidental divergence.
-* Manifests produced by `iroha app sorafs toolkit pack` and `sorafs_manifest_stub` include the registry metadata.
+* የ `sorafs.sf1@1.0.0` የመገለጫ ካርታዎች በ ውስጥ ላሉ የህዝብ መገልገያዎች
+  `fixtures/sorafs_chunker` እና ኮርፖራ በስር ተመዝግቧል
+  `fuzz/sorafs_chunker`. ከጫፍ እስከ ጫፍ ያለው እኩልነት በሩስት፣ ሂድ እና መስቀለኛ መንገድ ላይ ይሰራል
+  በቀረቡት ፈተናዎች በኩል.
+* `chunker_registry::lookup_by_profile` ገላጭ መለኪያዎችን ያረጋግጣል
+  የአጋጣሚ ልዩነትን ለመጠበቅ `ChunkProfile::DEFAULT` ግጥሚያ።
+* በI18NI0000057X እና `sorafs_manifest_stub` የተሰሩ መግለጫዎች የመመዝገቢያ ሜታዳታ ያካትታሉ።

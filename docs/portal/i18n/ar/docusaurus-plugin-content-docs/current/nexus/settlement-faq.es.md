@@ -4,35 +4,37 @@ direction: rtl
 source: docs/portal/docs/nexus/settlement-faq.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: nexus-settlement-faq
-title: FAQ de Settlement
-description: Respuestas para operadores que cubren el enrutamiento de settlement, conversion a XOR, telemetria y evidencia de auditoria.
+المعرف: الأسئلة الشائعة حول التسوية
+العنوان: الأسئلة الشائعة حول التسوية
+الوصف: استجابات للمشغلين الذين يشملون عمليات التسوية والتحويل إلى XOR والقياس عن بعد وإثبات السمع.
 ---
 
-Esta pagina refleja el FAQ interno de settlement (`docs/source/nexus_settlement_faq.md`) para que los lectores del portal revisen la misma guia sin hurgar en el mono-repo. Explica como el Settlement Router procesa pagos, que metricas monitorear y como los SDK deben integrar los payloads de Norito.
+تشير هذه الصفحة إلى الأسئلة الشائعة حول التسوية الداخلية (`docs/source/nexus_settlement_faq.md`) لكي يقوم قراء البوابة بمراجعة نفس الشيء دون الحاجة إلى الانتظار في المستودع الأحادي. اشرح كيف يقوم جهاز توجيه التسوية بمعالجة الخطوات التي تقيس المراقبة وكيف يجب أن تتكامل SDK مع حمولات Norito.
 
-## Destacados
+## ديستاكادوس
 
-1. **Mapeo de lanes** - cada dataspace declara un `settlement_handle` (`xor_global`, `xor_lane_weighted`, `xor_hosted_custody` o `xor_dual_fund`). Consulta el catalogo de lanes mas reciente en `docs/source/project_tracker/nexus_config_deltas/`.
-2. **Conversion deterministica** - el router convierte todos los settlements a XOR a traves de las fuentes de liquidez aprobadas por gobernanza. Las lanes privadas prefinancian buffers XOR; los haircuts aplican solo cuando los buffers se desvian de la politica.
-3. **Telemetria** - vigila `nexus_settlement_latency_seconds`, contadores de conversion y medidores de haircut. Los dashboards viven en `dashboards/grafana/nexus_settlement.json` y las alertas en `dashboards/alerts/nexus_audit_rules.yml`.
-4. **Evidencia** - archiva configs, logs del router, exportaciones de telemetria e informes de conciliacion para auditorias.
-5. **Responsabilidades de SDK** - cada SDK debe exponer helpers de settlement, IDs de lane y codificadores de payloads Norito para mantener paridad con el router.
+1. **خرائط الممرات** - تعلن كل مساحة بيانات عن `settlement_handle` (`xor_global`، `xor_lane_weighted`، `xor_hosted_custody` أو `xor_dual_fund`). راجع كتالوج الممرات الأحدث في `docs/source/project_tracker/nexus_config_deltas/`.
+2. **تحديد التحويل** - يقوم جهاز التوجيه بتحويل جميع المستوطنات إلى XOR من خلال تدفقات السائل المعززة من أجل الإدارة. Las Lanes privadas المخازن المؤقتة المالية XOR؛ يتم تطبيق قصات الشعر فقط عند إزالة المخازن المؤقتة من السياسة.
+3. ** القياس عن بعد ** - المراقبة `nexus_settlement_latency_seconds`، وعدادات التحويل، وقياسات قص الشعر. تم تنشيط لوحات المعلومات في `dashboards/grafana/nexus_settlement.json` والتنبيهات في `dashboards/alerts/nexus_audit_rules.yml`.
+4. **الأدلة** - تكوينات الأرشيف وسجلات جهاز التوجيه وتصدير القياسات عن بعد ومعلومات التوفيق بين المستمعين.
+5. **مسؤوليات SDK** - يجب أن تكون كل SDK بمثابة مساعدين للتسوية ومعرفات الممرات ومشفرات الحمولات Norito للحفاظ على تكافؤ جهاز التوجيه.
 
-## Flujos de ejemplo
+## تدفق المثال
 
-| Tipo de lane | Evidencia a capturar | Lo que demuestra |
+| تيبو دي لين | دليل على الالتقاط | لو كيو ديموسترا |
 |-----------|--------------------|----------------|
-| Privada `xor_hosted_custody` | Log del router + `nexus_settlement_latency_seconds{lane}` + `settlement_router_haircut_total{lane}` | Los buffers CBDC debitan XOR deterministica y los haircuts se mantienen dentro de la politica. |
-| Publica `xor_global` | Log del router + referencia DEX/TWAP + metricas de latencia/conversion | La ruta de liquidez compartida fijo el precio de la transferencia al TWAP publicado con cero haircut. |
-| Hibrida `xor_dual_fund` | Log del router que muestra la division publica vs shielded + contadores de telemetria | La mezcla shielded/publica respeto los ratios de gobernanza y registro el haircut aplicado a cada tramo. |
+| بريفادا `xor_hosted_custody` | تسجيل الدخول لجهاز التوجيه + `nexus_settlement_latency_seconds{lane}` + `settlement_router_haircut_total{lane}` | تدين المخازن المؤقتة للعملات الرقمية للبنك المركزي (CBDC) بحتمية XOR ويتم الحفاظ على قصات الشعر داخل السياسة. |
+| بوبليكا `xor_global` | سجل جهاز التوجيه + مرجع DEX/TWAP + مقاييس زمن الاستجابة/التحويل | تتقاسم طريقة السائل سعر النقل مع TWAP المنشور بقص الشعر. |
+| هيبريدا `xor_dual_fund` | سجل جهاز التوجيه الذي يعرض القسم العام مقابل المحمي + أجهزة القياس عن بعد | La mezcla محمية/عامة فيما يتعلق بنسب الإدارة وتسجيل قصة الشعر المطبقة على كل شيء. |
 
-## Necesitas mas detalle?
+## هل تحتاج إلى مزيد من التفاصيل؟
 
-- FAQ completo: `docs/source/nexus_settlement_faq.md`
-- Especificacion del settlement router: `docs/source/settlement_router.md`
-- Playbook de politica CBDC: `docs/source/cbdc_lane_playbook.md`
-- Runbook de operaciones: [Operaciones de Nexus](./nexus-operations)
+- الأسئلة الشائعة كاملة: `docs/source/nexus_settlement_faq.md`
+- مواصفات جهاز التوجيه التسوية: `docs/source/settlement_router.md`
+- قواعد اللعبة السياسية CBDC: `docs/source/cbdc_lane_playbook.md`
+- دليل العمليات: [عمليات Nexus](./nexus-operations)

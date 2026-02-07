@@ -9,99 +9,100 @@ source_last_modified: "2026-01-05T09:28:11.867590+00:00"
 translation_last_reviewed: 2026-02-07
 title: Release Process
 summary: Run the CLI/SDK release gate, apply the shared versioning policy, and publish canonical release notes.
+translator: machine-google-reviewed
 ---
 
-# Release Process
+# ဖြန့်ချိရေးလုပ်ငန်းစဉ်
 
-SoraFS binaries (`sorafs_cli`, `sorafs_fetch`, helpers) and SDK crates
-(`sorafs_car`, `sorafs_manifest`, `sorafs_chunker`) ship together. The release
-pipeline keeps the CLI and libraries aligned, ensures lint/test coverage, and
-captures artefacts for downstream consumers. Run the checklist below for every
-candidate tag.
+SoraFS binaries (`sorafs_cli`၊ `sorafs_fetch`၊ ကူညီသူများ) နှင့် SDK သေတ္တာများ
+(`sorafs_car`, `sorafs_manifest`, `sorafs_chunker`) အတူတကွ သင်္ဘော။ လွှတ်လိုက်သည်
+ပိုက်လိုင်းသည် CLI နှင့် စာကြည့်တိုက်များကို လိုက်လျောညီထွေဖြစ်အောင်၊ ပိုးမွှား/စမ်းသပ်မှု လွှမ်းခြုံမှုကို သေချာစေသည်၊ နှင့်
+မြစ်အောက်ပိုင်း စားသုံးသူများအတွက် အနုပညာပစ္စည်းများကို ဖမ်းယူသည်။ တစ်ခုချင်းစီအတွက် အောက်ပါ checklist ကို run ပါ။
+ကိုယ်စားလှယ်လောင်း tag
 
-## 0. Confirm security review sign-off
+## 0။ လုံခြုံရေးသုံးသပ်ချက်ကို အတည်ပြုရန် လက်မှတ်ထိုး-ပိတ်ပါ။
 
-Before executing the technical release gate, capture the latest security review
-artefacts:
+နည်းပညာပိုင်းဆိုင်ရာ ထုတ်ပေးရေးဂိတ်ကို မလုပ်ဆောင်မီ နောက်ဆုံးပေါ် လုံခြုံရေးသုံးသပ်ချက်ကို ဖမ်းယူပါ။
+လက်ရာများ-
 
-- Download the most recent SF-6 security review memo ([reports/sf6-security-review](./reports/sf6-security-review.md))
-  and record its SHA256 hash in the release ticket.
-- Attach the remediation ticket link (e.g., `governance/tickets/SF6-SR-2026.md`) and note the sign-off
-  approvers from Security Engineering and the Tooling Working Group.
-- Verify that the remediation checklist in the memo is closed; unresolved items block the release.
-- Prepare to upload parity harness logs (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`)
-  alongside the manifest bundle.
-- Confirm the signing command you plan to run includes both `--identity-token-provider` and an explicit
-  `--identity-token-audience=<aud>` so Fulcio scope is captured in the release evidence.
+- နောက်ဆုံးရ SF-6 လုံခြုံရေးပြန်လည်သုံးသပ်ရေးမှတ်စုကို ဒေါင်းလုဒ်လုပ်ပါ ([အစီရင်ခံစာများ/sf6-လုံခြုံရေး-သုံးသပ်ချက်](./reports/sf6-security-review.md))
+  နှင့် ၎င်း၏ SHA256 hash ကို ထုတ်ဝေခွင့်လက်မှတ်တွင် မှတ်တမ်းတင်ပါ။
+- ပြန်လည်ပြင်ဆင်ခြင်းလက်မှတ်လင့်ခ်ကို ပူးတွဲပါ (ဥပမာ၊ `governance/tickets/SF6-SR-2026.md`) နှင့် လက်မှတ်ထိုးပိတ်ခြင်းကို မှတ်သားပါ။
+  Security Engineering နှင့် Tooling Working Group တို့မှ အတည်ပြုသူများ။
+- မှတ်စုတိုပါရှိ ပြန်လည်ပြင်ဆင်ခြင်းစာရင်းကို ပိတ်ထားကြောင်း စစ်ဆေးပါ။ မဖြေရှင်းရသေးသော အရာများသည် ထုတ်ဝေမှုကို ပိတ်ဆို့ထားသည်။
+- တူညီသောကြိုးကြိုးမှတ်တမ်းများ (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`) ကို အပ်လုဒ်လုပ်ရန် ပြင်ဆင်ပါ။
+  manifest အစုအဝေးနှင့်အတူ။
+- `--identity-token-provider` နှင့် တိကျပြတ်သားသော နှစ်ခုလုံးပါ၀င်ရန် သင်လုပ်ဆောင်ရန် စီစဉ်ထားသည့် လက်မှတ်ရေးထိုးခြင်းကို အတည်ပြုပါ
+  `--identity-token-audience=<aud>` ထို့ကြောင့် Fulcio နယ်ပယ်ကို သက်သေအထောက်အထားတွင် ဖမ်းယူထားသည်။
 
-Include these artefacts when notifying governance and publishing the release.
+အုပ်ချုပ်ရေးကို အကြောင်းကြားပြီး ထုတ်ဝေဖြန့်ချိသည့်အခါတွင် ဤအရာများကို ထည့်သွင်းပါ။
 
-## 1. Execute the release/test gate
+## 1. လွှတ်/စမ်းသပ်ဂိတ်ကို လုပ်ဆောင်ပါ။
 
-The `ci/check_sorafs_cli_release.sh` helper runs formatting, Clippy, and tests
-across the CLI and SDK crates with a workspace-local target directory (`.target`)
-to avoid permission conflicts when executing inside CI containers.
+`ci/check_sorafs_cli_release.sh` အကူအညီပေးသူက ဖော်မတ်ချခြင်း၊ Clippy နှင့် စမ်းသပ်မှုများကို လုပ်ဆောင်သည်။
+အလုပ်ခွင်-ဒေသခံ ပစ်မှတ်လမ်းညွှန် (`.target`) ဖြင့် CLI နှင့် SDK သေတ္တာများတစ်လျှောက်
+CI ကွန်တိန်နာများအတွင်း လုပ်ဆောင်သည့်အခါ ခွင့်ပြုချက်ကွဲလွဲမှုများကို ရှောင်ရှားရန်။
 
 ```bash
 CARGO_TARGET_DIR=.target ci/check_sorafs_cli_release.sh
 ```
 
-The script performs the following assertions:
+ဇာတ်ညွှန်းသည် အောက်ပါအချက်များကို လုပ်ဆောင်သည်-
 
-- `cargo fmt --all -- --check` (workspace)
-- `cargo clippy --locked --all-targets` for `sorafs_car` (with the `cli` feature),
-  `sorafs_manifest`, and `sorafs_chunker`
-- `cargo test --locked --all-targets` for those same crates
+- `cargo fmt --all -- --check` (အလုပ်ခွင်)
+- `sorafs_car` အတွက် `cargo clippy --locked --all-targets` (`cli`)၊
+  `sorafs_manifest` နှင့် `sorafs_chunker`
+- အလားတူသေတ္တာများအတွက် `cargo test --locked --all-targets`
 
-If any step fails, fix the regression before tagging. Release builds must be
-continuous with main; do not cherry-pick fixes into release branches. The gate
-also checks that keyless signing flags (`--identity-token-issuer`, `--identity-token-audience`)
-are provided where applicable; missing arguments fail the run.
+အဆင့်တစ်ခုခု အဆင်မပြေပါက၊ တဂ်မတင်မီ ဆုတ်ယုတ်မှုကို ပြင်ဆင်ပါ။ ဖြန့်ချိရေးတွေ လုပ်ရမယ်။
+ပင်မနှင့်အတူအဆက်မပြတ်; အကိုင်းအခက်များတွင် ချယ်ရီကောက်ပြင်ဆင်ခြင်းများ မလုပ်ပါနှင့်။ တံခါး
+သော့မပါသော ဆိုင်းဘုတ်များ (`--identity-token-issuer`၊ `--identity-token-audience`)ကိုလည်း စစ်ဆေးသည်
+သက်ဆိုင်သည့်နေရာတွင် ပံ့ပိုးပေးထားသည်။ ပျောက်ဆုံးနေသော အကြောင်းပြချက်များသည် ပြေး၍မရပါ။
 
-## 2. Apply the versioning policy
+## 2. မူကွဲမူဝါဒကို ကျင့်သုံးပါ။
 
-All SoraFS CLI/SDK crates use SemVer:
+SoraFS CLI/SDK သေတ္တာအားလုံး SemVer ကို အသုံးပြုသည်-
 
-- `MAJOR`: Introduced for the first 1.0 release. Before 1.0 the `0.y` minor bump
-  **indicates breaking changes** in the CLI surface or Norito schemas.
-  fields gated behind optional policy, telemetry additions).
-- `PATCH`: Bug fixes, documentation-only releases, and dependency updates that
-  do not change observable behaviour.
+- `MAJOR`- ပထမဆုံး 1.0 ထွက်ရှိမှုအတွက် မိတ်ဆက်ခဲ့သည်။ 1.0 မတိုင်မီတွင် `0.y` သည် အနည်းငယ်သော အဖုအထစ်ဖြစ်သည်။
+  ** CLI မျက်နှာပြင် သို့မဟုတ် Norito schemas တွင် ပျက်စီးနေသောပြောင်းလဲမှုများကို ညွှန်ပြသည်။
+  ရွေးချယ်နိုင်ခွင့်မူဝါဒ၊ တယ်လီမီတာ ပေါင်းထည့်မှုများ) နောက်ကွယ်တွင် ကန့်သတ်ထားသော အကွက်များ။
+- `PATCH`- ချွတ်ယွင်းချက်ပြင်ဆင်မှုများ၊ စာရွက်စာတမ်းသီးသန့်ထုတ်ဝေမှုများနှင့် မှီခိုမှုအပ်ဒိတ်များ
+  မြင်နိုင်သော အပြုအမူကို မပြောင်းလဲပါနှင့်။
 
-Always keep `sorafs_car`, `sorafs_manifest`, and `sorafs_chunker` on the same
-version so downstream SDK consumers can depend on a single aligned version
-string. When bumping versions:
+`sorafs_car`၊ `sorafs_manifest` နှင့် `sorafs_chunker` တို့ကို အမြဲအတူတူထားပါ။
+ဗားရှင်း SDK သုံးစွဲသူများသည် တစ်ခုတည်းသော aligned ဗားရှင်းပေါ်တွင်မူတည်နိုင်သောကြောင့် ဗားရှင်း
+ကြိုးတစ်ချောင်း။ ဗားရှင်းများ ပေါက်ကွဲသောအခါ-
 
-1. Update `version =` fields in each crate’s `Cargo.toml`.
-2. Regenerate the `Cargo.lock` via `cargo update -p <crate>@<new-version>` (the
-   workspace enforces explicit versions).
-3. Run the release gate again to ensure no stale artefacts remain.
+1. သေတ္တာတစ်ခုစီ၏ `Cargo.toml` ရှိ `version =` အကွက်များကို အပ်ဒိတ်လုပ်ပါ။
+2. `Cargo.lock` ကို `cargo update -p <crate>@<new-version>` (the
+   workspace သည် ရှင်းလင်းပြတ်သားသော ဗားရှင်းများကို ပြဌာန်းသည်)။
+3. ဟောင်းနွမ်းနေသော ရှေးဟောင်းပစ္စည်းများ မကျန်တော့ကြောင်း သေချာစေရန်အတွက် ထွက်လာသည့်တံခါးကို ထပ်မံလုပ်ဆောင်ပါ။
 
-## 3. Prepare release notes
+## ၃။ ထုတ်ပြန်ချက် မှတ်စုများကို ပြင်ဆင်ပါ။
 
-Every release must publish a markdown changelog that highlights CLI, SDK, and
-governance-impacting changes. Use the template in
-`docs/examples/sorafs_release_notes.md` (copy it to your release artifacts
-directory and fill in the sections with concrete details).
+ထုတ်ဝေမှုတိုင်းသည် CLI၊ SDK နှင့် မီးမောင်းထိုးပြသော markdown changelog ကိုထုတ်ဝေရပါမည်။
+အုပ်ချုပ်ရေးကို ထိခိုက်စေသော အပြောင်းအလဲများ။ ပုံစံပုံစံကို အသုံးပြုပါ။
+`docs/examples/sorafs_release_notes.md` (၎င်းကို သင့်ထုတ်လွှတ်သည့် ရှေးဟောင်းပစ္စည်းများသို့ ကူးယူပါ။
+လမ်းညွှန်နှင့် တိကျသောအသေးစိတ်အချက်အလက်များဖြင့် အပိုင်းများကို ဖြည့်ပါ။)
 
-Minimum content:
+အနည်းဆုံး အကြောင်းအရာ-
 
-- **Highlights**: feature headlines for CLI and SDK consumers.
-  requirements.
-- **Upgrade steps**: TL;DR commands for bumping cargo dependencies and rerunning
-  deterministic fixtures.
-- **Verification**: command output hashes or envelopes and the exact
-  `ci/check_sorafs_cli_release.sh` revision executed.
+- **အထူးအဆန်းများ**- CLI နှင့် SDK သုံးစွဲသူများအတွက် ခေါင်းစီးများပါရှိပါသည်။
+  လိုအပ်ချက်တွေ
+- **အဆင့်မြှင့်တင်ရန် အဆင့်**- TL;DR သည် ကုန်တင်ကုန်ချ မှီခိုမှုနှင့် ပြန်လည်လည်ပတ်ခြင်းအတွက် အတားအဆီးများ
+  အဆုံးအဖြတ်ပွဲများ။
+- **အတည်ပြုခြင်း**- အမိန့်ပေးထားသော hashes သို့မဟုတ် စာအိတ်များနှင့် အတိအကျ
+  `ci/check_sorafs_cli_release.sh` တည်းဖြတ်မှုကို လုပ်ဆောင်ပြီးပါပြီ။
 
-Attach the filled release notes to the tag (e.g., GitHub release body) and store
-them alongside deterministically generated artefacts.
+ဖြည့်စွက်ထားသော ထုတ်ဝေမှုမှတ်စုများကို တဂ် (ဥပမာ၊ GitHub ထုတ်ဝေမှုကိုယ်ထည်) တွင် ပူးတွဲပြီး သိမ်းဆည်းပါ။
+၎င်းတို့ကို အဆုံးအဖြတ်ပေးသော ပစ္စည်းများနှင့်အတူ၊
 
-## 4. Execute release hooks
+## 4. လွှတ်တင်ချိတ်များကို အကောင်အထည်ဖော်ပါ။
 
-Run `scripts/release_sorafs_cli.sh` to generate the signature bundle and
-verification summary that ship with every release. The wrapper builds the CLI
-when necessary, calls `sorafs_cli manifest sign`, and immediately replays
-`manifest verify-signature` so failures surface before tagging. Example:
+လက်မှတ်အစုအဝေးကိုထုတ်လုပ်ရန် `scripts/release_sorafs_cli.sh` ကိုဖွင့်ပါ။
+ထုတ်ဝေမှုတိုင်းနှင့် ပေးပို့သော အတည်ပြုချက်အနှစ်ချုပ်။ ထုပ်ပိုးမှုသည် CLI ကိုတည်ဆောက်သည်။
+လိုအပ်ပါက `sorafs_cli manifest sign` ကိုခေါ်ဆိုပြီး ချက်ချင်းပြန်ဖွင့်ပါ။
+`manifest verify-signature` ထို့ကြောင့် tagging မလုပ်မီ ပျက်ကွက်မှုများပေါ်လာသည်။ ဥပမာ-
 
 ```bash
 scripts/release_sorafs_cli.sh \
@@ -115,31 +116,31 @@ scripts/release_sorafs_cli.sh \
   --expect-token-hash "$(cat .release/token.hash)"
 ```
 
-Tips:
+အကြံပြုချက်များ
 
-- Track release inputs (payload, plans, summaries, expected token hash) in your
-  repo or deployment config so the script remains reproducible. The CI fixture
-  bundle under `fixtures/sorafs_manifest/ci_sample/` shows the canonical layout.
-- Base CI automation on `.github/workflows/sorafs-cli-release.yml`; it runs the
-  release gate, invokes the script above, and archives bundles/signatures as
-  workflow artefacts. Mirror the same command order (release gate → sign →
-  verify) in other CI systems so audit logs line up with the generated hashes.
-- Keep the generated `manifest.bundle.json`, `manifest.sig`,
-  `manifest.sign.summary.json`, and `manifest.verify.summary.json` together—they
-  form the packet referenced in the governance notification.
-- When the release updates canonical fixtures, copy the refreshed manifest,
-  chunk plan, and summaries into `fixtures/sorafs_manifest/ci_sample/` (and update
-  `docs/examples/sorafs_ci_sample/manifest.template.json`) before tagging.
-  Downstream operators depend on the committed fixtures to reproduce the release
-  bundle.
-- Capture the run log for `sorafs_cli proof stream` bounded-channel verification and attach it to the
-  release packet to demonstrate proof streaming safeguards remain active.
-- Record the exact `--identity-token-audience` used during signing in the release notes; governance
-  cross-checks the audience against Fulcio policy before approving publication.
+- သင့်တွင် ထွက်ရှိလာသော သွင်းအားစုများ (အခကြေးငွေ၊ အစီအစဥ်များ၊ အကျဉ်းချုပ်များ၊ မျှော်မှန်းထားသော တိုကင် hash) ကို ခြေရာခံပါ။
+  repo သို့မဟုတ် deployment config သည် script ကိုဆက်လက်ထုတ်လုပ်နိုင်သည်။ CI ခံစစ်မှူး
+  `fixtures/sorafs_manifest/ci_sample/` အောက်တွင်အတွဲလိုက်သည် canonical layout ကိုပြသသည်။
+- `.github/workflows/sorafs-cli-release.yml` တွင် အခြေခံ CI အလိုအလျောက်စနစ် ၎င်းသည် run သည်။
+  ထွက်လာသည့်ဂိတ်၊ အပေါ်က script ကိုခေါ်ပြီး အစုအစည်း/လက်မှတ်များအဖြစ် မော်ကွန်းတင်ပါ။
+  အလုပ်အသွားအလာ လက်ရာများ။ တူညီသော အမိန့်ပေးအမိန့်ကို ကြေးမုံပြင် (ထွက်ပေါက် → ဆိုင်းဘုတ် →
+  Verify) အခြား CI စနစ်များတွင် စစ်ဆေးခြင်း မှတ်တမ်းများကို ထုတ်လုပ်ထားသော hashes များဖြင့် တန်းစီပါ။
+- ထုတ်လုပ်ထားသော `manifest.bundle.json`, `manifest.sig`၊
+  `manifest.sign.summary.json` နှင့် `manifest.verify.summary.json` အတူတူ—သူတို့
+  အုပ်ချုပ်ရေး အမိန့်ကြော်ငြာစာတွင် ကိုးကားထားသော ပက်ကေ့ခ်ျကို ဖွဲ့ပါ။
+- ထုတ်ဝေမှုသည် canonical fixtures များကို အပ်ဒိတ်လုပ်သောအခါ၊ ပြန်လည်ဆန်းသစ်ထားသော manifest ကို ကူးယူပါ။
+  အပိုင်းအစီအစဉ်နှင့် `fixtures/sorafs_manifest/ci_sample/` (နှင့် အပ်ဒိတ်
+  တံဆိပ်မကပ်မီ `docs/examples/sorafs_ci_sample/manifest.template.json`)။
+  အောက်ပိုင်းအော်ပရေတာများသည် ထုတ်လွှင့်မှုကို ပြန်ထုတ်ပေးရန် ကတိပြုထားသည့် ပွဲစဉ်များပေါ်တွင် မူတည်သည်။
+  အတွဲ။
+- `sorafs_cli proof stream` ကန့်သတ်ထားသော ချန်နယ်အတည်ပြုခြင်းအတွက် လည်ပတ်မှုမှတ်တမ်းကို ဖမ်းယူပြီး ၎င်းကို ပူးတွဲပါ
+  တိုက်ရိုက်ထုတ်လွှင့်ခြင်းဆိုင်ရာ အကာအကွယ်များကို သက်သေပြရန် ပက်ကေ့ချ်ကို ထုတ်လွှတ်ပါ။
+- ထုတ်ဝေမှုမှတ်စုများတွင် လက်မှတ်ထိုးရာတွင် အသုံးပြုသည့် `--identity-token-audience` အတိအကျကို မှတ်တမ်းတင်ပါ။ အုပ်ချုပ်မှု
+  ထုတ်ဝေမှုကို အတည်ပြုခြင်းမပြုမီ Fulcio မူဝါဒကို ဆန့်ကျင်သည့် ပရိသတ်အား အပြန်အလှန်စစ်ဆေးသည်။
 
-Use `scripts/sorafs_gateway_self_cert.sh` when the release also carries a
-gateway rollout. Point it at the same manifest bundle to prove the attestation
-matches the candidate artefact:
+ထုတ်ဝေမှုတွင်လည်း ပါဝင်လာသောအခါ `scripts/sorafs_gateway_self_cert.sh` ကို အသုံးပြုပါ။
+တံခါးပေါက်ထွက်ခြင်း။ သက်သေခံချက်ကို သက်သေပြရန် ၎င်းကို တူညီသောဖော်ပြချက်အစုအဝေးတွင် ညွှန်ပြပါ။
+ကိုယ်စားလှယ်လောင်း၏လက်ရာနှင့် ကိုက်ညီသည်-
 
 ```bash
 scripts/sorafs_gateway_self_cert.sh --config docs/examples/sorafs_gateway_self_cert.conf \
@@ -147,42 +148,42 @@ scripts/sorafs_gateway_self_cert.sh --config docs/examples/sorafs_gateway_self_c
   --manifest-bundle artifacts/release/manifest.bundle.json
 ```
 
-## 5. Tag and publish
+## 5. Tag လုပ်ပြီး ထုတ်ဝေပါ။
 
-After the checks pass and hooks complete:
+စစ်ဆေးမှုများ ပြီးဆုံးပြီးနောက်၊
 
-1. Run `sorafs_cli --version` and `sorafs_fetch --version` to confirm binaries
-   report the new version.
-2. Prepare the release configuration in a checked-in `sorafs_release.toml`
-   (preferred) or another config file tracked by your deployment repo. Avoid
-   relying on ad-hoc environment variables; pass paths to the CLI with
-   `--config` (or equivalent) so the release inputs are explicit and
-   reproducible.
-3. Create a signed tag (preferred) or annotated tag:
+1. binaries ကိုအတည်ပြုရန် `sorafs_cli --version` နှင့် `sorafs_fetch --version` ကိုဖွင့်ပါ
+   ဗားရှင်းအသစ်ကို သတင်းပို့ပါ။
+2. check-in `sorafs_release.toml` တွင် ထုတ်ဝေမှုပုံစံကို ပြင်ဆင်ပါ။
+   (ဦးစားပေးသည်) သို့မဟုတ် သင်၏ ဖြန့်ကျက်မှု repo မှ ခြေရာခံထားသော အခြား config ဖိုင်။ ရှောင်ပါ။
+   ad-hoc ပတ် ၀ န်းကျင် ကိန်းရှင်များကို အားကိုးခြင်း၊ CLI သို့လမ်းကြောင်းများဖြတ်သန်းပါ။
+   `--config` (သို့မဟုတ် ညီမျှ) ထို့ကြောင့် ထုတ်လွှတ်မှုထည့်သွင်းချက်များသည် ရှင်းလင်းပြတ်သားပြီး
+   မျိုးပွားနိုင်သော။
+3. လက်မှတ်ရေးထိုးထားသော tag (နှစ်သက်ရာ) သို့မဟုတ် အမှတ်အသားပြုထားသော တဂ်ကို ဖန်တီးပါ-
    ```bash
    git tag -s sorafs-vX.Y.Z -m "SoraFS CLI & SDK vX.Y.Z"
    git push origin sorafs-vX.Y.Z
    ```
-4. Upload artefacts (CAR bundles, manifests, proof summaries, release notes,
-   attestation outputs) to the project registry following the governance
-   checklist in [deployment guide](./developer-deployment.md). If the release
-   minted new fixtures, push them to the shared fixture repo or object store so
-   audit automation can diff the published bundle against source control.
-5. Notify the governance channel with links to the signed tag, release notes,
-   manifest bundle/signature hashes, the archived `manifest.sign/verify` summaries,
-   and any attestation envelopes. Include the CI job URL (or log archive) that
-   ran `ci/check_sorafs_cli_release.sh` and `scripts/release_sorafs_cli.sh`. Update
-   the governance ticket so auditors can trace approvals to artefacts; when the
-   `.github/workflows/sorafs-cli-release.yml` job posts notifications, link the
-   recorded hash outputs rather than pasting ad-hoc summaries.
+4. ပစ္စည်းများကို အပ်လုဒ်လုပ်ပါ (CAR အစုအဝေးများ၊ ဖော်ပြချက်များ၊ အထောက်အထား အနှစ်ချုပ်များ၊ ထုတ်ပြန်ချက် မှတ်စုများ၊
+   သက်သေခံချက်များ) စီမံအုပ်ချုပ်မှုအောက်ရှိ ပရောဂျက်မှတ်ပုံတင်ခြင်းသို့
+   [အသုံးပြုမှုလမ်းညွှန်](./developer-deployment.md) တွင် စစ်ဆေးရန်စာရင်း။ လွှတ်လိုက်လျှင်
+   အသစ်ပြင်ဆင်ပြီးပါက ၎င်းတို့ကို မျှဝေထားသော fixture repo သို့မဟုတ် object store သို့ တွန်းပို့ပါ။
+   စာရင်းစစ် အလိုအလျောက်စနစ်သည် ထုတ်ဝေထားသော အစုအစည်းကို ရင်းမြစ်ထိန်းချုပ်မှုနှင့် ကွဲပြားနိုင်သည်။
+5. လက်မှတ်ထိုးထားသော tag လင့်ခ်များပါရှိသော အုပ်ချုပ်မှုချန်နယ်ကို အသိပေးပါ၊
+   အစုအစည်း/ လက်မှတ် ဟက်ကာများ၊ သိမ်းဆည်းထားသော `manifest.sign/verify` အနှစ်ချုပ်များ၊
+   အထောက်အထားစာအိတ်များ။ CI အလုပ် URL (သို့မဟုတ် မှတ်တမ်း archive) ကို ထည့်သွင်းပါ။
+   `ci/check_sorafs_cli_release.sh` နှင့် `scripts/release_sorafs_cli.sh` တို့ကို လုပ်ဆောင်ခဲ့သည်။ မွမ်းမံ
+   စာရင်းစစ်များသည် ရှေးဟောင်းပစ္စည်းများ၏ အတည်ပြုချက်ကို ခြေရာခံနိုင်စေရန် အုပ်ချုပ်မှုလက်မှတ်၊ ဘယ်အချိန်မှာ
+   `.github/workflows/sorafs-cli-release.yml` အလုပ်ပို့စ်များ အသိပေးချက်များ၊ လင့်ခ်
+   ad-hoc အနှစ်ချုပ်များကို ကူးထည့်မည့်အစား မှတ်တမ်းတင်ထားသော hash အထွက်များ။
 
-## 6. Post-release follow-up
+## 6. ထုတ်ပြန်ပြီးနောက် နောက်ဆက်တွဲ
 
-- Ensure documentation pointing at the new version (quickstarts, CI templates)
-  is updated or confirm no changes are required.
-- File roadmap entries if follow-on work (e.g., migration flags, deprecation of
-- Archive the release gate output logs for auditors—store them beside the signed
-  artefacts.
+- ဗားရှင်းအသစ်တွင် ညွှန်ပြထားသော စာရွက်စာတမ်းများကို သေချာစစ်ဆေးပါ (အမြန်စတင်မှုများ၊ CI နမူနာများ)
+  အပ်ဒိတ်လုပ်သည် သို့မဟုတ် ပြောင်းလဲမှုမလိုအပ်ကြောင်း အတည်ပြုသည်။
+- နောက်ဆက်တွဲလုပ်ဆောင်နေပါက လမ်းပြမြေပုံထည့်သွင်းမှုများ (ဥပမာ၊ ရွှေ့ပြောင်းခြင်းအလံများ၊ ဖျက်သိမ်းခြင်း
+- စာရင်းစစ်များအတွက် ထုတ်လွှတ်သည့် ဂိတ်အထွက်မှတ်တမ်းများကို သိမ်းဆည်းပါ- ၎င်းတို့ကို လက်မှတ်ရေးထိုးထားသည့် ဘေးတွင် သိမ်းဆည်းပါ။
+  ရှေးဟောင်းပစ္စည်း။
 
-Following this pipeline keeps the CLI, SDK crates, and governance collateral in
-lock-step for each release cycle.
+ဤပိုက်လိုင်းကို လိုက်နာခြင်းဖြင့် CLI၊ SDK သေတ္တာများနှင့် အုပ်ချုပ်မှုဆိုင်ရာ အာမခံပစ္စည်းများကို ထည့်သွင်းထားသည်။
+ထုတ်လွှင့်မှုစက်ဝန်းတစ်ခုစီအတွက် သော့ခတ်အဆင့်။

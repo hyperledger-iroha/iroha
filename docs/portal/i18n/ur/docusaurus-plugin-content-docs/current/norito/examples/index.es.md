@@ -4,18 +4,20 @@ direction: rtl
 source: docs/portal/docs/norito/examples/index.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: Ejemplos de Norito
-description: Fragmentos de Kotodama seleccionados con recorridos del libro mayor.
-slug: /norito/examples
+عنوان: Norito کی مثالیں
+تفصیل: لیجر واک تھرو کے ساتھ Kotodama کے منتخب کردہ ٹکڑے۔
+سلگ: /نوریٹو /مثالیں
 ---
 
-Estos ejemplos reflejan los quickstarts de los SDK y los recorridos del libro mayor. Cada fragmento incluye una lista de verificación del libro mayor y enlaza a las guías de Rust, Python y JavaScript para que puedas repetir el mismo escenario de principio a fin.
+یہ مثالیں SDK کوئیک اسٹارٹ اور لیجر واک تھرو کی عکاسی کرتی ہیں۔ ہر ٹکڑے میں ایک لیجر چیک لسٹ اور زنگ ، ازگر ، اور جاوا اسکرپٹ گائڈز کے لنکس شامل ہیں تاکہ آپ شروع سے ختم ہونے تک اسی منظر کو دہرا سکیں۔
 
-- **[Esqueleto del entrypoint Hajimari](./hajimari-entrypoint)** — Andamiaje mínimo de contrato Kotodama con un único entrypoint público y un manejador de estado.
-- **[Registrar dominio y acuñar activos](./register-and-mint)** — Demuestra la creación de dominios con permisos, el registro de activos y la acuñación determinista.
-- **[Invocar transferencia del host desde Kotodama](./call-transfer-asset)** — Demuestra cómo un entrypoint de Kotodama puede llamar a la instrucción de host `transfer_asset` con validación de metadatos en línea.
-- **[Transferir activo entre cuentas](./transfer-asset)** — Flujo directo de transferencia de activos que refleja los quickstarts de los SDK y los recorridos del libro mayor.
-- **[Acuñar, transferir y quemar un NFT](./nft-flow)** — Recorre el ciclo de vida de un NFT de extremo a extremo: acuñación al propietario, transferencias, etiquetado de metadatos y quema.
+- **۔
+- **۔
+۔
+- **۔
+- ** [ٹکسال ، ایک NFT کی منتقلی اور جلائیں]

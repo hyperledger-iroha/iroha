@@ -6,27 +6,28 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 926ec1446b2ed51270a59a2842ba668cc442cf47f6c7bb0bd8b3189f7d16e738
 source_last_modified: "2026-01-22T15:38:30.655816+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Rust SDK Quickstart
+# Быстрый старт Rust SDK
 
-The Rust client API lives in the `iroha` crate, which exposes a `client::Client`
-type for talking to Torii. Use it when you need to submit transactions,
-subscribe to events, or query state from a Rust application.
+Клиентский API Rust находится в крейте `iroha`, который предоставляет файл `client::Client`.
+введите для разговора с Torii. Используйте его, когда вам нужно отправить транзакции,
+подписывайтесь на события или запрашивайте состояние из приложения Rust.
 
-## 1. Add the crate
+## 1. Добавьте ящик
 
 ```toml title="Cargo.toml"
 [dependencies]
 iroha = { path = "../../crates/iroha", features = ["client"] }
 ```
 
-The workspace example unlocks the client module via the `client` feature. If you
-consume the published crate, replace the `path` attribute with the current
-version string.
+Пример рабочей области разблокирует клиентский модуль с помощью функции `client`. Если ты
+использовать опубликованный крейт, замените атрибут `path` текущим
+строка версии.
 
-## 2. Configure the client
+## 2. Настройте клиент
 
 ```rust title="src/main.rs"
 use iroha::client::{Client, ClientConfiguration};
@@ -45,10 +46,10 @@ fn main() -> eyre::Result<()> {
 }
 ```
 
-`ClientConfiguration` mirrors the CLI configuration file: it includes Torii and
-telemetry URLs, authentication material, timeouts, and batching preferences.
+`ClientConfiguration` отражает файл конфигурации CLI: он включает Torii и
+URL-адреса телеметрии, материалы аутентификации, тайм-ауты и настройки пакетной обработки.
 
-## 3. Submit a transaction
+## 3. Отправьте транзакцию
 
 ```rust
 use iroha::client::{Client, ClientConfiguration};
@@ -88,11 +89,11 @@ fn submit_example() -> eyre::Result<()> {
 }
 ```
 
-Under the hood the client uses Norito to encode the transaction payload before
-posting it to Torii. If submission succeeds, the returned hash can be used to
-track status via `client.poll_transaction_status(hash)`.
+Под капотом клиент использует Norito для кодирования полезных данных транзакции перед
+разместив это на Torii. Если отправка прошла успешно, возвращенный хеш можно использовать для
+отслеживать статус через `client.poll_transaction_status(hash)`.
 
-## 4. Submit DA blobs
+## 4. Отправьте объекты DA
 
 ```rust
 use iroha::client::{Client, ClientConfiguration};
@@ -115,11 +116,11 @@ fn submit_da_blob() -> eyre::Result<()> {
 }
 ```
 
-When you need to inspect or persist the Norito payload without sending it to
-Torii, call `client.build_da_ingest_request(...)` to obtain the signed request
-and render it as JSON/bytes, mirroring `iroha app da submit --no-submit`.
+Когда вам нужно проверить или сохранить полезную нагрузку Norito, не отправляя ее в
+Torii, позвоните `client.build_da_ingest_request(...)`, чтобы получить подписанный запрос.
+и визуализировать его как JSON/bytes, зеркально отображая `iroha app da submit --no-submit`.
 
-## 5. Query data
+## 5. Запрос данных
 
 ```rust
 use iroha::client::{Client, ClientConfiguration};
@@ -135,11 +136,11 @@ fn list_domains() -> eyre::Result<()> {
 }
 ```
 
-Queries follow the request/response pattern: construct a query type from
-`iroha_data_model::query`, send it via `client.request`, and iterate over the
-results. Responses use Norito-backed JSON, so the wire format is deterministic.
+Запросы следуют шаблону запрос/ответ: создайте тип запроса из
+`iroha_data_model::query`, отправьте его через `client.request` и выполните итерацию по
+результаты. В ответах используется JSON с поддержкой Norito, поэтому формат передачи является детерминированным.
 
-## 6. Subscribe to events
+## 6. Подпишитесь на события
 
 ```rust
 use iroha::client::{Client, ClientConfiguration};
@@ -159,20 +160,20 @@ async fn listen_for_blocks() -> eyre::Result<()> {
 }
 ```
 
-The client exposes async streams for Torii’s SSE endpoints, including pipeline
-events, data events, and telemetry feeds.
+Клиент предоставляет асинхронные потоки для конечных точек SSE Torii, включая конвейер.
+события, события данных и каналы телеметрии.
 
-## More examples
+## Еще примеры
 
-- End-to-end flows live under `tests/` in `crates/iroha`. Search for integration
-  tests such as `transaction_submission.rs` for richer scenarios.
-- The CLI (`iroha_cli`) uses the same client module; browse
-  `crates/iroha_cli/src/` to see how authentication, batching, and retries are
-  handled in production tooling.
-- Keep Norito in mind: the client never falls back to `serde_json`. When you
-  extend the SDK, rely on `norito::json` helpers for JSON endpoints and
-  `norito::codec` for binary payloads.
+- Сквозные потоки живут под `tests/` в `crates/iroha`. Поиск интеграции
+  тесты, такие как `transaction_submission.rs`, для более сложных сценариев.
+- CLI (`iroha_cli`) использует тот же клиентский модуль; просматривать
+  `crates/iroha_cli/src/`, чтобы узнать, как выполняются аутентификация, пакетная обработка и повторные попытки.
+  обрабатывается на производственной оснастке.
+- Имейте в виду Norito: клиент никогда не возвращается к `serde_json`. Когда ты
+  расширить SDK, использовать помощники `norito::json` для конечных точек JSON и
+  `norito::codec` для двоичных полезных данных.
 
-With these building blocks you can integrate Torii into Rust services or CLIs.
-Refer to the generated documentation and data-model crates for the full set of
-instructions, queries, and events.
+С помощью этих строительных блоков вы можете интегрировать Torii в службы Rust или интерфейсы командной строки.
+Обратитесь к сгенерированной документации и крейтам моделей данных для получения полного набора
+инструкции, запросы и события.

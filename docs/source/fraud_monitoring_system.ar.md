@@ -6,218 +6,198 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 7c8262bacbb15b83bd70c824990e4948832418b59f184bca353eee899e44f4d4
 source_last_modified: "2026-01-03T18:07:57.676991+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Fraud Monitoring System
+# نظام مراقبة الاحتيال
 
-This document captures the reference design for the shared fraud monitoring capability that will accompany the core ledger. The goal is to provide payment service providers (PSPs) with high-quality risk signals for every transaction while keeping custody, privacy, and policy decisions under the control of designated operators outside the settlement engine.
+يلتقط هذا المستند التصميم المرجعي لقدرة مراقبة الاحتيال المشتركة التي ستصاحب دفتر الأستاذ الأساسي. الهدف هو تزويد مقدمي خدمات الدفع (PSPs) بإشارات مخاطر عالية الجودة لكل معاملة مع الحفاظ على قرارات الحفظ والخصوصية والسياسة تحت سيطرة المشغلين المعينين خارج محرك التسوية.
 
-## Goals and Success Criteria
-- Deliver real-time fraud risk assessments (<120 ms 95p, <40 ms median) for every payment touching the settlement engine.
-- Preserve user privacy by ensuring the central service never processes personally identifiable information (PII) and only ingests pseudonymous identifiers and behavioral telemetry.
-- Support multi-PSP environments where each provider keeps operational autonomy but can query shared intelligence.
-- Adapt continuously to new attack patterns via supervised and unsupervised models without introducing non-deterministic ledger behavior.
-- Provide auditable decision traces for regulators and independent reviewers without exposing sensitive wallets or counterparties.
+## الأهداف ومعايير النجاح
+- تقديم تقييمات مخاطر الاحتيال في الوقت الفعلي (<120 مللي ثانية 95p، <40 مللي ثانية متوسط) لكل دفعة تلامس محرك التسوية.
+- الحفاظ على خصوصية المستخدم من خلال التأكد من أن الخدمة المركزية لا تعالج أبدًا معلومات التعريف الشخصية (PII) وتستوعب فقط المعرفات ذات الأسماء المستعارة والقياس السلوكي عن بعد.
+- دعم بيئات PSP المتعددة حيث يحتفظ كل مزود بالاستقلالية التشغيلية ولكن يمكنه الاستعلام عن الذكاء المشترك.
+- التكيف بشكل مستمر مع أنماط الهجوم الجديدة عبر النماذج الخاضعة للإشراف وغير الخاضعة للإشراف دون تقديم سلوك دفتر الأستاذ غير الحتمي.
+- توفير آثار قرارات قابلة للتدقيق للمنظمين والمراجعين المستقلين دون الكشف عن المحافظ الحساسة أو الأطراف المقابلة.
 
-## Scope
-- **In-scope:** Transaction risk scoring, behavioral analytics, cross-PSP correlation, anomaly alerting, governance hooks, and PSP integration APIs.
-- **Out-of-scope:** Direct enforcement (remain PSP responsibility), sanctions screening (handled by existing compliance pipelines), and identity proofing (alias management covers this).
+## النطاق
+- **ضمن النطاق:** تسجيل مخاطر المعاملات، والتحليلات السلوكية، والارتباط بين PSP، والتنبيه بالحالات الشاذة، وخطافات الإدارة، وواجهات برمجة تطبيقات تكامل PSP.
+- **خارج النطاق:** التنفيذ المباشر (تظل مسؤولية PSP)، وفحص العقوبات (يتم التعامل معها من خلال مسارات الامتثال الحالية)، وإثبات الهوية (تغطي إدارة الأسماء المستعارة هذا).
 
-## Functional Requirements
-1. **Transaction Scoring API**: Synchronous API that PSPs call before forwarding a payment to the settlement engine, returning a risk score, categorical verdict, and reasoning features.
-2. **Event Ingestion**: Stream of settlement outcomes, wallet lifecycle events, device fingerprints, and PSP-level fraud feedback for continuous learning.
-3. **Model Lifecycle Management**: Versioned models with offline training, shadow deployment, staged rollout, and rollback support. Deterministic fallback heuristic must exist for every feature.
-4. **Feedback Loop**: PSPs must be able to submit confirmed fraud cases, false positives, and remediation notes. System aligns feedback with risk features and updates analytics.
-5. **Privacy Controls**: All data stored and transmitted must be alias-based. Any request containing raw identity metadata is rejected and logged.
-6. **Governance Reporting**: Scheduled exports of aggregated metrics (detections per PSP, typologies, response latency) plus ad-hoc investigation APIs for authorized auditors.
-7. **Resilience**: Active-active deployment across at least two facilities with automatic queue draining and replay. If the service is degraded, PSPs fall back to local rules without blocking the ledger.
+## المتطلبات الوظيفية
+1. **واجهة برمجة تطبيقات تسجيل المعاملات**: واجهة برمجة التطبيقات المتزامنة التي يستدعيها مقدمو خدمة الدفع قبل إعادة توجيه الدفع إلى محرك التسوية، وإرجاع درجة المخاطرة، والحكم القاطع، وميزات الاستدلال.
+2. ** استيعاب الحدث **: تدفق نتائج التسوية، وأحداث دورة حياة المحفظة، وبصمات أصابع الجهاز، وملاحظات الاحتيال على مستوى PSP للتعلم المستمر.
+3. **إدارة دورة حياة النموذج**: نماذج تم إصدارها مع التدريب دون الاتصال بالإنترنت، ونشر الظل، والطرح المرحلي، ودعم التراجع. يجب أن يكون الاستدلال الاحتياطي الحتمي موجودًا لكل ميزة.
+4. **حلقة الملاحظات**: يجب أن يكون مقدمو خدمات الدفع قادرين على إرسال حالات الاحتيال المؤكدة والإيجابيات الكاذبة ومذكرات العلاج. يقوم النظام بمحاذاة التعليقات مع ميزات المخاطر وتحليلات التحديثات.
+5. **ضوابط الخصوصية**: يجب أن تكون جميع البيانات المخزنة والمرسلة مستندة إلى اسم مستعار. يتم رفض وتسجيل أي طلب يحتوي على بيانات تعريف هوية أولية.
+6. **تقارير الحوكمة**: عمليات التصدير المجدولة للمقاييس المجمعة (الاكتشافات لكل مزود خدمة PSP، والأنواع، وزمن الاستجابة) بالإضافة إلى واجهات برمجة تطبيقات التحقيق المخصصة للمدققين المعتمدين.
+7. **المرونة**: النشر النشط والنشط عبر منشأتين على الأقل مع استنزاف قائمة الانتظار وإعادة التشغيل تلقائيًا. إذا تدهورت الخدمة، فإن مزودي خدمة الدفع يعودون إلى القواعد المحلية دون حظر دفتر الأستاذ.## المتطلبات غير الوظيفية
+- **الحتمية والاتساق**: ترشد درجات المخاطر قرارات PSP ولكنها لا تغير تنفيذ دفتر الأستاذ. تظل التزامات دفتر الأستاذ حتمية عبر العقد.
+- **قابلية التوسع**: الحفاظ على تقييمات المخاطر التي تبلغ ≥10 آلاف في الثانية من خلال القياس الأفقي وتقسيم الرسائل بواسطة معرفات المحفظة الزائفة.
+- **قابلية الملاحظة**: كشف المقاييس (`fraud.scoring_latency_ms`، `fraud.risk_score_distribution`، `fraud.api_error_rate`، `fraud.model_version_active`) والسجلات المنظمة لكل مكالمة تسجيل.
+- **الأمان**: TLS المتبادل بين مقدمي خدمات الدفع والخدمة المركزية، ووحدات أمان الأجهزة لتوقيع مظاريف الاستجابة، ومسارات التدقيق الواضحة للتلاعب.
+- **الامتثال**: التوافق مع متطلبات مكافحة غسل الأموال وتمويل الإرهاب، وتوفير فترات احتفاظ قابلة للتكوين، والتكامل مع سير عمل حفظ الأدلة.
 
-## Non-Functional Requirements
-- **Determinism & Consistency**: Risk scores guide PSP decisions but do not mutate ledger execution. Ledger commits remain deterministic across nodes.
-- **Scalability**: Sustain ≥10k risk evaluations per second with horizontal scaling and message partitioning keyed by pseudo-wallet identifiers.
-- **Observability**: Expose metrics (`fraud.scoring_latency_ms`, `fraud.risk_score_distribution`, `fraud.api_error_rate`, `fraud.model_version_active`) and structured logs for each scoring call.
-- **Security**: Mutual TLS between PSPs and the central service, hardware security modules for signing response envelopes, tamper-evident audit trails.
-- **Compliance**: Align with AML/CFT requirements, provide configurable retention periods, and integrate with evidence preservation workflows.
+## نظرة عامة على الهندسة المعمارية
+1. **طبقة بوابة واجهة برمجة التطبيقات**
+  - يتلقى طلبات التسجيل والتعليقات عبر واجهات برمجة تطبيقات HTTP/JSON المصادق عليها.
+   - إجراء التحقق من صحة المخطط باستخدام برامج الترميز Norito وفرض حدود المعدل لكل معرف PSP.
 
-## Architecture Overview
-1. **API Gateway Layer**
-  - Receives scoring and feedback requests over authenticated HTTP/JSON APIs.
-   - Performs schema validation using Norito codecs and enforces rate limits per PSP id.
+2. **خدمة تجميع الميزات**
+   - ضم الطلبات الواردة بالمجاميع التاريخية (السرعة والأنماط الجغرافية المكانية واستخدام الجهاز) المخزنة في متجر ميزات السلاسل الزمنية.
+   - يدعم نوافذ الميزات القابلة للتكوين (الدقائق والساعات والأيام) باستخدام وظائف التجميع الحتمية.
 
-2. **Feature Aggregation Service**
-   - Joins incoming requests with historical aggregates (velocity, geospatial patterns, device usage) stored in a time-series feature store.
-   - Supports configurable feature windows (minutes, hours, days) using deterministic aggregation functions.
+3. **محرك المخاطر**
+   - ينفذ خط أنابيب النموذج النشط (مجموعة الأشجار المعززة المتدرجة، وكاشفات الشذوذ، والقواعد).
+   - يتضمن مجموعة قواعد احتياطية حتمية لضمان الاستجابات المحدودة عندما لا تتوفر نتائج النموذج.
+   - يصدر مظاريف `FraudAssessment` مع النتيجة والنطاق والميزات المساهمة وإصدار النموذج.## نماذج التسجيل والاستدلال
+- **مقياس النتائج والنطاقات**: تمت تسوية درجات المخاطر إلى 0-1000. يتم تعريف النطاقات على النحو التالي: `0–249` (منخفض)، `250–549` (متوسط)، `550–749` (عالي)، `750+` (حرج). يتم تعيين النطاقات إلى الإجراءات الموصى بها لمقدمي خدمات الدفع (الموافقة التلقائية، والمتابعة، والانتظار للمراجعة، والرفض التلقائي) ولكن يظل التنفيذ خاصًا بمقدمي خدمات الدفع (PSP).
+- **المجموعة النموذجية**:
+  - تستوعب أشجار القرار المعززة بالتدرج ميزات منظمة مثل المبلغ، والاسم المستعار/سرعة الجهاز، وفئة التاجر، وقوة المصادقة، وطبقة ثقة PSP، وميزات الرسم البياني عبر المحفظة.
+  - يعمل كاشف الشذوذ القائم على التشفير التلقائي على ناقلات سلوكية ذات نافذة زمنية (إيقاع الإنفاق، وتبديل الأجهزة، والإنتروبيا الزمنية). تتم معايرة النتائج مقابل نشاط PSP الأخير للحد من الانجراف.
+  - يتم تنفيذ قواعد السياسة الحتمية أولاً؛ تغذي مخرجاتها النماذج الإحصائية كميزات ثنائية/مستمرة حتى تتمكن المجموعة من تعلم التفاعلات.
+- **الاستدلالات الاحتياطية**: عندما يفشل تنفيذ النموذج، لا تزال الطبقة الحتمية تنتج نتيجة محدودة من خلال تجميع عقوبات القواعد. تساهم كل قاعدة بوزن قابل للتكوين، يتم جمعه ثم تثبيته على مقياس من 0 إلى 1000، مما يضمن زمن الاستجابة في أسوأ الحالات وقابلية التفسير.
+- **ميزنة زمن الوصول**: تسجيل أهداف خط الأنابيب <20 مللي ثانية لبوابة واجهة برمجة التطبيقات + التحقق من الصحة، و<30 مللي ثانية لتجميع الميزات (يتم تقديمها من ذاكرة التخزين المؤقت في الذاكرة مع الكتابة الخلفية إلى المخازن الدائمة)، و<40 مللي ثانية لتقييم المجموعة. يعود الإجراء الاحتياطي الحتمي خلال أقل من 10 مللي ثانية إذا تجاوز استدلال ML ميزانيته، مما يضمن بقاء P95 الإجمالي أقل من 120 مللي ثانية.
+ - **ميزنة زمن الوصول**: تسجيل أهداف خط الأنابيب <20 مللي ثانية لبوابة واجهة برمجة التطبيقات + التحقق من الصحة، و<30 مللي ثانية لتجميع الميزات (يتم تقديمها من ذاكرة التخزين المؤقت في الذاكرة مع الكتابة الخلفية إلى المخازن الدائمة)، و<40 مللي ثانية لتقييم المجموعة. يعود الإجراء الاحتياطي الحتمي خلال أقل من 10 مللي ثانية إذا تجاوز استدلال ML ميزانيته، مما يضمن بقاء P95 الإجمالي أقل من 120 مللي ثانية.## تصميم ذاكرة التخزين المؤقت لميزات الذاكرة
+- **تخطيط الجزء**: يتم تقسيم مخازن الميزات بواسطة تجزئة الاسم المستعار 64 بت إلى أجزاء `N = 256`. تمتلك كل قطعة:
+  - مخزن مؤقت حلقي خالٍ من القفل لدلتا المعاملات الأخيرة (نوافذ مدتها 5 دقائق + ساعة واحدة) مخزن كهيكل من المصفوفات لزيادة موقع خط ذاكرة التخزين المؤقت إلى أقصى حد.
+  - شجرة فينويك مضغوطة (دلاء 16 بت معبأة) للحفاظ على مجاميع 24 ساعة / 7 أيام دون إعادة حساب كاملة.
+  - خريطة تجزئة قفزة سكوتش لتعيين الأطراف المقابلة → إحصائيات متدحرجة (العدد، المبلغ، التباين، الطابع الزمني الأخير) بحد أقصى 1024 إدخالًا لكل اسم مستعار.
+- **مكان إقامة الذاكرة**: تبقى الشظايا الساخنة في ذاكرة الوصول العشوائي (RAM). بالنسبة إلى 50 مليون اسم مستعار مع 1% نشط في الساعة الأخيرة، تبلغ مساحة ذاكرة التخزين المؤقت حوالي 500 ألف اسم مستعار. عند حوالي 320 بايت لكل اسم مستعار لبيانات التعريف النشطة، تبلغ مجموعة العمل حوالي 160 ميجابايت، وهي صغيرة بما يكفي لذاكرة التخزين المؤقت L3 على الخوادم الحديثة.
+- **التزامن**: يستعير القراء مراجع غير قابلة للتغيير عبر الاستصلاح القائم على العصر؛ يقوم الكتاب بإلحاق الدلتا وتحديث المجاميع باستخدام المقارنة والمبادلة. يؤدي هذا إلى تجنب تنافس كائن المزامنة (mutex) ويحافظ على المسارات الساخنة إلى عمليتين ذريتين + مطاردة المؤشر المحدود.
+- **الجلب المسبق**: يصدر عامل التسجيل تلميحات `prefetch_read` اليدوية لجزء الاسم المستعار التالي بمجرد اكتمال التحقق من صحة الطلب، مما يؤدي إلى إخفاء زمن استجابة الذاكرة الرئيسية (حوالي 80 ns) خلف تجميع الميزات.
+- **سجل الكتابة الخلفي**: تقوم شبكة WAL لكل جزء بتجميع دلتا كل 50 مللي ثانية (أو 4 كيلو بايت) وتنتقل إلى المتجر الدائم. يتم تشغيل نقاط التفتيش كل 5 دقائق للحفاظ على حدود الاسترداد مشددة.
 
-3. **Risk Engine**
-   - Executes the active model pipeline (ensemble of gradient boosted trees, anomaly detectors, rules).
-   - Includes a deterministic fallback rule-set to guarantee bounded responses when model scores are unavailable.
-   - Emits `FraudAssessment` envelopes with score, band, contributing features, and model version.
+### تحليل زمن الوصول النظري (خادم Intel Ice Lake، بسرعة 3.1 جيجاهرتز)
+- **بحث الأجزاء + الجلب المسبق**: 1 ذاكرة تخزين مؤقت مفقودة (~80 ns) بالإضافة إلى حساب التجزئة (<10 ns).
+- ** تكرار المخزن المؤقت الحلقي (32 إدخالاً) **: 32 × 2 تحميلًا = 64 تحميلًا؛ مع 32 خطًا من خطوط ذاكرة التخزين المؤقت والوصول المتسلسل، يبقى هذا في L1 → ~20 ns.
+- **تحديثات فينويك (سجل₂ 2048 ≈ 11 خطوة)**: 11 قفزة مؤشر؛ بافتراض أن نصف L1 ونصف L2 يضرب → ~ 30 ns.
+- ** مسبار خريطة هوب سكوتش (عامل الحمولة 0.75، مسباران) **: خطان للتخزين المؤقت، ~2 × 15 نانوثانية.
+- **تجميع ميزات النموذج**: 150 عملية عددية (<0.1 ns لكل منها) → ~15 ns.يعطي جمع هذه ما يقرب من 160 نانوثانية من الحوسبة وحوالي 120 نانوثانية من أكشاك الذاكرة لكل طلب (~0.28 ميكروثانية). مع وجود أربعة عمال تجميع متزامنين لكل مركز، تلبي المرحلة بسهولة ميزانية 30 مللي ثانية حتى في ظل التحميل المتواصل؛ يجب أن يسجل النشر الفعلي الرسوم البيانية للتحقق من صحتها (عبر `fraud.feature_cache_lookup_ms`).
+- **ميزات Windows والتجميع**:
+  - تتبع النوافذ قصيرة المدى (5 دقائق وساعة واحدة) وطويلة المدى (24 ساعة و7 أيام) سرعة الإنفاق وإعادة استخدام الجهاز ودرجات الرسم البياني للاسم المستعار.
+  - تعتمد ميزات الرسم البياني (على سبيل المثال، الأجهزة المشتركة عبر الأسماء المستعارة، والتوسع المفاجئ، والأطراف المقابلة الجديدة في مجموعات عالية المخاطر) على ملخصات مضغوطة بانتظام بحيث تظل الاستعلامات أقل من مللي ثانية.
+  - تقارن الاستدلالات الموقعية الجيوب الجغرافية الخشنة مع السلوك التاريخي، مع وضع علامة على القفزات غير المحتملة (على سبيل المثال، مواقع بعيدة متعددة في غضون دقائق) باستخدام زيادة المخاطر المعتمدة على Haversine.
+  - تحافظ كاشفات شكل التدفق على رسوم بيانية متدحرجة للكميات الواردة/الصادرة والأطراف المقابلة لتحديد توقيعات الخلط/التراجع (مروحة سريعة متبوعة بتسلسلات قفزات دورية مماثلة وتسلسلات قفز دورية ووسطاء قصيري العمر).
+- **كتالوج القواعد (غير شامل)**:
+  - **اختراق السرعة**: سلسلة سريعة من عمليات النقل عالية القيمة تتجاوز الحدود لكل اسم مستعار أو لكل جهاز.
+  - **شذوذ في الرسم البياني للاسم المستعار**: يتفاعل الاسم المستعار مع مجموعة مرتبطة بحالات احتيال مؤكدة أو أنماط معروفة.
+  - **إعادة استخدام الجهاز**: بصمة الجهاز المشتركة عبر الأسماء المستعارة التي تنتمي إلى مجموعات مختلفة من مستخدمي PSP دون ربط مسبق.
+  - **القيمة العالية لأول مرة**: اسم مستعار جديد يحاول الحصول على مبالغ أعلى من ممر الإعداد النموذجي لمقدم خدمة الدفع.
+  - **الرجوع إلى مستوى المصادقة المنخفض**: تستخدم المعاملة عوامل أضعف من خط الأساس للحساب (على سبيل المثال، الرجوع من المقاييس الحيوية إلى رقم التعريف الشخصي) دون مبرر يعلنه مزود خدمة الدفع.
+  - **نمط الخلط/التراجع**: يشارك الاسم المستعار في سلاسل دخول/خروج عالية مع توقيت مقترن بإحكام، أو كميات متكررة ذهابًا وإيابًا، أو تدفقات دائرية عبر أسماء مستعارة متعددة ضمن نوافذ قصيرة. تعمل القاعدة على تعزيز النتيجة باستخدام المسامير المركزية للرسم البياني وأجهزة الكشف عن شكل التدفق؛ يتم تثبيت الحالات الشديدة على النطاق `high` حتى قبل إخراج ML.
+  - **نتيجة القائمة السوداء للمعاملات**: يظهر الاسم المستعار أو الطرف المقابل في خلاصة القائمة السوداء المشتركة المنسقة عبر تصويت الحوكمة على السلسلة أو سلطة مفوضة مع ضوابط `sudo` (على سبيل المثال، الأوامر التنظيمية، والاحتيال المؤكد). يسجل المشابك على النطاق `critical` ويصدر رمز السبب `BLACKLIST_MATCH`؛ يجب على مزودي خدمة الدفع (PSP) تسجيل التجاوزات للتدقيق.
+  - **عدم تطابق توقيع Sandbox**: يرسل PSP تقييمًا تم إنشاؤه باستخدام توقيع نموذج قديم؛ تتصاعد النتيجة إلى `critical` ومشغلات ربط التدقيق.
+- **رموز الأسباب**: يتضمن كل تقييم رموز أسباب يمكن قراءتها آليًا ومرتبة حسب وزن المساهمة (على سبيل المثال، `VELOCITY_BREACH`، `NEW_DEVICE`، `GRAPH_HIGH_RISK`، `AUTH_DOWNGRADE`). يمكن لمزودي خدمة الدفع (PSP) عرضها على المشغلين أو المحافظ لمراسلة المستخدم.- **حوكمة النموذج**: تتبع المعايرة وتحديد الحدود قواعد اللعبة الموثقة - تتم مراجعة منحنيات ROC/PR كل ثلاثة أشهر، ويتم إجراء اختبار رجعي ضد الاحتيال المسمى، وتعمل النماذج المنافسة في الظل حتى تستقر. يتطلب أي تحديث للحد الأدنى موافقة مزدوجة (عمليات الاحتيال + المخاطر المستقلة).
 
-## Scoring Models and Heuristics
-- **Score Scale & Bands**: Risk scores are normalized to 0–1,000. Bands are defined as: `0–249` (low), `250–549` (medium), `550–749` (high), `750+` (critical). Bands map to recommended actions for PSPs (auto-approve, step-up, queue-for-review, auto-decline) but enforcement remains PSP-specific.
-- **Model Ensemble**:
-  - Gradient-boosted decision trees ingest structured features such as amount, alias/device velocity, merchant category, authentication strength, PSP trust tier, and cross-wallet graph features.
-  - An autoencoder-based anomaly detector runs on time-windowed behavioural vectors (per-alias spend cadence, device switching, temporal entropy). Scores are calibrated against recent PSP activity to limit drift.
-  - Deterministic policy rules execute first; their outputs feed the statistical models as binary/continuous features so the ensemble can learn interactions.
-- **Fallback Heuristics**: When model execution fails, the deterministic layer still produces a bounded score by aggregating rule penalties. Each rule contributes a configurable weight, summed then clamped to the 0–1,000 scale, guaranteeing worst-case latency and explainability.
-- **Latency Budgeting**: Scoring pipeline targets <20 ms for API gateway + validation, <30 ms for feature aggregation (served from in-memory caches with write-behind to persistent stores), and <40 ms for ensemble evaluation. Deterministic fallback returns within <10 ms if ML inference exceeds its budget, ensuring overall P95 stays under 120 ms.
- - **Latency Budgeting**: Scoring pipeline targets <20 ms for API gateway + validation, <30 ms for feature aggregation (served from in-memory caches with write-behind to persistent stores), and <40 ms for ensemble evaluation. Deterministic fallback returns within <10 ms if ML inference exceeds its budget, ensuring overall P95 stays under 120 ms.
+## تدفق القائمة السوداء من مصادر الحوكمة
+- **التأليف على السلسلة**: يتم تقديم إدخالات القائمة السوداء من خلال النظام الفرعي للإدارة (`iroha_core::smartcontracts::isi::governance`) باعتباره `BlacklistProposal` ISI الذي يسرد الأسماء المستعارة أو معرفات PSP أو بصمات الأجهزة المراد حظرها. يصوت أصحاب المصلحة باستخدام مسار الاقتراع القياسي؛ بمجرد استيفاء النصاب القانوني، تصدر السلسلة سجل `GovernanceEvent::BlacklistUpdated` يحمل الإضافات/الإزالة المعتمدة بالإضافة إلى `blacklist_epoch` المتزايد بشكل رتيب.
+- **مسار Sudo المفوض**: يمكن تنفيذ إجراءات الطوارئ عبر التعليمة `sudo::Execute`، التي تُصدر نفس الحدث `BlacklistUpdated` ولكنها تشير إلى التغيير على أنه `origin = Sudo`. وهذا يعكس التاريخ الموجود على السلسلة بمصدر واضح حتى يتمكن المدققون من التمييز بين الأصوات المتفق عليها والتدخلات المفوضة.
+- **قناة التوزيع**: تشترك خدمة جسر FMS في البث `LedgerEvent` (المشفر بـ Norito) وتراقب أحداث `BlacklistUpdated`. يتم التحقق من صحة كل حدث مقابل إثبات Merkle للحوكمة والتحقق منه باستخدام توقيع الكتلة قبل تطبيقه. الأحداث عاجزة. يحتفظ FMS بأحدث `blacklist_epoch` لتجنب عمليات الإعادة.
+- **التطبيق داخل FMS**: بمجرد قبول التحديث، تتم كتابة الإدخالات في مخزن القواعد الحتمية (مدعومة بمخزن الإلحاق فقط مع سجلات التدقيق). يقوم محرك التسجيل بإعادة تحميل القائمة السوداء خلال 30 ثانية، مما يضمن أن التقييمات اللاحقة تؤدي إلى تشغيل قاعدة `BLACKLIST_MATCH` وتثبيتها على `critical`.
+- **التدقيق والتراجع**: يمكن للإدارة التصويت لإزالة الإدخالات عبر المسار نفسه. يحتفظ FMS بلقطات تاريخية تحمل علامة `blacklist_epoch` حتى يتمكن المشغلون من الإجابة على أسئلة الطب الشرعي أو إعادة عرض القرارات السابقة أثناء التحقيقات.
 
-## In-Memory Feature Cache Design
-- **Shard Layout**: Feature stores are sharded by 64-bit alias hash into `N = 256` shards. Each shard owns:
-  - A lock-free ring buffer for recent transaction deltas (5 min + 1 hr windows) stored as struct-of-arrays to maximise cache-line locality.
-  - A compressed Fenwick tree (bit-packed 16-bit buckets) to maintain 24 hr / 7 day aggregates without full recomputation.
-  - A hop-scotch hash map mapping counterparties → rolling stats (count, sum, variance, last timestamp) capped at 1,024 entries per alias.
-- **Memory Residency**: Hot shards stay in RAM. For a 50 M alias universe with 1% active in the last hour, cache residency is ~500k aliases. At ~320 B per alias of active metadata, the working set is ~160 MB—small enough for L3 cache on modern servers.
-- **Concurrency**: Readers borrow immutable references via epoch-based reclamation; writers append deltas and update aggregates using compare-and-swap. This avoids mutex contention and keeps hot paths to two atomic ops + bounded pointer chasing.
-- **Prefetching**: The scoring worker issues manual `prefetch_read` hints for the next alias shard once request validation completes, hiding main-memory latency (~80 ns) behind feature aggregation.
-- **Write-behind Log**: A per-shard WAL batches deltas every 50 ms (or 4 KB) and flushes to the durable store. Checkpoints run every 5 minutes to keep recovery bounds tight.
+4. **منصة التعلم والتحليلات**
+   - يتلقى أحداث الاحتيال المؤكدة ونتائج التسوية وملاحظات PSP عبر دفتر الأستاذ الإلحاقي فقط (على سبيل المثال، Kafka + تخزين الكائنات).
+   - يوفر دفاتر ملاحظات/وظائف غير متصلة بالإنترنت لعلماء البيانات لإعادة تدريب النماذج. يتم إصدار العناصر النموذجية وتوقيعها قبل الترقية.
 
-### Theoretical Latency Breakdown (Intel Ice Lake-class server, 3.1 GHz)
-- **Shard lookup + prefetch**: 1 cache miss (~80 ns) plus hash calculation (<10 ns).
-- **Ring buffer iteration (32 entries)**: 32 × 2 loads = 64 loads; with 32 B cache lines and sequential access this stays in L1 → ~20 ns.
-- **Fenwick updates (log₂ 2048 ≈ 11 steps)**: 11 pointer hops; assuming half L1, half L2 hits → ~30 ns.
-- **Hop-scotch map probe (load factor 0.75, 2 probes)**: 2 cache lines, ~2 × 15 ns.
-- **Model feature assembly**: 150 scalar ops (<0.1 ns each) → ~15 ns.
+5. **بوابة الحوكمة**
+   - واجهة مقيدة للمدققين لمراجعة الاتجاهات والبحث في التقييمات التاريخية وتصدير تقارير الحوادث.
+   - ينفذ فحوصات السياسة بحيث لا يتمكن المحققون من الوصول إلى معلومات تحديد الهوية الشخصية دون تعاون PSP.
 
-Summing these gives ~160 ns of compute and ~120 ns of memory stalls per request (~0.28 µs). With four concurrent aggregation workers per core, the stage easily meets the 30 ms budget even under burst load; actual deployment should record histograms to validate (via `fraud.feature_cache_lookup_ms`).
-- **Feature Windows & Aggregation**:
-  - Short-term (rolling 5 min, 1 hr) and long-term (24 hr, 7 day) windows track spend velocity, device reuse, and alias graph degrees.
-  - Graph features (e.g., shared devices across aliases, sudden fan-out, new counterparties in high-risk clusters) rely on regularly compacted summaries so queries stay sub-millisecond.
-  - Location heuristics compare coarse geobuckets with historical behaviour, flagging improbable jumps (e.g., multiple distant locations within minutes) using a capped Haversine-based risk increment.
-  - Flow-shape detectors maintain rolling histograms of inbound/outbound amounts and counterparties to spot mixing/tumbling signatures (rapid fan-in followed by similar fan-out, cyclical hop sequences, short-lived intermediaries).
-- **Rule Catalogue (non-exhaustive)**:
-  - **Velocity breach**: Rapid series of high-value transfers exceeding per-alias or per-device thresholds.
-  - **Alias graph anomaly**: Alias interacts with a cluster linked to confirmed fraud cases or known mule patterns.
-  - **Device reuse**: Shared device fingerprint across aliases belonging to different PSP user cohorts without prior linkage.
-  - **First-time high-value**: New alias attempting amounts above the PSP’s typical onboarding corridor.
-  - **Authentication downgrade**: Transaction uses weaker factors than the account’s baseline (e.g., fallback from biometric to PIN) without PSP-declared justification.
-  - **Mixing/tumbling pattern**: Alias participates in high fan-in/fan-out chains with tightly coupled timing, repeating round-trip amounts, or circular flows across multiple aliases within short windows. Rule boosts score using graph centrality spikes and flow-shape detectors; severe cases clamp to the `high` band even before ML output.
-  - **Transaction blacklist hit**: Alias or counterparty appears on the shared blacklist feed curated via on-chain governance voting or a delegated authority with `sudo` controls (e.g., regulatory orders, confirmed fraud). Score clamps to the `critical` band and emits `BLACKLIST_MATCH` reason code; PSPs must log overrides for audit.
-  - **Sandbox signature mismatch**: PSP submits an assessment generated with an outdated model signature; score escalates to `critical` and audit hook triggers.
-- **Reason Codes**: Every assessment includes machine-readable reason codes ranked by contribution weight (e.g., `VELOCITY_BREACH`, `NEW_DEVICE`, `GRAPH_HIGH_RISK`, `AUTH_DOWNGRADE`). PSPs can surface these to operators or wallets for user messaging.
-- **Model Governance**: Calibration and threshold setting follow documented playbooks—ROC/PR curves reviewed quarterly, back-testing against labelled fraud, and challenger models run in shadow until stable. Any threshold update requires dual approval (fraud operations + independent risk).
+6. ** محولات التكامل **
+   - حزم SDK خفيفة الوزن لمقدمي خدمات PSP (Rust وKotlin وSwift وTypeScript) التي تنفذ طلبات/استجابات Norito والتخزين المؤقت المحلي.
+   - خطاف محرك التسوية (ضمن `iroha_core`) الذي يسجل مراجع تقييم المخاطر عندما يقوم مقدمو خدمات الدفع بإعادة توجيه المعاملات بعد الفحص.## تدفق البيانات
+1. يقوم PSP بالمصادقة على بوابة API وإرسال `RiskQuery` الذي يحتوي على:
+   - معرفات الاسم المستعار للدافع/المدفوع لأمره، ومعرف الجهاز المجزأ، ومبلغ المعاملة، والفئة، والمجموعة التقريبية للموقع الجغرافي، وعلامات ثقة PSP، وبيانات تعريف الجلسة الأخيرة.
+2. تتحقق البوابة من صحة الحمولة، وتثريها ببيانات تعريف PSP (طبقة الترخيص، SLA) وقوائم الانتظار لتجميع الميزات.
+3. تقوم خدمة الميزات بسحب أحدث التجميعات وإنشاء ناقل النموذج وإرساله إلى محرك المخاطر.
+4. يقوم محرك المخاطر بتقييم الطلب وإرفاق رموز السبب الحتمي وتوقيع `FraudAssessment` وإعادته إلى PSP.
+5. يجمع PSP بين التقييم وسياساته المحلية للموافقة على المعاملة أو رفضها أو تكثيفها.
+6. يتم دفع النتيجة (الموافقة/الرفض، تأكيد الاحتيال/الإيجابية الكاذبة) بشكل غير متزامن إلى منصة التعلم من أجل التحسين المستمر.
+7. تعمل العمليات المجمعة اليومية على تجميع مقاييس تقارير الحوكمة وتوجيه تنبيهات السياسة (على سبيل المثال، حالات الهندسة الاجتماعية المتزايدة) إلى لوحات معلومات PSP.
 
-## Governance-Sourced Blacklist Flow
-- **On-chain authoring**: Blacklist entries are introduced through the governance subsystem (`iroha_core::smartcontracts::isi::governance`) as a `BlacklistProposal` ISI that lists aliases, PSP ids, or device fingerprints to block. Stakeholders vote using the standard ballot pipeline; once quorum is met, the chain emits a `GovernanceEvent::BlacklistUpdated` record carrying the approved additions/removals plus a monotonically increasing `blacklist_epoch`.
-- **Delegated sudo path**: Emergency actions can be executed via the `sudo::Execute` instruction, which emits the same `BlacklistUpdated` event but flags the change as `origin = Sudo`. This mirrors on-chain history with explicit provenance so auditors can distinguish consensus votes from delegated interventions.
-- **Distribution channel**: The FMS bridge service subscribes to the `LedgerEvent` stream (Norito-encoded) and watches for `BlacklistUpdated` events. Each event is validated against the governance Merkle proof and verified with the block signature before being applied. Events are idempotent; the FMS maintains the latest `blacklist_epoch` to avoid replays.
-- **Application inside FMS**: Once an update is accepted, the entries are written to the deterministic rule store (backed by append-only storage with audit logs). The scoring engine hot-reloads the blacklist within 30 seconds, ensuring subsequent assessments trigger the `BLACKLIST_MATCH` rule and clamp to `critical`.
-- **Audit & rollback**: Governance can vote to remove entries via the same pipeline. The FMS keeps historical snapshots tagged by `blacklist_epoch` so operators can answer forensic questions or replay past decisions during investigations.
-
-4. **Learning & Analytics Platform**
-   - Receives confirmed fraud events, settlement outcomes, and PSP feedback via an append-only ledger (e.g., Kafka + object storage).
-   - Provides offline notebooks/jobs for data scientists to retrain models. Model artifacts are versioned and signed before promotion.
-
-5. **Governance Portal**
-   - Restricted interface for auditors to review trends, search historical assessments, and export incident reports.
-   - Implements policy checks so investigators cannot drill down to PII without PSP cooperation.
-
-6. **Integration Adapters**
-   - Lightweight SDKs for PSPs (Rust, Kotlin, Swift, TypeScript) implementing the Norito requests/responses and local caching.
-   - Settlement engine hook (within `iroha_core`) that records risk assessment references when PSPs forward transactions post-check.
-
-## Data Flow
-1. PSP authenticates to the API gateway and submits a `RiskQuery` containing:
-   - Alias identifiers for payer/payee, hashed device id, transaction amount, category, geolocation coarse bucket, PSP confidence flags, and recent session metadata.
-2. Gateway validates payload, enriches with PSP metadata (licence tier, SLA) and queues for feature aggregation.
-3. Feature service pulls the latest aggregates, constructs the model vector, and sends it to the risk engine.
-4. Risk engine evaluates the request, attaches deterministic reason codes, signs the `FraudAssessment`, and returns it to the PSP.
-5. PSP combines the assessment with its local policies to approve, decline, or step-up authenticate the transaction.
-6. Outcome (approved/declined, fraud confirmed/false positive) is pushed asynchronously to the learning platform for continuous improvement.
-7. Daily batch processes roll up metrics for governance reporting and push policy alerts (e.g., rising social-engineering cases) to PSP dashboards.
-
-## Integration with Iroha Components
-- **Core Host Hooks**: Transaction admission now enforces the `fraud_assessment_band` metadata whenever `fraud_monitoring.enabled` and `required_minimum_band` are set. The host rejects transactions missing the field or carrying a band below the configured minimum, and emits a deterministic warning when `missing_assessment_grace_secs` is non-zero (grace window scheduled for removal in milestone FM-204 once the remote verifier is wired). Assessments must also include `fraud_assessment_score_bps`; the host cross-checks the score against the declared band (0–249 ➜ low, 250–549 ➜ medium, 550–749 ➜ high, 750+ ➜ critical, with basis-point values supported up to 10 000). When `fraud_monitoring.attesters` is configured, transactions must attach a Norito-encoded `fraud_assessment_envelope` (base64) and a matching `fraud_assessment_digest` (hex). The daemon deterministically decodes the envelope, verifies the Ed25519 signature against the attester registry, recomputes the digest over the unsigned payload, and rejects mismatches so only attested assessments reach consensus.
-- **Configuration**: Add configuration entries under `iroha_config::fraud_monitoring` for the risk service endpoints, timeouts, and required assessment bands. Defaults disable enforcement for local development.
-
-  | Key | Type | Default | Notes |
+## التكامل مع مكونات Iroha
+- **خطافات المضيف الأساسية**: يفرض قبول المعاملات الآن البيانات التعريفية `fraud_assessment_band` عندما يتم تعيين `fraud_monitoring.enabled` و`required_minimum_band`. يرفض المضيف المعاملات التي تفتقد الحقل أو التي تحمل نطاقًا أقل من الحد الأدنى الذي تم تكوينه، ويصدر تحذيرًا حتميًا عندما تكون قيمة `missing_assessment_grace_secs` غير صفرية (نافذة السماح مجدولة للإزالة في الحدث الرئيسي FM-204 بمجرد توصيل جهاز التحقق عن بعد). يجب أن تتضمن التقييمات أيضًا `fraud_assessment_score_bps`؛ يقوم المضيف بمقارنة النتيجة مع النطاق المُعلن (0–249 ➜ منخفض، 250–549 ➜ متوسط، 550–749 ➜ مرتفع، 750+ ➜ حرج، مع دعم قيم نقطة الأساس حتى 10000). عند تكوين `fraud_monitoring.attesters`، يجب أن تقوم المعاملات بإرفاق Norito بترميز `fraud_assessment_envelope` (base64) و`fraud_assessment_digest` المطابق (ست عشري). يقوم البرنامج الخفي بفك تشفير المظروف بشكل حتمي، والتحقق من توقيع Ed25519 مقابل سجل المصدق، وإعادة حساب الملخص على الحمولة غير الموقعة، ورفض حالات عدم التطابق بحيث تصل التقييمات المعتمدة فقط إلى الإجماع.
+- **التكوين**: أضف إدخالات التكوين ضمن `iroha_config::fraud_monitoring` لنقاط نهاية خدمة المخاطر والمهلات ونطاقات التقييم المطلوبة. تعمل الإعدادات الافتراضية على تعطيل التنفيذ من أجل التنمية المحلية.| مفتاح | اكتب | الافتراضي | ملاحظات |
   | --- | --- | --- | --- |
-  | `enabled` | bool | `false` | Master switch for admission checks; without `required_minimum_band` the host logs a warning and skips enforcement. |
-  | `service_endpoints` | array<URL> | `[]` | Ordered list of fraud service base URLs. Duplicates are removed deterministically; reserved for the upcoming verifier. |
-  | `connect_timeout_ms` | duration | `500` | Milliseconds before connection attempts abort; zero values fold back to the default. |
-  | `request_timeout_ms` | duration | `1500` | Milliseconds to await a response from the risk service. |
-  | `missing_assessment_grace_secs` | duration | `0` | Grace window allowing missing assessments; non-zero values trigger a deterministic fallback that logs and allows the transaction. |
-  | `required_minimum_band` | enum (`low`, `medium`, `high`, `critical`) | `null` | When set, transactions must attach an assessment at or above this severity band; lower values are rejected. Set to `null` to disable gating even if `enabled` is true. |
-  | `attesters` | array<{ engine_id, public_key }> | `[]` | Optional registry of attestation engines. When populated, envelopes must be signed by one of the listed keys and include a matching digest. |
+  | `enabled` | منطقي | `false` | التبديل الرئيسي لفحوصات القبول؛ بدون `required_minimum_band`، يقوم المضيف بتسجيل تحذير ويتخطى التنفيذ. |
+  | `service_endpoints` | صفيف | `[]` | قائمة مرتبة بعناوين URL الأساسية لخدمة الاحتيال. تتم إزالة التكرارات بشكل حتمي. محفوظة للمحقق القادم. |
+  | `connect_timeout_ms` | المدة | `500` | ميلي ثانية قبل إحباط محاولات الاتصال؛ تُطوى القيم الصفرية إلى القيمة الافتراضية. |
+  | `request_timeout_ms` | المدة | `1500` | ميلي ثانية في انتظار الرد من خدمة المخاطر. |
+  | `missing_assessment_grace_secs` | المدة | `0` | نافذة سماح تسمح بالتقييمات المفقودة؛ تؤدي القيم غير الصفرية إلى إجراء احتياطي حتمي يقوم بتسجيل المعاملة والسماح بها. |
+  | `required_minimum_band` | التعداد (`low`، `medium`، `high`، `critical`) | `null` | عند التعيين، يجب أن ترفق المعاملات تقييمًا عند نطاق الخطورة هذا أو أعلى منه؛ يتم رفض القيم الدنيا. اضبط على `null` لتعطيل عملية البوابات حتى لو كان `enabled` صحيحًا. |
+  | `attesters` | المصفوفة | `[]` | التسجيل الاختياري لمحركات التصديق. عند تعبئتها، يجب أن يتم توقيع المظاريف بواسطة أحد المفاتيح المدرجة وأن تتضمن ملخصًا مطابقًا. |
 
-- **Validation**: Unit tests in `crates/iroha_core/tests/fraud_monitoring.rs` cover disabled, missing, and insufficient-band paths; `integration_tests::fraud_monitoring_requires_assessment_bands` exercises the mocked-assessment flow end-to-end.
+- **التحقق من الصحة**: تغطي اختبارات الوحدة في `crates/iroha_core/tests/fraud_monitoring.rs` مسارات النطاق المعطلة والمفقودة وغير الكافية؛ يمارس `integration_tests::fraud_monitoring_requires_assessment_bands` تدفق التقييم المستهزئ من البداية إلى النهاية.
 
-- **Telemetry**: `iroha_telemetry` exports PSP-facing collectors capturing assessment counts (`fraud_psp_assessments_total{tenant,band,lane,subnet}`), missing metadata (`fraud_psp_missing_assessment_total{tenant,lane,subnet,cause}`), latency histograms (`fraud_psp_latency_ms{tenant,lane,subnet}`), score distributions (`fraud_psp_score_bps{tenant,band,lane,subnet}`), invalid payloads (`fraud_psp_invalid_metadata_total{tenant,field,lane,subnet}`), attestation outcomes (`fraud_psp_attestation_total{tenant,engine,lane,subnet,status}`), and outcome mismatches (`fraud_psp_outcome_mismatch_total{tenant,direction,lane,subnet}`). Metadata keys expected on every transaction are `fraud_assessment_band`, `fraud_assessment_tenant`, `fraud_assessment_score_bps`, `fraud_assessment_latency_ms`, the attester envelope/digest pair (`fraud_assessment_envelope`, `fraud_assessment_digest`), and the post-incident `fraud_assessment_disposition` flag (values: `approved`, `declined`, `manual_review`, `confirmed_fraud`, `false_positive`, `chargeback`, `loss`).
-- **Norito Schema**: Define Norito types for `RiskQuery`, `FraudAssessment`, and governance reports. Provide roundtrip tests to guarantee codec stability.
+- **القياس عن بعد**: يقوم `iroha_telemetry` بتصدير أدوات التجميع التي تواجه PSP والتي تلتقط أعداد التقييم (`fraud_psp_assessments_total{tenant,band,lane,subnet}`)، والبيانات الوصفية المفقودة (`fraud_psp_missing_assessment_total{tenant,lane,subnet,cause}`)، والمخططات البيانية لزمن الوصول (`fraud_psp_latency_ms{tenant,lane,subnet}`)، وتوزيعات النتائج (`fraud_psp_score_bps{tenant,band,lane,subnet}`)، والحمولات النافعة غير الصالحة (`fraud_psp_invalid_metadata_total{tenant,field,lane,subnet}`)، ونتائج التصديق (`fraud_psp_attestation_total{tenant,engine,lane,subnet,status}`)، وعدم تطابق النتائج (`fraud_psp_outcome_mismatch_total{tenant,direction,lane,subnet}`). مفاتيح البيانات الوصفية المتوقعة في كل معاملة هي `fraud_assessment_band`، و`fraud_assessment_tenant`، و`fraud_assessment_score_bps`، و`fraud_assessment_latency_ms`، وزوج المغلف/الملخص المصدق (`fraud_assessment_envelope`، `fraud_assessment_digest`)، وزوج ما بعد الحادث. علامة `fraud_assessment_disposition` (القيم: `approved`، `declined`، `manual_review`، `confirmed_fraud`، `false_positive`، `chargeback`، `loss`).
+- **مخطط Norito**: تحديد أنواع Norito لـ `RiskQuery` و`FraudAssessment` وتقارير الإدارة. توفير اختبارات ذهابًا وإيابًا لضمان استقرار برنامج الترميز.
 
-## Privacy & Data Minimization
-- Aliases, hashed device IDs, and coarse geolocation buckets form the entire data plane shared with the central service.
-- PSPs retain mapping from aliases to real identities; no such mapping leaves their perimeter.
-- Risk models operate only on pseudonymous behavioral signals plus PSP-submitted context (merchant category, channel, authentication strength).
-- Audit exports are aggregated (e.g., counts per PSP per day). Any drill-down requires dual control and PSP-side de-anonymization.
+## تقليل الخصوصية والبيانات
+- تشكل الأسماء المستعارة ومعرفات الأجهزة المجزأة ومجموعات تحديد الموقع الجغرافي التقريبية مستوى البيانات بأكمله المشترك مع الخدمة المركزية.
+- يحتفظ مقدمو خدمات الدفع بالخرائط بدءًا من الأسماء المستعارة وحتى الهويات الحقيقية؛ ولا يترك مثل هذا التعيين محيطهم.
+- تعمل نماذج المخاطر فقط على الإشارات السلوكية ذات الأسماء المستعارة بالإضافة إلى السياق المقدم من PSP (فئة التاجر، القناة، قوة المصادقة).
+- يتم تجميع عمليات تصدير التدقيق (على سبيل المثال، الأعداد لكل مزود خدمة الدفع في اليوم). يتطلب أي توغّل تحكمًا مزدوجًا وإلغاء إخفاء الهوية من جانب PSP.## العمليات والنشر
+- نشر منصة التسجيل كنظام فرعي مخصص يديره مشغل معين يختلف عن مشغلي عقدة البنك المركزي.
+- توفير بيئات زرقاء/خضراء: `fraud-scoring-prod`، `fraud-scoring-shadow`، `fraud-lab`.
+- تنفيذ عمليات التحقق من السلامة الآلية (زمن استجابة واجهة برمجة التطبيقات، وتراكم الرسائل، ونجاح تحميل النموذج). في حالة فشل عمليات التحقق من الصحة، تتحول مجموعات PSP SDK تلقائيًا إلى الوضع المحلي فقط وتخطر المشغلين.
+- الحفاظ على دلاء الاحتفاظ: التخزين الساخن (30 يومًا في المتجر المميز)، التخزين الدافئ (سنة واحدة في تخزين الكائنات)، الأرشيف البارد (5 سنوات مضغوطة).
 
-## Operations & Deployment
-- Deploy the scoring platform as a dedicated subsystem managed by an appointed operator distinct from the central bank node operators.
-- Provide blue/green environments: `fraud-scoring-prod`, `fraud-scoring-shadow`, `fraud-lab`.
-- Implement automated health checks (API latency, message backlog, model load success). If health checks fail, PSP SDKs automatically switch to local-only mode and notify operators.
-- Maintain retention buckets: hot storage (30 days in feature store), warm storage (1 year in object storage), cold archive (5 years compressed).
+## جامعات القياس عن بعد ولوحات المعلومات
 
-## Telemetry Collectors & Dashboards
+### جامعي المطلوبة
 
-### Required collectors
+- **Prometheus Scrape**: قم بتمكين `/metrics` على كل أداة تحقق تقوم بتشغيل ملف تعريف تكامل PSP حتى يتم تصدير سلسلة `fraud_psp_*`. تتضمن التسميات الافتراضية معرفات العنصر النائب `subnet="global"` و`lane` بحيث يمكن للوحات المعلومات أن تدور حول محورها بمجرد شحن توجيه الشبكات الفرعية المتعددة.
+- **إجماليات التقييم**: `fraud_psp_assessments_total{tenant,band}` يحسب التقييمات المقبولة لكل نطاق خطورة؛ يتم إطلاق التنبيهات إذا توقف المستأجر عن الإبلاغ لمدة 5 دقائق.
+- **بيانات التعريف المفقودة**: يميز `fraud_psp_missing_assessment_total{tenant,cause}` بين حالات الرفض الصارم (`cause="missing"`) وسمحات نافذة السماح (`cause="grace"`). معاملات البوابة التي تقع بشكل متكرر في مجموعة السماح.
+- **الرسم البياني لزمن الاستجابة**: يتتبع `fraud_psp_latency_ms_bucket` زمن استجابة التسجيل المُبلغ عنه بواسطة PSP. الهدف  20% عن متوسط ​​30 يومًا.
+- **بيانات تعريف غير صالحة**: يشير `fraud_psp_invalid_metadata_total{field}` إلى تراجعات حمولة PSP (على سبيل المثال، معرفات المستأجر المفقودة، والتصرفات المشوهة) بحيث يمكن نشر تحديثات SDK بسرعة.
+- **حالة التصديق**: يؤكد `fraud_psp_attestation_total{tenant,engine,status}` أنه تم التوقيع على المظاريف وتطابق الملخصات. تنبيه إذا كان `status!="verified"` يرتفع لأي مستأجر أو محرك.
 
-- **Prometheus scrape**: enable `/metrics` on every validator running the PSP integration profile so `fraud_psp_*` series are exported. Default labels include placeholder `subnet="global"` and `lane` IDs so dashboards can pivot once multi-subnet routing ships.
-- **Assessment totals**: `fraud_psp_assessments_total{tenant,band}` counts accepted assessments per severity band; alerts fire if a tenant stops reporting for 5 minutes.
-- **Missing metadata**: `fraud_psp_missing_assessment_total{tenant,cause}` distinguishes hard rejections (`cause="missing"`) from grace-window allowances (`cause="grace"`). Gate transactions that repeatedly fall into the grace bucket.
-- **Latency histogram**: `fraud_psp_latency_ms_bucket` traces PSP-reported scoring latency. Target <120 ms P95 with alerts at 150 ms.
-- **Score distribution**: `fraud_psp_score_bps_bucket{band}` snapshots risk-score drift; wire percentiles to the governance dashboard.
-- **Outcome mismatches**: `fraud_psp_outcome_mismatch_total{direction}` splits false positives (`direction="false_positive"`) from missed fraud (`"missed_fraud"`). Escalate if either direction deviates >20% from trailing 30-day mean.
-- **Invalid metadata**: `fraud_psp_invalid_metadata_total{field}` flags PSP payload regressions (e.g., missing tenant IDs, malformed dispositions) so SDK updates can be rolled out quickly.
-- **Attestation status**: `fraud_psp_attestation_total{tenant,engine,status}` confirms that envelopes are being signed and digests match. Alert if `status!="verified"` spikes for any tenant or engine.
+### تغطية لوحة القيادة
 
-### Dashboard coverage
+- **نظرة عامة تنفيذية**: مخطط مساحي مكدس لـ `fraud_psp_assessments_total` حسب النطاق لكل مستأجر، إلى جانب جدول يلخص زمن الاستجابة P95 وأعداد عدم التطابق.
+- **العمليات**: لوحات الرسم البياني لـ `fraud_psp_latency_ms` و`fraud_psp_score_bps` مع مقارنة أسبوعية، بالإضافة إلى عدادات الإحصائيات الفردية لـ `fraud_psp_missing_assessment_total` مقسمة على `cause`.
+- **مراقبة المخاطر**: مخطط شريطي `fraud_psp_outcome_mismatch_total` لكل مستأجر، جدول التنقل يسرد حالات `fraud_assessment_disposition=confirmed_fraud` الأخيرة حيث كان `band` هو `low` أو `medium`.
+- **قواعد التنبيه**:
+  - `rate(fraud_psp_missing_assessment_total{cause="missing"}[5m]) > 0` → تنبيه الترحيل (القبول يرفض حركة مرور PSP).
+  - `histogram_quantile(0.95, sum(rate(fraud_psp_latency_ms_bucket[10m])) by (le,tenant)) > 150` → خرق SLO لزمن الوصول.
+  - `sum by (tenant) (rate(fraud_psp_outcome_mismatch_total{direction="missed_fraud"}[1h])) > 0.01` → انحراف النموذج / فجوة السياسة.
 
-- **Executive overview**: stacked area chart of `fraud_psp_assessments_total` by band per tenant, coupled with a table summarising P95 latency and mismatch counts.
-- **Operations**: histogram panels for `fraud_psp_latency_ms` and `fraud_psp_score_bps` with week-over-week comparison, plus single-stat counters for `fraud_psp_missing_assessment_total` split by `cause`.
-- **Risk monitoring**: bar chart of `fraud_psp_outcome_mismatch_total` per tenant, drill-down table listing recent `fraud_assessment_disposition=confirmed_fraud` cases where `band` was `low` or `medium`.
-- **Alert rules**:
-  - `rate(fraud_psp_missing_assessment_total{cause="missing"}[5m]) > 0` → paging alert (admission rejecting PSP traffic).
-  - `histogram_quantile(0.95, sum(rate(fraud_psp_latency_ms_bucket[10m])) by (le,tenant)) > 150` → latency SLO breach.
-  - `sum by (tenant) (rate(fraud_psp_outcome_mismatch_total{direction="missed_fraud"}[1h])) > 0.01` → model drift / policy gap.
+### توقعات الفشل- يجب أن تحافظ مجموعات PSP SDK على نقطتي نهاية نشطتين للتسجيل وتفشل في غضون 15 ثانية من اكتشاف أخطاء النقل أو ارتفاع زمن الاستجابة > 200 مللي ثانية. يسمح دفتر الأستاذ بحركة مرور السماح لـ `fraud_monitoring.missing_assessment_grace_secs` على الأكثر؛ يجب على المشغلين الحفاظ على المقبض عند <= 30 ثانية في الإنتاج.
+- يسجل المدققون `fraud_psp_missing_assessment_total{cause="grace"}` أثناء الرجوع؛ إذا ظل المستأجر في حالة السماح لمدة تزيد عن 5 دقائق، فيجب على مزود خدمة الدفع (PSP) التبديل إلى المراجعة اليدوية وفتح حادثة Sev2 مع فريق عمليات الاحتيال المشترك.
+- يجب أن توضح عمليات النشر النشطة والنشطة استنزاف/إعادة تشغيل قائمة الانتظار أثناء تدريبات التعافي من الكوارث. يجب أن تحافظ مقاييس إعادة التشغيل على `fraud_psp_latency_ms` P99 أقل من 400 مللي ثانية لنافذة إعادة التشغيل.
 
-### Failover expectations
+## قائمة مراجعة مشاركة بيانات PSP
 
-- PSP SDKs must maintain two active scoring endpoints and fail over within 15 seconds of detecting transport errors or latency spikes >200 ms. The ledger tolerates grace traffic for at most `fraud_monitoring.missing_assessment_grace_secs`; operators should keep the knob at <=30 seconds in production.
-- Validators record `fraud_psp_missing_assessment_total{cause="grace"}` while in fallback; if a tenant stays in grace for >5 minutes, the PSP must switch to manual review and open a Sev2 incident with the shared fraud operations team.
-- Active-active deployments must demonstrate queue drain/replay during disaster recovery drills. Replay metrics should keep `fraud_psp_latency_ms` P99 under 400 ms for the replay window.
+1. ** سباكة القياس عن بعد **: الكشف عن مفاتيح البيانات الوصفية المذكورة أعلاه لكل معاملة يتم تسليمها إلى دفتر الأستاذ؛ يجب أن تكون معرفات المستأجر مستعارة ومحددة في عقد PSP.
+2. **إخفاء الهوية**: التأكد من أن تجزئات الجهاز ومعرفات الأسماء المستعارة والتصرفات هي أسماء مستعارة قبل مغادرة محيط PSP؛ لا يمكن تضمين أي معلومات تحديد الهوية الشخصية (PII) في بيانات تعريف Norito.
+3. **تقارير زمن الاستجابة**: قم بملء `fraud_assessment_latency_ms` بالتوقيت الشامل (بوابة إلى PSP) بحيث تظهر انحدارات SLA على الفور.
+4. **تسوية النتائج**: قم بتحديث `fraud_assessment_disposition` بمجرد تأكيد حالات الاحتيال (على سبيل المثال، نشر رد المبالغ المدفوعة) للحفاظ على دقة مقاييس عدم التطابق.
+5. **تدريبات تجاوز الفشل**: تدرب كل ثلاثة أشهر باستخدام قائمة التحقق المشتركة — تحقق من تجاوز الفشل التلقائي لنقطة النهاية، وتأكد من تسجيل نافذة السماح، وأرفق ملاحظات التدريب بمهمة المتابعة التي تم تقديمها بواسطة `scripts/ci/schedule_fraud_scoring.sh`.
+6. **التحقق من صحة لوحة المعلومات**: يجب على فرق عمليات PSP مراجعة لوحات المعلومات Prometheus بعد الإعداد وبعد كل تمرين للفريق الأحمر للتأكد من تدفق المقاييس مع تسميات المستأجر المتوقعة.
 
-## PSP Data-Sharing Checklist
+## الاعتبارات الأمنية
+- جميع الردود موقعة بمفاتيح مدعومة بالأجهزة؛ يقوم مزودو خدمة PSP بالتحقق من صحة التوقيعات قبل الثقة في النتائج.
+- حد المعدل عن طريق الاسم المستعار/الجهاز للتخفيف من هجمات التحقيق التي تهدف إلى معرفة حدود النموذج.
+- تضمين علامة مائية داخل التقييمات لتتبع الاستجابات المسربة دون الكشف عن هوية PSP علنًا.
+- قم بإجراء تمارين الفريق الأحمر ربع السنوية بالتنسيق مع مجموعة عمل الأمان (النقطة المهمة 0) وأدخل النتائج في تحديثات خارطة الطريق.## مراحل التنفيذ
+1. **المرحلة 0 – الأسس**
+   - وضع اللمسات الأخيرة على مخططات Norito وسقالات PSP SDK وأسلاك التكوين وكعب التحقق من جانب دفتر الأستاذ.
+   - بناء محرك قواعد حتمية يغطي فحوصات المخاطر الإلزامية (السرعة، السرعة لكل زوج من الأسماء المستعارة، إعادة استخدام الجهاز).
+2. **المرحلة الأولى - أفضل لاعب في التهديف المركزي**
+   - نشر متجر الميزات وخدمة التسجيل ولوحات معلومات القياس عن بعد.
+   - دمج التهديف في الوقت الحقيقي مع مجموعة محدودة من PSP؛ التقاط الكمون ومقاييس الجودة.
+3. **المرحلة الثانية – التحليلات المتقدمة**
+   - تقديم الكشف عن الحالات الشاذة، وتحليل الارتباط القائم على الرسم البياني، والعتبات التكيفية.
+   - إطلاق بوابة الحوكمة وخطوط إعداد التقارير المجمعة.
+4. **المرحلة الثالثة – التعلم المستمر والأتمتة**
+   - أتمتة مسارات التدريب/التحقق من صحة النموذج، وإضافة عمليات نشر الكناري، وتوسيع تغطية SDK.
+   - التوافق مع اتفاقيات مشاركة البيانات عبر الولايات القضائية والتوصيل بجسور الشبكات الفرعية المتعددة المستقبلية.
 
-1. **Telemetry plumbing**: expose the metadata keys listed above for every transaction handed to the ledger; tenant identifiers must be pseudonymous and scoped to the PSP contract.
-2. **Anonymisation**: confirm that device hashes, alias identifiers, and dispositions are pseudonymised before leaving the PSP perimeter; no PII can be embedded in Norito metadata.
-3. **Latency reporting**: populate `fraud_assessment_latency_ms` with end-to-end timing (gateway to PSP) so SLA regressions surface immediately.
-4. **Outcome reconciliation**: update `fraud_assessment_disposition` once fraud cases are confirmed (e.g., chargeback posted) to keep mismatch metrics accurate.
-5. **Failover drills**: rehearse quarterly using the shared checklist—verify automatic endpoint failover, ensure grace-window logging, and attach drill notes to the follow-up task filed by `scripts/ci/schedule_fraud_scoring.sh`.
-6. **Dashboard validation**: PSP operations teams must review Prometheus dashboards after onboarding and after every red-team exercise to confirm metrics are flowing with expected tenant labels.
-
-## Security Considerations
-- All responses are signed with hardware-backed keys; PSPs validate signatures before trusting scores.
-- Rate-limit by alias/device to mitigate probing attacks aiming to learn model boundaries.
-- Embed watermarking inside assessments to trace leaked responses without revealing PSP identity publicly.
-- Run quarterly red-team exercises in coordination with the Security WG (Milestone 0) and feed findings into roadmap updates.
-
-## Implementation Phases
-1. **Phase 0 – Foundations**
-   - Finalize Norito schemas, PSP SDK scaffolding, configuration wiring, and ledger-side verification stub.
-   - Build deterministic rule engine covering mandatory risk checks (velocity, velocity per alias pair, device reuse).
-2. **Phase 1 – Central Scoring MVP**
-   - Deploy feature store, scoring service, and telemetry dashboards.
-   - Integrate real-time scoring with a limited PSP cohort; capture latency and quality metrics.
-3. **Phase 2 – Advanced Analytics**
-   - Introduce anomaly detection, graph-based link analysis, and adaptive thresholds.
-   - Launch governance portal and batch reporting pipelines.
-4. **Phase 3 – Continuous Learning & Automation**
-   - Automate model training/validation pipelines, add canary deployments, and expand SDK coverage.
-   - Align with cross-jurisdiction data-sharing agreements and plug into future multi-subnet bridges.
-
-## Open Questions
-- What regulatory body will charter the operator of the fraud service, and how are oversight responsibilities shared?
-- How do PSPs expose end-user challenge flows while maintaining consistent UX across providers?
-- Which privacy-enhancing technologies (e.g., secure enclaves, homomorphic aggregation) should be prioritized once baseline service is stable?
+## أسئلة مفتوحة
+- ما هي الهيئة التنظيمية التي ستعين مشغل خدمة مكافحة الاحتيال، وكيف يتم تقاسم مسؤوليات الرقابة؟
+- كيف يكشف مقدمو خدمات الدفع (PSP) عن تدفقات تحدي المستخدم النهائي مع الحفاظ على تجربة مستخدم متسقة عبر مقدمي الخدمة؟
+- ما هي تقنيات تعزيز الخصوصية (على سبيل المثال، الجيوب الآمنة، والتجميع المتماثل) التي ينبغي منحها الأولوية بمجرد استقرار الخدمة الأساسية؟

@@ -8,42 +8,44 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: W1 partner feedback & exit summary
 sidebar_label: W1 summary
 description: Findings, actions, and exit evidence for the partner/Torii integrator preview wave.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-| Item | Details |
+| Element | Tafsilotlar |
 | --- | --- |
-| Wave | W1 — Partners & Torii integrators |
-| Invite window | 2025‑04‑12 → 2025‑04‑26 |
-| Artefact tag | `preview-2025-04-12` |
-| Tracker issue | `DOCS-SORA-Preview-W1` |
-| Participants | sorafs-op-01…03, torii-int-01…02, sdk-partner-01…02, gateway-ops-01 |
+| To'lqin | W1 — Hamkorlar va Torii integratorlari |
+| Taklif oynasi | 2025‑04‑12 → 2025‑04‑26 |
+| Artefakt tegi | `preview-2025-04-12` |
+| Kuzatuvchi muammosi | `DOCS-SORA-Preview-W1` |
+| Ishtirokchilar | sorafs-op-01…03, torii-int-01…02, sdk-partner-01…02, shlyuz-ops-01 |
 
-## Highlights
+## E'tiborga molik
 
-1. **Checksum workflow** — All reviewers verified the descriptor/archive via `scripts/preview_verify.sh`; logs stored alongside the invite acknowledgements.
-2. **Telemetry** — `docs.preview.integrity`, `TryItProxyErrors`, and `DocsPortal/GatewayRefusals` dashboards stayed green for the entire wave; no incidents or alert pages fired.
-3. **Doc feedback (`docs-preview/w1`)** — Two minor nits filed:
-   - `docs-preview/w1 #1`: clarify nav wording in the Try it section (resolved).
-   - `docs-preview/w1 #2`: update Try it screenshot (resolved).
-4. **Runbook parity** — SoraFS operators confirmed the new cross-links between `orchestrator-ops` and `multi-source-rollout` addressed their W0 concerns.
+1. **Tekshiruv ish jarayoni** — Barcha sharhlovchilar `scripts/preview_verify.sh` orqali tavsiflovchi/arxivni tasdiqladilar; taklifnomalar bilan birga saqlanadigan jurnallar.
+2. **Telemetriya** — `docs.preview.integrity`, `TryItProxyErrors` va `DocsPortal/GatewayRefusals` asboblar paneli butun toʻlqin davomida yashil rangda qoldi; hech qanday hodisalar yoki ogohlantirish sahifalari ishdan chiqmadi.
+3. **Hujjatning fikr-mulohazasi (`docs-preview/w1`)** — Ikkita kichik nit topshirildi:
+   - `docs-preview/w1 #1`: Sinab ko'ring (hal qilingan) bo'limida nav so'zlarini aniqlang.
+   - `docs-preview/w1 #2`: yangilash Skrinshotni sinab ko'ring (hal qilingan).
+4. **Runbook pariteti** — SoraFS operatorlari `orchestrator-ops` va `multi-source-rollout` o'rtasidagi yangi o'zaro bog'lanishlarni tasdiqladilar, ularning W0 muammolarini hal qilishdi.
 
-## Action items
+## Harakat elementlari
 
-| ID | Description | Owner | Status |
+| ID | Tavsif | Egasi | Holati |
 | --- | --- | --- | --- |
-| W1-A1 | Update Try it nav wording per `docs-preview/w1 #1`. | Docs-core-02 | ✅ Completed (2025‑04‑18). |
-| W1-A2 | Refresh Try it screenshot per `docs-preview/w1 #2`. | Docs-core-03 | ✅ Completed (2025‑04‑19). |
-| W1-A3 | Summarise partner findings + telemetry evidence in roadmap/status. | Docs/DevRel lead | ✅ Completed (see tracker + status.md). |
+| W1-A1 | Yangilash `docs-preview/w1 #1` bo'yicha navbatma-navbat so'zlab ko'ring. | Docs-core-02 | ✅ Tugallangan (2025-04-18). |
+| W1-A2 | Yangilash `docs-preview/w1 #2` uchun skrinshotni sinab ko'ring. | Docs-core-03 | ✅ Tugallangan (2025-04-19). |
+| W1-A3 | Yo'l xaritasi/statusidagi hamkorlar natijalarini + telemetriya dalillarini umumlashtiring. | Docs/DevRel yetakchisi | ✅ Tugallandi (qarang: treker + status.md). |
 
-## Exit summary (2025-04-26)
+## Chiqish xulosasi (26-04-2025)
 
-- All eight reviewers confirmed completion during the final office hours, purged local artefacts, and had their access revoked.
-- Telemetry remained green through exit; final snapshots attached to `DOCS-SORA-Preview-W1`.
-- Invite log updated with exit acknowledgements; tracker flipped W1 to 🈴 and added the checkpoint entries.
-- Evidence bundle (descriptor, checksum log, probe output, Try it proxy transcript, telemetry screenshots, feedback digest) archived under `artifacts/docs_preview/W1/`.
+- Barcha sakkizta sharhlovchi oxirgi ish soatlarida yakunlanganligini tasdiqladilar, mahalliy artefaktlarni tozalashdi va ularga kirish huquqini bekor qilishdi.
+- Telemetriya chiqish orqali yashil rangda qoldi; yakuniy suratlar `DOCS-SORA-Preview-W1` ga biriktirilgan.
+- Chiqish tasdiqnomalari bilan yangilangan taklif jurnali; treker W1 ni 🈴 ga aylantirdi va nazorat nuqtasi yozuvlarini qo'shdi.
+- `artifacts/docs_preview/W1/` ostida arxivlangan dalillar to'plami (deskriptor, nazorat summasi jurnali, tekshiruv chiqishi, sinab ko'ring proksi transkripti, telemetriya skrinshotlari, fikr-mulohazalar dayjesti).
 
-## Next steps
+## Keyingi qadamlar
 
-- Prepare the W2 community intake plan (governance approval + request template tweaks).
-- Refresh the preview artefact tag for the W2 wave and re-run the preflight script once dates are finalised.
-- Port applicable W1 findings into roadmap/status so the community wave has the latest guidance.
+- W2 hamjamiyatini qabul qilish rejasini tayyorlang (boshqaruvni tasdiqlash + so'rov shablonini sozlash).
+- W2 to'lqini uchun oldindan ko'rish artefakt tegini yangilang va sanalar tugallangandan so'ng oldindan parvoz skriptini qayta ishga tushiring.
+- Qo'llaniladigan W1 topilmalarini yo'l xaritasi/statusiga kiriting, shunda hamjamiyat to'lqini eng so'nggi ko'rsatmalarga ega bo'ladi.

@@ -4,45 +4,45 @@ direction: ltr
 source: docs/portal/docs/reference/norito-codec.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 # Справочник кодека Norito
 
-Norito — канонический слой сериализации Iroha. Каждое on-wire сообщение, on-disk payload и межкомпонентный API используют Norito, чтобы узлы соглашались на идентичные байты даже при разном оборудовании. Эта страница резюмирует ключевые элементы и указывает на полную спецификацию в `norito.md`.
+Norito — número canônico da série Iroha. A transferência on-wire, carga útil no disco e API móvel usam Norito, que são usados ​​para obter suporte идентичные байты даже при разном оборудовании. Esta página irá configurar os elementos de controle e usá-los de acordo com a especificação especificada em `norito.md`.
 
-## Базовая компоновка
+##Composição de Bazovaia
 
-| Компонент | Назначение | Источник |
+| Componente | Atualizado | Estocado |
 | --- | --- | --- |
-| **Header** | Обрамляет payloads magic/version/schema hash, CRC64, длиной и тегом сжатия; v1 требует `VERSION_MINOR = 0x00` и проверяет header flags относительно поддерживаемой маски (по умолчанию `0x00`). | `norito::header` — см. `norito.md` ("Header & Flags", корень репозитория) |
-| **Bare payload** | Детерминированное кодирование значений для hashing/сравнения. On-wire транспорт всегда использует header; bare байты — только внутренние. | `norito::codec::{Encode, Decode}` |
-| **Compression** | Опциональный Zstd (и экспериментальное GPU-ускорение), выбираемый байтом сжатия в header. | `norito.md`, “Compression negotiation” |
+| **Cabeçalho** | Обрамляет payloads magic/version/schema hash, CRC64, длиной e тегом сжатия; v1 usa `VERSION_MINOR = 0x00` e testa sinalizadores de cabeçalho usando a máscara (por meio de `0x00`). | `norito::header` — cm. `norito.md` ("Cabeçalho e sinalizadores", repositório principal) |
+| **Carga útil nua** | Determinar a codificação de código para hashing/transferência. Cabeçalho de transporte on-wire; bare байты — только внутренние. | `norito::codec::{Encode, Decode}` |
+| **Compressão** | O Zstd opcional (e o uso GPU padrão), é inserido no cabeçalho. | `norito.md`, “Negociação de compactação” |
 
-Реестр layout flags (packed-struct, packed-seq, field bitset, compact lengths) находится в `norito::header::flags`. V1 по умолчанию использует flags `0x00`, но принимает явные flags в пределах поддерживаемой маски; неизвестные биты отклоняются. `norito::header::Flags` сохраняется для внутренней инспекции и будущих версий.
+O registro de sinalizadores de layout (packed-struct, pack-seq, field bitset, compact lengths) está localizado em `norito::header::flags`. V1 para usar sinalizadores `0x00`, não принимает явные sinalizadores na máscara de segurança; неизвестные биты отклоняются. `norito::header::Flags` é uma garantia para inspeção externa e versão correta.
 
-## Поддержка derive
+## Поддержка deriva
 
-`norito_derive` поставляет derive `Encode`, `Decode`, `IntoSchema` и JSON helpers. Ключевые соглашения:
+`norito_derive` fornece derivar `Encode`, `Decode`, `IntoSchema` e auxiliares JSON. Classificação de classe:
 
-- Derive генерируют как AoS, так и packed code paths; v1 по умолчанию использует AoS layout (flags `0x00`), если header flags не включают packed варианты. Реализация находится в `crates/norito_derive/src/derive_struct.rs`.
-- Функции, влияющие на layout (`packed-struct`, `packed-seq`, `compact-len`), включаются opt-in через header flags и должны кодироваться/декодироваться согласованно между peers.
-- JSON helpers (`norito::json`) предоставляют детерминированный Norito-backed JSON для публичных API. Используйте `norito::json::{to_json_pretty, from_json}` — никогда `serde_json`.
+- Derive caminhos de código gerados como AoS e compactados; v1 para usar o layout AoS (sinalizadores `0x00`), exceto os sinalizadores de cabeçalho não exibem variantes compactadas. Realize a verificação em `crates/norito_derive/src/derive_struct.rs`.
+- Funções, configuração de layout (`packed-struct`, `packed-seq`, `compact-len`), ativação de sinalizadores de cabeçalho e opções de ativação кодироваться/декодироваться согласованно между pares.
+- Ajudantes JSON (`norito::json`) fornecem o JSON suportado por Norito para API pública. Utilize `norito::json::{to_json_pretty, from_json}` — não use `serde_json`.
 
-## Multicodec и таблицы идентификаторов
+## Multicodec e tabelas identificadas
 
-Norito хранит назначения multicodec в `norito::multicodec`. Референсная таблица (hashes, типы ключей, дескрипторы payload) поддерживается в `multicodec.md` в корне репозитория. При добавлении нового идентификатора:
+Norito transfere multicodec para `norito::multicodec`. A tabela de referência (hashes, tipos de classe, descrição de carga útil) pode ser encontrada em `multicodec.md` no repositório principal. Para obter um novo identificador:
 
-1. Обновите `norito::multicodec::registry`.
-2. Расширьте таблицу в `multicodec.md`.
-3. Перегенерируйте downstream bindings (Python/Java), если они используют эту карту.
+1. Abra `norito::multicodec::registry`.
+2. Insira a tabela em `multicodec.md`.
+3. Transforme as ligações downstream (Python/Java), apenas usando este cartão.
 
-## Перегенерация docs и fixtures
+## Documentos e luminárias de gerenciamento
 
-Пока портал размещает лишь прозаическое резюме, используйте upstream Markdown источники как источник истины:
+Quando o portal cria uma configuração de processo de configuração, use o Markdown upstream como essas opções:
 
-- **Spec**: `norito.md`
-- **Multicodec table**: `multicodec.md`
-- **Benchmarks**: `crates/norito/benches/`
-- **Golden tests**: `crates/norito/tests/`
-
-Когда автоматизация Docusaurus будет включена, портал обновится через sync script (отслеживается в `docs/portal/scripts/`), который извлекает данные из этих файлов. До тех пор держите эту страницу вручную синхронизированной при каждом изменении спецификации.
+**Especificações**: `norito.md`
+- **Tabela multicodec**: `multicodec.md`
+- **Referências**: `crates/norito/benches/`
+- **Testes de ouro**: `crates/norito/tests/`Quando a automação Docusaurus foi ativada, o portal ativou o script de sincronização (definido em `docs/portal/scripts/`), который извлекает данные из этих файлов. Isso deve ser feito para que você possa obter a sincronização de acordo com as especificações específicas.

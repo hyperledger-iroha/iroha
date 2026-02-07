@@ -7,27 +7,27 @@ generator: scripts/sync_docs_i18n.py
 source_hash: cff283a14bf65f185f81539f8fbcd78ddcc6447c5e9045e1b46493051febaf6a
 source_last_modified: "2025-12-29T18:16:35.913045+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Acceleration
+# 加速
 
-The `[accel]` section controls optional hardware acceleration for IVM and helpers. All
-accelerated paths have deterministic CPU fallbacks; if a backend fails a golden
-self‑test at runtime it is disabled automatically and execution continues on CPU.
+`[accel]` 部分控制 IVM 和助手的可選硬件加速。全部
+加速路徑具有確定性的 CPU 回退；如果後端失敗了
+運行時自檢會自動禁用，並在 CPU 上繼續執行。
 
-- `enable_cuda` (default: true) – Use CUDA when compiled and available.
-- `enable_metal` (default: true) – Use Metal on macOS when available.
-- `max_gpus` (default: 0) – Maximum GPUs to initialize; `0` means auto/no cap.
-- `merkle_min_leaves_gpu` (default: 8192) – Minimum leaves to offload Merkle
-  leaf hashing to GPU. Lower only for unusually fast GPUs.
-- Advanced (optional; usually inherit sensible defaults):
-  - `merkle_min_leaves_metal` (default: inherit `merkle_min_leaves_gpu`).
-  - `merkle_min_leaves_cuda` (default: inherit `merkle_min_leaves_gpu`).
-  - `prefer_cpu_sha2_max_leaves_aarch64` (default: 32768) – Prefer CPU SHA‑2 up to this many leaves on ARMv8 with SHA2.
-  - `prefer_cpu_sha2_max_leaves_x86` (default: 32768) – Prefer CPU SHA‑NI up to this many leaves on x86/x86_64.
+- `enable_cuda`（默認值：true） - 編譯並可用時使用 CUDA。
+- `enable_metal`（默認值：true） - 在 macOS 上使用 Metal（如果可用）。
+- `max_gpus`（默認值：0）——要初始化的最大 GPU 數量； `0` 表示自動/無上限。
+- `merkle_min_leaves_gpu`（默認值：8192）——卸載 Merkle 的最小葉數
+  葉散列到 GPU。僅對於速度異常快的 GPU 而言較低。
+- 高級（可選；通常繼承合理的默認值）：
+  - `merkle_min_leaves_metal`（默認：繼承`merkle_min_leaves_gpu`）。
+  - `merkle_min_leaves_cuda`（默認：繼承`merkle_min_leaves_gpu`）。
+  - `prefer_cpu_sha2_max_leaves_aarch64`（默認值：32768） – 優先選擇 CPU SHA-2，直到 ARMv8 上具有 SHA2 的這麼多葉子。
+  - `prefer_cpu_sha2_max_leaves_x86`（默認值：32768） – 在 x86/x86_64 上優先使用 CPU SHA-NI 最多這麼多葉子。
 
-Notes
-- Determinism first: acceleration never changes observable outputs; backends
-  run golden tests on init and fall back to scalar/SIMD when mismatches are detected.
-- Configure via `iroha_config`; avoid environment variables in production.
-
+註釋
+- 確定性第一：加速度永遠不會改變可觀察的輸出；後端
+  在 init 上運行黃金測試，並在檢測到不匹配時回退到標量/SIMD。
+- 通過 `iroha_config` 配置；避免生產中的環境變量。

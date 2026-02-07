@@ -4,30 +4,32 @@ direction: ltr
 source: docs/portal/docs/norito/examples/nft-flow.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
 slug: /norito/examples/nft-flow
-title: سك ونقل وحرق NFT
-description: يسرد دورة حياة NFT من البداية إلى النهاية: السك للمالك، النقل، ووسم بيانات التعريف، والحرق.
-source: crates/ivm/docs/examples/12_nft_flow.ko
+título: سك ونقل وحرق NFT
+description: يسرد دورة حياة NFT من البداية إلى النهاية: السك للمالك, النقل, ووسم بيانات التعريف, والحرق.
+fonte: crates/ivm/docs/examples/12_nft_flow.ko
 ---
 
-يسرد دورة حياة NFT من البداية إلى النهاية: السك للمالك، النقل، ووسم بيانات التعريف، والحرق.
+يسرد دورة حياة NFT من البداية إلى النهاية: السك للمالك, النقل, ووسم بيانات التعريف, والحرق.
 
 ## جولة دفتر الأستاذ
 
 - تأكد من وجود تعريف NFT (مثل `n0#wonderland`) إلى جانب حسابات المالك/المستلم المستخدمة في المقتطف (`ih58...`, `ih58...`).
-- استدعِ نقطة الدخول `nft_issue_and_transfer` لسك NFT ونقله من Alice إلى Bob وإرفاق علامة بيانات تعريف تصف الإصدار.
-- افحص حالة دفتر NFT باستخدام `iroha_cli ledger nfts list --account <id>` أو مكافئات SDK للتحقق من النقل، ثم أكد إزالة الأصل بعد تنفيذ تعليمة الحرق.
+- استدعِ نقطة الدخول `nft_issue_and_transfer` para NFT e من Alice إلى Bob وإرفاق علامة بيانات تعريف تصف الإصدار.
+- Faça o download do NFT `iroha_cli ledger nfts list --account <id>` ou do SDK para o SDK do site, sem problemas بعد تنفيذ تعليمة الحرق.
 
-## أدلة SDK ذات صلة
+## O SDK está disponível
 
-- [البدء السريع لـ Rust SDK](/sdks/rust)
-- [البدء السريع لـ Python SDK](/sdks/python)
-- [البدء السريع لـ JavaScript SDK](/sdks/javascript)
+- [Atualizado para Rust SDK](/sdks/rust)
+- [Implementar para Python SDK](/sdks/python)
+- [Escolha o JavaScript SDK](/sdks/javascript)
 
-[نزّل مصدر Kotodama](/norito-snippets/nft-flow.ko)
+[Kotodama](/norito-snippets/nft-flow.ko)
 
 ```text
 // Mint an NFT, transfer it, update metadata, and burn it using typed IDs.

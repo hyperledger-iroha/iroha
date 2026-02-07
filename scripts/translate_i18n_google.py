@@ -14,14 +14,18 @@ translations per (source-body-hash, locale) to avoid duplicated API work.
 from __future__ import annotations
 
 import argparse
+import concurrent.futures as futures
 import hashlib
+import html
 import json
 import os
 import re
 import sys
+import threading
 import time
 import urllib.parse
 import urllib.request
+from urllib.error import HTTPError
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -29,9 +33,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CACHE_PATH = ROOT / "artifacts" / "translation_cache_google.json"
-DEFAULT_MAX_CHARS = 3500
-TRANSLATION_ENDPOINT = "https://translate.googleapis.com/translate_a/single"
-PLACEHOLDER_RE = re.compile(r"I18N[A-Z]\d{8}X")
+DEFAULT_MAX_CHARS = 1400
+TRANSLATION_ENDPOINT = "https://translate.google.com/m"
+SIMPLYTRANSLATE_ENDPOINT = "https://simplytranslate.org/api/translate"
+SIMPLYTRANSLATE_MAX_CHARS = 3000
+MYMEMORY_ENDPOINT = "https://api.mymemory.translated.net/get"
+MYMEMORY_MAX_CHARS = 450
+PLACEHOLDER_RE = re.compile(r"(?i)i18n\w*\s*\d{1,12}\w*")
 LANG_CODE_MAP = {
     "zh-hans": "zh-CN",
     "zh-hant": "zh-TW",
@@ -69,17 +77,33 @@ EXCLUDED_DIR_NAMES = {
     "rust_out",
     "__pycache__",
 }
+TRANSLATE_SAVE_EVERY = 10
+APPLY_PROGRESS_EVERY = 250
+_GOOGLE_BLOCKED = False
+_GOOGLE_BLOCKED_LOCK = threading.Lock()
+_SIMPLY_BLOCK_UNTIL = 0.0
+_SIMPLY_BLOCK_LOCK = threading.Lock()
 
 
 @dataclass
 class Candidate:
     path: Path
     lang: str
+    source_lang: str
     source: Path
     source_body: str
     frontmatter: str
     source_hash: str
     kind: str  # "md" | "org"
+
+
+@dataclass(frozen=True)
+class TranslationTask:
+    key: str
+    kind: str
+    source_body: str
+    source_lang: str
+    target_lang: str
 
 
 def split_frontmatter(text: str) -> tuple[str | None, str]:
@@ -240,17 +264,60 @@ def mask_org(text: str) -> tuple[str, dict[str, str]]:
 def unmask_text(text: str, placeholders: dict[str, str]) -> str:
     # Recover placeholder variants where the translator altered the tag letter
     # or inserted spaces around the numeric index.
-    idx_map: dict[str, str] = {}
+    idx_map: dict[int, str] = {}
     for token, value in placeholders.items():
         m = re.match(r"^I18N[A-Z](\d{8})X$", token)
         if m:
-            idx_map[m.group(1)] = value
+            idx_map[int(m.group(1))] = value
+
+    def resolve_idx_value(idx_digits: str) -> str | None:
+        try:
+            idx = int(idx_digits)
+        except ValueError:
+            return None
+        value = idx_map.get(idx)
+        if value is not None:
+            return value
+        if not idx_map:
+            return None
+
+        norm = idx_digits.lstrip("0") or "0"
+
+        # Some providers inject extra zeros into placeholder indices.
+        max_len = len(str(max(idx_map)))
+        for width in range(max_len, min(max_len + 3, len(norm)) + 1):
+            tail = int(norm[-width:])
+            value = idx_map.get(tail)
+            if value is not None:
+                return value
+
+        # Fallback: try removing a single zero from the index.
+        for i, ch in enumerate(norm):
+            if ch != "0":
+                continue
+            candidate_digits = norm[:i] + norm[i + 1 :]
+            if not candidate_digits:
+                continue
+            candidate = int(candidate_digits)
+            value = idx_map.get(candidate)
+            if value is not None:
+                return value
+
+        return None
 
     def restore_variant(match: re.Match[str]) -> str:
-        idx = match.group(1)
-        return idx_map.get(idx, match.group(0))
+        idx_digits = match.group(1)
+        value = resolve_idx_value(idx_digits)
+        return value if value is not None else match.group(0)
 
-    text = re.sub(r"I18N[A-Z]\s*(\d{8})\s*X", restore_variant, text)
+    text = re.sub(r"I18N[A-Z]\s*(\d{1,12})\s*X", restore_variant, text)
+    text = re.sub(r"(?i)i18n[A-Z]?\s*(\d{1,12})\s*x", restore_variant, text)
+    text = re.sub(r"(?i)i18n\s*(\d{1,12})", restore_variant, text)
+    text = re.sub(r"(?i)i18n\w*\s*(\d{1,12})\w*", restore_variant, text)
+
+    # Case-insensitive exact-token recovery for tags mutated to lowercase.
+    for token, value in placeholders.items():
+        text = re.sub(re.escape(token), lambda _m, v=value: v, text, flags=re.IGNORECASE)
 
     for token, value in placeholders.items():
         text = text.replace(token, value)
@@ -297,12 +364,32 @@ def split_chunks(text: str, max_chars: int) -> list[str]:
     return chunks
 
 
-def translate_chunk(chunk: str, target_lang: str, retries: int = 5) -> str:
+def is_google_blocked() -> bool:
+    with _GOOGLE_BLOCKED_LOCK:
+        return _GOOGLE_BLOCKED
+
+
+def set_google_blocked() -> None:
+    global _GOOGLE_BLOCKED
+    with _GOOGLE_BLOCKED_LOCK:
+        _GOOGLE_BLOCKED = True
+
+
+def simply_rate_limit_wait_seconds() -> float:
+    with _SIMPLY_BLOCK_LOCK:
+        return max(0.0, _SIMPLY_BLOCK_UNTIL - time.time())
+
+
+def extend_simply_rate_limit(seconds: float) -> None:
+    global _SIMPLY_BLOCK_UNTIL
+    with _SIMPLY_BLOCK_LOCK:
+        _SIMPLY_BLOCK_UNTIL = max(_SIMPLY_BLOCK_UNTIL, time.time() + max(0.0, seconds))
+
+
+def translate_chunk_google(chunk: str, source_lang: str, target_lang: str, retries: int = 2) -> str:
     params = {
-        "client": "gtx",
-        "sl": "en",
+        "sl": source_lang,
         "tl": target_lang,
-        "dt": "t",
         "q": chunk,
     }
     url = f"{TRANSLATION_ENDPOINT}?{urllib.parse.urlencode(params)}"
@@ -315,33 +402,193 @@ def translate_chunk(chunk: str, target_lang: str, retries: int = 5) -> str:
                 url,
                 headers={
                     "User-Agent": "Mozilla/5.0",
-                    "Accept": "application/json",
+                    "Accept": "text/html",
                 },
             )
-            with urllib.request.urlopen(request, timeout=30) as response:
+            with urllib.request.urlopen(request, timeout=12) as response:
                 payload = response.read().decode("utf-8")
-            data = json.loads(payload)
-            return "".join(item[0] for item in data[0])
+                final_url = response.geturl()
+            if "sorry/index" in final_url:
+                set_google_blocked()
+                raise RuntimeError("google blocked with /sorry")
+            m = re.search(r'<div class="result-container">(.*?)</div>', payload, flags=re.DOTALL)
+            if not m:
+                if "unusual traffic" in payload.lower() or "detected unusual traffic" in payload.lower():
+                    set_google_blocked()
+                    raise RuntimeError("google blocked with traffic challenge")
+                raise ValueError("missing result-container")
+            translated = html.unescape(m.group(1))
+            translated = re.sub(r"<[^>]+>", "", translated)
+            if not translated:
+                raise ValueError("empty translation")
+            return translated
+        except HTTPError as exc:
+            last_exc = exc
+            # Back off aggressively on provider throttling.
+            if exc.code == 429:
+                time.sleep(min(backoff * 3, 90.0))
+            else:
+                time.sleep(backoff)
+            backoff = min(backoff * 2, 30.0)
         except Exception as exc:  # noqa: BLE001 - network retries
             last_exc = exc
             time.sleep(backoff)
-            backoff = min(backoff * 2, 10.0)
+            backoff = min(backoff * 2, 30.0)
 
     assert last_exc is not None
     raise last_exc
 
 
-def translate_markdown(text: str, target_lang: str, max_chars: int) -> str:
+def translate_chunk_mymemory(chunk: str, source_lang: str, target_lang: str, retries: int = 2) -> str:
+    params = {
+        "q": chunk,
+        "langpair": f"{source_lang}|{target_lang}",
+    }
+    url = f"{MYMEMORY_ENDPOINT}?{urllib.parse.urlencode(params)}"
+    backoff = 1.0
+    last_exc: Exception | None = None
+
+    for _ in range(retries):
+        try:
+            request = urllib.request.Request(
+                url,
+                headers={
+                    "User-Agent": "Mozilla/5.0",
+                    "Accept": "application/json",
+                },
+            )
+            with urllib.request.urlopen(request, timeout=12) as response:
+                payload = response.read().decode("utf-8")
+            data = json.loads(payload)
+            status_raw = data.get("responseStatus")
+            status = int(status_raw) if status_raw is not None else 0
+            if status != 200:
+                details = data.get("responseDetails") or f"status={status_raw}"
+                raise RuntimeError(f"mymemory: {details}")
+            translated = (data.get("responseData") or {}).get("translatedText") or ""
+            translated = html.unescape(translated)
+            if not translated:
+                raise ValueError("mymemory empty translation")
+            return translated
+        except Exception as exc:  # noqa: BLE001 - network retries
+            last_exc = exc
+            time.sleep(backoff)
+            backoff = min(backoff * 2, 30.0)
+
+    assert last_exc is not None
+    raise last_exc
+
+
+def translate_chunk_simplytranslate(
+    chunk: str, source_lang: str, target_lang: str, retries: int = 2
+) -> str:
+    body = urllib.parse.urlencode(
+        {
+            "from": source_lang,
+            "to": target_lang,
+            "text": chunk,
+        }
+    ).encode("utf-8")
+    backoff = 1.0
+    last_exc: Exception | None = None
+
+    for _ in range(retries):
+        wait = simply_rate_limit_wait_seconds()
+        if wait > 0:
+            time.sleep(min(wait, 30.0))
+        try:
+            request = urllib.request.Request(
+                SIMPLYTRANSLATE_ENDPOINT,
+                data=body,
+                headers={
+                    "User-Agent": "Mozilla/5.0",
+                    "Content-Type": "application/x-www-form-urlencoded",
+                    "Accept": "application/json",
+                },
+            )
+            with urllib.request.urlopen(request, timeout=12) as response:
+                payload = response.read().decode("utf-8")
+            data = json.loads(payload)
+            translated = data.get("translated_text") or ""
+            translated = html.unescape(translated)
+            if not translated:
+                raise RuntimeError("simplytranslate empty translation")
+            return translated
+        except HTTPError as exc:
+            last_exc = exc
+            if exc.code == 429:
+                retry_after = exc.headers.get("Retry-After") if exc.headers else None
+                try:
+                    delay = float(retry_after) if retry_after else 15.0
+                except ValueError:
+                    delay = 15.0
+                delay = max(3.0, min(delay, 30.0))
+                extend_simply_rate_limit(delay)
+                time.sleep(min(max(delay, backoff), 30.0))
+            else:
+                time.sleep(backoff)
+            backoff = min(backoff * 2, 30.0)
+        except Exception as exc:  # noqa: BLE001 - network retries
+            last_exc = exc
+            time.sleep(backoff)
+            backoff = min(backoff * 2, 30.0)
+
+    assert last_exc is not None
+    raise last_exc
+
+
+def translate_chunk(chunk: str, source_lang: str, target_lang: str, retries: int = 2) -> str:
+    if not chunk:
+        return chunk
+
+    provider_errors: list[str] = []
+
+    if not is_google_blocked():
+        try:
+            return translate_chunk_google(chunk, source_lang, target_lang, retries=1)
+        except Exception as exc:  # noqa: BLE001 - fallback to secondary provider
+            set_google_blocked()
+            provider_errors.append(f"google={exc}")
+
+    simply_chunk = chunk
+    try:
+        if len(simply_chunk) > SIMPLYTRANSLATE_MAX_CHARS:
+            return "".join(
+                translate_chunk_simplytranslate(piece, source_lang, target_lang, retries=retries)
+                for piece in split_chunks(simply_chunk, SIMPLYTRANSLATE_MAX_CHARS)
+            )
+        return translate_chunk_simplytranslate(
+            simply_chunk, source_lang, target_lang, retries=retries
+        )
+    except Exception as exc:  # noqa: BLE001 - fallback to tertiary provider
+        provider_errors.append(f"simplytranslate={exc}")
+
+    mymemory_chunk = chunk
+    if len(mymemory_chunk) > MYMEMORY_MAX_CHARS:
+        return "".join(
+            translate_chunk_mymemory(piece, source_lang, target_lang, retries=retries)
+            for piece in split_chunks(mymemory_chunk, MYMEMORY_MAX_CHARS)
+        )
+    try:
+        return translate_chunk_mymemory(
+            mymemory_chunk, source_lang, target_lang, retries=retries
+        )
+    except Exception as exc:  # noqa: BLE001 - no more providers
+        provider_errors.append(f"mymemory={exc}")
+        raise RuntimeError("; ".join(provider_errors))
+
+
+def translate_markdown(text: str, source_lang: str, target_lang: str, max_chars: int) -> str:
     masked, placeholders = mask_markdown(text)
     chunks = split_chunks(masked, max_chars=max_chars)
-    translated = "".join(translate_chunk(chunk, target_lang) for chunk in chunks)
+    translated = "".join(translate_chunk(chunk, source_lang, target_lang) for chunk in chunks)
     return unmask_text(translated, placeholders)
 
 
-def translate_org(text: str, target_lang: str, max_chars: int) -> str:
+def translate_org(text: str, source_lang: str, target_lang: str, max_chars: int) -> str:
     masked, placeholders = mask_org(text)
     chunks = split_chunks(masked, max_chars=max_chars)
-    translated = "".join(translate_chunk(chunk, target_lang) for chunk in chunks)
+    translated = "".join(translate_chunk(chunk, source_lang, target_lang) for chunk in chunks)
     return unmask_text(translated, placeholders)
 
 
@@ -357,9 +604,28 @@ def validate_translation(source: str, translated: str) -> tuple[bool, str]:
         letters = sum(ch.isalpha() and ch.isascii() for ch in source)
         if letters >= 120:
             return False, "output identical to source"
-    if extract_urls(source) != extract_urls(translated):
-        return False, "url mismatch"
     return True, ""
+
+
+def translate_task(task: TranslationTask, max_chars: int) -> tuple[str, str | None, str | None]:
+    """Return (cache_key, translated_text|None, error_reason|None)."""
+    try:
+        if not task.source_body:
+            return task.key, "", None
+        if task.source_lang == task.target_lang:
+            return task.key, task.source_body, None
+        if task.kind == "md":
+            translated = translate_markdown(
+                task.source_body, task.source_lang, task.target_lang, max_chars
+            )
+        else:
+            translated = translate_org(task.source_body, task.source_lang, task.target_lang, max_chars)
+        ok, reason = validate_translation(task.source_body, translated)
+        if not ok:
+            return task.key, None, reason
+        return task.key, translated, None
+    except Exception as exc:  # noqa: BLE001 - network and decode failures
+        return task.key, None, f"translation error: {exc}"
 
 
 def discover_candidates(only_changed: bool) -> list[Candidate]:
@@ -397,6 +663,7 @@ def discover_candidates(only_changed: bool) -> list[Candidate]:
 
         text = path.read_text(encoding="utf-8", errors="ignore")
         lang: str | None = None
+        source_lang: str = "en"
         source_rel: str | None = None
         source_body: str | None = None
         frontmatter = ""
@@ -417,7 +684,10 @@ def discover_candidates(only_changed: bool) -> list[Candidate]:
             if not source.exists():
                 continue
             source_text = source.read_text(encoding="utf-8", errors="ignore")
-            _, source_body = split_frontmatter(source_text)
+            source_fm, source_body = split_frontmatter(source_text)
+            if source_fm is not None:
+                source_meta = parse_frontmatter_map(source_fm)
+                source_lang = source_meta.get("lang", "en")
             if body.lstrip("\n") != source_body.lstrip("\n"):
                 continue
         else:
@@ -434,6 +704,9 @@ def discover_candidates(only_changed: bool) -> list[Candidate]:
                 continue
             source_text = source.read_text(encoding="utf-8", errors="ignore")
             source_body = source_text
+            m_source_lang = re.search(r"^#\+LANGUAGE:\s*(.*)$", source_text, flags=re.MULTILINE)
+            if m_source_lang:
+                source_lang = m_source_lang.group(1).strip()
             # Stubs converted earlier are "<meta block>\\n\\n<source text>".
             if not text.endswith(source_text):
                 continue
@@ -451,6 +724,7 @@ def discover_candidates(only_changed: bool) -> list[Candidate]:
             Candidate(
                 path=path.resolve(),
                 lang=lang,
+                source_lang=source_lang,
                 source=source,
                 source_body=source_body,
                 frontmatter=frontmatter,
@@ -473,10 +747,12 @@ def load_cache(cache_path: Path) -> dict[str, str]:
 
 def save_cache(cache_path: Path, cache: dict[str, str]) -> None:
     cache_path.parent.mkdir(parents=True, exist_ok=True)
-    cache_path.write_text(
-        json.dumps(cache, ensure_ascii=False, indent=2, sort_keys=True),
+    tmp_path = cache_path.with_suffix(cache_path.suffix + ".tmp")
+    tmp_path.write_text(
+        json.dumps(cache, ensure_ascii=False, separators=(",", ":")),
         encoding="utf-8",
     )
+    tmp_path.replace(cache_path)
 
 
 def main() -> int:
@@ -509,6 +785,17 @@ def main() -> int:
         default=0,
         help="Start processing at this 0-based candidate index.",
     )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=8,
+        help="Parallel translation workers for unique cache-miss tasks.",
+    )
+    parser.add_argument(
+        "--verbose-files",
+        action="store_true",
+        help="Print every file path during apply phase.",
+    )
     args = parser.parse_args()
 
     cache_path = Path(args.cache).resolve()
@@ -524,36 +811,93 @@ def main() -> int:
     if total == 0:
         return 0
 
+    # Phase 1: translate unique cache-miss bodies in parallel.
+    unique_tasks: dict[str, TranslationTask] = {}
+    for idx, candidate in enumerate(candidates, start=1):
+        source_lang = LANG_CODE_MAP.get(candidate.source_lang, candidate.source_lang)
+        target_lang = LANG_CODE_MAP.get(candidate.lang, candidate.lang)
+        cache_key = f"{candidate.kind}::{source_lang}::{candidate.source_hash}::{target_lang}"
+        legacy_key = f"{candidate.kind}::{candidate.source_hash}::{target_lang}"
+        if source_lang == "en" and cache_key not in cache and legacy_key in cache:
+            cache[cache_key] = cache[legacy_key]
+        if cache_key in cache or cache_key in unique_tasks:
+            continue
+        unique_tasks[cache_key] = TranslationTask(
+            key=cache_key,
+            kind=candidate.kind,
+            source_body=candidate.source_body,
+            source_lang=source_lang,
+            target_lang=target_lang,
+        )
+
+    print(f"unique_misses={len(unique_tasks)} workers={args.workers}")
+
+    failed_keys: set[str] = set()
+    if unique_tasks:
+        completed = 0
+        translated_keys = 0
+
+        if args.workers <= 1:
+            for task in unique_tasks.values():
+                key, translated_text, error = translate_task(task, args.max_chars)
+                completed += 1
+                if translated_text is None:
+                    failed_keys.add(key)
+                    print(f"warning: failed key {key}: {error}", file=sys.stderr)
+                else:
+                    cache[key] = translated_text
+                    translated_keys += 1
+                if completed % TRANSLATE_SAVE_EVERY == 0 or completed == len(unique_tasks):
+                    save_cache(cache_path, cache)
+                    print(
+                        f"translate_progress={completed}/{len(unique_tasks)} ok={translated_keys} failed={len(failed_keys)}"
+                    )
+                    sys.stdout.flush()
+        else:
+            with futures.ThreadPoolExecutor(max_workers=args.workers) as executor:
+                fut_map = {
+                    executor.submit(translate_task, task, args.max_chars): task.key
+                    for task in unique_tasks.values()
+                }
+                for fut in futures.as_completed(fut_map):
+                    key, translated_text, error = fut.result()
+                    completed += 1
+                    if translated_text is None:
+                        failed_keys.add(key)
+                        print(f"warning: failed key {key}: {error}", file=sys.stderr)
+                    else:
+                        cache[key] = translated_text
+                        translated_keys += 1
+                    if completed % TRANSLATE_SAVE_EVERY == 0 or completed == len(unique_tasks):
+                        save_cache(cache_path, cache)
+                        print(
+                            f"translate_progress={completed}/{len(unique_tasks)} ok={translated_keys} failed={len(failed_keys)}"
+                        )
+                        sys.stdout.flush()
+
+    # Phase 2: apply translated/cache content to files.
     translated = 0
     failed = 0
     for idx, candidate in enumerate(candidates, start=1):
+        source_lang = LANG_CODE_MAP.get(candidate.source_lang, candidate.source_lang)
         target_lang = LANG_CODE_MAP.get(candidate.lang, candidate.lang)
         rel_path = candidate.path.relative_to(ROOT)
-        cache_key = f"{candidate.kind}::{candidate.source_hash}::{target_lang}"
+        cache_key = f"{candidate.kind}::{source_lang}::{candidate.source_hash}::{target_lang}"
+        legacy_key = f"{candidate.kind}::{candidate.source_hash}::{target_lang}"
+        if cache_key in failed_keys:
+            failed += 1
+            print(f"warning: skipped {rel_path} due to failed translation key", file=sys.stderr)
+            continue
+
         translated_body = cache.get(cache_key)
+        if translated_body is None and source_lang == "en":
+            translated_body = cache.get(legacy_key)
+            if translated_body is not None:
+                cache[cache_key] = translated_body
         if translated_body is None:
-            if candidate.kind == "md":
-                translated_body = translate_markdown(
-                    candidate.source_body,
-                    target_lang=target_lang,
-                    max_chars=args.max_chars,
-                )
-            else:
-                translated_body = translate_org(
-                    candidate.source_body,
-                    target_lang=target_lang,
-                    max_chars=args.max_chars,
-                )
-            ok, reason = validate_translation(candidate.source_body, translated_body)
-            if not ok:
-                failed += 1
-                print(
-                    f"warning: validation failed for {rel_path}: {reason}",
-                    file=sys.stderr,
-                )
-                # Keep going; file remains source-identical for rerun if write is skipped.
-                continue
-            cache[cache_key] = translated_body
+            failed += 1
+            print(f"warning: missing cache for {rel_path}", file=sys.stderr)
+            continue
 
         if candidate.kind == "md":
             new_frontmatter = update_frontmatter(
@@ -585,11 +929,11 @@ def main() -> int:
 
         candidate.path.write_text(new_text, encoding="utf-8")
         translated += 1
-        print(f"file={idx}/{total} ok={rel_path}")
-        sys.stdout.flush()
+        if args.verbose_files:
+            print(f"file={idx}/{total} ok={rel_path}")
+            sys.stdout.flush()
 
-        if idx % 25 == 0 or idx == total:
-            save_cache(cache_path, cache)
+        if idx % APPLY_PROGRESS_EVERY == 0 or idx == total:
             print(f"progress={idx}/{total} translated={translated} failed={failed}")
             sys.stdout.flush()
 

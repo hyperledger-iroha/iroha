@@ -7,31 +7,32 @@ generator: scripts/sync_docs_i18n.py
 source_hash: e3f492c3253124b1066f1ca4389c5ccf4b96a723a2cd9c30ca28ec92775eeaf4
 source_last_modified: "2026-01-05T18:22:23.396018+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-## Recommended SDK Flow (ConnectClient + Norito bridge)
+## የሚመከር የኤስዲኬ ፍሰት (ConnectClient + I18NT0000000X ድልድይ)
 
-Need a full Xcode integration walkthrough (SPM/CocoaPods, XCFramework wiring, ChaChaPoly helpers)?
-See `docs/connect_swift_integration.md` for the end-to-end packaging guide.
+ሙሉ የXcode ውህደት መራመጃ ይፈልጋሉ (SPM/CocoaPods፣ XCFramework wiring፣ ChaChaPoly helpers)?
+ከጫፍ እስከ ጫፍ የማሸጊያ መመሪያን ለማግኘት `docs/connect_swift_integration.md` ይመልከቱ።
 
-The Swift SDK ships a Norito-backed Connect stack:
+ስዊፍት ኤስዲኬ በNorito የሚደገፍ የግንኙነት ቁልል ይልካል።
 
-- `ConnectClient` maintains the WebSocket (`/v1/connect/ws?...`) transport on top of
+- `ConnectClient` የዌብሶኬትን (`/v1/connect/ws?...`) ማጓጓዣን ከላይ ያቆያል
   `URLSessionWebSocketTask`.
-- `ConnectSession` orchestrates the lifecycle (open → approve/reject → sign → close) and
-  decrypts ciphertext frames once direction keys are installed.
-- `ConnectCrypto` exposes X25519 key generation plus Norito-compliant direction-key
-  derivation so apps never have to implement HKDF/HMAC plumbing manually.
-- `ConnectEnvelope`/`ConnectControl` represent the typed Norito frames emitted by the
-  Rust bridge (`connect_norito_bridge`); ciphertext envelopes are decrypted via the
-  same FFI helpers used on Android/Rust, guaranteeing parity.
+- `ConnectSession` የህይወት ኡደቱን ያቀናጃል (ክፍት → ማጽደቅ/ ውድቅ → ምልክት → መዝጋት) እና
+  የአቅጣጫ ቁልፎች ከተጫኑ በኋላ የምስጢር ጽሑፍ ፍሬሞችን ዲክሪፕት ያደርጋል።
+- `ConnectCrypto` የ X25519 ቁልፍ ትውልድ እና I18NT0000002X የሚያከብር የአቅጣጫ ቁልፍ ያጋልጣል
+  አፕሊኬሽኖች HKDF/HMAC የቧንቧ ስራን በእጅ መተግበር የለባቸውም።
+- `ConnectEnvelope`/`ConnectControl` የተተየቡ I18NT0000003X ፍሬሞችን ይወክላሉ
+  ዝገት ድልድይ (`connect_norito_bridge`); የምስጢር ጽሁፍ ኤንቨሎፕ ዲክሪፕት የተደረገው በ
+  ተመሳሳይ የኤፍኤፍአይ ረዳቶች በአንድሮይድ/ዝገት ላይ ጥቅም ላይ ይውላሉ፣ተመሳሳይነት ዋስትና።
 
-Before starting a session:
-1. Derive the 32-byte session identifier (`sid`) using the same BLAKE2b recipe as other
-   SDKs (`"iroha-connect|sid|" || chain_id || app_pk || nonce16`).
-2. Generate a Connect key pair via `ConnectCrypto.generateKeyPair()` or reuse a stored
-   private key (public keys can be recomputed with `ConnectCrypto.publicKey(fromPrivateKey:)`).
-3. Create the WebSocket client and start it inside an async context.
+አንድ ክፍለ ጊዜ ከመጀመርዎ በፊት፡-
+1. የ32-ባይት ክፍለ ጊዜ መለያውን (`sid`) ልክ እንደሌሎች ተመሳሳይ BLAKE2b የምግብ አሰራርን በመጠቀም ያግኙ።
+   ኤስዲኬዎች (`"iroha-connect|sid|" || chain_id || app_pk || nonce16`)።
+2. የግንኙነት ቁልፍ ጥንድ በ`ConnectCrypto.generateKeyPair()` በኩል ይፍጠሩ ወይም የተከማቸን እንደገና ይጠቀሙ
+   የግል ቁልፍ (የወል ቁልፎች በ `ConnectCrypto.publicKey(fromPrivateKey:)` እንደገና ማስላት ይቻላል)።
+3. የዌብሶኬት ደንበኛን ይፍጠሩ እና በተመሳሰል አውድ ውስጥ ይጀምሩት።
 
 ```swift
 import IrohaSwift
@@ -79,15 +80,15 @@ Task {
 }
 ```
 
-`ConnectSession` throws `ConnectSessionError.missingDecryptionKeys` if ciphertext frames
-arrive before direction keys are installed; derive them immediately after processing an
-`Approve` control (wallet public key is included in the payload). To inspect ciphertext
-frames manually, call `ConnectEnvelope.decrypt(frame:symmetricKey:)` with the directional
-key that matches the frame’s direction.
+`ConnectSession` የምስጥር ፅሁፍ ፍሬሞች ከሆኑ `ConnectSessionError.missingDecryptionKeys` ይጥላል
+የአቅጣጫ ቁልፎች ከመጫናቸው በፊት ይድረሱ; ከሂደቱ በኋላ ወዲያውኑ ያገኟቸው
+`Approve` መቆጣጠሪያ (የኪስ ቦርሳ የህዝብ ቁልፍ በክፍያ ጭነት ውስጥ ተካትቷል)። ምስጢራዊ ጽሑፍን ለመመርመር
+ፍሬሞችን በእጅ፣ ከአቅጣጫው ጋር I18NI0000026X ይደውሉ
+ከክፈፉ አቅጣጫ ጋር የሚዛመድ ቁልፍ።
 
-> **Tip:** When the Norito bridge is missing (e.g., Swift Package Manager builds without
-> the XCFramework), the SDK automatically falls back to a JSON shim. Encryption helpers
-> (`ConnectCrypto.*`) require the bridge, so link the XCFramework in production apps.
+> ** ጠቃሚ ምክር:** የ Norito ድልድይ ሲጠፋ (ለምሳሌ የስዊፍት ፓኬጅ አስተዳዳሪ ያለ ይገነባል)
+> XCFramework)፣ ኤስዲኬ ወዲያውኑ ወደ JSON shim ይመለሳል። ምስጠራ ረዳቶች
+> (`ConnectCrypto.*`) ድልድዩን ይፈልጋል፣ ስለዚህ XCFrameworkን በምርት መተግበሪያዎች ውስጥ ያገናኙት።
 
 ```swift
 import Foundation
@@ -287,19 +288,19 @@ let ctReject = sealEnvelopeV1(key: kWallet, sid: sid, dir: 1, seq: 2, payload: r
 let frameReject = frameCiphertextV1Demo(sid: sid, dir: 1, seq: 2, aead: ctReject)
 ws.send(.data(frameReject)) { err in if let err = err { print("ws send reject:", err) } }
 ```
-## CI validation
+## CI ማረጋገጫ
 
-- Before making Connect or bridge integration changes, run:
+- የግንኙነት ወይም የድልድይ ውህደት ለውጦችን ከማድረግዎ በፊት ያሂዱ
 
   ```bash
   make swift-ci
   ```
 
-  The command validates Swift fixtures, checks the dashboard feeds, and renders the CLI
-  summaries. The CI workflow relies on Buildkite metadata
-  (`ci/xcframework-smoke:<lane>:device_tag`) to map results back to the simulator or
-  StrongBox lanes—after changing pipelines or agent tags, confirm the metadata still
-  appears in the logs.
-- If the run fails, follow `docs/source/swift_parity_triage.md` and inspect the
-  `mobile_ci` output to determine which lane needs regeneration or further incident
-  handling.
+  ትዕዛዙ Swift fixturesን ያረጋግጣል፣ የዳሽቦርድ ምግቦችን ይፈትሻል እና CLI ን ይሰጣል
+  ማጠቃለያ የCI የስራ ፍሰት በBuildkite ሜታዳታ ላይ ይመሰረታል።
+  (`ci/xcframework-smoke:<lane>:device_tag`) ውጤቱን ወደ አስመሳዩ ለመመለስ ወይም
+  StrongBox መስመሮች—የቧንቧ መስመሮችን ወይም የወኪል መለያዎችን ከቀየሩ በኋላ ሜታዳታውን አሁንም ያረጋግጡ
+  በምዝግብ ማስታወሻዎች ውስጥ ይታያል.
+- ሩጫው ካልተሳካ, `docs/source/swift_parity_triage.md` ን ይከተሉ እና ይፈትሹ
+  የትኛው ሌይን መታደስ ወይም ተጨማሪ ክስተት እንደሚያስፈልገው ለመወሰን `mobile_ci` ውፅዓት
+  አያያዝ.

@@ -4,19 +4,21 @@ direction: ltr
 source: docs/portal/docs/sdks/javascript.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: JavaScript SDK quickstart
-description: Build transactions, stream events, and drive Connect previews with `@iroha/iroha-js`.
-slug: /sdks/javascript
+タイトル: JavaScript SDK クイックスタート
+説明: トランザクションを構築し、イベントをストリーミングし、`@iroha/iroha-js` でプレビューを接続します。
+スラグ: /sdks/javascript
 ---
 
-`@iroha/iroha-js` is the canonical Node.js package for interacting with Torii. It
-bundles Norito builders, Ed25519 helpers, pagination utilities, and a resilient
-HTTP/WebSocket client so you can mirror the CLI flows from TypeScript.
+`@iroha/iroha-js` は、Torii と対話するための正規の Node.js パッケージです。それ
+Norito ビルダー、Ed25519 ヘルパー、ページネーション ユーティリティ、および回復力のある
+HTTP/WebSocket クライアントを使用すると、TypeScript から CLI フローをミラーリングできます。
 
-## Installation
+## インストール
 
 ```bash
 npm install @iroha/iroha-js
@@ -24,10 +26,10 @@ npm install @iroha/iroha-js
 npm run build:native
 ```
 
-The build step wraps `cargo build -p iroha_js_host`. Ensure the toolchain from
-`rust-toolchain.toml` is available locally before running `npm run build:native`.
+ビルド ステップは `cargo build -p iroha_js_host` をラップします。ツールチェーンが次からのものであることを確認します。
+`rust-toolchain.toml` は、`npm run build:native` を実行する前にローカルで使用可能です。
 
-## Key management
+## キー管理
 
 ```ts
 import {
@@ -48,10 +50,10 @@ const derived = publicKeyFromPrivate(privateKey);
 console.assert(Buffer.compare(derived, publicKey) === 0);
 ```
 
-## Build transactions
+## トランザクションを構築する
 
-Norito instruction builders normalise identifiers, metadata, and quantities so
-encoded transactions match the Rust/CLI payloads.
+Norito 命令ビルダーは、識別子、メタデータ、数量を正規化します。
+エンコードされたトランザクションは Rust/CLI ペイロードと一致します。
 
 ```ts
 import {
@@ -80,11 +82,11 @@ const { signedTransaction } = buildMintAndTransferTransaction({
 });
 ```
 
-## Torii client configuration
+## Torii クライアント構成
 
-`ToriiClient` accepts retry/timeout knobs that mirror `iroha_config`. Use
-`resolveToriiClientConfig` to merge a camelCase config object (normalize
-`iroha_config` first), env overrides, and inline options.
+`ToriiClient` は、`iroha_config` を反映する再試行/タイムアウト ノブを受け入れます。使用する
+`resolveToriiClientConfig` は、キャメルケース構成オブジェクトをマージします (正規化します)
+`iroha_config` 最初)、env オーバーライド、およびインライン オプション。
 
 ```ts
 import { ToriiClient, resolveToriiClientConfig } from "@iroha/iroha-js";
@@ -115,31 +117,31 @@ const torii = new ToriiClient(
 );
 ```
 
-Environment variables for local dev:
+ローカル開発用の環境変数:
 
-| Variable | Purpose |
-|----------|---------|
-| `IROHA_TORII_TIMEOUT_MS` | Request timeout (milliseconds). |
-| `IROHA_TORII_MAX_RETRIES` | Maximum retry attempts. |
-| `IROHA_TORII_BACKOFF_INITIAL_MS` | Initial retry backoff. |
-| `IROHA_TORII_BACKOFF_MULTIPLIER` | Exponential backoff multiplier. |
-| `IROHA_TORII_MAX_BACKOFF_MS` | Maximum retry delay. |
-| `IROHA_TORII_RETRY_STATUSES` | Comma-separated HTTP status codes to retry. |
-| `IROHA_TORII_RETRY_METHODS` | Comma-separated HTTP methods to retry. |
-| `IROHA_TORII_API_TOKEN` | Adds `X-API-Token`. |
-| `IROHA_TORII_AUTH_TOKEN` | Adds `Authorization: Bearer …` header. |
+|変数 |目的 |
+|----------|----------|
+| `IROHA_TORII_TIMEOUT_MS` |リクエストのタイムアウト (ミリ秒)。 |
+| `IROHA_TORII_MAX_RETRIES` |最大再試行回数。 |
+| `IROHA_TORII_BACKOFF_INITIAL_MS` |初期再試行バックオフ。 |
+| `IROHA_TORII_BACKOFF_MULTIPLIER` |指数バックオフ乗数。 |
+| `IROHA_TORII_MAX_BACKOFF_MS` |最大再試行遅延。 |
+| `IROHA_TORII_RETRY_STATUSES` |再試行するためのカンマ区切りの HTTP ステータス コード。 |
+| `IROHA_TORII_RETRY_METHODS` |再試行するカンマ区切りの HTTP メソッド。 |
+| `IROHA_TORII_API_TOKEN` | `X-API-Token` を追加します。 |
+| `IROHA_TORII_AUTH_TOKEN` | `Authorization: Bearer …` ヘッダーを追加します。 |
 
-Retry profiles mirror Android defaults and are exported for parity checks:
-`DEFAULT_TORII_CLIENT_CONFIG`, `DEFAULT_RETRY_PROFILE_PIPELINE`,
-`DEFAULT_RETRY_PROFILE_STREAMING`. See `docs/source/sdk/js/torii_retry_policy.md`
-for the endpoint-to-profile mapping and the parameters governance audits during
-JS4/JS7.
+再試行プロファイルは Android のデフォルトを反映し、パリティ チェックのためにエクスポートされます。
+`DEFAULT_TORII_CLIENT_CONFIG`、`DEFAULT_RETRY_PROFILE_PIPELINE`、
+`DEFAULT_RETRY_PROFILE_STREAMING`。 `docs/source/sdk/js/torii_retry_policy.md`を参照
+エンドポイントからプロファイルへのマッピングとパラメーター ガバナンス監査については、
+JS4/JS7。
 
-## Iterable lists & pagination
+## 反復可能なリストとページネーション
 
-Pagination helpers mirror the Python SDK ergonomics for `/v1/accounts`,
-`/v1/domains`, `/v1/assets/definitions`, NFTs, balances, asset holders, and the
-account transaction history.
+ページネーション ヘルパーは、`/v1/accounts` の Python SDK 人間工学を反映しています。
+`/v1/domains`、`/v1/assets/definitions`、NFT、残高、資産保有者、および
+アカウントの取引履歴。
 
 ```ts
 const { items, total } = await torii.listDomains({
@@ -178,22 +180,22 @@ const holders = await torii.listAssetHolders("rose#wonderland", {
 console.log(balances.items, txs.items, holders.items);
 ```
 
-## Offline allowances & verdict metadata
+## オフライン許可と判定メタデータ
 
-Offline allowance responses expose the enriched ledger metadata up-front —
-`expires_at_ms`, `policy_expires_at_ms`, `refresh_at_ms`, `verdict_id_hex`,
-`attestation_nonce_hex`, and `remaining_amount` are returned alongside the raw
-record so dashboards don’t have to decode the embedded Norito payloads. The new
-countdown helpers (`deadline_kind`, `deadline_state`, `deadline_ms`,
-`deadline_ms_remaining`) highlight the next expiring deadline (refresh → policy
-→ certificate) so UI badges can warn operators whenever an allowance has
-<24 h remaining. The SDK
-mirrors the REST filters exposed by `/v1/offline/allowances`:
-`certificateExpiresBeforeMs/AfterMs`, `policyExpiresBeforeMs/AfterMs`,
-`verdictIdHex`, `attestationNonceHex`, `refreshBeforeMs/AfterMs`, and the
-`requireVerdict` / `onlyMissingVerdict` booleans. Invalid combinations (for
-example `onlyMissingVerdict` + `verdictIdHex`) are rejected locally before Torii
-is called.
+オフライン手当の応答により、強化された台帳メタデータが事前に公開されます。
+`expires_at_ms`、`policy_expires_at_ms`、`refresh_at_ms`、`verdict_id_hex`、
+`attestation_nonce_hex` および `remaining_amount` が生のファイルと一緒に返されます。
+記録することで、ダッシュボードが埋め込み Norito ペイロードをデコードする必要がなくなります。新しい
+カウントダウン ヘルパー (`deadline_kind`、`deadline_state`、`deadline_ms`、
+`deadline_ms_remaining`) 次に期限切れになる期限を強調表示します (更新 → ポリシー)
+→ 証明書) を使用して、許容量が不足するたびに UI バッジがオペレーターに警告できるようにします。
+残り 24 時間未満。 SDK
+`/v1/offline/allowances` によって公開される REST フィルターをミラーリングします。
+`certificateExpiresBeforeMs/AfterMs`、`policyExpiresBeforeMs/AfterMs`、
+`verdictIdHex`、`attestationNonceHex`、`refreshBeforeMs/AfterMs`、および
+`requireVerdict` / `onlyMissingVerdict` ブール値。無効な組み合わせ (
+例 `onlyMissingVerdict` + `verdictIdHex`) は、Torii より前にローカルで拒否されます。
+と呼ばれます。
 
 ```ts
 const { items: allowances } = await torii.listOfflineAllowances({
@@ -212,14 +214,14 @@ for (const entry of allowances) {
 }
 ```
 
-## Offline top-ups (issue + register)
+## オフラインでのトップアップ (発行 + 登録)
 
-Use the top-up helpers when you want to issue a certificate and immediately
-register it on-ledger. The SDK verifies the issued and registered certificate
-IDs match before returning, and the response includes both payloads. There is
-no dedicated top-up endpoint; the helper chains the issue + register calls. If
-you already have a signed certificate, call `registerOfflineAllowance` (or
-`renewOfflineAllowance`) directly.
+証明書をすぐに発行したい場合は、トップアップ ヘルパーを使用します。
+それを台帳に登録します。 SDKは発行および登録された証明書を検証します
+ID は返される前に一致し、応答には両方のペイロードが含まれます。あります
+専用のトップアップエンドポイントはありません。ヘルパーは問題と登録呼び出しを連鎖させます。もし
+すでに署名付き証明書をお持ちの場合は、`registerOfflineAllowance` (または
+`renewOfflineAllowance`) を直接使用します。
 
 ```ts
 const topUp = await torii.topUpOfflineAllowance({
@@ -241,11 +243,11 @@ const renewed = await torii.topUpOfflineAllowanceRenewal(
 console.log(renewed.registration.certificate_id_hex);
 ```
 
-## Torii queries & streaming (WebSockets)
+## Torii クエリとストリーミング (WebSocket)
 
-Query helpers expose status, Prometheus metrics, telemetry snapshots, and event
-streams using the Norito filter grammar. Streaming automatically upgrades to
-WebSockets and resumes when the retry budget allows.
+クエリ ヘルパーはステータス、Prometheus メトリクス、テレメトリ スナップショット、およびイベントを公開します
+Norito フィルター文法を使用したストリーム。ストリーミングは自動的に次のようにアップグレードされます
+WebSocket を実行し、再試行予算が許す限り再開します。
 
 ```ts
 const status = await torii.getSumeragiStatus();
@@ -265,18 +267,18 @@ for await (const event of torii.streamEvents({
 abort.abort(); // closes the underlying WebSocket cleanly
 ```
 
-Use `streamBlocks`, `streamTransactions`, or `streamTelemetry` for the other
-WebSocket endpoints. All streaming helpers surface retry attempts, so hook the
-`onReconnect` callback to feed dashboards and alerting.
+その他には `streamBlocks`、`streamTransactions`、または `streamTelemetry` を使用します。
+WebSocket エンドポイント。すべてのストリーミング ヘルパーは再試行を表示するため、
+ダッシュボードとアラートをフィードするための `onReconnect` コールバック。
 
-## Explorer snapshots & QR payloads
+## Explorer のスナップショットと QR ペイロード
 
-Explorer telemetry provides typed helpers for the `/v1/explorer/metrics` and
-`/v1/explorer/accounts/{account_id}/qr` endpoints so dashboards can replay the
-same snapshots that power the portal. `getExplorerMetrics()` normalises the
-payload and returns `null` when the route is disabled. Pair it with
-`getExplorerAccountQr()` whenever you need IH58 (preferred)/sora (second-best) literals plus inline
-SVG for share buttons.
+Explorer テレメトリは、`/v1/explorer/metrics` および
+`/v1/explorer/accounts/{account_id}/qr` エンドポイント。ダッシュボードで
+ポータルを強化するのと同じスナップショット。 `getExplorerMetrics()` は、
+ペイロードをロードし、ルートが無効な場合は `null` を返します。と組み合わせてください
+IH58 (推奨)/sora (2 番目に優れた) リテラルとインラインが必要な場合は常に `getExplorerAccountQr()`
+共有ボタンの SVG。
 
 ```ts
 import { promises as fs } from "node:fs";
@@ -298,22 +300,20 @@ await fs.writeFile("alice.svg", qr.svg, "utf8");
 console.log(
   `qr metadata v${qr.qrVersion} ec=${qr.errorCorrection} prefix=${qr.networkPrefix}`,
 );
-```
+````addressFormat: "compressed"` を渡すと、エクスプローラーのデフォルトの圧縮ファイルが反映されます。
+セレクター;優先 IH58 出力のオーバーライドを省略するか、`ih58_qr` を要求します
+QRセーフバリアントが必要な場合。圧縮リテラルは 2 番目に優れたものです
+Sora 専用の UX オプション。ヘルパーは常に正規の識別子を返します。
+選択したリテラル、およびメタデータ (ネットワーク プレフィックス、QR バージョン/モジュール、エラー)
+修正層、およびインライン SVG) を使用できるため、CI/CD は、
+Explorer は、特注のコンバーターを呼び出すことなく表示されます。
 
-Passing `addressFormat: "compressed"` mirrors Explorer’s default compressed
-selectors; omit the override for the preferred IH58 output or request `ih58_qr`
-when you need the QR-safe variant. The compressed literal is the second-best
-Sora-only option for UX. The helper always returns the canonical identifier,
-the selected literal, and metadata (network prefix, QR version/modules, error
-correction tier, and inline SVG), so CI/CD can publish the same payloads that
-the Explorer surfaces without calling bespoke converters.
+## 接続セッションとキューイング
 
-## Connect sessions & queueing
-
-The Connect helpers mirror `docs/source/connect_architecture_strawman.md`. The
-fastest path to a preview-ready session is `bootstrapConnectPreviewSession`,
-which stitches together deterministic SID/URI generation and the Torii
-registration call.
+Connect ヘルパーは `docs/source/connect_architecture_strawman.md` をミラーリングします。の
+プレビュー対応セッションへの最速パスは `bootstrapConnectPreviewSession` です。
+確定的な SID/URI 生成と Torii を結合します。
+登録電話。
 
 ```ts
 import {
@@ -336,25 +336,25 @@ console.log("wallet QR", preview.walletUri);
 console.log("Connect tokens", tokens?.wallet, tokens?.app);
 ```
 
-- Pass `register: false` when you only need deterministic URIs for QR/deeplink
-  previews.
-- `generateConnectSid` stays available when you need to derive session ids
-  without minting URIs.
-- Directional keys and ciphertext envelopes come from the native bridge; when
-  unavailable the SDK falls back to the JSON codec and throws
-  `ConnectQueueError.bridgeUnavailable`.
-- Offline buffers are stored as Norito `.to` blobs in IndexedDB. Monitor queue
-  state via the emitted `ConnectQueueError.overflow(limit)` /
-  `.expired(ttlMs)` errors and feed `connect.queue_depth` telemetry as outlined
-  in the roadmap.
+- QR/ディープリンクの決定論的な URI のみが必要な場合は、`register: false` を渡します。
+  プレビュー。
+- セッション ID を取得する必要がある場合は、`generateConnectSid` を引き続き使用できます
+  URI を鋳造せずに。
+- 方向キーと暗号文エンベロープはネイティブ ブリッジから取得されます。いつ
+  利用できない場合、SDK は JSON コーデックにフォールバックしてスローします
+  `ConnectQueueError.bridgeUnavailable`。
+- オフライン バッファーは、Norito `.to` BLOB として IndexedDB に保存されます。監視キュー
+  発行された `ConnectQueueError.overflow(limit)` / による状態
+  `.expired(ttlMs)` エラーとフィード `connect.queue_depth` テレメトリ (概要を参照)
+  ロードマップでは。
 
-### Connect registry & policy snapshots
+### レジストリとポリシーのスナップショットを接続する
 
-Platform operators can introspect and update the Connect registry without
-leaving Node.js. `iterateConnectApps()` pages through the registry, while
-`getConnectStatus()` and `getConnectAppPolicy()` expose the runtime counters and
-current policy envelope. `updateConnectAppPolicy()` accepts camelCase fields,
-so you can stage the same JSON payload that Torii expects.
+プラットフォーム オペレーターは、何もせずに Connect レジストリをイントロスペクトし、更新できます。
+Node.jsを離れる。 `iterateConnectApps()` はレジストリをページングしますが、
+`getConnectStatus()` および `getConnectAppPolicy()` はランタイム カウンターを公開し、
+現在の保険契約の封筒。 `updateConnectAppPolicy()` はキャメルケースのフィールドを受け入れます。
+したがって、Torii が期待するのと同じ JSON ペイロードをステージングできます。
 
 ```ts
 const status = await torii.getConnectStatus();
@@ -376,17 +376,17 @@ if ((policy.wsPerIpMaxSessions ?? 0) < 5) {
 }
 ```
 
-Always capture the latest `getConnectStatus()` snapshot before applying
-mutations—the governance checklist requires evidence that policy updates start
-from the fleet’s current limits.
+適用する前に、必ず最新の `getConnectStatus()` スナップショットをキャプチャしてください。
+突然変異 - ガバナンス チェックリストには、ポリシーの更新が開始されたという証拠が必要です
+フリートの現在の制限から。
 
-### Connect WebSocket dialling
+### WebSocket ダイヤルに接続する
 
-`ToriiClient.openConnectWebSocket()` assembles the canonical
-`/v1/connect/ws` URL (including `sid`, `role`, and token parameters), upgrades
-`http→ws` / `https→wss`, and hands the final URL to whichever WebSocket
-implementation you supply. Browsers automatically reuse the global
-`WebSocket`. Node.js callers should pass a constructor such as `ws`:
+`ToriiClient.openConnectWebSocket()` は正規をアセンブルします
+`/v1/connect/ws` URL (`sid`、`role`、およびトークンパラメータを含む)、アップグレード
+`http→ws` / `https→wss`、最終 URL をいずれかの WebSocket に渡します
+あなたが提供する実装。ブラウザは自動的にグローバルを再利用します。
+`WebSocket`。 Node.js の呼び出し元は、`ws` のようなコンストラクターを渡す必要があります。
 
 ```ts
 import WebSocket from "ws";
@@ -422,19 +422,19 @@ socket.addEventListener("message", (event) => {
 });
 ```
 
-When you only need the URL, call `torii.buildConnectWebSocketUrl(params)` or the
-top-level `buildConnectWebSocketUrl(baseUrl, params)` helper and reuse the
-resulting string in a custom transport/queue.
+URL のみが必要な場合は、`torii.buildConnectWebSocketUrl(params)` または
+トップレベルの `buildConnectWebSocketUrl(baseUrl, params)` ヘルパーを再利用します。
+カスタムトランスポート/キュー内の結果の文字列。
 
-Looking for a complete CLI-oriented sample? The
-[Connect preview recipe](./recipes/javascript-connect-preview.md) includes a
-runnable script plus telemetry guidance that mirrors the roadmap deliverable for
-documenting the Connect queue + WebSocket flow.
+完全な CLI 指向のサンプルをお探しですか?の
+[接続プレビュー レシピ](./recipes/javascript-connect-preview.md) には、
+実行可能なスクリプトと、ロードマップの成果物を反映するテレメトリ ガイダンス
+Connect キュー + WebSocket フローを文書化します。
 
-### Queue telemetry & alerting
+### キューのテレメトリとアラート
 
-Wire queue metrics directly into the helper surfaces so dashboards can mirror
-the roadmap KPIs.
+キュー メトリクスをヘルパー サーフェスに直接配線して、ダッシュボードにミラーリングできるようにします。
+ロードマップの KPI。
 
 ```ts
 import { bootstrapConnectPreviewSession, ConnectQueueError } from "@iroha/iroha-js";
@@ -458,17 +458,17 @@ async function dialWithTelemetry(client: ToriiClient) {
 }
 ```
 
-`ConnectQueueError#toConnectError()` converts queue failures into the generic
-`ConnectError` taxonomy so shared HTTP/WebSocket interceptors can emit the
-standard `connect.queue_depth`, `connect.queue_overflow_total`, and
-`connect.queue_expired_total` metrics referenced throughout the roadmap.
+`ConnectQueueError#toConnectError()` はキューの失敗を汎用エラーに変換します。
+`ConnectError` 分類法により、共有 HTTP/WebSocket インターセプターは
+標準 `connect.queue_depth`、`connect.queue_overflow_total`、および
+`connect.queue_expired_total` メトリクスはロードマップ全体で参照されます。
 
-## Streaming watchers & event cursors
+## ストリーミング ウォッチャーとイベント カーソル
 
-`ToriiClient.streamEvents()` exposes `/v1/events/sse` as an async iterator with automatic
-retries, so Node/Bun CLIs can tail pipeline activity the same way the Rust CLI does.
-Persist the `Last-Event-ID` cursor alongside your runbook artefacts so operators can
-resume a stream without skipping events when a process restarts.
+`ToriiClient.streamEvents()` は、自動を備えた非同期イテレータとして `/v1/events/sse` を公開します。
+再試行するため、Node/Bun CLI は Rust CLI と同じ方法でパイプライン アクティビティを追跡できます。
+`Last-Event-ID` カーソルを Runbook アーティファクトの横に保持して、オペレーターが
+プロセスの再起動時にイベントをスキップせずにストリームを再開します。
 
 ```ts
 import fs from "node:fs/promises";
@@ -498,35 +498,33 @@ for await (const event of torii.streamEvents({
 }
 ```
 
-- Switch `PIPELINE_STATUS` (for example `Pending`, `Applied`, or `Approved`) or set
-  `STREAM_FILTER_JSON` to replay the same filters the CLI accepts.
-- `STREAM_MAX_EVENTS=0 node ./recipes/streaming.mjs` keeps the iterator alive until a
-  signal is received; pass `STREAM_MAX_EVENTS=25` when you only need the first few events
-  for a smoke test.
-- `ToriiClient.streamSumeragiStatus()` mirrors the same interface for
-  `/v1/sumeragi/status/sse` so consensus telemetry can be tailed separately, and the
-  iterator honours `Last-Event-ID` the same way.
-- See `javascript/iroha_js/recipes/streaming.mjs` for a turnkey CLI (cursor persistence,
-  env-var filter overrides, and `extractPipelineStatusKind` logging) used in the JS4
-  streaming/WebSocket roadmap deliverable.
+- `PIPELINE_STATUS` (たとえば、`Pending`、`Applied`、または `Approved`) を切り替えるか、設定します
+  `STREAM_FILTER_JSON` は、CLI が受け入れるのと同じフィルターを再生します。
+- `STREAM_MAX_EVENTS=0 node ./recipes/streaming.mjs` は、終了するまで反復子を存続させます。
+  信号が受信される。最初のいくつかのイベントだけが必要な場合は、`STREAM_MAX_EVENTS=25` を渡します
+  煙のテストのため。
+- `ToriiClient.streamSumeragiStatus()` は、同じインターフェイスをミラーリングします。
+  `/v1/sumeragi/status/sse` なので、コンセンサス テレメトリは個別に追跡できます。
+  イテレータは同じように `Last-Event-ID` を尊重します。
+- ターンキー CLI (カーソル永続性、
+  env-var フィルターのオーバーライド、および `extractPipelineStatusKind` ロギング) が JS4 で使用されます。
+  ストリーミング/WebSocket ロードマップの成果物。
 
-## UAID portfolios & Space Directory
+## UAID ポートフォリオと宇宙ディレクトリ
 
-The Space Directory APIs surface the Universal Account ID (UAID) lifecycle. The
-helpers accept `uaid:<hex>` literals or raw 64-hex digests (LSB=1) and
-canonicalise them before submitting requests:
+Space Directory API は、ユニバーサル アカウント ID (UAID) のライフサイクルを明らかにします。の
+ヘルパーは `uaid:<hex>` リテラルまたは生の 64 16 進ダイジェスト (LSB=1) を受け入れます。
+リクエストを送信する前にそれらを正規化します。- `getUaidPortfolio(uaid, { assetId })` はデータスペースごとの残高を集計します。
+  正規のアカウント ID ごとに資産保有をグループ化します。 `assetId` を渡してフィルタリングします。
+  ポートフォリオを単一の資産インスタンスにまで落とし込みます。
+- `getUaidBindings(uaid, { addressFormat })` はすべてのデータスペース ↔ アカウントを列挙します
+  バインディング (`addressFormat: "compressed"` は `sora…` リテラルを返します)。
+- `getUaidManifests(uaid, { dataspaceId })` は各機能マニフェストを返します。
+  ライフサイクル ステータス、および監査用にバインドされたアカウント。
 
-- `getUaidPortfolio(uaid, { assetId })` aggregates balances per dataspace,
-  grouping asset holdings by canonical account IDs; pass `assetId` to filter the
-  portfolio down to a single asset instance.
-- `getUaidBindings(uaid, { addressFormat })` enumerates every dataspace ↔ account
-  binding (`addressFormat: "compressed"` returns the `sora…` literals).
-- `getUaidManifests(uaid, { dataspaceId })` returns each capability manifest,
-  lifecycle status, and bound accounts for auditing.
-
-For operator evidence packs, manifest publish/revoke flows, and SDK migration
-guidance, follow the Universal Account Guide (`docs/source/universal_accounts_guide.md`)
-alongside these client helpers so the portal and source documentation remain in sync.
+オペレーター証拠パック、マニフェスト発行/取り消しフロー、および SDK 移行の場合
+ガイダンスに従って、ユニバーサル アカウント ガイド (`docs/source/universal_accounts_guide.md`) に従ってください。
+これらのクライアント ヘルパーと並行して、ポータルとソース ドキュメントの同期を維持します。
 
 ```ts
 import { promises as fs } from "node:fs";
@@ -547,11 +545,11 @@ const manifests = await torii.getUaidManifests(uaid, { dataspaceId: 11 });
 console.log("manifests", manifests.manifests[0].manifest.entries.length);
 ```
 
-Operators can also rotate manifests or execute emergency deny-wins flows without
-dropping to the CLI. Both helpers accept an optional `{ signal }` object so
-long-running submissions can be cancelled with `AbortController`; non-object
-options or non-`AbortSignal` inputs raise a synchronous `TypeError` before the
-request hits Torii:
+オペレーターは、マニフェストをローテーションしたり、緊急拒否フローを実行したりすることもできます。
+CLI にドロップします。どちらのヘルパーもオプションの `{ signal }` オブジェクトを受け入れるため、
+長時間実行される送信は `AbortController` でキャンセルできます。非オブジェクト
+オプションまたは非 `AbortSignal` 入力は、
+リクエストは Torii にヒットします:
 
 ```ts
 import { promises as fs } from "node:fs";
@@ -586,45 +584,45 @@ await torii.revokeSpaceDirectoryManifest(
 );
 ```
 
-`publishSpaceDirectoryManifest()` accepts either raw manifest JSON (matching the
-fixtures under `fixtures/space_directory/`) or any object that serialises to the
-same structure. `privateKey`, `privateKeyHex`, or `privateKeyMultihash` map to
-the `ExposedPrivateKey` field Torii expects and default to the `ed25519`
-algorithm when no prefix is supplied. Both requests return once Torii enqueues
-the instruction (`202 Accepted`), at which point the ledger will emit the
-matching `SpaceDirectoryEvent`.
+`publishSpaceDirectoryManifest()` は、生のマニフェスト JSON (
+`fixtures/space_directory/` の下のフィクスチャ)、または
+同じ構造。 `privateKey`、`privateKeyHex`、または `privateKeyMultihash` へのマップ
+`ExposedPrivateKey` フィールド Torii が期待されており、デフォルトは `ed25519` です
+プレフィックスが指定されていない場合のアルゴリズム。 Torii がキューに登録されると、両方のリクエストが返されます。
+命令 (`202 Accepted`)。この時点で台帳は
+`SpaceDirectoryEvent` と一致します。
 
-## Governance & ISO bridge
+## ガバナンスと ISO のブリッジ
 
-`ToriiClient` exposes the governance APIs for inspecting contracts, staging
-proposals, submitting ballots (plain or ZK), rotating the council, and calling
+`ToriiClient` は、契約の検査、ステージングのためのガバナンス API を公開します。
+提案、投票用紙（普通投票または ZK）の提出、評議会の輪番化、および招集
 `governanceFinalizeReferendumTyped` /
-`governanceEnactProposalTyped` without hand-written DTOs. ISO&nbsp;20022 helpers
-follow the same pattern via `buildPacs008Message`/`buildPacs009Message` and the
-`submitIso*`/`waitForIsoMessageStatus` trio.
+手書きの DTO なしの `governanceEnactProposalTyped`。 ISO 20022 ヘルパー
+`buildPacs008Message`/`buildPacs009Message` 経由で同じパターンに従います。
+`submitIso*`/`waitForIsoMessageStatus` トリオ。
 
-See the [governance & ISO bridge recipe](./recipes/javascript-governance-iso.md)
-for CLI-ready samples plus pointers back to the full field guide in
-`docs/source/sdk/js/governance_iso_examples.md`.
+[ガバナンスと ISO ブリッジのレシピ](./recipes/javascript-governance-iso.md) を参照してください。
+CLI 対応のサンプルと、完全なフィールド ガイドへのポインタについては、
+`docs/source/sdk/js/governance_iso_examples.md`。
 
-## RBC sampling & delivery evidence
+## 赤血球のサンプリングと納品の証拠
 
-The JS roadmap also requires Roadrunner Block Commitment (RBC) sampling so operators can
-prove that the block they fetched through Sumeragi matches the chunk proofs they verify.
-Use the built-in helpers instead of building payloads by hand:
+JS ロードマップでは、オペレーターが次のことができるように、Roadrunner Block Commitment (RBC) サンプリングも必要です
+Sumeragi を通じてフェッチしたブロックが、検証したチャンクプルーフと一致することを証明します。
+ペイロードを手動で構築する代わりに、組み込みヘルパーを使用します。
 
-1. `getSumeragiRbcSessions()` mirrors `/v1/sumeragi/rbc/sessions`, and
-   `findRbcSamplingCandidate()` auto-selects the first delivered session with a block hash
-   (the integration suite falls back to it whenever
-   `IROHA_TORII_INTEGRATION_RBC_SAMPLE` is unset).
-2. `ToriiClient.buildRbcSampleRequest(session, overrides)` normalises `{blockHash,height,view}`
-   plus optional `{count,seed,apiToken}` overrides so malformed hex or negative integers never
-   reach Torii.
-3. `sampleRbcChunks()` POSTs the request to `/v1/sumeragi/rbc/sample`, returning chunk proofs
-   and Merkle paths (`samples[].chunkHex`, `chunkRoot`, `payloadHash`) you should archive with
-   the rest of your adoption evidence.
-4. `getSumeragiRbcDelivered(height, view)` captures the cohort’s delivery metadata so auditors
-   can replay the proof end-to-end.
+1. `getSumeragiRbcSessions()` は `/v1/sumeragi/rbc/sessions` をミラーリングします。
+   `findRbcSamplingCandidate()` は、ブロック ハッシュを使用して最初に配信されたセッションを自動選択します
+   (統合スイートは常にそれにフォールバックします)
+   `IROHA_TORII_INTEGRATION_RBC_SAMPLE` は設定されていません)。
+2. `ToriiClient.buildRbcSampleRequest(session, overrides)` は `{blockHash,height,view}` を正規化します
+   さらに、オプションの `{count,seed,apiToken}` がオーバーライドされるため、不正な 16 進数や負の整数が入力されることはありません
+   Torii に達します。
+3. `sampleRbcChunks()` はリクエストを `/v1/sumeragi/rbc/sample` に POST し、チャンクプルーフを返します。
+   およびマークル パス (`samples[].chunkHex`、`chunkRoot`、`payloadHash`) を使用してアーカイブする必要があります。
+   養子縁組の証拠の残りの部分。
+4. `getSumeragiRbcDelivered(height, view)` はコホートの配信メタデータをキャプチャします。
+   証明をエンドツーエンドで再生できます。
 
 ```js
 import assert from "node:assert";
@@ -658,23 +656,23 @@ console.log(
 );
 ```
 
-Persist both responses under the artefact root you submit to governance. Override the
-auto-selected session via `RBC_SAMPLE_JSON='{"height":123,"view":4,"blockHash":"0x…"}'`
-whenever you need to probe a specific block, and treat failures to fetch RBC snapshots as a
-pre-flight gating error rather than silently downgrading to direct mode.
+両方の応答をガバナンスに送信するアーティファクト ルートの下に保持します。オーバーライド
+`RBC_SAMPLE_JSON='{"height":123,"view":4,"blockHash":"0x…"}'` 経由の自動選択セッション
+特定のブロックをプローブし、RBC スナップショットのフェッチの失敗を問題として扱う必要がある場合は常に
+サイレントにダイレクト モードにダウングレードするのではなく、プリフライト ゲーティング エラーを修正します。
 
-## Testing & CI
+## テストと CI
 
-1. Cache cargo and npm artifacts.
-2. Run `npm run build:native`.
-3. Execute `npm test` (or `node --test` for smoke jobs).
+1. カーゴと npm アーティファクトをキャッシュします。
+2. `npm run build:native` を実行します。
+3. `npm test` (またはスモーク ジョブの場合は `node --test`) を実行します。
 
-The reference GitHub Actions workflow lives in
-`docs/source/examples/iroha_js_ci.md`.
+参照 GitHub Actions ワークフローは次の場所にあります。
+`docs/source/examples/iroha_js_ci.md`。
 
-## Next steps
+## 次のステップ
 
-- Review the generated types in `javascript/iroha_js/index.d.ts`.
-- Explore the recipes under `javascript/iroha_js/recipes/`.
-- Pair `ToriiClient` with the Norito quickstart to inspect payloads alongside
-  SDK calls.
+- `javascript/iroha_js/index.d.ts` で生成された型を確認します。
+- `javascript/iroha_js/recipes/` の下のレシピを調べます。
+- `ToriiClient` を Norito クイックスタートと組み合わせて、ペイロードを同時に検査します
+  SDK 呼び出し。

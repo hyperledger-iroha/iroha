@@ -4,164 +4,158 @@ direction: ltr
 source: docs/portal/docs/sorafs/observability-plan.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: observability-plan
+id: план наблюдения
 title: خطة قابلية الملاحظة وأهداف SLO لـ SoraFS
-sidebar_label: قابلية الملاحظة وSLOs
-description: مخطط التليمترية ولوحات المتابعة وسياسة ميزانية الخطأ لبوابات SoraFS والعقد والمُنسِّق متعدد المصادر.
+Sidebar_label: Изменение уровня доступа и SLO
+описание: مخطط التليمترية ولوحات المتابعة وسياسة ميزانية الخطأ لبوابات SoraFS Он был убит.
 ---
 
-:::note المصدر المعتمد
-تعكس هذه الصفحة الخطة الموجودة ضمن `docs/source/sorafs_observability_plan.md`. احرص على إبقاء النسختين متزامنتين إلى أن يتم ترحيل مجموعة Sphinx القديمة بالكامل.
+:::примечание
+Установите флажок `docs/source/sorafs_observability_plan.md`. Он был изображен в фильме "Сфинкс" в фильме "Сфинкс". بالكامل.
 :::
 
 ## الأهداف
-- تحديد المقاييس والأحداث المُهيكلة للبوابات والعقد والمُنسِّق متعدد المصادر.
-- توفير لوحات Grafana وحدود التنبيه وخطافات التحقق.
-- تثبيت أهداف SLO جنبًا إلى جنب مع سياسات ميزانية الخطأ وتمارين الفوضى.
+- Он был создан в 1990-х годах в Лос-Анджелесе и в Нью-Йорке. المصادر.
+- Зарегистрирован Grafana, который находится в режиме ожидания.
+- Он сказал СЛО Дэниелу Дэну в Стокгольме в Нью-Йорке.
 
 ## كتالوج المقاييس
 
 ### أسطح البوابة
 
-| المقياس | النوع | Labels | الملاحظات |
+| المقياس | النوع | Этикетки | الملاحظات |
 |--------|-------|--------|-----------|
-| `sorafs_gateway_active` | Gauge (UpDownCounter) | `endpoint`, `method`, `variant`, `chunker`, `profile` | يُصدر عبر `SorafsGatewayOtel`؛ يتتبع عمليات HTTP الجارية لكل تركيبة endpoint/method. |
-| `sorafs_gateway_responses_total` | Counter | `endpoint`, `method`, `variant`, `chunker`, `profile`, `result`, `status`, `error_code` | كل طلب مكتمل للبوابة يزيد العداد مرة واحدة؛ `result` ∈ {`success`,`error`,`dropped`}. |
-| `sorafs_gateway_ttfb_ms_bucket` | Histogram | `endpoint`, `method`, `variant`, `chunker`, `profile`, `result`, `status`, `error_code` | كمون time-to-first-byte لاستجابات البوابة؛ يُصدَّر كـ Prometheus `_bucket/_sum/_count`. |
-| `sorafs_gateway_proof_verifications_total` | Counter | `profile_version`, `result`, `error_code` | نتائج تحقق الأدلة الملتقطة لحظة الطلب (`result` ∈ {`success`,`failure`}). |
-| `sorafs_gateway_proof_duration_ms_bucket` | Histogram | `profile_version`, `result`, `error_code` | توزيع كمون التحقق لإيصالات PoR. |
-| `telemetry::sorafs.gateway.request` | حدث مُهيكل | `endpoint`, `method`, `variant`, `result`, `status`, `error_code`, `duration_ms` | سجل مُهيكل يُصدر عند اكتمال كل طلب للتنسيق مع Loki/Tempo. |
-| `torii_sorafs_chunk_range_requests_total`, `torii_sorafs_gateway_refusals_total` | Counter | مجموعات Labels قديمة | مقاييس Prometheus محفوظة للّوحات التاريخية؛ تُصدر مع سلسلة OTLP الجديدة. |
+| `sorafs_gateway_active` | Датчик (UpDownCounter) | `endpoint`, `method`, `variant`, `chunker`, `profile` | يُصدر عبر `SorafsGatewayOtel`; Доступ к конечной точке/методу HTTP. |
+| `sorafs_gateway_responses_total` | Счетчик | `endpoint`, `method`, `variant`, `chunker`, `profile`, `result`, `status`, `error_code` | В 2009 году он был выбран в качестве посредника. `result` ∈ {`success`,`error`,`dropped`}. |
+| `sorafs_gateway_ttfb_ms_bucket` | Гистограмма | `endpoint`, `method`, `variant`, `chunker`, `profile`, `result`, `status`, `error_code` | Значение времени до первого байта Код: Prometheus `_bucket/_sum/_count`. |
+| `sorafs_gateway_proof_verifications_total` | Счетчик | `profile_version`, `result`, `error_code` | Установите флажок для проверки (`result` ∈ {`success`,`failure`}). |
+| `sorafs_gateway_proof_duration_ms_bucket` | Гистограмма | `profile_version`, `result`, `error_code` | Он сказал: "ПоR". |
+| `telemetry::sorafs.gateway.request` | حدث مُهيكل | `endpoint`, `method`, `variant`, `result`, `status`, `error_code`, `duration_ms` | Он был показан в фильме "Локи/Темпо". |
+| `torii_sorafs_chunk_range_requests_total`, `torii_sorafs_gateway_refusals_total` | Счетчик | Ярлыки Этикетки قديمة | Код Prometheus для проверки подлинности Он был создан в рамках программы OTLP. |
 
-تعكس أحداث `telemetry::sorafs.gateway.request` عدادات OTEL مع حمولة مُهيكلة، فتُظهر `endpoint` و`method` و`variant` و`status` و`error_code` و`duration_ms` لتنسيق Loki/Tempo، بينما تستهلك لوحات المتابعة سلسلة OTLP لتعقب SLO.
+تعكس أحداث `telemetry::sorafs.gateway.request` عدادات OTEL مع حمولة مُهيكلة, فتُظهر `endpoint` و`method` و`variant` و`status` و`error_code` و`duration_ms` в роли Локи/Темпо, Дэнни Используйте OTLP для SLO.
 
-### تليمترية صحة الأدلة
-
-| المقياس | النوع | Labels | الملاحظات |
+### تليمترية صحة الأدلة| المقياس | النوع | Этикетки | الملاحظات |
 |--------|-------|--------|-----------|
-| `torii_sorafs_proof_health_alerts_total` | Counter | `provider_id`, `trigger`, `penalty` | يزيد كلما أصدرت `RecordCapacityTelemetry` حدث `SorafsProofHealthAlert`. يميز `trigger` بين إخفاقات PDP/PoTR/Both، بينما يلتقط `penalty` ما إذا كان الضمان قد خُصم فعليًا أو تم كتمه عبر cooldown. |
-| `torii_sorafs_proof_health_pdp_failures`, `torii_sorafs_proof_health_potr_breaches` | Gauge | `provider_id` | أحدث أعداد PDP/PoTR داخل نافذة التليمترية المخالِفة حتى تتمكن الفرق من قياس مقدار تجاوز المزوّدين للسياسة. |
-| `torii_sorafs_proof_health_penalty_nano` | Gauge | `provider_id` | مقدار Nano-XOR المخصوم في آخر تنبيه (صفر عند كتم التطبيق بسبب cooldown). |
-| `torii_sorafs_proof_health_cooldown` | Gauge | `provider_id` | مقياس بولي (`1` = تنبيه مكبوت بسبب cooldown) لإظهار متى تكون تنبيهات المتابعة مكتومة مؤقتًا. |
-| `torii_sorafs_proof_health_window_end_epoch` | Gauge | `provider_id` | الحقبة المسجّلة لنافذة التليمترية المرتبطة بالتنبيه لتمكين المشغلين من الربط مع آثار Norito. |
+| `torii_sorafs_proof_health_alerts_total` | Счетчик | `provider_id`, `trigger`, `penalty` | Установите флажок `RecordCapacityTelemetry` и `SorafsProofHealthAlert`. `trigger` используется для PDP/PoTR/Both, а также для `penalty` в случае необходимости. У него есть время восстановления. |
+| `torii_sorafs_proof_health_pdp_failures`, `torii_sorafs_proof_health_potr_breaches` | Калибр | `provider_id` | В ходе PDP/PoTR были созданы всемирные стандарты, которые можно было бы использовать в будущем. Он был убит в Лос-Анджелесе. |
+| `torii_sorafs_proof_health_penalty_nano` | Калибр | `provider_id` | Был использован Nano-XOR в игре с Дэниелом (перезарядка в кулдауне). |
+| `torii_sorafs_proof_health_cooldown` | Калибр | `provider_id` | Миссис Билл (`1` = Время восстановления Тайваня Пэнсона) المتابعة مكتومة مؤقتًا. |
+| `torii_sorafs_proof_health_window_end_epoch` | Калибр | `provider_id` | В 2017 году в Вашингтоне появилась новая информация о том, как сделать это, чтобы добиться успеха. Это сообщение Norito. |
 
-تغذي هذه التدفقات الآن صف proof-health في لوحة Taikai viewer
-(`dashboards/grafana/taikai_viewer.json`)، مما يمنح مشغلي CDN رؤية فورية
-لأحجام التنبيهات ومزيج محفزات PDP/PoTR والعقوبات وحالة cooldown لكل مزوّد.
+تغذي هذه التدفقات الآن صفproof-health в لوحة Taikai Viewer
+(`dashboards/grafana/taikai_viewer.json`) в формате CDN رؤية فورية
+Для этого используется PDP/PoTR, а также время восстановления после завершения.
 
-تدعم المقاييس نفسها الآن قاعدتي تنبيه في Taikai viewer:
+Видео с участием Кейна Тэна в просмотре Taikai:
 تطلق `SorafsProofHealthPenalty` عندما
-يزداد `torii_sorafs_proof_health_alerts_total{penalty="penalty_applied"}` خلال
-آخر 15 دقيقة، بينما يرفع `SorafsProofHealthCooldown` تحذيرًا إذا بقي مزوّد في
-cooldown لمدة خمس دقائق. كلا التنبيهين موجودان في
-`dashboards/alerts/taikai_viewer_rules.yml` لكي يحصل SREs على سياق فوري عند تصاعد
-تطبيق PoR/PoTR.
+Код `torii_sorafs_proof_health_alerts_total{penalty="penalty_applied"}`
+15 дней назад, Дэниел Уинстон, `SorafsProofHealthCooldown`, он сказал:
+Время восстановления истекает. Кэла Уинстон Миссисипи
+`dashboards/alerts/taikai_viewer_rules.yml` для SREs в Сьерра-Леоне.
+Используется PoR/PoTR.
 
-### أسطح المُنسِّق
-
-| المقياس / الحدث | النوع | Labels | المُنتِج | الملاحظات |
+### أسطح المُنسِّق| المقياس / الحدث | النوع | Этикетки | المُنتِج | الملاحظات |
 |----------------|-------|--------|---------|-----------|
-| `sorafs_orchestrator_active_fetches` | Gauge | `manifest_id`, `region` | `FetchMetricsCtx` | الجلسات الجارية حاليًا. |
-| `sorafs_orchestrator_fetch_duration_ms` | Histogram | `manifest_id`, `region` | `FetchMetricsCtx` | هيستوغرام المدة بالميلي ثانية؛ نطاقات 1 ms إلى 30 s. |
-| `sorafs_orchestrator_fetch_failures_total` | Counter | `manifest_id`, `region`, `reason` | `FetchMetricsCtx` | الأسباب: `no_providers`, `no_healthy_providers`, `no_compatible_providers`, `exhausted_retries`, `observer_failed`, `internal_invariant`. |
-| `sorafs_orchestrator_retries_total` | Counter | `manifest_id`, `provider_id`, `reason` | `FetchMetricsCtx` | يميز أسباب إعادة المحاولة (`retry`, `digest_mismatch`, `length_mismatch`, `provider_error`). |
-| `sorafs_orchestrator_provider_failures_total` | Counter | `manifest_id`, `provider_id`, `reason` | `FetchMetricsCtx` | يلتقط تعطيل الجلسة أو تعداد الإخفاقات على مستوى الجلسة. |
-| `sorafs_orchestrator_chunk_latency_ms` | Histogram | `manifest_id`, `provider_id` | `FetchMetricsCtx` | توزيع كمون جلب الشرائح (ms) لتحليل throughput/SLO. |
-| `sorafs_orchestrator_bytes_total` | Counter | `manifest_id`, `provider_id` | `FetchMetricsCtx` | البايتات المسلّمة لكل manifest/provider؛ استخرج throughput عبر `rate()` في PromQL. |
-| `sorafs_orchestrator_stalls_total` | Counter | `manifest_id`, `provider_id` | `FetchMetricsCtx` | يحصي الشرائح التي تتجاوز `ScoreboardConfig::latency_cap_ms`. |
-| `telemetry::sorafs.fetch.lifecycle` | حدث مُهيكل | `manifest`, `region`, `job_id`, `event`, `status`, `chunk_count`, `total_bytes`, `provider_candidates`, `retry_budget`, `global_parallel_limit` | `FetchTelemetryCtx` | يعكس دورة حياة المهمة (بدء/اكتمال) بحمولة Norito JSON. |
-| `telemetry::sorafs.fetch.retry` | حدث مُهيكل | `manifest`, `region`, `job_id`, `provider`, `reason`, `attempts` | `FetchTelemetryCtx` | يصدر لكل سلسلة إعادة محاولة لمزوّد؛ `attempts` تحصي المحاولات التراكمية (≥ 1). |
-| `telemetry::sorafs.fetch.provider_failure` | حدث مُهيكل | `manifest`, `region`, `job_id`, `provider`, `reason`, `failures` | `FetchTelemetryCtx` | يُظهر عند تجاوز المزوّد لعتبة الإخفاق. |
-| `telemetry::sorafs.fetch.error` | حدث مُهيكل | `manifest`, `region`, `job_id`, `reason`, `provider?`, `provider_reason?`, `duration_ms` | `FetchTelemetryCtx` | سجل فشل نهائي مناسب لابتلاع Loki/Splunk. |
-| `telemetry::sorafs.fetch.stall` | حدث مُهيكل | `manifest`, `region`, `job_id`, `provider`, `latency_ms`, `bytes` | `FetchTelemetryCtx` | يُطلق عند تجاوز كمون الشريحة للحد المضبوط (يعكس عدادات stall). |
+| `sorafs_orchestrator_active_fetches` | Калибр | `manifest_id`, `region` | `FetchMetricsCtx` | الجلسات الجارية حاليًا. |
+| `sorafs_orchestrator_fetch_duration_ms` | Гистограмма | `manifest_id`, `region` | `FetchMetricsCtx` | В 2007 году он был избран в 2007 году. Время от 1 мс до 30 с. |
+| `sorafs_orchestrator_fetch_failures_total` | Счетчик | `manifest_id`, `region`, `reason` | `FetchMetricsCtx` | Коды: `no_providers`, `no_healthy_providers`, `no_compatible_providers`, `exhausted_retries`, `observer_failed`, `internal_invariant`. |
+| `sorafs_orchestrator_retries_total` | Счетчик | `manifest_id`, `provider_id`, `reason` | `FetchMetricsCtx` | Установите флажок (`retry`, `digest_mismatch`, `length_mismatch`, `provider_error`). |
+| `sorafs_orchestrator_provider_failures_total` | Счетчик | `manifest_id`, `provider_id`, `reason` | `FetchMetricsCtx` | Он сказал, что хочет, и начнёт работать с ним. |
+| `sorafs_orchestrator_chunk_latency_ms` | Гистограмма | И18НИ00000135Х, И18НИ00000136Х | `FetchMetricsCtx` | Зарегистрируйте значение пропускной способности/SLO (мс). |
+| `sorafs_orchestrator_bytes_total` | Счетчик | `manifest_id`, `provider_id` | `FetchMetricsCtx` | Проверьте манифест/поставщика; Пропускная способность определяется `rate()` в PromQL. |
+| `sorafs_orchestrator_stalls_total` | Счетчик | `manifest_id`, `provider_id` | `FetchMetricsCtx` | Это приложение `ScoreboardConfig::latency_cap_ms`. |
+| `telemetry::sorafs.fetch.lifecycle` | حدث مُهيكل | `manifest`, `region`, `job_id`, `event`, `status`, `chunk_count`, `total_bytes`, `provider_candidates`, `retry_budget`, `global_parallel_limit` | `FetchTelemetryCtx` | Создан файл (создание/размещение) Norito JSON. |
+| `telemetry::sorafs.fetch.retry` | حدث مُهيكل | `manifest`, `region`, `job_id`, `provider`, `reason`, `attempts` | `FetchTelemetryCtx` | يصدر لكل سلسلة إعادة محاولة لمزوّد؛ `attempts` может быть отключен от сети (≥ 1). |
+| `telemetry::sorafs.fetch.provider_failure` | حدث مُهيكل | `manifest`, `region`, `job_id`, `provider`, `reason`, `failures` | `FetchTelemetryCtx` | Он был убит в 1980-х годах. |
+| `telemetry::sorafs.fetch.error` | حدث مُهيكل | `manifest`, `region`, `job_id`, `reason`, `provider?`, `provider_reason?`, `duration_ms` | `FetchTelemetryCtx` | Создан в фильме «Локи/Splunk». |
+| `telemetry::sorafs.fetch.stall` | حدث مُهيكل | `manifest`, `region`, `job_id`, `provider`, `latency_ms`, `bytes` | `FetchTelemetryCtx` | Он был в восторге от киоска "Старый мир". |
 
-### أسطح العقد / التكرار
-
-| المقياس | النوع | Labels | الملاحظات |
+### أسطح العقد / التكرار| المقياس | النوع | Этикетки | الملاحظات |
 |--------|-------|--------|-----------|
-| `sorafs_node_capacity_utilisation_pct` | Histogram | `provider_id` | هيستوغرام OTEL لنسبة استخدام التخزين (يُصدر كـ `_bucket/_sum/_count`). |
-| `sorafs_node_por_success_total` | Counter | `provider_id` | عداد أحادي لعينات PoR الناجحة، مشتق من لقطات المجدول. |
-| `sorafs_node_por_failure_total` | Counter | `provider_id` | عداد أحادي لعينات PoR الفاشلة. |
-| `torii_sorafs_storage_bytes_*`, `torii_sorafs_storage_por_*` | Gauge | `provider` | مقاييس Prometheus الحالية للبايتات المستخدمة وعمق الطابور وعدادات PoR الجارية. |
-| `torii_sorafs_capacity_*`, `torii_sorafs_uptime_bps`, `torii_sorafs_por_bps` | Gauge | `provider` | بيانات نجاح السعة/الجاهزية للمزوّد المعروضة في لوحة السعة. |
-| `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | Gauge | `provider`, `manifest` | عمق التراكم بالإضافة إلى عدادات الفشل التراكمية المصدّرة عند الاستعلام عن `/v1/sorafs/por/ingestion/{manifest}` لتغذية لوحة/تنبيه "PoR Stalls". |
+| `sorafs_node_capacity_utilisation_pct` | Гистограмма | `provider_id` | ОТЕЛЬ расположен в Барселоне (номер `_bucket/_sum/_count`). |
+| `sorafs_node_por_success_total` | Счетчик | `provider_id` | Он был открыт для PoR в 2007 году в Лос-Анджелесе. |
+| `sorafs_node_por_failure_total` | Счетчик | `provider_id` | عداد أحادي لعينات PoR الفاشلة. |
+| `torii_sorafs_storage_bytes_*`, `torii_sorafs_storage_por_*` | Калибр | `provider` | Установите Prometheus для получения дополнительной информации о PoR. |
+| `torii_sorafs_capacity_*`, `torii_sorafs_uptime_bps`, `torii_sorafs_por_bps` | Калибр | `provider` | Он был выбран/предпринят для того, чтобы покончить с собой. |
+| `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | Калибр | `provider`, `manifest` | Он сказал, что хочет, чтобы это произошло с ним. `/v1/sorafs/por/ingestion/{manifest}` вызывает сообщение «PoR Stalles». |
 
-### Proof of Timely Retrieval (PoTR) وSLA الشرائح
+### Доказательство своевременного извлечения (PoTR) и SLA الشرائح
 
-| المقياس | النوع | Labels | المُنتِج | الملاحظات |
+| المقياس | النوع | Этикетки | المُنتِج | الملاحظات |
 |--------|-------|--------|---------|-----------|
-| `sorafs_potr_deadline_ms` | Histogram | `tier`, `provider` | منسق PoTR | هامش الموعد النهائي بالميلي ثانية (موجب = محقق). |
-| `sorafs_potr_failures_total` | Counter | `tier`, `provider`, `reason` | منسق PoTR | الأسباب: `expired`, `missing_proof`, `corrupt_proof`. |
-| `sorafs_chunk_sla_violation_total` | Counter | `provider`, `manifest_id`, `reason` | مراقب SLA | يطلق عند إخفاق تسليم الشرائح في تحقيق SLO (كمون، معدل نجاح). |
-| `sorafs_chunk_sla_violation_active` | Gauge | `provider`, `manifest_id` | مراقب SLA | مقياس بولي (0/1) يتبدل أثناء نافذة الإخفاق النشطة. |
+| `sorafs_potr_deadline_ms` | Гистограмма | `tier`, `provider` | Видео PoTR | هامش الموعد النهائي بالميلي ثانية (موجب = محقق). |
+| `sorafs_potr_failures_total` | Счетчик | `tier`, `provider`, `reason` | Видео PoTR | Коды: `expired`, `missing_proof`, `corrupt_proof`. |
+| `sorafs_chunk_sla_violation_total` | Счетчик | `provider`, `manifest_id`, `reason` | Соглашение об уровне обслуживания | Он выступил с Дэвисом в фильме "Сло" (Келли Уилсон). |
+| `sorafs_chunk_sla_violation_active` | Калибр | `provider`, `manifest_id` | Соглашение об уровне обслуживания | Нападающий Блин (0/1) был выбран игроком на поле. |
 
 ## أهداف SLO
 
-- توفر البوابة بدون ثقة: **99.9%** (استجابات HTTP 2xx/304).
-- Trustless TTFB P95: hot tier ≤ 120 ms، warm tier ≤ 300 ms.
-- معدل نجاح الأدلة: ≥ 99.5% يوميًا.
-- نجاح المُنسِّق (اكتمال الشرائح): ≥ 99%.
+- Скорость передачи данных: **99,9%** (подключение HTTP 2xx/304).
+- Trustless TTFB P95: горячий уровень ≤ 120 мс, теплый уровень ≤ 300 мс.
+- Уровень производительности: ≥ 99,5% эффективности.
+- Уровень шума (اكتمال الشرائح): ≥ 99%.
 
 ## لوحات المتابعة والتنبيهات
 
-1. **Observability للبوابة** (`dashboards/grafana/sorafs_gateway_observability.json`) — تتبع توفر trustless وTTFB P95 وتفصيل الرفض وإخفاقات PoR/PoTR عبر مقاييس OTEL.
-2. **صحة المُنسِّق** (`dashboards/grafana/sorafs_fetch_observability.json`) — تغطي الحمل متعدد المصادر وإعادات المحاولة وإخفاقات المزوّدين وموجات stalls.
-3. **مقاييس خصوصية SoraNet** (`dashboards/grafana/soranet_privacy_metrics.json`) — ترسم buckets relay المجهولة ونوافذ الكتم وصحة collector عبر `soranet_privacy_last_poll_unixtime` و`soranet_privacy_collector_enabled` و`soranet_privacy_poll_errors_total{provider}`.
+1. **Наблюдаемость** (`dashboards/grafana/sorafs_gateway_observability.json`) — без доверия и TTFB P95 для обеспечения безопасности PoR/PoTR. МОСКВА ОТЕЛЬ.
+2. **Установить блокировку** (`dashboards/grafana/sorafs_fetch_observability.json`) Торговые палатки Нью-Йорка.
+3. **Подключение к SoraNet** (`dashboards/grafana/soranet_privacy_metrics.json`) — реле сегментов, обеспечивающее сборку коллектора. `soranet_privacy_last_poll_unixtime` و`soranet_privacy_collector_enabled` و`soranet_privacy_poll_errors_total{provider}`.
 
-حزم التنبيهات:
+Ответ:
 
-- `dashboards/alerts/sorafs_gateway_rules.yml` — توفر البوابة وTTFB وارتفاعات فشل الأدلة.
-- `dashboards/alerts/sorafs_fetch_rules.yml` — إخفاقات/إعادات المحاولة/stalls للمُنسِّق؛ يتم التحقق عبر `scripts/telemetry/test_sorafs_fetch_alerts.sh` و`dashboards/alerts/tests/sorafs_fetch_rules.test.yml` و`dashboards/alerts/tests/soranet_privacy_rules.test.yml` و`dashboards/alerts/tests/soranet_policy_rules.test.yml`.
-- `dashboards/alerts/soranet_privacy_rules.yml` — قمم تدهور الخصوصية وإنذارات الكتم ورصد collector الخامل وتنبيهات collector المعطل (`soranet_privacy_last_poll_unixtime`, `soranet_privacy_collector_enabled`).
-- `dashboards/alerts/soranet_policy_rules.yml` — إنذارات brownout للخصوصية مربوطة بـ `sorafs_orchestrator_brownouts_total`.
-- `dashboards/alerts/taikai_viewer_rules.yml` — إنذارات drift/ingest/CEK lag في Taikai viewer إضافة إلى تنبيهات penalty/cooldown لصحة الأدلة في SoraFS المبنية على `torii_sorafs_proof_health_*`.
+- `dashboards/alerts/sorafs_gateway_rules.yml` — можно установить и TTFB в случае необходимости.
+- `dashboards/alerts/sorafs_fetch_rules.yml` — إخفاقات/إعادات المحاولة/stalls للمُنسِّق؛ Установите `scripts/telemetry/test_sorafs_fetch_alerts.sh` и `dashboards/alerts/tests/sorafs_fetch_rules.test.yml` и `dashboards/alerts/tests/soranet_privacy_rules.test.yml` и `dashboards/alerts/tests/soranet_policy_rules.test.yml`.
+- `dashboards/alerts/soranet_privacy_rules.yml` — قمم تدهور الخصوصية وإنذارات الكتم ورصد Collector الخامل وتنبيهات Collector Это (`soranet_privacy_last_poll_unixtime`, `soranet_privacy_collector_enabled`).
+- `dashboards/alerts/soranet_policy_rules.yml` — Отключение затемнения происходит при отключении `sorafs_orchestrator_brownouts_total`.
+- `dashboards/alerts/taikai_viewer_rules.yml` — дрейф/поглощение/задержка CEK в просмотре Taikai в режиме просмотра штраф/перезарядка для SoraFS Это `torii_sorafs_proof_health_*`.
 
-## استراتيجية التتبع
+## استراتيجية التتبع- Доступ к OpenTelemetry в разделе:
+  - Обеспечивает работу OTLP-промежутков (HTTP) с помощью дайджестов и хэшей токенов.
+  - Код `tracing` + `opentelemetry` охватывает весь регион.
+  - Код SoraFS охватывает область PoR и другие регионы. Для этого необходимо найти идентификатор трассировки `x-sorafs-trace`.
+- `SorafsFetchOtel` для проверки подлинности OTLP. `telemetry::sorafs.fetch.*` загрузил JSON для создания файла в формате JSON.
+- Коллекционеры: شغّل OTEL Collectors بجانب Prometheus/Loki/Tempo (Tempo مفضل). Он был убит в Джагере.
+- Воспользуйтесь функцией очистки воды (10 % свежести, 100 % эффективности).
 
-- اعتماد OpenTelemetry من الطرف للطرف:
-  - تصدر البوابات OTLP spans (HTTP) مع معرفات الطلب وdigests المانيفست وtoken hashes.
-  - يستخدم المُنسِّق `tracing` + `opentelemetry` لتصدير spans لمحاولات الجلب.
-  - تصدر عقد SoraFS المدمجة spans لتحديات PoR وعمليات التخزين. تشترك كل المكونات في trace ID موحد ينتقل عبر `x-sorafs-trace`.
-- يربط `SorafsFetchOtel` مقاييس المُنسِّق بهيستوغرامات OTLP بينما توفر أحداث `telemetry::sorafs.fetch.*` حمولات JSON خفيفة لخلفيات تركّز على السجلات.
-- Collectors: شغّل OTEL collectors بجانب Prometheus/Loki/Tempo (Tempo مفضل). ما زالت المُصدِّرات المتوافقة مع Jaeger اختيارية.
-- يجب أخذ عينات للعمليات عالية الكاردينالية (10% لمسارات النجاح، 100% للإخفاقات).
+## Поддержка TLS (SF-5b)
 
-## تنسيق تليمترية TLS (SF-5b)
+- Сказка:
+  - Используйте TLS `sorafs_gateway_tls_cert_expiry_seconds` и `sorafs_gateway_tls_renewal_total{result}` и `sorafs_gateway_tls_ech_enabled`.
+  - Откройте раздел «Обзор шлюза» в разделе TLS/Certificates.
+- Ответ на вопрос:
+  - Доступен для использования TLS (≤ 14 дней в году) без доверия к SLO.
+  - На стадионе ECH в Сан-Франциско в Лос-Анджелесе TLS в Нью-Йорке.
+- Для этого: необходимо подключить TLS к шлюзу Prometheus. Был создан на базе SF-5b на борту самолета в Лос-Анджелесе.
 
-- مواءمة المقاييس:
-  - ترسل أتمتة TLS `sorafs_gateway_tls_cert_expiry_seconds` و`sorafs_gateway_tls_renewal_total{result}` و`sorafs_gateway_tls_ech_enabled`.
-  - أدرج هذه المقاييس في لوحة Gateway Overview ضمن لوحة TLS/Certificates.
-- ربط التنبيهات:
-  - عند إطلاق تنبيهات انتهاء TLS (≤ 14 يومًا متبقّيًا) اربطها مع SLO توفر trustless.
-  - يؤدي تعطيل ECH إلى تنبيه ثانوي يشير إلى لوحات TLS والتوفر معًا.
-- خط الأنابيب: تصدر مهمة أتمتة TLS إلى نفس مكدس Prometheus الذي يستخدمه gateway؛ يضمن التنسيق مع SF-5b إزالة التكرار في القياس.
+## Ярлыки для этикеток
 
-## اصطلاحات تسمية المقاييس والـLabels
-
-- تتبع أسماء المقاييس بادئات `torii_sorafs_*` أو `sorafs_*` المستخدمة بواسطة Torii والبوابة.
-- مجموعات الـLabels موحدة:
-  - `result` → مخرجات HTTP (`success`, `refused`, `failed`).
+- Установите флажок `torii_sorafs_*` или `sorafs_*`. Torii.
+- Список ярлыков:
+  - `result` → Открытие HTTP (`success`, `refused`, `failed`).
   - `reason` → رمز الرفض/الخطأ (`unsupported_chunker`, `timeout`, إلخ).
   - `provider` → معرف المزوّد مرمّز بالهيكس.
-  - `manifest` → digest مانيفست قانوني (يتم تقليمه عند ارتفاع الكاردينالية).
-  - `tier` → Labels الطبقات التعريفية (`hot`, `warm`, `archive`).
-- نقاط إصدار التليمترية:
-  - مقاييس البوابة تعيش تحت `torii_sorafs_*` وتعيد استخدام اصطلاحات `crates/iroha_core/src/telemetry.rs`.
-  - يصدر المُنسِّق مقاييس `sorafs_orchestrator_*` وأحداث `telemetry::sorafs.fetch.*` (lifecycle, retry, provider failure, error, stall) بعلامات digest المانيفست وjob ID وregion ومعرفات المزوّد.
-  - تعرض العقد `torii_sorafs_storage_*` و`torii_sorafs_capacity_*` و`torii_sorafs_por_*`.
-- نسّق مع Observability لتسجيل كتالوج المقاييس في وثيقة أسماء Prometheus المشتركة، بما في ذلك توقعات كاردينالية الـLabels (الحدود العليا للمزوّد/المانيفست).
+  - `manifest` → дайджест مانيفست قانوني (يتم تقليمه عند ارتفاع الكاردينالية).
+  - `tier` → Этикетки для печати (`hot`, `warm`, `archive`).
+- В тексте сообщения:
+  - Установите флажок `torii_sorafs_*` и установите флажок `crates/iroha_core/src/telemetry.rs`.
+  - يصدر المُنسِّق مقاييس `sorafs_orchestrator_*` وأحداث `telemetry::sorafs.fetch.*` (жизненный цикл, повторная попытка, сбой поставщика, ошибка, остановка) Обзор данных Укажите идентификатор вакансии в регионе, где вы находитесь.
+  - Установите `torii_sorafs_storage_*` и `torii_sorafs_capacity_*` и `torii_sorafs_por_*`.
+- Наблюдение لتسجيل كتالوج المقاييس في وثيقة أسماء Prometheus المشتركة, بما В разделе «Наклейки» (на английском языке).
 
 ## خط أنابيب البيانات
 
-- تُنشر collectors بجانب كل مكوّن، وتصدر OTLP إلى Prometheus (مقاييس) وLoki/Tempo (سجلات/تتبعات).
-- يثري eBPF الاختياري (Tetragon) التتبع منخفض المستوى للبوابات/العقد.
-- استخدم `iroha_telemetry::metrics::{install_sorafs_gateway_otlp_exporter, install_sorafs_node_otlp_exporter}` لـ Torii والعقد المدمجة؛ يستمر المُنسِّق في استدعاء `install_sorafs_fetch_otlp_exporter`.
+- Коллекционеры بجانب مكوّن, OTLP إلى Prometheus (مقاييس) и Loki/Tempo (سجلات/تتبعات).
+- يثري eBPF الاختياري (Tetragon) для создания защитного слоя/отделения.
+- `iroha_telemetry::metrics::{install_sorafs_gateway_otlp_exporter, install_sorafs_node_otlp_exporter}` и Torii. Создан для `install_sorafs_fetch_otlp_exporter`.
 
 ## خطافات التحقق
 
-- شغّل `scripts/telemetry/test_sorafs_fetch_alerts.sh` أثناء CI لضمان بقاء قواعد تنبيه Prometheus متزامنة مع مقاييس stall وفحوصات كتم الخصوصية.
+- شغّل `scripts/telemetry/test_sorafs_fetch_alerts.sh` أثناء CI لضمان بقاء قواعد تنبيه Prometheus متزامنة مع مقاييس Он находится в центре внимания.
 - حافظ على لوحات Grafana ضمن التحكم بالإصدارات (`dashboards/grafana/`) وحدّث اللقطات/الروابط عند تغيير اللوحات.
-- تسجل تمارين الفوضى النتائج عبر `scripts/telemetry/log_sorafs_drill.sh`؛ يستخدم التحقق `scripts/telemetry/validate_drill_log.sh` (راجع [دليل العمليات](operations-playbook.md)).
+- تسجل تمارين الفوضى النتائج عبر `scripts/telemetry/log_sorafs_drill.sh`; Установите `scripts/telemetry/validate_drill_log.sh` (راجع [دليل العمليات](operations-playbook.md)).

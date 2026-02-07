@@ -11,188 +11,187 @@
 #+TITLE: On selecting versions as LTS candidates
 #+AUTHOR: Aleksandr Petrosyan
 #+DATE: 12-08-2023
-* About
+#+TRANSLATOR: machine-google-reviewed
 
-In the interest of preserving the engineering resources, it is in our
-interests to limit the scope of post-release support. If one has
-several versions of Iroha running in parallel, they might need to
-replicate the support work as many times as there are parallel
-versions.
+#+TITLE: On selecting versions as LTS candidates
+#+AUTHOR: Aleksandr Petrosyan
+#+DATE: 12-08-2023
+* အကြောင်း
 
-Instead of attempting to support multiple versions badly, we try to
-cater to 80% of use cases with 20% of the effort and reach a
-compromise between supporting every released version equally and only
-supporting the latest stable version.
+အင်ဂျင်နီယာ အရင်းအမြစ်များကို ထိန်းသိမ်းစောင့်ရှောက်ခြင်း၏ အကျိုးစီးပွားအတွက်၊ ၎င်းသည် ကျွန်ုပ်တို့၌ ရှိပါသည်။
+ထုတ်ဝေပြီးနောက်ပိုင်း ပံ့ပိုးမှုနယ်ပယ်ကို ကန့်သတ်ရန် အကျိုးစီးပွားများ။ တစ်ခုရှိလျှင်
+Iroha ၏ ဗားရှင်းများစွာကို အပြိုင်လုပ်ဆောင်နေရန် လိုအပ်ပါသည်။
+မျဉ်းပြိုင်ရှိသကဲ့သို့ ပံ့ပိုးမှုလုပ်ငန်းကို အကြိမ်များစွာ ထပ်တူလုပ်ပါ။
+ဗားရှင်းများ
 
-Specifically, we support the latest =stable= release. Often this
-release is either not as well-tested, well-documented, or
-well-supported by the SDKs, in addition to often changing in terms of
-thus have a monthly release cadence and one release per year is chosen
-to be the target of long-term support and development.
+ဗားရှင်းများစွာကို ဆိုးဆိုးရွားရွား ပံ့ပိုးရန် ကြိုးစားမည့်အစား၊ ကျွန်ုပ်တို့ ကြိုးစားသည်။
+ကြိုးပမ်းမှု၏ 20% ဖြင့် အသုံးပြုမှု 80% ကို ဖြည့်ဆည်းပေးပါသည်။
+ထုတ်ဝေသည့်ဗားရှင်းတိုင်းကို အညီအမျှနှင့် အားလုံးအတွက် ပံ့ပိုးပေးမှုအကြား အပေးအယူလုပ်ပါ။
+နောက်ဆုံးထွက်တည်ငြိမ်သောဗားရှင်းကိုထောက်ပံ့သည်။
 
-* LTS selection criteria
+အထူးသဖြင့်၊ ကျွန်ုပ်တို့သည် နောက်ဆုံးထွက် =stable= ကို ပံ့ပိုးပေးပါသည်။ ဒီလိုဖြစ်တတ်တယ်။
+ထုတ်ဝေမှုမှာ ကောင်းစွာစမ်းသပ်ပြီးမဟုတ်၊ ကောင်းစွာမှတ်တမ်းတင်ထားခြင်း သို့မဟုတ်၊
+မကြာခဏ ပြောင်းလဲမှုများအပြင် SDKs မှ ကောင်းမွန်စွာပံ့ပိုးပေးပါသည်။
+ထို့ကြောင့် လစဉ်ထုတ်လွှတ်မှုပုံစံတစ်ခုရှိပြီး တစ်နှစ်လျှင် ထုတ်ဝေမှုတစ်ခုကို ရွေးချယ်သည်။
+ရေရှည်ပံ့ပိုးကူညီမှုနှင့် ဖွံ့ဖြိုးတိုးတက်ရေး၏ ပစ်မှတ်ဖြစ်ရန်။
 
-The following is a non-exhaustive list of recommended considerations
-for selecting a particular version as an LTS candidate
+* LTS ရွေးချယ်မှုစံနှုန်းများ
 
-1. The release should be /unlikely/ to contain major /known/ issues which
-   would preclude it from being useful.
+အောက်ဖော်ပြပါသည် အကြံပြုထားသော ထည့်သွင်းစဉ်းစားမှုများ၏ ပြည့်စုံမှုမရှိသောစာရင်းဖြစ်သည်။
+LTS ကိုယ်စားလှယ်လောင်းအဖြစ် သီးခြားဗားရှင်းကို ရွေးချယ်ရန်အတွက်
 
-   More specifically, the release should have a good coverage of a
-   basic use-case, for example, (Pre-)RC-6[fn:1] was the last release which
-   contained the old consensus engine. Given that the actor-based
-   consensus had a maximum stable throughput of 10 TPS, (Pre-)RC-6 was
-   not labelled as an LTS, despite being used as one.
+1. ထုတ်ဝေမှုသည် /unlikely/ ဖြစ်သင့်သည်။
+   အသုံးမဝင်အောင် ဟန့်တားလိမ့်မယ်။
 
-   RC-9 contained all the necessary features for running an Iroha node
-   on the new consensus, some changes to the structure of the
-   configuration and a few fixes to the =p2p= subsystem. It could have
-   filled all the possible niches of any projects based on Iroha, and
-   as such it was labelled as an LTS release despite being less-well
-   tested.
+   အထူးသဖြင့် ထုတ်ဝေမှုတွင် ကောင်းမွန်သော လွှမ်းခြုံမှုရှိသင့်သည်။
+   အခြေခံအသုံးပြုမှုကိစ္စ၊ ဥပမာ၊ (Pre-)RC-6[fn:1] သည် နောက်ဆုံးထုတ်လွှတ်မှုဖြစ်သည်။
+   သဘောတူညီမှုအင်ဂျင်အဟောင်းပါရှိသည်။ ဇာတ်ဆောင်ကို အခြေခံပေးထားတာ။
+   အများသဘောဆန္ဒအရ အမြင့်ဆုံးတည်ငြိမ်သောဖြတ်သန်းမှုတွင် 10 TPS၊ (Pre-)RC-6 ဖြစ်ခဲ့သည်။
+   တစ်ခုအဖြစ်အသုံးပြုသော်လည်း LTS အဖြစ်တံဆိပ်မကပ်ပါ။
 
-   Releases RC8, RC12, RC13 and RC17 were disqualified based on this
-   criterion.
+   RC-9 တွင် Iroha node ကိုအသုံးပြုရန် လိုအပ်သောအင်္ဂါရပ်များ ပါ၀င်သည် ။
+   သဘောတူညီမှုအသစ်တွင် ဖွဲ့စည်းပုံပြင်ဆင်မှုအချို့၊
+   ဖွဲ့စည်းမှုပုံစံနှင့် =p2p= စနစ်ခွဲအတွက် အနည်းငယ် ပြင်ဆင်မှုများ။ ရှိသည်
+   Iroha ကိုအခြေခံ၍ မည်သည့်ပရောဂျက်များ၏ ဖြစ်နိုင်ခြေရှိသော niches အားလုံးကို ဖြည့်သွင်းခဲ့သည်။
+   ကောင်းမွန်မှုနည်းသော်လည်း ၎င်းကို LTS ထုတ်ဝေမှုအဖြစ် တံဆိပ်ကပ်ထားသည်။
+   စမ်းသပ်ခဲ့သည်။
 
-2. If there is a large feature that entails an API breakage, the
-   release that has the most stable version of the "old way of doing
-   things" should be prioritised as an LTS candidate.
+   ဤအချက်အပေါ် အခြေခံ၍ RC8၊ RC12၊ RC13 နှင့် RC17 တို့ကို ထုတ်ဝေခွင့် ပိတ်ပင်ထားသည်။
+   စံနှုန်း
 
-   For example, RC12 and RC13, were the last versions of Iroha that
-   still used a hard-coded permission validator. Them being labelled
-   as an LTS candidate was precluded by the major known issues,
-   particularly with stability, poor coverage, and because releasing
-   an LTS after RC9 would have split the development resources off
-   from fixing the issue of rigid un-modifiable permission validators.
+2. API ကွဲအက်မှု ကြီးမားသော အင်္ဂါရပ်တစ်ခု ရှိပါက၊
+   "လုပ်ပုံလုပ်နည်းဟောင်း၏ အတည်ငြိမ်ဆုံးဗားရှင်းပါရှိသော ထုတ်ဝေမှု
+   အရာများ" ကို LTS ကိုယ်စားလှယ်လောင်းအဖြစ် ဦးစား ပေးသင့်သည်။
 
-   RC14 and RC15 on the other hand, were in the process of a slow
-   migration of features. As such, the latter versions would be
-   considered direct upgrades over the previous one, having more
-   optimisations and better feature coverage.
+   ဥပမာအားဖြင့်၊ RC12 နှင့် RC13 သည် Iroha ၏နောက်ဆုံးဗားရှင်းများဖြစ်သည်။
+   hard-coded permission validator ကို အသုံးပြုနေဆဲဖြစ်သည်။ တံဆိပ်ကပ်ခံရတယ်။
+   LTS ကိုယ်စားလှယ်လောင်းတစ်ဦးအနေဖြင့် အဓိကသိရှိထားသော ပြဿနာများကြောင့် တားဆီးခံခဲ့ရပြီး၊
+   အထူးသဖြင့် တည်ငြိမ်မှု၊ လွှမ်းခြုံမှု ညံ့ဖျင်းမှုနှင့် ထုတ်လွှတ်ခြင်းကြောင့် ဖြစ်သည်။
+   RC9 ပြီးနောက် LTS သည် ဖွံ့ဖြိုးရေးအရင်းအမြစ်များကို ခွဲထုတ်လိုက်မည်ဖြစ်သည်။
+   တင်းကျပ်သော ပြုပြင်မွမ်းမံနိုင်သော ခွင့်ပြုချက် အတည်ပြုသူများ၏ ပြဿနာကို ဖြေရှင်းခြင်းမှ။
 
-3. The release must be feature complete for a use-case.
+   တစ်ဖက်တွင် RC14 နှင့် RC15 တို့သည် နှေးကွေးနေပါသည်။
+   အင်္ဂါရပ်များပြောင်းရွှေ့ခြင်း။ ထို့ ကြောင့် နောက်ပိုင်းဗားရှင်းများဖြစ်မည်။
+   ယခင်တစ်ခုထက် တိုက်ရိုက်အဆင့်မြှင့်တင်မှုများ ပိုများလာသည်ဟု ယူဆပါသည်။
+   အကောင်းဆုံးလုပ်ဆောင်မှုများနှင့် ပိုမိုကောင်းမွန်သော လုပ်ဆောင်ချက်လွှမ်းခြုံမှု။
 
-   This is different to point 1, because while RC10 and RC13 were free
-   from major problems, they did not offer sufficiently full coverage
-   of the features required for the major project stakeholders.
+3. အသုံးပြုမှုကိစ္စအတွက် ထုတ်ပြန်ချက်သည် အင်္ဂါရပ်ပြည့်စုံရပါမည်။RC10 နှင့် RC13 သည် အခမဲ့ဖြစ်နေချိန်ဖြစ်သောကြောင့် အမှတ် 1 နှင့် ကွဲပြားသည်။
+   ကြီးကြီးမားမား ပြဿနာများမှ လုံလောက်သော လွှမ်းခြုံမှုကို မပေးနိုင်ခဲ့ပါ။
+   အဓိက ပရောဂျက် သက်ဆိုင်သူများ အတွက် လိုအပ်သော အင်္ဂါရပ်များ။
 
-4. The release must be supported by all SDKs.
+4. ထုတ်ဝေမှုကို SDKs အားလုံးက ပံ့ပိုးပေးရပါမည်။
 
-   While the support in Iroha Python is largely confined to LTS
-   candidates, creating a catch 22 situation, it is an exception. The
-   two other major SDKs, namely Kotlin, and TypeScript must support
-   the LTS candidate. If the SDK cannot be made to support the
-   candidate, the candidate release is disqualified.
+   Iroha Python တွင် ပံ့ပိုးမှုအား LTS တွင် ကန့်သတ်ထားသော်လည်း၊
+   ကိုယ်စားလှယ်လောင်း 22 ယောက်ကို ဖမ်းတဲ့အခြေအနေ ဖန်တီးတာက ခြွင်းချက်ပါ။ ဟိ
+   အခြား အဓိက SDK နှစ်ခုဖြစ်သည့် Kotlin နှင့် TypeScript တို့ကို ပံ့ပိုးပေးရပါမည်။
+   LTS ကိုယ်စားလှယ်လောင်း။ အကယ်၍ SDK ကို ပံ့ပိုးရန် မပြုလုပ်နိုင်ခဲ့ပါ။
+   ကိုယ်စားလှယ်လောင်း လွှတ် တော်သည် အရည်အချင်း မပြည့်မီ။
 
-5. The release must be well-tested.
+5. လွှတ်ပေးရန် ကောင်းမွန်စွာ စမ်းသပ်ရမည်။
 
-   This point supplements point 1, in that lack of known features
-   coupled with bad test coverage does not, in fact, mean freedom from
-   major problems.
+   ဤအချက်သည် လူသိမများသောအင်္ဂါရပ်များတွင် အချက် 1 ကို ဖြည့်စွက်ထားသည်။
+   မကောင်းသော စစ်ဆေးမှု လွှမ်းခြုံမှုနှင့် ယှဉ်တွဲနေခြင်းသည် အမှန်တကယ် လွတ်မြောက်မှုဟု မဆိုလိုပါ။
+   အဓိကပြဿနာများ။
 
-   This generally applies to all releases after RC6 and until RC17, as
-   the development team was told of a way of restructuring the
-   integration tests, but the process only ended with RC17 and the
-   introduction of the =pytest= framework.
+   ယေဘုယျအားဖြင့် ၎င်းသည် RC6 ပြီးနောက် ထုတ်ဝေမှုအားလုံးနှင့် RC17 အထိ အကျုံးဝင်သည်။
+   ဖွံ့ဖြိုးရေးအဖွဲ့အား ပြန်လည်ဖွဲ့စည်းပုံနည်းလမ်းကို ပြောပြခဲ့ပါသည်။
+   ပေါင်းစပ်စမ်းသပ်မှုများ၊ သို့သော် လုပ်ငန်းစဉ်သည် RC17 နှင့် နိဂုံးချုပ်သွားပါသည်။
+   =pytest= မူဘောင်ကို မိတ်ဆက်ခြင်း။
 
-   While passing integration tests is necessary it is not sufficient,
-   the following minimal testing is required to qualify a release as
-   an LTS candidate
+   ပေါင်းစည်းခြင်းဆိုင်ရာ စာမေးပွဲများကို ဖြေဆိုရန် လိုအပ်သော်လည်း မလုံလောက်ခြင်း၊
+   ထုတ်ဝေမှုအဖြစ် အရည်အချင်းပြည့်မီရန် အောက်ဖော်ပြပါ အနည်းငယ်သော စမ်းသပ်မှု လိုအပ်ပါသည်။
+   LTS ကိုယ်စားလှယ်လောင်း
 
-   1. Unit and Integration testing. One must take care to run all
-      integration tests, including the long and flaky ones. If tests
-      are unusually flaky that is indicative of a problem, and the
-      release should be disqualified (see [[../../flakyness.org]]).
+   1. ယူနစ်နှင့် ပေါင်းစပ်စမ်းသပ်ခြင်း။ အားလုံး ပြေးဖို့ ဂရုစိုက်ရမယ်။
+      ရှည်လျားပြီး မမြဲသောအရာများအပါအဝင် ပေါင်းစပ်စစ်ဆေးမှုများ။ ဆေးစစ်ရင်၊
+      ပြဿနာတစ်ခု၏ညွှန်ပြသော ပုံမှန်မဟုတ်သော မမြဲမြံမှုများ၊ နှင့်
+      ထုတ်ဝေခွင့်ကို ကန့်သတ်ထားသင့်သည် ([[../../flakyness.org]] ကိုကြည့်ပါ)။
 
-   2. =pytest= tests, which technically qualify as integration
-      tests.
+   2. နည်းပညာအရ ပေါင်းစပ်မှုအဖြစ် အရည်အသွေးပြည့်မီသော =pytest= စမ်းသပ်မှုများ၊
+      စမ်းသပ်မှုများ။
 
-   3. Longevity testing. The candidate must be tested for at least two
-      weeks to qualify. If the candidate is accepted as an LTS, the
-      longevity testing should be conducted for at least four weeks.
+   3. အသက်ရှည်ခြင်းကို စမ်းသပ်ခြင်း။ လျှောက်ထားသူသည် အနည်းဆုံး နှစ်ယောက်အတွက် စစ်ဆေးမှုခံယူရမည်ဖြစ်သည်။
+      အရည်အချင်းပြည့်မီရန် ရက်သတ္တပတ်များ။ အကယ်၍ လျှောက်ထားသူကို LTS အဖြစ်လက်ခံပါက၊
+      အသက်ရှည်ခြင်းစမ်းသပ်မှုကို အနည်းဆုံး လေးပတ်ကြာ ပြုလုပ်သင့်သည်။
 
-   4. Load testing. The LTS candidate must satisfy all of the criteria
-      set out by the QA team as operational and developmental
-      requirements under load (also known as extra-functional, and
-      mistakenly as non-functional). Failure to produce blocks in a
-      timely fashion is an automatic disqualification. Other
-      disqualifying criteria are left up to the discretion of the QA
-      team.
+   4. Load စမ်းသပ်ခြင်း။ LTS လျှောက်ထားသူသည် စံသတ်မှတ်ချက်အားလုံးကို ဖြည့်ဆည်းပေးရမည်။
+      QA အဖွဲ့မှ လုပ်ငန်းလည်ပတ်မှုနှင့် ဖွံ့ဖြိုးတိုးတက်မှုအဖြစ် သတ်မှတ်သည်။
+      ဝန်အောက်ရှိ လိုအပ်ချက်များ (extra-functional ဟုလည်း ခေါ်သည်၊ နှင့်
+      အလုပ်မဖြစ်ဟု မှားယွင်းစွာ ယူဆပါသည်။) လုပ်ကွက်များ ထုတ်လုပ်ရန် ပျက်ကွက်တာတွေ၊
+      အချိန်နှင့်တပြေးညီဖက်ရှင်သည် အလိုအလျောက် အရည်အချင်းပြည့်မီသည်။ တခြား
+      အရည်အချင်းမပြည့်မီသော သတ်မှတ်ချက်များကို QA ၏ ဆုံးဖြတ်ချက်အရ ချန်ထားခဲ့သည်
+      အဖွဲ့။
 
-   5. It must be deployed as a =development= container in at least one
-      project for at least two weeks, with no major problems. RC9 did
-      not pass this test and would have been disqualified with the
-      updated criteria listed in the present document.
+   5. ၎င်းကို အနည်းဆုံး တစ်လုံးတွင် =development= ကွန်တိန်နာအဖြစ် အသုံးပြုရမည်
+      ကြီးကြီးမားမားပြဿနာမရှိဘဲ အနည်းဆုံး နှစ်ပတ်ကြာ ပရောဂျက်။ RC9 ဗျ။
+      ဤစာမေးပွဲကို မအောင်မြင်ပါက အရည်အချင်းစစ် ပျက်သွားမည်ဖြစ်သည်။
+      လက်ရှိစာရွက်စာတမ်းတွင် ဖော်ပြထားသော အပ်ဒိတ်သတ်မှတ်ချက်များ။
 
-6. The release must be well-documented.
+6. ထုတ်ပြန်ချက်အား ကောင်းမွန်စွာ မှတ်တမ်းတင်ထားရမည်။
 
-   It should not contain multiple new features that lack
-   documentation. Any shortfall in terms of documentation coverage
-   must be fixable within the time-frame of at most the release window
-   for the candidate. Failure to do so is an automatic disqualification.
+   ချို့တဲ့သော အင်္ဂါရပ်များစွာ မပါဝင်သင့်ပါ။
+   စာရွက်စာတမ်း။ စာရွက်စာတမ်းလွှမ်းခြုံမှုဆိုင်ရာ စည်းကမ်းချက်များ၌ တစ်စုံတစ်ရာ ချို့ယွင်းချက်ရှိသည်။
+   ဖြန့်ချိသည့် ဝင်းဒိုးအများစု၏ အချိန်ဘောင်အတွင်း ပြင်ဆင်နိုင်ရမည်။
+   ကိုယ်စားလှယ်လောင်းအတွက်။ ထိုသို့လုပ်ဆောင်ရန် ပျက်ကွက်ခြင်းသည် အလိုအလျောက် အရည်အချင်းပြည့်မီခြင်း ဖြစ်သည်။
 
-In addition to the regular release procedure outlined in
-[[release_procedure.org]], the LTS must adhere to the following additional
-steps.
+ဖော်ပြထားသော ပုံမှန်ထုတ်ပြန်မှုလုပ်ငန်းစဉ်များအပြင်
+[[release_procedure.org]]၊ LTS သည် အောက်ပါ ထပ်လောင်းကို လိုက်နာရပါမည်။
+ခြေလှမ်းများ။/adition/ ပုံမှန်ထုတ်ပြန်မှုကို လုပ်ဆောင်ခြင်းတွင်၊ သီးခြား PR တစ်ခုဖြစ်သည်။
+ခေါင်းစဉ် =[release]: <semver> LTS= နေရာတွင် =<semver>= သည် ဝေါဟာရဖြစ်သည်
+ဖွံ့ဖြိုးရေးဌာနခွဲမှ ကုဒ်ဗားရှင်းကို ဖန်တီးရပါမည်။ ဟိ
+ပုံမှန်စစ်ဆေးရမည့်စာရင်းကို ရှောင်ဖယ်ထားရမည်ဖြစ်ပြီး ၎င်းအစား Pull Request လည်း လိုအပ်ပါသည်။
+ပြန်လည်သုံးသပ်ပြီး အတည်ပြုထားသည့် တူညီသောပုဂ္ဂိုလ်များမှ ပြန်လည်သုံးသပ်ရမည်။
+=stable= ထွက်ရှိသည်။ အားလုံးသေချာစေရန်အတွက် သုံးသပ်ချက် နှစ်ခုမှာ အများဆုံး လိုအပ်ပါသည်။
+အပြောင်းအလဲများသည် မှန်ကန်သော အစီအစဉ်ဖြင့် ဖြစ်ပေါ်လာမည် ဖြစ်ပြီး ထိုသို့ မဟုတ်ပါ။
+အထောက်အထားမဲ့ ပြဿနာများ ပြေလည်သွားသည်။
 
-In /addition/ to performing a regular release, a separate PR with the
-title =[release]: <semver> LTS= where =<semver>= is the semantic
-version of the code from the development branch must be created. The
-regular checklist must be eschewed, and instead the Pull Request must
-be reviewed by the same personnel that reviewed and approved the
-=stable= release. At most two reviews are needed, to ensure that all
-the changes will take place in the correct order and that no
-undocumented issues slipped through.
+LTS ထုတ်ဝေပြီးသည်နှင့် CI သည် docker container ကိုထုတ်လုပ်မည်ဖြစ်သည်။
+Alpine Linux ပလပ်ဖောင်းပေါ်တွင် LTS နှင့် Ubuntu Linux တွင်၊
+=glibc= ၏ platform-native ဗားရှင်းကို အသုံးပြုထားသည်။ CI လည်း ထုတ်ရမယ်။
+ပံ့ပိုးထားသော ပက်ကေ့ဂျ်များအားလုံးကို ၎င်းတို့၏ သက်ဆိုင်ရာသို့ ထုတ်ဝေပါ။
+သိုလှောင်မှုများ။ ဥပမာအားဖြင့်၊ AUR ပက်ကေ့ခ်ျကို အပ်ဒိတ်လုပ်သည်ဟု ဆိုလိုသည်။
+ဆွဲတင်တောင်းဆိုမှုကို ပေါင်းစည်းပြီးနောက် မှန်ကန်သော ပက်ကေ့ခ်ျကို ထုတ်လုပ်သည်။ ဟိ
+GitHub ထုတ်ဝေမှု စာမျက်နှာကို သီးခြားထုတ်ဝေခွင့် ခေါင်းစဉ်ဖြင့် ဖြည့်ရပါမည်။
+LTS နှင့် =AppImage= ဖိုင်တစ်ခုတည်း ပါဝင်သည်။ ဒါတွေကို ထုတ်ပြန်ရမယ်။
+၎င်းနှင့်တွဲပြီး တပ်ဆင်၍မရဟု အမှတ်အသားပြုထားသည့် သီးခြားပက်ကေ့ဂျ်များအဖြစ် လာပါ။
+တည်ငြိမ်သောဗားရှင်း။
 
-Once the LTS release is made, the CI will produce a docker container
-with the LTS release on the Alpine Linux platform and on Ubuntu Linux,
-using the platform-native version of =glibc=. The CI must also produce
-all of the supported packages, and publish them to their respective
-repositories. This means, for example, that the AUR package is updated
-after the pull request is merged and produces the correct package. The
-GitHub release page must be populated with a separate release entitled
-LTS and containing the single-file =AppImage=. These releases must
-come as separate packages that are marked as not installable alongside the
-stable version.
+* နောက်ကြောင်းပြန်ပို့ခြင်းမူဝါဒ
 
-* Back-porting policy
+ယေဘူယျအားဖြင့် LTS သို့ နောက်ကြောင်းပြန်ပို့ခြင်းမှာ စိတ်ပျက်စရာဖြစ်သည်။ အောက်ပါအတိုင်း
+နောက်ကြောင်းပြန်ပို့ခြင်း အကြောင်းရင်းများကို လက်ခံနိုင်ဖွယ်ရှိသည်ဟု ယူဆပါသည်-
+1. ဥပမာ၊ ကဲ့သို့ Iroha API နှင့် ဆက်စပ်မှုမရှိသော ထပ်လောင်း။ ဗိုလ်ချုပ်
+   အထောက်အကူကိရိယာ နှင့်/သို့မဟုတ် စာရွက်စာတမ်းများ။
+2. အဓိက လုံခြုံရေး အားနည်းချက်ကို ပြင်ဆင်ခြင်း။
+3. အဓိက bug ကို ပြင်ခြင်း။
+4. အသုံးပြုခြင်းကို တားမြစ်ထားသည့် အဓိကဒီဇိုင်းကြီးကြပ်မှုကို ပြုပြင်ခြင်း၊
+   လက်ရှိ LTS ၏ အဓိကသက်ဆိုင်သူများ/အသုံးပြုသူများသည် ဝစီကံ ရှိသည်။
+   backport သည် နှစ်သက်ဖွယ်ကောင်းသော ဖြေရှင်းချက်ဖြစ်ကြောင်း အသိအမှတ်ပြုပါသည်။
 
-Generally, back-porting into the LTS is discouraged. The following
-back-porting reasons are considered acceptable:
-1. Addition that is not tied to the Iroha API, like e.g. a general
-   helper tool and/or documentation.
-2. Fixing a major security vulnerability.
-3. Fixing a major bug.
-4. Fixing a major design oversight that precludes usage, provided that
-   the key stakeholders/users of the current LTS have verbally
-   certified that a backport is a preferable solution.
+ထွက်လာသည့်အတိုင်း Back-ports များကို တူညီသောချန်နယ်များမှတစ်ဆင့် ကြေညာရပါမည်။
+ကိုယ်တိုင် လိုအပ်သောပြောင်းလဲမှုများကို နှစ်ခုစလုံးတွင် backported အဖြစ်တံဆိပ်တပ်ရပါမည်။
+၎င်းတို့ပြင်ဆင်ထားသည့် ရေပေါ်ထုတ်လွှတ်မှုနှင့် မည်သည့်ဗားရှင်း
+ပြန်ပို့ခံရတယ်။
 
-Back-ports must be announced through the same channels, as the release
-itself. Required changes must be labelled as backported in both the
-upstream release in which they were fixed and the version into which
-they have been back-ported.
+ကြေညာချက်မှာ ရှင်းပြရမယ်။
+1. Backport ကို အဘယ်ကြောင့် ရွေးချယ်ခဲ့သည် (အထက်ပါ အကြောင်းပြချက်များကို ကြည့်ပါ)
+2. Backport ၏ အကျိုးသက်ရောက်မှုသည် အဘယ်နည်း
+3. လုပ်ဆောင်နိုင်သော၊ ပေါင်းစည်းမှုနှင့် လက်ရှိအခြေအနေမှာ အဘယ်နည်း
+   ဝန်/သက်ရှည်စမ်းသပ်ခြင်း။
 
-The announcement must explain
-1. Why the backport was chosen (see above reasons)
-2. What the impact of the backport must be
-3. What is the current status of functional, integration and
-   load/longevity testing.
+* အသုံးချနိုင်မှု
 
-* Applicability
+LTS/တည်ငြိမ်သော ဖြန့်ချိရေးမူဝါဒကို ပထမအကြိမ်အဖြစ် အမြန်ဆုံး ပြန်လည်ပြင်ဆင်သင့်သည်။
+Iroha ၏ အင်္ဂါရပ်အပြည့်အစုံ ဗားရှင်း (v2.0.0) ကို ကြေညာထားသည်။ မပေးတော့ဘူး။
+တက်ကြွသော ဖွံ့ဖြိုးတိုးတက်မှုတွင် အဓိက ဖွံ့ဖြိုးတိုးတက်မှုအဖွဲ့သည် လုပ်နိုင် (သင့်သည်) လုပ်နိုင်ရမည်။
+ကွဲပြားသောဗားရှင်းများ၏ ပံ့ပိုးမှုအပေါ် ပိုမိုအာရုံစိုက်ရန်။
 
-The LTS/stable release policy should be revised as soon as the first
-feature-complete version of Iroha is announced (v2.0.0). Given no more
-active development, the core development team can (and should) be able
-to focus more on the support of the diverging versions.
-
-* Footnotes
-
-[fn:1] The naming convention was stabilised long before any plan to
-release a version of Iroha was made.  As such calling any version of
-Iroha a release candidate has some implications.  Calling them pre
-release candidates is a similar type of misnomer, but less egregious,
-because rather than a misapplication of an existing term, this is an
-invention of a term that /could/ have subtle differences from a
-release candidate.  In reality these should have been called
-*development snapshots*.  But in order not to break continuity too
-much with the existing SDKs a compromise was chosen.
+* အောက်ခြေမှတ်စုများ[fn:1] အမည်ပေးခြင်းဆိုင်ရာ သဘောတူညီချက်ကို ဆောင်ရွက်ရန် အစီအစဉ်မစမီ အချိန်အတော်ကြာ တည်ငြိမ်ခဲ့သည်။
+Iroha ဗားရှင်းကို ထုတ်ဝေခဲ့သည်။  ယင်းကဲ့သို့ မည်သည့်ဗားရှင်းကိုမဆို ခေါ်သည်။
+Iroha လွှတ် တော်ကိုယ်စားလှယ်တစ်ဦးတွင် သက်ရောက်မှုအချို့ရှိသည်။  သူတို့ကို ကြိုခေါ်တယ်။
+လွှတ်​​တော်​ကိုယ်​စားလှယ်​များသည်​ အလားတူအမည်​လွဲမှား​သောအမျိုးအစားဖြစ်​​သော်​လည်း ယုတ်​မာမှုနည်းသည်​။
+အဘယ်ကြောင့်ဆိုသော် ရှိပြီးသားအသုံးအနှုန်းကို လွဲမှားစွာအသုံးချခြင်းထက်၊ ၎င်းသည် တစ်ခုဖြစ်သည်။
+/could/ a နှင့် သိမ်မွေ့သော ခြားနားမှုရှိသော ဝေါဟာရတစ်ခုကို တီထွင်ခြင်း။
+လွှတ် တော်ကိုယ်စားလှယ်။  တကယ်တော့ ဒါတွေကို ခေါ်သင့်တယ်။
+* ဖွံ့ဖြိုးတိုးတက်မှုပုံရိပ်များ * ။  ဒါပေမယ့် အဆက်ပြတ်မသွားစေရန်
+ရှိပြီးသား SDKs များနှင့် များစွာသော အပေးအယူတစ်ခုကို ရွေးချယ်ခဲ့သည်။

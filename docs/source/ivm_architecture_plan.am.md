@@ -7,82 +7,81 @@ generator: scripts/sync_docs_i18n.py
 source_hash: da8a99adbbcf1d8b209a25da32e256c0dad2860633f373d7410a3a91d790c938
 source_last_modified: "2026-01-21T19:17:13.236818+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# IVM Architecture Refactor Plan
+# IVM አርክቴክቸር ሪፋክተር እቅድ
 
-This plan captures the short-term milestones for reshaping the Iroha Virtual Machine
-(IVM) into clearer layers while preserving security and performance characteristics.
-It focuses on isolating responsibilities, making host integrations safer, and
-preparing the Kotodama language stack for extraction into a standalone crate.
+ይህ እቅድ Iroha ምናባዊ ማሽንን እንደገና ለመቅረጽ የአጭር ጊዜ እድገቶችን ይይዛል
+(IVM) የደህንነት እና የአፈጻጸም ባህሪያትን በመጠበቅ ወደ ግልፅ ንብርብሮች።
+ኃላፊነቶችን በማግለል፣ የአስተናጋጅ ውህደቶችን ደህንነቱ የተጠበቀ በማድረግ እና ላይ ያተኩራል።
+የ Kotodama የቋንቋ ቁልል ወደ አንድ ብቻውን ሣጥን ለማውጣት በማዘጋጀት ላይ።
 
-## Goals
+# ግቦች
 
-1. **Layered runtime façade** – introduce an explicit runtime interface so the VM
-   core can be embedded behind a narrow trait and alternative front-ends can evolve
-   without touching internal modules.
-2. **Host/syscall boundary  hardening** – route syscall dispatch through a
-   dedicated adapter that enforces ABI policy and pointer validation before any host
-   code executes.
-3. **Language/tooling separation** – move Kotodama specific code to a new crate and
-   keep only the bytecode execution surface in `ivm`.
-4. **Configuration cohesion** – unify acceleration and feature toggles so they are
-   driven through `iroha_config`, removing environment-based knobs in production
-   paths.
+1. **የተነባበረ የሩጫ ጊዜ የፊት ለፊት ገፅታ** - ግልጽ የሆነ የአሂድ ጊዜ በይነገጽ በማስተዋወቅ ቪ.ኤም
+   ኮር ከጠባብ ባህሪ በስተጀርባ ሊካተት ይችላል እና አማራጭ የፊት-ጫፎቹ ሊሻሻሉ ይችላሉ።
+   ውስጣዊ ሞጁሎችን ሳይነኩ.
+2. **የአስተናጋጅ/syscall ወሰን ማጠንከሪያ** - መንገድ syscall መላኪያ በ ሀ
+   የABI ፖሊሲን እና የጠቋሚ ማረጋገጫን ከማንኛውም አስተናጋጅ በፊት የሚያስፈጽም ራሱን የቻለ አስማሚ
+   ኮድ ያስፈጽማል.
+3. ** የቋንቋ/የመሳሪያ መለያየት** - Kotodama የተወሰነ ኮድ ወደ አዲስ ሳጥን ይውሰዱ እና
+   በ `ivm` ውስጥ የባይቴኮድ ማስፈጸሚያ ገጽን ብቻ ይያዙ።
+4. **የማዋቀር ቅንጅት** - ማጣደፍን እና የባህሪ መቀያየርን አንድ ማድረግ
+   በ `iroha_config` ተነድቷል ፣ በምርት ውስጥ አካባቢን መሠረት ያደረጉ ቁልፎችን ያስወግዳል
+   መንገዶች.
 
-## Phase Breakdown
+## ደረጃ መከፋፈል
 
-### Phase 1 – Runtime façade (in progress)
-- Add a `runtime` module that defines a `VmEngine` trait describing lifecycle
-  operations (`load_program`, `execute`, host plumbing).
-- Teach `IVM` to implement the trait.  This keeps the existing struct but allows
-  consumers (and future tests) to depend on the interface instead of concrete
-  types.
-- Start shedding direct module re-exports from `lib.rs` so callers import via the
-  façade when possible.
+### ደረጃ 1 - የሩጫ ጊዜ የፊት ገጽታ (በሂደት ላይ)
+- የህይወት ኡደትን የሚገልጽ የ `VmEngine` ባህሪን የሚገልጽ የ`runtime` ሞጁል ያክሉ
+  ክወናዎች (`load_program`, `execute`, አስተናጋጅ የቧንቧ).
+- ባህሪውን ተግባራዊ ለማድረግ `IVM` ያስተምሩ.  ይህ አሁን ያለውን መዋቅር ያስቀምጣል ነገር ግን ይፈቅዳል
+  ሸማቾች (እና የወደፊት ሙከራዎች) ከኮንክሪት ይልቅ በይነገጹ ላይ ጥገኛ እንዲሆኑ
+  ዓይነቶች.
+- ደዋዮች በ
+  በሚቻልበት ጊዜ የፊት ገጽታ።
 
-**Security / performance impact**: The façade restricts direct access to internal
-state; only safe entry points are exposed.  This makes it easier to audit host
-interactions and reason about gas or TLV handling.
+**የደህንነት/የአፈጻጸም ተፅእኖ**፡ የፊት ለፊት ገፅታ በቀጥታ ወደ ውስጥ መግባትን ይገድባል
+ግዛት; ደህንነቱ የተጠበቀ የመግቢያ ነጥቦች ብቻ ይጋለጣሉ.  ይህ አስተናጋጁን ኦዲት ማድረግ ቀላል ያደርገዋል
+ስለ ጋዝ ወይም TLV አያያዝ ግንኙነቶች እና ምክንያቶች።
 
-### Phase 2 – Syscall dispatcher
-- Introduce a `SyscallDispatcher` component that wraps `IVMHost` and enforces ABI
-  policy and pointer validation once, in one location.
-- Migrate the default host and mock hosts to use the dispatcher, removing
-  duplicated validation logic.
-- Make dispatcher pluggable so hosts can supply custom instrumentation without
-  bypassing safety checks.
-- Provide a `SyscallDispatcher::shared(...)` helper so cloned VMs can forward
-  syscalls through a shared `Arc<Mutex<..>>` host without each worker building
-  bespoke wrappers.
+### ደረጃ 2 - Syscall ላኪ
+- `IVMHost` ተጠቅልሎ ABIን የሚያስፈጽም የ`SyscallDispatcher` አካልን አስተዋውቅ
+  ፖሊሲ እና ጠቋሚ ማረጋገጫ አንድ ጊዜ፣ በአንድ ቦታ።
+- ነባሪውን አስተናጋጅ ያዛውሩ እና አስተናጋጆችን በማስወገድ ላኪውን ለመጠቀም ይሳለቁ
+  የተባዛ የማረጋገጫ አመክንዮ.
+- አስተናጋጆች ያለ ብጁ መሳሪያ ማቅረብ እንዲችሉ ላኪ ተሰኪ ያድርጉ
+  የደህንነት ፍተሻዎችን ማለፍ.
+- ክሎድ ቪኤምዎች ማስተላለፍ እንዲችሉ የ`SyscallDispatcher::shared(...)` አጋዥ ያቅርቡ
+  እያንዳንዱ ሰራተኛ ሳይገነባ በጋራ `Arc<Mutex<..>>` አስተናጋጅ በኩል syscalls
+  የሚነገር መጠቅለያዎች.
 
-**Security / performance impact**: Centralised gating protects against hosts that
-forget to call `is_syscall_allowed`, and it allows future caching of pointer
-validations for repeated syscalls.
+**የደህንነት/የአፈጻጸም ተፅእኖ**፡ የተማከለ ጌቲንግ ከአስተናጋጆች ይጠብቃል።
+`is_syscall_allowed` መደወልን እርሳው፣ እና ወደፊት የጠቋሚ መሸጎጫ ይፈቅዳል
+ለተደጋገሙ ስክሎች ማረጋገጫዎች.
 
-### Phase 3 – Kotodama extraction
-- Kotodama compiler extracted to `crates/kotodama_lang` (from `crates/ivm/src/kotodama`).
-- Provide a minimal bytecode API that the VM consumes (`compile_to_ivm_bytecode`).
+### ደረጃ 3 - Kotodama ማውጣት
+- Kotodama ማጠናከሪያ ወደ `crates/kotodama_lang` (ከ`crates/ivm/src/kotodama`) ወጥቷል።
+- ቪኤም የሚበላውን አነስተኛ ባይትኮድ ኤፒአይ ያቅርቡ (`compile_to_ivm_bytecode`)።
 
-**Security / performance impact**: Decoupling lowers the attack surface of the VM
-core and allows language innovation without risking interpreter regressions.
+**የደህንነት/የአፈጻጸም ተፅእኖ**፡- መፍታት የVMን የጥቃቱን ገጽ ይቀንሳል
+አስኳል እና የቋንቋ ፈጠራን ይፈቅዳል የአስተርጓሚ ድጋፎችን አደጋ ላይ ይጥላል።### ደረጃ 4 - ውቅር ማጠናከር
+- የክር ማፋጠን አማራጮችን በ`iroha_config` ቅድመ-ቅምጦች (ለምሳሌ፣ የጂፒዩ ጀርባዎችን ማንቃት) ነባሩን አካባቢ መሻር (`IVM_DISABLE_CUDA`፣ `IVM_DISABLE_METAL`) እንደ የአሂድ ማጥፊያ መቀየሪያዎች ሲቆዩ።
+- የ `RuntimeConfig` ነገርን በአዲሱ የፊት ለፊት ክፍል ያጋልጡ ስለዚህ አስተናጋጆች ይምረጡ
+  ቆራጥ የፍጥነት ፖሊሲዎች በግልጽ።
 
-### Phase 4 – Configuration consolidation
-- Thread acceleration options through `iroha_config` presets (e.g., enabling GPU backends) while keeping the existing environment overrides (`IVM_DISABLE_CUDA`, `IVM_DISABLE_METAL`) as runtime kill switches.
-- Expose a `RuntimeConfig` object through the new façade so hosts select
-  deterministic acceleration policies explicitly.
+**የደህንነት/የአፈጻጸም ተፅእኖ**፡- env ላይ የተመሰረቱ መቀያየሪያዎችን ማስወገድ ጸጥታን ያስወግዳል
+የውቅረት ተንሳፋፊ እና በመሰማራት ላይ የመወሰን ባህሪን ያረጋግጣል።
 
-**Security / performance impact**: Eliminating env-based toggles avoids silent
-configuration drift and ensures deterministic behaviour across deployments.
+## አፋጣኝ ቀጣይ እርምጃዎች
 
-## Immediate next steps
+- ደረጃ 1ን ያጠናቅቁ የፊት ገጽታን በመጨመር እና ከፍተኛ ደረጃ የጥሪ ጣቢያዎችን በማዘመን
+  በእሱ ላይ የተመሰረተ ነው.
+- የፊት ገጽታን እና ሆን ተብሎ ይፋዊ ኤፒአይዎችን ለማረጋገጥ የወል ድጋሚ ወደ ውጭ የላኩትን ኦዲት ያድርጉ
+  ከሳጥኑ ውስጥ መፍሰስ ።
+- የ syscall dispatcher API በተለየ ሞጁል ይቅረጹ እና ወደ ማዛወር
+  ነባሪ አስተናጋጅ አንዴ ከተረጋገጠ።
 
-- Finish Phase 1 by adding the façade trait and updating high-level call sites to
-  depend on it.
-- Audit public re-exports to ensure only the façade and deliberately public APIs
-  leak out of the crate.
-- Prototype the syscall dispatcher API in a separate module and migrate the
-  default host once validated.
-
-Progress on each phase will be tracked in `status.md` once the implementation is
-underway.
+በእያንዳንዱ ደረጃ ላይ ያለው መሻሻል ትግበራው ከተጠናቀቀ በኋላ በ`status.md` ውስጥ ክትትል ይደረጋል
+እየተካሄደ ነው።

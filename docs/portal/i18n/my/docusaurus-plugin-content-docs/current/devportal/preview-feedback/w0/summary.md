@@ -8,54 +8,56 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: W0 midpoint feedback digest
 sidebar_label: W0 feedback (midpoint)
 description: Midpoint checkpoints, findings, and action items for the core-maintainer preview wave.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-| Item | Details |
-| --- | --- |
-| Wave | W0 — Core maintainers |
-| Digest date | 2025‑03‑27 |
-| Review window | 2025‑03‑25 → 2025‑04‑08 |
-| Participants | docs-core-01, sdk-rust-01, sdk-js-01, sorafs-ops-01, observability-01 |
+| အမျိုးအမည် | အသေးစိတ် |
+| ---| ---|
+| လှိုင်း | W0 — ပင်မထိန်းသိမ်းသူများ |
+| Digest date | 2025-03-27 |
+| သုံးသပ်ချက် window | 2025-03-25 → 2025-04-08 |
+| ပါဝင်သူများ | docs-core-01, sdk-rust-01, sdk-js-01, sorafs-ops-01, observability-01 |
 | Artefact tag | `preview-2025-03-24` |
 
-## Highlights
+## ပေါ်လွင်ချက်များ
 
-1. **Checksum workflow** — All reviewers confirmed `scripts/preview_verify.sh`
-   succeeded against the shared descriptor/archive pair. No manual overrides
-   required.
-2. **Navigation feedback** — Two minor sidebar ordering issues were filed
-   (`docs-preview/w0 #1–#2`). Both are routed to Docs/DevRel and do not block the
-   wave.
-3. **SoraFS runbook parity** — sorafs-ops-01 requested clearer cross-links
-   between `sorafs/orchestrator-ops` and `sorafs/multi-source-rollout`. Follow-up
-   issue filed; to be addressed before W1.
-4. **Telemetry review** — observability-01 confirmed `docs.preview.integrity`,
-   `TryItProxyErrors`, and Try-it proxy logs stayed green; no alerts fired.
+1. **Checksum workflow** — ပြန်လည်သုံးသပ်သူအားလုံး `scripts/preview_verify.sh` အတည်ပြုခဲ့သည်
+   မျှဝေထားသော ဖော်ပြချက်/မှတ်တမ်းတွဲအတွဲကို အောင်မြင်ခဲ့သည်။ လူကိုယ်တိုင် အစားထိုးခြင်းများ မရှိပါ။
+   လိုအပ်သည်။
+2. **လမ်းညွှန်မှု တုံ့ပြန်ချက်** — အသေးအဖွဲ sidebar မှာကြားခြင်းဆိုင်ရာ ပြဿနာနှစ်ခုကို တင်ပြခဲ့သည်။
+   (`docs-preview/w0 #1–#2`)။ နှစ်ခုလုံးကို Docs/DevRel သို့ လမ်းကြောင်းပြောင်းထားပြီး ၎င်းကို မပိတ်ဆို့ပါ။
+   လှိုင်း။
+3. **SoraFS runbook parity** — sorafs-ops-01 မှ ပိုမိုရှင်းလင်းသော အပြန်အလှန်လင့်ခ်များကို တောင်းဆိုခဲ့သည်
+   `sorafs/orchestrator-ops` နှင့် `sorafs/multi-source-rollout` အကြား။ နောက်ဆက်တွဲ
+   တိုင်ကြားထားသောကိစ္စ၊ W1 မတိုင်မီ ဖြေရှင်းရန်။
+4. **Telemetry ပြန်လည်သုံးသပ်ခြင်း** — observability-01 အတည်ပြု `docs.preview.integrity`၊
+   `TryItProxyErrors`၊ နှင့် Try-it proxy မှတ်တမ်းများသည် စိမ်းနေခဲ့သည်။ သတိပေးချက်မထုတ်ပါ။
 
-## Action items
+## လုပ်ဆောင်ချက်ပစ္စည်းများ
 
-| ID | Description | Owner | Status |
-| --- | --- | --- | --- |
-| W0-A1 | Reorder devportal sidebar entries to surface reviewer-focused docs (`preview-invite-*` group together). | Docs-core-01 | ✅ Completed — sidebar now lists the reviewer docs contiguously (`docs/portal/sidebars.js`). |
-| W0-A2 | Add explicit cross-link between `sorafs/orchestrator-ops` and `sorafs/multi-source-rollout`. | Sorafs-ops-01 | ✅ Completed — each runbook now links to the other so operators see both guides during rollouts. |
-| W0-A3 | Share telemetry snapshots + query bundle with governance tracker. | Observability-01 | ✅ Completed — bundle attached to `DOCS-SORA-Preview-W0`. |
+| ID | ဖော်ပြချက် | ပိုင်ရှင် | အဆင့်အတန်း |
+| ---| ---| ---| ---|
+| W0-A1 | ပြန်လည်သုံးသပ်သူ-အလေးပေးသော docs (`preview-invite-*` အုပ်စုတစု) ပေါ်ရှိ ပြန်လည်သုံးသပ်သူ-အာရုံစိုက်စာရွက်စာတမ်းများဆီသို့ devportal sidebar ကို ပြန်လည်စီစစ်ပါ။ | Docs-core-01 | ✅ ပြီးပါပြီ — ဆိုက်ဘားသည် ယခု သုံးသပ်သူစာရွက်စာတမ်း (`docs/portal/sidebars.js`) ကို တစ်ဆက်တည်း ဖော်ပြပါသည်။ |
+| W0-A2 | `sorafs/orchestrator-ops` နှင့် `sorafs/multi-source-rollout` အကြား တိကျပြတ်သားသော အပြန်အလှန်လင့်ခ်ကို ထည့်ပါ။ | Sorafs-ops-01 | ✅ ပြီးပါပြီ — ယခု runbook တစ်ခုစီသည် အခြားတစ်ခုသို့ လင့်ခ်ချိတ်ထားသောကြောင့် အော်ပရေတာများသည် စတင်ရောင်းချစဉ်အတွင်း လမ်းညွှန်ချက်နှစ်ခုလုံးကို မြင်နိုင်သည်။ |
+| W0-A3 | တယ်လီမီတာ လျှပ်တစ်ပြက်ပုံများ + စုံစမ်းမှုအစုအဝေးကို အုပ်ချုပ်မှုခြေရာခံကိရိယာဖြင့် မျှဝေပါ။ | Observability-01 | ✅ ပြီးပါပြီ — `DOCS-SORA-Preview-W0` နှင့်တွဲထားသောအတွဲ။ |
 
-## Exit summary (2025-04-08)
+## ထွက်ပေါက်အကျဉ်းချုပ် (2025-04-08)
 
-- All five reviewers confirmed completion, purged local builds, and exited the
-  preview window; access revocations recorded in `DOCS-SORA-Preview-W0`.
-- No incidents or alerts fired during the wave; telemetry dashboards stayed
-  green for the full period.
-- Navigation + cross-link actions (W0-A1/A2) are implemented and reflected in
-  the docs above; telemetry evidence (W0-A3) is attached to the tracker.
-- Evidence bundle archived: telemetry screenshots, invite acknowledgements, and
-  this digest are linked from the tracker issue.
+- ပြန်လည်သုံးသပ်သူငါးဦးစလုံး ပြီးစီးကြောင်း အတည်ပြုပြီး ဒေသတွင်း အဆောက်အအုံများကို ဖယ်ရှားကာ ထွက်ခွာသွားခဲ့သည်။
+  အစမ်းပြဝင်းဒိုး; `DOCS-SORA-Preview-W0` တွင် မှတ်တမ်းတင်ထားသော ဝင်ရောက်ခွင့် ရုပ်သိမ်းခြင်း
+- လှိုင်းအတွင်း အဖြစ်အပျက်များ သို့မဟုတ် သတိပေးချက်များ ထွက်ပေါ်လာခြင်းမရှိပါ။ တယ်လီမီတာ ဒက်ရှ်ဘုတ်များ ကျန်ခဲ့သည်။
+  အချိန်ပြည့်အတွက် အစိမ်းရောင်။
+- Navigation + cross-link actions (W0-A1/A2) ကို အကောင်အထည်ဖေါ်ပြီး ရောင်ပြန်ဟပ်ပါသည်။
+  အထက်ပါစာရွက်စာတမ်းများ တယ်လီမီတာ အထောက်အထား (W0-A3) ကို ခြေရာခံကိရိယာတွင် ပူးတွဲထားသည်။
+- သိမ်းဆည်းထားသော အထောက်အထားအစုအဝေး- တယ်လီမီတာ ဖန်သားပြင်ဓာတ်ပုံများ၊ အသိအမှတ်ပြုလွှာများကို ဖိတ်ကြားခြင်းနှင့်
+  ဤအချက်များကို ခြေရာခံခြင်းပြဿနာမှ ချိတ်ဆက်ထားသည်။
 
-## Next steps
+## နောက်တစ်ဆင့်
 
-- Implement W0 action items before opening W1.
-- Obtain legal approval and proxy staging slot, then follow the partner-wave
-  preflight steps outlined in the [preview invite flow](../../preview-invite-flow.md).
+- W1 မဖွင့်မီ W0 လုပ်ဆောင်ချက်ကို အကောင်အထည်ဖော်ပါ။
+- တရားဝင်ခွင့်ပြုချက်နှင့် ပရောက်စီစတိတ်စတိကိုရယူပါ၊ ထို့နောက် ပါတနာ-လှိုင်းကို လိုက်နာပါ။
+  [အကြိုကြည့်ရှုရန်ဖိတ်ကြားချက်စီးဆင်းမှု](../../preview-invite-flow.md) တွင်ဖော်ပြထားသော preflight အဆင့်များ။
 
-_This digest is linked from the [preview invite tracker](../../preview-invite-tracker.md) to
-keep the DOCS-SORA roadmap traceable._
+_ဤအချက်များကို [အကြိုကြည့်ရှုရန် ဖိတ်ကြားမှု ခြေရာခံ](../../preview-invite-tracker.md) မှ လင့်ခ်ချိတ်ထားသည်
+DOCS-SORA လမ်းပြမြေပုံကို ခြေရာခံနိုင်ပါစေ။_

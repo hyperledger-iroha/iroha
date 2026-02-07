@@ -4,76 +4,76 @@ direction: ltr
 source: docs/portal/docs/sorafs/reports/sf6-security-review.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: Revision de seguridad SF-6
-summary: Hallazgos y tareas de seguimiento de la evaluacion independiente de keyless signing, proof streaming y pipelines de envio de manifests.
+タイトル: 改訂版 SF-6
+概要: キーレス署名、プルーフ ストリーミング、マニフェスト環境のパイプラインの独立した評価に関するセキュリティ。
 ---
 
-# Revision de seguridad SF-6
+# 改訂版 SF-6
 
-**Ventana de evaluacion:** 2026-02-10 -> 2026-02-18  
-**Leads de revision:** Security Engineering Guild (`@sec-eng`), Tooling Working Group (`@tooling-wg`)  
-**Alcance:** SoraFS CLI/SDK (`sorafs_cli`, `sorafs_car`, `sorafs_manifest`), APIs de proof streaming, manejo de manifests en Torii, integracion Sigstore/OIDC, hooks de release en CI.  
-**Artefactos:**  
-- Fuente del CLI y tests (`crates/sorafs_car/src/bin/sorafs_cli.rs`)  
-- Handlers de manifest/proof en Torii (`crates/iroha_torii/src/sorafs/api.rs`)  
-- Automatizacion de release (`ci/check_sorafs_cli_release.sh`, `scripts/release_sorafs_cli.sh`)  
-- Harness de paridad determinista (`crates/sorafs_car/tests/sorafs_cli.rs`, [Reporte de Paridad GA del Orchestrator SoraFS](./orchestrator-ga-parity.md))
+**ベンタナの評価:** 2026-02-10 -> 2026-02-18  
+**改訂リーダー:** Security Engineering Guild (`@sec-eng`)、Tooling Working Group (`@tooling-wg`)  
+**Alcance:** SoraFS CLI/SDK (`sorafs_cli`、`sorafs_car`、`sorafs_manifest`)、API 実証ストリーミング、Torii のマニフェストの管理、統合Sigstore/OIDC、CI でのフックのリリース。  
+**アーティファクト:**  
+- CLI テスト (`crates/sorafs_car/src/bin/sorafs_cli.rs`)  
+- Torii (`crates/iroha_torii/src/sorafs/api.rs`) のマニフェスト/プルーフ ハンドラー  
+- リリースの自動化 (`ci/check_sorafs_cli_release.sh`、`scripts/release_sorafs_cli.sh`)  
+- ハーネス・デ・パリダード・デターミニスタ (`crates/sorafs_car/tests/sorafs_cli.rs`、[Reporte de Paridad GA del Orchestrator SoraFS](./orchestrator-ga-parity.md))
 
-## Metodologia
+## メトドロギア
 
-1. **Workshops de threat modeling** mapearon capacidades de atacantes para estaciones de trabajo de developers, sistemas CI y nodos Torii.  
-2. **Code review** enfoco superficies de credenciales (intercambio de tokens OIDC, keyless signing), validacion de manifests Norito y back-pressure en proof streaming.  
-3. **Testing dinamico** reprodujo manifests de fixtures y simulo modos de falla (token replay, manifest tampering, proof streams truncados) usando el harness de paridad y fuzz drives a medida.  
-4. **Inspeccion de configuracion** valido defaults de `iroha_config`, manejo de flags del CLI y scripts de release para asegurar ejecuciones deterministas y auditables.  
-5. **Entrevista de proceso** confirmo el flujo de remediacion, rutas de escalamiento y captura de evidencia de auditoria con los owners de release de Tooling WG.
+1. **脅威モデリングのワークショップ** 開発者向けの管理システム、システム CI およびノード Torii のアタカンテス マップ。  
+2. **コード レビュー** 資格情報の管理 (トークン OIDC、キーレス署名)、マニフェスト Norito の検証、およびバックプレッシャーとプルーフ ストリーミング。  
+3. **ディナミコのテスト** マニフェスト デ フィクスチャとシミュレーション モード (トークン リプレイ、マニフェスト改ざん、プルーフ ストリーム トランカド) を再現し、パリダーとファズを使用してメディダを駆動します。  
+4. **構成の検査** `iroha_config` の有効なデフォルト、CLI およびスクリプトのフラグ管理、リリースパラメタの監査可能性の決定。  
+5. **Entrevista de proceso** は、ツール WG の所有者とリリースの聴覚障害者に対する修復、エスカラミエントの記録および証拠の収集を確認します。
 
-## Resumen de hallazgos
+## ハラスゴスの履歴書
 
-| ID | Severidad | Area | Hallazgo | Resolucion |
-|----|----------|------|---------|------------|
-| SF6-SR-01 | Alta | Keyless signing | Los defaults de audiencia del token OIDC eran implicitos en templates de CI, con riesgo de replay entre tenants. | Se agrego la aplicacion explicita de `--identity-token-audience` en hooks de release y templates de CI ([release process](../developer-releases.md), `docs/examples/sorafs_ci.md`). CI ahora falla si se omite la audiencia. |
-| SF6-SR-02 | Media | Proof streaming | Los caminos de back-pressure aceptaban buffers de suscriptores sin limite, habilitando agotamiento de memoria. | `sorafs_cli proof stream` impone tamanos de canal acotados con truncamiento determinista, registrando resumenes Norito y abortando el stream; el espejo Torii se actualizo para acotar chunks de respuesta (`crates/iroha_torii/src/sorafs/api.rs`). |
-| SF6-SR-03 | Media | Envio de manifests | El CLI aceptaba manifests sin verificar planes de chunks embebidos cuando `--plan` estaba ausente. | `sorafs_cli manifest submit` ahora recomputa y compara digests de CAR salvo que se provea `--expect-plan-digest`, rechazando mismatches y mostrando pistas de remediacion. Los tests cubren casos de exito/falla (`crates/sorafs_car/tests/sorafs_cli.rs`). |
-| SF6-SR-04 | Baja | Audit trail | El checklist de release carecia de un log de aprobacion firmado para la revision de seguridad. | Se agrego una seccion en [release process](../developer-releases.md) que requiere adjuntar hashes del memo de revision y URL del ticket de sign-off antes de GA. |
+| ID |セベリダッド |エリア |ハラズゴ |解決策 |
+|----|----------|------|----------|------------|
+| SF6-SR-01 |アルタ |キーレス署名 |トークン OIDC のデフォルトは、CI テンプレートの暗黙的なものであり、再生エンターテナントと協議します。 | CI のリリース テンプレートのフックで `--identity-token-audience` のアプリケーションを明示的に確認します ([リリース プロセス](../developer-releases.md)、`docs/examples/sorafs_ci.md`)。 CI アホラ フォールラ シ セ オミテ ラ オーディエンシア。 |
+| SF6-SR-02 |メディア |プルーフストリーミング |背圧を受け入れ、罪の限界を緩和し、記憶を取り戻すことができます。 | `sorafs_cli proof stream` 決定的な決定を下すため、運河のタマノスを破棄し、登録を再開します。 Norito ストリームを中止します。 Torii は実際のアコタル チャンク デ レスペスタ (`crates/iroha_torii/src/sorafs/api.rs`) です。 |
+| SF6-SR-03 |メディア |マニフェスト環境 | El CLI の aceptaba は、チャンクの検証面、`--plan` estaba ausente を明示します。 | `sorafs_cli manifest submit` CAR サルボの再計算と比較ダイジェストの証明 `--expect-plan-digest`、修復の不一致と修正のほとんどのピスタ。 Los テスト cubren casos de exito/falla (`crates/sorafs_car/tests/sorafs_cli.rs`)。 |
+| SF6-SR-04 |バハ |監査証跡 |セキュリティ チェックリストのリリース チェックリストは、セキュリティ ポリシーの改訂に関する承認申請の記録を作成します。 | [リリース プロセス](../developer-releases.md) では、GA のサインオフ前にリビジョンのメモと URL の付属ハッシュが必要です。 |
 
-Todos los hallazgos high/medium se corrigieron durante la ventana de revision y se validaron con el harness de paridad existente. No quedan issues criticos latentes.
+高い/中程度のセキュリティ デュランテ ラ ベンタナ デ リビジョンとセキュリティ セキュリティ コン エル ハーネスの存在を確認してください。潜在的な批判を提起するクエダンはいない。
 
-## Validacion de controles
+## コントロールの検証- **資格情報:** CI および発行者の明示的な監査テンプレートの損失。 CLI およびヘルパーは、`--identity-token-provider` に付随する落下速度一斉射撃 `--identity-token-audience` をリリースします。  
+- **決定的な再生:** 現実の状況をテストし、実際の状況をテストし、実際の状況を確認し、結果をダイジェストし、最終的な結果を検出します。  
+- **バック プレッシャーとプルーフ ストリーミング:** Torii アホラ送信アイテム PoR/PoTR の sobre canales acotados、Y el CLI retene Solo muestras truncadas de latencia + cinco ejemplos de falla、evitando crecimiento sin limite y manteniendoresumenes deterministas。  
+- **観察結果:** プルーフ ストリーミング (`torii_sorafs_proof_stream_*`) のコンタドールは、CLI の再開で、アボート、オーディトリアのパンくずリストをキャプチャします。  
+- **ドキュメント:** 開発者向けガイド ([開発者インデックス](../developer-index.md)、[CLI リファレンス](../developer-cli.md)) は、エスカラミエントのセキュリティ ワークフローを考慮したフラグを示します。
 
-- **Alcance de credenciales:** Los templates de CI ahora exigen audiencia y issuer explicitos; el CLI y el helper de release fallan rapido salvo que `--identity-token-audience` acompane a `--identity-token-provider`.  
-- **Replay determinista:** Tests actualizados cubren flujos positivos/negativos de envio de manifests, asegurando que digests desalineados sigan siendo fallas no deterministas y se detecten antes de tocar la red.  
-- **Back-pressure en proof streaming:** Torii ahora transmite items PoR/PoTR sobre canales acotados, y el CLI retiene solo muestras truncadas de latencia + cinco ejemplos de falla, evitando crecimiento sin limite y manteniendo resumenes deterministas.  
-- **Observabilidad:** Contadores de proof streaming (`torii_sorafs_proof_stream_*`) y resumenes del CLI capturan razones de aborto, entregando breadcrumbs de auditoria a operadores.  
-- **Documentacion:** Guías para developers ([developer index](../developer-index.md), [CLI reference](../developer-cli.md)) indican flags sensibles a seguridad y workflows de escalamiento.
+## リリースのチェックリストに追加
 
-## Adiciones al checklist de release
+ロサンゼルスのリリースマネージャー**デベン**は、GA候補者の証拠となる証拠を提出します:
 
-Los release managers **deben** adjuntar la siguiente evidencia al promover un GA candidate:
+1. 安全な文書の改訂版をハッシュします。  
+2. 救済策のチケットをリンクします (例、`governance/tickets/SF6-SR-2026.md`)。  
+3. オーディオ/発行者の明示的な `scripts/release_sorafs_cli.sh --manifest ... --bundle-out ... --signature-out ...` 引数の出力。  
+4. ハーネスのキャプチャをログに記録します (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`)。  
+5. Torii のリリース ノートには、テレメトリのコンタドールと証明ストリーミング アコタドが含まれています。
 
-1. Hash del memo mas reciente de revision de seguridad (este documento).  
-2. Link al ticket de remediacion seguido (por ejemplo, `governance/tickets/SF6-SR-2026.md`).  
-3. Output de `scripts/release_sorafs_cli.sh --manifest ... --bundle-out ... --signature-out ...` mostrando argumentos explicitos de audiencia/issuer.  
-4. Logs capturados del harness de paridad (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`).  
-5. Confirmacion de que las release notes de Torii incluyen contadores de telemetria de proof streaming acotado.
+GA のサインオフで前方のブロックを収集する必要はありません。
 
-No recolectar los artefactos anteriores bloquea el sign-off de GA.
-
-**Hashes de artefactos de referencia (sign-off 2026-02-20):**
+**参照成果物のハッシュ (承認 2026-02-20):**
 
 - `sf6_security_review.md` — `66001d0b53d8e7ed5951a07453121c075dea931ca44c11f1fcd1571ed827342a`
 
-## Seguimientos pendientes
+## セギミエントス・ペンディエンテス
 
-- **Actualizacion del threat model:** Repetir esta revision trimestralmente o antes de grandes adiciones de flags del CLI.  
-- **Cobertura de fuzzing:** Los encodings de transporte de proof streaming se fuzzearon via `fuzz/proof_stream_transport`, cubriendo payloads identity, gzip, deflate y zstd.  
-- **Ensayo de incidentes:** Programar un ejercicio de operadores que simule token compromise y rollback de manifest, garantizando que la documentacion refleje procedimientos practicados.
+- **脅威モデルの実際:** CLI でフラグを立てる前に、リビジョン 3 回を繰り返します。  
+- **ファジングのコベルトゥーラ:** `fuzz/proof_stream_transport` 経由での転送および証明ストリーミングのエンコーディングの損失、ペイロード ID、gzip、deflate、zstd の暗号化。  
+- **事件の対処:** シミュレート トークン侵害とマニフェストのロールバックによる緊急プログラムのプログラマ、文書の参照手順の確認。
 
-## Aprobacion
+## アプロバシオン
 
-- Representante de Security Engineering Guild: @sec-eng (2026-02-20)  
-- Representante de Tooling Working Group: @tooling-wg (2026-02-20)
+- セキュリティ エンジニアリング ギルド代表: @sec-eng (2026-02-20)  
+- ツーリングワーキンググループの代表者: @tooling-wg (2026-02-20)
 
-Almacena las aprobaciones firmadas junto al bundle de artefactos de release.
+すべての成果物をリリースするために必要なすべての企業が公開されます。

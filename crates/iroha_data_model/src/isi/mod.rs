@@ -705,22 +705,34 @@ impl<'a> norito::core::NoritoDeserialize<'a> for InstructionBox {
     }
 
     fn deserialize(archived: &'a norito::core::Archived<InstructionBox>) -> Self {
-        let (name, bytes): (String, Vec<u8>) =
-            norito::core::NoritoDeserialize::deserialize(archived.cast());
-        match decode_instruction_from_pair(&name, &bytes) {
-            Ok(inst) => inst,
+        let pair: Result<(String, Vec<u8>), norito::core::Error> =
+            norito::core::NoritoDeserialize::try_deserialize(archived.cast());
+        match pair {
+            Ok((name, bytes)) => match decode_instruction_from_pair(&name, &bytes) {
+                Ok(inst) => inst,
+                Err(err) => {
+                    // Avoid panics on malformed instruction payloads (DoS vector).
+                    // Represent the decode error as a sentinel instruction that the executor rejects.
+                    let hash: [u8; 32] = iroha_crypto::Hash::new(&bytes).into();
+                    let mut message = err.to_string();
+                    // Keep the placeholder bounded; it may end up in logs/errors.
+                    const MAX_MESSAGE_LEN: usize = 256;
+                    if message.len() > MAX_MESSAGE_LEN {
+                        message.truncate(MAX_MESSAGE_LEN);
+                    }
+                    InstructionBox::from(crate::isi::transparent::InvalidInstruction::new(
+                        name, hash, message,
+                    ))
+                }
+            },
             Err(err) => {
-                // Avoid panics on malformed instruction payloads (DoS vector).
-                // Represent the decode error as a sentinel instruction that the executor rejects.
-                let hash: [u8; 32] = iroha_crypto::Hash::new(&bytes).into();
                 let mut message = err.to_string();
-                // Keep the placeholder bounded; it may end up in logs/errors.
                 const MAX_MESSAGE_LEN: usize = 256;
                 if message.len() > MAX_MESSAGE_LEN {
                     message.truncate(MAX_MESSAGE_LEN);
                 }
                 InstructionBox::from(crate::isi::transparent::InvalidInstruction::new(
-                    name, hash, message,
+                    "<norito>", [0u8; 32], message,
                 ))
             }
         }
@@ -737,21 +749,30 @@ impl<'a> norito::core::NoritoDeserialize<'a> for InstructionBox {
 
 impl<'a> norito::core::DecodeFromSlice<'a> for InstructionBox {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        let archived =
-            norito::core::archived_from_slice::<InstructionBox>(bytes).map_err(|_| {
-                norito::core::Error::Message(
-                    "instruction payload must use canonical Norito framing".to_owned(),
-                )
-            })?;
+        fn canonical_framing_error() -> norito::core::Error {
+            norito::core::Error::Message(
+                "instruction payload must use canonical Norito framing".to_owned(),
+            )
+        }
+
+        let archived = norito::core::archived_from_slice::<InstructionBox>(bytes)
+            .map_err(|_| canonical_framing_error())?;
         let _guard = norito::core::PayloadCtxGuard::enter(archived.bytes());
-        let inst = norito::core::NoritoDeserialize::try_deserialize(archived.archived())?;
+        let inst = norito::core::NoritoDeserialize::try_deserialize(archived.archived()).map_err(
+            |err| match err {
+                norito::core::Error::Message(_) => err,
+                _ => canonical_framing_error(),
+            },
+        )?;
         Ok((inst, archived.bytes().len()))
     }
 }
 
 impl norito::json::FastJsonWrite for InstructionBox {
     fn write_json(&self, out: &mut String) {
-        let bytes = norito::to_bytes(self).expect("instruction serialization must succeed");
+        // JSON uses base64 of the canonical Norito-framed payload so clients can
+        // round-trip without guessing decode flags.
+        let bytes = norito::to_bytes(self).expect("InstructionBox should Norito-frame");
         let encoded = STANDARD.encode(bytes);
         norito::json::JsonSerialize::json_serialize(&encoded, out);
     }
@@ -792,7 +813,7 @@ pub fn decode_instruction_from_pair(
         return res;
     }
     Err(norito::Error::Message(format!(
-        "instruction `{name}` payload must use canonical Norito framing"
+        "unknown instruction `{name}` (not registered)"
     )))
 }
 
@@ -809,7 +830,7 @@ pub fn frame_instruction_payload(
         return result;
     }
     Err(norito::Error::Message(format!(
-        "instruction `{type_name}` payload must use canonical Norito framing"
+        "unknown instruction `{type_name}` (not registered)"
     )))
 }
 
@@ -1085,7 +1106,8 @@ pub fn set_instruction_registry(registry: InstructionRegistry) {
     }
     #[cfg(not(test))]
     if let Some(lock) = INSTRUCTION_REGISTRY.get() {
-        *lock.write().expect("instruction registry lock poisoned") = registry;
+        let mut guard = lock.write().unwrap_or_else(|err| err.into_inner());
+        *guard = registry;
     } else {
         let _ = INSTRUCTION_REGISTRY.set(RwLock::new(registry));
     }
@@ -1120,7 +1142,7 @@ fn instruction_registry() -> InstructionRegistryReadGuard {
     let registry = INSTRUCTION_REGISTRY
         .get_or_init(|| RwLock::new(Arc::new(crate::instruction_registry::default())))
         .read()
-        .expect("instruction registry lock poisoned");
+        .unwrap_or_else(|err| err.into_inner());
     InstructionRegistryReadGuard::Global(Arc::clone(&registry))
 }
 

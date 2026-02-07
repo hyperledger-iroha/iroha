@@ -4,51 +4,53 @@ direction: ltr
 source: docs/portal/docs/soranet/puzzle-service-operations.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: puzzle-service-operations
-title: Puzzle Service Operations Guide
-sidebar_label: Puzzle Service Ops
-description: Argon2/ML-DSA admission tickets کے لئے `soranet-puzzle-service` daemon کی آپریشنز۔
+identifiant : puzzle-service-opérations
+titre : Guide des opérations du service Puzzle
+sidebar_label : Opérations de service de puzzle
+description : Billets d'entrée Argon2/ML-DSA pour le démon `soranet-puzzle-service`.
 ---
 
-:::note Canonical Source
-`docs/source/soranet/puzzle_service_operations.md` کی عکاسی کرتا ہے۔ جب تک پرانا documentation set retire نہ ہو، دونوں ورژنز sync رکھیں۔
+:::note Source canonique
+`docs/source/soranet/puzzle_service_operations.md` pour le client جب تک پرانا documentation set retiré نہ ہو، دونوں ورژنز رکھیں۔
 :::
 
-# Puzzle Service Operations Guide
+# Guide des opérations du service de puzzle
 
-`tools/soranet-puzzle-service/` کا `soranet-puzzle-service` daemon
-Argon2-backed admission tickets جاری کرتا ہے جو relay کی `pow.puzzle.*` policy
-کو mirror کرتے ہیں، اور جب configure ہو تو edge relays کی جانب سے ML-DSA
-admission tokens broker کرتا ہے۔ یہ پانچ HTTP endpoints expose کرتا ہے:
+Démon `tools/soranet-puzzle-service/` et `soranet-puzzle-service`
+Billets d'entrée soutenus par Argon2 et politique de relais `pow.puzzle.*`
+Un miroir est utilisé pour configurer un relais de bord et un ML-DSA
+courtier en jetons d'admission کرتا ہے۔ Les points de terminaison HTTP exposent les éléments suivants :
 
-- `GET /healthz` - liveness probe.
-- `GET /v1/puzzle/config` - relay JSON (`handshake.descriptor_commit_hex`, `pow.*`) سے
-  اٹھائے گئے موثر PoW/puzzle parameters واپس کرتا ہے۔
-- `POST /v1/puzzle/mint` - Argon2 ticket mint کرتا ہے؛ optional JSON body
+- `GET /healthz` - sonde de vivacité.
+- `GET /v1/puzzle/config` - relais JSON (`handshake.descriptor_commit_hex`, `pow.*`) سے
+  Voici les paramètres PoW/puzzle et les détails
+- `POST /v1/puzzle/mint` - Billet Argon2 neuf corps JSON facultatif
   `{ "ttl_secs": <u64>, "transcript_hash_hex": "<32-byte hex>", "signed": true }`
-  کم TTL کی درخواست کرتا ہے (policy window تک clamp)، ticket کو transcript hash
-  سے bind کرتا ہے، اور signing keys configured ہوں تو relay-signed ticket +
-  signature fingerprint واپس کرتا ہے۔
-- `GET /v1/token/config` - جب `pow.token.enabled = true` ہو تو active admission-token
-  policy واپس کرتا ہے (issuer fingerprint، TTL/clock-skew bounds، relay ID، اور
-  merged revocation set).
-- `POST /v1/token/mint` - ML-DSA admission token mint کرتا ہے جو supplied resume hash
-  سے bound ہوتا ہے؛ request body `{ "transcript_hash_hex": "...", "ttl_secs": <u64>, "flags": <u8> }`
+  Il s'agit d'un TTL ou d'un ticket (fenêtre de politique, pince), d'un ticket et d'un hachage de transcription.
+  سے bind کرتا ہے، اور clés de signature configurées ہوں تو ticket signé par relais +
+  signature empreinte digitale واپس کرتا ہے۔
+- `GET /v1/token/config` - pour `pow.token.enabled = true` et un jeton d'admission actif
+  politique واپس کرتا ہے (empreinte digitale de l'émetteur, limites TTL/inclinaison d'horloge, ID de relais, اور
+  ensemble de révocation fusionné).
+- `POST /v1/token/mint` - Jeton d'admission ML-DSA neuf et hachage de CV fourni
+  سے lié ہوتا ہے؛ corps de demande `{ "transcript_hash_hex": "...", "ttl_secs": <u64>, "flags": <u8> }`
   قبول کرتا ہے۔
 
-Service کے بنائے گئے tickets کو integration test
+Service et tickets de service et test d'intégration
 `volumetric_dos_soak_preserves_puzzle_and_latency_slo` میں verify کیا جاتا ہے، جو
-volumetric DoS scenarios کے دوران relay throttles بھی exercise کرتا ہے۔
+scénarios DoS volumétriques avec manettes de relais et exercices
 【tools/soranet-relay/tests/adaptive_and_puzzle.rs:337】
 
-## Token issuance configure کرنا
+## Configuration de l'émission de jetons کرنا
 
-`pow.token.*` کے تحت relay JSON fields set کریں (مثال کے لئے
-`tools/soranet-relay/deploy/config/relay.entry.json` دیکھیں) تاکہ ML-DSA tokens
-enable ہوں۔ کم از کم issuer public key اور optional revocation list فراہم کریں:
+`pow.token.*` est un ensemble de champs JSON de relais définis (pour plus de détails
+`tools/soranet-relay/deploy/config/relay.entry.json` (`tools/soranet-relay/deploy/config/relay.entry.json`) pour les jetons ML-DSA
+activer ہوں۔ Il s'agit d'une clé publique de l'émetteur et d'une liste de révocation facultative.
 
 ```json
 "pow": {
@@ -61,13 +63,13 @@ enable ہوں۔ کم از کم issuer public key اور optional revocation list
 }
 ```
 
-Puzzle service انہی values کو reuse کرتا ہے اور runtime میں Norito JSON revocation
+Service de puzzle valeurs et réutilisation du temps d'exécution et révocation JSON Norito
 فائل کو خودکار طور پر reload کرتا ہے۔ CLI `soranet-admission-token`
 (`cargo run -p soranet-relay --bin soranet_admission_token`) استعمال کریں تاکہ
-tokens offline mint/inspect ہوں، revocation فائل میں `token_id_hex` entries append ہوں،
-اور production updates سے پہلے موجودہ credentials audit ہوں۔
+jetons hors ligne menthe/inspecter et révocation ici `token_id_hex` entrées ajouter ici
+اور mises à jour de production et audit des informations d'identification ہوں۔
 
-Issuer secret key کو CLI flags کے ذریعے puzzle service میں پاس کریں:
+Clé secrète de l'émetteur et drapeaux CLI pour le service de puzzle et le service :
 
 ```bash
 cargo run -p soranet-puzzle-service -- \
@@ -77,76 +79,72 @@ cargo run -p soranet-puzzle-service -- \
   --token-revocation-refresh-secs 60
 ```
 
-`--token-secret-hex` بھی دستیاب ہے جب secret out-of-band tooling pipeline کے ذریعے manage ہو۔
-Revocation file watcher `/v1/token/config` کو current رکھتا ہے؛ updates کو
-`soranet-admission-token revoke` کمانڈ کے ساتھ coordinate کریں تاکہ revocation state
-lag نہ کرے۔
+`--token-secret-hex` est un pipeline d'outils hors bande secret pour gérer et gérer
+Observateur de fichiers de révocation `/v1/token/config` et version actuelle mises à jour
+`soranet-admission-token revoke` Coordonnées de l'état de révocation
+décalage نہ کرے۔Relay JSON میں `pow.signed_ticket_public_key_hex` set کریں تاکہ tickets PoW signés
+vérifier la clé publique ML-DSA-44 et la publicité `/v1/puzzle/config` clé et
+L'empreinte digitale BLAKE3 (`signed_ticket_public_key_fingerprint_hex`) echo est disponible
+broche de vérification des clients کر سکیں۔ ID de relais de billets signés et liaisons de transcription
+valider le magasin de révocation et partager le magasin tickets PoW bruts de 74 octets
+vérificateur de billets signés configuré ہونے پر بھی valide رہتے ہیں۔ Secret du signataire
+`--signed-ticket-secret-hex` et `--signed-ticket-secret-path` pour le lancement du service
+پر passer کریں؛ les paires de clés incompatibles au démarrage rejettent le secret
+`pow.signed_ticket_public_key_hex` pour valider ici `POST /v1/puzzle/mint`
+`"signed": true` (`"transcript_hash_hex"` en option) encodé en mode Norito
+ticket signé octets bruts du ticket کے ساتھ واپس ہو؛ réponses میں `signed_ticket_b64`
+اور `signed_ticket_fingerprint_hex` شامل ہوتے ہیں تاکہ replay empreintes digitales track ہوں۔
+` signed = true` et demandes de rejet ہیں اگر secret du signataire configuré نہ ہو۔
 
-Relay JSON میں `pow.signed_ticket_public_key_hex` set کریں تاکہ signed PoW tickets
-verify کرنے کے لئے ML-DSA-44 public key advertise ہو؛ `/v1/puzzle/config` یہ key اور
-اس کا BLAKE3 fingerprint (`signed_ticket_public_key_fingerprint_hex`) echo کرتا ہے تاکہ
-clients verifier pin کر سکیں۔ Signed tickets relay ID اور transcript bindings کے خلاف
-validate ہوتے ہیں اور اسی revocation store کو share کرتے ہیں؛ raw 74-byte PoW tickets
-signed-ticket verifier configured ہونے پر بھی valid رہتے ہیں۔ Signer secret کو
-`--signed-ticket-secret-hex` یا `--signed-ticket-secret-path` کے ذریعے service launch
-پر pass کریں؛ startup mismatched keypairs reject کرتا ہے اگر secret
-`pow.signed_ticket_public_key_hex` کے خلاف validate نہ ہو۔ `POST /v1/puzzle/mint`
-`"signed": true` (اور optional `"transcript_hash_hex"`) قبول کرتا ہے تاکہ Norito-encoded
-signed ticket raw ticket bytes کے ساتھ واپس ہو؛ responses میں `signed_ticket_b64`
-اور `signed_ticket_fingerprint_hex` شامل ہوتے ہیں تاکہ replay fingerprints track ہوں۔
-` signed = true` والی requests reject ہوتی ہیں اگر signer secret configured نہ ہو۔
+## Manuel de rotation des clés
 
-## Key rotation playbook
+1. **Commit de descripteur de bonne qualité** Ensemble d'annuaires de gouvernance et relais
+   descripteur commit publier کرتی ہے۔ Chaîne hexadécimale et configuration JSON du relais
+   `handshake.descriptor_commit_hex` copie du service de puzzle et service de puzzle partagé
+2. ** Examen des limites de la politique de puzzle ici ** Mise à jour des limites de la politique de puzzle
+   Plan de publication des valeurs `pow.puzzle.{memory_kib,time_cost,lanes}` Opérateurs ici
+   Les relais de configuration Argon2 sont dotés d'une mémoire déterministe (avec une mémoire de 4 Mo)
+   1 <= voies <= 16).
+3. **Étape de redémarrage ici** Annonce du basculement de la rotation de la gouvernance dans l'unité systemd ici
+   rechargement de conteneurs Service de recharge à chaud disponible نیا descripteur commit لینے کے لئے
+   redémarrer ضروری ہے۔
+4. **Valider le ticket** `POST /v1/puzzle/mint` pour l'émission du ticket et le ticket de caisse.
+   `difficulty` et `expires_at` Politique de conformité et correspondance Rapport de trempage
+   (`docs/source/soranet/reports/pow_resilience.md`) référence aux limites de latence attendues
+   capturer کرتا ہے۔ Les jetons permettent à `/v1/token/config` de récupérer un émetteur annoncé
+   empreinte digitale et nombre de révocations valeurs attendues et correspondance
 
-1. **نیا descriptor commit جمع کریں۔** Governance directory bundle میں relay
-   descriptor commit publish کرتی ہے۔ Hex string کو relay JSON config میں
-   `handshake.descriptor_commit_hex` میں copy کریں جو puzzle service کے ساتھ shared ہے۔
-2. **Puzzle policy bounds review کریں۔** تصدیق کریں کہ updated
-   `pow.puzzle.{memory_kib,time_cost,lanes}` values release plan کے مطابق ہیں۔ Operators کو
-   Argon2 configuration relays میں deterministic رکھنا چاہئے (کم از کم 4 MiB memory،
-   1 <= lanes <= 16).
-3. **Restart stage کریں۔** Governance rotation cutover announce کرے تو systemd unit یا
-   container reload کریں۔ Service میں hot-reload نہیں ہے؛ نیا descriptor commit لینے کے لئے
-   restart ضروری ہے۔
-4. **Validate کریں۔** `POST /v1/puzzle/mint` کے ذریعے ticket issue کریں اور تصدیق کریں کہ
-   `difficulty` اور `expires_at` نئی policy سے match ہوں۔ Soak report
-   (`docs/source/soranet/reports/pow_resilience.md`) reference کے لئے expected latency bounds
-   capture کرتا ہے۔ Tokens enable ہوں تو `/v1/token/config` fetch کریں تاکہ advertised issuer
-   fingerprint اور revocation count expected values سے match ہوں۔
+## Procédure de désactivation d'urgence
 
-## Emergency disable procedure
-
-1. Shared relay configuration میں `pow.puzzle.enabled = false` set کریں۔
-   `pow.required = true` رکھیں اگر hashcash fallback tickets لازمی رہنے چاہئیں۔
-2. Optional طور پر `pow.emergency` entries enforce کریں تاکہ Argon2 gate offline ہونے پر
-   stale descriptors reject ہوں۔
-3. Relay اور puzzle service دونوں restart کریں تاکہ تبدیلی apply ہو۔
-4. `soranet_handshake_pow_difficulty` monitor کریں تاکہ difficulty expected hashcash value
+1. Configuration du relais partagé selon `pow.puzzle.enabled = false` défini sur
+   `pow.required = true` Billets de repli pour hashcash
+2. Les entrées facultatives de type `pow.emergency` appliquent la porte Argon2 hors ligne.
+   les descripteurs périmés rejettent ہوں۔
+3. Relay اور puzzle service دونوں restart کریں تاکہ تبدیلی appliquer ہو۔
+4. `soranet_handshake_pow_difficulty` surveille la difficulté de la valeur de hashcash attendue
    تک drop ہو، اور verify کریں کہ `/v1/puzzle/config` `puzzle = null` رپورٹ کرے۔
 
-## Monitoring اور alerting
-
-- **Latency SLO:** `soranet_handshake_latency_seconds` track کریں اور P95 کو 300 ms سے نیچے رکھیں۔
-  Soak test offsets guard throttles کے لئے calibration data فراہم کرتے ہیں۔
+## Surveillance et alerte- **SLO de latence :** Piste `soranet_handshake_latency_seconds` pour P95 à 300 ms pour la durée de vie
+  Le test de trempage décale les régulateurs de protection et les données d'étalonnage
   【docs/source/soranet/reports/pow_resilience.md:1】
-- **Quota pressure:** `soranet_guard_capacity_report.py` کو relay metrics کے ساتھ استعمال کریں تاکہ
-  `pow.quotas` cooldowns (`soranet_abuse_remote_cooldowns`, `soranet_handshake_throttled_remote_quota_total`) tune ہوں۔
+- **Pression de quota :** `soranet_guard_capacity_report.py` et métriques de relais
+  Temps de recharge `pow.quotas` (`soranet_abuse_remote_cooldowns`, `soranet_handshake_throttled_remote_quota_total`) réglés
   【docs/source/soranet/relay_audit_pipeline.md:68】
-- **Puzzle alignment:** `soranet_handshake_pow_difficulty` کو `/v1/puzzle/config` سے واپس ہونے والی
-  difficulty کے ساتھ match ہونا چاہئے۔ Divergence stale relay config یا failed restart کی نشاندہی ہے۔
-- **Token readiness:** اگر `/v1/token/config` غیر متوقع طور پر `enabled = false` ہو جائے یا
-  `revocation_source` stale timestamps رپورٹ کرے تو alert کریں۔ Operators کو CLI کے ذریعے Norito
-  revocation file rotate کرنا چاہئے جب کوئی token retire ہو تاکہ یہ endpoint درست رہے۔
-- **Service health:** `/healthz` کو معمول کی liveness cadence پر probe کریں اور alert کریں اگر
-  `/v1/puzzle/mint` HTTP 500 responses دے (Argon2 parameter mismatch یا RNG failures کی نشاندہی).
-  Token minting errors `/v1/token/mint` پر HTTP 4xx/5xx responses کے ذریعے نظر آتے ہیں؛ repeated failures
-  کو paging condition سمجھیں۔
+- **Alignement du puzzle :** `soranet_handshake_pow_difficulty` et `/v1/puzzle/config` et `soranet_handshake_pow_difficulty` et `/v1/puzzle/config`.
+  difficulté کے ساتھ match ہونا چاہئے۔ Divergence de configuration de relais obsolète et échec du redémarrage
+- **Préparation au jeton :** اگر `/v1/token/config` غیر متوقع طور پر `enabled = false` ہو جائے یا
+  `revocation_source` horodatages périmés et alerte d'alerte Opérateurs et CLI pour Norito
+  révocation rotation du fichier rotation du jeton retrait du point de terminaison
+- **Santé du service :** `/healthz` pour la cadence de vivacité et la sonde et l'alerte.
+  `/v1/puzzle/mint` Réponses HTTP 500 pour (incompatibilité des paramètres Argon2 et échecs RNG par exemple).
+  Erreurs de création de jetons `/v1/token/mint` dans les réponses HTTP 4xx/5xx échecs répétés
+  Condition de pagination
 
-## Compliance اور audit logging
+## Conformité et journalisation d'audit
 
-Relays structured `handshake` events emit کرتے ہیں جن میں throttle reasons اور cooldown durations شامل ہوتے ہیں۔
-یقینی بنائیں کہ `docs/source/soranet/relay_audit_pipeline.md` میں بیان کردہ compliance pipeline ان logs کو ingest کرے
-تاکہ puzzle policy changes auditable رہیں۔ Puzzle gate enable ہو تو minted ticket samples اور Norito configuration
-snapshot کو rollout ticket کے ساتھ archive کریں تاکہ مستقبل کے audits کے لئے دستیاب ہوں۔ Maintenance windows سے پہلے
-mint کئے گئے admission tokens کو ان کے `token_id_hex` values کے ساتھ track کیا جانا چاہئے اور expire یا revoke ہونے
-پر revocation file میں insert کیا جانا چاہئے۔
+Les événements structurés `handshake` des relais émettent des raisons d'accélération et des durées de refroidissement.
+L'application `docs/source/soranet/relay_audit_pipeline.md` fournit un pipeline de conformité pour les journaux et l'ingestion
+Les changements de politique de puzzle vérifiables La porte de puzzle active ہو تو des échantillons de billets émis et la configuration Norito
+instantané et ticket de déploiement pour les archives et les audits pour les audits Fenêtres de maintenance سے پہلے
+menthe il y a des jetons d'admission et des valeurs `token_id_hex` et une piste de suivi et d'expiration et de révocation
+پر fichier de révocation میں insert کیا جانا چاہئے۔

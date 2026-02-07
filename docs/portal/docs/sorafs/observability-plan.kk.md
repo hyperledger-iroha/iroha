@@ -11,203 +11,202 @@ id: observability-plan
 title: SoraFS Observability & SLO Plan
 sidebar_label: Observability & SLOs
 description: Telemetry schema, dashboards, and error-budget policy for SoraFS gateways, nodes, and the multi-source orchestrator.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
+:::ескерту Канондық дереккөз
 :::
 
-## Objectives
-- Define metrics and structured events for gateways, nodes, and the multi-source orchestrator.
-- Provide Grafana dashboards, alert thresholds, and validation hooks.
-- Establish SLO targets alongside error-budget and chaos-drill policies.
+## Мақсаттар
+- Шлюздер, түйіндер және көп көзді оркестр үшін көрсеткіштер мен құрылымдық оқиғаларды анықтаңыз.
+- Grafana бақылау тақталарын, ескерту шектерін және тексеру ілмектерін қамтамасыз етіңіз.
+- Қате-бюджет және хаос-бұрғылау саясаттарымен қатар SLO мақсаттарын белгілеңіз.
 
-## Metric Catalogue
+## Метрикалық каталог
 
-### Gateway surfaces
+### Шлюз беттері
 
-| Metric | Type | Labels | Notes |
+| метрикалық | |түрі Белгілер | Ескертпелер |
 |--------|------|--------|-------|
-| `sorafs_gateway_active` | Gauge (UpDownCounter) | `endpoint`, `method`, `variant`, `chunker`, `profile` | Emitted via `SorafsGatewayOtel`; tracks in-flight HTTP operations per endpoint/method combination. |
-| `sorafs_gateway_responses_total` | Counter | `endpoint`, `method`, `variant`, `chunker`, `profile`, `result`, `status`, `error_code` | Every completed gateway request increments once; `result` ∈ {`success`,`error`,`dropped`}. |
-| `sorafs_gateway_ttfb_ms_bucket` | Histogram | `endpoint`, `method`, `variant`, `chunker`, `profile`, `result`, `status`, `error_code` | Time-to-first-byte latency for gateway responses; exported as Prometheus `_bucket/_sum/_count`. |
-| `sorafs_gateway_proof_verifications_total` | Counter | `profile_version`, `result`, `error_code` | Proof verification outcomes captured at request time (`result` ∈ {`success`,`failure`}). |
-| `sorafs_gateway_proof_duration_ms_bucket` | Histogram | `profile_version`, `result`, `error_code` | Verification latency distribution for PoR receipts. |
-| `telemetry::sorafs.gateway.request` | Structured event | `endpoint`, `method`, `variant`, `result`, `status`, `error_code`, `duration_ms` | Structured log emitted on every request completion for Loki/Tempo correlation. |
+| `sorafs_gateway_active` | Өлшеуіш (жоғары төмен санауыш) | `endpoint`, `method`, `variant`, `chunker`, `profile` | `SorafsGatewayOtel` арқылы шығарылады; соңғы нүкте/әдіс комбинациясы бойынша ұшудағы HTTP операцияларын бақылайды. |
+| `sorafs_gateway_responses_total` | Есептегіш | `endpoint`, `method`, `variant`, `chunker`, `profile`, `result`, I18NI000000040X, I18NI00000041002 | Әрбір аяқталған шлюз сұрауы бір рет артады; `result` ∈ {`success`,`error`,`dropped`}. |
+| `sorafs_gateway_ttfb_ms_bucket` | Гистограмма | `endpoint`, `method`, `variant`, `chunker`, `profile`, `result`, I18NI000000053X, I18NI0000000505 | Шлюз жауаптары үшін бірінші байтқа дейінгі кідіріс уақыты; Prometheus `_bucket/_sum/_count` ретінде экспортталды. |
+| `sorafs_gateway_proof_verifications_total` | Есептегіш | `profile_version`, `result`, `error_code` | Сұрау уақытында түсірілген дәлелді тексеру нәтижелері (`result` ∈ {`success`, `failure`}). |
+| `sorafs_gateway_proof_duration_ms_bucket` | Гистограмма | `profile_version`, `result`, `error_code` | PoR түбіртектері үшін тексеру кідірісін бөлу. |
+| `telemetry::sorafs.gateway.request` | Құрылымдық оқиға | `endpoint`, `method`, `variant`, `result`, `status`, `error_code`, `duration_ms` | Loki/Темпо корреляциясына арналған әрбір сұрау аяқталғанда шығарылатын құрылымдық журнал. |
 
-`telemetry::sorafs.gateway.request` events mirror the OTEL counters with structured payloads, surfacing `endpoint`, `method`, `variant`, `status`, `error_code`, and `duration_ms` for Loki/Tempo correlation while dashboards consume the OTLP series for SLO tracking.
+`telemetry::sorafs.gateway.request` events mirror the OTEL counters with structured payloads, surfacing `endpoint`, `method`, `variant`, `status`, `error_code`, and `duration_ms` for Бақылау тақталары SLO бақылауы үшін OTLP сериясын пайдаланған кезде Loki/Темпо корреляциясы.
 
-### Proof-health telemetry
+### Денсаулықты дәлелдейтін телеметрия
 
-| Metric | Type | Labels | Notes |
+| метрикалық | |түрі Белгілер | Ескертпелер |
 |--------|------|--------|-------|
-| `torii_sorafs_proof_health_alerts_total` | Counter | `provider_id`, `trigger`, `penalty` | Increments every time `RecordCapacityTelemetry` emits a `SorafsProofHealthAlert`. `trigger` distinguishes PDP/PoTR/Both failures, while `penalty` captures whether collateral was actually slashed or suppressed by cooldown. |
-| `torii_sorafs_proof_health_pdp_failures`, `torii_sorafs_proof_health_potr_breaches` | Gauge | `provider_id` | Latest PDP/PoTR counts reported inside the offending telemetry window so teams can quantify how far providers overshot policy. |
-| `torii_sorafs_proof_health_penalty_nano` | Gauge | `provider_id` | Nano-XOR amount slashed on the last alert (zero when cooldown suppressed enforcement). |
-| `torii_sorafs_proof_health_cooldown` | Gauge | `provider_id` | Boolean gauge (`1` = alert suppressed by cooldown) to surface when follow-up alerts are temporarily muted. |
-| `torii_sorafs_proof_health_window_end_epoch` | Gauge | `provider_id` | Epoch recorded for the telemetry window tied to the alert so operators can correlate against Norito artefacts. |
+| `torii_sorafs_proof_health_alerts_total` | Есептегіш | `provider_id`, `trigger`, `penalty` | `RecordCapacityTelemetry` `SorafsProofHealthAlert` шығарған сайын артады. `trigger` PDP/PoTR/Екі сәтсіздікті ажыратады, ал `penalty` кепілзаттың шын мәнінде қысқартылғанын немесе салқындату арқылы басылғанын анықтайды. |
+| `torii_sorafs_proof_health_pdp_failures`, `torii_sorafs_proof_health_potr_breaches` | Өлшеуіш | `provider_id` | Ең соңғы PDP/PoTR санаулары бұзылған телеметрия терезесінде хабарланады, осылайша топтар провайдерлердің саясатты қаншалықты асырғанын сандық түрде анықтай алады. |
+| `torii_sorafs_proof_health_penalty_nano` | Өлшеуіш | `provider_id` | Соңғы ескертуде Nano-XOR мөлшері қысқартылды (салқындату күшіне енген кезде нөлге тең). |
+| `torii_sorafs_proof_health_cooldown` | Өлшеуіш | `provider_id` | Логикалық көрсеткіш (`1` = салқындату арқылы басылған ескерту) кейінгі ескертулердің дыбысы уақытша өшірілгенде пайда болады. |
+| `torii_sorafs_proof_health_window_end_epoch` | Өлшеуіш | `provider_id` | Операторлар Norito артефактілерімен корреляция жасай алатындай етіп ескертуге байланыстырылған телеметрия терезесі үшін жазылған дәуір. |
 
-These feeds now power the Taikai viewer dashboard’s proof-health row
-(`dashboards/grafana/taikai_viewer.json`), giving CDN operators live visibility
-into alert volumes, PDP/PoTR trigger mix, penalties, and cooldown state per
-provider.
+Бұл арналар енді Taikai көру құралының бақылау тақтасының денсаулықты тексеру жолына қуат береді
+(`dashboards/grafana/taikai_viewer.json`), CDN операторларына тікелей көріну мүмкіндігін береді
+ескерту көлемдеріне, PDP/PoTR триггерлерінің қоспасына, айыппұлдарға және әр адамға арналған салқындату күйіне
+провайдер.
 
-The same metrics now back two Taikai viewer alert rules:
-`SorafsProofHealthPenalty` fires whenever
-`torii_sorafs_proof_health_alerts_total{penalty="penalty_applied"}` increases in
-the last 15 minutes, while `SorafsProofHealthCooldown` raises a warning if a
-provider remains in cooldown for five minutes. Both alerts live in
-`dashboards/alerts/taikai_viewer_rules.yml` so SREs receive immediate context
-whenever PoR/PoTR enforcement escalates.
+Дәл сол көрсеткіштер енді Taikai қарауының екі ескерту ережесін қайтарады:
+`SorafsProofHealthPenalty` кез келген уақытта жанады
+`torii_sorafs_proof_health_alerts_total{penalty="penalty_applied"}` артады
+соңғы 15 минут, ал `SorafsProofHealthCooldown` егер
+провайдер бес минут бойы салқындату режимінде қалады. Екі ескерту де сақталады
+`dashboards/alerts/taikai_viewer_rules.yml`, сондықтан SRE дереу мәтінмәнді алады
+PoR/PoTR талаптарын орындау күшейген сайын.
 
-### Orchestrator surfaces
+### Оркестр беттері
 
-| Metric / Event | Type | Labels | Producer | Notes |
+| Метрика / Оқиға | |түрі Белгілер | Өндіруші | Ескертпелер |
 |----------------|------|--------|----------|-------|
-| `sorafs_orchestrator_active_fetches` | Gauge | `manifest_id`, `region` | `FetchMetricsCtx` | Sessions currently in-flight. |
-| `sorafs_orchestrator_fetch_duration_ms` | Histogram | `manifest_id`, `region` | `FetchMetricsCtx` | Duration histogram in milliseconds; 1 ms→30 s buckets. |
-| `sorafs_orchestrator_fetch_failures_total` | Counter | `manifest_id`, `region`, `reason` | `FetchMetricsCtx` | Reasons: `no_providers`, `no_healthy_providers`, `no_compatible_providers`, `exhausted_retries`, `observer_failed`, `internal_invariant`. |
-| `sorafs_orchestrator_retries_total` | Counter | `manifest_id`, `provider_id`, `reason` | `FetchMetricsCtx` | Distinguishes retry causes (`retry`, `digest_mismatch`, `length_mismatch`, `provider_error`). |
-| `sorafs_orchestrator_provider_failures_total` | Counter | `manifest_id`, `provider_id`, `reason` | `FetchMetricsCtx` | Captures session-level disablement / failure tallies. |
-| `sorafs_orchestrator_chunk_latency_ms` | Histogram | `manifest_id`, `provider_id` | `FetchMetricsCtx` | Per-chunk fetch latency distribution (ms) for throughput/SLO analysis. |
-| `sorafs_orchestrator_bytes_total` | Counter | `manifest_id`, `provider_id` | `FetchMetricsCtx` | Bytes delivered per manifest/provider; derive throughput via `rate()` in PromQL. |
-| `sorafs_orchestrator_stalls_total` | Counter | `manifest_id`, `provider_id` | `FetchMetricsCtx` | Counts chunks exceeding `ScoreboardConfig::latency_cap_ms`. |
-| `telemetry::sorafs.fetch.lifecycle` | Structured event | `manifest`, `region`, `job_id`, `event`, `status`, `chunk_count`, `total_bytes`, `provider_candidates`, `retry_budget`, `global_parallel_limit` | `FetchTelemetryCtx` | Mirrors job lifecycle (start/complete) with Norito JSON payload. |
-| `telemetry::sorafs.fetch.retry` | Structured event | `manifest`, `region`, `job_id`, `provider`, `reason`, `attempts` | `FetchTelemetryCtx` | Emitted per provider retry streak; `attempts` counts incremental retries (≥ 1). |
-| `telemetry::sorafs.fetch.provider_failure` | Structured event | `manifest`, `region`, `job_id`, `provider`, `reason`, `failures` | `FetchTelemetryCtx` | Surfaced when a provider crosses the failure threshold. |
-| `telemetry::sorafs.fetch.error` | Structured event | `manifest`, `region`, `job_id`, `reason`, `provider?`, `provider_reason?`, `duration_ms` | `FetchTelemetryCtx` | Terminal failure record, friendly to Loki/Splunk ingestion. |
-| `telemetry::sorafs.fetch.stall` | Structured event | `manifest`, `region`, `job_id`, `provider`, `latency_ms`, `bytes` | `FetchTelemetryCtx` | Raised when chunk latency breaches the configured cap (mirrors stall counters). |
+| `sorafs_orchestrator_active_fetches` | Өлшеуіш | `manifest_id`, `region` | `FetchMetricsCtx` | Сеанстар қазір ұшуда. |
+| `sorafs_orchestrator_fetch_duration_ms` | Гистограмма | `manifest_id`, `region` | `FetchMetricsCtx` | Ұзақтық гистограммасы миллисекундпен; 1мс→30с шелек. |
+| `sorafs_orchestrator_fetch_failures_total` | Есептегіш | `manifest_id`, `region`, `reason` | `FetchMetricsCtx` | Себептер: `no_providers`, `no_healthy_providers`, `no_compatible_providers`, `exhausted_retries`, `observer_failed`, `internal_invariant`. |
+| `sorafs_orchestrator_retries_total` | Есептегіш | `manifest_id`, `provider_id`, `reason` | `FetchMetricsCtx` | Қайталау себептерін ажыратады (`retry`, `digest_mismatch`, `length_mismatch`, `provider_error`). |
+| `sorafs_orchestrator_provider_failures_total` | Есептегіш | `manifest_id`, `provider_id`, `reason` | `FetchMetricsCtx` | Сеанс деңгейіндегі өшіру/сәтсіздік көрсеткіштерін жазады. |
+| `sorafs_orchestrator_chunk_latency_ms` | Гистограмма | `manifest_id`, `provider_id` | `FetchMetricsCtx` | Өткізу қабілеттілігі/SLO талдауы үшін әр бөлікті алу кідірісін бөлу (мс). |
+| `sorafs_orchestrator_bytes_total` | Есептегіш | `manifest_id`, `provider_id` | `FetchMetricsCtx` | Манифестке/провайдерге жеткізілетін байттар; PromQL жүйесінде `rate()` арқылы өткізу қабілеттілігін алыңыз. |
+| `sorafs_orchestrator_stalls_total` | Есептегіш | `manifest_id`, `provider_id` | `FetchMetricsCtx` | `ScoreboardConfig::latency_cap_ms` асатын бөліктерді санайды. |
+| `telemetry::sorafs.fetch.lifecycle` | Құрылымдық оқиға | `manifest`, `region`, `job_id`, `event`, `status`, `chunk_count`, I18NI0000016010, I18NI0000016160 `retry_budget`, `global_parallel_limit` | `FetchTelemetryCtx` | Norito JSON пайдалы жүктемесі бар айна жұмысының өмірлік циклін (бастау/аяқталады). |
+| `telemetry::sorafs.fetch.retry` | Құрылымдық оқиға | `manifest`, `region`, `job_id`, `provider`, `reason`, `attempts` | `FetchTelemetryCtx` | Әрбір провайдердің қайталау сызығына шығарылады; `attempts` қосымша қайталауларды санайды (≥1). |
+| `telemetry::sorafs.fetch.provider_failure` | Құрылымдық оқиға | `manifest`, `region`, `job_id`, `provider`, `reason`, `failures` | `FetchTelemetryCtx` | Провайдер сәтсіздік шегінен өткенде пайда болады. |
+| `telemetry::sorafs.fetch.error` | Құрылымдық оқиға | `manifest`, `region`, `job_id`, `reason`, `provider?`, `provider_reason?`, `duration_ms` | `FetchTelemetryCtx` | Loki/Splunk қабылдауға ыңғайлы терминал ақауы туралы жазба. |
+| `telemetry::sorafs.fetch.stall` | Құрылымдық оқиға | `manifest`, `region`, `job_id`, `provider`, `latency_ms`, `bytes` | `FetchTelemetryCtx` | Бөлшектердің кешігуі конфигурацияланған қақпақты бұзған кезде көтеріледі (айналар санауыштарды тоқтатады). |
 
-### Node / replication surfaces
+### Түйін / репликация беттері
 
-| Metric | Type | Labels | Notes |
+| метрикалық | |түрі Белгілер | Ескертпелер |
 |--------|------|--------|-------|
-| `sorafs_node_capacity_utilisation_pct` | Histogram | `provider_id` | OTEL histogram of storage utilisation percentage (exported as `_bucket/_sum/_count`). |
-| `sorafs_node_por_success_total` | Counter | `provider_id` | Monotonic counter for successful PoR samples, derived from scheduler snapshots. |
-| `sorafs_node_por_failure_total` | Counter | `provider_id` | Monotonic counter for failed PoR samples. |
-| `torii_sorafs_storage_bytes_*`, `torii_sorafs_storage_por_*` | Gauge | `provider` | Existing Prometheus gauges for bytes used, queue depth, PoR inflight counts. |
-| `torii_sorafs_capacity_*`, `torii_sorafs_uptime_bps`, `torii_sorafs_por_bps` | Gauge | `provider` | Provider capacity/uptime success data surfaced in the capacity dashboard. |
-| `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | Gauge | `provider`, `manifest` | Backlog depth plus the cumulative failure counters exported whenever `/v1/sorafs/por/ingestion/{manifest}` is polled, feeding the “PoR Stalls” panel/alert. |
+| `sorafs_node_capacity_utilisation_pct` | Гистограмма | `provider_id` | Жадты пайдалану пайызының OTEL гистограммасы (`_bucket/_sum/_count` ретінде экспортталған). |
+| `sorafs_node_por_success_total` | Есептегіш | `provider_id` | Жоспарлағыш суреттерінен алынған сәтті PoR үлгілеріне арналған монотонды есептегіш. |
+| `sorafs_node_por_failure_total` | Есептегіш | `provider_id` | Сәтсіз PoR үлгілері үшін монотонды есептегіш. |
+| `torii_sorafs_storage_bytes_*`, `torii_sorafs_storage_por_*` | Өлшеуіш | `provider` | Қолданылған байттар үшін бар Prometheus өлшеуіштері, кезек тереңдігі, PoR рейс санаулары. |
+| `torii_sorafs_capacity_*`, `torii_sorafs_uptime_bps`, `torii_sorafs_por_bps` | Өлшеуіш | `provider` | Провайдердің сыйымдылығы/жұмыс уақыты табысы туралы деректер сыйымдылық бақылау тақтасында пайда болды. |
+| `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | Өлшеуіш | `provider`, `manifest` | `/v1/sorafs/por/ingestion/{manifest}` сұралған сайын экспортталатын, "PoR Stalls" панелін/ескертуін беретін артта қалу тереңдігі және жиынтық ақаулық есептегіштері. |
 
-### Repair & SLA
+### Жөндеу және SLA
 
-| Metric | Type | Labels | Notes |
+| метрикалық | |түрі Белгілер | Ескертпелер |
 |--------|------|--------|-------|
-| `sorafs_repair_tasks_total` | Counter | `status` | OTEL counter for repair task transitions. |
-| `sorafs_repair_latency_minutes` | Histogram | `outcome` | OTEL histogram for repair lifecycle latency. |
-| `sorafs_repair_queue_depth` | Histogram | `provider` | OTEL histogram of queued tasks per provider (snapshot-style). |
-| `sorafs_repair_backlog_oldest_age_seconds` | Histogram | — | OTEL histogram of the oldest queued task age (seconds). |
-| `sorafs_repair_lease_expired_total` | Counter | `outcome` | OTEL counter for lease expiries (`requeued`/`escalated`). |
-| `sorafs_repair_slash_proposals_total` | Counter | `outcome` | OTEL counter for slash proposal transitions. |
-| `torii_sorafs_repair_tasks_total` | Counter | `status` | Prometheus counter for task transitions. |
-| `torii_sorafs_repair_latency_minutes_bucket` | Histogram | `outcome` | Prometheus histogram for repair lifecycle latency. |
-| `torii_sorafs_repair_queue_depth` | Gauge | `provider` | Prometheus gauge for queued tasks per provider. |
-| `torii_sorafs_repair_backlog_oldest_age_seconds` | Gauge | — | Prometheus gauge for the oldest queued task age (seconds). |
-| `torii_sorafs_repair_lease_expired_total` | Counter | `outcome` | Prometheus counter for lease expiries. |
-| `torii_sorafs_slash_proposals_total` | Counter | `outcome` | Prometheus counter for slash proposal transitions. |
+| `sorafs_repair_tasks_total` | Есептегіш | `status` | Жөндеу тапсырмаларын ауыстыруға арналған OTEL есептегіші. |
+| `sorafs_repair_latency_minutes` | Гистограмма | `outcome` | Жөндеу өмірлік циклінің кешігуіне арналған OTEL гистограммасы. |
+| `sorafs_repair_queue_depth` | Гистограмма | `provider` | Әр провайдерге кезекте тұрған тапсырмалардың OTEL гистограммасы (сурет стилі). |
+| `sorafs_repair_backlog_oldest_age_seconds` | Гистограмма | — | Ең ескі кезекте тұрған тапсырма жасының OTEL гистограммасы (секундтар). |
+| `sorafs_repair_lease_expired_total` | Есептегіш | `outcome` | Жалдау мерзімі аяқталатын OTEL есептегіші (`requeued`/`escalated`). |
+| `sorafs_repair_slash_proposals_total` | Есептегіш | `outcome` | Ұсыныстың қиғаш өтуіне арналған OTEL есептегіші. |
+| `torii_sorafs_repair_tasks_total` | Есептегіш | `status` | Тапсырмаларды ауыстыруға арналған Prometheus есептегіші. |
+| `torii_sorafs_repair_latency_minutes_bucket` | Гистограмма | `outcome` | Жөндеу өмірлік циклінің кешігуіне арналған Prometheus гистограммасы. |
+| `torii_sorafs_repair_queue_depth` | Өлшеуіш | `provider` | Әр провайдерге кезекте тұрған тапсырмаларға арналған Prometheus көрсеткіші. |
+| `torii_sorafs_repair_backlog_oldest_age_seconds` | Өлшеуіш | — | Ең ескі кезекте тұрған тапсырма жасына арналған Prometheus көрсеткіші (секундтар). |
+| `torii_sorafs_repair_lease_expired_total` | Есептегіш | `outcome` | Prometheus есептегіші жалдау мерзімі аяқталады. |
+| `torii_sorafs_slash_proposals_total` | Есептегіш | `outcome` | Prometheus қиғаш сызық ұсыныс ауысуларына арналған есептегіш. |
 
-Governance audit JSON metadata mirrors the repair telemetry labels (`status`, `ticket_id`, `manifest`, `provider` on repair events; `outcome` on slash proposals) so metrics and audit artefacts can be correlated deterministically.
+Басқару аудиті JSON метадеректері жөндеу телеметрия белгілерін көрсетеді (`status`, `ticket_id`, `manifest`, жөндеу оқиғалары бойынша `provider`; `outcome` slash correlics және slash correlics бойынша аудиттер) анықтаушы түрде.
 
-### Retention & GC
-
-| Metric | Type | Labels | Notes |
+### Сақтау және GC| метрикалық | |түрі Белгілер | Ескертпелер |
 |--------|------|--------|-------|
-| `sorafs_gc_runs_total` | Counter | `result` | OTEL counter for GC sweeps, emitted by the embedded node. |
-| `sorafs_gc_evictions_total` | Counter | `reason` | OTEL counter for evicted manifests grouped by reason. |
-| `sorafs_gc_bytes_freed_total` | Counter | `reason` | OTEL counter for bytes freed grouped by reason. |
-| `sorafs_gc_blocked_total` | Counter | `reason` | OTEL counter for evictions blocked by active repairs or policy. |
-| `torii_sorafs_gc_runs_total` | Counter | `result` | Prometheus counter for GC sweeps (success/error). |
-| `torii_sorafs_gc_evictions_total` | Counter | `reason` | Prometheus counter for evicted manifests grouped by reason. |
-| `torii_sorafs_gc_bytes_freed_total` | Counter | `reason` | Prometheus counter for bytes freed grouped by reason. |
-| `torii_sorafs_gc_blocked_total` | Counter | `reason` | Prometheus counter for blocked evictions grouped by reason. |
-| `torii_sorafs_gc_expired_manifests` | Gauge | — | Current count of expired manifests observed by GC sweeps. |
-| `torii_sorafs_gc_oldest_expired_age_seconds` | Gauge | — | Age in seconds of the oldest expired manifest (after retention grace). |
+| `sorafs_gc_runs_total` | Есептегіш | `result` | Енгізілген түйін арқылы шығарылатын GC сыпыруға арналған OTEL есептегіші. |
+| `sorafs_gc_evictions_total` | Есептегіш | `reason` | Себеп бойынша топтастырылған шығарылған манифесттерге арналған OTEL есептегіші. |
+| `sorafs_gc_bytes_freed_total` | Есептегіш | `reason` | Себеп бойынша топтастырылған босатылған байттар үшін OTEL есептегіші. |
+| `sorafs_gc_blocked_total` | Есептегіш | `reason` | Белсенді жөндеу немесе саясатпен блокталған көшірулерге арналған OTEL есептегіші. |
+| `torii_sorafs_gc_runs_total` | Есептегіш | `result` | GC тазалауға арналған Prometheus есептегіші (сәттілік/қате). |
+| `torii_sorafs_gc_evictions_total` | Есептегіш | `reason` | Prometheus себебі бойынша топтастырылған шығарылған манифесттерге арналған есептегіш. |
+| `torii_sorafs_gc_bytes_freed_total` | Есептегіш | `reason` | Себеп бойынша топтастырылған босатылған байттар үшін Prometheus есептегіш. |
+| `torii_sorafs_gc_blocked_total` | Есептегіш | `reason` | Prometheus себебі бойынша топтастырылған блокталған көшірулерге арналған есептегіш. |
+| `torii_sorafs_gc_expired_manifests` | Өлшеуіш | — | Мерзімі өткен манифесттердің ағымдағы саны МК сыпырушылары бақылайды. |
+| `torii_sorafs_gc_oldest_expired_age_seconds` | Өлшеуіш | — | Мерзімі өткен ең ескі манифесттің секундтарымен жасы (сақтаудан кейін). |
 
-### Reconciliation
+### Татуласу
 
-| Metric | Type | Labels | Notes |
+| метрикалық | |түрі Белгілер | Ескертпелер |
 |--------|------|--------|-------|
-| `sorafs.reconciliation.runs_total` | Counter | `result` | OTEL counter for reconciliation snapshots. |
-| `sorafs.reconciliation.divergence_total` | Counter | — | OTEL counter of divergence counts per run. |
-| `torii_sorafs_reconciliation_runs_total` | Counter | `result` | Prometheus counter for reconciliation runs. |
-| `torii_sorafs_reconciliation_divergence_count` | Gauge | — | Latest divergence count observed in a reconciliation report. |
+| `sorafs.reconciliation.runs_total` | Есептегіш | `result` | Салыстыру суреттеріне арналған OTEL есептегіші. |
+| `sorafs.reconciliation.divergence_total` | Есептегіш | — | OTEL әр жүгірістегі дивергенция санаушысы. |
+| `torii_sorafs_reconciliation_runs_total` | Есептегіш | `result` | Prometheus салыстыру орындалу үшін есептегіш. |
+| `torii_sorafs_reconciliation_divergence_count` | Өлшеуіш | — | Салыстыру есебінде байқалған соңғы айырмашылықтар саны. |
 
-### Proof of Timely Retrieval (PoTR) & chunk SLA
+### Уақтылы іздеу (PoTR) және SLA бөлігінің дәлелі
 
-| Metric | Type | Labels | Producer | Notes |
+| метрикалық | |түрі Белгілер | Өндіруші | Ескертпелер |
 |--------|------|--------|----------|-------|
-| `sorafs_potr_deadline_ms` | Histogram | `tier`, `provider` | PoTR coordinator | Deadline slack in milliseconds (positive = met). |
-| `sorafs_potr_failures_total` | Counter | `tier`, `provider`, `reason` | PoTR coordinator | Reasons: `expired`, `missing_proof`, `corrupt_proof`. |
-| `sorafs_chunk_sla_violation_total` | Counter | `provider`, `manifest_id`, `reason` | SLA monitor | Fired when chunk delivery misses SLO (latency, success rate). |
-| `sorafs_chunk_sla_violation_active` | Gauge | `provider`, `manifest_id` | SLA monitor | Boolean gauge (0/1) toggled during active breach window. |
+| `sorafs_potr_deadline_ms` | Гистограмма | `tier`, `provider` | PoTR үйлестірушісі | Миллисекундтағы соңғы мерзімнің әлсіреуі (оң = орындалды). |
+| `sorafs_potr_failures_total` | Есептегіш | `tier`, `provider`, `reason` | PoTR үйлестірушісі | Себептер: `expired`, `missing_proof`, `corrupt_proof`. |
+| `sorafs_chunk_sla_violation_total` | Есептегіш | `provider`, `manifest_id`, `reason` | SLA мониторы | Бөлшектерді жеткізу SLO (кідіріс, сәттілік жылдамдығы) өткізіп алған кезде іске қосылады. |
+| `sorafs_chunk_sla_violation_active` | Өлшеуіш | `provider`, `manifest_id` | SLA мониторы | Логикалық көрсеткіш (0/1) белсенді бұзу терезесі кезінде ауыстырылды. |
 
-## SLO Targets
+## SLO мақсаттары
 
-- Gateway trustless availability: **99.9 %** (HTTP 2xx/304 responses).
-- Trustless TTFB P95: hot tier ≤ 120 ms, warm tier ≤ 300 ms.
-- Proof success rate: ≥ 99.5 % per day.
-- Orchestrator success (chunk completion): ≥ 99 %.
+- Шлюздің сенімсіз қолжетімділігі: **99,9%** (HTTP 2xx/304 жауаптары).
+- Сенімсіз TTFB P95: ыстық деңгей ≤120 мс, жылы деңгей ≤300 мс.
+- Дәлелдеу сәттілігі: тәулігіне ≥99,5%.
+- Оркестрдің жетістігі (бөлшектерді аяқтау): ≥99%.
 
-## Dashboards & Alerting
+## Бақылау тақталары және ескертулер
 
-1. **Gateway Observability** (`dashboards/grafana/sorafs_gateway_observability.json`) — tracks trustless availability, TTFB P95, refusal breakdown, and PoR/PoTR failures via the OTEL metrics.
-2. **Orchestrator Health** (`dashboards/grafana/sorafs_fetch_observability.json`) — covers multi-source load, retries, provider failures, and stall bursts.
-3. **SoraNet Privacy Metrics** (`dashboards/grafana/soranet_privacy_metrics.json`) — charts anonymised relay buckets, suppression windows, and collector health via `soranet_privacy_last_poll_unixtime`, `soranet_privacy_collector_enabled`, and `soranet_privacy_poll_errors_total{provider}`.
-4. **Capacity Health** (`dashboards/grafana/sorafs_capacity_health.json`) — tracks provider headroom plus repair SLA escalations, repair queue depth by provider, and GC sweeps/evictions/bytes freed/blocked reasons/expired-manifest age and reconciliation divergence snapshots.
+1. **Gateway Observability** (`dashboards/grafana/sorafs_gateway_observability.json`) — OTEL көрсеткіштері арқылы сенімсіз қолжетімділікті, TTFB P95, бас тартудың бұзылуын және PoR/PoTR қателерін қадағалайды.
+2. **Orchestrator Health** (`dashboards/grafana/sorafs_fetch_observability.json`) — көп көзді жүктеуді, қайталауларды, провайдердің қателерін және тоқтап қалуларды қамтиды.
+3. **SoraNet Privacy Metrics** (`dashboards/grafana/soranet_privacy_metrics.json`) — `soranet_privacy_last_poll_unixtime`, `soranet_privacy_collector_enabled` және I18NI0000292X және I18NI000002 арқылы анонимделген релелік шелектерді, басу терезелерін және коллектор денсаулығын диаграммалар.
+4. **Capacity Health** (`dashboards/grafana/sorafs_capacity_health.json`) — провайдердің бос орынын және жөндеу SLA ұлғаюын, провайдер бойынша жөндеу кезек тереңдігін және GC тазалау/шығару/босатылған/бұғатталған себептер/мерзімі өткен манифест жасы мен келісу алшақтықтары суреттерін қадағалайды.
 
-Alert bundles:
+Ескерту жинақтары:
 
-- `dashboards/alerts/sorafs_gateway_rules.yml` — gateway availability, TTFB, proof failure spikes.
-- `dashboards/alerts/sorafs_fetch_rules.yml` — orchestrator failures/retries/stalls; validated via `scripts/telemetry/test_sorafs_fetch_alerts.sh`, `dashboards/alerts/tests/sorafs_fetch_rules.test.yml`, `dashboards/alerts/tests/soranet_privacy_rules.test.yml`, and `dashboards/alerts/tests/soranet_policy_rules.test.yml`.
-- `dashboards/alerts/sorafs_capacity_rules.yml` — capacity pressure plus repair SLA/backlog/lease-expiry alerts and GC stall/blocked/error alerts for retention sweeps.
-- `dashboards/alerts/soranet_privacy_rules.yml` — privacy downgrade spikes, suppression alarms, collector-idle detection, and disabled-collector alerts (`soranet_privacy_last_poll_unixtime`, `soranet_privacy_collector_enabled`).
-- `dashboards/alerts/soranet_policy_rules.yml` — anonymity brownout alarms wired to `sorafs_orchestrator_brownouts_total`.
-- `dashboards/alerts/taikai_viewer_rules.yml` — Taikai viewer drift/ingest/CEK lag alarms plus the new SoraFS proof-health penalty/cooldown alerts powered by `torii_sorafs_proof_health_*`.
+- `dashboards/alerts/sorafs_gateway_rules.yml` — шлюздің қолжетімділігі, TTFB, сәтсіздікті растау.
+- `dashboards/alerts/sorafs_fetch_rules.yml` — оркестрдің ақаулары/қайталануы/тұрақтары; `scripts/telemetry/test_sorafs_fetch_alerts.sh`, `dashboards/alerts/tests/sorafs_fetch_rules.test.yml`, `dashboards/alerts/tests/soranet_privacy_rules.test.yml` және `dashboards/alerts/tests/soranet_policy_rules.test.yml` арқылы расталған.
+- `dashboards/alerts/sorafs_capacity_rules.yml` — сыйымдылық қысымы плюс жөндеу SLA/қатар/жалдау мерзімінің аяқталуы туралы ескертулер және сақтауды сыпыру үшін GC тоқтауы/бұғатталған/қате туралы ескертулер.
+- `dashboards/alerts/soranet_privacy_rules.yml` — құпиялылық деңгейін төмендету жоғарылатулары, басу дабылдары, коллектордың бос тұруын анықтау және өшірілген коллектор туралы ескертулер (`soranet_privacy_last_poll_unixtime`, `soranet_privacy_collector_enabled`).
+- `dashboards/alerts/soranet_policy_rules.yml` — `sorafs_orchestrator_brownouts_total` сымына қосылған анонимді өшіру дабылдары.
+- `dashboards/alerts/taikai_viewer_rules.yml` — Taikai қарау құралының дрейф/инест/CEK кідіріс дабылдары және `torii_sorafs_proof_health_*` арқылы жұмыс істейтін жаңа SoraFS денсаулықты тексеретін айыппұл/салқындату туралы ескертулер.
 
-## Tracing Strategy
+## Бақылау стратегиясы
 
-- Adopt OpenTelemetry end-to-end:
-  - Gateways emit OTLP spans (HTTP) annotated with request IDs, manifest digests, and token hashes.
-  - The orchestrator uses `tracing` + `opentelemetry` to export spans for fetch attempts.
-  - Embedded SoraFS nodes export spans for PoR challenges and storage operations. All components share a common trace ID propagated via `x-sorafs-trace`.
-- `SorafsFetchOtel` bridges orchestrator metrics into OTLP histograms while `telemetry::sorafs.fetch.*` events provide lightweight JSON payloads for log-centric backends.
-- Collectors: run OTEL collectors alongside Prometheus/Loki/Tempo (Tempo preferred). Jaeger API exporters remain optional.
-- High-cardinality operations should be sampled (10 % for success paths, 100 % for failures).
+- OpenTelemetry-ді соңына дейін қабылдаңыз:
+  - Шлюздер сұрау идентификаторлары, манифест дайджесттері және таңбалауыш хэштері бар аннотацияланған OTLP аралықтарын (HTTP) шығарады.
+  - Оркестр алу әрекеттері үшін аралықты экспорттау үшін `tracing` + `opentelemetry` пайдаланады.
+  - Енгізілген SoraFS түйіндерінің PoR проблемалары мен сақтау операциялары үшін экспорт аралығы. Барлық компоненттер `x-sorafs-trace` арқылы таралатын ортақ бақылау идентификаторын бөліседі.
+- `SorafsFetchOtel` оркестр көрсеткіштерін OTLP гистограммаларына көпірлейді, ал `telemetry::sorafs.fetch.*` оқиғалары журналға бағытталған серверлер үшін жеңіл JSON пайдалы жүктемелерін қамтамасыз етеді.
+- Коллекторлар: OTEL коллекторларын Prometheus/Loki/Tempo (Темпо қолайлы) қатарында іске қосыңыз. Jaeger API экспорттаушылары міндетті емес болып қалады.
+- Кардиналдылығы жоғары операцияларды іріктеу керек (сәтті жолдар үшін 10%, сәтсіздіктер үшін 100%).
 
-## TLS Telemetry Coordination (SF-5b)
+## TLS телеметриялық үйлестіру (SF-5b)
 
-- Metric alignment:
-  - TLS automation ships `sorafs_gateway_tls_cert_expiry_seconds`, `sorafs_gateway_tls_renewal_total{result}`, and `sorafs_gateway_tls_ech_enabled`.
-  - Include these gauges in the Gateway Overview dashboard under the TLS/Certificates panel.
-- Alert linkage:
-  - When TLS expiry alerts fire (≤ 14 days remaining) correlate with the trustless availability SLO.
-  - ECH disablement emits a secondary alert referencing both TLS and availability panels.
-- Pipeline: the TLS automation job exports to the same Prometheus stack as gateway metrics; coordination with SF-5b ensures deduplicated instrumentation.
+- Метрикалық туралау:
+  - TLS автоматтандыруы `sorafs_gateway_tls_cert_expiry_seconds`, `sorafs_gateway_tls_renewal_total{result}` және `sorafs_gateway_tls_ech_enabled` жібереді.
+  - Бұл өлшеуіштерді TLS/Сертификаттар тақтасының астындағы шлюзге шолу бақылау тақтасына қосыңыз.
+- Ескерту байланысы:
+  - TLS мерзімінің аяқталу туралы ескертулері өрт (≤14 күн қалды) SLO сенімсіз қолжетімділігімен байланысты.
+  - ECH өшіру TLS және қолжетімділік тақталарына сілтеме жасайтын қосымша ескертуді шығарады.
+- Құбыр: TLS автоматтандыру тапсырмасы шлюз метрикасымен бірдей Prometheus стекіне экспортталады; SF-5b көмегімен үйлестіру қайталанатын аспаптарды қамтамасыз етеді.
 
-## Metric Naming & Label Conventions
+## Метрикалық атау және белгі конвенциялары
 
-- Metric names follow the existing `torii_sorafs_*` or `sorafs_*` prefixes used by Torii and the gateway.
-- Label sets are standardised:
-  - `result` → HTTP outcome (`success`, `refused`, `failed`).
-  - `reason` → refusal/error code (`unsupported_chunker`, `timeout`, etc.).
-  - `status` → repair task state (`queued`, `in_progress`, `completed`, `failed`, `escalated`).
-  - `outcome` → repair lease or latency outcome (`requeued`, `escalated`, `completed`, `failed`).
-  - `provider` → hex-encoded provider identifier.
-  - `manifest` → canonical manifest digest (trimmed when high-cardinality).
-  - `tier` → declarative tier labels (`hot`, `warm`, `archive`).
-- Telemetry emission points:
-  - Gateway metrics live under `torii_sorafs_*` and reuse conventions from `crates/iroha_core/src/telemetry.rs`.
-  - The orchestrator emits `sorafs_orchestrator_*` metrics and `telemetry::sorafs.fetch.*` events (lifecycle, retry, provider failure, error, stall) tagged with manifest digest, job ID, region, and provider identifiers.
-  - Nodes surface `torii_sorafs_storage_*`, `torii_sorafs_capacity_*`, and `torii_sorafs_por_*`.
-- Coordinate with Observability to register the metric catalogue in the shared Prometheus naming doc, including label cardinality expectations (provider/manifests upper bounds).
+- Көрсеткіш атаулары Torii және шлюз пайдаланатын бар `torii_sorafs_*` немесе `sorafs_*` префикстеріне сәйкес келеді.
+- Жапсырмалар жиынтығы стандартталған:
+  - `result` → HTTP нәтижесі (`success`, `refused`, `failed`).
+  - `reason` → бас тарту/қате коды (`unsupported_chunker`, `timeout`, т.б.).
+  - `status` → жөндеу тапсырмасының күйі (`queued`, `in_progress`, `completed`, `failed`, `escalated`).
+  - `outcome` → жөндеуді жалға алу немесе кешіктіру нәтижесі (`requeued`, `escalated`, `completed`, `failed`).
+  - `provider` → он алтылық кодталған провайдер идентификаторы.
+  - `manifest` → канондық манифест дайджесті (кардиналдылығы жоғары болған кезде кесілген).
+  - `tier` → декларативті деңгейдегі белгілер (`hot`, `warm`, `archive`).
+- телеметриялық сәуле шығару нүктелері:
+  - Шлюз көрсеткіштері `torii_sorafs_*` астында өмір сүреді және `crates/iroha_core/src/telemetry.rs` конвенцияларын қайта пайдалану.
+  - Оркестр манифест дайджестімен, тапсырма идентификаторымен, аймақпен және провайдер идентификаторларымен тегтелген `sorafs_orchestrator_*` метрикасын және `telemetry::sorafs.fetch.*` оқиғаларын (өмір циклі, қайталау, провайдер қатесі, қате, тоқтау) шығарады.
+  - `torii_sorafs_storage_*`, `torii_sorafs_capacity_*` және `torii_sorafs_por_*` түйіндерінің беті.
+- Көрсеткіштік каталогты ортақ Prometheus атау құжатында тіркеу үшін Бақылау мүмкіндігімен үйлестіріңіз, соның ішінде жапсырманың негізгі күтулері (провайдер/манифест жоғарғы шекаралары).
 
-## Data Pipeline
+## Деректер құбыры
 
-- Collectors deploy alongside each component, exporting OTLP to Prometheus (metrics) and Loki/Tempo (logs/traces).
-- Optional eBPF (Tetragon) enriches low-level tracing for gateways/nodes.
-- Use `iroha_telemetry::metrics::{install_sorafs_gateway_otlp_exporter, install_sorafs_node_otlp_exporter}` for Torii and embedded nodes; the orchestrator continues to call `install_sorafs_fetch_otlp_exporter`.
+- Коллекторлар OTLP-ті Prometheus (метрика) және Loki/Tempo (журналдар/іздер) түріне экспорттай отырып, әрбір құрамдаспен бірге орналастырады.
+- Қосымша eBPF (Тетрагон) шлюздер/түйіндер үшін төмен деңгейлі бақылауды байытады.
+- Torii және ендірілген түйіндер үшін `iroha_telemetry::metrics::{install_sorafs_gateway_otlp_exporter, install_sorafs_node_otlp_exporter}` пайдаланыңыз; оркестр `install_sorafs_fetch_otlp_exporter` қоңырауын жалғастырады.
 
-## Validation Hooks
+## Тексеру ілмектері
 
-- Run `scripts/telemetry/test_sorafs_fetch_alerts.sh` during CI to ensure Prometheus alert rules remain in lockstep with stall metrics and privacy suppression checks.
-- Keep Grafana dashboards under version control (`dashboards/grafana/`) and update screenshots/links when panels change.
-- Chaos drills log outcomes via `scripts/telemetry/log_sorafs_drill.sh`; validation leverages `scripts/telemetry/validate_drill_log.sh` (see the [Operations Playbook](operations-playbook.md)).
+- Prometheus ескерту ережелерінің тоқтау көрсеткіштері мен құпиялылықты басу тексерулерімен құлыптаулы күйде қалуын қамтамасыз ету үшін CI кезінде `scripts/telemetry/test_sorafs_fetch_alerts.sh` іске қосыңыз.
+- Grafana бақылау тақталарын нұсқа бақылауында ұстаңыз (`dashboards/grafana/`) және панельдер өзгерген кезде скриншоттарды/сілтемелерді жаңартыңыз.
+- Хаос журнал нәтижелерін `scripts/telemetry/log_sorafs_drill.sh` арқылы жасайды; валидация рычагтары `scripts/telemetry/validate_drill_log.sh` ([Operations Playbook](operations-playbook.md) қараңыз).

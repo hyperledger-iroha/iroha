@@ -8,20 +8,22 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraNet PQ Ratchet Fire Drill
 sidebar_label: PQ Ratchet Runbook
 description: On-call rehearsal steps for promoting or demoting the staged PQ anonymity policy with deterministic telemetry validation.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
+:::注意规范来源
 :::
 
-## Purpose
+## 目的
 
-This runbook guides the fire-drill sequence for SoraNet's staged post-quantum (PQ) anonymity policy. Operators rehearse both promotion (Stage A -> Stage B -> Stage C) and controlled demotion back to Stage B/A when PQ supply drops. The drill validates telemetry hooks (`sorafs_orchestrator_policy_events_total`, `sorafs_orchestrator_brownouts_total`, `sorafs_orchestrator_pq_ratio_*`) and collects artefacts for the incident rehearsal log.
+本操作手册指导 SoraNet 分阶段后量子 (PQ) 匿名策略的防火演习顺序。当 PQ 供应下降时，运营商会排练升级（阶段 A -> 阶段 B -> 阶段 C）并受控降级回阶段 B/A。该演练验证遥测挂钩（`sorafs_orchestrator_policy_events_total`、`sorafs_orchestrator_brownouts_total`、`sorafs_orchestrator_pq_ratio_*`）并收集事件排练日志的工件。
 
-## Prerequisites
+## 先决条件
 
-- Latest `sorafs_orchestrator` binary with capability-weighting (commit at or after the drill reference shown in `docs/source/soranet/reports/pq_ratchet_validation.md`).
-- Access to the Prometheus/Grafana stack serving `dashboards/grafana/soranet_pq_ratchet.json`.
-- Nominal guard directory snapshot. Fetch and verify a copy prior to the drill:
+- 具有能力加权的最新 `sorafs_orchestrator` 二进制文件（在 `docs/source/soranet/reports/pq_ratchet_validation.md` 中显示的钻取参考处或之后提交）。
+- 访问服务于 `dashboards/grafana/soranet_pq_ratchet.json` 的 Prometheus/Grafana 堆栈。
+- 名义保护目录快照。在练习之前获取并验证副本：
 
 ```bash
 sorafs_cli guard-directory fetch \
@@ -30,9 +32,9 @@ sorafs_cli guard-directory fetch \
   --expected-directory-hash <directory-hash-hex>
 ```
 
-If the source directory only publishes JSON, re-encode it to Norito binary with `soranet-directory build` before running the rotation helpers.
+如果源目录仅发布 JSON，请在运行轮换助手之前使用 `soranet-directory build` 将其重新编码为 Norito 二进制文件。
 
-- Capture metadata and pre-stage issuer rotation artefacts with the CLI:
+- 使用 CLI 捕获元数据和前期发行人轮换工件：
 
 ```bash
 soranet-directory inspect \
@@ -43,67 +45,67 @@ soranet-directory rotate \
   --keys-out ./artefacts/guard_issuer_rotation --overwrite
 ```
 
-- Change window approved by networking and observability on-call teams.
+- 经网络和可观察性待命团队批准的更改窗口。
 
-## Promotion steps
+## 促销步骤
 
-1. **Stage audit**
+1. **阶段审核**
 
-   Record the starting stage:
+   记录起始阶段：
 
    ```bash
    sorafs_cli config get --config orchestrator.json sorafs.anonymity_policy
    ```
 
-   Expect `anon-guard-pq` before promotion.
+   升级前预计为 `anon-guard-pq`。
 
-2. **Promote to Stage B (Majority PQ)**
+2. **晋升至B阶段（多数PQ）**
 
    ```bash
    sorafs_cli config set --config orchestrator.json \
      sorafs.anonymity_policy anon-majority-pq
    ```
 
-   - Wait >=5 minutes for manifests to refresh.
-   - In Grafana (`SoraNet PQ Ratchet Drill` dashboard) confirm the "Policy Events" panel shows `outcome=met` for `stage=anon-majority-pq`.
-   - Capture a screenshot or panel JSON and attach it to the incident log.
+   - 等待 >=5 分钟以刷新清单。
+   - 在 Grafana（`SoraNet PQ Ratchet Drill` 仪表板）中，确认“策略事件”面板显示 `outcome=met` 和 `stage=anon-majority-pq`。
+   - 捕获屏幕截图或面板 JSON 并将其附加到事件日志中。
 
-3. **Promote to Stage C (Strict PQ)**
+3. **晋升至C阶段（严格PQ）**
 
    ```bash
    sorafs_cli config set --config orchestrator.json \
      sorafs.anonymity_policy anon-strict-pq
    ```
 
-   - Verify `sorafs_orchestrator_pq_ratio_*` histograms trend to 1.0.
-   - Confirm the brownout counter remains flat; otherwise follow the demotion steps.
+   - 验证 `sorafs_orchestrator_pq_ratio_*` 直方图趋势为 1.0。
+   - 确认掉电计数器保持平稳；否则请遵循降级步骤。
 
-## Demotion / brownout drill
+## 降级/限电演习
 
-1. **Induce a synthetic PQ shortage**
+1. **引起合成PQ短缺**
 
-   Disable PQ relays in the playground environment by trimming the guard directory to classical entries only, then reload the orchestrator cache:
+   通过将守卫目录仅修剪为经典条目来禁用 Playground 环境中的 PQ 中继，然后重新加载 Orchestrator 缓存：
 
    ```bash
    sorafs_cli guard-cache prune --config orchestrator.json --keep-classical-only
    ```
 
-2. **Observe brownout telemetry**
+2. **观察断电遥测**
 
-   - Dashboard: panel "Brownout Rate" spikes above 0.
-   - PromQL: `sum(rate(sorafs_orchestrator_brownouts_total{region="$region"}[5m]))`
-   - `sorafs_fetch` should report `anonymity_outcome="brownout"` with `anonymity_reason="missing_majority_pq"`.
+   - 仪表板：面板“掉电率”峰值高于 0。
+   - PromQL：`sum(rate(sorafs_orchestrator_brownouts_total{region="$region"}[5m]))`
+   - `sorafs_fetch` 应报告 `anonymity_outcome="brownout"` 和 `anonymity_reason="missing_majority_pq"`。
 
-3. **Demote to Stage B / Stage A**
+3. **降级至B阶段/A阶段**
 
    ```bash
    sorafs_cli config set --config orchestrator.json \
      sorafs.anonymity_policy anon-majority-pq
    ```
 
-   If PQ supply is still insufficient, demote to `anon-guard-pq`. The drill completes once brownout counters settle and promotions can be reapplied.
+   如果PQ供应仍然不足，则降级为`anon-guard-pq`。一旦限电计数器稳定并且可以重新应用促销活动，演练就完成了。
 
-4. **Restore guard directory**
+4. **恢复守卫目录**
 
    ```bash
    sorafs_cli guard-directory import \
@@ -111,14 +113,14 @@ soranet-directory rotate \
      --input ./artefacts/guard_directory_pre_drill.json
    ```
 
-## Telemetry & artefacts
+## 遥测和文物
 
-- **Dashboard:** `dashboards/grafana/soranet_pq_ratchet.json`
-- **Prometheus alerts:** ensure `sorafs_orchestrator_policy_events_total` brownout alert stays below the configured SLO (&lt;5% across any 10 minute window).
-- **Incident log:** append the captured telemetry snippets and operator notes to `docs/examples/soranet_pq_ratchet_fire_drill.log`.
-- **Signed capture:** use `cargo xtask soranet-rollout-capture` to copy the drill log and scoreboard into `artifacts/soranet_pq_rollout/<timestamp>/`, compute BLAKE3 digests, and produce a signed `rollout_capture.json`.
+- **仪表板：** `dashboards/grafana/soranet_pq_ratchet.json`
+- **Prometheus 警报：** 确保 `sorafs_orchestrator_policy_events_total` 掉电警报保持在配置的 SLO 以下（在任何 10 分钟窗口内 <5%）。
+- **事件日志：** 将捕获的遥测片段和操作员注释附加到 `docs/examples/soranet_pq_ratchet_fire_drill.log`。
+- **签名捕获：**使用 `cargo xtask soranet-rollout-capture` 将演练日志和记分板复制到 `artifacts/soranet_pq_rollout/<timestamp>/`，计算 BLAKE3 摘要，并生成签名的 `rollout_capture.json`。
 
-Example:
+示例：
 
 ```
 cargo xtask soranet-rollout-capture \
@@ -130,12 +132,12 @@ cargo xtask soranet-rollout-capture \
   --label "drill-2026-02-21"
 ```
 
-Attach the generated metadata and signature to the governance packet.
+将生成的元数据和签名附加到治理数据包中。
 
-## Rollback
+## 回滚
 
-If the drill uncovers real PQ shortages, remain on Stage A, notify the Networking TL, and attach the collected metrics plus guard directory diffs to the incident tracker. Use the guard directory export captured earlier to restore normal service.
+如果演习发现真正的 PQ 短缺，请留在阶段 A，通知网络 TL，并将收集的指标以及防护目录差异附加到事件跟踪器。使用之前捕获的guard目录导出来恢复正常服务。
 
-:::tip Regression Coverage
-`cargo test -p sorafs_orchestrator pq_ratchet_fire_drill_records_metrics` provides the synthetic validation backing this drill.
+:::提示回归覆盖率
+`cargo test -p sorafs_orchestrator pq_ratchet_fire_drill_records_metrics` 提供了支持此演练的综合验证。
 :::

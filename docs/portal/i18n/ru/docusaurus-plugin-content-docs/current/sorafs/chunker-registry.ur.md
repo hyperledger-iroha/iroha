@@ -4,50 +4,52 @@ direction: ltr
 source: docs/portal/docs/sorafs/chunker-registry.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: chunker-registry
-title: SoraFS chunker profile registry
-sidebar_label: Chunker registry
-description: SoraFS chunker registry کے لیے profile IDs، parameters اور negotiation plan۔
+идентификатор: chunker-реестр
+заголовок: Реестр профиля чанка SoraFS
+Sidebar_label: Реестр Chunker
+описание: реестр SoraFS chunker, идентификаторы профилей, параметры и план переговоров.
 ---
 
-:::note مستند ماخذ
+:::примечание
 :::
 
-## SoraFS chunker profile registry (SF-2a)
+## SoraFS Реестр профиля чанка (SF-2a)
 
-SoraFS stack chunking behavior کو ایک چھوٹے namespaced registry کے ذریعے negotiate کرتا ہے۔
-ہر profile deterministic CDC parameters، semver metadata اور expected digest/multicodec assign کرتا ہے جو manifests اور CAR archives میں استعمال ہوتا ہے۔
+SoraFS поведение фрагментации стека Как использовать реестр с пространством имен и как вести переговоры
+детерминированные параметры CDC профиля, метаданные Semver, ожидаемый дайджест/назначение нескольких кодеков, манифесты, CAR-архивы и т. д.
 
-Profile authors کو
+Авторы профиля کو
 [`docs/source/sorafs/chunker_profile_authoring.md`](./chunker-profile-authoring.md)
-میں مطلوبہ metadata، validation checklist اور proposal template دیکھنا چاہیے قبل اس کے کہ وہ نئی entries submit کریں۔
-جب governance تبدیلی approve کر دے تو
-[registry rollout checklist](./chunker-registry-rollout-checklist.md) اور
-[staging manifest playbook](./staging-manifest-playbook) کے مطابق fixtures کو staging اور production میں promote کریں۔
+Создайте метаданные, контрольный список проверки и шаблон предложения, а затем выберите нужные записи и отправьте их.
+جب управление تبدیلی утвердить کر دے تو
+[контрольный список развертывания реестра](./chunker-registry-rollout-checklist.md)
+[постановочный манифест манифеста] (./staging-manifest-playbook) کے مطابق приспособления کو постановочный اور Production میں продвигать کریں۔
 
-### Profiles
+### Профили
 
-| Namespace | Name | SemVer | Profile ID | Min (bytes) | Target (bytes) | Max (bytes) | Break mask | Multihash | Aliases | Notes |
+| Пространство имен | Имя | СемВер | Идентификатор профиля | Мин (байты) | Цель (байты) | Макс. (байты) | Разбить маску | Мультихэш | Псевдонимы | Заметки |
 |-----------|------|--------|------------|-------------|----------------|-------------|------------|-----------|---------|-------|
-| `sorafs`  | `sf1` | `1.0.0` | `1` | 65536 | 262144 | 524288 | `0x0000ffff` | `0x1f` (BLAKE3-256) | `["sorafs.sf1@1.0.0", "sorafs.sf1@1.0.0"]` | SF-1 fixtures میں استعمال ہونے والا canonical profile |
+| `sorafs` | `sf1` | `1.0.0` | `1` | 65536 | 262144 | 524288 | `0x0000ffff` | `0x1f` (BLAKE3-256) | `["sorafs.sf1@1.0.0", "sorafs.sf1@1.0.0"]` | Светильники SF-1 میں استعمال ہونے والا канонический профиль |
 
-Registry code میں `sorafs_manifest::chunker_registry` کے طور پر موجود ہے (جسے [`chunker_registry_charter.md`](./chunker-registry-charter.md) govern کرتا ہے)۔ ہر entry ایک `ChunkerProfileDescriptor` کے طور پر ظاہر ہوتی ہے جس میں:
+Регистрационный код `sorafs_manifest::chunker_registry` کے طور پر موجود ہے (جسے [`chunker_registry_charter.md`](./chunker-registry-charter.md) Запись `ChunkerProfileDescriptor` может быть использована в следующих случаях:
 
-* `namespace` – متعلقہ profiles کی logical grouping (مثلاً `sorafs`)۔
-* `name` – انسان کے لیے readable profile label (`sf1`, `sf1-fast`, …)۔
-* `semver` – parameter set کے لیے semantic version string۔
-* `profile` – اصل `ChunkProfile` (min/target/max/mask)۔
-* `multihash_code` – chunk digests بناتے وقت استعمال ہونے والا multihash (`0x1f`
-  SoraFS default کے لیے)۔
+* `namespace` – профили для логической группировки (например, `sorafs`).
+* `name` – انسان کے لیے читаемая метка профиля (`sf1`, `sf1-fast`, …)۔
+* `semver` – набор параметров کے لیے семантическая версия строки۔.
+* `profile` – اصل `ChunkProfile` (мин/цель/макс/маска)۔
+* `multihash_code` – дайджесты фрагментов для мультихеширования (`0x1f`
+  SoraFS по умолчанию کے لیے)۔
 
-Manifest `ChunkingProfileV1` کے ذریعے profiles کو serialize کرتا ہے۔ یہ structure registry metadata
-(namespace, name, semver) کو raw CDC parameters اور اوپر دکھائی گئی alias list کے ساتھ record کرتا ہے۔
-Consumers کو پہلے `profile_id` کے ذریعے registry lookup کرنا چاہیے اور اگر unknown IDs آئیں تو inline parameters پر fallback کرنا چاہیے؛
+Манифест `ChunkingProfileV1` позволяет создавать профили и сериализовать их. یہ структура метаданных реестра
+(пространство имен, имя, семвер) Необработанные параметры CDC или список псевдонимов, или список записей, или список псевдонимов, или список псевдонимов, или список записей.
+Потребители могут использовать `profile_id`, выполнять поиск в реестре, использовать неизвестные идентификаторы, встроенные параметры и резервный вариант. چاہیے؛
 
-Registry کو tooling سے inspect کرنے کے لیے helper CLI چلائیں:
+Реестр и инструменты, а также проверка и вспомогательный CLI-интерфейс:
 
 ```
 $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
@@ -67,9 +69,9 @@ $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profi
 ]
 ```
 
-CLI کے وہ تمام flags جو JSON لکھتے ہیں (`--json-out`, `--por-json-out`, `--por-proof-out`,
-`--por-sample-out`) path کے طور پر `-` قبول کرتے ہیں، جس سے payload stdout پر stream ہوتا ہے بجائے فائل بنانے کے۔
-یہ tooling میں data pipe کرنا آسان بناتا ہے جبکہ main report کو پرنٹ کرنے والا default behavior برقرار رہتا ہے۔
+CLI и флаги JSON и JSON (`--json-out`, `--por-json-out`, `--por-proof-out`,
+`--por-sample-out`) path کے طور پر `-` в зависимости от типа полезной нагрузки stdout потока ہوتا ہے بجائے فائل بنانے کے۔
+Инструменты и канал данных Как настроить основной отчет и как настроить поведение по умолчанию
 
 ```
 $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
@@ -107,18 +109,16 @@ Multi-source chunk scheduling `range` capability کے ذریعے announce ہوت
 
 CAR data request کرتے وقت clients کو `Accept-Chunker` header بھیجنا چاہیے جو preference order میں `(namespace, name, semver)` tuples list کرے:
 
-```
-
-Gateways mutually supported profile منتخب کرتے ہیں (default `sorafs.sf1@1.0.0`) اور فیصلہ `Content-Chunker` response header کے ذریعے reflect کرتے ہیں۔ Manifests منتخب profile embed کرتے ہیں تاکہ downstream nodes HTTP negotiation پر انحصار کیے بغیر chunk layout validate کر سکیں۔
+```Взаимно поддерживаемый профиль шлюзов Наличие профиля (по умолчанию `sorafs.sf1@1.0.0`) Заголовок ответа `Content-Chunker` Отражает значение Манифесты Профиль профиля встраивание کرتے ہیں تاکہ нижестоящих узлов HTTP-согласование پر انحصار کیے بغیر, макет фрагмента validate کر سکیں۔
 
 
 
-* **Primary path** – CARv2، BLAKE3 payload digest (`0x1f` multihash)،
-  `MultihashIndexSorted`، اور chunk profile اوپر کے مطابق record ہوتا ہے۔
+* **Основной путь** – CARv2, дайджест полезной нагрузки BLAKE3 (мультихэш `0x1f`),
+  `MultihashIndexSorted`, профиль фрагмента اوپر کے مطابق, запись ہوتا ہے۔
 
 
-### Conformance
+### Соответствие
 
-* `sorafs.sf1@1.0.0` profile public fixtures (`fixtures/sorafs_chunker`) اور `fuzz/sorafs_chunker` کے تحت register corpora سے match کرتا ہے۔ End-to-end parity Rust، Go اور Node میں دیے گئے tests سے exercise کی جاتی ہے۔
-* `chunker_registry::lookup_by_profile` assert کرتا ہے کہ descriptor parameters `ChunkProfile::DEFAULT` سے match کریں تاکہ accidental divergence سے بچا جا سکے۔
-* `iroha app sorafs toolkit pack` اور `sorafs_manifest_stub` سے بنے manifests میں registry metadata شامل ہوتی ہے۔
+* `sorafs.sf1@1.0.0` профиль общедоступных светильников (`fixtures/sorafs_chunker`) или `fuzz/sorafs_chunker` کے تحت зарегистрируйте корпорацию سے match کرتا ہے۔ Сквозная четность Rust, Go и Node, тесты и упражнения, а также упражнения.
+* `chunker_registry::lookup_by_profile` утверждает параметры дескриптора `ChunkProfile::DEFAULT` سے совпадение или случайное расхождение سے بچا جا سکے۔
+* `iroha app sorafs toolkit pack` или `sorafs_manifest_stub` سے بنے манифестирует метаданные реестра в обычном порядке.

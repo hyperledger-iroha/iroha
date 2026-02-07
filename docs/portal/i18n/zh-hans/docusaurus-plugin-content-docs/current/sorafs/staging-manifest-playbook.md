@@ -8,18 +8,20 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Staging Manifest Playbook
 sidebar_label: Staging Manifest Playbook
 description: Checklist for enabling the Parliament-ratified chunker profile on staging Torii deployments.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
+:::注意规范来源
 :::
 
-## Overview
+## 概述
 
-This playbook walks through enabling the Parliament-ratified chunker profile on a staging Torii deployment before promoting the change to production. It assumes the SoraFS governance charter has been ratified and the canonical fixtures are available in the repository.
+本手册介绍了在将更改推广到生产环境之前，在临时 Torii 部署上启用议会批准的 chunker 配置文件。它假设 SoraFS 治理章程已获得批准，并且规范的固定装置在存储库中可用。
 
-## 1. Prerequisites
+## 1.先决条件
 
-1. Sync the canonical fixtures and signatures:
+1. 同步规范赛程和签名：
 
    ```bash
    cargo xtask sorafs-fetch-fixture \
@@ -28,8 +30,8 @@ This playbook walks through enabling the Parliament-ratified chunker profile on 
    ci/check_sorafs_fixtures.sh
    ```
 
-2. Prepare the admission envelope directory that Torii will read at startup (example path): `/var/lib/iroha/admission/sorafs`.
-3. Ensure the Torii config enables the discovery cache and admission enforcement:
+2. 准备Torii在启动时读取的准入信封目录（示例路径）：`/var/lib/iroha/admission/sorafs`。
+3. 确保 Torii 配置启用发现缓存和准入强制：
 
    ```toml
    [torii.sorafs.discovery]
@@ -47,43 +49,43 @@ This playbook walks through enabling the Parliament-ratified chunker profile on 
    enforce_capabilities = true
    ```
 
-## 2. Publish Admission Envelopes
+## 2. 公布录取信封
 
-1. Copy the approved provider admission envelopes into the directory referenced by `torii.sorafs.discovery.admission.envelopes_dir`:
+1. 将批准的提供者准入信封复制到 `torii.sorafs.discovery.admission.envelopes_dir` 引用的目录中：
 
    ```bash
    install -m 0644 fixtures/sorafs_manifest/provider_admission/*.json \
      /var/lib/iroha/admission/sorafs/
    ```
 
-2. Restart Torii (or send a SIGHUP if you wrapped the loader with on-the-fly reload).
-3. Tail the logs for admission messages:
+2. 重新启动 Torii（如果您使用即时重新加载来包装加载程序，则发送 SIGHUP）。
+3. 跟踪日志以获取准入消息：
 
    ```bash
    torii | grep "loaded provider admission envelope"
    ```
 
-## 3. Validate Discovery Propagation
+## 3. 验证发现传播
 
-1. Post the signed provider advert payload (Norito bytes) produced by your
-   provider pipeline:
+1. 发布由您生成的签名提供商广告负载（Norito 字节）
+   供应商管道：
 
    ```bash
    curl -sS -X POST --data-binary @provider_advert.to \
      http://staging-torii:8080/v1/sorafs/provider/advert
    ```
 
-2. Query the discovery endpoint and confirm the advert appears with canonical aliases:
+2. 查询发现端点并确认广告以规范别名出现：
 
    ```bash
    curl -sS http://staging-torii:8080/v1/sorafs/providers | jq .
    ```
 
-   Ensure `profile_aliases` includes `"sorafs.sf1@1.0.0"` as the first entry.
+   确保 `profile_aliases` 包含 `"sorafs.sf1@1.0.0"` 作为第一个条目。
 
-## 4. Exercise Manifest & Plan Endpoints
+## 4. 练习清单和计划终点
 
-1. Fetch the manifest metadata (requires a stream token if admission is enforced):
+1. 获取清单元数据（如果强制执行准入，则需要流令牌）：
 
    ```bash
    sorafs-fetch \
@@ -94,25 +96,25 @@ This playbook walks through enabling the Parliament-ratified chunker profile on 
      --json-out=reports/staging_manifest.json
    ```
 
-2. Inspect the JSON output and verify:
-   - `chunk_profile_handle` is `sorafs.sf1@1.0.0`.
-   - `manifest_digest_hex` matches the determinism report.
-   - `chunk_digests_blake3` align with the regenerated fixtures.
+2. 检查 JSON 输出并验证：
+   - `chunk_profile_handle` 是 `sorafs.sf1@1.0.0`。
+   - `manifest_digest_hex` 与确定性报告匹配。
+   - `chunk_digests_blake3` 与重新生成的夹具对齐。
 
-## 5. Telemetry Checks
+## 5. 遥测检查
 
-- Confirm Prometheus exposes the new profile metrics:
+- 确认 Prometheus 公开新的配置文件指标：
 
   ```bash
   curl -sS http://staging-torii:8080/metrics | grep torii_sorafs_chunk_range_requests_total
   ```
 
-- Dashboards should show the staging provider under the expected alias and keep brownout counters at zero while the profile is active.
+- 仪表板应在预期别名下显示临时提供程序，并在配置文件处于活动状态时将掉电计数器保持为零。
 
-## 6. Rollout Readiness
+## 6. 推出准备情况
 
-1. Capture a short report with the URLs, manifest ID, and telemetry snapshot.
-2. Share the report in the Nexus rollout channel alongside the planned production activation window.
-3. Proceed to the production checklist (Section 4 in `chunker_registry_rollout_checklist.md`) once stakeholders sign off.
+1. 捕获包含 URL、清单 ID 和遥测快照的简短报告。
+2. 在 Nexus 推出渠道以及计划的生产激活窗口中共享报告。
+3. 利益相关者签字后，继续执行生产检查表（`chunker_registry_rollout_checklist.md` 中的第 4 节）。
 
-Keeping this playbook updated ensures every chunker/admission rollout follows the same deterministic steps across staging and production.
+保持此剧本的更新可确保每个分块器/准入部署在分阶段和生产中都遵循相同的确定性步骤。

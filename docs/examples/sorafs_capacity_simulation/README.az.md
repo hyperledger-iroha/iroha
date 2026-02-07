@@ -7,20 +7,21 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 727a648141405b0c8f12a131ff903d3e7ce5b74a7f899dd99fe9aa6490b55ef2
 source_last_modified: "2025-12-29T18:16:35.080764+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# SoraFS Capacity Simulation Toolkit
+# SoraFS Tutum Simulyasiyası Alət dəsti
 
-This directory ships the reproducible artefacts for the SF-2c capacity marketplace
-simulation. The toolkit exercises quota negotiation, failover handling, and slashing
-remediation using the production CLI helpers and a lightweight analysis script.
+Bu kataloq SF-2c tutum bazarı üçün təkrarlana bilən artefaktları göndərir
+simulyasiya. Alətlər dəsti kvota danışıqlarını, uğursuzluqla işləməyi və kəsişməni həyata keçirir
+istehsal CLI köməkçiləri və yüngül analiz skriptindən istifadə edərək remediasiya.
 
-## Prerequisites
+## İlkin şərtlər
 
-- Rust toolchain capable of running `cargo run` for workspace members.
-- Python 3.10+ (standard library only).
+- İş sahəsi üzvləri üçün `cargo run`-i işə sala bilən Rust alətlər silsiləsi.
+- Python 3.10+ (yalnız standart kitabxana).
 
-## Quickstart
+## Sürətli başlanğıc
 
 ```bash
 # 1. Generate canonical CLI artefacts
@@ -30,39 +31,39 @@ remediation using the production CLI helpers and a lightweight analysis script.
 ./analyze.py --artifacts ./artifacts
 ```
 
-The `run_cli.sh` script invokes `sorafs_manifest_stub capacity` to build:
+`run_cli.sh` skripti qurmaq üçün `sorafs_manifest_stub capacity`-i çağırır:
 
-- Deterministic provider declarations for the quota negotiation fixture set.
-- A replication order matching the negotiation scenario.
-- Telemetry snapshots for the failover window.
-- A dispute payload capturing the slashing request.
+- Kvota danışıqları qurğusu üçün deterministik provayder bəyannamələri.
+- Danışıqlar ssenarisinə uyğun təkrarlama sifarişi.
+- İstifadə etmə pəncərəsi üçün telemetriya snapshotları.
+- Kəsmə sorğusunu tutan mübahisə yükü.
 
-The script writes Norito bytes (`*.to`), base64 payloads (`*.b64`), Torii request
-bodies, and human-readable summaries (`*_summary.json`) under the chosen artifact
-directory.
+Skript Norito bayt (`*.to`), base64 faydalı yükləri (`*.b64`), Torii sorğunu yazır.
+gövdələr və seçilmiş artefakt altında insan tərəfindən oxuna bilən xülasələr (`*_summary.json`)
+kataloq.
 
-`analyze.py` consumes the generated summaries, produces an aggregated report
-(`capacity_simulation_report.json`), and emits a Prometheus textfile
-(`capacity_simulation.prom`) carrying:
+`analyze.py` yaradılan xülasələri istehlak edir, ümumiləşdirilmiş hesabat hazırlayır
+(`capacity_simulation_report.json`) və Prometheus mətn faylı yayır
+(`capacity_simulation.prom`) daşıyan:
 
-- `sorafs_simulation_quota_*` gauges describing negotiated capacity and allocation
-  share per provider.
-- `sorafs_simulation_failover_*` gauges highlighting downtime deltas and the selected
-  replacement provider.
-- `sorafs_simulation_slash_requested` recording the remediation percentage extracted
-  from the dispute payload.
+- `sorafs_simulation_quota_*` danışıq qabiliyyətini və bölüşdürməni təsvir edən ölçülər
+  provayder başına pay.
+- `sorafs_simulation_failover_*` iş vaxtı deltalarını və seçilmişləri vurğulayan ölçü cihazları
+  əvəz provayderi.
+- `sorafs_simulation_slash_requested` çıxarılan remediasiya faizini qeyd edir
+  mübahisənin faydalı yükündən.
 
-Import the Grafana bundle in `dashboards/grafana/sorafs_capacity_simulation.json`
-and point it at a Prometheus datasource that scrapes the generated textfile (for
-example via the node-exporter textfile collector). The runbook at
-`docs/source/sorafs/runbooks/sorafs_capacity_simulation.md` walks through the full
-workflow, including Prometheus configuration tips.
+Grafana paketini `dashboards/grafana/sorafs_capacity_simulation.json`-də idxal edin
+və onu yaradılan mətn faylını qıran Prometheus məlumat mənbəyinə yönəldin (üçün
+misal node-exporter mətn faylı kollektoru vasitəsilə). Runbook ünvanında
+`docs/source/sorafs/runbooks/sorafs_capacity_simulation.md` tam şəkildə gəzir
+Prometheus konfiqurasiya məsləhətləri daxil olmaqla iş axını.
 
-## Fixtures
+## Qurğular
 
-- `scenarios/quota_negotiation/` — Provider declaration specs and replication order.
-- `scenarios/failover/` — Telemetry windows for the primary outage and failover lift.
-- `scenarios/slashing/` — Dispute spec referencing the same replication order.
+- `scenarios/quota_negotiation/` — Provayder bəyannaməsinin xüsusiyyətləri və replikasiya qaydası.
+- `scenarios/failover/` — Əsas kəsinti və uğursuzluq qaldırma üçün telemetriya pəncərələri.
+- `scenarios/slashing/` — Eyni replikasiya sırasına istinad edən mübahisə spesifikasiyası.
 
-These fixtures are validated in `crates/sorafs_car/tests/capacity_simulation_toolkit.rs`
-to guarantee they remain in sync with the CLI schema.
+Bu qurğular `crates/sorafs_car/tests/capacity_simulation_toolkit.rs`-də təsdiq edilmişdir
+onların CLI sxemi ilə sinxron qalmasını təmin etmək üçün.

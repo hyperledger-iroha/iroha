@@ -11,69 +11,70 @@ id: public-preview-invite
 title: Public preview invite playbook
 sidebar_label: Preview invite playbook
 description: Checklist for announcing the docs portal preview to external reviewers.
+translator: machine-google-reviewed
 ---
 
-## Program goals
+## Хөтөлбөрийн зорилго
 
-This playbook explains how to announce and run the public preview once the
-reviewer onboarding workflow is live. It keeps the DOCS-SORA roadmap honest by
-ensuring every invite ships with verifiable artefacts, security guidance, and a
-clear feedback path.
+Энэхүү тоглоомын ном нь нэг удаа олон нийтэд урьдчилан үзэхийг хэрхэн зарлах, ажиллуулах талаар тайлбарладаг
+хянагч элсүүлэх ажлын урсгалыг шууд дамжуулж байна. Энэ нь DOCS-SORA замын зураглалыг үнэнчээр хангадаг.
+уригдсан хөлөг онгоц бүрийг баталгаатай олдвор, аюулгүй байдлын зааварчилгаагаар хангах, а
+тодорхой санал хүсэлтийн зам.
 
-- **Audience:** curated list of community members, partners, and maintainers who
-  signed the preview acceptable-use policy.
-- **Ceilings:** default wave size ≤ 25 reviewers, 14-day access window, incident
-  response within 24h.
+- **Үзэгчид:** олон нийтийн гишүүд, түншүүд, асран хамгаалагчдын сонгосон жагсаалт
+  Урьдчилан харах боломжтой ашиглах бодлогод гарын үсэг зурсан.
+- **Тааз:** өгөгдмөл долгионы хэмжээ ≤ 25 хянагч, 14 хоногийн нэвтрэх цонх, осол
+  24 цагийн дотор хариу өгнө.
 
-## Launch gating checklist
+## Хаалганы хяналтын хуудсыг эхлүүлэх
 
-Complete these tasks before sending any invitation:
+Урилга илгээхээсээ өмнө эдгээр ажлыг гүйцэтгээрэй:
 
-1. Latest preview artefacts uploaded in CI (`docs-portal-preview`,
-   checksum manifest, descriptor, SoraFS bundle).
-2. `npm run --prefix docs/portal serve` (checksum-gated) tested on the same tag.
-3. Reviewer onboarding tickets approved and linked to the invite wave.
-4. Security, observability, and incident docs validated
+1. CI-д байршуулсан хамгийн сүүлийн үеийн урьдчилан үзэх олдворууд (`docs-portal-preview`,
+   шалгах нийлбэр манифест, тодорхойлогч, SoraFS багц).
+2. `npm run --prefix docs/portal serve` (checksum-gated) нь ижил шошгон дээр шалгагдсан.
+3. Шүүгчийн онгоцны тийзийг зөвшөөрч, урилгатай холбосон.
+4. Аюулгүй байдал, ажиглалт, ослын баримтуудыг баталгаажуулсан
    ([`security-hardening`](./security-hardening.md),
    [`observability`](./observability.md),
    [`incident-runbooks`](./incident-runbooks.md)).
-5. Feedback form or issue template prepared (include fields for severity,
-   reproduction steps, screenshots, and environment info).
-6. Announcement copy reviewed by Docs/DevRel + Governance.
+5. Санал хүсэлтийн маягт эсвэл асуудлын загварыг бэлтгэсэн (ноцтой байдлын талбаруудыг оруулах,
+   хуулбарлах алхамууд, дэлгэцийн агшин, орчны мэдээлэл).
+6. Зарын хуулбарыг Docs/DevRel + Governance хянан шалгасан.
 
-## Invite package
+## Урилгын багц
 
-Every invite must include:
+Урилга бүр дараахь зүйлийг агуулсан байх ёстой.
 
-1. **Verified artefacts** — Provide the SoraFS manifest/plan or GitHub artefact
-   links plus the checksum manifest and descriptor. Reference the verification
-   command explicitly so reviewers can run it before launching the site.
-2. **Serve instructions** — Include the checksum-gated preview command:
+1. **Баталгаажсан олдворууд** — SoraFS манифест/төлөвлөгөө эсвэл GitHub олдворыг өгөх
+   холбоосууд дээр нэмэх нь шалгах нийлбэрийн манифест болон тодорхойлогч. Баталгаажуулалтыг лавлана уу
+   командыг тодорхой зааж өгснөөр тоймчид сайтыг эхлүүлэхээс өмнө үүнийг ажиллуулж болно.
+2. **Үйлчилгээний заавар** — шалгах нийлбэртэй урьдчилан харах командыг оруулна уу:
 
    ```bash
    DOCS_RELEASE_TAG=preview-<stamp> npm run --prefix docs/portal serve
    ```
 
-3. **Security reminders** — Call out that tokens expire automatically, links
-   must not be shared, and incidents should be reported immediately.
-4. **Feedback channel** — Link to the issue template/form and clarify response
-   time expectations.
-5. **Program dates** — Provide start/end dates, office hours or sync meetings,
-   and the next refresh window.
+3. **Аюулгүй байдлын сануулга** — Токенуудын хугацаа автоматаар дуусна, холбоосууд
+   хуваалцаж болохгүй бөгөөд тохиолдлын талаар нэн даруй мэдэгдэх ёстой.
+4. **Санал хүсэлтийн суваг** — Асуудлын загвар/маягт руу холбож, хариултыг тодруулна уу
+   цаг хугацааны хүлээлт.
+5. **Хөтөлбөрийн огноо** — Эхлэх/дуусах огноо, ажлын цаг, уулзалтуудыг синхрончлох,
+   болон дараагийн шинэчлэх цонх.
 
-The sample email in
+Имэйлийн жишээ
 [`docs/examples/docs_preview_invite_template.md`](../../../examples/docs_preview_invite_template.md)
-covers these requirements. Update the placeholders (dates, URLs, contacts)
-before sending.
+эдгээр шаардлагыг хамарна. Орлуулагчдыг шинэчлэх (огноо, URL, харилцагчид)
+илгээхээс өмнө.
 
-## Expose the preview host
+## Урьдчилан үзэх хостыг харуулах
 
-Only promote the preview host once onboarding is complete and the change ticket
-is approved. See the [preview host exposure guide](./preview-host-exposure.md)
-for the end-to-end build/publish/verify steps used in this section.
+Зөвхөн суулгаж, тасалбараа сольсны дараа л урьдчилан үзэх хостыг сурталчлаарай
+батлагдсан. [Хост өртөх гарын авлагыг урьдчилан харах](./preview-host-exposure.md)
+Энэ хэсэгт ашигласан төгсгөл хүртэлх бүтээх/нийтлэх/баталгаажуулах алхмуудын хувьд.
 
-1. **Build and package:** Stamp the release tag and produce deterministic
-   artefacts.
+1. **Бүтээж, багцлах:** Хувилбарын шошгыг дарж, детерминистик гарга
+   олдворууд.
 
    ```bash
    cd docs/portal
@@ -92,18 +93,18 @@ for the end-to-end build/publish/verify steps used in this section.
      --out artifacts/sorafs/preview-descriptor.json
    ```
 
-   The pin script writes `portal.car`, `portal.manifest.*`, `portal.pin.proposal.json`,
-   and `portal.dns-cutover.json` under `artifacts/sorafs/`. Attach those files to the
-   invite wave so every reviewer can verify the same bits.
+   Pin скрипт нь `portal.car`, `portal.manifest.*`, `portal.pin.proposal.json`,
+   болон `portal.dns-cutover.json` `artifacts/sorafs/` дор. Эдгээр файлуудыг хавсаргана уу
+   Давалгаа урьснаар хянагч бүр ижил битүүдийг баталгаажуулах боломжтой.
 
-2. **Publish the preview alias:** Rerun the command without `--skip-submit`
-   (supply `TORII_URL`, `AUTHORITY`, `PRIVATE_KEY[_FILE]`, and the
-   governance-issued alias proof). The script will bind the manifest to
-   `docs-preview.sora` and emit `portal.manifest.submit.summary.json` plus
-   `portal.pin.report.json` for the evidence bundle.
+2. **Урьдчилан харах нэрийг нийтлэх:** `--skip-submit`гүйгээр командыг дахин ажиллуулна уу
+   (`TORII_URL`, `AUTHORITY`, `PRIVATE_KEY[_FILE]`, ба
+   засаглалаас олгосон нэрийн баталгаа). Скрипт нь манифестыг холбох болно
+   `docs-preview.sora` ба `portal.manifest.submit.summary.json` нэмэх нь ялгаруулдаг
+   Нотлох баримтын багцын хувьд `portal.pin.report.json`.
 
-3. **Probe the deployment:** Confirm the alias resolves and the checksum matches
-   the tag before sending invites.
+3. **Байршлыг шалгах:** Алсыг шийдэж, шалгах нийлбэр таарч байгааг баталгаажуулна уу
+   урилга илгээхээс өмнө шошго.
 
    ```bash
    npm run probe:portal -- \
@@ -111,26 +112,26 @@ for the end-to-end build/publish/verify steps used in this section.
      --expect-release="$DOCS_RELEASE_TAG"
    ```
 
-   Keep `npm run serve` (`scripts/serve-verified-preview.mjs`) handy as a
-   fallback so reviewers can spin up a local copy if the preview edge blips.
+   `npm run serve` (`scripts/serve-verified-preview.mjs`)-г гартаа байлгах
+   Урьдчилан үзэх ирмэг анивчсан тохиолдолд тоймчид орон нутгийн хуулбарыг эргүүлэх боломжтой.
 
-## Communications timeline
+## Харилцааны цагийн хуваарь
 
-| Day | Action | Owner |
+| Өдөр | Үйлдэл | Эзэмшигч |
 | --- | --- | --- |
-| D-3 | Finalise invite copy, refresh artefacts, dry-run verification | Docs/DevRel |
-| D-2 | Governance sign-off + change ticket | Docs/DevRel + Governance |
-| D-1 | Send invites using the template, update tracker with recipient list | Docs/DevRel |
-| D | Kickoff call / office hours, monitor telemetry dashboards | Docs/DevRel + On-call |
-| D+7 | Midpoint feedback digest, triage blocking issues | Docs/DevRel |
-| D+14 | Close wave, revoke temporary access, publish summary in `status.md` | Docs/DevRel |
+| D-3 | Урилгын хуулбарыг дуусгах, олдворуудыг шинэчлэх, хуурай ажиллуулах баталгаажуулалт | Docs/DevRel |
+| D-2 | Засаглалын гарын үсэг + солих тасалбар | Docs/DevRel + Засаглал |
+| D-1 | Загвар ашиглан урилга илгээх, хүлээн авагчийн жагсаалт бүхий трекерийг шинэчлэх | Docs/DevRel |
+| D | Эхлэх дуудлага / ажлын цаг, телеметрийн хяналтын самбарыг хянах | Docs/DevRel + Дуудлагаар |
+| D+7 | Дунд цэгийн санал асуулга, гурвалжийг хаах асуудал | Docs/DevRel |
+| D+14 | Долгионыг хааж, түр зуурын хандалтыг цуцалж, хураангуйг `status.md` дээр нийтлэх | Docs/DevRel |
 
-## Access tracking & telemetry
+## Хандалтын хяналт ба телеметр
 
-1. Record every recipient, invite timestamp, and revocation date with the
-   preview feedback logger (see
-   [`preview-feedback-log`](./preview-feedback-log)) so every wave shares the
-   same evidence trail:
+1. Хүлээн авагч бүр, урих цаг, хүчингүй болсон огноог тэмдэглэнэ үү
+   Урьдчилан харах санал хүсэлт бүртгэгч (харна уу
+   [`preview-feedback-log`](./preview-feedback-log)) тул долгион бүрийг хуваалцдаг.
+   ижил нотлох баримт:
 
    ```bash
    # Append a new invite event to artifacts/docs_portal_preview/feedback_log.json
@@ -141,41 +142,41 @@ for the end-to-end build/publish/verify steps used in this section.
      --notes "wave-01 seed"
    ```
 
-   Supported events are `invite-sent`, `acknowledged`,
-   `feedback-submitted`, `issue-opened`, and `access-revoked`. The log lives at
-   `artifacts/docs_portal_preview/feedback_log.json` by default; attach it to
-   the invite wave ticket together with consent forms. Use the summary helper
-   to produce an auditable roll-up before the close-out note:
+   Дэмжигдсэн үйл явдлууд нь `invite-sent`, `acknowledged`,
+   `feedback-submitted`, `issue-opened`, `access-revoked`. Мод амьдардаг
+   Анхдагчаар `artifacts/docs_portal_preview/feedback_log.json`; хавсаргана уу
+   урилга долгионы тасалбарыг зөвшөөрлийн маягтын хамт. Товч туслагчийг ашиглана уу
+   Хаалтын тэмдэглэлийн өмнө аудит хийх боломжтой тоймыг гаргахын тулд:
 
    ```bash
    npm run --prefix docs/portal preview:summary -- --summary-json \
      > artifacts/docs_portal_preview/preview-20250303-summary.json
    ```
 
-   The JSON summary enumerates invites per wave, open recipients, feedback
-   counts, and the timestamp of the most recent event. The helper is backed by
+   JSON хураангуй нь долгион тус бүрийн урилга, нээлттэй хүлээн авагч, санал хүсэлтийг тоолдог
+   тоо, хамгийн сүүлийн үеийн үйл явдлын цагийн тэмдэг. Туслагчийг дэмжиж байна
    [`scripts/preview-feedback-log.mjs`](../../scripts/preview-feedback-log.mjs),
-   so the same workflow can run locally or in CI. Use the digest template in
+   Тиймээс ижил ажлын урсгалыг дотоод эсвэл CI-д ажиллуулж болно. Тайлбарын загварыг ашиглана уу
    [`docs/examples/docs_preview_feedback_digest.md`](../../../examples/docs_preview_feedback_digest.md)
-   when publishing the wave recap.
-2. Tag telemetry dashboards with the `DOCS_RELEASE_TAG` used for the wave so
-   spikes can be correlated with invite cohorts.
-3. Run `npm run probe:portal -- --expect-release=<tag>` after the deploy to
-   confirm the preview environment advertises the correct release metadata.
-4. Capture any incidents in the runbook template and link them to the cohort.
+   долгионы тоймыг нийтлэх үед.
+2. Телеметрийн хяналтын самбарыг долгионд ашигладаг `DOCS_RELEASE_TAG`-ээр тэмдэглэнэ үү.
+   өргөлтийг урилгатай когорттой холбож болно.
+3. Байршуулсаны дараа `npm run probe:portal -- --expect-release=<tag>`-г ажиллуул
+   урьдчилан харах орчин нь зөв хувилбарын мета өгөгдлийг сурталчлахыг баталгаажуулах.
+4. Runbook загварт тохиолдсон тохиолдлуудыг авч, когорттой холбоно уу.
 
-## Feedback & close-out
+## Санал хүсэлт, хаах
 
-1. Aggregate feedback in a shared doc or issue board. Label items with
-   `docs-preview/<wave>` so roadmap owners can query them easily.
-2. Use the preview logger’s summary output to populate the wave report, then
-   summarise the cohort in `status.md` (participants, major findings, planned
-   fixes) and update `roadmap.md` if the DOCS-SORA milestone changed.
-3. Follow the offboarding steps from
-   [`reviewer-onboarding`](./reviewer-onboarding.md): revoke access, archive
-   requests, and thank participants.
-4. Prepare the next wave by refreshing artefacts, re-running the checksum gates,
-   and updating the invite template with new dates.
+1. Хуваалцсан баримт бичиг эсвэл асуудлын самбарт санал хүсэлтийг нэгтгэх. Зүйлүүдийг шошго
+   `docs-preview/<wave>` тул замын газрын зураг эзэмшигчид тэдгээрийг хялбархан асууж болно.
+2. Долгионы тайланг бөглөхийн тулд урьдчилан харах бүртгэлийн хураангуй гаралтыг ашиглана уу
+   `status.md` (оролцогчид, гол үр дүн, төлөвлөсөн
+   засварууд) болон DOCS-SORA үе шат өөрчлөгдсөн бол `roadmap.md`-г шинэчилнэ үү.
+3. -аас гарах алхмуудыг дагана уу
+   [`reviewer-onboarding`](./reviewer-onboarding.md): хандалтыг хүчингүй болгох, архивлах
+   хүсэлт, оролцогчдод баярлалаа.
+4. Олдворуудыг сэргээж, хяналтын дүнгийн хаалгыг дахин ажиллуулж, дараагийн давалгааг бэлтгэх,
+   мөн урилгын загварыг шинэ огноогоор шинэчлэх.
 
-Consistently applying this playbook keeps the preview program auditable and
-gives Docs/DevRel a repeatable way to scale invites as the portal approaches GA.
+Энэхүү тоглоомын дэвтрийг тууштай ашиглах нь урьдчилан харах програмыг шалгах боломжтой бөгөөд
+нь Docs/DevRel-д портал GA-д ойртоход урилгыг масштаблах давтагдах боломжтой аргыг өгдөг.

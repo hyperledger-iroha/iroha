@@ -11,62 +11,63 @@ id: developer-sdk-index
 title: SoraFS SDK Guides
 sidebar_label: SDK Guides
 description: Language-specific snippets for integrating SoraFS artefacts.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
-:::
+:::иҫкәртергә канонлы сығанаҡ
+::: 1990 й.
 
-Use this hub to track the per-language helpers that ship with the SoraFS toolchain.
-For Rust-specific snippets jump to [Rust SDK snippets](./developer-sdk-rust.md).
+Был үҙәкте ҡулланып, тел ярҙамсыларын күҙәтеү өсөн, тип судно менән I18NT0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000-гә тиклем ебәргән менән ташыуын күҙәтеп барығыҙ.
+Rust-специфик өҙөктәр өсөн һикереп [Раст SDK өҙөктәре] (./developer-sdk-rust.md).
 
-## Language helpers
+##Тел ярҙамсылары
 
-- **Python** — `sorafs_multi_fetch_local` (local orchestrator smoke tests) and
-  `sorafs_gateway_fetch` (gateway E2E exercises) now accept an optional
-  `telemetry_region` plus a `transport_policy` override
-  (`"soranet-first"`, `"soranet-strict"`, or `"direct-only"`), mirroring the CLI
-  rollout knobs. When a local QUIC proxy spins up,
-  `sorafs_gateway_fetch` returns the browser manifest under
-  `local_proxy_manifest` so tests can hand the trust bundle to browser adapters.
-- **JavaScript** — `sorafsMultiFetchLocal` mirrors the Python helper, returning
-  payload bytes and receipt summaries, while `sorafsGatewayFetch` exercises
-  Torii gateways, threads local proxy manifests, and exposes the same
-  telemetry/transport overrides as the CLI.
-- **Rust** — services can embed the scheduler directly via
-  `sorafs_car::multi_fetch`; see the [Rust SDK snippets](./developer-sdk-rust.md)
-  reference for proof-stream helpers and orchestrator integration.
-- **Android** — `HttpClientTransport.sorafsGatewayFetch(…)` reuses the Torii HTTP
-  executor and honours `GatewayFetchOptions`. Combine it with
-  `ClientConfig.Builder#setSorafsGatewayUri` and the PQ upload hint
-  (`setWriteModeHint(WriteModeHint.UPLOAD_PQ_ONLY)`) when uploads must stick to
-  PQ-only paths.
+- **Питон** — I18NI000000006X (урындағы оркестр төтөн анализдары) һәм
+  I18NI000000007X (ҡапҡа E2E күнекмәләр) хәҙер ҡабул итеү факультатив
+  I18NI000000008X плюс I18NI000000009X X
+  (`"soranet-first"`, `"soranet-strict"`, йәки `"direct-only"`), КЛИ-ны көҙгөләй.
+  ручка ручкалары. Ҡасан урындағы QUIC прокси әйләндерә,
+  I18NI000000013X браузерҙа 1990 йылдарҙа 1990 йылда 1990 й.
+  `local_proxy_manifest` шулай һынауҙар ышаныс өйөмөн браузер адаптерҙарына тапшыра ала.
+- **JavaScript** — I18NI000000015X Python ярҙамсыһын көҙгөләй.
+  файҙалы йөк байт һәм квитанция резюмелары, шул уҡ ваҡытта I18NI000000016X күнекмәләр
+  I18NT000000001X шлюздар, ептәр урындағы прокси күренә, һәм шул уҡ фашлай
+  телеметрия/транспорт өҫтөнлөк бирә, тип CLI.
+- **Раст** — хеҙмәттәр туранан-тура планлаштырыусыға индерә ала.
+  `sorafs_car::multi_fetch`; Ҡара: [Раст SDK өҙөктәре] (I18NU000000005X)
+  белешмә өсөн проф-ағым ярҙамсылары һәм оркестр буйынса интеграция.
+- **Android** — I18NI000000018X I18NT0000002X HTTP-ны ҡабаттан ҡуллана.
+  башҡарыусы һәм почет I18NI000000019X. Уны берләштереү менән .
+  I18NI000000020X һәм PQ тейәү кәңәше
+  (`setWriteModeHint(WriteModeHint.UPLOAD_PQ_ONLY)`) тейәүҙәр ҡасан йәбешергә тейеш
+  PQ-тик юлдар.
 
-## Scoreboard and policy knobs
+## Япраҡлы һәм сәйәсәт ручкалары
 
-Both the Python (`sorafs_multi_fetch_local`) and JavaScript
-(`sorafsMultiFetchLocal`) helpers expose the telemetry-aware scheduler scoreboard
-used by the CLI:
+Икеһе лә Питон (I18NI000000022X) һәм JavaScript
+(I18NI000000023X) ярҙамсылары телеметрия-аңлы планлаштырыусы табынды фашлай
+CLI ҡулланған:
 
-- Production binaries enable the scoreboard by default; set `use_scoreboard=True`
-  (or provide `telemetry` entries) when replaying fixtures so the helper derives
-  weighted provider ordering from advert metadata and recent telemetry snapshots.
-- Set `return_scoreboard=True` to receive the computed weights alongside chunk
-  receipts so CI logs can capture diagnostics.
-- Use `deny_providers` or `boost_providers` arrays to reject peers or add a
-  `priority_delta` when the scheduler selects providers.
-- Keep the default `"soranet-first"` posture unless staging a downgrade; supply
-  `"direct-only"` only when a compliance region must avoid relays or when
-  rehearsing the SNNet-5a fallback, and reserve `"soranet-strict"` for PQ-only
-  pilots with governance approval.
-- Gateway helpers also expose `scoreboardOutPath` and `scoreboardNowUnixSecs`.
-  Set `scoreboardOutPath` to persist the computed scoreboard (mirrors the CLI
-  `--scoreboard-out` flag) so `cargo xtask sorafs-adoption-check` can validate
-  SDK artefacts, and use `scoreboardNowUnixSecs` when fixtures need a stable
-  `assume_now` value for reproducible metadata. In the JavaScript helper you
-  can additionally set `scoreboardTelemetryLabel`/`scoreboardAllowImplicitMetadata`;
-  when the label is omitted it derives `region:<telemetryRegion>` (falling back
-  to `sdk:js`). The Python helper automatically emits `telemetry_source="sdk:python"`
-  whenever it persists a scoreboard and keeps implicit metadata disabled.
+- Етештереүҙең бинарҙары таблоға ғәҙәттәгесә мөмкинлек бирә; тип аталған I18NI000000024X
+  (йәки `telemetry` яҙмаларын тәьмин итеү) ҡасан реплей ҡорамалдар шулай ярҙамсы килеп сыға
+  үлсәүле провайдер заказ реклама метамағлүмәттәр һәм күптән түгел телеметрия снимоктары.
+- I18NI0000000026X комплекты өлөшө менән бергә иҫәпләнгән ауырлыҡтарҙы алыу өсөн
+  квитанциялар шулай CI журналдар диагностика тота ала.
+- Ҡулланыу I18NI0000000027X йәки I18NI000000028X массивтары тиҫтерҙәрен кире ҡағыу йәки өҫтәү өсөн
+  I18NI000000029X ҡасан планлаштырыусы һайлау провайдерҙары.
+- I18NI00000000300X поза ғәҙәттәгесә тотоғоҙ, әгәр ҙә түбәнгә ҡуйылмаһа; тапшырыу
+  I18NI0000000031X тик ҡасан ғына үтәү төбәге ҡотолорға тейеш реле йәки ҡасан .
+  репетиция SNNet-5a fallback, һәм запас I18NI0000000032X өсөн PQ-тик
+  идара итеүҙе раҫлау менән осоусылар.
+- Ҡапҡа ярҙамсылары шулай уҡ I18NI000000033X һәм `scoreboardNowUnixSecs` фашлай.
+  I18NI000000035X комплекты иҫәпләнгән табло (көҙгөләр CLI
+  I18NI0000000036X флагы) шулай I18NI000000037X раҫлай ала
+  SDK артефакттар, һәм ҡулланыу I18NI0000000038X ҡасан ҡорамалдар тотороҡло кәрәк .
+  I18NI000000039X ҡиммәте өсөн ҡабатланған метамағлүмәттәр. JavaScript ярҙамсыһында һеҙгә
+  өҫтәмә рәүештә `scoreboardTelemetryLabel`/`scoreboardAllowImplicitMetadata` X;
+  ҡасан лейбл төшөрөп ҡалдырылған I18NI0000000042X сыға (ҡаршы төшөп
+  тиклем `sdk:js`). Python ярҙамсыһы автоматик рәүештә `telemetry_source="sdk:python"`
+  ҡасан ғына ул табло һаҡлана һәм йәшерен метамағлүмәттәрҙе инвалид тота.
 
 ```python
 result = sorafs_multi_fetch_local(

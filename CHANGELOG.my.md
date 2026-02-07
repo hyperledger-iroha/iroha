@@ -7,1860 +7,1841 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 26f5115a14476de15fbc8f26c5a9807954df6884763a818b2bc98ec6cfe1a4cc
 source_last_modified: "2026-01-05T09:28:11.640562+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Changelog
+# ပြောင်းလဲမှုမှတ်တမ်း
 
 [Unreleased]: https://github.com/hyperledger-iroha/iroha/compare/v2.0.0-rc.2.0...HEAD
 [2.0.0-rc.2.0]: https://github.com/hyperledger-iroha/iroha/releases/tag/v2.0.0-rc.2.0
 
-All notable changes to this project will be documented in this file.
+ဤပရောဂျက်အတွက် ထင်ရှားသောပြောင်းလဲမှုအားလုံးကို ဤဖိုင်တွင် မှတ်တမ်းတင်ထားပါမည်။
 
-## [Unreleased]
+## [မထုတ်ဝေရသေးသော]
 
-- Drop the SCALE shim; `norito::codec` is now implemented with native Norito serialization.
-- Replace `parity_scale_codec` usages with `norito::codec` across crates.
-- Begin migrating tooling to native Norito serialization.
-- Remove remaining `parity-scale-codec` dependency from the workspace in favor of native Norito serialization.
-- Replace residual SCALE trait derivations with native Norito implementations and rename versioned codec module.
-- Merge `iroha_config_base_derive` and `iroha_futures_derive` into `iroha_derive` with feature-gated macros.
-- *(multisig)* Reject direct signatures from multisig authorities with a stable error code/reason, enforce multisig TTL caps across nested relayers, and surface TTL caps in the CLI before submission (SDK parity pending).
-- Move FFI procedural macros into `iroha_ffi` and remove `iroha_ffi_derive` crate.
-- *(schema_gen)* Remove unnecessary `transparent_api` feature from `iroha_data_model` dependency.
-- *(data_model)* Cache the ICU NFC normalizer for `Name` parsing to reduce repeated initialization overhead.
-- 📚 Document JS quickstart, configuration resolver, publishing workflow, and configuration-aware recipe for the Torii client.
-- *(IrohaSwift)* Raise minimum deployment targets to iOS 15 / macOS 12, adopt Swift concurrency across Torii client APIs, and mark public models as `Sendable`.
-- *(IrohaSwift)* Added `ToriiDaProofSummaryArtifact` and `DaProofSummaryArtifactEmitter.emit` so Swift apps can build/emit CLI-compatible DA proof bundles without shelling out to the CLI, complete with docs and regression tests covering both in-memory and on-disk workflows.【F:IrohaSwift/Sources/IrohaSwift/ToriiDaProofSummaryArtifact.swift:1】【F:IrohaSwift/Tests/IrohaSwiftTests/ToriiDaProofSummaryArtifactTests.swift:1】【F:docs/source/sdk/swift/index.md:260】
-- *(data_model/js_host)* Fix Kaigi Option serialization by removing the archived-reuse flag from `KaigiParticipantCommitment`, add native roundtrip tests, and drop the JS decode fallback so Kaigi instructions now Norito round-trip before submission.【F:crates/iroha_data_model/src/kaigi.rs:128】【F:crates/iroha_js_host/src/lib.rs:1379】【F:javascript/iroha_js/test/instructionBuilders.test.js:30】
-- *(javascript)* Allow `ToriiClient` callers to delete default headers (by passing `null`) so `getMetrics` cleanly switches between JSON and Prometheus text Accept headers.【F:javascript/iroha_js/src/toriiClient.js:488】【F:javascript/iroha_js/src/toriiClient.js:761】
-- *(javascript)* Added iterable helpers for NFTs, per-account asset balances, and asset-definition holders (with TypeScript defs, docs, and tests) so Torii pagination now covers the remaining app endpoints.【F:javascript/iroha_js/src/toriiClient.js:105】【F:javascript/iroha_js/index.d.ts:80】【F:javascript/iroha_js/test/toriiClient.test.js:365】【F:javascript/iroha_js/README.md:470】
-- *(javascript)* Added governance instruction/transaction builders plus a governance recipe so JS clients can stage deploy proposals, ballots, enactment, and council persistence end to end.【F:javascript/iroha_js/src/instructionBuilders.js:1012】【F:javascript/iroha_js/src/transaction.js:1082】【F:javascript/iroha_js/recipes/governance.mjs:1】
-- *(javascript)* Added ISO 20022 pacs.008 submit/status helpers and a matching recipe, letting JS callers exercise the Torii ISO bridge without bespoke HTTP plumbing.【F:javascript/iroha_js/src/toriiClient.js:888】【F:javascript/iroha_js/index.d.ts:706】【F:javascript/iroha_js/recipes/iso_bridge.mjs:1】
-- *(javascript)* Added pacs.008/pacs.009 builder helpers plus a config-driven recipe so JS callers can synthesise ISO 20022 payloads with validated BIC/IBAN metadata before hitting the bridge.【F:javascript/iroha_js/src/isoBridge.js:1】【F:javascript/iroha_js/test/isoBridge.test.js:1】【F:javascript/iroha_js/recipes/iso_bridge_builder.mjs:1】【F:javascript/iroha_js/index.d.ts:1】
-- *(javascript)* Completed the DA ingest/fetch/prove loop: `ToriiClient.fetchDaPayloadViaGateway` now auto-derives chunker handles (via the new `deriveDaChunkerHandle` binding), optional proof summaries reuse the native `generateDaProofSummary`, and the README/typings/tests were refreshed so SDK callers can mirror `iroha da get-blob/prove-availability` without bespoke plumbing.【F:javascript/iroha_js/src/toriiClient.js:1123】【F:javascript/iroha_js/src/dataAvailability.js:1】【F:javascript/iroha_js/test/toriiClient.test.js:1454】【F:javascript/iroha_js/index.d.ts:3275】【F:javascript/iroha_js/README.md:760】
-- *(javascript/js_host)* `sorafsGatewayFetch` scoreboard metadata now records the gateway manifest id/CID whenever gateway providers are used so adoption artefacts align with the CLI captures.【F:crates/iroha_js_host/src/lib.rs:3017】【F:docs/source/sorafs_orchestrator_rollout.md:23】
-- *(torii/cli)* Enforce ISO crosswalks: Torii now rejects `pacs.008` submissions with unknown agent BICs and the DvP CLI preview validates `--delivery-instrument-id` via `--iso-reference-crosswalk`.【F:crates/iroha_torii/src/iso20022_bridge.rs:704】【F:crates/iroha_cli/src/main.rs:3892】
-- *(torii)* Add PvP cash ingestion via `POST /v1/iso20022/pacs009`, enforcing `Purp=SECU` and BIC reference-data checks before building transfers.【F:crates/iroha_torii/src/iso20022_bridge.rs:1070】【F:crates/iroha_torii/src/lib.rs:4759】
-- *(tooling)* Added `cargo xtask iso-bridge-lint` (plus `ci/check_iso_reference_data.sh`) to validate ISIN/CUSIP, BIC↔LEI, and MIC snapshots alongside repository fixtures.【F:xtask/src/main.rs:146】【F:ci/check_iso_reference_data.sh:1】
-- *(javascript)* Hardened npm publishing by declaring repository metadata, an explicit files allowlist, provenance-enabled `publishConfig`, a `prepublishOnly` changelog/test guard, and a GitHub Actions workflow that exercises Node 18/20 in CI【F:javascript/iroha_js/package.json:1】【F:javascript/iroha_js/scripts/check-changelog.mjs:1】【F:docs/source/sdk/js/publishing.md:1】【F:.github/workflows/javascript-sdk.yml:1】
-- *(ivm/cuda)* BN254 field add/sub/mul now execute on the new CUDA kernels with host-side batching via `bn254_launch_kernel`, enabling hardware acceleration for Poseidon and ZK gadgets while preserving deterministic fallbacks.【F:crates/ivm/cuda/bn254.cu:1】【F:crates/ivm/src/cuda.rs:66】【F:crates/ivm/src/cuda.rs:1244】
+- SCALE shim ကိုချလိုက်ပါ။ ယခု `norito::codec` ကို မူရင်း Norito နံပါတ်စဉ်သတ်မှတ်ခြင်းဖြင့် အကောင်အထည်ဖော်ထားပါသည်။
+- `parity_scale_codec` အသုံးပြုမှုများကို သေတ္တာများအတွင်း `norito::codec` ဖြင့် အစားထိုးပါ။
+- ကိရိယာကို မူရင်း Norito အမှတ်စဉ်အဖြစ်သို့ စတင်ရွှေ့ပြောင်းပါ။
+- မူရင်း I18NT000000128X မှီခိုအားထားမှုကို မူရင်း Norito ၏မျက်နှာသာပေးကာ အလုပ်ခွင်မှ ဖယ်ရှားပါ။
+- ကျန်ရှိသော SCALE လက္ခဏာရပ်များကို မူရင်း Norito အကောင်အထည်ဖော်မှုများဖြင့် အစားထိုးပြီး ဗားရှင်းပြောင်းထားသော codec မော်ဂျူးကို အမည်ပြောင်းပါ။
+- `iroha_config_base_derive` နှင့် `iroha_futures_derive` ကို `iroha_derive` အသွင်အပြင်ဖြင့် ပေါင်းစပ်ထားသော မက်ခရို။
+- *(multisig)* တည်ငြိမ်သောအမှားအယွင်းကုဒ်/အကြောင်းပြချက်ဖြင့် multisig အာဏာပိုင်များထံမှ တိုက်ရိုက်လက်မှတ်များကို ငြင်းပယ်ပြီး၊ nested relayers များတစ်လျှောက် multisig TTL ထုပ်များကို တွန်းအားပေးရန်နှင့် တင်သွင်းခြင်းမပြုမီ CLI ရှိ TTL ထုပ်များကို မျက်နှာပြင်ပေါ်တင်ပါ (SDK ကွာဟမှုကို ဆိုင်းငံ့ထားသည်)။
+- FFI လုပ်ထုံးလုပ်နည်း မက်ခရိုကို `iroha_ffi` သို့ ရွှေ့ပြီး `iroha_ffi_derive` သေတ္တာကို ဖယ်ရှားပါ။
+- *(schema_gen)* မလိုအပ်သော `transparent_api` အင်္ဂါရပ်ကို `iroha_data_model` မှီခိုမှုမှ ဖယ်ရှားပါ။
+- *(data_model)* `Name` ခွဲခြမ်းစိတ်ဖြာခြင်းအတွက် ICU NFC normalizer ကို ကက်ရှ်လုပ်ပါ။
+- 📚 Document JS အမြန်စတင်မှု၊ ဖွဲ့စည်းမှုဖြေရှင်းပေးသူ၊ အလုပ်အသွားအလာကို ထုတ်ဝေခြင်းနှင့် Torii ဖောက်သည်အတွက် ဖွဲ့စည်းမှု-သတိပြုမိသော စာရွက်။
+- *(IrohaSwift)* iOS 15 / macOS 12 သို့ အနိမ့်ဆုံး ဖြန့်ကျက်ပစ်မှတ်များကို မြှင့်တင်ပါ၊ Torii ဖောက်သည် APIs တစ်လျှောက် Swift တွဲဖက်အသုံးပြုကာ အများသူငှာ မော်ဒယ်များကို `Sendable` အဖြစ် အမှတ်အသားပြုပါ။
+- *(IrohaSwift)* `ToriiDaProofSummaryArtifact` နှင့် `DaProofSummaryArtifactEmitter.emit` တို့ကို ပေါင်းထည့်ထားသောကြောင့် Swift အက်ပ်များသည် CLI-သဟဇာတဖြစ်သော DA အထောက်အထားအစုအဝေးများကို CLI သို့ ပစ်မထုတ်ဘဲ docs နှင့် regression tests များ အစုံအလင်ဖြင့် မန်မိုရီအတွင်းနှင့် ဒစ်ဒစ်ပေါ်တွင် နှစ်ခုစလုံးကို အကျုံးဝင်သည် အလုပ်အသွားအလာ။
+- *(data_model/js_host)* `KaigiParticipantCommitment` မှ သိမ်းဆည်းထားသော-ပြန်သုံးခြင်းအလံကို ဖယ်ရှားပြီး မူရင်းအသွားအပြန်စမ်းသပ်မှုများကို ပေါင်းထည့်ကာ JS ကုဒ်ပြန်ယူမှုကို လွှတ်ချပေးခြင်းဖြင့် Kaigi ညွှန်ကြားချက်များကို ယခု Norito အသွားအပြန်မတိုင်မီ တင်ပြချက်။【F:crates/iroha_data_model/src/kaigi.rs:128】【F:crates/iroha_js_host/src/lib.rs:1379】【F:javascript/iroha_js/test/instructionBuilders.test.js:30】
+- *(javascript)* `ToriiClient` ခေါ်ဆိုသူများအား ပုံသေခေါင်းစီးများကို ဖျက်ရန် (`null` ကိုဖြတ်သန်းခြင်းဖြင့်) သို့ဖြစ်ရာ `getMetrics` သည် JSON နှင့် Prometheus စာသားကို သန့်ရှင်းစွာပြောင်းပြီး လက်ခံပါ ခေါင်းစီးများ။【F:javascript/iroha_js/src/toriiClient.js:488】【F:javascript/iroha_js/src/toriiClient.js:761】
+- *(javascript)* NFTs၊ အကောင့်တစ်ခုလျှင် ပိုင်ဆိုင်မှုလက်ကျန်များနှင့် ပိုင်ဆိုင်မှု-အဓိပ္ပါယ်ဖွင့်ဆိုချက်များ (TypeScript defs၊ docs၊ နှင့် စမ်းသပ်မှုများဖြင့်) ထပ်လောင်းထည့်လိုက်သောကြောင့် Torii pagination သည် ကျန်ရှိသောအက်ပ်ကို အကျုံးဝင်သည် အဆုံးမှတ်များ။【F:javascript/iroha_js/src/toriiClient.js:105】【F:javascript/iroha_js/index.d.ts:80】【F:javascript/iroha_js/test/toriiClient.test.js:365】【F:javascript/irohaME7_js/READ
+- *(javascript)* ထည့်သွင်းထားသော အုပ်ချုပ်မှု ညွှန်ကြားချက်/ငွေပေးငွေယူ တည်ဆောက်သူများ နှင့် အုပ်ချုပ်မှု စာရွက် ပါရှိသောကြောင့် JS ဖောက်သည်များသည် အဆိုပြုချက်များ၊ မဲများ၊ အတည်ပြုချက်များနှင့် ကောင်စီတွင် စွဲမြဲစွာ ကုန်ဆုံးနိုင်သည် ။ အဆုံး။【F:javascript/iroha_js/src/instructionBuilders.js:1012】【F:javascript/iroha_js/src/transaction.js:1082】【F:javascript/iroha_js/recipes/governance.mjs:1】
+- *(javascript)* Added ISO 20022 pacs.008 submit/status helpers နှင့် ကိုက်ညီသော စာရွက်ကို JS ခေါ်ဆိုသူများအား HTTP မပါဘဲ Torii ISO တံတားကို လေ့ကျင့်ခန်းလုပ်ခွင့်ပြုပါ။ ရေပိုက်။【F:javascript/iroha_js/src/toriiClient.js:888】【F:javascript/iroha_js/index.d.ts:706】【F:javascript/iroha_js/recipes/iso_bridge.mjs:1】
+- *(javascript)* ထည့်သွင်းထားသော pacs.008/pacs.009 builder helpers များအပြင် config-driven recipe ဖြင့် JS ခေါ်ဆိုသူများသည် ISO 20022 payload များကို တရားဝင် BIC/IBAN metadata ဖြင့် ပေါင်းစပ်နိုင်သည် တံတား။ 【F:javascript/iroha_js/src/isoBridge.js:1】【F:javascript/iroha_js/test/isoBridge.test.js:1】【F:javascript/iroha_js/recipes/iso_bridge_builder.mjs:1】【F:javascripts/iroha.
+- *(javascript)* DA ထည့်သွင်းခြင်း/fetch/prove ကွင်းဆက်ကို ပြီးမြောက်ခဲ့သည်- `ToriiClient.fetchDaPayloadViaGateway` သည် ယခုအခါ chunker handles (`deriveDaChunkerHandle` binding အသစ်မှတစ်ဆင့်) အလိုအလျောက်ရယူသည်)၊ ရွေးချယ်နိုင်သော အထောက်အထားအကျဉ်းချုပ်များသည် မူရင်း `generateDaProofSummary` ဟုခေါ်သော စမ်းသပ်မှုများကို ပြန်လည်စတင်နိုင်ပါသည်၊ စိတ်ကြိုက်မှန် `iroha da get-blob/prove-availability` ရေပိုက်။【F:javascript/iroha_js/src/toriiClient.js:1123】【F:javascript/iroha_js/src/dataAvailability.js:1】【F:javascrip t/iroha_js/test/toriiClient.test.js:1454 【F:javascript/iroha_js/index.d.ts:3275】【F:javascript/iroha_js/README.md:760】
+- *(javascript/js_host)* `sorafsGatewayFetch` အမှတ်စာရင်းဘုတ် မက်တာဒေတာသည် ယခုအခါ ဂိတ်ဝေးပံ့ပိုးပေးသူများကို အသုံးပြုသည့်အခါတိုင်း gateway manifest id/CID ကို မှတ်တမ်းတင်ထားသောကြောင့် မွေးစားခြင်းဆိုင်ရာ ပစ္စည်းများသည် CLI နှင့် ကိုက်ညီသည် ရိုက်ကူးမှုများ။【F:crates/iroha_js_host/src/lib.rs:3017】【F:docs/source/sorafs_orchestrator_rollout.md:23】
+- *(torii/cli)* ISO လူကူးမျဉ်းကြားများကို တွန်းအားပေးပါ- Torii သည် ယခုအခါ အမည်မသိအေးဂျင့် BIC များဖြင့် `pacs.008` တင်သွင်းမှုများကို ငြင်းပယ်လိုက်ပြီး DvP CLI အကြိုကြည့်ရှုမှုသည် `--delivery-instrument-id` မှတစ်ဆင့် အကျုံးဝင်သည် `--iso-reference-crosswalk`.【F:crates/iroha_torii/src/iso20022_bridge.rs:704】【F:crates/iroha_cli/src/main.rs:3892】
+- *(torii)* `POST /v1/iso20022/pacs009` မှတစ်ဆင့် PvP ငွေသားထည့်သွင်းခြင်း၊ `Purp=SECU` နှင့် BIC ရည်ညွှန်းချက်-ဒေတာစစ်ဆေးမှုများကို မတည်ဆောက်မီ လိုက်နာဆောင်ရွက်ခြင်း။ လွှဲပြောင်းမှုများ။【F:crates/iroha_torii/src/iso20022_bridge.rs:1070】【F:crates/iroha_torii/src/lib.rs:4759】
+- *(ကိရိယာတန်ဆာပလာ)* ထည့်သွင်းထားသော `cargo xtask iso-bridge-lint` (plus `ci/check_iso_reference_data.sh`) ကို ISIN/CUSIP၊ BIC↔LEI နှင့် MIC လျှပ်တစ်ပြက်ပုံများနှင့်အတူ အတည်ပြုရန် ထည့်သွင်းထားပါသည်။【F:xtask/src/main.rs:146】F:146【F:xtask/src/main.rs:146】
+- *(javascript)* repository metadata၊ တိကျပြတ်သားသောဖိုင်ခွင့်ပြုစာရင်း၊ သက်သေပြထားသော `publishConfig`၊ `prepublishOnly` changelog/test guard နှင့် GitHub လုပ်ဆောင်ချက်များကို ကျင့်သုံးသည့် အလုပ်အသွားအလာကို ကြေငြာခြင်းဖြင့် ခိုင်မာသော npm ထုတ်ဝေခြင်း CI 【F:javascript/iroha_js/package.json:1】【F:javascript/iroha_js/scripts/check-changelog.mjs:1】【F:docs/source/sdk/js/publishing.md:1】【F:.github/workflows/javascript-sdk.yml:1】
+- *(ivm/cuda)* BN254 အကွက် add/sub/mul သည် ယခု `bn254_launch_kernel` မှတစ်ဆင့် host-side batching ဖြင့် CUDA kernels အသစ်များကို လုပ်ဆောင်ပြီး Poseidon နှင့် ZK gadgets များအတွက် ဟာ့ဒ်ဝဲလ်အရှိန်မြှင့်ခြင်းကို မြှင့်တင်ပေးသည် တုံ့ပြန်မှုများ။【F:crates/ivm/cuda/bn254.cu:1】【F:crates/ivm/src/cuda.rs:66】【F:crates/ivm/src/cuda.rs:1244】
 
 ## [2.0.0-rc.2.0] - 2025-05-08
 
-### 🚀 Features
+### 🚀 အင်္ဂါရပ်များ
 
-- *(cli)* Add `iroha transaction get` and other important commands (#5289)
-- [**breaking**] Separate fungible and non-fungible assets (#5308)
-- [**breaking**] Finalize non-empty blocks by allowing empty blocks after them (#5320)
-- Expose telemetry types in schema and client (#5387)
-- *(iroha_torii)* Stubs for feature-gated endpoints (#5385)
-- Add commit time metrics (#5380)
+- *(cli)* `iroha transaction get` နှင့် အခြားအရေးကြီးသော ညွှန်ကြားချက်များ ထည့်ပါ (#5289)
+- [**breaking**] သီးခြား မှိုသတ်နိုင်သော နှင့် မှိုမဝင်နိုင်သော ပိုင်ဆိုင်မှုများ (#5308)
+- [**breaking**] ၎င်းတို့နောက်မှ အချည်းနှီးသောလုပ်ကွက်များကို ခွင့်ပြုခြင်းဖြင့် အပြီးသတ်ပါ (#5320)
+- schema နှင့် client (#5387) တွင် telemetry အမျိုးအစားများကို ဖော်ထုတ်ပါ။
+- *(iroha_torii)* အင်္ဂါရပ်ဖြင့် ကန့်သတ်ထားသော အဆုံးမှတ်များအတွက် တုံးများ (#5385)
+- commit time metrics (#5380) ကိုထည့်ပါ။
 
-### 🐛 Bug Fixes
+### 🐛 ချွတ်ယွင်းချက်ပြင်ဆင်မှုများ
 
-- Revise NonZeros (#5278)
-- Typos in documentation files (#5309)
-- *(crypto)* Expose `Signature::payload` getter (#5302) (#5310)
-- *(core)* Add checks for role presence before granting it (#5300)
-- *(core)* Reconnect disconnected peer (#5325)
-- Fix pytests related to store assets and NFT (#5341)
-- *(CI)* Fix python static analysis workflow for poetry v2 (#5374)
-- Expired transaction event appears after commit (#5396)
+- NonZeros (#5278) ကို ပြန်လည်ပြင်ဆင်ပါ
+- စာရွက်စာတမ်းဖိုင်များတွင် Typos (#5309)
+- *(crypto)* `Signature::payload` getter (#5302) (#5310) ကိုထုတ်ပါ
+- *(core)* မပေးအပ်မီ အခန်းကဏ္ဍရှိခြင်းအတွက် စစ်ဆေးမှုများကို ပေါင်းထည့်ပါ (#5300)
+- *(core)* အဆက်ပြတ်နေသော သက်တူရွယ်တူများကို ပြန်လည်ချိတ်ဆက်ပါ (#5325)
+- စတိုးဆိုင်ပိုင်ဆိုင်မှုများနှင့် NFT (#5341) နှင့်သက်ဆိုင်သည့် pytests များကို ပြင်ဆင်ပါ
+- *(CI)* ကဗျာ v2 (#5374) အတွက် python static ခွဲခြမ်းစိတ်ဖြာခြင်းလုပ်ငန်းအသွားအလာကို ပြင်ဆင်ပါ။
+- ကတိပြုပြီးနောက် (#5396)၊
 
-### 💼 Other
+### 💼 အခြား
 
-- Include `rust-toolchain.toml` (#5376)
-- Warn on `unused`, not `deny` (#5377)
+- `rust-toolchain.toml` (#5376) ပါဝင်သည်
+- `unused` တွင် သတိပေးပါ၊ `deny` (#5377) မဟုတ်ပါ။
 
-### 🚜 Refactor
+### 🚜 ဓာတ်ကူစက်
 
 - Umbrella Iroha CLI (#5282)
-- *(iroha_test_network)* Use pretty format for logs (#5331)
-- [**breaking**] Simplify serialization of `NumericSpec` in `genesis.json` (#5340)
-- Improve logging for failed p2p connection  (#5379)
-- Revert `logger.level`, add `logger.filter`, extend config routes (#5384)
+- *(iroha_test_network)* မှတ်တမ်းများအတွက် လှပသောပုံစံကို အသုံးပြုပါ (#5331)
+- [**breaking**] `NumericSpec` ကို `genesis.json` (#5340) တွင် ရိုးရှင်းအောင်ပြုလုပ်ပါ
+- မအောင်မြင်သော p2p ချိတ်ဆက်မှုအတွက် မှတ်တမ်းသွင်းခြင်းကို ပိုမိုကောင်းမွန်စေသည် (#5379)
+- `logger.level` ကိုပြန်ပြောင်းပါ၊ `logger.filter` ကိုထည့်ပါ၊ ပြင်ဆင်သတ်မှတ်လမ်းကြောင်းများကို တိုးချဲ့ပါ (#5384)
 
-### 📚 Documentation
+### 📚 စာတမ်း
 
-- Add `network.public_address` to `peer.template.toml` (#5321)
+- `network.public_address` ကို `peer.template.toml` (#5321) သို့ ထည့်ပါ။
 
-### ⚡ Performance
+### ⚡ စွမ်းဆောင်ရည်
 
-- *(kura)* Prevent redundant block writes to disk (#5373)
-- Implemented custom storage for transactions hashes (#5405)
+- *(kura)* မလိုအပ်တော့သော ပိတ်ဆို့မှုများကို တားဆီးရန် disk (#5373)
+- ငွေပေးငွေယူ hashes (#5405) အတွက် စိတ်ကြိုက်သိုလှောင်မှုကို အကောင်အထည်ဖော်ခဲ့သည်
 
-### ⚙️ Miscellaneous Tasks
+### ⚙️ အထွေထွေအလုပ်များ
 
-- Fix poetry usage (#5285)
-- Remove redundant consts from `iroha_torii_const` (#5322)
-- Remove unused `AssetEvent::Metadata*` (#5339)
-- Bump Sonarqube Action version (#5337)
-- Remove unused permissions (#5346)
-- Add unzip package to ci-image (#5347)
-- Fix some comments (#5397)
-- Move integrations tests out from `iroha` crate (#5393)
-- Disable defectdojo job (#5406)
-- Add DCO sign-off for missing commits
-- Reorganise workflows (second try) (#5399)
-- Do not run Pull Request CI on push to main (#5415)
+- ကဗျာအသုံးပြုမှုကို ပြင်ဆင်ပါ (#5285)
+- `iroha_torii_const` (#5322) မှ မလိုအပ်သော const များကို ဖယ်ရှားပါ။
+- အသုံးမပြုသော `AssetEvent::Metadata*` (#5339) ကို ဖယ်ရှားပါ။
+- Bump Sonarqube အက်ရှင်ဗားရှင်း (#5337)
+- အသုံးမပြုသောခွင့်ပြုချက်များကိုဖယ်ရှားပါ (#5346)
+- ci-image (#5347) သို့ ဇစ်ဖွင့်ထားသော ပက်ကေ့ဂျ်ကို ထည့်ပါ။
+- အချို့သော မှတ်ချက်များကို ပြင်ပါ (#5397)
+- `iroha` သေတ္တာ (#5393) မှ ပေါင်းစပ်စစ်ဆေးမှုများကို ရွှေ့ပါ။
+- defectdojo အလုပ် (#5406) ကို ပိတ်ပါ။
+- ပျောက်ဆုံးနေသော ကွန်မန့်များအတွက် DCO အကောင့်ပိတ်ခြင်းကို ထည့်ပါ။
+- အလုပ်အသွားအလာများကို ပြန်လည်စီစဉ်ပါ (ဒုတိယကြိုးစားပါ) (#5399)
+- Pull Request CI ကို main (#5415) သို့ တွန်းပို့ခြင်းဖြင့် မလုပ်ဆောင်ပါနှင့်။
 
 <!-- generated by git-cliff -->
 
 ## [2.0.0-rc.1.3] - 2025-03-07
 
-### Added
+### ထည့်ပေးထားပါတယ်။
 
-- finalize non-empty blocks by allowing empty blocks after them (#5320)
+- ၎င်းတို့နောက်မှ အချည်းနှီးသော လုပ်ကွက်များကို ခွင့်ပြုခြင်းဖြင့် (#5320)
 
 ## [2.0.0-rc.1.2] - 2025-02-25
 
-### Fixed
+### ပုံသေ
 
-- re-registered peers are now correctly reflected in the peer list (#5327)
+- ပြန်လည်မှတ်ပုံတင်ထားသော ရွယ်တူရွယ်တူများသည် ယခုအခါ သက်တူရွယ်တူများစာရင်း (#5327) တွင် မှန်ကန်စွာ ရောင်ပြန်ဟပ်နေပါသည်။
 
 ## [2.0.0-rc.1.1] - 2025-02-12
 
-### Added
+### ထည့်ပေးထားပါတယ်။
 
-- add `iroha transaction get` and other important commands (#5289)
+- `iroha transaction get` နှင့် အခြားသော အရေးကြီးသော အမိန့်များ (#5289) ကို ထည့်ပါ။
 
 ## [2.0.0-rc.1.0] - 2024-12-06
 
-### Added
+### ထည့်ပေးထားပါတယ်။- မေးမြန်းမှု ခန့်မှန်းချက်များကို အကောင်အထည်ဖော်ပါ (#5242)
+- အမြဲတမ်း executor (#5082) ကိုသုံးပါ။
+- iroha cli (#5241) တွင် နားထောင်ချိန်ကုန်ချိန်များကို ထည့်ပါ။
+- /peers API အဆုံးမှတ်ကို torii (#5235) သို့ ထည့်ပါ။
+- ဘာသာမဲ့ လိပ်စာ p2p (#5176)
+- Multisig utility နှင့် အသုံးပြုနိုင်စွမ်းကို မြှင့်တင်ပါ (#5027)
+- `BasicAuth::password` ကို ရိုက်နှိပ်ခြင်းမှ ကာကွယ်ပါ (#5195)
+- `FindTransactions` မေးမြန်းမှု (#5190) တွင် ဆင်းသက်ခြင်း
+- စမတ်စာချုပ် အကောင်အထည်ဖော်မှု အခြေအနေတိုင်းတွင် ပိတ်ဆို့ခေါင်းစီးကို မိတ်ဆက်ပါ (#5151)
+- ကြည့်ရှုမှုပြောင်းလဲမှု အညွှန်းကိန်း (#4957) ကို အခြေခံ၍ လှုပ်ရှားဆောင်ရွက်သည့်အချိန်
+- ပုံသေခွင့်ပြုချက်သတ်မှတ်မှုသတ်မှတ်ပါ (#5075)
+- `Option<Box<R>>` (#5094) အတွက် Niche အကောင်အထည်ဖော်မှုကို ထည့်ပါ။
+- ငွေပေးငွေယူနှင့် ပိတ်ဆို့ခန့်မှန်းချက်များ (#5025)
+- စုံစမ်းမေးမြန်းမှုတွင် ကျန်ရှိသည့် ပစ္စည်းပမာဏကို အစီရင်ခံပါ (#5016)
+- ကန့်သတ်ထားသော သီးခြားအချိန် (#4928)
+- `Numeric` (#4976) တွင် ပျောက်ဆုံးနေသော သင်္ချာဆိုင်ရာ လုပ်ဆောင်ချက်များကို ထည့်ပါ။
+- ပိတ်ဆို့စင့်ခ်လုပ်ခြင်းမက်ဆေ့ချ်များကို တရားဝင်အတည်ပြုပါ (#4965)
+- မေးမြန်းမှု စစ်ထုတ်မှုများ (#4833)
 
-- implement query projections (#5242)
-- use persistent executor (#5082)
-- add listen timeouts to iroha cli (#5241)
-- add /peers API endpoint to torii (#5235)
-- address agnostic p2p (#5176)
-- improve multisig utility and usability (#5027)
-- protect `BasicAuth::password` from being printed (#5195)
-- sort descending in `FindTransactions` query (#5190)
-- introduce block header into every smart contract execution context (#5151)
-- dynamic commit time based on view change index (#4957)
-- define default permission set (#5075)
-- add implementation of Niche for `Option<Box<R>>` (#5094)
-- transaction and block predicates (#5025)
-- report amount of remaining items in query (#5016)
-- bounded discrete time (#4928)
-- add missing mathematical operations to `Numeric` (#4976)
-- validate block sync messages (#4965)
-- query filters (#4833)
+### ပြောင်းလဲခဲ့သည်။
 
-### Changed
+- မျိုးတူ ID ခွဲခြမ်းစိတ်ဖြာမှုကို ရိုးရှင်းအောင်ပြုလုပ်ပါ (#5228)
+- block payload (#5118) မှ ငွေပေးငွေယူအမှားကို ရွှေ့ပါ။
+- JsonString ကို Json (#5154) သို့ နာမည်ပြောင်းပါ။
+- စမတ်စာချုပ်များ (#5073) သို့ ဖောက်သည်အဖွဲ့အစည်းကို ထည့်ပါ
+- ငွေလွှဲအော်ဒါမှာယူခြင်းဝန်ဆောင်မှုအဖြစ် ဦးဆောင်သူ (#4967)
+- kura ကို memory မှပိတ်ဆို့ထားသောအဟောင်းများကိုချပါ (#5103)
+- `Executable` (#5096) တွင် ညွှန်ကြားချက်အတွက် `ConstVec` ကိုသုံးပါ။
+- အတင်းအဖျင်း TXs အများဆုံးတစ်ကြိမ် (#5079)
+- `CommittedTransaction` (#5089) မမ်မိုရီအသုံးပြုမှုကို လျှော့ချပါ။
+- query cursor အမှားများကို ပိုမိုတိကျအောင်ပြုလုပ်ပါ (#5086)
+- သေတ္တာများကို ပြန်လည်ဖွဲ့စည်းပါ (#4970)
+- `FindTriggers` မေးမြန်းချက်ကို မိတ်ဆက်ပါ၊ `FindTriggerById` (#5040) ကို ဖယ်ရှားပါ။
+- အပ်ဒိတ်အတွက် လက်မှတ်များပေါ်တွင် မှီခိုမနေပါနှင့် (#5039)
+- genesis.json (#5020) တွင် ပါရာမီတာများ ဖော်မတ်ကို ပြောင်းလဲပါ။
+- လက်ရှိနှင့် ယခင်ကြည့်ရှုမှုပြောင်းလဲမှု အထောက်အထား (#4929) ကိုသာ ပေးပို့ပါ။
+- မအားလပ်သည့် ကွင်းဆက် (#5032) ကို တားဆီးရန် အဆင်သင့်မဖြစ်သောအခါ စာတိုပေးပို့ခြင်းကို ပိတ်ပါ။
+- စုစုပေါင်းပိုင်ဆိုင်မှုပမာဏကို ပိုင်ဆိုင်မှုအဓိပ္ပါယ်ဖွင့်ဆိုချက် (#5029) သို့ ရွှေ့ပါ။
+- ပေးဆောင်မှုတစ်ခုလုံးမဟုတ်ဘဲ ဘလောက်၏ခေါင်းစီးကိုသာ လက်မှတ်ရေးထိုးပါ (#5000)
+- Block hash (#4998) အမျိုးအစားအဖြစ် `HashOf<BlockHeader>` ကိုသုံးပါ။
+- `/health` နှင့် `/api_version` (#4960) ကိုရိုးရှင်းအောင်ပြုလုပ်ပါ
+- `configs` ကို `defaults` သို့ အမည်ပြောင်းပါ၊ `swarm` (#4862) ကို ဖယ်ရှားပါ။
 
-- simplify peer id parsing (#5228)
-- move transaction error out of block payload (#5118)
-- rename JsonString to Json (#5154)
-- add client entity to smart contracts (#5073)
-- leader as transaction ordering service (#4967)
-- make kura drop old blocks from memory (#5103)
-- use `ConstVec` for instructions in `Executable` (#5096)
-- gossip txs at most once (#5079)
-- reduce memory usage of `CommittedTransaction` (#5089)
-- make query cursor errors more specific (#5086)
-- reorganize crates (#4970)
-- introduce `FindTriggers` query, remove `FindTriggerById` (#5040)
-- dont depend on signatures for update (#5039)
-- change parameters format in genesis.json (#5020)
-- only send current and previous view change proof (#4929)
-- disable sending message when not ready to prevent busy loop (#5032)
-- move total asset quantity to asset definition (#5029)
-- sign only block's header, not the whole payload (#5000)
-- use `HashOf<BlockHeader>` as the type of the block hash (#4998)
-- simplify `/health` and `/api_version` (#4960)
-- rename `configs` to `defaults`, remove `swarm` (#4862)
+### ပုံသေ
 
-### Fixed
+- json (#5198) တွင် အတွင်းခန်းအခန်းကဏ္ဍကို ချောမွေ့စေသည်
+- `cargo audit` သတိပေးချက်များကို ပြင်ဆင်ပါ (#5183)
+- လက်မှတ်အညွှန်း (#5157) သို့ အပိုင်းအခြားစစ်ဆေးချက်ထည့်ပါ။
+- docs (#5149) တွင် မော်ဒယ် macro နမူနာကို ပြင်ဆင်ပါ
+- blocks/ events stream (#5101) တွင် ws ကို ကောင်းစွာပိတ်ပါ။
+- ကျိုးကြောင်းယုံကြည်ရသောရွယ်တူများစစ်ဆေးခြင်း (#5121)
+- နောက်ဘလောက်တွင် အမြင့် +1 (#5111) ရှိမရှိ စစ်ဆေးပါ။
+- ဥပါဒ်ပိတ်ဆို့ခြင်း၏အချိန်တံဆိပ်ကို ပြင်ဆင်ပါ (#5098)
+- `transparent_api` အင်္ဂါရပ်မပါဘဲ `iroha_genesis` စုစည်းမှုကို ပြင်ဆင်ပါ (#5056)
+- `replace_top_block` (#4870) ကို မှန်မှန်ကန်ကန် ကိုင်တွယ်ပါ။
+- executor ၏ cloning ကိုပြင်ဆင်ပါ (#4955)
+- နောက်ထပ်အမှားအယွင်းအသေးစိတ်အချက်အလက်များကိုပြသပါ (#4973)
+- blocks stream (#4990) အတွက် `GET` ကိုသုံးပါ။
+- တန်းစီငွေပေးချေမှုများ ကိုင်တွယ်မှုကို တိုးတက်ကောင်းမွန်စေခြင်း (#4947)
+- ထပ်နေသော blocksync block မက်ဆေ့ချ်များကို တားဆီးပါ (#4909)
+- တပြိုင်နက်တည်း ကြီးမားသော မက်ဆေ့ချ်များ ပေးပို့ခြင်းအတွက် မရပ်မနား တားဆီးပါ (#4948)
+- ကက်ရှ် (#4922) မှ သက်တမ်းကုန်ဆုံးသွားသော ငွေပေးငွေယူကို ဖယ်ရှားပါ။
+- လမ်းကြောင်း (#4903) ဖြင့် torii url ကိုပြင်ဆင်ပါ။
 
-- flatten inner role in json (#5198)
-- fix `cargo audit` warnings (#5183)
-- add range check to signature index (#5157)
-- fix model macro example in docs (#5149)
-- close ws properly in blocks/events stream (#5101)
-- broken trusted peers check (#5121)
-- check that next block has height +1 (#5111)
-- fix timestamp of genesis block (#5098)
-- fix `iroha_genesis` compilation without `transparent_api` feature (#5056)
-- correctly handle `replace_top_block` (#4870)
-- fix cloning of executor (#4955)
-- display more error details (#4973)
-- use `GET` for blocks stream (#4990)
-- improve queue transactions handling (#4947)
-- prevent redundant blocksync block messages (#4909)
-- prevent deadlock on simultaneous sending large message (#4948)
-- remove expired transaction from cache (#4922)
-- fix torii url with path (#4903)
+### ဖယ်ရှားခဲ့သည်။
 
-### Removed
+- client မှ module-based api ကိုဖယ်ရှားပါ (#5184)
+- `riffle_iter` (#5181) ကို ဖယ်ရှားပါ။
+- အသုံးမပြုသော မှီခိုမှုများကို ဖယ်ရှားပါ (#5173)
+- `max` ရှေ့ဆက်ကို `blocks_in_memory` (#5145) မှ ဖယ်ရှားပါ။
+- သဘောတူညီမှု ခန့်မှန်းချက် (#5116) ကို ဖယ်ရှားပါ။
+- `event_recommendations` ကို ဘလောက် (#4932) မှ ဖယ်ရှားပါ။
 
-- remove module-based api from client (#5184)
-- remove `riffle_iter` (#5181)
-- remove unused dependencies (#5173)
-- remove `max` prefix from `blocks_in_memory` (#5145)
-- remove consensus estimation (#5116)
-- remove `event_recommendations` from block (#4932)
-
-### Security
+### လုံခြုံရေး
 
 ## [2.0.0-pre-rc.22.1] - 2024-07-30
 
-### Fixed
+### ပုံသေ
 
-- added `jq` to the docker image
+- docker ပုံတွင် `jq` ကို ထည့်ထားသည်။
 
 ## [2.0.0-pre-rc.22.0] - 2024-07-25
 
-### Added
+### ထည့်ပေးထားပါတယ်။
 
-- specify on-chain parameters explicitly in genesis (#4812)
-- allow turbofish with multiple `Instruction`s (#4805)
-- reimplement multisignature transactions (#4788)
-- implement built-in vs custom on-chain parameters (#4731)
-- improve custom instruction usage (#4778)
-- make the metadata dynamic via implementing JsonString (#4732)
-- allow multiple peers submit genesis block (#4775)
-- supply `SignedBlock` instead of `SignedTransaction` to peer (#4739)
-- custom instructions in executor (#4645)
-- extend client cli to request json queries (#4684)
- - add detect support for `norito_decoder` (#4680)
-- generalize permissions schema to executor data model (#4658)
-- added register trigger permissions in the default executor (#4616)
- - support JSON in `norito_cli`
-- introduce p2p idle timeout
+- ဥပါဒ် (#4812) တွင် ကွင်းဆက်ဘောင်များကို ပြတ်သားစွာ သတ်မှတ်ပါ။
+- များစွာသော `Instruction`s (#4805) ပါသော တာဘိုငါးများကို ခွင့်ပြုပါ။
+- လက်မှတ်ပေါင်းများစွာ ငွေပေးငွေယူများ ပြန်လည်ပြင်ဆင်ခြင်း (#4788)
+- built-in နှင့် စိတ်ကြိုက်ကွင်းဆက်ဆိုင်ရာ ကန့်သတ်ချက်များကို အကောင်အထည်ဖော်ပါ (#4731)
+- စိတ်ကြိုက်ညွှန်ကြားချက်အသုံးပြုမှုကို မြှင့်တင်ပါ (#4778)
+- JsonString (#4732) ကို အကောင်အထည်ဖော်ခြင်းဖြင့် မက်တာဒေတာကို တက်ကြွစေသည်
+- သက်တူရွယ်တူများစွာကို ဥပါဒ်ပိတ်ဆို့ခြင်း (#4775) တင်သွင်းခွင့်ပြုပါ။
+- `SignedBlock` အစား `SignedTransaction` ကို သက်တူရွယ်တူ (#4739) သို့ ထောက်ပံ့ပေးသည်
+- executor တွင် စိတ်ကြိုက်ညွှန်ကြားချက်များ (#4645)
+- json queries (#4684) ကို တောင်းဆိုရန် client cli ကို တိုးချဲ့ပါ
+ - `norito_decoder` (#4680) အတွက် detect ထောက်ကူကို ထည့်ပါ။
+- executor data model (#4658) သို့ ခွင့်ပြုချက် schema ကို ယေဘူယျ ချဲ့ပါ
+- default executor (#4616) တွင် register trigger permissions များကို ထည့်သွင်းထားသည်။
+ - `norito_cli` တွင် JSON ကို ပံ့ပိုးပါ။
+- p2p idle timeout ကိုမိတ်ဆက်ပေးပါ။
 
-### Changed
+### ပြောင်းလဲခဲ့သည်။
 
-- replace `lol_alloc` with `dlmalloc` (#4857)
-- rename `type_` to `type` in schema (#4855)
-- replace `Duration` with `u64` in schema (#4841)
-- use `RUST_LOG`-like EnvFilter for logging (#4837)
-- keep voting block when possible (#4828)
-- migrate from warp to axum (#4718)
-- split executor data model (#4791)
-- shallow data model (#4734) (#4792)
-- don't send public key with signature (#4518)
-- rename `--outfile` to `--out-file` (#4679)
-- rename iroha server and client (#4662)
-- rename `PermissionToken` to `Permission` (#4635)
-- reject `BlockMessages` eagerly (#4606)
-- make `SignedBlock` immutable (#4620)
-- rename TransactionValue into CommittedTransaction (#4610)
-- authenticate personal accounts by ID (#4411)
-- use multihash format for private keys (#4541)
- - rename `parity_scale_decoder` to `norito_cli`
-- send blocks to Set B validators
-- make `Role` transparent (#4886)
-- derive block hash from header (#4890)
+- `lol_alloc` ကို `dlmalloc` (#4857) ဖြင့် အစားထိုးပါ။
+- `type_` အား `type` သို့ schema (#4855) ဟု အမည်ပြောင်းပါ
+- `Duration` ကို `u64` ဖြင့် schema (#4841) ဖြင့် အစားထိုးပါ။
+- မှတ်တမ်းရယူရန်အတွက် `RUST_LOG`-like EnvFilter ကိုသုံးပါ (#4837)
+- ဖြစ်နိုင်ပါက မဲပေးခြင်းကို ပိတ်ပင်ထားပါ (#4828)
+- warp မှ axum သို့ပြောင်းပါ (#4718)
+- ခွဲထုတ်မှုဒေတာမော်ဒယ် (#4791)
+- တိမ်ဒေတာမော်ဒယ် (#4734) (#4792)
+- လက်မှတ် (#4518) ဖြင့် အများသူငှာသော့ကို မပို့ပါနှင့်။
+- `--outfile` ကို `--out-file` (#4679) သို့ အမည်ပြောင်းပါ။
+- iroha server နှင့် client (#4662) အမည်ပြောင်းပါ။
+- `PermissionToken` ကို `Permission` (#4635) သို့ အမည်ပြောင်းပါ။
+- `BlockMessages` ကို စိတ်အားထက်သန်စွာ ငြင်းပယ်ပါ (#4606)
+- `SignedBlock` ကို မပြောင်းလဲနိုင်သော (#4620) ပြုလုပ်ပါ
+- TransactionValue ကို CommittedTransaction (#4610) သို့ အမည်ပြောင်းပါ။
+- ID (#4411) ဖြင့် ကိုယ်ရေးကိုယ်တာအကောင့်များကို စစ်မှန်ကြောင်းအထောက်အထားပြပါ
+- သီးသန့်သော့များအတွက် multihash ဖော်မတ်ကိုသုံးပါ (#4541)
+ - `parity_scale_decoder` ကို `norito_cli` သို့ အမည်ပြောင်းပါ
+- Set B validators များသို့ blocks များပို့ပါ။
+- `Role` ကို ဖောက်ထွင်းမြင်ရအောင်လုပ်ပါ (#4886)
+- ခေါင်းစီး (#4890) မှ block hash ကို ရယူပါ။
 
-### Fixed
+### ပုံသေ
 
-- check that authority owns domain to transfer (#4807)
-- remove logger double initialization (#4800)
-- fix naming convention for assets and permissions (#4741)
-- upgrade executor in separate transaction in genesis block (#4757)
-- correct default value for `JsonString` (#4692)
-- improve deserialization error message (#4659)
-- do not panic if the passed Ed25519Sha512 public key is of invalid length (#4650)
-- use proper view change index on init block load (#4612)
-- don't prematurely execute time-triggers before their `start` timestamp (#4333)
-- support `https` for `torii_url` (#4601) (#4617)
-- remove serde(flatten) from SetKeyValue/RemoveKeyValue (#4547)
-- trigger set is correctly serialized
-- revoke removed `PermissionToken`s on `Upgrade<Executor>` (#4503)
-- report correct view change index for current round
-- remove corresponding triggers on `Unregister<Domain>` (#4461)
-- check genesis pub key in genesis round
-- prevent registering genesis Domain or Account
-- remove permissions from roles on entity unregistration
-- trigger metadata is accessible in smart contracts
-- use rw lock to prevent inconsitent state view (#4867)
-- handle soft fork in snapshot (#4868)
-- fix MinSize for ChaCha20Poly1305
-- add limits to LiveQueryStore to prevent high memory usage (#4893)
+- လွှဲပြောင်းရန် domain ပိုင်ဆိုင်ကြောင်း စစ်ဆေးပါ (#4807)
+- logger double initialization (#4800) ကို ဖယ်ရှားပါ။
+- ပိုင်ဆိုင်မှုနှင့် ခွင့်ပြုချက်များအတွက် အမည်အမည်ပေးခြင်း သဘောတူညီချက်ကို ပြင်ဆင်ပါ (#4741)
+- ဥပါဒ်ပိတ်ဆို့ခြင်း (#4757) တွင် သီးခြားငွေပေးငွေယူအတွက် executor ကို အဆင့်မြှင့်ပါ။
+- `JsonString` (#4692) အတွက် မှန်ကန်သော မူရင်းတန်ဖိုး
+- deserialization error message ကို တိုးတက်အောင်လုပ်ပါ (#4659)
+- ကျော်သွားသော Ed25519Sha512 အများသူငှာသော့သည် မမှန်ကန်ပါက (#4650) ထိတ်လန့်မနေပါနှင့်။
+- init block load (#4612) တွင် သင့်လျော်သော မြင်ကွင်းပြောင်းလဲမှု အညွှန်းကိန်းကို အသုံးပြုပါ။
+- ၎င်းတို့၏ `start` အချိန်တံဆိပ် (#4333) မတိုင်မီ အချိန်-အစပျိုးမှုများကို အချိန်မတိုင်မီ မလုပ်ဆောင်ပါနှင့်။
+- `torii_url` အတွက် `https` (#4601) (#4617)
+- SetKeyValue/RemoveKeyValue (#4547) မှ serde (ပြားချပ်ချပ်) ကို ဖယ်ရှားပါ။
+- trigger set ကို မှန်ကန်စွာ နံပါတ်စဉ်တပ်ထားပါသည်။
+- `Upgrade<Executor>` (#4503) တွင် ဖယ်ရှားထားသော `PermissionToken`s ကို ပြန်လည်ရုပ်သိမ်းရန်
+- လက်ရှိပတ်ပတ်လည်အတွက် မှန်ကန်သော အမြင်ပြောင်းလဲမှု အညွှန်းကိန်းကို အစီရင်ခံပါ။
+- `Unregister<Domain>` (#4461) ရှိ သက်ဆိုင်ရာ အစပျိုးများကို ဖယ်ရှားပါ။
+- ဥပါဒ်အဝိုင်းတွင် genesis pub key ကိုစစ်ဆေးပါ။
+- ဥပါဒ် Domain သို့မဟုတ် အကောင့်မှတ်ပုံတင်ခြင်းကို တားဆီးပါ။
+- မှတ်ပုံတင်ခြင်းမပြုခြင်းဆိုင်ရာ အခန်းကဏ္ဍများမှ ခွင့်ပြုချက်များကို ဖယ်ရှားပါ။
+- အစပျိုးမက်တာဒေတာကို စမတ်ကန်ထရိုက်များတွင် သုံးနိုင်သည်။
+- ကွဲလွဲနေသောအခြေအနေမြင်ကွင်း (#4867) ကိုကာကွယ်ရန် rw လော့ခ်ကိုသုံးပါ။
+- လျှပ်တစ်ပြက်အတွင်း ပျော့ပျောင်းသောခက်ရင်းကို ကိုင်တွယ်ပါ (#4868)
+- ChaCha20Poly1305 အတွက် MinSize ကို ပြင်ဆင်ပါ။
+- မြင့်မားသောမှတ်ဉာဏ်အသုံးပြုမှု (#4893) ကိုကာကွယ်ရန် LiveQueryStore တွင်ကန့်သတ်ချက်များထည့်ပါ။
 
-### Removed
+### ဖယ်ရှားခဲ့သည်။
 
-- remove public key from ed25519 private key (#4856)
-- remove kura.lock (#4849)
-- revert `_ms` and `_bytes` suffixes in config (#4667)
-- remove `_id` and `_file` suffix from genesis fields (#4724)
-- remove index Assets in AssetsMap by AssetDefinitionId (#4701)
-- remove domain from trigger identity (#4640)
-- remove genesis signing from Iroha (#4673)
-- remove `Visit` bound from `Validate` (#4642)
-- remove `TriggeringEventFilterBox` (#4866)
-- remove `garbage` in p2p handshake (#4889)
-- remove `committed_topology` from block (#4880)
+- အများသူငှာသော့ကို ed25519 သီးသန့်သော့ (#4856) မှဖယ်ရှားပါ။
+- kura.lock (#4849) ကို ဖယ်ရှားပါ။
+- Config တွင် `_ms` နှင့် `_bytes` ၏ နောက်ဆက်တွဲများ (#4667) ကို ပြန်ပြောင်းပါ။
+- ဥပါဒ်နယ်ပယ်များမှ `_id` နှင့် `_file` တို့ကို ဖယ်ရှားပါ (#4724)
+- AssetDefinitionId (#4701) ဖြင့် AssetsMap ရှိ အညွှန်းပိုင်ဆိုင်မှုများကို ဖယ်ရှားပါ
+- အစပျိုးအထောက်အထား (#4640) မှ ဒိုမိန်းကို ဖယ်ရှားပါ
+- Iroha (#4673) မှ ဥပါဒ်လက္ခဏာကို ဖယ်ရှားပါ။
+- `Visit` ကို `Validate` (#4642) မှ ဖယ်ထုတ်ပါ။
+- `TriggeringEventFilterBox` (#4866) ကို ဖယ်ရှားပါ။
+- p2p လက်ဆွဲခြင်းတွင် `garbage` ကို ဖယ်ရှားပါ (#4889)
+- `committed_topology` ကို ဘလောက် (#4880) မှ ဖယ်ရှားပါ။
 
-### Security
+### လုံခြုံရေး
 
-- guard against secrets leakage
+- လျှို့ဝှက်ချက်များ ပေါက်ကြားခြင်းမှ ကာကွယ်ပါ။
 
 ## [2.0.0-pre-rc.21] - 2024-04-19
 
-### Added
+### ထည့်ပေးထားပါတယ်။
 
-- include trigger id in trigger entrypoint (#4391)
-- expose event set as bitfields in schema (#4381)
-- introduce new `wsv` with granular access (#2664)
-- add event filters for `PermissionTokenSchemaUpdate`, `Configuration` and `Executor` events
-- introduce snapshot "mode" (#4365)
-- allow granting/revoking role's permissions (#4244)
-- introduce arbitrary-precision numeric type for assets (remove all other numeric types) (#3660)
-- different fuel limit for Executor (#3354)
-- integrate pprof profiler (#4250)
-- add asset subcommand in client CLI (#4200)
-- `Register<AssetDefinition>` permissions (#4049)
-- add `chain_id` to prevent replay attacks (#4185)
-- add subcommands to edit domain metadata in client CLI (#4175)
-- implement store set, remove, get operations in Client CLI (#4163)
-- count identical smart contracts for triggers (#4133)
-- add subcommand into client CLI to transfer domains (#3974)
-- support boxed slices in FFI (#4062)
-- git commit SHA to client CLI (#4042)
-- proc macro for default validator boilerplate (#3856)
-- introduced query request builder into Client API (#3124)
-- lazy queries inside smart contracts (#3929)
-- `fetch_size` query parameter (#3900)
-- asset store tranfer instruction (#4258)
-- guard against secrets leakage (#3240)
-- deduplicate triggers with the same source code (#4419)
+- trigger id ကို trigger entrypoint (#4391) တွင် ထည့်သွင်းပါ။
+- schema (#4381) တွင် bitfields အဖြစ် သတ်မှတ်ထားသော အဖြစ်အပျက်ကို ဖော်ထုတ်ပါ။
+- အသေးစိတ်အသုံးပြုမှု (#2664) ဖြင့် `wsv` အသစ်ကို မိတ်ဆက်ပါ။
+- `PermissionTokenSchemaUpdate`၊ `Configuration` နှင့် `Executor` ဖြစ်ရပ်များအတွက် ပွဲဇကာများကို ထည့်ပါ
+- လျှပ်တစ်ပြက်ရိုက်ချက် "မုဒ်" မိတ်ဆက် (#4365)
+- အခန်းကဏ္ဍ၏ခွင့်ပြုချက်များကိုခွင့်ပြု/ ရုပ်သိမ်းခြင်း (#4244)
+- ပိုင်ဆိုင်မှုများအတွက် မတရား-တိကျသောဂဏန်းအမျိုးအစားကို မိတ်ဆက်ပေးပါ (အခြားဂဏန်းအမျိုးအစားအားလုံးကို ဖယ်ရှားပါ) (#3660)
+- Executor အတွက် မတူညီသော လောင်စာဆီကန့်သတ်ချက် (#3354)
+- pprof profiler (#4250) ကို ပေါင်းစပ်ပါ။
+- client CLI (#4200) တွင် ပိုင်ဆိုင်မှု subcommand ကိုထည့်ပါ။
+- `Register<AssetDefinition>` ခွင့်ပြုချက်များ (#4049)
+- ပြန်ဖွင့်တိုက်ခိုက်မှုများကိုကာကွယ်ရန် `chain_id` ကိုထည့်ပါ (#4185)
+- client CLI (#4175) တွင် domain metadata ကိုတည်းဖြတ်ရန် subcommands များထည့်ပါ။
+- စတိုးဆိုင်သတ်မှတ်မှု၊ ဖယ်ရှားရန်၊ Client CLI (#4163) တွင် လုပ်ဆောင်ချက်များကို ရယူပါ။
+- အစပျိုးမှုများအတွက် တူညီသော စမတ်စာချုပ်များကို ရေတွက်ပါ (#4133)
+- ဒိုမိန်းများကိုလွှဲပြောင်းရန် client CLI တွင် subcommand ကိုထည့်ပါ (#3974)
+- FFI (#4062) တွင် ထုပ်ပိုးထားသော အချပ်များကို ပံ့ပိုးပါ။
+- git SHA ကို client CLI (#4042) သို့ SHA အပ်နှံသည်
+- မူရင်း validator boilerplate အတွက် proc macro (#3856)
+- Client API (#3124) သို့ query request builder ကို မိတ်ဆက်ခဲ့သည်
+- စမတ်စာချုပ်များအတွင်း ပျင်းရိသောမေးခွန်းများ (#3929)
+- `fetch_size` မေးမြန်းမှု ကန့်သတ်ချက် (#3900)
+- ပစ္စည်းအရောင်းဆိုင် လွှဲပြောင်းခြင်း ညွှန်ကြားချက် (#4258)
+- လျှို့ဝှက်ချက်များ ပေါက်ကြားခြင်းမှ ကာကွယ်ခြင်း (#3240)
+- တူညီသောအရင်းအမြစ်ကုဒ် (#4419) ဖြင့် ပွားနေသော အစပျိုးမှုများ
 
-### Changed
-
-- bump rust toolchain to nightly-2024-04-18
-- send blocks to Set B validators (#4387)
-- split pipeline events into block and transaction events (#4366)
-- rename `[telemetry.dev]` config section to `[dev_telemetry]` (#4377)
-- make `Action` and `Filter` non-generic types (#4375)
-- improve event filtering API with builder pattern (#3068)
-- unify various event filter APIs, introduce a fluent builder API
-- rename `FilterBox` into `EventFilterBox`
-- rename `TriggeringFilterBox` into `TriggeringEventFilterBox`
-- improve filter naming, e.g. `AccountFilter` -> `AccountEventFilter`
-- rewrite config according to the configuration RFC (#4239)
-- hide internal structure of the versioned structs from the public API (#3887)
-- temporarily introduce predictable ordering after too many failed view changes (#4263)
-- use concrete key types in `iroha_crypto` (#4181)
-- split view changes from normal messages (#4115)
-- make `SignedTransaction` immutable (#4162)
-- export `iroha_config` through `iroha_client` (#4147)
-- export `iroha_crypto` through `iroha_client` (#4149)
-- export `data_model` through `iroha_client` (#4081)
-- remove `openssl-sys` dependency from `iroha_crypto` and introduce configurable tls backends to `iroha_client` (#3422)
-- replace unmaintained EOF `hyperledger/ursa` with in-house solution `iroha_crypto` (#3422)
-- optimize executor performance (#4013)
+### ပြောင်းလဲခဲ့သည်။- ညစဉ်ညတိုင်း-2024-04-18 သို့ သံချေးတက်တူးလ်
+- Set B validators (#4387) သို့ ဘလောက်များ ပို့ပါ
+- ပိုက်လိုင်းဖြစ်ရပ်များကို ပိတ်ဆို့ခြင်းနှင့် ငွေပေးငွေယူဖြစ်ရပ်များ (#4366) အဖြစ် ပိုင်းခြားပါ။
+- `[telemetry.dev]` config အပိုင်းကို `[dev_telemetry]` (#4377) သို့ အမည်ပြောင်းပါ။
+- ယေဘုယျမဟုတ်သော `Action` နှင့် `Filter` (#4375)
+- builder ပုံစံ (#3068) ဖြင့် event filtering API ကို မြှင့်တင်ပါ
+- အမျိုးမျိုးသော event filter API များကို ပေါင်းစည်းပြီး ကျွမ်းကျင်သော builder API ကိုမိတ်ဆက်ပေးပါ။
+- `FilterBox` ကို `EventFilterBox` သို့ အမည်ပြောင်းပါ။
+- `TriggeringFilterBox` ကို `TriggeringEventFilterBox` သို့ အမည်ပြောင်းပါ။
+- စစ်ထုတ်မှုအမည်ကို မြှင့်တင်ပါ၊ ဥပမာ၊ `AccountFilter` -> `AccountEventFilter`
+- configuration RFC (#4239) အရ config ကို ပြန်ရေးပါ။
+- အများသူငှာ API (#3887) မှ ဗားရှင်းထုတ်ထားသော structs များ၏ အတွင်းပိုင်း ဖွဲ့စည်းပုံကို ဝှက်ထားရန်။
+- မအောင်မြင်သော မြင်ကွင်းပြောင်းလဲမှုများ (#4263) များပြားလွန်းပြီးနောက် ကြိုတင်ခန့်မှန်းနိုင်သော မှာယူမှုကို ယာယီမိတ်ဆက်ပါ။
+- `iroha_crypto` (#4181) တွင် ကွန်ကရစ်သော့အမျိုးအစားများကို အသုံးပြုပါ။
+- ပုံမှန်မက်ဆေ့ဂျ်များမှ မြင်ကွင်းခွဲ၍ ပြောင်းလဲမှုများ (#4115)
+- `SignedTransaction` ကို မပြောင်းလဲနိုင်သော (#4162) ပြုလုပ်ပါ
+- `iroha_config` ကို `iroha_client` (#4147) မှတဆင့် တင်ပို့ပါ
+- `iroha_crypto` ကို `iroha_client` (#4149) မှတဆင့် တင်ပို့ပါ
+- `data_model` ကို `iroha_client` (#4081) မှတဆင့် တင်ပို့ပါ
+- `openssl-sys` မှီခိုအားထားမှုကို `iroha_crypto` မှဖယ်ရှားပြီး `iroha_client` (#3422) သို့ configureable tls backends များကို မိတ်ဆက်ပါ။
+- မထိန်းသိမ်းမထားသော EOF `hyperledger/ursa` ကို အိမ်တွင်းဖြေရှင်းချက် `iroha_crypto` (#3422) ဖြင့် အစားထိုးပါ။
+- executor စွမ်းဆောင်ရည်ကို အကောင်းဆုံးဖြစ်အောင် (#4013)
 - topology peer update (#3995)
 
-### Fixed
+### ပုံသေ
 
-- remove corresponding triggers on `Unregister<Domain>` (#4461)
-- remove permissions from roles on entity unregistration (#4242)
-- assert that genesis tranasction is signed by genesis pub key (#4253)
-- introduce timeout for unresponsive peers in p2p (#4267)
-- prevent registering genesis Domain or Account (#4226)
-- `MinSize` for `ChaCha20Poly1305` (#4395)
-- start console when `tokio-console` is enabled (#4377)
-- separate each item with `\n` and recursively create parent directories for `dev-telemetry` file logs
-- prevent account registration without signatures (#4212)
-- key pair generation is now infallible (#4283)
-- stop encoding `X25519` keys as `Ed25519` (#4174)
-- do signature validation in `no_std` (#4270)
-- calling blocking methods within async context (#4211)
-- revoke associated tokens on entity unregistretration (#3962)
-- async blocking bug when starting Sumeragi
-- fixed `(get|set)_config` 401 HTTP (#4177)
-- `musl` archiver name in Docker (#4193)
-- smart contract debug print (#4178)
-- topology update on restart (#4164)
-- registration of new peer (#4142)
-- on-chain predictable iteration order (#4130)
-- re-architect logger and dynamic configuration (#4100)
-- trigger atomicity (#4106)
-- query store message ordering issue (#4057)
-- set `Content-Type: application/x-norito` for endpoints which reply using Norito
+- `Unregister<Domain>` (#4461) ရှိ သက်ဆိုင်ရာ အစပျိုးများကို ဖယ်ရှားပါ။
+- မှတ်ပုံတင်ခြင်းမပြုခြင်းဆိုင်ရာ အခန်းကဏ္ဍများမှ ခွင့်ပြုချက်များကို ဖယ်ရှားပါ (#4242)
+- genesis tranasction ကို genesis pub key (#4253) ဖြင့် ရေးထိုးထားကြောင်း အခိုင်အမာဆိုသည်။
+- p2p (#4267) တွင် တုံ့ပြန်မှုမရှိသော သက်တူရွယ်တူများအတွက် အချိန်ကုန်သွားသည်
+- ဥပါဒ် Domain သို့မဟုတ် အကောင့် (#4226) ကို စာရင်းသွင်းခြင်းကို တားဆီးပါ။
+- `ChaCha20Poly1305` အတွက် `MinSize` (#4395)
+- `tokio-console` ကိုဖွင့်သောအခါ (#4377) ကိုဖွင့်ပါ
+- အရာတစ်ခုစီကို `\n` ဖြင့် ပိုင်းခြားပြီး `dev-telemetry` ဖိုင်မှတ်တမ်းများအတွက် ပင်မလမ်းညွှန်များကို ထပ်ခါတလဲလဲ ဖန်တီးပါ။
+- လက်မှတ်မပါဘဲ အကောင့်မှတ်ပုံတင်ခြင်းကို တားဆီးပါ (#4212)
+- သော့တွဲမျိုးဆက်သည် ယခုအခါ မှားယွင်းနိုင်ချေရှိသည် (#4283)
+- `X25519` ကီးများကို `Ed25519` (#4174) အဖြစ် ကုဒ်သွင်းခြင်းကို ရပ်ပါ
+- `no_std` (#4270) တွင် လက်မှတ်အတည်ပြုခြင်းပြုလုပ်ပါ။
+- async context (#4211) အတွင်း ပိတ်ဆို့ခြင်းနည်းလမ်းများကို ခေါ်ဆိုခြင်း
+- အဖွဲ့အစည်းမှတ်ပုံတင်ခြင်းမပြုခြင်း (#3962) တွင် ဆက်စပ်တိုကင်များကို ရုပ်သိမ်းခြင်း
+- Sumeragi ကိုစတင်သောအခါတွင် async ပိတ်ဆို့ခြင်း bug
+- ပုံသေ `(get|set)_config` 401 HTTP (#4177)
+- `musl` Docker (#4193) တွင် archiver အမည်
+- စမတ်စာချုပ် အမှားအယွင်း ပုံနှိပ်ခြင်း (#4178)
+- ပြန်လည်စတင်ခြင်းတွင် topology update (#4164)
+- သက်တူရွယ်တူအသစ်များ မှတ်ပုံတင်ခြင်း (#4142)
+- ကွင်းဆက်တွင် ကြိုတင်ခန့်မှန်းနိုင်သော ထပ်လောင်းအမှာစာ (#4130)
+- ပြန်လည်ဗိသုကာပညာရှင် သစ်ခုတ်သမားနှင့် ပြောင်းလဲနေသော ဖွဲ့စည်းမှုပုံစံ (#4100)
+- အဏုမြူစွမ်းအားကို အစပျိုးခြင်း (#4106)
+- စတိုးဆိုင် မက်ဆေ့ချ်မှာယူမှုပြဿနာ (#4057)
+- Norito ကို အသုံးပြု၍ စာပြန်သည့် အဆုံးမှတ်များအတွက် `Content-Type: application/x-norito` ကို သတ်မှတ်ပါ
 
-### Removed
+### ဖယ်ရှားခဲ့သည်။
 
-- `logger.tokio_console_address` configuration parameter (#4377)
+- `logger.tokio_console_address` ဖွဲ့စည်းမှုဘောင် (#4377)
 - `NotificationEvent` (#4377)
 - `Value` enum (#4305)
-- MST aggregation from iroha (#4229)
-- cloning for ISI and query execution in smart contracts (#4182)
-- `bridge` and `dex` features (#4152)
-- flattened events (#3068)
-- expressions (#4089)
-- auto-generated config reference
-- `warp` noise in logs (#4097)
+- iroha မှ MST စုစည်းမှု (#4229)
+- ISI အတွက် ပုံတူပွားခြင်းနှင့် စမတ်စာချုပ်များ (#4182)
+- `bridge` နှင့် `dex` အင်္ဂါရပ်များ (#4152)
+- အပြားလိုက်ဖြစ်ရပ်များ (#3068)
+- အသုံးအနှုန်းများ (#4089)
+- အလိုအလျောက်ထုတ်ပေးသော config အကိုးအကား
+- `warp` မှတ်တမ်းများတွင် ဆူညံသံ (#4097)
 
-### Security
+### လုံခြုံရေး
 
-- prevent pub key spoofing in p2p (#4065)
-- ensure the `secp256k1` signatures coming out of OpenSSL are normalized (#4155)
+- p2p (#4065) တွင် အရက်ဆိုင်သော့အတုအယောင်ကို တားဆီးပါ
+- OpenSSL မှထွက်လာသော `secp256k1` လက်မှတ်များကို ပုံမှန်ဖြစ်စေကြောင်း သေချာပါစေ (#4155)
 
 ## [2.0.0-pre-rc.20] - 2023-10-17
 
-### Added
+### ထည့်ပေးထားပါတယ်။
 
-- Transfer `Domain` ownership
-- `Domain` owner permissions
-- Add `owned_by` field to `Domain`
-- parse filter as JSON5 in `iroha_client_cli` (#3923)
-- Add support for usage of Self type in serde partially tagged enums
-- Standardize block API (#3884)
-- Implement `Fast` kura init mode
-- Add iroha_swarm disclaimer header
-- initial support for WSV snapshots
+- `Domain` ပိုင်ဆိုင်မှုကို လွှဲပြောင်းပါ။
+- `Domain` ပိုင်ရှင်ခွင့်ပြုချက်များ
+- `owned_by` အကွက်ကို `Domain` သို့ ထည့်ပါ
+- `iroha_client_cli` (#3923) တွင် JSON5 အဖြစ် စစ်ထုတ်ခြင်း
+- serde တစ်စိတ်တစ်ပိုင်းတဂ်လုပ်ထားသော enums တွင် Self type ကိုအသုံးပြုမှုအတွက်ပံ့ပိုးမှုထည့်ပါ။
+- ပိတ်ဆို့ခြင်း API ကို စံသတ်မှတ်ခြင်း (#3884)
+- `Fast` kura init မုဒ်ကို အကောင်အထည်ဖော်ပါ။
+- iroha_swarm ငြင်းဆိုချက် ခေါင်းစီးကို ထည့်ပါ။
+- WSV လျှပ်တစ်ပြက်ရိုက်ချက်များအတွက် ကနဦးပံ့ပိုးမှု
 
-### Fixed
+### ပုံသေ
 
-- Fix executor downloading in update_configs.sh (#3990)
-- proper rustc in devShell
-- Fix burn `Trigger` reprtitions
-- Fix transfer `AssetDefinition`
-- Fix `RemoveKeyValue` for `Domain`
-- Fix the usage of `Span::join`
-- Fix topology mismatch bug (#3903)
-- Fix `apply_blocks` and `validate_blocks` benchmark
-- `mkdir -r` with store path, not lock path (#3908)
-- Don't fail if dir exists in test_env.py
-- Fix authentication/authorization docstring (#3876)
-- Better error message for query find error
-- Add genesis account public key to dev docker compose
-- Compare permission token payload as JSON (#3855)
-- Fix `irrefutable_let_patterns` in the `#[model]` macro
-- Allow genesis to execute any ISI (#3850)
-- Fix genesis validation (#3844)
-- Fix topology for 3 or less peers
-- Correct how tx_amounts histogram is calculated.
-- `genesis_transactions_are_validated()` test flakiness
-- Default validator generation
-- Fix iroha graceful shutdown
+- update_configs.sh (#3990) တွင် executor ဒေါင်းလုဒ်ဆွဲခြင်းကို ပြုပြင်ပါ
+- devShell တွင်သင့်လျော်သော rustc
+- မီးလောင်နေသော `Trigger` ကို ပြင်ဆင်ပါ။
+- လွှဲပြောင်း `AssetDefinition` ကိုပြင်ပါ။
+- `Domain` အတွက် `RemoveKeyValue` ကို ပြင်ဆင်ပါ
+- `Span::join` အသုံးပြုမှုကို ပြုပြင်ပါ။
+- topology mismatch bug ကိုပြင်ပါ (#3903)
+- `apply_blocks` နှင့် `validate_blocks` စံညွှန်းကို ပြင်ဆင်ပါ
+- စတိုးဆိုင်လမ်းကြောင်းပါရှိသော `mkdir -r`၊ လော့ခ်လမ်းကြောင်း (#3908)
+- test_env.py တွင် dir ရှိလျှင် မအောင်မြင်ပါနှင့်
+- အထောက်အထားစိစစ်ခြင်း/ခွင့်ပြုချက်ရယူခြင်း docstring (#3876) ကို ပြင်ဆင်ပါ
+- query find error အတွက် ပိုကောင်းတဲ့ error message ပါ။
+- dev docker ရေးရန်အတွက် genesis အကောင့် public key ကိုထည့်ပါ။
+- ခွင့်ပြုချက်တိုကင် payload ကို JSON (#3855) အဖြစ် နှိုင်းယှဉ်ပါ
+- `irrefutable_let_patterns` ကို `#[model]` မက်ခရိုတွင် ပြင်ဆင်ပါ
+- မည်သည့် ISI (#3850) ကိုမဆို လုပ်ဆောင်ရန် ဥပါဒ်ခွင့်ပြုပါ
+- ဥပါဒ်အတည်ပြုခြင်းကို ပြုပြင်ပါ (#3844)
+- လုပ်ဖော်ကိုင်ဖက် 3 ဦး သို့မဟုတ် ဤထက်နည်းသော topology ကို ပြင်ဆင်ပါ။
+- tx_amounts histogram တွက်ချက်ပုံကို ပြင်ပါ။
+- `genesis_transactions_are_validated()` စမ်းသပ်မှု
+- ပုံသေ validator မျိုးဆက်
+- iroha ပိတ်ခြင်းကို သပ်ရပ်စွာ ဖြေရှင်းပါ။
 
-### Refactor
+### ဓာတ်ပေါင်းဖို
 
-- remove unused dependencies (#3992)
-- bump dependencies (#3981)
-- Rename validator to executor (#3976)
-- Remove `IsAssetDefinitionOwner` (#3979)
-- Include smart contract code into the workspace (#3944)
-- Merge API and Telemetry endpoints into a single server
-- move expression len out of public API into core (#3949)
-- Avoid clone in roles lookup
-- Range queries for roles
-- Move account roles to `WSV`
-- Rename ISI from *Box to *Expr (#3930)
-- Remove 'Versioned' prefix from versioned containers (#3913)
-- move `commit_topology` into block payload (#3916)
-- Migrate `telemetry_future` macro to syn 2.0
-- Registered with Identifiable in ISI bounds (#3925)
-- Add basic generics support to `derive(HasOrigin)`
-- Clean up Emitter APIs documentation to make clippy happy
-- Add tests for derive(HasOrigin) macro, reduce repetition in derive(IdEqOrdHash), fix error reporting on stable
-- Improve naming, simplify repeated .filter_maps & get rid of unnecessary .except in derive(Filter)
-- Make PartiallyTaggedSerialize/Deserialize use darling
-- Make derive(IdEqOrdHash) use darling, add tests
-- Make derive(Filter) use darling
-- Update iroha_data_model_derive to use syn 2.0
-- Add signature check condition unit tests
-- Allow only a fixed set of signature verification conditions
-- Generalize ConstBytes into a ConstVec that holds any const sequence
-- Use a more efficient representation for bytes values that are not changing
-- Store finalized wsv in snapshot
-- Add `SnapshotMaker` actor
-- document limitation of parsing derives in proc macros
-- clean up comments
-- extract a common test utility for parsing attributes to lib.rs
-- use parse_display & update Attr -> Attrs naming
-- allow usage of pattern matching in ffi function args
-- reduce repetition in getset attrs parsing
-- rename Emitter::into_token_stream into Emitter::finish_token_stream
-- Use parse_display to parse getset tokens
-- Fix typos and improve error messages
-- iroha_ffi_derive: use darling to parse attributes and use syn 2.0
-- iroha_ffi_derive: replace proc-macro-error with manyhow
-- Simplify kura lock file code
-- make all numeric values serialize as string literals
-- Split off Kagami (#3841)
-- Rewrite `scripts/test-env.sh`
-- Differentiate between smart contract and trigger entrypoints
-- Elide `.cloned()` in `data_model/src/block.rs`
-- update `iroha_schema_derive` to use syn 2.0
+- အသုံးမပြုသော မှီခိုမှုများကို ဖယ်ရှားပါ (#3992)
+- မှီခိုမှု (#3981)
+- validator ကို executor သို့ အမည်ပြောင်းပါ (#3976)
+- `IsAssetDefinitionOwner` (#3979) ကို ဖယ်ရှားပါ။
+- အလုပ်ခွင်တွင် စမတ်စာချုပ်ကုဒ်ကို ထည့်သွင်းပါ (#3944)
+- API နှင့် Telemetry အဆုံးမှတ်များကို ဆာဗာတစ်ခုတည်းသို့ ပေါင်းစည်းပါ။
+- အများသူငှာ API မှ len expression ကို core (#3949) သို့ ရွှေ့ပါ။
+- အခန်းကဏ္ဍရှာဖွေမှုတွင် clone ကိုရှောင်ကြဉ်ပါ။
+- အခန်းကဏ္ဍများအတွက် မေးခွန်းများ အပိုင်းအခြား
+- အကောင့်အခန်းကဏ္ဍများကို `WSV` သို့ ရွှေ့ပါ။
+- *Box မှ *Expr (#3930) သို့ ISI အမည်ပြောင်းပါ။
+- ဗားရှင်းလုပ်ထားသော ကွန်တိန်နာများ (#3913) မှ 'ဗားရှင်းလုပ်ထားသော' ရှေ့ဆက်ကို ဖယ်ရှားပါ
+- `commit_topology` ကို block payload (#3916) သို့ ရွှေ့ပါ။
+- `telemetry_future` macro ကို syn 2.0 သို့ ရွှေ့ပြောင်းပါ။
+- ISI ဘောင်များ (#3925) တွင် ခွဲခြားသတ်မှတ်နိုင်သော မှတ်ပုံတင်ဖြင့် မှတ်ပုံတင်ထားသည်။
+- `derive(HasOrigin)` တွင် အခြေခံ generic ပံ့ပိုးမှုကို ထည့်ပါ။
+- clippy ပျော်ရွှင်စေရန် Emitter APIs စာရွက်စာတမ်းများကို ရှင်းလင်းပါ။
+- derive(HasOrigin) macro အတွက် စမ်းသပ်မှုများကို ပေါင်းထည့်ပါ၊ derive(IdEqOrdHash) တွင် ထပ်ခါတလဲလဲလုပ်ခြင်းကို လျှော့ချပါ၊ တည်ငြိမ်သော အမှားအယွင်းအစီရင်ခံခြင်းကို ပြင်ဆင်ပါ
+- အမည်ပေးခြင်းကို မြှင့်တင်ပါ၊ ထပ်ခါတလဲလဲ .filter_maps ကို ရိုးရှင်းအောင်ပြုလုပ်ပြီး မလိုအပ်သော .derive(Filter) မှလွဲ၍ မလိုအပ်သောအရာများကို ဖယ်ရှားပါ
+- PartiallyTaggedSerialize/ Deserialize သုံးပါ ချစ်တို့ရေ
+- derive(IdEqOrdHash) ကိုအသုံးပြုပါ ချစ်လှစွာသော၊ စမ်းသပ်မှုများထည့်ပါ။
+- derive (Filter) ကိုအသုံးပြုပါ ချစ်တို့ရေ
+- syn 2.0 ကိုအသုံးပြုရန် iroha_data_model_derive ကို အပ်ဒိတ်လုပ်ပါ။
+- လက်မှတ်စစ်ဆေးမှုအခြေအနေယူနစ်စမ်းသပ်မှုများကိုထည့်ပါ။
+- သတ်မှတ်ထားသော လက်မှတ်အတည်ပြုမှု အခြေအနေများကိုသာ ခွင့်ပြုပါ။
+- ConstBytes အားလုံးကို const sequence ကိုင်ဆောင်ထားသော ConstVec တစ်ခုအဖြစ် ယေဘုယျလုပ်ပါ။
+- ပြောင်းလဲခြင်းမရှိသော bytes တန်ဖိုးများအတွက် ပိုမိုထိရောက်သောကိုယ်စားပြုမှုကို အသုံးပြုပါ။
+- အပြီးသတ် wsv ကို လျှပ်တစ်ပြက်တွင် သိမ်းဆည်းပါ။
+- `SnapshotMaker` သရုပ်ဆောင်ထည့်ပါ။
+- ခွဲခြမ်းစိတ်ဖြာခြင်း၏ စာရွက်စာတမ်းကန့်သတ်ချက်သည် proc macro တွင် ဆင်းသက်လာသည်။
+- မှတ်ချက်များကိုရှင်းလင်းပါ။
+- lib.rs သို့ attribute များကိုခွဲခြမ်းစိတ်ဖြာရန်အတွက် ဘုံစမ်းသပ်ကိရိယာတစ်ခုကို ထုတ်ယူပါ။
+- parse_display ကိုသုံး၍ Attr ကို အပ်ဒိတ်လုပ်ပါ -> Attrs အမည်ပေးခြင်း
+- ffi လုပ်ဆောင်ချက် args တွင် ပုံစံတူအသုံးပြုမှုကို ခွင့်ပြုပါ။
+- getset attrs ခွဲခြမ်းစိတ်ဖြာမှုတွင် ထပ်တလဲလဲလုပ်ခြင်းကို လျှော့ချပါ။
+- Emitter::into_token_stream ကို Emitter::finish_token_stream သို့ အမည်ပြောင်းပါ
+- getset တိုကင်များကိုခွဲခြမ်းစိတ်ဖြာရန် parse_display ကိုသုံးပါ။
+- အမှားပြင်ဆင်ပြီး အမှားမက်ဆေ့ချ်များကို မြှင့်တင်ပါ။
+- iroha_ffi_derive- ရည်ညွှန်းချက်များကို ခွဲခြမ်းစိပ်ဖြာရန် ချစ်လှစွာသောကိုသုံး၍ syn 2.0 ကိုသုံးပါ
+- iroha_ffi_derive: proc-macro-error ကို နည်းများစွာဖြင့် အစားထိုးပါ။
+- kura လော့ခ်ဖိုင်ကုဒ်ကို ရိုးရှင်းအောင်ပြုလုပ်ပါ။
+- ကိန်းဂဏာန်းတန်ဖိုးများအားလုံးကို string literals အဖြစ် အမှတ်စဉ်ပြုလုပ်ပါ။
+- Kagami (#3841) ကို ခွဲထုတ်ပါ။
+- `scripts/test-env.sh` ကို ပြန်ရေးပါ။
+- စမတ်ကျသော စာချုပ်နှင့် အစပျိုး entrypoints များအကြား ခွဲခြားပါ။
+- `data_model/src/block.rs` တွင် Elide `.cloned()`
+- Syn 2.0 ကိုအသုံးပြုရန် `iroha_schema_derive` ကို အပ်ဒိတ်လုပ်ပါ။
 
 ## [2.0.0-pre-rc.19] - 2023-08-14
 
-### Added
+### ထည့်ပေးထားပါတယ်။
 
-- hyperledger#3309 Bump IVM runtime for improved
-- hyperledger#3383 Implement macro to parse a socket addresses at compile time
-- hyperledger#2398 Add integration tests for query filters
-- Include the actual error message in `InternalError`
-- Usage of `nightly-2023-06-25` as the default tool-chain
-- hyperledger#3692 Validator migration
-- [DSL internship] hyperledger#3688: Implement basic arithmetic as proc macro
-- hyperledger#3371 Split validator `entrypoint` to ensure that validators are no longer viewed as smart-contracts
-- hyperledger#3651 WSV snapshots, which allow to bring up an Iroha node quickly after a crash
-- hyperledger#3752 Replace `MockValidator` with an `Initial` validator that accepts all transactions
-- hyperledger#3276 Add temporary instruction called `Log` that logs a specified string to the main log of the Iroha node
-- hyperledger#3641 Make the permission token payload human-readable
-- hyperledger#3324 Add `iroha_client_cli` related `burn` checks and refactoring
-- hyperledger#3781 Validate genesis transactions
-- hyperledger#2885 Differentiate between events that can and cannot be used for triggers
-- hyperledger#2245 `Nix`-based build of iroha node binary as `AppImage`
+- ပိုမိုကောင်းမွန်စေရန်အတွက် hyperledger #3309 Bump IVM runtime
+- hyperledger#3383 ကို compile အချိန်၌ socket လိပ်စာများကိုခွဲခြမ်းစိတ်ဖြာရန် macro ကိုအသုံးပြုပါ
+- hyperledger#2398 query filters အတွက် ပေါင်းစပ်စစ်ဆေးမှုများ ထည့်ပါ။
+- `InternalError` တွင် အမှန်တကယ် အမှားအယွင်း မက်ဆေ့ချ်ကို ထည့်သွင်းပါ။
+- မူရင်းတူးလ်ကွင်းဆက်အဖြစ် `nightly-2023-06-25` ကို အသုံးပြုခြင်း။
+- hyperledger#3692 မှန်ကန်သော ရွှေ့ပြောင်းမှု
+- [DSL အလုပ်သင်] hyperledger #3688- အခြေခံဂဏန်းသင်္ချာကို proc macro အဖြစ် အကောင်အထည်ဖော်ပါ။
+- တရားဝင်စာရင်းသွင်းသူများကို စမတ်စာချုပ်များအဖြစ် မကြည့်တော့ကြောင်း သေချာစေရန် ဟိုက်ပါဘလက်ဂျာ# 3371 ခွဲခြမ်းစစ်ဆေးခြင်း `entrypoint`
+- ပျက်စီးမှုတစ်ခုပြီးနောက် Iroha node ကို လျင်မြန်စွာ ယူဆောင်လာနိုင်သည့် ဟိုက်ပါလီဂါ # 3651 WSV လျှပ်တစ်ပြက်များ
+- hyperledger#3752 `MockValidator` ကို `Initial` validator ဖြင့် အစားထိုးပါ
+- hyperledger#3276 I18NT000000317X ဟုခေါ်သော ယာယီညွှန်ကြားချက်ကို Iroha ၏ပင်မမှတ်တမ်းသို့ သတ်မှတ်ထားသော စာကြောင်းတစ်ခုအား မှတ်တမ်းထည့်သည်။
+- hyperledger#3641 ခွင့်ပြုချက် token payload ကို human-readable လုပ်ပါ။
+- hyperledger#3324 `iroha_client_cli` နှင့် ဆက်စပ်သော `burn` စစ်ဆေးမှုများနှင့် refactoring ကို ထည့်ပါ
+- hyperledger#3781 ဥပါဒ် အရောင်းအ၀ယ်များကို အတည်ပြုပါ။
+- hyperledger#2885 အစပျိုးမှုများအတွက် အသုံးမပြုနိုင်သော ဖြစ်ရပ်များအကြား ကွဲပြားသည်။
+- hyperledger#2245 `Nix` ကို `AppImage` အဖြစ် iroha node binary တည်ဆောက်ခြင်း
 
-### Fixed
+### ပုံသေ- မှားယွင်းစွာ ရေးထိုးထားသော အရောင်းအ၀ယ်များကို လက်ခံနိုင်စေမည့် ဟိုက်ပါအကောင့်နံပါတ် ၃၆၁၃ ဆုတ်ယုတ်မှု
+- မှားယွင်းနေသော Configuration topology ကို စောစောစီးစီး ငြင်းပယ်ပါ။
+- hyperledger#3445 ဆုတ်ယုတ်မှုကို ပြုပြင်ပြီး `/configuration` တွင် `/configuration` ကို ထပ်မံလုပ်ဆောင်ပါ
+- hyperledger#3654 Fix `iroha2` `glibc`-based `Dockerfiles` ကို အသုံးပြုရန်
+- hyperledger #3451 Fix `docker` Apple silicon macs ပေါ်တွင် တည်ဆောက်သည်
+- hyperledger#3741 `tempfile` အမှားကို `kagami validator` ကိုပြင်ပါ
+- hyperledger#3758 တစ်ဦးချင်းစီသေတ္တာများတည်ဆောက်၍မရသောဆုတ်ယုတ်မှုကိုပြုပြင်ပါ၊ သို့သော်အလုပ်ခွင်၏တစ်စိတ်တစ်ပိုင်းအနေဖြင့်တည်ဆောက်နိုင်သည်
+- အခန်းကဏ္ဍမှတ်ပုံတင်ခြင်းတွင် တရားဝင်မမှန်ကန်သော ဟိုက်ပါလယ်ဂျာ#3777 ဖာထေးကွက်ကွက်လပ်
+- hyperledger#3805 Fix Iroha `SIGTERM` ကိုလက်ခံရရှိပြီးနောက် မပိတ်ပါ။
 
-- hyperledger#3613 Regression which could allow incorrectly signed transactions to be accepted
-- Reject incorrect Configuration topology early
-- hyperledger#3445 Fix regression and make `POST` on the `/configuration` endpoint work again
-- hyperledger#3654 Fix `iroha2` `glibc`-based `Dockerfiles` to be deployed
-- hyperledger#3451 Fix `docker` build on Apple silicon macs
-- hyperledger#3741 Fix `tempfile` error in `kagami validator`
-- hyperledger#3758 Fix regression where individual crates could not be built, but could be built as part of the workspace
-- hyperledger#3777 Patch loophole in role registration not being validated
-- hyperledger#3805 Fix Iroha not shutting down after receiving `SIGTERM`
+### အခြား
 
-### Other
-
-- hyperledger#3648 Include `docker-compose.*.yml` check in the CI processes
-- Move instruction `len()` from `iroha_data_model` into `iroha_core`
-- hyperledger#3672 Replace `HashMap` with `FxHashMap` in derive macros
-- hyperledger#3374 Unify error's doc-comments and `fmt::Display` implementation
-- hyperledger#3289 Use Rust 1.70 workspace inheritance throughout project
-- hyperledger#3654 Add `Dockerfiles` to build iroha2 on `GNU libc <https://www.gnu.org/software/libc/>`_
-- Introduce `syn` 2.0, `manyhow` and `darling` for proc-macros
-- hyperledger#3802 Unicode `kagami crypto` seed
+- hyperledger#3648 တွင် `docker-compose.*.yml` ပါဝင်ပြီး CI လုပ်ငန်းစဉ်များတွင် စစ်ဆေးပါ
+- ညွှန်ကြားချက် `len()` ကို `iroha_data_model` မှ `iroha_core` သို့ ရွှေ့ပါ
+- hyperledger#3672 သည် `HashMap` ကို ထုတ်ယူသည့် macro တွင် `FxHashMap` ဖြင့် အစားထိုးပါ
+- hyperledger#3374 အမှား၏ doc-မှတ်ချက်များနှင့် `fmt::Display` အကောင်အထည်ဖော်မှုကို ပေါင်းစည်းပါ
+- hyperledger#3289 ပရောဂျက်တစ်လျှောက်လုံး Rust 1.70 အလုပ်ခွင်အမွေကို အသုံးပြုပါ။
+- hyperledger#3654 `GNU libc <https://www.gnu.org/software/libc/>`_ တွင် iroha2 ကိုတည်ဆောက်ရန် `Dockerfiles` ကိုထည့်ပါ။
+- proc-macros အတွက် `syn` 2.0၊ `manyhow` နှင့် `darling` ကို မိတ်ဆက်ပါ။
+- hyperledger#3802 Unicode `kagami crypto` မျိုးစေ့
 
 ## [2.0.0-pre-rc.18]
 
-### Added
+### ထည့်ပေးထားပါတယ်။
 
-- hyperledger#3468: Server-side cursor, which allows for lazily evaluated re-entrant pagination which should have major positive performance implications for query latency
-- hyperledger#3624: General purpose permission tokens; specifically
-  - Permissions tokens can have any structure
-  - Token structure is self-described in the `iroha_schema` and serialised as a JSON string
-  - Token value is `Norito`-encoded
-  - as a consequence of this change permission token naming convention was moved from `snake_case` to `UpeerCamelCase`
-- hyperledger#3615 Preserve wsv after validation
+- hyperledger #3468- query latency အတွက် ကြီးကြီးမားမား အပြုသဘောဆောင်သော စွမ်းဆောင်မှု သက်ရောက်မှုရှိသင့်သည့် ပျင်းရိစွာ အကဲဖြတ်ထားသော ပြန်လည်ထည့်သွင်းခြင်း pagination ကို ခွင့်ပြုပေးသော ဆာဗာ-ဘေးကာဆာ၊
+- hyperledger#3624- အထွေထွေရည်ရွယ်ချက်ခွင့်ပြုချက်တိုကင်များ၊ အထူးသဖြင့်
+  - ခွင့်ပြုချက်တိုကင်များတွင်မည်သည့်ဖွဲ့စည်းပုံရှိနိုင်သည်။
+  - တိုကင်ဖွဲ့စည်းပုံကို `iroha_schema` တွင် ကိုယ်တိုင်ဖော်ပြပြီး JSON စာကြောင်းအဖြစ် အမှတ်စဉ်သတ်မှတ်ထားသည်။
+  - တိုကင်တန်ဖိုးသည် `Norito` ဖြင့် ကုဒ်လုပ်ထားသည်။
+  - ဤပြောင်းလဲမှု၏အကျိုးဆက်အနေဖြင့် ခွင့်ပြုချက်တိုကင်အမည်ပေးခြင်းကွန်ဗင်းရှင်းကို `snake_case` မှ `UpeerCamelCase` သို့ ရွှေ့ခဲ့သည်
+- hyperledger#3615 အတည်ပြုပြီးနောက် wsv ကို ထိန်းသိမ်းပါ။
 
-### Fixed
+### ပုံသေ
 
-- hyperledger#3627 Transaction atomicity now enforced via cloning of the `WorlStateView`
-- hyperledger#3195 Extend panic behaviour for when receiving a rejected genesis transaction
-- hyperledger#3042 Fix bad request message
-- hyperledger#3352 Split up control flow and data message into separate channels
-- hyperledger#3543 Improve precision of metrics
+- hyperledger#3627 သည် `WorlStateView` ၏ပုံတူပွားခြင်းမှတစ်ဆင့် ယခုအခါတွင် အရောင်းအ၀ယ်ပြုလုပ်သည့် အနုမြူစနစ်အား ပြဌာန်းထားသည်
+- hyperledger#3195 ပယ်ချထားသော ဥပါဒ် အရောင်းအ၀ယ်ကို လက်ခံရရှိသည့်အခါ ထိတ်လန့်သောအပြုအမူကို တိုးချဲ့ပါ။
+- hyperledger#3042 မကောင်းတဲ့ တောင်းဆိုချက် မက်ဆေ့ချ်ကို ပြင်ဆင်ပါ။
+- hyperledger#3352 ထိန်းချုပ်မှုစီးဆင်းမှုနှင့် ဒေတာမက်ဆေ့ဂျ်ကို သီးခြားချန်နယ်များအဖြစ် ပိုင်းခြားပါ။
+- hyperledger#3543 မက်ထရစ်များ၏ တိကျမှုကို မြှင့်တင်ပါ။
 
 ## 2.0.0-pre-rc.17
 
-### Added
+### ထည့်ပေးထားပါတယ်။
 
-- hyperledger#3330 Extend `NumericValue` deserialisation
-- hyperledger#2622 `u128`/`i128` support in FFI
-- hyperledger#3088 Introduce queue throttling, to prevent DoS
-- hyperledger#2373 `kagami swarm file` and `kagami swarm dir` command variants for generating `docker-compose` files
-- hyperledger#3597 Permission Token Analysis (Iroha side)
-- hyperledger#3353 Remove `eyre` from `block.rs` by enumerating error conditions and using strongly-typed errors
-- hyperledger#3318 Interleave rejected and accepted transactions in blocks to preserve transaction processing order
+- hyperledger#3330 Extend `NumericValue` ဖယ်ထုတ်ခြင်း
+- FFI တွင် hyperledger #2622 `u128`/`i128` ပံ့ပိုးမှု
+- DoS ကိုကာကွယ်ရန် hyperledger#3088 တန်းစီခြင်းအား နိဒါန်းပျိုးပါ။
+- `docker-compose` ဖိုင်များကို ထုတ်လုပ်ရန်အတွက် ဟိုက်ပါပါစာရင်းဂျာ #2373 `kagami swarm file` နှင့် `kagami swarm dir` ကွန်မန်းမျိုးကွဲများ
+- hyperledger #3597 Permission Token Analysis (Iroha side)
+- hyperledger#3353 `eyre` ကို `block.rs` မှ `block.rs` မှ အမှားအယွင်းအခြေအနေများကို တွက်ချက်ပြီး ပြင်းထန်စွာရိုက်ထားသော အမှားများကို အသုံးပြု၍ ဖယ်ရှားပါ
+- hyperledger#3318 Interleave သည် အရောင်းအ၀ယ်လုပ်ဆောင်ခြင်းအစီအစဥ်ကို ထိန်းသိမ်းထားရန် ဘလောက်များတွင် အရောင်းအ၀ယ်များကို ငြင်းပယ်ပြီး လက်ခံခဲ့သည်။
 
-### Fixed
+### ပုံသေ
 
-- hyperledger#3075 Panic on invalid transaction in the `genesis.json` to prevent invalid transactions from being processed
-- hyperledger#3461 Proper handling of default values in default config
-- hyperledger#3548 Fix `IntoSchema` transparent attribute
-- hyperledger#3552 Fix validator path schema representation
-- hyperledger#3546 Fix for time triggers getting stuck
-- hyperledger#3162 Forbid 0 height in block streaming requests
-- Configuration macro initial test
-- hyperledger#3592 Fix for  config files being updated on `release`
-- hyperledger#3246 Don't involve `Set B validators <https://github.com/hyperledger-iroha/iroha/blob/main/docs/source/iroha_2_whitepaper.md#2-system-architecture>`_ without `fault <https://en.wikipedia.org/wiki/Byzantine_fault>`_
-- hyperledger#3570 Correctly display client-side string query errors
-- hyperledger#3596 `iroha_client_cli` shows blocks/events
-- hyperledger#3473 Make `kagami validator` work from outside the  iroha repository root directory
+- မမှန်ကန်သော ငွေပေးငွေယူများကို လုပ်ဆောင်ခြင်းမှ ကာကွယ်ရန် `genesis.json` တွင် မမှန်ကန်သော ငွေပေးငွေယူအတွက် ဟိုက်ပါအကောင့် #3075 ထိတ်လန့်ခြင်း
+- hyperledger#3461 default config တွင် ပုံသေတန်ဖိုးများကို မှန်ကန်စွာ ကိုင်တွယ်ခြင်း။
+- hyperledger#3548 Fix `IntoSchema` ဖောက်ထွင်းမြင်ရသော ရည်ညွှန်းချက်
+- hyperledger#3552 validator လမ်းကြောင်း schema ကိုယ်စားပြုမှုကို ပြင်ဆင်ပါ။
+- hyperledger#3546 အချိန်အစပျိုးများပိတ်မိခြင်းအတွက်ပြင်ဆင်ပါ။
+- hyperledger#3162 ပိတ်ဆို့ကြည့်ရှုခြင်းတောင်းဆိုမှုများတွင် 0 အမြင့်ကို တားမြစ်ပါ။
+- ဖွဲ့စည်းမှုပုံစံ macro ကနဦးစမ်းသပ်မှု
+- `release` တွင် အပ်ဒိတ်လုပ်နေသော config ဖိုင်များအတွက် hyperledger #3592 Fix
+- hyperledger#3246 `fault <https://en.wikipedia.org/wiki/Byzantine_fault>`_ မပါဘဲ `Set B validators <https://github.com/hyperledger-iroha/iroha/blob/main/docs/source/iroha_2_whitepaper.md#2-system-architecture>`_ မပါဝင်ပါနှင့်။
+- hyperledger#3570 သည် client-side string query အမှားများကို မှန်ကန်စွာပြသသည်။
+- hyperledger#3596 `iroha_client_cli` သည် ပိတ်ဆို့ခြင်း/ဖြစ်ရပ်များကို ပြသသည်
+- hyperledger#3473 `kagami validator` ကို iroha repository root directory ပြင်ပမှ အလုပ်လုပ်အောင်လုပ်ပါ။
 
-### Other
+### အခြား
 
-- hyperledger#3063 Map transaction `hash` to block height in `wsv`
-- strongly-typed `HashOf<T>` in `Value`
+- `wsv` တွင် အမြင့်ကို ပိတ်ဆို့ရန် ဟိုက်ပါဘလက်ဂျာ#3063 မြေပုံအရောင်းအ၀ယ် `hash`
+- `Value` တွင် `HashOf<T>` အား ပြင်းပြင်းထန်ထန် ရိုက်ထားသည်
 
 ## [2.0.0-pre-rc.16]
 
-### Added
+### ထည့်ပေးထားပါတယ်။
 
-- hyperledger#2373 `kagami swarm` sub-command for generating `docker-compose.yml`
-- hyperledger#3525 Standardize transaction API
-- hyperledger#3376 Add Iroha Client CLI `pytest <https://docs.pytest.org/en/7.4.x/>`_ automation framework
-- hyperledger#3516 Retain original blob hash in `LoadedExecutable`
+- hyperledger#2373 `kagami swarm` သည် `docker-compose.yml` ကိုထုတ်လုပ်ရန်အတွက် ကွန်မန်းခွဲ
+- hyperledger#3525 စံပြုငွေပေးငွေယူ API
+- hyperledger#3376 Iroha Client CLI `pytest <https://docs.pytest.org/en/7.4.x/>`_ automation framework ကိုထည့်ပါ
+- hyperledger#3516 `LoadedExecutable` တွင် မူရင်း blob hash ကို ထိန်းသိမ်းပါ။
 
-### Fixed
+### ပုံသေ
 
-- hyperledger#3462 Add `burn` asset command to `client_cli`
-- hyperledger#3233 Refactor error types
-- hyperledger#3330 Fix regression, by manually implementing `serde::de::Deserialize` for `partially-tagged <https://serde.rs/enum-representations.html>`_ `enums`
-- hyperledger#3487 Return missing types into the schema
-- hyperledger#3444 Return discriminant into schema
-- hyperledger#3496 Fix `SocketAddr` field parsing
-- hyperledger#3498 Fix soft-fork detection
-- hyperledger#3396 Store block in `kura` before emitting a block committed event
+- hyperledger#3462 `burn` ပိုင်ဆိုင်မှု command ကို `client_cli` သို့ထည့်ပါ
+- hyperledger#3233 Refactor အမှားအမျိုးအစားများ
+- `partially-tagged <https://serde.rs/enum-representations.html>`_ `enums` အတွက် `serde::de::Deserialize` ကို ကိုယ်တိုင်အကောင်အထည်ဖော်ခြင်းဖြင့် hyperledger#3330 ဆုတ်ယုတ်မှုကို ပြုပြင်ပါ
+- hyperledger#3487 ပျောက်နေသောအမျိုးအစားများကို schema သို့ပြန်ပေးပါ။
+- hyperledger#3444 ခွဲခြားမှုကို schema အဖြစ်ပြန်ပေးပါ။
+- hyperledger#3496 Fix `SocketAddr` အကွက်ခွဲခြမ်းစိတ်ဖြာခြင်း
+- hyperledger#3498 ပျော့ပျောင်းသောခက်ရင်းရှာဖွေမှုကို ပြုပြင်ပါ။
+- ပိတ်ဆို့ကျူးလွန်ထားသောဖြစ်ရပ်ကိုမထုတ်မီ `kura` ရှိ hyperledger #3396 စတိုးဘလောက်
 
-### Other
+### အခြား
 
-- hyperledger#2817 Remove interior mutability from `WorldStateView`
+- hyperledger#2817 `WorldStateView` မှ အတွင်းပိုင်းပြောင်းလဲနိုင်စွမ်းကို ဖယ်ရှားပါ
 - hyperledger#3363 Genesis API refactor
-- Refactor existing and supplement with new tests for topology
-- Switch from `Codecov <https://about.codecov.io/>`_ to `Coveralls <https://coveralls.io/>`_  for test coverage
-- hyperledger#3533 Rename `Bool` to `bool` in schema
+- ရှိပြီးသားအားပြန်ဖြည့်ပြီး topology အတွက် စမ်းသပ်မှုအသစ်များဖြင့် ဖြည့်စွက်ပါ။
+- စမ်းသပ်မှုလွှမ်းခြုံမှုအတွက် `Codecov <https://about.codecov.io/>`_ မှ `Coveralls <https://coveralls.io/>`_ သို့ ပြောင်းပါ
+- hyperledger#3533 `Bool` ကို `bool` သို့ အမည်ပြောင်းပါ
 
 ## [2.0.0-pre-rc.15]
 
-### Added
+### ထည့်ပေးထားပါတယ်။
 
-- hyperledger#3231 Monolithic validator
-- hyperledger#3015 Support for niche optimization in FFI
-- hyperledger#2547 Add logo to `AssetDefinition`
-- hyperledger#3274 Add to `kagami` a sub-command that generates examples (backported into LTS)
-- hyperledger#3415 `Nix <https://nixos.wiki/wiki/Flakes>`_ flake
-- hyperledger#3412 Move transaction gossiping to a separate actor
-- hyperledger#3435 Introduce `Expression` visitor
-- hyperledger#3168 Provide genesis validator as a separate file
-- hyperledger#3454 Make LTS the default for most Docker operations and documentation
-- hyperledger#3090 Propagate on-chain parameters from blockchain to `sumeragi`
+- hyperledger #3231 Monolithic validator
+- hyperledger#3015 FFI တွင် အထူးကောင်းမွန်အောင်ပြုလုပ်ခြင်းအတွက် ပံ့ပိုးမှု
+- hyperledger#2547 `AssetDefinition` သို့ လိုဂိုထည့်ပါ။
+- hyperledger#3274 ဥပမာများကိုထုတ်ပေးသော (LTS သို့ backported) ထုတ်ပေးသော `kagami` သို့ထည့်ပါ
+- hyperledger#3415 `Nix <https://nixos.wiki/wiki/Flakes>`_ အပေါက်များ
+- hyperledger#3412 အတင်းအဖျင်းပြောသော ငွေပေးငွေယူကို သီးခြားသရုပ်ဆောင်တစ်ဦးသို့ ရွှေ့ပါ။
+- hyperledger#3435 `Expression` ဧည့်သည်ကို မိတ်ဆက်ပေးပါ။
+- hyperledger#3168 သည် သီးခြားဖိုင်တစ်ခုအဖြစ် genesis validator ကို ပေးပါ။
+- hyperledger#3454 သည် Docker လုပ်ဆောင်ချက်များနှင့် စာရွက်စာတမ်းအများစုအတွက် ပုံသေ LTS ဖြစ်အောင်လုပ်ပါ
+- hyperledger#3090 blockchain မှ `sumeragi` သို့ on-chain parameters များကို ဖြန့်ဝေပါ
 
-### Fixed
+### ပုံသေ
 
-- hyperledger#3330 Fix untagged enum de-serialization with `u128` leaves (backported into RC14)
-- hyperledger#2581 reduced noise in logs
-- hyperledger#3360 Fix `tx/s` benchmark
-- hyperledger#3393 Break communication deadlock loop in `actors`
-- hyperledger#3402 Fix `nightly` build
-- hyperledger#3411 Properly handle peers simultaneous connection
-- hyperledger#3440 Deprecate asset conversions during transfer, instead handled by smart-contracts
-- hyperledger#3408: Fix `public_keys_cannot_be_burned_to_nothing` test
+- hyperledger#3330 `u128` အရွက်ဖြင့် tag မထားသော enum de-serialization ကိုပြင်ပါ (RC14 သို့ backported)
+- hyperledger#2581 မှတ်တမ်းများတွင် ဆူညံသံကို လျှော့ချသည်။
+- hyperledger#3360 Fix `tx/s` စံသတ်မှတ်ချက်
+- hyperledger#3393 `actors` ရှိ ဆက်သွယ်ရေးမသေသောလော့ခ်လမ်းကြောင်းကို ဖြတ်တောက်ပါ
+- hyperledger#3402 Fix `nightly` တည်ဆောက်ခြင်း။
+- hyperledger#3411 သက်တူရွယ်တူများ တစ်ပြိုင်နက်တည်း ဆက်သွယ်မှုကို မှန်ကန်စွာ ကိုင်တွယ်ပါ။
+- hyperledger#3440 စမတ်-ကန်ထရိုက်များမှ ကိုင်တွယ်မည့်အစား လွှဲပြောင်းမှုအတွင်း ပိုင်ဆိုင်မှုကူးပြောင်းမှုများကို ဆန့်ကျင်ပါ
+- hyperledger #3408- `public_keys_cannot_be_burned_to_nothing` စမ်းသပ်မှုကို ပြင်ဆင်ပါ။
 
-### Other
+### အခြား
 
-- hyperledger#3362 Migrate to `tokio` actors
-- hyperledger#3349 Remove `EvaluateOnHost` from smart contracts
-- hyperledger#1786 Add `iroha`-native types for socket addresses
-- Disable IVM cache
-- Re-enable IVM cache
-- Rename permission validator into validator
-- hyperledger#3388 Make `model!` a module-level attribute macro
-- hyperledger#3370 Serialize `hash` as hexadecimal string
-- Move `maximum_transactions_in_block` from `queue` to `sumeragi` configuration
-- Deprecate and remove `AssetDefinitionEntry` type
-- Rename `configs/client_cli` into `configs/client`
-- Update `MAINTAINERS.md`
+- hyperledger#3362 `tokio` သရုပ်ဆောင်များထံ ပြောင်းရွှေ့ပါ
+- hyperledger#3349 `EvaluateOnHost` ကို စမတ်စာချုပ်များမှ ဖယ်ရှားပါ
+- hyperledger#1786 socket လိပ်စာများအတွက် `iroha`-ဇာတိအမျိုးအစားများကိုထည့်ပါ
+- IVM ကက်ရှ်ကို ပိတ်ပါ။
+- IVM ကက်ရှ်ကို ပြန်ဖွင့်ပါ။
+- ခွင့်ပြုချက် validator ကို validator အဖြစ် အမည်ပြောင်းပါ။
+- hyperledger#3388 `model!` ကို module-level attribute macro အဖြစ် ပြုလုပ်ပါ
+- hyperledger#3370 ကို `hash` ကို hexadecimal string အဖြစ် အတွဲလိုက်
+- `maximum_transactions_in_block` ကို `queue` မှ `sumeragi` သို့ ရွှေ့ပါ
+- `AssetDefinitionEntry` အမျိုးအစားကို ကန့်ကွက်ပြီး ဖယ်ရှားပါ။
+- `configs/client_cli` ကို `configs/client` သို့ အမည်ပြောင်းပါ
+- အပ်ဒိတ် `MAINTAINERS.md`
 
 ## [2.0.0-pre-rc.14]
 
-### Added
+### ထည့်ပေးထားပါတယ်။
 
-- hyperledger#3127 data model `structs` opaque by default
-- hyperledger#3122 use `Algorithm` for storing digest function (community contributor)
-- hyperledger#3153 `iroha_client_cli` output is machine readable
-- hyperledger#3105 Implement `Transfer` for  `AssetDefinition`
-- hyperledger#3010 `Transaction` expire pipeline event added
+- ပုံမှန်အားဖြင့် hyperledger#3127 ဒေတာမော်ဒယ် `structs` သည် အလင်းပြနေသည်
+- hyperledger #3122 သည် `Algorithm` ကို အသုံးပြု၍ digest လုပ်ဆောင်ချက် (အသိုင်းအဝိုင်းပံ့ပိုးသူ) ကိုသိမ်းဆည်းရန်
+- hyperledger#3153 `iroha_client_cli` အထွက်သည် စက်ဖြင့်ဖတ်နိုင်သည်
+- hyperledger #3105 `Transfer` အတွက် `AssetDefinition` ကို အကောင်အထည်ဖော်ပါ
+- hyperledger#3010 `Transaction` သက်တမ်းကုန်သွားသော ပိုက်လိုင်းဖြစ်ရပ်ကို ထည့်ထားသည်
 
-### Fixed
+### ပုံသေ
 
-- hyperledger#3113 revision of unstable network tests
-- hyperledger#3129 Fix `Parameter` de/serialisation
-- hyperledger#3141 Manually implement `IntoSchema` for `Hash`
-- hyperledger#3155 Fix panic hook in tests, preventing deadlock
-- hyperledger#3166 Don't view change on idle, improving performance
-- hyperledger#2123 Return to PublicKey de/serialization from multihash
-- hyperledger#3132 Add NewParameter validator
-- hyperledger#3249 Split block hashes into partial and complete versions
-- hyperledger#3031 Fix the UI/UX of missing configuration parameters
-- hyperledger#3247 Removed fault injection from `sumeragi`.
+- မတည်မငြိမ် ကွန်ရက်စမ်းသပ်မှုများ၏ ဟိုက်ပါဘလက်ဂျာ #3113 ပြန်လည်ပြင်ဆင်ခြင်း။
+- hyperledger #3129 Fix `Parameter` de/serialisation
+- hyperledger#3141 `Hash` အတွက် `IntoSchema` ကို ကိုယ်တိုင်အကောင်အထည်ဖော်ပါ။
+- hyperledger#3155 သော့ပိတ်ခြင်းကိုကာကွယ်ပေးသောစမ်းသပ်မှုများတွင် ထိတ်လန့်တကြားချိတ်ကို ပြုပြင်ပါ။
+- hyperledger#3166 idle တွင် အပြောင်းအလဲကို မကြည့်ပါနှင့်၊ စွမ်းဆောင်ရည်ကို မြှင့်တင်ပါ။
+- hyperledger#2123 multihash မှ PublicKey de/serialization သို့ ပြန်သွားရန်
+- hyperledger#3132 NewParameter validator ကိုထည့်ပါ။
+- hyperledger#3249 ဘလောက်ဟိတ်များကို တစ်စိတ်တစ်ပိုင်းနှင့် ပြီးပြည့်စုံသောဗားရှင်းများအဖြစ် ခွဲလိုက်ပါ။
+- hyperledger#3031 ပျောက်ဆုံးနေသော ဖွဲ့စည်းမှုပုံစံဘောင်များ၏ UI/UX ကို ပြင်ဆင်ပါ။
+- hyperledger#3247 ကို `sumeragi` မှ မှားယွင်းထိုးသွင်းခြင်းကို ဖယ်ရှားထားသည်။
 
-### Other
+### အခြား
 
-- Add missing `#[cfg(debug_assertions)]` to fix spurious failures
-- hyperledger#2133 Rewrite topology to be closer the whitepaper
-- Remove `iroha_client` dependency on `iroha_core`
-- hyperledger#2943 Derive `HasOrigin`
-- hyperledger#3232 Share workspace metadata
-- hyperledger#3254 Refactor `commit_block()` and `replace_top_block()`
-- Use stable default allocator handler
-- hyperledger#3183 Rename the `docker-compose.yml` files
-- Improved the `Multihash` display format
-- hyperledger#3268 Globally unique item identifiers
-- New PR template
+- ပျောက်နေသော `#[cfg(debug_assertions)]` ကို spurious ကျရှုံးမှုများကိုဖြေရှင်းရန်ထည့်ပါ။
+- hyperledger#2133 စာရွက်ဖြူနှင့် ပိုနီးစပ်စေရန် topology ကို ပြန်ရေးပါ။
+- `iroha_core` ပေါ်တွင် `iroha_client` မှီခိုမှုကို ဖယ်ရှားပါ
+- hyperledger#2943 `HasOrigin` ကို ရယူပါ။
+- hyperledger#3232 အလုပ်ခွင်မက်တာဒေတာကို မျှဝေပါ။
+- hyperledger#3254 Refactor `commit_block()` နှင့် `replace_top_block()`
+- တည်ငြိမ်သော ပုံသေခွဲဝေပေးသူကို အသုံးပြုပါ။
+- hyperledger#3183 `docker-compose.yml` ဖိုင်များကို အမည်ပြောင်းပါ။
+- `Multihash` မျက်နှာပြင်ဖော်မတ်ကို မြှင့်တင်ထားသည်။
+- hyperledger#3268 တစ်ကမ္ဘာလုံးတွင် ထူးခြားသည့်အရာ ခွဲခြားသတ်မှတ်မှုများ
+- PR ပုံစံအသစ်
 
 ## [2.0.0-pre-rc.13]
 
-### Added
+### ထည့်ပေးထားပါတယ်။- hyperledger#2399 ISI အဖြစ် သတ်မှတ်မှုဘောင်များ။
+- hyperledger#3119 `dropped_messages` မက်ထရစ်ကို ထည့်ပါ။
+- hyperledger#3094 `n` ရွယ်တူများဖြင့် ကွန်ရက်ကို ဖန်တီးပါ။
+- hyperledger#3082 `Created` ဖြစ်ရပ်တွင် အချက်အလက်အပြည့်အစုံကို ပံ့ပိုးပါ။
+- hyperledger#3021 Opaque pointer တင်သွင်းခြင်း။
+- FFI တွင် တိကျပြတ်သားသော ခွဲခြားဆက်ဆံမှုများဖြင့် ကွက်လပ်မရှိသော စာရင်းဇယားများ #2794 ကို ငြင်းပယ်ပါ။
+- hyperledger#2922 ကို မူရင်းဥပါဒ်သို့ `Grant<Role>` ပေါင်းထည့်ပါ။
+- hyperledger#2922 `inner` အကွက်ကို `NewRole` json ဖယ်ထုတ်ခြင်းတွင် ဖယ်ထားပါ။
+- json deserialization တွင် hyperledger #2922 မှ `object(_id)` ကို ချန်ထားပါ။
+- json ဖယ်ခွာခြင်းတွင် hyperledger #2922 `Id` ကို ချန်လှပ်ထားသည်။
+- json deserialization တွင် hyperledger #2922 `Identifiable` ကို ချန်ထားပါ။
+- hyperledger#2963 `queue_size` ကို မက်ထရစ်များထဲသို့ ထည့်ပါ။
+- hyperledger#3027 ကို Kura အတွက် lockfile ကိုအကောင်အထည်ဖော်ပါ။
+- hyperledger#2813 Kagami သည် default peer config ကို ထုတ်လုပ်သည်။
+- hyperledger#3019 ပံ့ပိုးမှု JSON5။
+- hyperledger#2231 FFI wrapper API ကိုထုတ်လုပ်ပါ။
+- hyperledger#2999 ဘလောက်လက်မှတ်များကို စုဆောင်းပါ။
+- hyperledger#2995 Soft fork detection။
+- hyperledger#2905 `NumericValue` ကို ပံ့ပိုးရန် ဂဏန်းသင်္ချာ လုပ်ဆောင်ချက်များကို တိုးချဲ့ပါ
+- hyperledger#2868 iroha ဗားရှင်းကိုထုတ်ပြီး မှတ်တမ်းများတွင် hash လုပ်ပါ။
+- ပိုင်ဆိုင်မှုစုစုပေါင်းပမာဏအတွက် hyperledger#2096 Query။
+- hyperledger#2899 'client_cli' တွင် ညွှန်ကြားချက်များ ပေါင်းထည့်ပါ
+- hyperledger#2247 websocket ဆက်သွယ်မှုဆူညံသံကိုဖယ်ရှားပါ။
+- hyperledger#2889 ကို `iroha_client` တွင် ပိတ်ဆို့ကြည့်ရှုခြင်းဆိုင်ရာ ပံ့ပိုးမှုထည့်ပါ။
+- hyperledger#2280 အခန်းကဏ္ဍကို ခွင့်ပြု/ရုပ်သိမ်းသည့်အခါ ခွင့်ပြုချက်ဖြစ်ရပ်များကို ထုတ်လုပ်ပါ။
+- hyperledger#2797 ဖြစ်ရပ်များကို မြှင့်တင်ပါ။
+- hyperledger#2725 `submit_transaction_blocking` သို့ အချိန်ကုန်သွားခြင်းကို ပြန်လည်ဖော်ပြပါ
+- hyperledger#2712 Config protests။
+- FFi ရှိ hyperledger #2491 Enum ပံ့ပိုးမှု။
+- hyperledger#2775 ပေါင်းစပ်ဖွဲ့စည်းမှုတွင် မတူညီသောသော့များကို ဖန်တီးပါ။
+- hyperledger#2627 Config အပြီးသတ်ခြင်း၊ proxy entrypoint၊ kagami docgen။
+- hyperledger#2765 သည် `kagami` တွင် ဓာတုဥပါဒ်ထုတ်ပေးခြင်း
+- hyperledger#2698 `iroha_client` ရှိ မရှင်းလင်းသော အမှားသတင်းကို ပြင်ဆင်ပါ
+- hyperledger#2689 ခွင့်ပြုချက်တိုကင်အဓိပ္ပါယ်သတ်မှတ်ချက်ဘောင်များကိုထည့်ပါ။
+- hyperledger#2502 စတိုးဆိုင် GIT hash ၏တည်ဆောက်မှု။
+- hyperledger#2672 `ipv4Addr`၊ `ipv6Addr` ဗားရှင်းနှင့် ကြိုတင်ခန့်မှန်းချက်များကို ထည့်ပါ။
+- hyperledger#2626 `Combine` ကိုရယူပါ၊ ခွဲ၍ `config` ကို အကောင်အထည်ဖော်ပါ။
+- proxy တည်ဆောက်ပုံများအတွက် hyperledger#2586 `Builder` နှင့် `LoadFromEnv`။
+- hyperledger#2611 သည် ယေဘုယျ opaque တည်ဆောက်ပုံများအတွက် `TryFromReprC` နှင့် `IntoFfi` ကို ရယူပါ။
+- hyperledger#2587 ကို `Configurable` ကို စရိုက်နှစ်ရပ်အဖြစ် ပိုင်းခြားပါ။ #2587- `Configurable` ကို စရိုက်နှစ်ရပ်အဖြစ် ခွဲလိုက်ပါ။
+- hyperledger#2488 `ffi_export` တွင် trait impls အတွက် ပံ့ပိုးမှုထည့်ပါ
+- hyperledger#2553 ပိုင်ဆိုင်မှုမေးမြန်းချက်များသို့ အမျိုးအစားခွဲထည့်ပါ။
+- hyperledger#2407 Parametrise အစပျိုးမှုများ။
+- hyperledger#2536 FFI ဖောက်သည်များအတွက် `ffi_import` ကို မိတ်ဆက်ပါ။
+- hyperledger#2338 `cargo-all-features` ကိရိယာတန်ဆာပလာကို ထည့်ပါ။
+- hyperledger#2564 Kagami ကိရိယာ အယ်လဂိုရီသမ် ရွေးချယ်မှုများ။
+- hyperledger#2490 အလွတ်သဘော လုပ်ဆောင်ချက်များအတွက် ffi_export ကို အကောင်အထည်ဖော်ပါ။
+- hyperledger#1891 သည် အစပျိုးလုပ်ဆောင်မှုကို အတည်ပြုပါ။
+- hyperledger#1988 ခွဲခြားသတ်မှတ်နိုင်သော၊ Eq၊ Hash၊ Ord အတွက် မက်ခရိုများကို ရယူပါ။
+- hyperledger #2434 FFI bindgen စာကြည့်တိုက်။
+- hyperledger#2073 blockchain အမျိုးအစားများအတွက် String ထက် ConstString ကို ဦးစားပေးပါ။
+- hyperledger#1889 domain-scoped triggers များထည့်ပါ။
+- hyperledger#2098 ခေါင်းစီးမေးမြန်းချက်များကို ပိတ်ဆို့ပါ။ #2098- ဘလောက်ခေါင်းစီးမေးခွန်းများကို ထည့်ပါ။
+- hyperledger#2467 iroha_client_cli ထဲသို့ အကောင့်ထောက်ပံ့ရန် အမိန့်ခွဲကို ထည့်ပါ။
+- hyperledger#2301 ၎င်းကိုမေးမြန်းသည့်အခါ ငွေပေးငွေယူ၏ပိတ်ဆို့ hash ကိုထည့်ပါ။
+ - hyperledger#2454 Norito ဒီကုဒ်ဒါတူးလ်သို့ တည်ဆောက်မှု script တစ်ခုထည့်ပါ။
+- hyperledger#2061 စစ်ထုတ်မှုများအတွက် မက်ခရိုကို ရယူပါ။
+- hyperledger#2228 ကို smartcontracts query error သို့ ခွင့်ပြုချက်မရှိသော မူကွဲကိုထည့်ပါ။
+- hyperledger#2395 ဥပါဒ်မသက်ရောက်ပါက ထိတ်လန့်မှုကို ပေါင်းထည့်ပါ။
+- hyperledger#2000 ဗလာအမည်များကို ခွင့်မပြုပါ။ #2000- အမည်အလွတ်များကို ခွင့်မပြုပါ။
+ - hyperledger#2127 Norito ကုဒ်ဒက်မှ အသုံးပြုထားသော ဒေတာအားလုံးကို သုံးစွဲကြောင်း သေချာစေရန် စိတ်ပိုင်းဆိုင်ရာ စစ်ဆေးမှုကို ပေါင်းထည့်ပါ။
+- hyperledger#2360 `genesis.json` ကို ရွေးချယ်နိုင်စေရန် ထပ်မံပြုလုပ်ပါ။
+- hyperledger#2053 သီးသန့် blockchain တွင်ကျန်ရှိသောမေးမြန်းချက်များအားလုံးသို့စမ်းသပ်မှုများထည့်ပါ။
+- hyperledger#2381 Unify `Role` မှတ်ပုံတင်ခြင်း။
+- hyperledger#2053 သီးသန့် blockchain ရှိ ပိုင်ဆိုင်မှုဆိုင်ရာ မေးမြန်းချက်များကို စမ်းသပ်မှုများ ထည့်ပါ။
+- hyperledger#2053 'private_blockchain' သို့ စမ်းသပ်မှုများ ထည့်ပါ
+- hyperledger#2302 'FindTriggersByDomainId' ဆောင်းပါးတိုကို ထည့်ပါ။
+- hyperledger#1998 မေးမြန်းချက်များသို့ စစ်ထုတ်မှုများကို ထည့်ပါ။
+- hyperledger#2276 လက်ရှိ Block hash ကို BlockHeaderValue တွင် ထည့်သွင်းပါ။
+- hyperledger#2161 ကိုင်တွယ် ID နှင့် မျှဝေထားသော FFI fns။
+- လက်ကိုင် id ကိုထည့်ကာ မျှဝေထားသော စရိုက်လက္ခဏာများ (Clone၊ Eq, Ord) ၏ FFI နှင့် ညီမျှသော တူညီမှုများကို အကောင်အထည်ဖော်ပါ။
+- hyperledger#1638 `configuration` return doc ခွဲသစ်ပင်။
+- hyperledger#2132 `endpointN` proc macro ထည့်ပါ။
+- hyperledger#2257 Revoke<Role> သည် RoleRevoked event ကို ထုတ်လွှတ်သည်။
+- hyperledger#2125 ကို FindAssetDefinitionById မေးမြန်းချက်ကို ထည့်ပါ။
+- hyperledger #1926 အချက်ပြ ကိုင်တွယ်ခြင်းနှင့် လှပသော ပိတ်ခြင်းတို့ကို ထည့်ပါ။
+- hyperledger #2161 သည် `data_model` အတွက် FFI လုပ်ဆောင်ချက်များကို ထုတ်ပေးသည်
+- hyperledger#1149 ဘလောက်ဖိုင်အရေအတွက်သည် လမ်းညွှန်တစ်ခုလျှင် 1000000 ထက်မပိုပါ။
+- hyperledger#1413 API ဗားရှင်း အဆုံးမှတ်ကို ထည့်ပါ။
+- လုပ်ကွက်များနှင့် ငွေပေးငွေယူများအတွက် စုံစမ်းမေးမြန်းခြင်းကို hyperledger#2103 ပံ့ပိုးပေးသည်။ `FindAllTransactions` query ကိုထည့်ပါ။
+- hyperledger#2186 `BigQuantity` နှင့် `Fixed` အတွက် လွှဲပြောင်း ISI ကို ထည့်ပါ။
+- hyperledger#2056 `AssetValueType` `enum` အတွက် derive proc macro crate တစ်ခုကို ထည့်ပါ။
+- hyperledger#2100 ပိုင်ဆိုင်မှုပါရှိသော အကောင့်အားလုံးကို ရှာရန် query ကိုထည့်ပါ။
+- hyperledger#2179 အစပျိုးလုပ်ဆောင်မှုကို ပိုမိုကောင်းမွန်အောင်ပြုလုပ်ပါ။
+- hyperledger#1883 မြှုပ်သွင်းထားသော ဖွဲ့စည်းမှုပုံစံဖိုင်များကို ဖယ်ရှားပါ။
+- hyperledger#2105 သည် client ရှိ query error များကို ကိုင်တွယ်သည်။
+- hyperledger#2050 အခန်းကဏ္ဍနှင့်ပတ်သက်သည့် မေးမြန်းချက်များကို ထည့်ပါ။
+- hyperledger#1572 အထူးပြုခွင့်ပြုချက်တိုကင်များ။
+- hyperledger#2121 စစ်ဆေးပြီးသော့ချိတ်ကို တည်ဆောက်သည့်အခါ တရားဝင်သည်။
+ - hyperledger#2003 Norito ကုဒ်ဒါကိရိယာကို မိတ်ဆက်ပါ။
+- hyperledger#1952 ပိုမိုကောင်းမွန်အောင်ပြုလုပ်ရန်အတွက် စံတစ်ခုအဖြစ် TPS စံညွှန်းတစ်ခု ထည့်ပါ။
+- hyperledger#2040 အရောင်းအ၀ယ်လုပ်ဆောင်မှုကန့်သတ်ချက်ဖြင့် ပေါင်းစပ်စမ်းသပ်မှုကို ပေါင်းထည့်ပါ။
+- hyperledger#1890 Orillion အသုံးပြုမှု-ဖြစ်ရပ်များအပေါ် အခြေခံ၍ ပေါင်းစပ်စမ်းသပ်မှုများကို မိတ်ဆက်ပါ။
+- hyperledger#2048 toolchain ဖိုင်ကိုထည့်ပါ။
+- hyperledger#2100 ပိုင်ဆိုင်မှုပါရှိသော အကောင့်အားလုံးကို ရှာရန် query ကိုထည့်ပါ။
+- hyperledger#2179 အစပျိုးလုပ်ဆောင်မှုကို ပိုမိုကောင်းမွန်အောင်ပြုလုပ်ပါ။
+- hyperledger#1883 မြှုပ်သွင်းထားသော ဖွဲ့စည်းမှုပုံစံဖိုင်များကို ဖယ်ရှားပါ။
+- hyperledger#2004 တွင် `isize` နှင့် `usize` ကို `IntoSchema` ဖြစ်လာခြင်းမှ တားမြစ်သည်။
+- hyperledger#2105 သည် client ရှိ query error များကို ကိုင်တွယ်သည်။
+- hyperledger#2050 အခန်းကဏ္ဍနှင့်ပတ်သက်သည့် မေးမြန်းချက်များကို ထည့်ပါ။
+- hyperledger#1572 အထူးပြုခွင့်ပြုချက်တိုကင်များ။
+- hyperledger#2121 စစ်ဆေးပြီးသော့ချိတ်ကို တည်ဆောက်သည့်အခါ တရားဝင်သည်။
+ - hyperledger#2003 Norito ကုဒ်ဒါကိရိယာကို မိတ်ဆက်ပါ။
+- hyperledger#1952 ပိုမိုကောင်းမွန်အောင်ပြုလုပ်ရန်အတွက် စံတစ်ခုအဖြစ် TPS စံညွှန်းတစ်ခု ထည့်ပါ။
+- hyperledger#2040 အရောင်းအ၀ယ်လုပ်ဆောင်မှုကန့်သတ်ချက်ဖြင့် ပေါင်းစပ်စမ်းသပ်မှုကို ပေါင်းထည့်ပါ။
+- hyperledger#1890 Orillion အသုံးပြုမှု- ကိစ္စများအပေါ် အခြေခံ၍ ပေါင်းစပ်စမ်းသပ်မှုများကို မိတ်ဆက်ပါ။
+- hyperledger#2048 toolchain ဖိုင်ကိုထည့်ပါ။
+- hyperledger#2037 ကြိုတင်လုပ်ဆောင်မှုအစပျိုးမှုများကို မိတ်ဆက်ပါ။
+- hyperledger#1621 ခေါ်ဆိုမှုအစပျိုးများဖြင့် မိတ်ဆက်ပါ။
+- hyperledger#1970 ရွေးချယ်နိုင်သော schema အဆုံးမှတ်ကို ထည့်ပါ။
+- hyperledger#1620 အချိန်အခြေခံအစပျိုးများကို မိတ်ဆက်ပါ။
+- hyperledger#1918 `client` အတွက် အခြေခံ စစ်မှန်ကြောင်း အထောက်အထားကို အကောင်အထည်ဖော်ပါ
+- hyperledger#1726 ထုတ်ဝေမှု PR အလုပ်အသွားအလာကို အကောင်အထည်ဖော်ပါ။
+- hyperledger#1815 သည် query responses များကို အမျိုးအစား-ဖွဲ့စည်းပုံ ပိုမိုပြုလုပ်ပါ။
+- hyperledger#1928 `gitchangelog` ကိုအသုံးပြုပြီး changelog မျိုးဆက်ကိုအကောင်အထည်ဖော်ပါ။
+- hyperledger#1902 Bare metal 4-peer setup script
 
-- hyperledger#2399 Config parameters as ISI.
-- hyperledger#3119 Add `dropped_messages` metric.
-- hyperledger#3094 Generate network with `n` peers.
-- hyperledger#3082 Provide full data in `Created` event.
-- hyperledger#3021 Opaque pointer import.
-- hyperledger#2794 Reject Fieldless enums with explicit discriminants in FFI.
-- hyperledger#2922 Add `Grant<Role>` to default genesis.
-- hyperledger#2922 Omit `inner` field in `NewRole` json deserialization.
-- hyperledger#2922 Omit `object(_id)` in json deserialization.
-- hyperledger#2922 Omit `Id` in json deserialisation.
-- hyperledger#2922 Omit `Identifiable` in json deserialization.
-- hyperledger#2963 Add `queue_size` to the metrics.
-- hyperledger#3027 implement lockfile for Kura.
-- hyperledger#2813 Kagami generate default peer config.
-- hyperledger#3019 Support JSON5.
-- hyperledger#2231 Generate FFI wrapper API.
-- hyperledger#2999 Accumulate block signatures.
-- hyperledger#2995 Soft fork detection.
-- hyperledger#2905 Extend arithmetic operations to support `NumericValue`
-- hyperledger#2868 Emit iroha version and commit hash in logs.
-- hyperledger#2096 Query for total amount of asset.
-- hyperledger#2899 Add multi-instructions subcommand into 'client_cli'
-- hyperledger#2247 Remove websocket communication noise.
-- hyperledger#2889 Add block streaming support into `iroha_client`
-- hyperledger#2280 Produce permission events when role is granted/revoked.
-- hyperledger#2797 Enrich events.
-- hyperledger#2725 Reintroduce timeout into `submit_transaction_blocking`
-- hyperledger#2712 Config proptests.
-- hyperledger#2491 Enum support in FFi.
-- hyperledger#2775 Generate different keys in synthetic genesis.
-- hyperledger#2627 Config finalisation, proxy entrypoint, kagami docgen.
-- hyperledger#2765 Generate synthetic genesis in `kagami`
-- hyperledger#2698 Fix unclear error message in `iroha_client`
-- hyperledger#2689 Add permission token definition parameters.
-- hyperledger#2502 Store GIT hash of build.
-- hyperledger#2672 Add `ipv4Addr`,  `ipv6Addr` variant and predicates.
-- hyperledger#2626 Implement `Combine` derive, split `config` macros.
-- hyperledger#2586 `Builder` and `LoadFromEnv` for proxy structs.
-- hyperledger#2611 Derive `TryFromReprC` and `IntoFfi` for generic opaque structs.
-- hyperledger#2587 Split `Configurable` into two traits. #2587: Split `Configurable` into two traits
-- hyperledger#2488 Add support for trait impls in `ffi_export`
-- hyperledger#2553 Add sorting to asset queries.
-- hyperledger#2407 Parametrise triggers.
-- hyperledger#2536 Introduce `ffi_import` for FFI clients.
-- hyperledger#2338 Add `cargo-all-features` instrumentation.
-- hyperledger#2564 Kagami tool algorithm options.
-- hyperledger#2490 Implement ffi_export for freestanding functions.
-- hyperledger#1891 Validate trigger execution.
-- hyperledger#1988 Derive macros for Identifiable, Eq, Hash, Ord.
-- hyperledger#2434 FFI bindgen library.
-- hyperledger#2073 Prefer ConstString over String for types in blockchain.
-- hyperledger#1889 Add domain-scoped triggers.
-- hyperledger#2098 Block header queries. #2098: add block header queries
-- hyperledger#2467 Add account grant subcommand into iroha_client_cli.
-- hyperledger#2301 Add transaction's block hash when querying it.
- - hyperledger#2454 Add a build script to the Norito decoder tool.
-- hyperledger#2061 Derive macro for filters.
-- hyperledger#2228 Add Unauthorized variant to smartcontracts query error.
-- hyperledger#2395 Add panic if genesis cannot be applied.
-- hyperledger#2000 Disallow empty names. #2000: Disallow empty names
- - hyperledger#2127 Add sanity check to ensure that all data decoded by the Norito codec is consumed.
-- hyperledger#2360 Make `genesis.json` optional again.
-- hyperledger#2053 Add tests to all remaining queries in private blockchain.
-- hyperledger#2381 Unify `Role` registration.
-- hyperledger#2053 Add tests to the asset-related queries in private blockchain.
-- hyperledger#2053 Add tests to 'private_blockchain'
-- hyperledger#2302 Add 'FindTriggersByDomainId' stub-query.
-- hyperledger#1998 Add filters to queries.
-- hyperledger#2276 Include current Block hash into BlockHeaderValue.
-- hyperledger#2161 Handle id and shared FFI fns.
-- add handle id and implement FFI equivalents of shared traits (Clone, Eq, Ord)
-- hyperledger#1638 `configuration` return doc sub-tree.
-- hyperledger#2132 Add `endpointN` proc macro.
-- hyperledger#2257 Revoke<Role> emits RoleRevoked event.
-- hyperledger#2125 Add FindAssetDefinitionById query.
-- hyperledger#1926 Add signal handling and graceful shutdown.
-- hyperledger#2161 generate FFI functions for `data_model`
-- hyperledger#1149 Block file count does not exceed 1000000 per directory.
-- hyperledger#1413 Add API version endpoint.
-- hyperledger#2103 support querying for blocks and transactions. Add `FindAllTransactions` query
-- hyperledger#2186 Add transfer ISI for `BigQuantity` and `Fixed`.
-- hyperledger#2056 Add a derive proc macro crate for `AssetValueType` `enum`.
-- hyperledger#2100 Add query to find all accounts with asset.
-- hyperledger#2179 Optimise trigger execution.
-- hyperledger#1883 Remove embedded configuration files.
-- hyperledger#2105 handle query errors in client.
-- hyperledger#2050 Add role-related queries.
-- hyperledger#1572 Specialized permission tokens.
-- hyperledger#2121 Check keypair is valid when constructed.
- - hyperledger#2003 Introduce Norito Decoder tool.
-- hyperledger#1952 Add a TPS benchmark as a standard for optimizations.
-- hyperledger#2040 Add integration test with transaction execution limit.
-- hyperledger#1890 Introduce integration tests based on Orillion use-cases.
-- hyperledger#2048 Add toolchain file.
-- hyperledger#2100 Add query to find all accounts with asset.
-- hyperledger#2179 Optimise trigger execution.
-- hyperledger#1883 Remove embedded configuration files.
-- hyperledger#2004 Forbid `isize` and `usize` from becoming `IntoSchema`.
-- hyperledger#2105 handle query errors in client.
-- hyperledger#2050 Add role-related queries.
-- hyperledger#1572 Specialized permission tokens.
-- hyperledger#2121 Check keypair is valid when constructed.
- - hyperledger#2003 Introduce Norito Decoder tool.
-- hyperledger#1952 Add a TPS benchmark as a standard for optimizations.
-- hyperledger#2040 Add integration test with transaction execution  limit.
-- hyperledger#1890 Introduce integration tests based on Orillion use-  cases.
-- hyperledger#2048 Add toolchain file.
-- hyperledger#2037 Introduce Pre-commit Triggers.
-- hyperledger#1621 Introduce By Call Triggers.
-- hyperledger#1970 Add optional schema endpoint.
-- hyperledger#1620 Introduce time based triggers.
-- hyperledger#1918 Implement basic authentication for `client`
-- hyperledger#1726 Implement a release PR workflow.
-- hyperledger#1815 Make query responses more type-structured.
-- hyperledger#1928 implement changelog generation using `gitchangelog`
-- hyperledger#1902 Bare metal 4-peer setup script.
-
-  Added a version of setup_test_env.sh that does not require docker-compose and uses the debug build of Iroha.
-- hyperledger#1619 Introduce event-based triggers.
-- hyperledger#1195 Close a websocket connection cleanly.
-- hyperledger#1606 Add ipfs link to domain logo in Domain structure.
-- hyperledger#1754 Add Kura inspector CLI.
-- hyperledger#1790 Improve performance by using stack-based vectors.
-- hyperledger#1805 Optional terminal colors for panic errors.
-- hyperledger#1749 `no_std` in `data_model`
-- hyperledger#1179 Add revoke-permission-or-role instruction.
-- hyperledger#1782 make iroha_crypto no_std compatible.
-- hyperledger#1172 Implement instruction events.
-- hyperledger#1734 Validate `Name` to exclude whitespaces.
-- hyperledger#1144 Add metadata nesting.
-- #1210 Block streaming (server side).
-- hyperledger#1331 Implement more `Prometheus` metrics.
-- hyperledger#1689 Fix feature dependencies. #1261: Add cargo bloat.
-- hyperledger#1675 use type instead of wrapper struct for versioned items.
-- hyperledger#1643 Wait for peers to commit genesis in tests.
+  docker-compose မလိုအပ်သော setup_test_env.sh ဗားရှင်းကို ထည့်သွင်းပြီး Iroha ၏ အမှားရှာပြင်တည်ဆောက်မှုကို အသုံးပြုထားသည်။
+- hyperledger#1619 ဖြစ်ရပ်အခြေခံအစပျိုးများကို မိတ်ဆက်ပါ။
+- hyperledger#1195 websocket ချိတ်ဆက်မှုကို သန့်ရှင်းစွာပိတ်ပါ။
+- hyperledger#1606 ဒိုမိန်းတည်ဆောက်ပုံတွင် ဒိုမိန်းလိုဂိုသို့ ipfs လင့်ခ်ကို ထည့်ပါ။
+- hyperledger#1754 Kura စစ်ဆေးရေးမှူး CLI ကိုထည့်ပါ။
+- hyperledger#1790 stack-based vector များကိုအသုံးပြုခြင်းဖြင့် စွမ်းဆောင်ရည်ကိုမြှင့်တင်ပါ။
+- ထိတ်လန့်သောအမှားများအတွက် hyperledger#1805 ရွေးချယ်နိုင်သော terminal အရောင်များ။
+- `data_model` တွင် hyperledger #1749 `no_std`
+- hyperledger#1179 ညွှန်ကြားချက်ကို ပြန်လည်ရုပ်သိမ်းရန် ခွင့်ပြုချက် သို့မဟုတ် အခန်းကဏ္ဍကို ထည့်ပါ။
+- hyperledger #1782 သည် iroha_crypto no_std ကို တွဲဖက်အသုံးပြုနိုင်သည်။
+- hyperledger#1172 ညွှန်ကြားချက်ဖြစ်ရပ်များကို အကောင်အထည်ဖော်ပါ။
+- hyperledger#1734 သည် အဖြူကွက်များကို ဖယ်ထုတ်ရန် `Name` ကို အတည်ပြုပါ။
+- hyperledger#1144 မက်တာဒေတာ nesting ကိုထည့်ပါ။
+- #1210 streaming ကိုပိတ်ဆို့ (ဆာဗာဘက်ခြမ်း) ။
+- hyperledger#1331 နောက်ထပ် `Prometheus` မက်ထရစ်များကို အကောင်အထည်ဖော်ပါ။
+- hyperledger#1689 အင်္ဂါရပ်မှီခိုမှုကို ပြုပြင်ပါ။ #1261- ကုန်တင်ဖောင်းကို ထည့်ပါ။
+- ဗားရှင်းလုပ်ထားသော အရာများအတွက် wrapper struct အစား hyperledger#1675 ကို အသုံးပြုပါ။
+- hyperledger#1643 စမ်းသပ်မှုတွင် ရွယ်တူများ ဥပါဒ်ကျူးလွန်ရန် စောင့်ပါ။
 - hyperledger#1678 `try_allocate`
-- hyperledger#1216 Add Prometheus endpoint. #1216: initial implementation of metrics endpoint.
-- hyperledger#1238 Run-time log-level updates. Created basic `connection` entrypoint-based reloading.
-- hyperledger#1652 PR Title Formatting.
-- Add the number of connected peers to `Status`
+- hyperledger#1216 Prometheus အဆုံးမှတ်ကို ထည့်ပါ။ #1216- မက်ထရစ်အဆုံးမှတ်၏ ကနဦးအကောင်အထည်ဖော်မှု။
+- hyperledger#1238 Run-time မှတ်တမ်းအဆင့် အပ်ဒိတ်များ။ အခြေခံ `connection` entrypoint-based ပြန်လည်စတင်ခြင်းကို ဖန်တီးခဲ့သည်။
+- hyperledger#1652 PR ခေါင်းစဉ်ပုံစံဖော်မတ်ခြင်း။
+- `Status` တွင် ချိတ်ဆက်ထားသော ရွယ်တူအရေအတွက်ကို ထည့်ပါ။
 
-  - Revert "Delete things related to the number of connected peers"
+  - "ချိတ်ဆက်ထားသည့်ရွယ်တူအရေအတွက်နှင့်ဆက်စပ်သောအရာများကိုဖျက်ပစ်ပါ" ကိုပြန်ပြောင်းပါ။
 
-  This reverts commit b228b41dab3c035ce9973b6aa3b35d443c082544.
-  - Clarify `Peer` has true public key only after handshake
-  - `DisconnectPeer` without tests
-  - Implement unregister peer execution
-  - Add (un)register peer subcommand to `client_cli`
-  - Refuse reconnections from an unregistered peer by its address
+  ၎င်းသည် b228b41dab3c035ce9973b6aa3b35d443c082544 ကျူးလွန်ခြင်းကို ပြန်ဖြစ်စေသည်။
+  - လက်ဆွဲနှုတ်ဆက်ပြီးမှသာ `Peer` တွင် အများသူငှာသော့အစစ်ပါရှိကြောင်း ရှင်းလင်းပါ။
+  - `DisconnectPeer` စစ်ဆေးမှုမရှိဘဲ
+  - မှတ်ပုံတင်ခြင်းမှ ဖြုတ်ပစ်သော သက်တူရွယ်တူ လုပ်ဆောင်ချက်ကို အကောင်အထည်ဖော်ပါ။
+  - `client_cli` သို့ peer subcommand ကို ပေါင်းထည့် (un)register လုပ်ပါ။
+  - ၎င်း၏လိပ်စာဖြင့် မှတ်ပုံမတင်ထားသော မျိုးတူချင်းထံမှ ပြန်လည်ချိတ်ဆက်မှုများကို ငြင်းဆိုပါ။သင့်ရွယ်တူချင်းများကို စာရင်းမသွင်းဘဲ အခြားရွယ်တူချင်း အဆက်အသွယ်ဖြတ်ပြီးနောက်၊
+  သင်၏ကွန်ရက်သည် မျိုးတူချင်းထံမှ ပြန်လည်ချိတ်ဆက်မှုတောင်းဆိုမှုများကို ကြားလိမ့်မည်။
+  အစတွင် သင်သိနိုင်သမျှမှာ ဆိပ်ကမ်းနံပါတ်သည် မထင်သလိုဖြစ်နေသော လိပ်စာဖြစ်သည်။
+  ထို့ကြောင့် ဆိပ်ကမ်းနံပါတ်မှလွဲ၍ အခြားအစိတ်အပိုင်းအလိုက် မှတ်ပုံတင်မထားသည့် မျိုးတူများကို မှတ်ထားပါ။
+  ထိုနေရာမှ ပြန်လည်ဆက်သွယ်မှုကို ငြင်းဆန်ပါ။
+- သတ်မှတ်ထားသော port တစ်ခုသို့ `/status` အဆုံးမှတ်ကို ထည့်ပါ။
 
-  After your peer unregisters and disconnects another peer,
-  your network will hear reconnection requests from the peer.
-  All you can know at first is the address whose port number is arbitrary.
-  So remember the unregistered peer by the part other than the port number
-  and refuse reconnection from there
-- Add `/status` endpoint to a specific port.
-
-### Fixes
-
-- hyperledger#3129 Fix `Parameter` de/serialization.
-- hyperledger#3109 Prevent `sumeragi` sleep after role agnostic message.
-- hyperledger#3046 Ensure Iroha can start gracefully on empty
+### ပြင်ဆင်မှုများ- hyperledger#3129 Fix `Parameter` de/serialization။
+- hyperledger#3109 `sumeragi` မှ ခွဲခြားမသိသော မက်ဆေ့ချ်ပြီးနောက် အိပ်စက်ခြင်းကို တားဆီးပါ။
+- hyperledger#3046 Iroha သည် ဗလာပေါ်တွင် ကျက်သရေရှိစွာ စတင်နိုင်သည်ကို သေချာပါစေ။
   `./storage`
-- hyperledger#2599 Remove nursery lints.
-- hyperledger#3087 Collect votes from Set B validators after view change.
-- hyperledger#3056 Fix `tps-dev` benchmark hanging.
-- hyperledger#1170 Implement cloning-wsv-style soft-fork handling.
-- hyperledger#2456 Make genesis block unlimited.
-- hyperledger#3038 Re-enable multisigs.
-- hyperledger#2894 Fix `LOG_FILE_PATH` env variable deserialization.
-- hyperledger#2803 Return correct status code for signature errors.
-- hyperledger#2963 `Queue` remove transactions correctly.
-- hyperledger#0000 Vergen breaking CI.
-- hyperledger#2165 Remove toolchain fidget.
-- hyperledger#2506 Fix the block validation.
-- hyperledger#3013 Properly chain burn validators.
-- hyperledger#2998 Delete unused Chain code.
-- hyperledger#2816 Move responsibility of access to blocks to kura.
-- hyperledger#2384 Replace decode with decode_all.
-- hyperledger#1967 Replace ValueName with Name.
-- hyperledger#2980 Fix block value ffi type.
-- hyperledger#2858 Introduce parking_lot::Mutex instead of std.
-- hyperledger#2850 Fix deserialization/decoding of `Fixed`
-- hyperledger#2923 Return `FindError` when `AssetDefinition` does not
-  exist.
-- hyperledger#0000 Fix `panic_on_invalid_genesis.sh`
-- hyperledger#2880 Close websocket connection properly.
-- hyperledger#2880 Fix block streaming.
-- hyperledger#2804 `iroha_client_cli` submit transaction blocking.
-- hyperledger#2819 Move non-essential members out of WSV.
-- Fix expression serialization recursion bug.
-- hyperledger#2834 Improve shorthand syntax.
-- hyperledger#2379 Add ability to dump new Kura blocks to blocks.txt.
-- hyperledger#2758 Add Sorting structure to the schema.
-- CI.
-- hyperledger#2548 Warn on large genesis file.
-- hyperledger#2638 Update `whitepaper` and propagate changes.
-- hyperledger#2678 Fix tests on staging branch.
-- hyperledger#2678 Fix tests abort on Kura force shutdown.
-- hyperledger#2607 Refactor of sumeragi code for more simplicity and
-  robustness fixes.
-- hyperledger#2561 Reintroduce viewchanges to consensus.
-- hyperledger#2560 Add back in block_sync and peer disconnecting.
-- hyperledger#2559 Add sumeragi thread shutdown.
-- hyperledger#2558 Validate genesis before updating the wsv from kura.
-- hyperledger#2465 Reimplement sumeragi node as singlethreaded state
-  machine.
-- hyperledger#2449 Initial implementation of Sumeragi Restructuring.
-- hyperledger#2802 Fix env loading for configuration.
-- hyperledger#2787 Notify every listener to shutdown on panic.
-- hyperledger#2764 Remove limit on max message size.
-- #2571: Better Kura Inspector UX.
-- hyperledger#2703 Fix Orillion dev env bugs.
-- Fix typo in a doc comment in schema/src.
-- hyperledger#2716 Make Duration in Uptime public.
-- hyperledger#2700 Export `KURA_BLOCK_STORE_PATH` in docker images.
-- hyperledger#0 Remove `/iroha/rust-toolchain.toml` from the builder
-  image.
-- hyperledger#0 Fix `docker-compose-single.yml`
-- hyperledger#2554 Raise error if `secp256k1` seed shorter than 32
-  bytes.
-- hyperledger#0 Modify `test_env.sh` to allocate storage for each peer.
-- hyperledger#2457 Forcibly shut down kura in tests.
-- hyperledger#2623 Fix doctest for VariantCount.
-- Update an expected error in ui_fail tests.
-- Fix incorrect doc comment in permission validators.
-- hyperledger#2422 Hide private keys in configuration endpoint response.
-- hyperledger#2492: Fix not all triggers being executed that match an event.
-- hyperledger#2504 Fix failing tps benchmark.
-- hyperledger#2477 Fix bug when permissions from roles weren't counted.
-- hyperledger#2416 Fix lints on macOS arm.
-- hyperledger#2457 Fix tests flakiness related to shut down on panic.
-  #2457: Add shut down on panic configuration
-- hyperledger#2473 parse rustc --version instead of RUSTUP_TOOLCHAIN.
-- hyperledger#1480 Shut down on panic. #1480: Add panic hook to exit program on panic
-- hyperledger#2376 Simplified Kura, no async, two files.
-- hyperledger#0000 Docker build failure.
-- hyperledger#1649 remove `spawn` from `do_send`
-- hyperledger#2128 Fix `MerkleTree` construction and iteration.
-- hyperledger#2137 Prepare tests for multiprocess context.
-- hyperledger#2227 Implement Register and Unregister for Asset.
-- hyperledger#2081 Fix role granting bug.
-- hyperledger#2358 Add release with debug profile.
-- hyperledger#2294 Add flamegraph generation to oneshot.rs.
-- hyperledger#2202 Fix total field in query response.
-- hyperledger#2081 Fix the test case to grant the role.
-- hyperledger#2017 Fix role unregistration.
-- hyperledger#2303 Fix docker-compose' peers doesn't get gracefully shut down.
-- hyperledger#2295 Fix unregister trigger bug.
-- hyperledger#2282 improve FFI derives from getset implementation.
-- hyperledger#1149 Remove nocheckin code.
-- hyperledger#2232 Make Iroha print meaningful message when genesis has too many isi.
-- hyperledger#2170 Fix build in docker container on M1 machines.
-- hyperledger#2215 Make nightly-2022-04-20 optional for `cargo build`
-- hyperledger#1990 Enable peer startup via env vars in the absence of config.json.
-- hyperledger#2081 Fix role registration.
-- hyperledger#1640 Generate config.json and genesis.json.
-- hyperledger#1716 Fix consensus failure with f=0 cases.
-- hyperledger#1845 Non-mintable assets can be minted once only.
-- hyperledger#2005 Fix `Client::listen_for_events()` not closing WebSocket stream.
-- hyperledger#1623 Create a RawGenesisBlockBuilder.
-- hyperledger#1917 Add easy_from_str_impl macro.
-- hyperledger#1990 Enable peer startup via env vars in the absence of config.json.
-- hyperledger#2081 Fix role registration.
-- hyperledger#1640 Generate config.json and genesis.json.
-- hyperledger#1716 Fix consensus failure with f=0 cases.
-- hyperledger#1845 Non-mintable assets can be minted once only.
-- hyperledger#2005 Fix `Client::listen_for_events()` not closing WebSocket stream.
-- hyperledger#1623 Create a RawGenesisBlockBuilder.
-- hyperledger#1917 Add easy_from_str_impl macro.
-- hyperledger#1922 Move crypto_cli into tools.
-- hyperledger#1969 Make the `roles` feature part of the default feature set.
-- hyperledger#2013 Hotfix CLI args.
-- hyperledger#1897 Remove usize/isize from serialization.
-- hyperledger#1955 Fix possibility to pass `:` inside `web_login`
-- hyperledger#1943 Add query errors to the schema.
-- hyperledger#1939 Proper features for `iroha_config_derive`.
-- hyperledger#1908 fix zero value handling for telemetry analysis script.
-- hyperledger#0000 Make implicitly ignored doc-test explicitly ignored.
-- hyperledger#1848 Prevent public keys from being burned to nothing.
-- hyperledger#1811 added tests and checks to dedup trusted peer keys.
-- hyperledger#1821 add IntoSchema for MerkleTree and VersionedValidBlock, fix HashOf and SignatureOf schemas.
-- hyperledger#1819 Remove traceback from error report in validation.
-- hyperledger#1774 log exact reason for validation failures.
-- hyperledger#1714 Compare PeerId only by key.
-- hyperledger#1788 Reduce memory footprint of `Value`.
-- hyperledger#1804 fix schema generation for HashOf, SignatureOf, add test to ensure no schemas are missing.
-- hyperledger#1802 Logging readability improvements.
-  - events log moved to trace level
-  - ctx removed from log capture
-  - terminal colors are made optional (for better log output to files)
-- hyperledger#1783 Fixed torii benchmark.
-- hyperledger#1772 Fix after #1764.
-- hyperledger#1755 Minor fixes for #1743, #1725.
-  - Fix JSONs according to #1743 `Domain` struct change
-- hyperledger#1751 Consensus fixes. #1715: Consensus fixes to handle high load (#1746)
-  - View change handling fixes
-  - View change proofs made independent of particular transaction hashes
-  - Reduced message passing
-  - Collect view change votes instead of sending messages right away (improves network resilience)
-  - Fully use Actor framework in Sumeragi (schedule messages to self instead of task spawns)
-  - Improves fault injection for tests with Sumeragi
-  - Brings testing code closer to production code
-  - Removes overcomplicated wrappers
-  - Allows Sumeragi use actor Context in test code
-- hyperledger#1734 Update genesis to fit the new Domain validation.
-- hyperledger#1742 Concrete errors returned in `core` instructions.
-- hyperledger#1404 Verify fixed.
-- hyperledger#1636 Remove `trusted_peers.json` and `structopt`
-  #1636: Remove `trusted_peers.json`.
-- hyperledger#1706 Update `max_faults` with Topology update.
-- hyperledger#1698 Fixed public keys, documentation and error messages.
+- hyperledger#2599 ပျိုးခင်းစာများကို ဖယ်ရှားပါ။
+- hyperledger#3087 ကြည့်ရှုမှုပြောင်းလဲပြီးနောက် သတ်မှတ် B မှန်ကန်သည့်စနစ်မှ မဲများကို စုဆောင်းပါ။
+- hyperledger#3056 Fix `tps-dev` စံနှုန်းဆွဲထားသည်။
+- hyperledger#1170 ကို cloning-wsv-style soft-fork ကိုင်တွယ်မှုကို အကောင်အထည်ဖော်ပါ။
+- hyperledger#2456 ဥပါဒ်ပိတ်ဆို့ခြင်းကို အကန့်အသတ်မရှိ ပြုလုပ်ပါ။
+- hyperledger#3038 multisig များကို ပြန်ဖွင့်ပါ။
+- hyperledger#2894 Fix `LOG_FILE_PATH` env variable deserialization။
+- hyperledger#2803 လက်မှတ်အမှားများအတွက် မှန်ကန်သောအခြေအနေကုဒ်ကို ပြန်ပေးပါ။
+- hyperledger#2963 `Queue` အရောင်းအ၀ယ်များကို မှန်ကန်စွာ ဖယ်ရှားပါ။
+- hyperledger#0000 Vergen သည် CI ကို ချိုးဖောက်သည်။
+- hyperledger#2165 toolchain fidget ကိုဖယ်ရှားပါ။
+- hyperledger#2506 ပိတ်ဆို့အတည်ပြုခြင်းကို ပြင်ဆင်ပါ။
+- hyperledger#3013 မှန်ကန်စွာ ကွင်းဆက်လောင်ကျွမ်းစေသော validators။
+- hyperledger#2998 အသုံးမပြုသော ကွင်းဆက်ကုဒ်ကို ဖျက်ပါ။
+- hyperledger#2816 ပိတ်ဆို့ခြင်းသို့ဝင်ရောက်ခြင်းတာဝန်ကို kura သို့ရွှေ့ပါ။
+- hyperledger#2384 ကုဒ်ကို decode_all ဖြင့် အစားထိုးပါ။
+- hyperledger#1967 တန်ဖိုးအမည်ကို အမည်ဖြင့် အစားထိုးပါ။
+- hyperledger#2980 ပိတ်ဆို့တန်ဖိုး ffi အမျိုးအစားကို ပြင်ဆင်ပါ။
+- hyperledger#2858 ရပ်နားရန်နေရာအား မိတ်ဆက်ပါ-:std အစား Mutex။
+- hyperledger#2850 `Fixed` ၏ deserialization/decoding ကိုပြင်ပါ
+- `AssetDefinition` မပါသောအခါ၊ hyperledger#2923 `FindError` သို့ ပြန်သွားရန်။
+  ရှိတော့
+- hyperledger#0000 `panic_on_invalid_genesis.sh` ကို ပြင်ဆင်ပါ။
+- hyperledger#2880 websocket ချိတ်ဆက်မှုကို ကောင်းမွန်စွာပိတ်ပါ။
+- hyperledger#2880 ပိတ်ဆို့ကြည့်ရှုခြင်းကို ပြုပြင်ပါ။
+- hyperledger#2804 `iroha_client_cli` အရောင်းအ၀ယ်ပိတ်ဆို့ခြင်းကို တင်သွင်းပါ။
+- hyperledger#2819 မရှိမဖြစ်လိုအပ်သော အဖွဲ့ဝင်များကို WSV မှ ရွှေ့ပါ။
+- စကားအသုံးအနှုန်း နံပါတ်စဉ်ပြန်ယူခြင်း ချို့ယွင်းချက်ကို ပြင်ဆင်ပါ။
+- hyperledger#2834 အတိုကောက် syntax ကို တိုးတက်အောင်လုပ်ပါ။
+- hyperledger#2379 တွင် Kura တုံးအသစ်များကို blocks.txt သို့ စွန့်ပစ်ရန် စွမ်းရည်ထည့်ပါ။
+- hyperledger#2758 အမျိုးအစားခွဲခြင်းတည်ဆောက်ပုံကို schema သို့ထည့်ပါ။
+- CI ။
+- hyperledger#2548 ကြီးမားသော ဥပါဒ်ဖိုင်ကို သတိပေးပါ။
+- hyperledger#2638 အပ်ဒိတ် `whitepaper` နှင့် ပြောင်းလဲမှုများကို ထုတ်လွှင့်ပါ။
+- hyperledger#2678 အဆင့်သတ်မှတ်ထားသောဌာနခွဲရှိ စမ်းသပ်မှုများကို ပြုပြင်ပါ။
+- hyperledger#2678 Kura force ပိတ်ခြင်းတွင် Fix tests ပျက်သွားပါသည်။
+- ပိုမိုရိုးရှင်းမှုနှင့် ပိုမိုရိုးရှင်းစေရန်အတွက် sumeragi ကုဒ်၏ ဟိုက်ပါအကောင့်နံပါတ် 2607 အား ကိုးကားချက်
+  ကြံ့ခိုင်မှုပြင်ဆင်မှုများ။
+- hyperledger#2561 အများဆန္ဒအတွက် အမြင်ပြောင်းလဲမှုများကို ပြန်လည်မိတ်ဆက်ပါ။
+- hyperledger#2560 ကို block_sync နှင့် peer disconnecting တွင် ပြန်ထည့်ပါ။
+- hyperledger#2559 sumeragi thread ပိတ်ခြင်းကို ထည့်ပါ။
+- hyperledger#2558 wsv ကို kura မှ မွမ်းမံမွမ်းမံခြင်းမပြုမီ ဥပါဒ်ကိုစစ်ဆေးပါ။
+- hyperledger#2465 သည် singlethreaded state အဖြစ် sumeragi node အား ပြန်လည်ပြင်ဆင်ပါ။
+  စက်။
+- hyperledger#2449 Sumeragi ပြန်လည်ဖွဲ့စည်းခြင်း၏ ကနဦးအကောင်အထည်ဖော်မှု။
+- ဖွဲ့စည်းမှုပုံစံအတွက် hyperledger#2802 ကို ပြင်ဆင်ပါ။
+- hyperledger#2787 အထိတ်တလန့်ဖြင့် ပိတ်ရန် နားထောင်သူတိုင်းကို အသိပေးပါ။
+- hyperledger#2764 အများဆုံးမက်ဆေ့ချ်အရွယ်အစားရှိ ကန့်သတ်ချက်ကို ဖယ်ရှားပါ။
+- #2571- ပိုမိုကောင်းမွန်သော Kura Inspector UX။
+- hyperledger#2703 Orillion dev env bugs ကိုပြင်ပါ။
+- schema/src ရှိ doc မှတ်ချက်တွင် typo ကိုပြင်ပါ။
+- hyperledger#2716 ကြာချိန်ကို Uptime အများသူငှာ ပြုလုပ်ပါ။
+- docker ပုံများတွင် hyperledger #2700 `KURA_BLOCK_STORE_PATH` ကို ထုတ်ယူပါ။
+- hyperledger#0 `/iroha/rust-toolchain.toml` ကို တည်ဆောက်သူမှ ဖယ်ရှားပါ။
+  ပုံ။
+- hyperledger#0 `docker-compose-single.yml` ကို ပြင်ဆင်ပါ။
+- 32 ထက်တိုသောမျိုးစေ့ `secp256k1` ထက်တိုပါက hyperledger#2554 အမှားကိုမြှင့်တင်ပါ
+  ဘိုက်
+- မျိုးတူတစ်ဦးစီအတွက် သိုလှောင်ခန်းကို ခွဲဝေသတ်မှတ်ရန် hyperledger#0 `test_env.sh` ကို မွမ်းမံပါ။
+- hyperledger#2457 စမ်းသပ်မှုများတွင် kura ကို အတင်းအကျပ်ပိတ်ပစ်လိုက်သည်။
+- hyperledger#2623 VariantCount အတွက် doctest ကို ပြင်ဆင်ပါ။
+- ui_fail စမ်းသပ်မှုများတွင် မျှော်လင့်ထားသည့် အမှားတစ်ခုကို အပ်ဒိတ်လုပ်ပါ။
+- ခွင့်ပြုချက်စစ်ဆေးသူများတွင် မှားယွင်းနေသော doc မှတ်ချက်ကို ပြင်ဆင်ပါ။
+- hyperledger#2422 ဖွဲ့စည်းမှုအဆုံးမှတ်တုံ့ပြန်မှုတွင် သီးသန့်သော့များကို ဝှက်ထားပါ။
+- hyperledger#2492- ဖြစ်ရပ်တစ်ခုနှင့် ကိုက်ညီသည့် အစပျိုးများအားလုံးကို မဖြေရှင်းပါနှင့်။
+- hyperledger#2504 မအောင်မြင်သော tps စံညွှန်းကို ပြင်ဆင်ပါ။
+- အခန်းကဏ္ဍများမှခွင့်ပြုချက်များကိုရေတွက်မထားသောအချိန်တွင် hyperledger#2477 ချွတ်ယွင်းချက်ကိုပြင်ပါ။
+- hyperledger#2416 macOS လက်မောင်းရှိ lints ကိုပြင်ပါ။
+- hyperledger#2457 ထိတ်လန့်ခြင်းအတွက် ပိတ်ခြင်းနှင့် ပတ်သက်သော ချို့ယွင်းချက်ရှိသော စမ်းသပ်မှုများကို ပြုပြင်ပါ။
+  #2457- အထိတ်တလန့်ပြင်ဆင်မှုတွင် ပိတ်ထည့်ပါ။
+- hyperledger#2473 RUSTUP_TOOLCHAIN အစား rustc --version ခွဲခြမ်းစိတ်ဖြာခြင်း။
+- hyperledger #1480 အထိတ်တလန့်ဖြင့် ပိတ်ပါ။ #1480- အထိတ်တလန့်ဖြစ်နေစဉ် ပရိုဂရမ်မှထွက်ရန် ထိတ်လန့်သောချိတ်ကို ထည့်ပါ။
+- hyperledger#2376 ရိုးရှင်းသော Kura၊ async မရှိ၊ ဖိုင်နှစ်ခု။
+- hyperledger#0000 Docker တည်ဆောက်မှု မအောင်မြင်ပါ။
+- hyperledger#1649 မှ `spawn` ကို `do_send` မှ ဖယ်ရှားပါ
+- hyperledger#2128 Fix `MerkleTree` တည်ဆောက်မှုနှင့် ထပ်ကာထပ်ကာ။
+- hyperledger#2137 လုပ်ငန်းစဉ်ပေါင်းစုံအတွက် စမ်းသပ်မှုများကို ပြင်ဆင်ပါ။
+- hyperledger#2227 ပိုင်ဆိုင်မှုအတွက် မှတ်ပုံတင်ခြင်းနှင့် မှတ်ပုံတင်ခြင်းမှ ပယ်ဖျက်ခြင်း။
+- hyperledger#2081 ချွတ်ယွင်းချက်ပေးသည့်အခန်းကဏ္ဍကို ပြင်ဆင်ပါ။
+- hyperledger#2358 အမှားရှာပြင်ပရိုဖိုင်ဖြင့် ထုတ်ဝေမှုကို ထည့်ပါ။
+- hyperledger#2294 flamegraph မျိုးဆက်ကို oneshot.rs သို့ထည့်ပါ။
+- hyperledger#2202 မေးမြန်းမှုတုံ့ပြန်မှုတွင် စုစုပေါင်းအကွက်ကို ပြင်ဆင်ပါ။
+- hyperledger#2081 အခန်းကဏ္ဍကိုပေးအပ်ရန် စမ်းသပ်မှုကိစ္စအား ပြင်ဆင်ပါ။
+- hyperledger#2017 အခန်းကဏ္ဍ မှတ်ပုံတင်ခြင်းကို ပြင်ပါ။
+- hyperledger#2303 Fix docker-compose' ရွယ်တူများသည် လှပစွာပိတ်သွားခြင်းမရှိပါ။
+- hyperledger#2295 မှတ်ပုံတင်ခြင်းမှ ပယ်ဖျက်ခြင်းအစပျိုး bug ကို ပြင်ဆင်ပါ။
+- hyperledger#2282 FFI သည် getset အကောင်အထည်ဖော်မှုမှ ဆင်းသက်လာခြင်းကို တိုးတက်စေသည်။
+- hyperledger#1149 nocheckin ကုဒ်ကိုဖယ်ရှားပါ။
+- hyperledger#2232 Iroha ဥပါဒ်တွင် isi များလွန်းသောအခါ အဓိပ္ပါယ်ရှိသော စာတိုကို print ထုတ်ပါ။
+- hyperledger#2170 M1 စက်များတွင် docker container တွင်တည်ဆောက်မှုကိုပြင်ဆင်ပါ။
+- hyperledger#2215 `cargo build` အတွက် တစ်ညတာ စိတ်ကြိုက်လုပ်ပါ-2022-04-20 ရွေးချယ်နိုင်သည်
+- hyperledger#1990 သည် config.json မရှိသဖြင့် env vars မှတစ်ဆင့် ရွယ်တူချင်းစတင်ခြင်းကိုဖွင့်ပါ။
+- hyperledger#2081 အခန်းကဏ္ဍမှတ်ပုံတင်ခြင်းကို ပြင်ဆင်ပါ။
+- hyperledger#1640 ကို config.json နှင့် genesis.json ကိုထုတ်လုပ်ပါ။
+- hyperledger#1716 f=0 ကိစ္စများဖြင့် အများသဘောတူမှု ပျက်ကွက်မှုကို ပြင်ဆင်ပါ။
+- hyperledger#1845 သတ္တုတွင်းမဟုတ်သော ပိုင်ဆိုင်မှုများကို တစ်ကြိမ်သာ ထုတ်ယူနိုင်သည်။
+- hyperledger#2005 Fix `Client::listen_for_events()` သည် WebSocket စီးကြောင်းကို မပိတ်ပါ။
+- hyperledger#1623 RawGenesisBlockBuilder ဖန်တီးပါ။
+- hyperledger#1917 easy_from_str_impl macro ထည့်ပါ။
+- hyperledger#1990 သည် config.json မရှိသဖြင့် env vars မှတစ်ဆင့် ရွယ်တူချင်းစတင်ခြင်းကိုဖွင့်ပါ။
+- hyperledger#2081 အခန်းကဏ္ဍမှတ်ပုံတင်ခြင်းကို ပြင်ဆင်ပါ။
+- hyperledger#1640 ကို config.json နှင့် genesis.json ကိုထုတ်လုပ်ပါ။
+- hyperledger#1716 f=0 ကိစ္စများဖြင့် အများသဘောတူမှု ပျက်ကွက်မှုကို ပြင်ဆင်ပါ။
+- hyperledger#1845 သတ္တုတွင်းမဟုတ်သော ပိုင်ဆိုင်မှုများကို တစ်ကြိမ်သာ ထုတ်ယူနိုင်သည်။
+- hyperledger#2005 Fix `Client::listen_for_events()` WebSocket စီးကြောင်းကို မပိတ်ပါ။
+- hyperledger#1623 RawGenesisBlockBuilder ဖန်တီးပါ။
+- hyperledger#1917 easy_from_str_impl macro ထည့်ပါ။
+- hyperledger#1922 crypto_cli ကို ကိရိယာများအဖြစ် ရွှေ့ပါ။
+- hyperledger#1969 `roles` အင်္ဂါရပ်ကို ပုံသေသတ်မှတ်ထားသော အင်္ဂါရပ်၏ အစိတ်အပိုင်းတစ်ခု ပြုလုပ်ပါ။
+- hyperledger#2013 Hotfix CLI args။
+- hyperledger#1897 ကို အမှတ်စဉ်ပြုလုပ်ခြင်းမှ အသုံးပြုမှု/အရွယ်အစားကို ဖယ်ရှားပါ။
+- hyperledger#1955 သည် `:` ကို `web_login` အတွင်းသို့ ကျော်ဖြတ်ရန် ဖြစ်နိုင်ခြေကို ပြင်ပါ
+- hyperledger#1943 ကို schema သို့ query errors များထည့်ပါ။
+- hyperledger#1939 `iroha_config_derive` အတွက် သင့်လျော်သောအင်္ဂါရပ်များ။
+- တယ်လီမက်ထရီခွဲခြမ်းစိတ်ဖြာမှု script အတွက် hyperledger#1908 ကို သုညတန်ဖိုး ကိုင်တွယ်ဖြေရှင်းပါ။
+- hyperledger#0000 doc-test ကို ပြတ်သားစွာ လျစ်လျူရှုထားခြင်းကို လျစ်လျူရှုပါ။
+- hyperledger#1848 အများသူငှာသော့များကို မည်သည့်အရာမှ မီးရှို့မခံရစေရန် တားဆီးပါ။
+- hyperledger#1811 သည် ယုံကြည်ရသော သက်တူရွယ်တူသော့များကို ဖျက်ရန် စမ်းသပ်မှုများနှင့် စစ်ဆေးမှုများကို ပေါင်းထည့်သည်။
+- hyperledger#1821 သည် MerkleTree နှင့် VersionedValidBlock အတွက် IntoSchema ကိုထည့်ပါ၊ HashOf နှင့် SignatureOf schemas ကိုပြင်ပါ။
+- hyperledger#1819 ကို တရားဝင်စစ်ဆေးရာတွင် အမှားအယွင်းအစီရင်ခံစာမှ ခြေရာကောက်ကို ဖယ်ရှားပါ။
+- hyperledger#1774 မှတ်တမ်းသည် တရားဝင်မှုပျက်ကွက်မှုအတွက် တိကျသောအကြောင်းပြချက်။
+- hyperledger#1714 သော့ဖြင့်သာ PeerId ကို နှိုင်းယှဉ်ပါ။
+- hyperledger#1788 `Value` ၏ မှတ်ဉာဏ်ခြေရာကို လျှော့ချပါ။
+- HashOf၊ SignatureOf အတွက် ဇယားကွက် #1804 ကို ပြင်ဆင်ပြီး schema များမပျောက်ဆုံးကြောင်း သေချာစေရန် စမ်းသပ်မှုထည့်ပါ။
+- hyperledger#1802 မှတ်တမ်းဖတ်နိုင်မှု မြှင့်တင်မှုများ။
+  - ဖြစ်ရပ်မှတ်တမ်းကို ခြေရာခံအဆင့်သို့ ရွှေ့ထားသည်။
+  - မှတ်တမ်းဖမ်းယူမှုမှ ctx ကိုဖယ်ရှားခဲ့သည်။
+  - terminal အရောင်များကို ရွေးချယ်နိုင်သည် (ဖိုင်များသို့ ပိုမိုကောင်းမွန်သော log output အတွက်)
+- hyperledger #1783 ပုံသေ torii စံညွှန်း။
+- hyperledger #1772 #1764 ပြီးနောက် ပြင်ဆင်ပါ။
+- hyperledger #1755 #1743၊ #1725 အတွက် အသေးစားပြင်ဆင်မှုများ။
+  - #1743 `Domain` ဖွဲ့စည်းပုံပြောင်းလဲမှုအရ JSON များကို ပြင်ဆင်ပါ
+- hyperledger#1751 အများဆန္ဒ ပြုပြင်မှုများ။ #1715- မြင့်မားသောဝန်ကိုကိုင်တွယ်ရန် အများသဘောတူပြင်ဆင်မှုများ (#1746)
+  - ပြောင်းလဲမှုကိုင်တွယ်ဖြေရှင်းမှုများကိုကြည့်ပါ။
+  - သီးခြားငွေပေးငွေယူ hashes များမပါဘဲပြုလုပ်ထားသောပြောင်းလဲမှုအထောက်အထားများကိုကြည့်ပါ။
+  - မက်ဆေ့ခ်ျဖြတ်သန်းမှုကိုလျှော့ချ
+  - မက်ဆေ့ချ်ပို့ခြင်းအစား မြင်ကွင်းပြောင်းလဲမှုမဲများကို စုဆောင်းပါ (ကွန်ရက်ခံနိုင်ရည်အား ပိုမိုကောင်းမွန်စေသည်)
+  - Sumeragi တွင် သရုပ်ဆောင်မူဘောင်ကို အပြည့်အဝအသုံးပြုပါ (လုပ်ငန်းဆောင်တာများအစား မက်ဆေ့ချ်များကို ကိုယ်တိုင်အချိန်ဇယားဆွဲပါ)
+  - Sumeragi ဖြင့် စမ်းသပ်မှုများအတွက် မှားယွင်းထိုးသွင်းမှုကို ပိုမိုကောင်းမွန်စေသည်။
+  - စမ်းသပ်ကုဒ်ကို ထုတ်လုပ်မှုကုဒ်နှင့် ပိုမိုနီးစပ်စေသည်။
+  - ရှုပ်ထွေးသောထုပ်ပိုးမှုများကိုဖယ်ရှားပါ။
+  - Sumeragi အား စမ်းသပ်ကုဒ်တွင် သရုပ်ဆောင် ဆက်စပ်မှုကို အသုံးပြုခွင့်ပေးသည်။
+- ဒိုမိန်းအတည်ပြုချက်အသစ်နှင့်ကိုက်ညီရန် hyperledger#1734 ကို အပ်ဒိတ်လုပ်ပါ။
+- hyperledger#1742 `core` ညွှန်ကြားချက်များတွင် ကွန်ကရစ်အမှားများ ပြန်ပေးသည်။
+- hyperledger#1404 ကို ပုံသေအတည်ပြုပါ။
+- hyperledger#1636 `trusted_peers.json` နှင့် `structopt` ကို ဖယ်ရှားပါ
+  #1636- `trusted_peers.json` ကို ဖယ်ရှားပါ။
+- Topology အပ်ဒိတ်ဖြင့် hyperledger#1706 `max_faults` ကို အပ်ဒိတ်လုပ်ပါ။
+- hyperledger#1698 ပြင်ဆင်ထားသော အများသူငှာသော့များ၊ စာရွက်စာတမ်းများနှင့် အမှားမက်ဆေ့ချ်များ။
 - Minting issues (1593 and 1405) issue 1405
 
-### Refactor
-
-- Extract functions from sumeragi main loop.
-- Refactor `ProofChain` to newtype.
-- Remove `Mutex` from `Metrics`
-- Remove adt_const_generics nightly feature.
-- hyperledger#3039 Introduce waiting buffer for the multisigs.
-- Simplify sumeragi.
-- hyperledger#3053 Fix clippy lints.
-- hyperledger#2506 Add more tests on block validation.
-- Remove `BlockStoreTrait` in Kura.
-- Update lints for `nightly-2022-12-22`
-- hyperledger#3022 Remove `Option` in `transaction_cache`
-- hyperledger#3008 Add niche value into `Hash`
-- Update lints to 1.65.
-- Add small tests to boost coverage.
-- Remove dead code from `FaultInjection`
-- Call p2p less often from sumeragi.
-- hyperledger#2675 Validate item names/ids without allocating Vec.
-- hyperledger#2974 Prevent block spoofing without full revalidation.
-- more efficient `NonEmpty` in combinators.
-- hyperledger#2955 Remove Block from BlockSigned message.
-- hyperledger#1868 Prevent validated transactions from being sent
-  between peers.
-- hyperledger#2458 Implement generic combinator API.
-- Add storage folder into gitignore.
-- hyperledger#2909 Hardcode ports for nextest.
-- hyperledger#2747 Change `LoadFromEnv` API.
-- Improve error messages on configuration failure.
-- Add extra examples to `genesis.json`
-- Remove unused dependencies before `rc9` release.
-- Finalise linting on new Sumeragi.
-- Extract subprocedures in the main loop.
-- hyperledger#2774 Change `kagami` genesis generation mode from flag to
-  subcommand.
-- hyperledger#2478 Add `SignedTransaction`
-- hyperledger#2649 Remove `byteorder` crate from `Kura`
-- Rename `DEFAULT_BLOCK_STORE_PATH` from `./blocks` to `./storage`
-- hyperledger#2650 Add `ThreadHandler` to shutdown iroha submodules.
-- hyperledger#2482 Store `Account` permission tokens in `Wsv`
-- Add new lints to 1.62.
-- Improve `p2p` error messages.
-- hyperledger#2001 `EvaluatesTo` static type checking.
-- hyperledger#2052 Make permission tokens registrable with definition.
-  #2052: Implement PermissionTokenDefinition
-- Ensure all feature combinations work.
-- hyperledger#2468 Remove debug supertrait from permission validators.
-- hyperledger#2419 Remove explicit `drop`s.
-- hyperledger#2253 Add `Registrable` trait to `data_model`
-- Implement `Origin` instead of `Identifiable` for the data events.
-- hyperledger#2369 Refactor permission validators.
-- hyperledger#2307 Make `events_sender` in `WorldStateView` non-optional.
-- hyperledger#1985 Reduce size of `Name` struct.
-- Add more `const fn`.
-- Make integration tests use `default_permissions()`
-- add permission token wrappers in private_blockchain.
-- hyperledger#2292 Remove `WorldTrait`, remove generics from `IsAllowedBoxed`
-- hyperledger#2204 Make Asset-related operations generic.
-- hyperledger#2233 Replace `impl` with `derive` for `Display` and `Debug`.
-- Identifiable structure improvements.
-- hyperledger#2323 Enhance kura init error message.
-- hyperledger#2238 Add peer builder for tests.
-- hyperledger#2011 More descriptive config params.
-- hyperledger#1896 Simplify `produce_event` implementation.
-- Refactor around `QueryError`.
-- Move `TriggerSet` to `data_model`.
-- hyperledger#2145 refactor client's `WebSocket` side, extract pure data logic.
-- remove `ValueMarker` trait.
-- hyperledger#2149 Expose `Mintable` and `MintabilityError` in `prelude`
-- hyperledger#2144 redesign client's http workflow, expose internal api.
-- Move to `clap`.
-- Create `iroha_gen` binary, consolidating docs, schema_bin.
-- hyperledger#2109 Make `integration::events::pipeline` test stable.
-- hyperledger#1982 encapsulate access to `iroha_crypto` structures.
-- Add `AssetDefinition` builder.
-- Remove unnecessary `&mut` from the API.
-- encapsulate access to data model structures.
-- hyperledger#2144 redesign client's http workflow, expose internal api.
-- Move to `clap`.
-- Create `iroha_gen` binary, consolidating docs, schema_bin.
-- hyperledger#2109 Make `integration::events::pipeline` test stable.
-- hyperledger#1982 encapsulate access to `iroha_crypto` structures.
-- Add `AssetDefinition` builder.
-- Remove unnecessary `&mut` from the API.
-- encapsulate access to data model structures.
-- Core, `sumeragi`, instance functions, `torii`
-- hyperledger#1903 move event emission to `modify_*` methods.
-- Split `data_model` lib.rs file.
-- Add wsv reference to queue.
-- hyperledger#1210 Split event stream.
-  - Move transaction-related functionality to data_model/transaction module
-- hyperledger#1725 Remove global state in Torii.
-  - Implement `add_state macro_rules` and remove `ToriiState`
-- Fix linter error.
-- hyperledger#1661 `Cargo.toml` cleanup.
-  - Sort out cargo dependencies
-- hyperledger#1650 tidy up `data_model`
-  - Move World to wsv, fix roles feature, derive IntoSchema for CommittedBlock
-- Organisation of `json` files and readme. Update Readme to conform to template.
-- 1529: structured logging.
-  - Refactor log messages
+### ဓာတ်ပေါင်းဖို- sumeragi ပင်မကွင်းဆက်မှလုပ်ဆောင်ချက်များကိုထုတ်ယူပါ။
+- အမျိုးအစားအသစ်သို့ Refactor `ProofChain`။
+- `Mutex` ကို `Metrics` မှ ဖယ်ရှားပါ
+- ညစဉ်ညတိုင်း adt_const_generics အင်္ဂါရပ်ကိုဖယ်ရှားပါ။
+- hyperledger#3039 ကိန်းဂဏန်းများအတွက် စောင့်ဆိုင်းနေသော ကြားခံများကို မိတ်ဆက်ပါ။
+- sumeragi ကိုရိုးရှင်းအောင်လုပ်ပါ။
+- hyperledger#3053 clippy lints ကိုပြင်ပါ။
+- hyperledger#2506 ပိတ်ဆို့အတည်ပြုခြင်းအတွက် နောက်ထပ်စမ်းသပ်မှုများ ထပ်ထည့်ပါ။
+- Kura တွင် `BlockStoreTrait` ကို ဖယ်ရှားပါ။
+- `nightly-2022-12-22` အတွက် သံချပ်များကို အပ်ဒိတ်လုပ်ပါ။
+- hyperledger#3022 `Option` ကို `transaction_cache` တွင် ဖယ်ရှားပါ
+- hyperledger#3008 သည် `Hash` သို့ niche တန်ဖိုးကို ထည့်ပါ
+- လိုင်းများကို 1.65 သို့ အပ်ဒိတ်လုပ်ပါ။
+- လွှမ်းခြုံမှုကို မြှင့်တင်ရန် သေးငယ်သော စမ်းသပ်မှုများကို ထည့်ပါ။
+- `FaultInjection` မှအသေကုဒ်ကိုဖယ်ရှားပါ။
+- sumeragi မှ p2p ကို မကြာခဏ လျှော့ခေါ်ပါ။
+- hyperledger#2675 သည် Vec ကိုခွဲဝေမပေးဘဲ item အမည်များ/ids များကိုအတည်ပြုပါ။
+- hyperledger#2974 ကို အပြည့်အဝပြန်လည်အတည်ပြုခြင်းမရှိဘဲ block spoofing ကိုတားဆီးပါ။
+- ပေါင်းစပ်ကိရိယာများတွင် ပိုမိုထိရောက်သော `NonEmpty`။
+- hyperledger#2955 BlockSigned message မှ ပိတ်ဆို့ခြင်းကို ဖယ်ရှားပါ။
+- hyperledger#1868 သည် တရားဝင်ငွေလွှဲမှုများကို ပေးပို့ခြင်းမှ တားဆီးပါ။
+  ရွယ်တူများအကြား။
+- hyperledger#2458 generic combinator API ကို အကောင်အထည်ဖော်ပါ။
+- gitignore တွင်သိုလှောင်မှုဖိုဒါကိုထည့်ပါ။
+- နောက်တစ်ခုအတွက် hyperledger#2909 Hardcode ပေါက်များ။
+- hyperledger#2747 `LoadFromEnv` API ကို ပြောင်းပါ။
+- ဖွဲ့စည်းမှုပျက်ကွက်ခြင်းအတွက် အမှားအယွင်းမက်ဆေ့ခ်ျကို မြှင့်တင်ပါ။
+- `genesis.json` တွင် အပိုဥပမာများထည့်ပါ။
+- `rc9` မထွက်မီ အသုံးမပြုသော မှီခိုမှုများကို ဖယ်ရှားပါ။
+- Sumeragi အသစ်တွင် linting ကို အပြီးသတ်ပါ။
+- ပင်မကွင်းဆက်ရှိ လုပ်ငန်းစဉ်ခွဲများကို ထုတ်ယူပါ။
+- hyperledger#2774 `kagami` ဥပါဒ် မျိုးဆက်မုဒ်ကို အလံမှ အလံသို့ ပြောင်းပါ
+  subcommand
+- hyperledger#2478 `SignedTransaction` ကိုထည့်ပါ။
+- hyperledger#2649 ကို `Kura` မှ `byteorder` သေတ္တာကို ဖယ်ရှားပါ
+- `DEFAULT_BLOCK_STORE_PATH` ကို `./blocks` မှ `./storage` သို့ အမည်ပြောင်းပါ
+- hyperledger#2650 iroha submodule များကိုပိတ်ရန် `ThreadHandler` ကိုထည့်ပါ။
+- hyperledger#2482 Store `Account` ခွင့်ပြုချက်တိုကင်များကို `Wsv`
+- 1.62 သို့ လိုင်းအသစ်များထည့်ပါ။
+- `p2p` အမှားမက်ဆေ့ချ်များကို တိုးတက်အောင်လုပ်ပါ။
+- hyperledger#2001 `EvaluatesTo` static အမျိုးအစား စစ်ဆေးခြင်း။
+- hyperledger#2052 ခွင့်ပြုချက်တိုကင်များကို အဓိပ္ပါယ်ဖွင့်ဆိုနိုင်ပါစေ။
+  #2052- PermissionTokenDefinition ကိုအကောင်အထည်ဖော်ပါ။
+- အင်္ဂါရပ်ပေါင်းစပ်မှုအားလုံးအလုပ်လုပ်ကြောင်းသေချာပါစေ။
+- hyperledger#2468 ခွင့်ပြုချက်အတည်ပြုသူများမှ အမှားရှာပြင်ခြင်းဆိုင်ရာ supertrait ကို ဖယ်ရှားပါ။
+- hyperledger#2419 အတိအလင်း `drop`s ကို ဖယ်ရှားပါ။
+- hyperledger#2253 `Registrable` စရိုက်ကို `data_model` သို့ထည့်ပါ
+- ဒေတာဖြစ်ရပ်များအတွက် `Identifiable` အစား `Origin` ကို အကောင်အထည်ဖော်ပါ။
+- hyperledger#2369 Refactor ခွင့်ပြုချက် အတည်ပြုသူများ။
+- hyperledger#2307 `events_sender` ကို `WorldStateView` တွင် ရွေးချယ်နိုင်ခြင်းမရှိပါ။
+- hyperledger#1985 `Name` struct ၏ အရွယ်အစားကို လျှော့ချပါ။
+- နောက်ထပ် `const fn` ကိုထည့်ပါ။
+- `default_permissions()` ကို အသုံးပြု၍ ပေါင်းစပ်စစ်ဆေးမှုများ ပြုလုပ်ပါ။
+- private_blockchain တွင် ခွင့်ပြုချက်တိုကင်ထုပ်ပိုးမှုများကို ထည့်ပါ။
+- hyperledger#2292 `WorldTrait` ကို ဖယ်ရှားပါ၊ `IsAllowedBoxed` မှ generics များကို ဖယ်ရှားပါ
+- hyperledger#2204 သည် ပိုင်ဆိုင်မှုနှင့်ဆိုင်သော လုပ်ဆောင်ချက်များကို ယေဘူယျလုပ်ပါ။
+- hyperledger#2233 `impl` ကို `derive` နှင့် `Display` နှင့် `Debug` ဖြင့် အစားထိုးပါ။
+- ခွဲခြားသိမြင်နိုင်သော ဖွဲ့စည်းပုံ တိုးတက်မှု။
+- hyperledger#2323 kura init အမှားသတင်းကို မြှင့်တင်ပါ။
+- စမ်းသပ်မှုများအတွက် hyperledger#2238 ပေါင်းထည့်ပါ။
+- hyperledger#2011 ပိုမိုဖော်ပြနိုင်သော config params ။
+- hyperledger#1896 `produce_event` အကောင်အထည်ဖော်မှုကို ရိုးရှင်းအောင်ပြုလုပ်ပါ။
+- `QueryError` ပတ်လည် Refactor
+- `TriggerSet` ကို `data_model` သို့ ရွှေ့ပါ။
+- hyperledger#2145 refactor client ၏ `WebSocket` ဘက်မှ၊ စင်စစ်ဒေတာယုတ္တိကို ထုတ်ယူပါ။
+- `ValueMarker` စရိုက်ကို ဖယ်ရှားပါ။
+- hyperledger#2149 တွင် `Mintable` နှင့် `MintabilityError` ကို `prelude` တွင် ဖော်ထုတ်ပါ
+- hyperledger#2144 သည် သုံးစွဲသူ၏ http လုပ်ငန်းအသွားအလာကို ပြန်လည်ဒီဇိုင်းထုတ်ကာ အတွင်းပိုင်း api ကို ဖော်ထုတ်ပါ။
+- `clap` သို့ ရွှေ့ပါ။
+- `iroha_gen` ဒွိစုံ၊ docs ပေါင်းစည်းခြင်း၊ schema_bin ဖန်တီးပါ။
+- hyperledger#2109 `integration::events::pipeline` စမ်းသပ်မှုကို တည်ငြိမ်အောင်လုပ်ပါ။
+- hyperledger#1982 သည် `iroha_crypto` အဆောက်အဦများသို့ ဝင်ရောက်ခွင့်ကို ကုပ်ဝှက်ထားသည်။
+- `AssetDefinition` တည်ဆောက်သူကို ထည့်ပါ။
+- မလိုအပ်သော `&mut` ကို API မှဖယ်ရှားပါ။
+- ဒေတာမော်ဒယ်ဖွဲ့စည်းပုံများသို့ဝင်ရောက်ခွင့်ကို encapsulate လုပ်ပါ။
+- hyperledger#2144 သည် သုံးစွဲသူ၏ http လုပ်ငန်းအသွားအလာကို ပြန်လည်ဒီဇိုင်းထုတ်ကာ အတွင်းပိုင်း api ကို ဖော်ထုတ်ပါ။
+- `clap` သို့ ရွှေ့ပါ။
+- `iroha_gen` ဒွိစုံ၊ docs ပေါင်းစည်းခြင်း၊ schema_bin ဖန်တီးပါ။
+- hyperledger#2109 `integration::events::pipeline` စမ်းသပ်မှုကို တည်ငြိမ်အောင်လုပ်ပါ။
+- hyperledger#1982 သည် `iroha_crypto` အဆောက်အဦများသို့ ဝင်ရောက်ခွင့်ကို ကုပ်ဝှက်ထားသည်။
+- `AssetDefinition` တည်ဆောက်သူကို ထည့်ပါ။
+- မလိုအပ်သော `&mut` ကို API မှဖယ်ရှားပါ။
+- ဒေတာမော်ဒယ်ဖွဲ့စည်းပုံများသို့ဝင်ရောက်ခွင့်ကို encapsulate လုပ်ပါ။
+- Core၊ `sumeragi`၊ instance လုပ်ဆောင်ချက်များ၊ `torii`
+- hyperledger#1903 သည် ဖြစ်ရပ်ထုတ်လွှတ်မှုကို `modify_*` နည်းလမ်းများသို့ ရွှေ့ပါ။
+- `data_model` lib.rs ဖိုင်ကို ခွဲလိုက်ပါ။
+- တန်းစီရန် wsv ရည်ညွှန်းချက်ကို ထည့်ပါ။
+- hyperledger#1210 ခွဲခြမ်းဖြစ်ရပ်စီးကြောင်း။
+  - ငွေပေးငွေယူဆိုင်ရာ လုပ်ဆောင်ချက်ကို data_model/transaction module သို့ ရွှေ့ပါ။
+- hyperledger#1725 Torii တွင် ကမ္ဘာလုံးဆိုင်ရာအခြေအနေကို ဖယ်ရှားပါ။
+  - `add_state macro_rules` ကိုအကောင်အထည်ဖော်ပြီး `ToriiState` ကိုဖယ်ရှားပါ။
+- linter error ကိုပြင်ပါ။
+- hyperledger#1661 `Cargo.toml` ရှင်းလင်းခြင်း။
+  - ကုန်တင်ကုန်ချမှီခိုမှုကိုခွဲခြားပါ။
+- hyperledger#1650 `data_model` ကို သပ်ရပ်အောင်ပြုလုပ်ပါ။
+  - ကမ္ဘာကို wsv သို့ရွှေ့ပါ၊ အခန်းကဏ္ဍများပါရှိမှုကိုပြင်ဆင်ပါ၊ CommittedBlock အတွက် IntoSchema ကိုရယူပါ။
+- `json` ဖိုင်များနှင့် readme ၏အဖွဲ့အစည်း။ နမူနာပုံစံနှင့် ကိုက်ညီစေရန် Readme ကို အပ်ဒိတ်လုပ်ပါ။
+- 1529: စနစ်တကျ သစ်ခုတ်ခြင်း။
+  - Refactor မှတ်တမ်းမက်ဆေ့ချ်များ
 - `iroha_p2p`
-  - Add p2p privatisation.
+  - p2p ပုဂ္ဂလိကပိုင်ပြုလုပ်ခြင်းကိုထည့်ပါ။
 
-### Documentation
+### စာရွက်စာတမ်း
 
-- Update Iroha Client CLI readme.
-- Update tutorial snippets.
-- Add 'sort_by_metadata_key' into API spec.
-- Update links to documentation.
-- Extend tutorial with asset-related docs.
-- Remove outdated doc files.
-- Review punctuation.
-- Move some docs to the tutorial repository.
-- Flakyness report for staging branch.
-- Generate changelog for pre-rc.7.
-- Flakyness report for Jul 30.
-- Bump versions.
-- Update test flakyness.
-- hyperledger#2499 Fix client_cli error messages.
-- hyperledger#2344 Generate CHANGELOG for 2.0.0-pre-rc.5-lts.
-- Add links to the tutorial.
-- Update information on git hooks.
-- flakyness test writeup.
-- hyperledger#2193 Update Iroha client documentation.
-- hyperledger#2193 Update Iroha CLI documentation.
-- hyperledger#2193 Update README for macro crate.
- - hyperledger#2193 Update Norito Decoder Tool documentation.
-- hyperledger#2193 Update Kagami documentation.
-- hyperledger#2193 Update benchmarks documentation.
-- hyperledger#2192 Review contributing guidelines.
-- Fix broken in-code references.
-- hyperledger#1280 Document Iroha metrics.
-- hyperledger#2119 Add guidance on how to hot reload Iroha in a Docker container.
-- hyperledger#2181 Review README.
-- hyperledger#2113 Document features in Cargo.toml files.
-- hyperledger#2177 Clean up gitchangelog output.
-- hyperledger#1991 Add readme to Kura inspector.
-- hyperledger#2119 Add guidance on how to hot reload Iroha in a Docker container.
-- hyperledger#2181 Review README.
-- hyperledger#2113 Document features in Cargo.toml files.
-- hyperledger#2177 Clean up gitchangelog output.
-- hyperledger#1991 Add readme to Kura inspector.
-- generate latest changelog.
-- Generate changelog.
-- Update outdated README files.
-- Added missing docs to `api_spec.md`.
+- Iroha Client CLI readme ကို အပ်ဒိတ်လုပ်ပါ။
+- သင်ခန်းစာအတိုအထွာများကို အပ်ဒိတ်လုပ်ပါ။
+- API spec ထဲသို့ 'sort_by_metadata_key' ကို ထည့်ပါ။
+- စာရွက်စာတမ်းအတွက်လင့်ခ်များကို အပ်ဒိတ်လုပ်ပါ။
+- ပိုင်ဆိုင်မှုဆိုင်ရာ စာရွက်စာတမ်းများဖြင့် သင်ခန်းစာကို တိုးချဲ့ပါ။
+- ခေတ်မမီတော့သော doc ဖိုင်များကို ဖယ်ရှားပါ။
+- အဖြတ်အတောက်များကို ပြန်လည်သုံးသပ်ပါ။
+- စာရွက်စာတမ်းအချို့ကို သင်ခန်းစာသိုလှောင်ခန်းသို့ ရွှေ့ပါ။
+- အဆင့်သတ်မှတ်ထားသောဌာနခွဲအတွက် ပျော့ပျောင်းမှုအစီရင်ခံစာ။
+- pre-rc.7 အတွက် changelog ကိုဖန်တီးပါ။
+- ဇူလိုင်လ 30 ရက်အတွက် ပျော့ပျောင်းမှုအစီရင်ခံစာ။
+- Bump ဗားရှင်းများ။
+- စမ်းသပ်မှု မတည်မငြိမ်ဖြစ်မှုကို အပ်ဒိတ်လုပ်ပါ။
+- hyperledger#2499 client_cli အမှားမက်ဆေ့ချ်များကို ပြင်ဆင်ပါ။
+- hyperledger#2344 2.0.0-pre-rc.5-lts အတွက် အပြောင်းအလဲကို ဖန်တီးပါ။
+- သင်ခန်းစာသို့ လင့်ခ်များထည့်ပါ။
+- git ချိတ်များဆိုင်ရာ အချက်အလက်ကို အပ်ဒိတ်လုပ်ပါ။
+- ပျော့ပျောင်းမှုစမ်းသပ်ရေး။
+- hyperledger#2193 အပ်ဒိတ် Iroha client စာရွက်စာတမ်း။
+- hyperledger#2193 အပ်ဒိတ် Iroha CLI စာရွက်စာတမ်း။
+- hyperledger#2193 macro crate အတွက် README ကို အပ်ဒိတ်လုပ်ပါ။
+ - hyperledger#2193 Update Norito ကုဒ်ဒါတူးလ် စာတမ်းပြုစုခြင်း။
+- hyperledger#2193 Update Kagami စာတမ်းပြုစုခြင်း။
+- hyperledger#2193 စံသတ်မှတ်ချက်များ စာရွက်စာတမ်းများကို အပ်ဒိတ်လုပ်ပါ။
+- hyperledger#2192 ပံ့ပိုးပေးထားသော လမ်းညွှန်ချက်များကို ပြန်လည်သုံးသပ်ပါ။
+- ပျက်စီးနေသော ကုဒ်ကိုးကားချက်များကို ပြင်ဆင်ပါ။
+- hyperledger#1280 စာရွက်စာတမ်း Iroha မက်ထရစ်များ။
+- hyperledger#2119 Docker ကွန်တိန်နာတစ်ခုအတွင်း Iroha ကို hot reload လုပ်နည်း လမ်းညွှန်ချက်ထည့်ပါ။
+- hyperledger#2181 ပြန်လည်သုံးသပ်ခြင်း README။
+- Cargo.toml ဖိုင်များတွင် hyperledger#2113 စာရွက်စာတမ်းအင်္ဂါရပ်များ။
+- hyperledger#2177 gitchangelog အထွက်ကို ရှင်းလင်းပါ။
+- hyperledger#1991 တွင် readme ကို Kura စစ်ဆေးရေးမှူးသို့ ထည့်ပါ။
+- hyperledger#2119 Docker ကွန်တိန်နာတစ်ခုတွင် Iroha ကို hot reload လုပ်နည်း လမ်းညွှန်ချက်ထည့်ပါ။
+- hyperledger#2181 ပြန်လည်သုံးသပ်ခြင်း README။
+- Cargo.toml ဖိုင်များတွင် hyperledger#2113 စာရွက်စာတမ်းအင်္ဂါရပ်များ။
+- hyperledger#2177 gitchangelog အထွက်ကို ရှင်းလင်းပါ။
+- hyperledger#1991 တွင် readme ကို Kura စစ်ဆေးရေးမှူးသို့ ထည့်ပါ။
+- နောက်ဆုံးပေါ် changelog ကိုဖန်တီးပါ။
+- ပြောင်းလဲမှုမှတ်တမ်းကိုဖန်တီးပါ။
+- ခေတ်မမီတော့သော README ဖိုင်များကို အပ်ဒိတ်လုပ်ပါ။
+- `api_spec.md` တွင် ပျောက်ဆုံးနေသော စာရွက်စာတမ်းများကို ထည့်ထားသည်။
 
-### CI/CD changes
-
-- Add five more self-hosted runners.
-- Add regular image tag for Soramitsu registry.
-- Workaround for libgit2-sys 0.5.0. Revert to 0.4.4.
-- Attempt to use arch-based image.
-- Update workflows to work on new nightly-only-container.
-- Remove binary entrypoints from coverage.
-- Switch dev tests to Equinix self-hosted runners.
-- hyperledger#2865 Remove usage of tmp file from `scripts/check.sh`
-- hyperledger#2781 Add coverage offsets.
-- Disable slow integration tests.
-- Replace base image with docker cache.
-- hyperledger#2781 Add codecov commit parent feature.
-- Move jobs to github runners.
-- hyperledger#2778 Client config check.
-- hyperledger#2732 Add a conditions to update iroha2-base images and add
-  PR labels.
-- Fix nightly image build.
-- Fix `buildx` error with `docker/build-push-action`
-- First-aids for non-functioning `tj-actions/changed-files`
-- Enable sequential publish of images, after #2662.
-- Add harbor registry.
-- Auto-label `api-changes` and `config-changes`
-- Commit hash in image, toolchain file again, UI isolation,
-  schema tracking.
-- Make publishing workflows sequential, and complements to #2427.
-- hyperledger#2309: Re-enable doc tests in CI.
-- hyperledger#2165 Remove codecov install.
-- Move to new container to prevent conflicts with current users.
- - hyperledger#2158 Upgrade `parity_scale_codec` and other dependencies. (Norito codec)
-- Fix build.
-- hyperledger#2461 Improve iroha2 CI.
-- Update `syn`.
-- move coverage to a new workflow.
+### CI/CD အပြောင်းအလဲများ- ကိုယ်တိုင်လက်ခံကျင်းပသည့် အပြေးသမားငါးဦး ထပ်ထည့်ပါ။
+- Soramitsu မှတ်ပုံတင်ခြင်းအတွက် ပုံမှန်ပုံတဂ်ကို ထည့်ပါ။
+- libgit2-sys 0.5.0 အတွက် ဖြေရှင်းနည်း။ 0.4.4 သို့ ပြန်ပြောင်းပါ။
+- arch-based image ကိုအသုံးပြုရန်ကြိုးစားပါ။
+- ညစဉ်သီးသန့်ကွန်တိန်နာအသစ်တွင်အလုပ်လုပ်ရန် အလုပ်အသွားအလာများကို အပ်ဒိတ်လုပ်ပါ။
+- လွှမ်းခြုံမှုမှ binary entrypoints များကိုဖယ်ရှားပါ။
+- ဆော့ဖ်ဝဲစမ်းသပ်မှုများကို Equinix ကိုယ်တိုင်လက်ခံကျင်းပသည့် အပြေးသမားများသို့ ပြောင်းပါ။
+- hyperledger#2865 `scripts/check.sh` မှ tmp ဖိုင်အသုံးပြုမှုကို ဖယ်ရှားပါ
+- hyperledger#2781 လွှမ်းခြုံမှုအော့ဖ်ဆက်များကို ထည့်ပါ။
+- နှေးကွေးသောပေါင်းစပ်စစ်ဆေးမှုများကိုပိတ်ပါ။
+- အခြေခံပုံကို docker cache ဖြင့် အစားထိုးပါ။
+- hyperledger#2781 သည် codecov ကိုထည့်ပါ မိဘအင်္ဂါရပ်ကို ကျူးလွန်ပါ။
+- github အပြေးသမားများထံ အလုပ်များရွှေ့ပါ။
+- hyperledger#2778 Client config စစ်ဆေးပါ။
+- hyperledger#2732 iroha2-base ပုံများကို အပ်ဒိတ်လုပ်ပြီး ပေါင်းထည့်ရန် အခြေအနေများကို ပေါင်းထည့်ပါ။
+  PR တံဆိပ်များ။
+- ညစဉ်ပုံရိပ်တည်ဆောက်မှုကိုပြုပြင်ပါ။
+- `buildx` အမှားကို `docker/build-push-action` ဖြင့် ပြင်ဆင်ပါ
+- `tj-actions/changed-files` မလုပ်ဆောင်နိုင်သော ရှေးဦးသူနာပြုများ
+- #2662 ပြီးနောက် ပုံများ၏ ဆက်တိုက်ထုတ်ဝေမှုကို ဖွင့်ပါ။
+- ဆိပ်ကမ်းမှတ်ပုံတင်ခြင်းကိုထည့်ပါ။
+- အော်တိုတံဆိပ် `api-changes` နှင့် `config-changes`
+- ရုပ်ပုံ၊ toolchain ဖိုင်တွင် hash ကို ထပ်မံထည့်သွင်းပါ၊ UI ကို သီးခြားခွဲထားခြင်း၊
+  schema ခြေရာခံခြင်း။
+- ထုတ်ဝေခြင်းလုပ်ငန်းအသွားအလာများကို ဆက်တိုက်ပြုလုပ်ပြီး #2427 ကိုဖြည့်စွက်ပါ။
+- hyperledger #2309- CI တွင် doc စမ်းသပ်မှုများကို ပြန်ဖွင့်ပါ။
+- hyperledger#2165 codecov install ကို ဖယ်ရှားပါ။
+- လက်ရှိအသုံးပြုသူများနှင့် ပဋိပက္ခများကို ကာကွယ်ရန် ကွန်တိန်နာအသစ်သို့ ရွှေ့ပါ။
+ - hyperledger#2158 `parity_scale_codec` နှင့် အခြားမှီခိုမှုများကို အဆင့်မြှင့်ပါ။ (Norito ကုဒ်ဒက်)
+- တည်ဆောက်မှုကိုပြုပြင်ပါ။
+- hyperledger#2461 iroha2 CI ကို တိုးတက်အောင်လုပ်ပါ။
+- အပ်ဒိတ် `syn`။
+- လွှမ်းခြုံမှုကို အလုပ်အသွားအလာအသစ်သို့ ရွှေ့ပါ။
 - reverse docker login ver.
-- Remove the version specification of `archlinux:base-devel`
-- Update Dockerfiles & Codecov reports reuse & Concurrency.
-- Generate changelog.
-- Add `cargo deny` file.
-- Add `iroha2-lts` branch with workflow copied from `iroha2`
-- hyperledger#2393 Bump the version of the Docker base image.
-- hyperledger#1658 Add documentation check.
-- Version bump of crates and remove unused dependencies.
-- Remove unnecessary coverage reporting.
-- hyperledger#2222 Split tests by whether it involves coverage or not.
-- hyperledger#2153 Fix #2154.
-- Version bump all of the crates.
-- Fix deploy pipeline.
-- hyperledger#2153 Fix coverage.
-- Add genesis check and update documentation.
-- Bump rust, mold and nightly to 1.60, 1.2.0 and 1.62 respectively.
-- load-rs triggers.
-- hyperledger#2153 Fix #2154.
-- Version bump all of the crates.
-- Fix deploy pipeline.
-- hyperledger#2153 Fix coverage.
-- Add genesis check and update documentation.
-- Bump rust, mold and nightly to 1.60, 1.2.0 and 1.62respectively.
-- load-rs triggers.
-- load-rs:release workflow triggers.
-- Fix push workflow.
-- Add telemetry to default features.
-- add proper tag to push workflow on main.
-- fix failing tests.
-- hyperledger#1657 Update image to rust 1.57. #1630: Move back to self-hosted runners.
-- CI improvements.
-- Switched coverage to use `lld`.
-- CI Dependency Fix.
-- CI segmentation improvements.
-- Uses a fixed Rust version in CI.
-- Fix Docker publish and iroha2-dev push CI. Move coverage and bench into PR
-- Remove unnecessary full Iroha build in CI docker test.
+- `archlinux:base-devel` ၏ ဗားရှင်းသတ်မှတ်ချက်ကို ဖယ်ရှားပါ။
+- Dockerfiles နှင့် Codecov အစီရင်ခံစာများကို ပြန်လည်အသုံးပြုခြင်း & Concurrency ကို အပ်ဒိတ်လုပ်ပါ။
+- ပြောင်းလဲမှုမှတ်တမ်းကိုဖန်တီးပါ။
+- `cargo deny` ဖိုင်ကိုထည့်ပါ။
+- `iroha2` မှ ကူးယူထားသော အလုပ်အသွားအလာနှင့်အတူ `iroha2-lts` ဌာနခွဲကို ထည့်ပါ။
+- hyperledger#2393 Docker အခြေခံပုံ၏ဗားရှင်းကို ခေါက်ပါ။
+- hyperledger#1658 စာရွက်စာတမ်းစစ်ဆေးခြင်းကို ထည့်ပါ။
+- သေတ္တာများ၏ဗားရှင်းဗားရှင်းနှင့်အသုံးမပြုသောမှီခိုမှုများကိုဖယ်ရှားပါ။
+- မလိုအပ်သော လွှမ်းခြုံအစီရင်ခံမှုကို ဖယ်ရှားပါ။
+- အကျုံးဝင်ခြင်းရှိ၊မရှိဖြင့် hyperledger#2222 Split tests။
+- hyperledger#2153 ပြင်ဆင်ခြင်း #2154။
+- ဗားရှင်းသေတ္တာများအားလုံးကို ထိမှန်စေခြင်း။
+- ပိုက်လိုင်းကို ဖြန့်ကျက်ပြုပြင်ပါ။
+- hyperledger#2153 လွှမ်းခြုံမှုကို ပြင်ဆင်ပါ။
+- ဥပါဒ်စစ်ဆေးခြင်းနှင့် စာရွက်စာတမ်းများကို အပ်ဒိတ်ထည့်ပါ။
+- သံချေးတက်ခြင်း၊ မှိုနှင့် ညစဉ်ညတိုင်း 1.60၊ 1.2.0 နှင့် 1.62 အသီးသီး။
+- load-rs အစပျိုးမှုများ။
+- hyperledger#2153 ပြင်ဆင်ခြင်း #2154။
+- ဗားရှင်းသေတ္တာများအားလုံးကို ထိမှန်စေခြင်း။
+- ပိုက်လိုင်းကို ဖြန့်ကျက်ပြုပြင်ပါ။
+- hyperledger#2153 လွှမ်းခြုံမှုကို ပြင်ဆင်ပါ။
+- ဥပါဒ်စစ်ဆေးခြင်းနှင့် စာရွက်စာတမ်းများကို အပ်ဒိတ်ထည့်ပါ။
+- သံချေးတက်ခြင်း၊ မှိုနှင့် ညစဉ်ညတိုင်း 1.60၊ 1.2.0 နှင့် 1.62 အသီးသီး။
+- load-rs အစပျိုးမှုများ။
+- load-rs: အလုပ်အသွားအလာ အစပျိုးမှုများကို ထုတ်ပေးသည်။
+- Push workflow ကိုပြင်ပါ။
+- ပုံသေအင်္ဂါရပ်များသို့ telemetry ကိုထည့်ပါ။
+- ပင်မတွင်အလုပ်အသွားအလာကိုတွန်းရန်သင့်လျော်သော tag ကိုထည့်ပါ။
+- မအောင်မြင်သောစာမေးပွဲများကိုပြုပြင်ပါ။
+- hyperledger#1657 ရုပ်ပုံကို rust 1.57 သို့ အပ်ဒိတ်လုပ်ပါ။ #1630- ကိုယ်တိုင်လက်ခံကျင်းပသည့် အပြေးသမားများထံ ပြန်ပြောင်းပါ။
+- CI တိုးတက်မှု။
+- `lld` ကို အသုံးပြုရန် လွှမ်းခြုံမှုကို ပြောင်းထားသည်။
+- CI မှီခိုမှု Fix ။
+- CI ပိုင်းခြားမှု တိုးတက်မှု။
+- CI တွင် သတ်မှတ်ထားသော Rust ဗားရှင်းကို အသုံးပြုသည်။
+- Docker ထုတ်ဝေခြင်းနှင့် iroha2-dev push CI ကို ပြုပြင်ပါ။ လွှမ်းခြုံမှုနှင့် ခုံတန်းလျားကို PR သို့ ရွှေ့ပါ။
+- CI docker စမ်းသပ်မှုတွင် မလိုအပ်သော Iroha အပြည့်အစုံကို ဖယ်ရှားပါ။
 
-  The Iroha build became useless as it is now done in docker image itself. So the CI only builds the client cli which is used in tests.
-- Add support for iroha2 branch in CI pipeline.
-  - long tests only ran on PR into iroha2
-  - publish docker images only from iroha2
-- Additional CI caches.
+  Iroha တည်ဆောက်မှုသည် ယခု docker ပုံတွင် ၎င်းကိုယ်တိုင်လုပ်ဆောင်သောကြောင့် အသုံးမ၀င်တော့ပါ။ ထို့ကြောင့် CI သည် စမ်းသပ်မှုများတွင် အသုံးပြုသည့် client cli ကိုသာ တည်ဆောက်သည်။
+- CI ပိုက်လိုင်းရှိ iroha2 ဌာနခွဲအတွက် ပံ့ပိုးမှုထည့်ပါ။
+  - ရှည်လျားသောစမ်းသပ်မှုများသည် PR တွင်သာ iroha2 သို့ပြေးခဲ့သည်။
+  - iroha2 မှ docker ပုံများကိုသာထုတ်ဝေပါ။
+- နောက်ထပ် CI ကက်ရှ်များ။
 
 ### Web-Assembly
 
 
-### Version bumps
+### ဗားရှင်းအဖုအထစ်များ
 
-- Version to pre-rc.13.
-- Version to pre-rc.11.
-- Version to RC.9.
-- Version to RC.8.
-- Update versions to RC7.
-- Pre-release preparations.
-- Update Mold 1.0.
-- Bump dependencies.
-- Update api_spec.md: fix request/response bodies.
-- Update rust version to 1.56.0.
-- Update contributing guide.
-- Update README.md and `iroha/config.json` to match new API and URL  format.
-- Update docker publish target to hyperledger/iroha2 #1453.
-- Updates workflow so that it matches main.
-- Update api spec and fix health endpoint.
-- Rust update to 1.54.
-- Docs(iroha_crypto): update `Signature` docs and align args of `verify`
-- Ursa version bump from 0.3.5 to 0.3.6.
-- Update workflows to new runners.
-- Update dockerfile for caching and faster ci builds.
-- Update libssl version.
-- Update dockerfiles and async-std.
-- Fix updated clippy.
-- Updates asset structure.
-  - Support for key-value instructions in asset
-  - Asset types as an enum
-  - Overflow vulnerability in asset ISI fix
-- Updates contributing guide.
-- Update out of date lib.
-- Update whitepaper and fix linting issues.
-- Update the cucumber_rust lib.
-- README updates for key generation.
-- Update Github Actions workflows.
-- Update Github Actions workflows.
-- Update requirements.txt.
-- Update common.yaml.
-- Docs updates from Sara.
-- Update instruction logic.
-- Update whitepaper.
-- Updates network functions description.
-- Update whitepaper based on comments.
-- Separation of WSV update and migration to Scale.
-- Update gitignore.
-- Update slightly description of kura in WP.
-- Update description about kura in whitepaper.
+- rc.13 အကြိုသို့ ဗားရှင်း။
+- rc.11 အကြိုသို့ ဗားရှင်း။
+- RC.9 သို့ ဗားရှင်း။
+- RC.8 သို့ ဗားရှင်း။
+- RC7 သို့ဗားရှင်းများကိုမွမ်းမံပါ။
+- အကြိုပြင်ဆင်မှုများ။
+- Mold 1.0 ကို အပ်ဒိတ်လုပ်ပါ။
+- Bump မှီခိုမှု။
+- api_spec.md ကို အပ်ဒိတ်လုပ်ပါ- တောင်းဆိုချက်/တုံ့ပြန်မှု အဖွဲ့များကို ပြင်ဆင်ပါ။
+- rust ဗားရှင်းကို 1.56.0 သို့ အပ်ဒိတ်လုပ်ပါ။
+- ပံ့ပိုးကူညီမှုလမ်းညွှန်ကို အပ်ဒိတ်လုပ်ပါ။
+- API နှင့် URL ဖော်မတ်အသစ်နှင့် ကိုက်ညီရန် README.md နှင့် `iroha/config.json` ကို အပ်ဒိတ်လုပ်ပါ။
+- docker မှ ပစ်မှတ်ကို hyperledger/iroha2 #1453 သို့ အပ်ဒိတ်လုပ်ပါ။
+- ပင်မနှင့်ကိုက်ညီစေရန် အလုပ်အသွားအလာကို အပ်ဒိတ်လုပ်ပါ။
+- api spec ကို အပ်ဒိတ်လုပ်ပြီး ကျန်းမာရေးအဆုံးမှတ်ကို ပြုပြင်ပါ။
+- Rust ကို 1.54 သို့ အပ်ဒိတ်လုပ်ပါ။
+- Docs(iroha_crypto): `Signature` docs ကို အပ်ဒိတ်လုပ်ပြီး `verify` ၏ args ကို ချိန်ညှိပါ
+- Ursa ဗားရှင်း 0.3.5 မှ 0.3.6 ထိ
+- အပြေးသမားအသစ်များအတွက် အလုပ်အသွားအလာများကို အပ်ဒိတ်လုပ်ပါ။
+- ကက်ရှ်နှင့် ပိုမိုမြန်ဆန်သော ci တည်ဆောက်မှုအတွက် dockerfile ကို အပ်ဒိတ်လုပ်ပါ။
+- libssl ဗားရှင်းကို အပ်ဒိတ်လုပ်ပါ။
+- dockerfiles နှင့် async-std ကို အပ်ဒိတ်လုပ်ပါ။
+- အပ်ဒိတ်လုပ်ထားသော clippy ကိုပြင်ပါ။
+- ပိုင်ဆိုင်မှုဖွဲ့စည်းပုံကို အပ်ဒိတ်လုပ်ခြင်း။
+  - ပိုင်ဆိုင်မှုရှိ သော့တန်ဖိုးဆိုင်ရာ ညွှန်ကြားချက်များအတွက် ပံ့ပိုးမှု
+  - စာရင်းတစ်ခုအနေဖြင့် ပိုင်ဆိုင်မှုအမျိုးအစားများ
+  - ပိုင်ဆိုင်မှု ISI ပြင်ဆင်မှုတွင် လွှမ်းမိုးမှု အားနည်းချက်
+- ပံ့ပိုးကူညီလမ်းညွှန်မွမ်းမံမှုများ။
+- ခေတ်မမီတော့ဘဲ အပ်ဒိတ်လုပ်ပါ။
+- စက္ကူဖြူကို အပ်ဒိတ်လုပ်ပြီး ရောင်ရမ်းမှုပြဿနာများကို ပြင်ဆင်ပါ။
+- cucumber_rust lib ကို အပ်ဒိတ်လုပ်ပါ။
+- သော့မျိုးဆက်အတွက် README အပ်ဒိတ်များ။
+- Github လုပ်ဆောင်ချက်များ အလုပ်အသွားအလာများကို အပ်ဒိတ်လုပ်ပါ။
+- Github လုပ်ဆောင်ချက်များ အလုပ်အသွားအလာများကို အပ်ဒိတ်လုပ်ပါ။
+- လိုအပ်ချက်များ.txt ကို အပ်ဒိတ်လုပ်ပါ။
+- common.yaml ကို အပ်ဒိတ်လုပ်ပါ။
+- Sara မှ Docs အပ်ဒိတ်များ။
+- ညွှန်ကြားချက်ယုတ္တိဗေဒကိုမွမ်းမံပါ။
+- စက္ကူဖြူကို အပ်ဒိတ်လုပ်ပါ။
+- ကွန်ရက်လုပ်ဆောင်ချက်ဖော်ပြချက်ကို အပ်ဒိတ်လုပ်ပါ။
+- မှတ်ချက်များအပေါ် အခြေခံ၍ စက္ကူဖြူကို အပ်ဒိတ်လုပ်ပါ။
+- WSV အပ်ဒိတ်နှင့် Scale သို့ ရွှေ့ပြောင်းခြင်းကို ခွဲခြားထားသည်။
+- gitignore ကို အပ်ဒိတ်လုပ်ပါ။
+- WP တွင် kura ၏ အနည်းငယ်ဖော်ပြချက်ကို အပ်ဒိတ်လုပ်ပါ။
+- စက္ကူဖြူတွင် kura အကြောင်း ဖော်ပြချက်ကို အပ်ဒိတ်လုပ်ပါ။
 
-### Schema
+### အစီအစဉ်
 
-- hyperledger#2114 Sorted collections support in schemas.
-- hyperledger#2108 Add pagination.
-- hyperledger#2114 Sorted collections support in schemas.
-- hyperledger#2108 Add pagination.
-- Make schema, version and macro no_std compatible.
-- Fix signatures in schema.
-- Altered  representation of `FixedPoint` in schema.
-- Added `RawGenesisBlock` to schema introspection.
-- Changed object-models to create schema IR-115.
+- hyperledger#2114 အမျိုးအစားခွဲထားသော စုစည်းမှုများကို schemas တွင် ပံ့ပိုးမှု။
+- hyperledger#2108 စာမျက်နှာထည့်ပါ။
+- hyperledger#2114 အမျိုးအစားခွဲထားသော စုစည်းမှုများကို schemas တွင် ပံ့ပိုးမှု။
+- hyperledger#2108 စာမျက်နှာထည့်ပါ။
+- schema၊ ဗားရှင်းနှင့် macro no_std နှင့် ကိုက်ညီမှုရှိအောင် ပြုလုပ်ပါ။
+- schema တွင်လက်မှတ်များကိုပြင်ပါ။
+- schema တွင် `FixedPoint` ကို ပြောင်းလဲထားသော ကိုယ်စားပြုမှု။
+- schema introspection တွင် `RawGenesisBlock` ကို ထည့်ခဲ့သည်။
+- schema IR-115 ဖန်တီးရန် အရာဝတ္ထု-မော်ဒယ်များကို ပြောင်းထားသည်။
 
-### Tests
+### စမ်းသပ်မှုများ
 
-- hyperledger#2544 Tutorial doctests.
-- hyperledger#2272 Add tests for 'FindAssetDefinitionById' query.
-- Add `roles` integration tests.
-- Standardise ui tests format, move derive ui tests to derive crates.
-- Fix mock tests (futures unordered bug).
-- Removed the DSL crate & moved tests to `data_model`
-- Ensure that unstable network tests pass for valid code.
-- Added tests to iroha_p2p.
-- Captures logs in tests unless test fails.
-- Add polling for tests and fix rarely breaking tests.
-- Tests parallel setup.
-- Remove root from iroha init and iroha_client tests.
-- Fix tests clippy warnings and adds checks to ci.
-- Fix `tx` validation errors during benchmark tests.
-- hyperledger#860: Iroha Queries and tests.
-- Iroha custom ISI guide and Cucumber tests.
-- Add tests for no-std client.
-- Bridge registration changes & tests.
-- Consensus tests with network mock.
-- Usage of temp dir for tests execution.
-- Benches tests positive cases.
-- Initial Merkle Tree functionality with tests.
-- Fixed tests and World State View initialization.
+- hyperledger#2544 ကျူတိုရီရယ် စာတမ်းများ။
+- hyperledger#2272 'FindAssetDefinitionById' မေးခွန်းအတွက် စမ်းသပ်မှုများ ထည့်ပါ။
+- `roles` ပေါင်းစည်းမှုစမ်းသပ်မှုများကို ထည့်ပါ။
+- ui စမ်းသပ်မှုပုံစံကို စံသတ်မှတ်ပါ၊ သေတ္တာများရယူရန် derive ui စမ်းသပ်မှုများကို ရွှေ့ပါ။
+- အတုအယောင်စမ်းသပ်မှုများကို ပြုပြင်ပါ (အနာဂတ်တွင် အစီအစဥ်မထားသော ချို့ယွင်းချက်)။
+- DSL သေတ္တာကို ဖယ်ရှားပြီး စမ်းသပ်မှုများကို `data_model` သို့ ရွှေ့ပါ။
+- မတည်ငြိမ်သောကွန်ရက်စမ်းသပ်မှုများသည် တရားဝင်ကုဒ်အတွက် အောင်မြင်ကြောင်း သေချာပါစေ။
+- iroha_p2p တွင် စမ်းသပ်မှုများ ထပ်ထည့်ထားသည်။
+- စမ်းသပ်မှုမအောင်မြင်ပါက မှတ်တမ်းများကို ဖမ်းယူပါ။
+- စစ်ဆေးမှုများအတွက် မဲရုံကိုထည့်ကာ ရှားပါးသော စမ်းသပ်မှုများကို ပြုပြင်ပါ။
+- အပြိုင်တပ်ဆင်မှုကို စမ်းသပ်သည်။
+- iroha init နှင့် iroha_client စမ်းသပ်မှုများမှ root ကိုဖယ်ရှားပါ။
+- စမ်းသပ်မှုများ clippy သတိပေးချက်များကိုပြင်ဆင်ပြီး ci သို့ချက်လက်မှတ်များထည့်ပါ။
+- စံနှုန်းစမ်းသပ်မှုများအတွင်း `tx` မှန်ကန်ကြောင်းအတည်ပြုအမှားများကိုပြင်ပါ။
+- hyperledger#860- Iroha မေးခွန်းများနှင့် စမ်းသပ်မှုများ။
+- Iroha စိတ်ကြိုက် ISI လမ်းညွှန်နှင့် သခွားသီးစမ်းသပ်မှုများ။
+- no-std client အတွက်စစ်ဆေးမှုများထည့်ပါ။
+- တံတားမှတ်ပုံတင်ခြင်းပြောင်းလဲမှုနှင့်စမ်းသပ်မှုများ။
+- ကွန်ရက်ပုံသဏ္ဍန်ဖြင့် သဘောတူညီမှုစမ်းသပ်မှုများ။
+- စမ်းသပ်မှုများလုပ်ဆောင်ရန်အတွက် temp dir ကိုအသုံးပြုခြင်း။
+- Benches များသည် အပြုသဘောဆောင်သော ကိစ္စများကို စစ်ဆေးသည်။
+- စမ်းသပ်မှုများနှင့်အတူ ကနဦး Merkle Tree လုပ်ဆောင်နိုင်စွမ်း။
+- ပုံသေစမ်းသပ်မှုများနှင့် World State View စတင်ခြင်း။
 
-### Other
-
-- Move parametrization into traits and remove FFI IR types.
-- Add support for unions, introduce `non_robust_ref_mut` * implement conststring FFI conversion.
-- Improve IdOrdEqHash.
-- Remove FilterOpt::BySome from (de-)serialization.
-- Make Not transparent.
-- Make ContextValue transparent.
-- Make Expression::Raw tag optional.
-- Add transparency for some instructions.
-- Improve (de-)serialization of RoleId.
-- Improve (de-)serialization of validator::Id.
-- Improve (de-)serialization of PermissionTokenId.
-- Improve (de-)serialization of TriggerId.
-- Improve (de-)serialization of Asset(-Definition) Ids.
-- Improve (de-)serialization of AccountId.
-- Improve (de-)serialization of Ipfs and DomainId.
-- Remove logger config from client config.
-- Add support for transparent structs in FFI.
-- Refactor &Option<T> to Option<&T>
-- Fix clippy warnings.
-- Add more details in `Find` error description.
-- Fix `PartialOrd` and `Ord` implementations.
-- Use `rustfmt` instead of `cargo fmt`
-- Remove `roles` feature.
-- Use `rustfmt` instead of `cargo fmt`
-- Share workdir as a volume with dev docker instances.
-- Remove Diff associated type in Execute.
-- Use custom encoding instead of multival return.
-- Remove serde_json as iroha_crypto dependency.
-- Allow only known fields in version attribute.
-- Clarify different ports for endpoints.
-- Remove `Io` derive.
-- Initial documentation of key_pairs.
-- Move back to self-hosted runners.
-- Fix new clippy lints in the code.
-- Remove i1i1 from maintainers.
-- Add actor doc and minor fixes.
-- Poll instead of pushing latest blocks.
-- Transaction status events tested for each of 7 peers.
-- `FuturesUnordered` instead of `join_all`
-- Switch to GitHub Runners.
-- Use VersionedQueryResult vs QueryResult for /query endpoint.
-- Reconnect telemetry.
-- Fix dependabot config.
-- Add commit-msg git hook to include signoff.
-- Fix the push pipeline.
-- Upgrade dependabot.
-- Detect future timestamp on queue push.
-- hyperledger#1197: Kura handles errors.
-- Add Unregister peer instruction.
-- Add optional nonce to distinguish transactions. Close #1493.
-- Removed unnecessary `sudo`.
-- Metadata for domains.
-- Fix the random bounces in `create-docker` workflow.
-- Added `buildx` as suggested by the failing pipeline.
-- hyperledger#1454: Fix query error response with specific status code and hints.
-- hyperledger#1533: Find transaction by hash.
-- Fix `configure` endpoint.
-- Add boolean-based asset mintability check.
-- Addition of typed crypto primitives and migration to type-safe cryptography.
-- Logging improvements.
-- hyperledger#1458: Add actor channel size to config as `mailbox`.
-- hyperledger#1451: Add warning about misconfiguration if `faulty_peers = 0` and `trusted peers count > 1`
-- Add handler for getting specific block hash.
-- Added new query FindTransactionByHash.
-- hyperledger#1185: Change crates name and path.
-- Fix logs and general improvements.
-- hyperledger#1150: Group 1000 blocks into each file
-- Queue stress test.
-- Log level fix.
-- Add header specification to client library.
-- Queue panic failure fix.
-- Fixup queue.
-- Fixup dockerfile release build.
-- Https client fixup.
-- Speedup ci.
-- 1. Removed all ursa dependences, except for iroha_crypto.
-- Fix overflow when subtracting durations.
-- Make fields public in client.
-- Push Iroha2 to Dockerhub as nightly.
-- Fix http status codes.
-- Replace iroha_error with thiserror, eyre and color-eyre.
-- Substitute queue with crossbeam one.
-- Remove some useless lint allowences.
-- Introduces metadata for asset definitions.
-- Removal of arguments from test_network crate.
-- Remove unnecessary dependencies.
-- Fix iroha_client_cli::events.
-- hyperledger#1382: Remove old network implementation.
-- hyperledger#1169: Added precision for assets.
-- Improvements in peer start up:
-  - Allows loading genesis public key only from env
-  - config, genesis and trusted_peers path can now be specified in cli params
-- hyperledger#1134: Integration of Iroha P2P.
-- Change query endpoint to POST instead of GET.
-- Execute on_start in actor synchronously.
-- Migrate to warp.
-- Rework commit with broker bug fixes.
-- Revert "Introduces multiple broker fixes" commit(9c148c33826067585b5868d297dcdd17c0efe246)
-- Introduces multiple broker fixes:
-  - Unsubscribe from broker on actor stop
-  - Support multiple subscriptions from the same actor type (previously a TODO)
-  - Fix a bug where broker always put self as an actor id.
-- Broker bug (test showcase).
-- Add derives for data model.
-- Remove rwlock from torii.
-- OOB Query Permission Checks.
-- hyperledger#1272: Implementation of peer counts,
-- Recursive check for query permissions inside of instructions.
-- Schedule stop actors.
-- hyperledger#1165: Implementation of peer counts.
-- Check query permissions by account in torii endpoint.
-- Removed exposing CPU and memory usage in system metrics.
- - Replace JSON with Norito for WS messages.
-- Store proof of view changes.
-- hyperledger#1168: Added logging if transaction does not passed signature check condition.
-- Fixed small issues, added connection listen code.
-- Introduce network topology builder.
-- Implement P2P network for Iroha.
-- Adds block size metric.
-- PermissionValidator trait renamed to IsAllowed. and corresponding other name changes
-- API spec web socket corrections.
-- Removes unnecessary dependencies from docker image.
-- Fmt uses Crate import_granularity.
-- Introduces Generic Permission Validator.
-- Migrate to actor framework.
-- Change broker design and add some functionality to actors.
-- Configures codecov status checks.
-- Uses source based coverage with grcov.
-- Fixed multiple build-args format and redeclared ARG for intermediate build containers.
-- Introduces SubscriptionAccepted message.
-- Remove zero-value assets from accounts after operating upon.
-- Fixed docker build arguments format.
-- Fixed error message if child block not found.
-- Added vendored OpenSSL to build, fixes pkg-config dependency.
-- Fix repository name for dockerhub and coverage diff.
-- Added clear error text and filename if TrustedPeers could not be loaded.
-- Changed text entities to links in docs.
-- Fix wrong username secret in Docker publish.
-- Fix small typo in whitepaper.
-- Allows mod.rs usage for better file structure.
-- Move main.rs into separate crate and make permissions for public blockchain.
-- Add querying inside client cli.
-- Migrate from clap to structopts for cli.
-- Limit telemetry to unstable network test.
-- Move traits to smartcontracts module.
+### အခြား- parameterization ကို စရိုက်များအဖြစ် ရွှေ့ပြီး FFI IR အမျိုးအစားများကို ဖယ်ရှားပါ။
+- သမဂ္ဂများအတွက် ပံ့ပိုးကူညီမှုထည့်ပါ၊ `non_robust_ref_mut` * conststring FFI ပြောင်းလဲခြင်းကို အကောင်အထည်ဖော်ပါ။
+- IdOrdEqHash ကို တိုးတက်အောင်လုပ်ပါ။
+- FilterOpt::BySome (de-)serialization မှ ဖယ်ရှားပါ။
+- ပွင့်လင်းမြင်သာမှု မရှိပါစေနှင့်။
+- ContextValue ကို ပွင့်လင်းမြင်သာအောင် ပြုလုပ်ပါ။
+- Expression ကိုလုပ်ပါ-:Raw tag ကို ရွေးချယ်နိုင်သည် ။
+- အချို့သောညွှန်ကြားချက်များအတွက် ပွင့်လင်းမြင်သာမှုကို ထည့်ပါ။
+- RoleId ၏ (de-)serialization ကို တိုးတက်အောင်လုပ်ပါ။
+- validator ၏ (de-)serialization ကို တိုးတက်အောင်လုပ်ပါ-:Id။
+- PermissionTokenId ၏ (de-)serialization ကို တိုးတက်အောင်လုပ်ပါ။
+- TriggerId ၏ (de-)serialization ကို တိုးတက်အောင်လုပ်ပါ။
+- ပိုင်ဆိုင်မှု(-အဓိပ္ပါယ်ဖွင့်ဆိုချက်) Ids ၏ (de-) အမှတ်စဉ်ကို တိုးတက်အောင်လုပ်ပါ။
+- AccountId ၏ (de-)serialization ကို တိုးတက်အောင်လုပ်ပါ။
+- Ipfs နှင့် DomainId ၏ (de-) အမှတ်စဉ်များကို တိုးတက်အောင်လုပ်ပါ။
+- client config မှ logger config ကိုဖယ်ရှားပါ။
+- FFI တွင် ပွင့်လင်းမြင်သာသောတည်ဆောက်ပုံများအတွက် ပံ့ပိုးမှုထည့်ပါ။
+- Refactor &Option <T> to Option<&T>
+- clippy သတိပေးချက်များကိုပြင်ပါ။
+- `Find` အမှားဖော်ပြချက်တွင် နောက်ထပ်အသေးစိတ်အချက်အလက်များကို ထည့်ပါ။
+- `PartialOrd` နှင့် `Ord` အကောင်အထည်ဖော်မှုများကို ပြင်ဆင်ပါ။
+- `cargo fmt` အစား `rustfmt` ကိုသုံးပါ။
+- `roles` လုပ်ဆောင်ချက်ကို ဖယ်ရှားပါ။
+- `cargo fmt` အစား `rustfmt` ကိုသုံးပါ။
+- dev docker ဖြစ်ရပ်များနှင့် volume တစ်ခုအနေဖြင့် workdir ကိုမျှဝေပါ။
+- Execute တွင် ဆက်စပ်နေသော Diff အမျိုးအစားကို ဖယ်ရှားပါ။
+- multival return အစား စိတ်ကြိုက်ကုဒ်နံပါတ်ကို သုံးပါ။
+- iroha_crypto မှီခိုမှုအဖြစ် serde_json ကို ဖယ်ရှားပါ။
+- ဗားရှင်း attribute တွင် သိထားသော အကွက်များကိုသာ ခွင့်ပြုပါ။
+- အဆုံးမှတ်များအတွက် မတူညီသော port များကို ရှင်းလင်းပါ။
+- Remove `Io` ကို ဖြုတ်ပါ။
+- key_pairs ၏ ကနဦးစာရွက်စာတမ်း။
+- ကိုယ်တိုင်လက်ခံကျင်းပသည့် အပြေးသမားများထံ ပြန်ပြောင်းပါ။
+- ကုဒ်ရှိ clippy lints အသစ်များကို ပြင်ဆင်ပါ။
+- ထိန်းသိမ်းသူထံမှ i1i1 ကိုဖယ်ရှားပါ။
+- သရုပ်ဆောင် doc နှင့် အသေးစားပြင်ဆင်မှုများကို ထည့်ပါ။
+- နောက်ဆုံးဘလောက်များကို တွန်းထုတ်မည့်အစား စစ်တမ်းကောက်ယူပါ။
+- ရွယ်တူ 7 ဦးစီအတွက် စမ်းသပ်ထားသော ငွေပေးငွေယူ အခြေအနေ အဖြစ်အပျက်များ။
+- `FuturesUnordered` အစား `join_all`
+- GitHub Runners သို့ပြောင်းပါ။
+- /query endpoint အတွက် VersionedQueryResult နှင့် QueryResult ကိုသုံးပါ။
+- တယ်လီမီတာကို ပြန်လည်ချိတ်ဆက်ပါ။
+- dependabot config ကိုပြင်ပါ။
+- signoff ပါဝင်ရန် commit-msg git hook ကိုထည့်ပါ။
+- တွန်းပိုက်လိုင်းကိုပြင်ပါ။
+- မှီခိုမှုအဆင့်မြှင့်တင်ပါ။
+- တန်းစီခြင်းတွန်းခြင်းတွင် အနာဂတ်အချိန်တံဆိပ်ကို ရှာဖွေပါ။
+- hyperledger #1197- Kura သည် အမှားများကို ကိုင်တွယ်သည်။
+- Register Unregister လုပ်ဖော်ကိုင်ဖက် ညွှန်ကြားချက်ကို ထည့်ပါ။
+- ငွေပေးငွေယူများကိုခွဲခြားရန် optional nonce ကိုထည့်ပါ။ #1493 ပိတ်ပါ။
+- မလိုအပ်သော `sudo` ကိုဖယ်ရှားပါ။
+- ဒိုမိန်းများအတွက် မက်တာဒေတာ။
+- `create-docker` အလုပ်အသွားအလာတွင် ကျပန်းပြန်ပေါက်မှုများကို ပြုပြင်ပါ။
+- ပျက်သွားသော ပိုက်လိုင်းမှ အကြံပြုထားသည့်အတိုင်း `buildx` ကို ထည့်ခဲ့သည်။
+- hyperledger#1454- တိကျသောအခြေအနေကုဒ်နှင့် အရိပ်အမြွက်များဖြင့် မေးမြန်းမှုအမှားကို တုံ့ပြန်ပါ။
+- hyperledger #1533- hash ဖြင့် ငွေပေးငွေယူကို ရှာပါ။
+- `configure` အဆုံးမှတ်ကို ပြင်ဆင်ပါ။
+- boolean-based ပိုင်ဆိုင်မှု mintability check ကိုထည့်ပါ။
+- ရိုက်ထည့်ထားသော crypto primitives နှင့် type-safe cryptography သို့ ရွှေ့ပြောင်းခြင်း။
+- မှတ်တမ်းတိုးတက်မှုများ။
+- hyperledger #1458- `mailbox` အဖြစ် သတ်မှတ်ရန် သရုပ်ဆောင်ချန်နယ်အရွယ်အစားကို ထည့်ပါ။
+- hyperledger#1451- `faulty_peers = 0` နှင့် `trusted peers count > 1` ဆိုလျှင် မှားယွင်းဖွဲ့စည်းမှုဆိုင်ရာ သတိပေးချက် ထည့်ပါ
+- သတ်မှတ်ထားသော block hash ရရှိရန်အတွက် handler ကိုထည့်ပါ။
+- ရှာဖွေမှုအသစ် FindTransactionByHash ကိုထပ်ထည့်သည်။
+- hyperledger #1185- သေတ္တာအမည်နှင့် လမ်းကြောင်းကို ပြောင်းပါ။
+- မှတ်တမ်းများနှင့် အထွေထွေတိုးတက်မှုများကို ပြုပြင်ပါ။
+- hyperledger#1150- ဖိုင်တစ်ခုစီတွင် ဘလောက် 1000 အုပ်စုဖွဲ့ပါ။
+- တန်းစီဖိအားစမ်းသပ်မှု။
+- မှတ်တမ်းအဆင့်ပြင်ဆင်ခြင်း။
+- သုံးစွဲသူဒစ်ဂျစ်တိုက်သို့ ခေါင်းစီးသတ်မှတ်ချက်ကို ထည့်ပါ။
+- တန်းစီထိတ်လန့်မှု ပျက်ကွက်မှုကို ပြုပြင်ပါ။
+- တန်းစီခြင်းကိုပြင်ဆင်ပါ။
+- dockerfile ထွက်ရှိမှုတည်ဆောက်မှုကိုပြင်ဆင်ပါ။
+- Https client ကိုပြင်ဆင်ခြင်း။
+- အရှိန်မြှင့်ပါ။
+- 1. iroha_crypto မှလွဲ၍ ursa မှီခိုမှုအားလုံးကို ဖယ်ရှားခဲ့သည်။
+- ကြာချိန်ကို နုတ်သည့်အခါ ပြည့်လျှံမှုကို ပြင်ဆင်ပါ။
+- client တွင် အကွက်များကို အများသူငှာ ပြုလုပ်ပါ။
+- Iroha2 ကို ညတိုင်းလိုလို Dockerhub သို့ တွန်းပါ။
+- http အခြေအနေကုဒ်များကိုပြင်ပါ။
+- iroha_error ကို ဤerror၊ eyere နှင့် color-eyre ဖြင့် အစားထိုးပါ။
+- crossbeam တစ်ခုဖြင့် တန်းစီခြင်းကို အစားထိုးပါ။
+- အသုံးမဝင်သော သံပုရာသီးအချို့ကို ဖယ်ရှားပါ။
+- ပိုင်ဆိုင်မှုအဓိပ္ပါယ်ဖွင့်ဆိုချက်များအတွက် မက်တာဒေတာကို မိတ်ဆက်ပေးသည်။
+- test_network crate မှ အကြောင်းပြချက်များကို ဖယ်ရှားခြင်း။
+- မလိုအပ်သောမှီခိုမှုများကိုဖယ်ရှားပါ။
+- iroha_client_cli ကို ပြင်ဆင်ပါ-:ဖြစ်ရပ်များ။
+- hyperledger #1382- ကွန်ရက်ဟောင်းအကောင်အထည်ဖော်မှုကို ဖယ်ရှားပါ။
+- hyperledger #1169- ပိုင်ဆိုင်မှုများအတွက် တိကျမှုကို ထည့်သွင်းထားသည်။
+- peer start up တွင် တိုးတက်မှုများ-
+  - genesis public key ကို env မှသာ တင်ခွင့်ပြုသည်။
+  - config၊ genesis နှင့် trusted_peers လမ်းကြောင်းကို cli params တွင် သတ်မှတ်နိုင်ပါပြီ။
+- hyperledger #1134- Iroha P2P ပေါင်းစပ်ခြင်း။
+- GET အစား query endpoint ကို POST သို့ ပြောင်းပါ။
+- သရုပ်ဆောင်တွင် on_start ကို တပြိုင်တည်းလုပ်ဆောင်ပါ။
+- warp သို့ပြောင်းရွှေ့ပါ။
+- ပွဲစား bug ပြင်ဆင်မှုများဖြင့် ပြန်လည်လုပ်ဆောင်ပါ။
+- "များစွာသော ပွဲစားပြင်ဆင်မှုများကို မိတ်ဆက်သည်" commit (9c148c33826067585b5868d297dcdd17c0efe246) ကို ပြန်ပြောင်းပါ။
+- ပွဲစားပြင်ဆင်မှုများအများအပြားကို မိတ်ဆက်ပေးသည်-
+  - ပွဲစားမှ စာရင်းသွင်းခြင်းမှ ရပ်စဲပါ။
+  - တူညီသောသရုပ်ဆောင်အမျိုးအစား (ယခင် TODO) မှ စာရင်းသွင်းမှုများစွာကို ပံ့ပိုးပါ။
+  - ပွဲစားက မိမိကိုယ်ကို သရုပ်ဆောင် အိုင်ဒီအဖြစ် အမြဲထည့်သွင်းထားသည့် ချွတ်ယွင်းချက်ကို ပြင်ပါ။
+- ပွဲစား ချို့ယွင်းချက် (စမ်းသပ်ပြသမှု)။
+- ဒေတာမော်ဒယ်အတွက် ကောက်နုတ်ချက်များကို ထည့်ပါ။
+- Torii မှ rwlock ကိုဖယ်ရှားပါ။
+- OOB Query Permission စစ်ဆေးမှုများ။
+- hyperledger #1272- သက်တူရွယ်တူအရေအတွက်များကို အကောင်အထည်ဖော်ခြင်း၊
+- ညွှန်ကြားချက်များအတွင်းမှ မေးမြန်းမှုခွင့်ပြုချက်များကို ထပ်တလဲလဲစစ်ဆေးပါ။
+- သရုပ်ဆောင်များကိုရပ်တန့်ရန်အချိန်ဇယား။
+- hyperledger #1165- သက်တူရွယ်တူအရေအတွက်များကို အကောင်အထည်ဖော်ခြင်း။
+- torii endpoint ရှိ အကောင့်ဖြင့် မေးမြန်းမှုခွင့်ပြုချက်များကို စစ်ဆေးပါ။
+- စနစ်မက်ထရစ်များတွင် ထုတ်လွှတ်နေသော CPU နှင့် မမ်မိုရီအသုံးပြုမှုကို ဖယ်ရှားထားသည်။
+ - WS မက်ဆေ့ဂျ်များအတွက် Norito ဖြင့် JSON ကို အစားထိုးပါ။
+- အမြင်ပြောင်းလဲမှုများ၏အထောက်အထားကိုသိမ်းဆည်းပါ။
+- hyperledger#1168- ငွေပေးငွေယူ လက်မှတ်စစ်ဆေးခြင်းအခြေအနေ မကျော်လွန်ပါက မှတ်တမ်းထည့်သွင်းထားသည်။
+- သေးငယ်သောပြဿနာများကိုဖြေရှင်းပြီးချိတ်ဆက်မှုနားထောင်ကုဒ်ကိုထည့်သွင်းပါ။
+- ကွန်ရက် topology တည်ဆောက်သူကို မိတ်ဆက်ပါ။
+- Iroha အတွက် P2P ကွန်ရက်ကို အကောင်အထည်ဖော်ပါ။
+- ပိတ်ဆို့အရွယ်အစားမက်ထရစ်ကိုထည့်ပါ။
+- PermissionValidator စရိုက်ကို IsAllowed သို့ အမည်ပြောင်းပါ။ နှင့်သက်ဆိုင်သောအခြားအမည်များပြောင်းလဲခြင်း။
+- API spec web socket ပြင်ဆင်မှုများ။
+- docker ပုံမှမလိုအပ်သောမှီခိုမှုများကိုဖယ်ရှားပါ။
+- Fmt သည် Crate import_granularity ကိုအသုံးပြုသည်။
+- ယေဘူယျခွင့်ပြုချက်စစ်ဆေးခြင်းကို မိတ်ဆက်ပေးသည်။
+- သရုပ်ဆောင်မူဘောင်သို့ ပြောင်းရွှေ့ပါ။
+- ပွဲစားဒီဇိုင်းကိုပြောင်းပြီး သရုပ်ဆောင်များအတွက် လုပ်ဆောင်နိုင်စွမ်းအချို့ကို ထည့်သွင်းပါ။
+- codecov အခြေအနေ စစ်ဆေးမှုများကို စီစဉ်သတ်မှတ်ပေးသည်။
+- grcov ဖြင့် အရင်းအမြစ်အခြေခံ လွှမ်းခြုံမှုကို အသုံးပြုသည်။
+- များပြားသော build-args ဖော်မတ်ကို ပြင်ဆင်ပြီး အလယ်အလတ်တည်ဆောက်သည့် ကွန်တိန်နာများအတွက် ARG ကို ထပ်မံကြေငြာခဲ့သည်။
+- စာရင်းသွင်းမှုလက်ခံထားသော မက်ဆေ့ချ်ကို မိတ်ဆက်ပါ။
+- လုပ်ဆောင်ပြီးနောက် အကောင့်များမှ သုညတန်ဖိုးပိုင်ဆိုင်မှုများကို ဖယ်ရှားပါ။
+- fixed docker build arguments ဖော်မတ်။
+- ကလေးပိတ်ဆို့ခြင်းမတွေ့ပါက Error Message ကို ပြင်ဆင်ပါ။
+- တည်ဆောက်ရန် ရောင်းချသူ OpenSSL ကို ပေါင်းထည့်ကာ pkg-config မှီခိုမှုကို ပြင်ဆင်သည်။
+- dockerhub နှင့် coverage diff အတွက် repository name ကို ပြင်ဆင်ပါ။
+- TrustedPeers ကို မတင်နိုင်ပါက ရှင်းလင်းသော အမှားအယွင်း စာသားနှင့် ဖိုင်အမည်ကို ပေါင်းထည့်ခဲ့သည်။
+- docs ရှိ လင့်ခ်များသို့ စာသားအကြောင်းအရာများကို ပြောင်းထားသည်။
+- Docker တွင် မှားယွင်းသော အသုံးပြုသူအမည်လျှို့ဝှက်ချက်ကို ပြင်ဆင်ပါ။
+- စက္ကူဖြူတွင် စာစီစာရိုက်အသေးစားကို ပြင်ဆင်ပါ။
+- ပိုမိုကောင်းမွန်သောဖိုင်ဖွဲ့စည်းပုံအတွက် mod.rs အသုံးပြုမှုကို ခွင့်ပြုသည်။
+- main.rs ကို သီးခြားသေတ္တာထဲသို့ ရွှေ့ပြီး အများသူငှာ blockchain အတွက် ခွင့်ပြုချက်လုပ်ပါ။
+- client cli တွင် querying ကိုထည့်ပါ။
+- clap မှ cli အတွက် structopts သို့ ရွှေ့ပြောင်းပါ။
+- မတည်ငြိမ်သောကွန်ရက်စမ်းသပ်မှုတွင် telemetry ကိုကန့်သတ်ပါ။
+- စရိုက်လက္ခဏာများကို smartcontracts module သို့ရွှေ့ပါ။
 - Sed -i "s/world_state_view/wsv/g"
-- Move smart contracts into separate module.
-- Iroha network content length bugfix.
-- Adds task local storage for actor id. Useful for deadlock detection.
-- Add deadlock detection test to CI
-- Add Introspect macro.
-- Disambiguates workflow names also formatting corrections
-- Change of query api.
-- Migration from async-std to tokio.
-- Add analyze of telemetry to ci.
-- Add futures telemetry for iroha.
-- Add iroha futures to every async function.
-- Add iroha futures for observability of number of polls.
-- Manual deploy and configuration added to README.
-- Reporter fixup.
-- Add derive Message macro.
-- Add simple actor framework.
-- Add dependabot configuration.
-- Add nice panic and error reporters.
-- Rust version migration to 1.52.1 and corresponding fixes.
-- Spawn blocking CPU intensive tasks in separate threads.
-- Use unique_port and cargo-lints from crates.io.
-- Fix for lockfree WSV:
-  - removes unnecessary Dashmaps and locks in API
-  - fixes bug with excessive number of blocks created (rejected transactions were not recorded)
-  - Displays full error cause for errors
-- Add telemetry subscriber.
-- Queries for roles and permissions.
-- Move blocks from kura to wsv.
-- Change to lock-free data structures inside wsv.
-- Network timeout fix.
-- Fixup health endpoint.
-- Introduces Roles.
-- Add push docker images from dev branch.
-- Add more agressive linting and remove panics from code.
-- Rework of Execute trait for instructions.
-- Remove old code from iroha_config.
-- IR-1060 Adds Grant checks for all the existing permissions.
-- Fix ulimit and timeout for iroha_network.
-- Ci timeout test fix.
-- Remove all assets when their definition was removed.
-- Fix wsv panic at adding asset.
-- Remove Arc and Rwlock for channels.
-- Iroha network fixup.
-- Permission Validators use references in checks.
-- Grant Instruction.
-- Added configuration for string length limits and validation of id's for NewAccount, Domain and AssetDefinition IR-1036.
-- Substitute log with tracing lib.
-- Add ci check for docs and deny dbg macro.
-- Introduces grantable permissions.
-- Add iroha_config crate.
-- Add @alerdenisov as a code owner to approve all incoming merge requests.
-- Fix of transaction size check during consensus.
-- Revert upgrading of async-std.
-- Replace some consts with power of 2 IR-1035.
-- Add query to retrieve transaction history IR-1024.
-- Add validation of permissions for store and restructure of permission validators.
-- Add NewAccount for account registration.
-- Add types for asset definition.
-- Introduces configurable metadata limits.
-- Introduces transaction metadata.
-- Add expressions inside queries.
-- Add lints.toml and fix warnings.
-- Separate trusted_peers from config.json.
-- Fix typo in URL to Iroha 2 community in Telegram.
-- Fix clippy warnings.
-- Introduces key-value metadata support for Account.
-- Add versioning of blocks.
-- Fixup ci linting repetitions.
-- Add mul,div,mod,raise_to expressions.
-- Add into_v* for versioning.
-- Substitute Error::msg with error macro.
-- Rewrite iroha_http_server and rework torii errors.
- - Upgrades Norito version to 2.
-- Whitepaper versioning description.
-- Infallable pagination. Fix the cases when pagination may unnecessary through errors, not returns empty collections instead.
-- Add derive(Error) for enums.
-- Fix nightly version.
-- Add iroha_error crate.
-- Versioned messages.
-- Introduces container versioning primitives.
-- Fix benchmarks.
-- Add pagination.
-- Add varint encoding decoding.
-- Change query timestamp to u128.
-- Add RejectionReason enum for pipeline events.
-- Removes outdated lines from genesis files. The destination was removed from register ISI in previous commits.
-- Simplifies register and unregister ISIs.
-- Fix commit timeout not being sent in 4 peer network.
-- Topology shuffle at change view.
-- Add other containers for FromVariant derive macro.
-- Add MST support for client cli.
-- Add FromVariant macro and cleanup codebase.
-- Add i1i1 to code owners.
-- Gossip transactions.
-- Add length for instructions and expressions.
-- Add docs to block time and commit time parameters.
-- Replaced Verify and Accept traits with TryFrom.
-- Introduce waiting only for the minimum number of peers.
-- Add github action to test api with iroha2-java.
-- Add genesis for docker-compose-single.yml.
-- Default signature check condition for account.
-- Add test for account with multiple signatories.
-- Add client API support for MST.
-- Build in docker.
-- Add genesis to docker compose.
-- Introduce Conditional MST.
-- Add wait_for_active_peers impl.
-- Add test for isahc client in iroha_http_server.
-- Client API spec.
-- Query execution in Expressions.
-- Integrates expressions and ISIs.
-- Expressions for ISI.
-- Fix account config benchmarks.
-- Add account config for client.
-- Fix `submit_blocking`.
-- Pipeline events are sent.
-- Iroha client web socket connection.
-- Events separation for pipeline and data events.
-- Integration test for permissions.
-- Add permission checks for burn and mint.
-- Unregister ISI permission.
-- Fix benchmarks for world struct PR.
-- Introduce World struct.
-- Implement the genesis block loading component.
-- Introduce genesis account.
-- Introduce permissions validator builder.
-- Add labels to Iroha2 PRs with Github Actions.
-- Introduce Permissions Framework.
-- Queue tx tx number limit and Iroha initialization fixes.
-- Wrap Hash in a struct.
-- Improve log level:
-  - Add info level logs to consensus.
-  - Mark network communication logs as trace level.
-  - Remove block vector from WSV as it is a duplication and it showed all the blockchain in logs.
-  - Set info log level as default.
-- Remove mutable WSV references for validation.
-- Heim version increment.
-- Add default trusted peers to the config.
-- Client API migration to http.
-- Add transfer isi to CLI.
-- Configuration of Iroha Peer related Instructions.
-- Implementation of missing ISI execute methods and test.
-- Url query params parsing
-- Add `HttpResponse::ok()`, `HttpResponse::upgrade_required(..)`
-- Replacement of old Instruction and Query models with Iroha DSL approach.
-- Add BLS signatures support.
-- Introduce http server crate.
-- Patched libssl.so.1.0.0 with symlink.
-- Verifies account signature for transaction.
-- Refactor transaction stages.
-- Initial domains improvements.
-- Implement DSL prototype.
-- Improve Torii Benchmarks: disable logging in benchmarks, add success ratio assert.
-- Improve test coverage pipeline: replaces `tarpaulin` with `grcov`, publish test coverage report to `codecov.io`.
-- Fix RTD theme.
-- Delivery artifacts for iroha subprojects.
-- Introduce `SignedQueryRequest`.
-- Fix a bug with signature verification.
-- Rollback transactions support.
-- Print generated key-pair as json.
-- Support `Secp256k1` key-pair.
-- Initial support for different crypto algorithms.
-- DEX Features.
-- Replace hardcoded config path with cli param.
-- Bench master workflow fix.
-- Docker event connection test.
-- Iroha Monitor Guide and CLI.
-- Events cli improvements.
-- Events filter.
-- Event connections.
-- Fix in master workflow.
-- Rtd for iroha2.
-- Merkle tree root hash for block transactions.
-- Publication to docker hub.
-- CLI functionality for Maintenance Connect.
-- CLI functionality for Maintenance Connect.
-- Eprintln to log macro.
-- Log improvements.
-- IR-802 Subscription to blocks statuses changes.
-- Events sending of transactions and blocks.
-- Moves Sumeragi message handling into message impl.
-- General Connect Mechanism.
-- Extract Iroha domain entities for no-std client.
-- Transactions TTL.
-- Max transactions per block configuration.
-- Store invalidated blocks hashes.
-- Synchronize blocks in batches.
-- Configuration of connect functionality.
-- Connect to Iroha functionality.
-- Block validation corrections.
-- Block synchronization: diagrams.
-- Connect to Iroha functionality.
-- Bridge: remove clients.
-- Block synchronization.
-- AddPeer ISI.
-- Commands to Instructions renaming.
-- Simple metrics endpoint.
-- Bridge: get registered bridges and external assets.
-- Docker compose test in pipeline.
-- Not enough votes Sumeragi test.
-- Block chaining.
-- Bridge: manual external transfers handling.
-- Simple Maintenance endpoint.
-- Migration to serde-json.
-- Demint ISI.
-- Add bridge clients, AddSignatory ISI, and CanAddSignatory permission.
-- Sumeragi: peers in set b related TODO fixes.
-- Validates the block before signing in Sumeragi.
-- Bridge external assets.
-- Signature validation in Sumeragi messages.
-- Binary asset-store.
-- Replace PublicKey alias with type.
-- Prepare crates for publishing.
-- Minimum votes logic inside NetworkTopology.
-- TransactionReceipt validation refactoring.
-- OnWorldStateViewChange trigger change: IrohaQuery instead of Instruction.
-- Separate construction from initialization in NetworkTopology.
-- Add Iroha Special Instructions related to Iroha events.
-- Block creation timeout handling.
-- Glossary and How-to add Iroha Module docs.
-- Replace hardcoded bridge model with origin Iroha model.
-- Introduce NetworkTopology struct.
-- Add Permission entity with transformation from Instructions.
-- Sumeragi Messages in the message module.
-- Genesis Block functionality for Kura.
-- Add README files for Iroha crates.
-- Bridge and RegisterBridge ISI.
-- Initial work with Iroha changes listeners.
-- Injection of Permission checks into OOB ISI.
-- Docker multiple peers fix.
-- Peer to peer docker example.
-- Transaction Receipt handling.
-- Iroha Permissions.
-- Module for Dex and crates for Bridges.
-- Fix integration test with asset creation with several peers.
-- Re-implement of Asset model into EC-S-.
-- Commit timeout handling.
-- Block header.
-- ISI related methods for domain entities.
-- Kura Mode enumeration and Trusted Peers configuration.
-- Documentation linting rule.
-- Add CommittedBlock.
-- Decoupling kura from `sumeragi`.
-- Check that transactions are not empty before block creation.
-- Re-implement Iroha Special Instructions.
-- Benchmarks for transactions and blocks transitions.
-- Transactions lifecycle and states reworked.
-- Blocks lifecycle and states.
-- Fix validation bug, `sumeragi` loop cycle synced with block_build_time_ms configuration parameter.
-- Encapsulation of Sumeragi algorithm inside `sumeragi` module.
-- Mocking module for Iroha Network crate implemented via channels.
-- Migration to async-std API.
-- Network mock feature.
-- Asynchronous related code clean up.
-- Performance optimizations in transaction processing loop.
-- Generation of key pairs was extracted from Iroha start.
-- Docker packaging of Iroha executable.
-- Introduce Sumeragi basic scenario.
-- Iroha CLI client.
-- Drop of iroha after bench group execution.
-- Integrate `sumeragi`.
-- Change `sort_peers` implementation to rand shuffle seeded with previous block hash.
-- Remove Message wrapper in peer module.
-- Encapsulate network-related information inside `torii::uri` and `iroha_network`.
-- Add Peer instruction implemented instead of hardcode handling.
-- Peers communication via trusted peers list.
-- Encapsulation of network requests handling inside Torii.
-- Encapsulation of crypto logic inside crypto module.
-- Block sign with timestamp and previous block hash as payload.
-- Crypto functions placed on top of the module and work with ursa signer encapsulated into Signature.
-- Sumeragi initial.
-- Validation of transaction instructions on world state view clone before commit to store.
-- Verify signatures on transaction acceptance.
-- Fix bug in Request deserialization.
-- Implementation of Iroha signature.
-- Blockchain entity was removed to clean up codebase.
-- Changes in Transactions API: better creation and work with requests.
-- Fix the bug that would create blocks with empty vector of transaction
-- Forward pending transactions.
- - Fix bug with missing byte in u128 Norito encoded TCP packet.
-- Attribute macros for methods tracing.
-- P2p module.
-- Usage of iroha_network in torii and client.
-- Add new ISI info.
-- Specific type alias for network state.
-- Box<dyn Error> replaced with String.
-- Network listen stateful.
-- Initial validation logic for transactions.
-- Iroha_network crate.
-- Derive macro for Io, IntoContract and IntoQuery traits.
-- Queries implementation for Iroha-client.
-- Transformation of Commands into ISI contracts.
-- Add proposed design for conditional multisig.
-- Migration to Cargo workspaces.
-- Modules migration.
-- External configuration via environment variables.
-- Get and Put requests handling for Torii.
-- Github ci correction.
-- Cargo-make cleans up blocks after test.
-- Introduce `test_helper_fns` module with a function to cleanup directory with blocks.
-- Implement validation via merkle tree.
-- Remove unused derive.
-- Propagate async/await and fix unawaited `wsv::put`.
-- Use join from `futures` crate.
-- Implement parallel store execution: writing to disk and updating WSV are happening in parallel.
-- Use references instead of ownership for (de)serialization.
-- Code ejection from  files.
-- Use ursa::blake2.
-- Rule about mod.rs in Contributing guide.
-- Hash 32 bytes.
-- Blake2 hash.
-- Disk accepts references to block.
-- Refactoring of commands module and Initial Merkle Tree.
-- Refactored modules structure.
-- Correct formatting.
-- Add doc comments to read_all.
-- Implement `read_all`, reorganize storage tests, and turn tests with async functions into async tests.
-- Remove unnecessary mutable capture.
-- Review issue, fix clippy.
-- Remove dash.
-- Add format check.
-- Add token.
-- Create rust.yml for github actions.
-- Introduce disk storage prototype.
-- Transfer asset test and functionality.
-- Add default initializer to structs.
-- Change name of MSTCache struct.
-- Add forgotten borrow.
-- Initial outline of iroha2 code.
-- Initial Kura API.
-- Add some basic files and also release the first draft of the whitepaper outlining the vision for iroha v2.
-- Basic iroha v2 branch.
+- စမတ်စာချုပ်များကို သီးခြား module သို့ ရွှေ့ပါ။
+- Iroha ကွန်ရက်အကြောင်းအရာအရှည် အမှားပြင်ဆင်ခြင်း။
+- သရုပ်ဆောင် ID အတွက် လုပ်ဆောင်စရာ စက်တွင်းသိုလှောင်မှုကို ပေါင်းထည့်ပါ။ deadlock detection အတွက် အသုံးဝင်ပါတယ်။
+- CI တွင် deadlock detection test ကိုထည့်ပါ။
+- Introspect macro ထည့်ပါ။
+- လုပ်ငန်းအသွားအလာအမည်များကို ဖော်မတ်ပြင်ဆင်မှုများကိုလည်း ကွဲလွဲစေသည်။
+- query api ၏ပြောင်းလဲမှု။
+- async-std မှ တိုကီယိုသို့ ရွှေ့ပြောင်းခြင်း။
+- ci သို့ telemetry ၏ခွဲခြမ်းစိတ်ဖြာမှုကိုထည့်ပါ။
+- iroha အတွက် အနာဂတ် telemetry ကိုထည့်ပါ။
+- async လုပ်ဆောင်ချက်တိုင်းတွင် iroha အနာဂတ်များကို ထည့်ပါ။
+- စစ်တမ်းအရေအတွက်ကိုကြည့်ရှုနိုင်စေရန် iroha အနာဂတ်များကိုထည့်ပါ။
+- README တွင် လူကိုယ်တိုင် အသုံးချခြင်းနှင့် ဖွဲ့စည်းမှုပုံစံကို ထည့်သွင်းထားသည်။
+- သတင်းထောက်ပြင်ဆင်ခြင်း။
+- ရယူထားသော Message macro ကိုထည့်ပါ။
+- ရိုးရှင်းသောသရုပ်ဆောင်မူဘောင်ကိုထည့်ပါ။
+- dependabot ဖွဲ့စည်းမှုပုံစံကိုထည့်ပါ။
+- ကောင်းသောထိတ်လန့်မှုနှင့်အမှားသတင်းထောက်များကိုထည့်ပါ။
+- Rust ဗားရှင်း 1.52.1 သို့ ပြောင်းရွှေ့ခြင်းနှင့် သက်ဆိုင်ရာ ပြင်ဆင်မှုများ။
+- သီးခြားအစီအစဥ်များတွင် CPU အထူးကြပ်မတ်လုပ်ဆောင်မှုများကို ပိတ်ဆို့ခြင်းကို ပွားများပါ။
+- crates.io မှ unique_port နှင့် cargo-lints ကိုသုံးပါ။
+- lockfree WSV အတွက် ပြင်ဆင်ပါ
+  - API ရှိ မလိုအပ်သော Dashmaps နှင့် လော့ခ်များကို ဖယ်ရှားပေးသည်။
+  - ဖန်တီးထားသော လုပ်ကွက်အရေအတွက် အလွန်အကျွံဖြင့် bug ကို ပြင်ဆင်ပါ (ပယ်ချထားသော အရောင်းအ၀ယ်များကို မှတ်တမ်းတင်မထားပါ)
+  - အမှားများအတွက် error အကြောင်းရင်း အပြည့်အစုံကို ပြသသည်။
+- telemetry စာရင်းသွင်းသူကိုထည့်ပါ။
+- အခန်းကဏ္ဍများနှင့်ခွင့်ပြုချက်များအတွက်မေးခွန်းများ။
+- ဘလောက်များကို kura မှ wsv သို့ရွှေ့ပါ။
+- wsv အတွင်း လော့ခ်မချဘဲ ဒေတာဖွဲ့စည်းပုံသို့ ပြောင်းပါ။
+- Network timeout fix ။
+- ကျန်းမာရေးအဆုံးမှတ်ကို ပြုပြင်ပါ။
+- ရာထူးများကို မိတ်ဆက်ခြင်း။
+- dev ဌာနခွဲမှ push docker ပုံများကိုထည့်ပါ။
+- ပိုမိုပြင်းထန်သော အလင်းတန်းများထည့်ကာ ကုဒ်မှ ထိတ်လန့်မှုများကို ဖယ်ရှားပါ။
+- ညွှန်ကြားချက်များအတွက် Execute trait ကိုပြန်လည်လုပ်ဆောင်ခြင်း။
+- iroha_config မှကုဒ်အဟောင်းကိုဖယ်ရှားပါ။
+- IR-1060 သည် ရှိပြီးသားခွင့်ပြုချက်အားလုံးအတွက် Grant စစ်ဆေးမှုများကို ပေါင်းထည့်သည်။
+- iroha_network အတွက် ulimit နှင့် timeout ကိုပြင်ပါ။
+- Ci timeout test fix ။
+- ၎င်းတို့၏ အဓိပ္ပါယ်ဖွင့်ဆိုချက်ကို ဖယ်ရှားသည့်အခါ ပိုင်ဆိုင်မှုအားလုံးကို ဖယ်ရှားပါ။
+- ပိုင်ဆိုင်မှုထည့်ရာတွင် wsv ထိတ်လန့်မှုကို ဖြေရှင်းပါ။
+- ချန်နယ်များအတွက် Arc နှင့် Rwlock ကိုဖယ်ရှားပါ။
+- Iroha ကွန်ရက်ပြင်ဆင်ခြင်း။
+- ခွင့်ပြုချက်စစ်ဆေးသူများသည် ချက်လက်မှတ်များတွင် အကိုးအကားများကို အသုံးပြုသည်။
+- ညွှန်ကြားချက်ပေးသည်။
+- NewAccount၊ Domain နှင့် AssetDefinition IR-1036 အတွက် id's ၏ id's ၏ validation အတွက် ထည့်သွင်းထားသော ဖွဲ့စည်းမှု။
+- ခြေရာခံ lib ဖြင့် အစားထိုးမှတ်တမ်း။
+- docs အတွက် ci check ထည့်ပြီး dbg macro ကို ငြင်းပါ။
+- ခွင့်ပြုထားသောခွင့်ပြုချက်များကိုမိတ်ဆက်ပေးသည်။
+- iroha_config သေတ္တာထည့်ပါ။
+- ဝင်လာသော ပေါင်းစည်းမှု တောင်းဆိုချက်အားလုံးကို အတည်ပြုရန် ကုဒ်ပိုင်ရှင်အဖြစ် @alerdenisov ကို ထည့်ပါ။
+- အများသဘောတူဆန္ဒခံယူစဉ်အတွင်း ငွေပေးငွေယူအရွယ်အစားစစ်ဆေးခြင်းကို ပြင်ဆင်ပါ။
+- async-std အဆင့်မြှင့်တင်ခြင်းကို ပြန်ပြောင်းပါ။
+- အချို့သော const များကို 2 IR-1035 ပါဝါဖြင့် အစားထိုးပါ။
+- ငွေပေးငွေယူမှတ်တမ်း IR-1024 ကိုရယူရန် query ကိုထည့်ပါ။- စတိုးဆိုင်နှင့် ခွင့်ပြုချက်အတည်ပြုပေးသူများ ပြန်လည်ဖွဲ့စည်းခြင်းအတွက် ခွင့်ပြုချက်များကို တရားဝင်ထည့်သွင်းပါ။
+- အကောင့်မှတ်ပုံတင်ခြင်းအတွက် NewAccount ကိုထည့်ပါ။
+- ပိုင်ဆိုင်မှုအဓိပ္ပါယ်ဖွင့်ဆိုချက်အတွက် အမျိုးအစားများထည့်ပါ။
+- ပြင်ဆင်သတ်မှတ်နိုင်သော မက်တာဒေတာကန့်သတ်ချက်များကို မိတ်ဆက်ပေးသည်။
+- ငွေပေးငွေယူမက်တာဒေတာကိုမိတ်ဆက်ပေးသည်။
+- မေးခွန်းများအတွင်းအသုံးအနှုန်းများထည့်ပါ။
+- lints.toml ထည့်ပြီး သတိပေးချက်များကို ပြင်ဆင်ပါ။
+- config.json မှ trusted_peers ကို ခွဲခြားပါ။
+- Telegram ရှိ Iroha 2 အသိုင်းအဝိုင်းသို့ URL တွင် typo ကိုပြင်ပါ။
+- clippy သတိပေးချက်များကိုပြင်ပါ။
+- အကောင့်အတွက် သော့တန်ဖိုး မက်တာဒေတာပံ့ပိုးမှုကို မိတ်ဆက်ပေးသည်။
+- လုပ်ကွက်များ၏ဗားရှင်းကိုထည့်ပါ။
+- ci linting ထပ်ခါတလဲလဲ ပြုပြင်ပါ။
+- mul,div,mod,raise_to expressions များကိုထည့်ပါ။
+- ဗားရှင်းပြုလုပ်ရန်အတွက် in_v* ကိုထည့်ပါ။
+- အစားထိုးအမှား-:အမှားမက်ခရိုဖြင့် msg။
+- iroha_http_server ကို ပြန်ရေးပြီး torii အမှားများကို ပြန်လည်လုပ်ဆောင်ပါ။
+ - Norito ဗားရှင်း 2 သို့ အဆင့်မြှင့်သည်။
+- စက္ကူဖြူဗားရှင်းဖော်ပြချက်။
+- အချည်းနှီးသော pagination ။ အမှားအယွင်းများမှတစ်ဆင့် မလိုအပ်ဘဲ pagination လုပ်သည့်ကိစ္စများကို ပြင်ဆင်ပါ၊ ၎င်းအစား ဗလာစုစည်းမှုများကို ပြန်မပေးပါ။
+- စာရင်းများအတွက် derive(Error) ကိုထည့်ပါ။
+- ညစဉ်ဗားရှင်းကိုပြင်ပါ။
+- iroha_error သေတ္တာထည့်ပါ။
+- ဗားရှင်းတင်ထားသောစာများ။
+- container versioning primitives များကို မိတ်ဆက်ပေးသည်။
+- စံနှုန်းများကို ပြင်ဆင်ပါ။
+- pagination ထည့်ပါ။
+- မူကွဲ ကုဒ်ကုဒ် ကုဒ်ဖြင့် ထည့်ပါ။
+- မေးမြန်းမှုအချိန်တံဆိပ်ကို u128 သို့ပြောင်းပါ။
+- ပိုက်လိုင်းဖြစ်ရပ်များအတွက် RejectionReason enum ကိုထည့်ပါ။
+- ဥပါဒ်ဖိုင်များမှ ခေတ်မမီသော လိုင်းများကို ဖယ်ရှားပါ။ ဦးတည်ရာကို ယခင်လုပ်ဆောင်မှုများတွင် မှတ်ပုံတင်ထားသော ISI မှ ဖယ်ရှားခဲ့သည်။
+- ISIS များကို စာရင်းသွင်းခြင်းနှင့် မှတ်ပုံတင်ခြင်းကို ရိုးရှင်းစေသည်။
+- သက်တူရွယ်တူကွန်ရက် 4 ခုတွင် ပေးပို့ခြင်းမပြုသည့် commit timeout ကို ပြင်ဆင်ပါ။
+- ပြောင်းလဲမှုမြင်ကွင်းတွင် Topology မွှေနှောက်ခြင်း။
+- FromVariant derive macro အတွက် အခြားကွန်တိန်နာများကို ထည့်ပါ။
+- client cli အတွက် MST ပံ့ပိုးမှုထည့်ပါ။
+- အမျိုးမျိုးသော မက်ခရိုမှ ထည့်ပြီး ကုဒ်ဘေ့စ်ကို ရှင်းလင်းပါ။
+- ကုဒ်ပိုင်ရှင်များသို့ i1i1 ကိုထည့်ပါ။
+- အတင်းအဖျင်းကိစ္စများ။
+- ညွှန်ကြားချက်များနှင့် အသုံးအနှုန်းများအတွက် အရှည်ထည့်ပါ။
+- အချိန်ကိုပိတ်ဆို့ရန်နှင့်အချိန်ကန့်သတ်ချက်များကိုလုပ်ဆောင်ရန် docs ကိုထည့်ပါ။
+- TryFrom ဖြင့် စရိုက်များကို အတည်ပြုပြီး လက်ခံခြင်း အစားထိုးထားသည်။
+- အနိမ့်ဆုံးလုပ်ဖော်ကိုင်ဖက်အရေအတွက်အတွက်သာစောင့်ဆိုင်းခြင်းကိုမိတ်ဆက်ပေးပါ။
+- iroha2-java ဖြင့် api စမ်းသပ်ရန် github လုပ်ဆောင်ချက်ကို ထည့်ပါ။
+- docker-compose-single.yml အတွက် ဥပါဒ်ထည့်ပါ။
+- အကောင့်အတွက် မူရင်းလက်မှတ်စစ်ဆေးခြင်းအခြေအနေ။
+- လက်မှတ်ထိုးသူအများအပြားရှိသောအကောင့်အတွက်စမ်းသပ်မှုထည့်ပါ။
+- MST အတွက် client API ပံ့ပိုးမှုထည့်ပါ။
+- docker တွင်တည်ဆောက်ပါ။
+- docker ရေးရန် genesis ကိုထည့်ပါ။
+- Conditional MST မိတ်ဆက်။
+- wait_for_active_peers impl ကိုထည့်ပါ။
+- iroha_http_server တွင် isahc client အတွက် စမ်းသပ်မှုကို ထည့်ပါ။
+- သုံးစွဲသူ API သတ်မှတ်ချက်။
+- Expressions တွင် Query ကိုလုပ်ဆောင်ခြင်း။
+- အသုံးအနှုန်းများနှင့် ISI များကို ပေါင်းစပ်သည်။
+- ISI အတွက် အသုံးအနှုန်းများ။
+- အကောင့် config စံနှုန်းများကို ပြင်ဆင်ပါ။
+- client အတွက်အကောင့် config ကိုထည့်ပါ။
+- `submit_blocking` ကို ပြင်ဆင်ပါ။
+- ပိုက်လိုင်းဖြစ်ရပ်များ ပေးပို့သည်။
+- Iroha client web socket ချိတ်ဆက်မှု။
+- ပိုက်လိုင်းနှင့် ဒေတာဖြစ်ရပ်များအတွက် ဖြစ်ရပ်များ ခြားနားခြင်း။
+- ခွင့်ပြုချက်များအတွက်ပေါင်းစပ်စမ်းသပ်မှု။
+- မီးရှို့ခြင်းနှင့် mint အတွက်ခွင့်ပြုချက်စစ်ဆေးမှုများထည့်ပါ။
+- ISI ခွင့်ပြုချက်ကို မှတ်ပုံတင်ခြင်းမှ ပယ်ဖျက်ပါ။
+- world struct PR အတွက် စံနှုန်းများကို ပြင်ဆင်ပါ။
+- World struct ကိုမိတ်ဆက်ပါ။
+- ဥပါဒ်ပိတ်ဆို့ခြင်း အစိတ်အပိုင်းကို အကောင်အထည်ဖော်ပါ။
+- ဥပါဒ် အကောင့်ကို မိတ်ဆက်ပါ။
+- ခွင့်ပြုချက်များ validator builder ကိုမိတ်ဆက်ပေးပါ။
+- Github လုပ်ဆောင်ချက်များဖြင့် Iroha2 PRs သို့ အညွှန်းများထည့်ပါ။
+- ခွင့်ပြုချက်ဘောင်ကို မိတ်ဆက်ပါ။
+- တန်းစီ tx tx နံပါတ်ကန့်သတ်ချက် Iroha ကနဦးပြင်ဆင်မှုများ။
+- Hash ကို struct တစ်ခုတွင်ထည့်ပါ။
+- မှတ်တမ်းအဆင့်ကို မြှင့်တင်ပါ
+  - သဘောတူညီမှုအတွက် အချက်အလက်အဆင့်မှတ်တမ်းများကို ထည့်ပါ။
+  - ကွန်ရက်ဆက်သွယ်ရေးမှတ်တမ်းများကို ခြေရာခံအဆင့်အဖြစ် အမှတ်အသားပြုပါ။
+  - ၎င်းသည် ထပ်တူဖြစ်နေသောကြောင့် WSV မှ block vector ကိုဖယ်ရှားပြီး blockchain အားလုံးကို logs တွင်ပြသထားသည်။
+  - အချက်အလက်မှတ်တမ်းအဆင့်ကို မူရင်းအတိုင်း သတ်မှတ်ပါ။
+- တရားဝင်အတည်ပြုရန်အတွက် မပြောင်းလဲနိုင်သော WSV ရည်ညွှန်းချက်များကို ဖယ်ရှားပါ။
+- Heim ဗားရှင်းတိုးခြင်း။
+- သတ်မှတ်ပုံစံသို့ ပုံသေယုံကြည်ရသော ရွယ်တူများကို ထည့်ပါ။
+- Client API ကို http သို့ ပြောင်းရွှေ့ခြင်း။
+- လွှဲပြောင်း isi ကို CLI သို့ထည့်ပါ။
+- Iroha သက်တူရွယ်တူဆိုင်ရာ ညွှန်ကြားချက်များ ဖွဲ့စည်းမှု။
+- ပျောက်ဆုံးနေသော ISI ၏လုပ်ဆောင်မှုနည်းလမ်းများနှင့် စမ်းသပ်မှုကို အကောင်အထည်ဖော်ခြင်း။
+- Url query params များကို ခွဲခြမ်းစိတ်ဖြာခြင်း။
+- `HttpResponse::ok()`၊ `HttpResponse::upgrade_required(..)` ထည့်ပါ
+- Iroha DSL ချဉ်းကပ်မှုဖြင့် ညွှန်ကြားချက်အဟောင်းများနှင့် Query မော်ဒယ်များကို အစားထိုးခြင်း။
+- BLS လက်မှတ်များပံ့ပိုးမှုထည့်ပါ။
+- http server crate ကို မိတ်ဆက်ပါ။
+- သင်္ကေတလင့်ခ်ဖြင့် libssl.so.1.0.0 ကို ဖာထေးထားသည်။
+- ငွေပေးငွေယူအတွက်အကောင့်လက်မှတ်ကိုအတည်ပြုပါ။
+- Refactor အရောင်းအ၀ယ်အဆင့်ဆင့်။
+- ကနဦးဒိုမိန်းများ မြှင့်တင်မှုများ။
+- DSL ရှေ့ပြေးပုံစံကို အကောင်အထည်ဖော်ပါ။
+- Torii Benchmarks ကို တိုးတက်အောင်လုပ်ပါ- စံသတ်မှတ်ချက်များတွင် လော့ဂ်အင်လုပ်ခြင်းကို ပိတ်ပါ၊ အောင်မြင်မှုအချိုးကို ထည့်သွင်းပါ။
+- စမ်းသပ်လွှမ်းခြုံပိုက်လိုင်းကို မြှင့်တင်ပါ- `tarpaulin` ကို `grcov` ဖြင့် အစားထိုးပြီး၊ စမ်းသပ်မှုအစီရင်ခံစာကို `codecov.io` သို့ ထုတ်ဝေပါ။
+- RTD အပြင်အဆင်ကိုပြင်ပါ။
+- iroha ပရောဂျက်ခွဲများအတွက် ရှေးဟောင်းပစ္စည်းများ ပေးပို့ခြင်း။
+- `SignedQueryRequest` ကို မိတ်ဆက်ပါ။
+- လက်မှတ်အတည်ပြုခြင်းနှင့်အတူ bug ကိုပြင်ပါ။
+- Rollback ငွေပေးငွေယူပံ့ပိုးမှု။
+- json အဖြစ် ကီးအတွဲကို ထုတ်ပေးသော ပရင့်ထုတ်ခြင်း။
+- `Secp256k1` သော့တွဲကို ပံ့ပိုးပါ။
+- မတူညီသော crypto algorithms အတွက် ကနဦးပံ့ပိုးမှု။
+- DEX အင်္ဂါရပ်များ။
+- hardcoded config လမ်းကြောင်းကို cli param ဖြင့် အစားထိုးပါ။
+- Bench master workflow fix ။
+- Docker ဖြစ်ရပ်ချိတ်ဆက်မှုစမ်းသပ်မှု။
+- Iroha Monitor Guide နှင့် CLI ။
+- ဖြစ်ရပ်များ cli တိုးတက်မှုများ။
+- ဖြစ်ရပ်များ filter ။
+- ပွဲချိတ်ဆက်မှုများ။
+- master workflow ကိုပြင်ပါ။
+- iroha2 အတွက် Rtd
+- အရောင်းအ၀ယ်ပိတ်ဆို့ရန်အတွက် Merkle tree root hash။
+- docker hub သို့ထုတ်ဝေခြင်း။
+- Maintenance Connect အတွက် CLI လုပ်ဆောင်ချက်။
+- Maintenance Connect အတွက် CLI လုပ်ဆောင်ချက်။
+- မက်ခရိုမှတ်တမ်းရယူရန် Eprintln။
+- မှတ်တမ်းတိုးတက်မှုများ။
+- အခြေအနေများကိုပိတ်ဆို့ရန်အတွက် IR-802 စာရင်းသွင်းခြင်း။
+- ငွေပေးငွေယူနှင့်လုပ်ကွက်များပေးပို့ခြင်းဖြစ်ရပ်များ။
+- Sumeragi မက်ဆေ့ဂျ်ကိုင်တွယ်ခြင်းကို message impl သို့ ရွှေ့ပါ။
+- အထွေထွေချိတ်ဆက်မှုယန္တရား။
+- no-std client အတွက် Iroha domain entities ကို ထုတ်ယူပါ။
+- ငွေပေးငွေယူ TTL
+- block configuration တစ်ခုလျှင် အများဆုံး ငွေပေးချေမှုများ။
+- တရားမဝင်သော ပိတ်ဆို့ထားသော ဟက်ကာများကို သိမ်းဆည်းပါ။
+- အစုလိုက်အစည်းလိုက်လုပ်ပါ။
+- ချိတ်ဆက်လုပ်ဆောင်နိုင်စွမ်း၏ဖွဲ့စည်းပုံ။
+- Iroha လုပ်ဆောင်ချက်ကို ချိတ်ဆက်ပါ။
+- တရားဝင်ပြင်ဆင်ချက်များကိုပိတ်ဆို့ပါ။
+- ထပ်တူပြုခြင်းကိုပိတ်ဆို့ခြင်း- ပုံကြမ်းများ။
+- Iroha လုပ်ဆောင်ချက်ကို ချိတ်ဆက်ပါ။
+- တံတား- ဖောက်သည်များကို ဖယ်ရှားပါ။
+- ထပ်တူပြုခြင်းကိုပိတ်ဆို့။
+- AddPeer ISI
+- Commands to Instructions အမည်ပြောင်းခြင်း။
+- ရိုးရှင်းသောတိုင်းတာမှုအဆုံးမှတ်။
+- တံတား- မှတ်ပုံတင်ထားသောတံတားများနှင့် ပြင်ပပိုင်ဆိုင်မှုများကို ရယူပါ။
+- Docker ပိုက်လိုင်းတွင် ရေးဖွဲ့စမ်းသပ်မှု။
+- Sumeragi စမ်းသပ်မှုတွင် မဲမလုံလောက်ပါ။
+- ကွင်းဆက်ပိတ်ဆို့ခြင်း။
+- တံတား- လက်ဖြင့် ပြင်ပလွှဲပြောင်းမှုများကို ကိုင်တွယ်ခြင်း။
+- ရိုးရှင်းသောထိန်းသိမ်းမှုအဆုံးမှတ်။
+- serde-json သို့ပြောင်းရွှေ့ခြင်း။
+- Demint ISI။
+- တံတားဖောက်သည်များ၊ AddSignatory ISI နှင့် CanAddSignatory ခွင့်ပြုချက်ကို ထည့်ပါ။
+- Sumeragi- set b နှင့် သက်ဆိုင်သော TODO ပြုပြင်မှုများ။
+- Sumeragi တွင် လက်မှတ်ထိုးခြင်းမပြုမီ ပိတ်ဆို့ခြင်းကို မှန်ကန်ကြောင်း စစ်ဆေးပါ။
+- ပြင်ပပိုင်ဆိုင်မှုများကို ပေါင်းကူးပါ။
+- Sumeragi မက်ဆေ့ဂျ်များတွင် လက်မှတ်အတည်ပြုခြင်း။
+- Binary ပိုင်ဆိုင်မှု-စတိုးဆိုင်။
+- PublicKey alias ကို အမျိုးအစားဖြင့် အစားထိုးပါ။
+- ထုတ်ဝေရန်အတွက် သေတ္တာများကို ပြင်ဆင်ပါ။
+- NetworkTopology အတွင်းရှိ အနည်းဆုံးမဲများ ယုတ္တိဗေဒ။
+- TransactionReceipt validation refactoring။
+- OnWorldStateViewChange အစပျိုးပြောင်းလဲမှု- ညွှန်ကြားချက်အစား IrohaQuery။
+- NetworkTopology တွင် ကနဦးတည်ဆောက်မှုမှ သီးခြားတည်ဆောက်မှု။
+- Iroha Iroha ဖြစ်ရပ်များနှင့် ဆက်စပ်သော အထူးညွှန်ကြားချက်များကို ထည့်ပါ။
+- ဖန်တီးမှုအချိန်လွန်ကိုင်တွယ်မှုကိုပိတ်ဆို့။
+- ဝေါဟာရနှင့် Iroha Module docs ထည့်နည်း။
+- hardcoded တံတားမော်ဒယ်ကို မူရင်း Iroha မော်ဒယ်ဖြင့် အစားထိုးပါ။
+- NetworkTopology struct ကိုမိတ်ဆက်ပါ။
+- ညွှန်ကြားချက်များမှ အသွင်ပြောင်းခြင်းဖြင့် ခွင့်ပြုချက်ထည့်ပါ။
+- မက်ဆေ့ဂျ် module ရှိ Sumeragi Messages။
+- Kura အတွက် Genesis Block လုပ်ဆောင်နိုင်စွမ်း။
+- Iroha သေတ္တာများအတွက် README ဖိုင်များကိုထည့်ပါ။
+- တံတားနှင့် RegisterBridge ISI။
+- Iroha ဖြင့် ကနဦးအလုပ်သည် နားထောင်သူများကို ပြောင်းလဲသည်။
+- ခွင့်ပြုချက်စစ်ဆေးမှုများကို OOB ISI သို့ ထိုးသွင်းခြင်း။
+- Docker များစွာသောရွယ်တူများပြင်ဆင်ခြင်း။
+- Peer to peer docker ဥပမာ။
+- ငွေလွှဲပြေစာ ကိုင်တွယ်ခြင်း။
+- Iroha ခွင့်ပြုချက်များ။
+- Dex အတွက် Module နှင့် Bridges အတွက် သေတ္တာများ။
+- သက်တူရွယ်တူများစွာဖြင့် ပိုင်ဆိုင်မှုဖန်တီးမှုဖြင့် ပေါင်းစပ်စမ်းသပ်မှုကို ပြုပြင်ပါ။
+- ပိုင်ဆိုင်မှုပုံစံကို EC-S- တွင် ပြန်လည်ထည့်သွင်းပါ။
+- အချိန်လွန်ကိုင်တွယ်မှုကိုလုပ်ဆောင်ပါ။
+- ခေါင်းစီးကိုပိတ်ပါ။
+- ဒိုမိန်းအရာများအတွက် ISI ဆက်စပ်နည်းလမ်းများ။
+- Kura Mode စာရင်းကောက်ယူခြင်းနှင့် Trusted Peers ဖွဲ့စည်းမှု။
+- စာတမ်းပြုစုနည်းဥပဒေ။
+- CommittedBlock ကိုထည့်ပါ။
+- `sumeragi` မှ kura ကို ဖယ်ထုတ်ခြင်း။
+- ပိတ်ဆို့ဖန်တီးမှုမပြုမီ ငွေပေးငွေယူများသည် ဗလာမဟုတ်ကြောင်း စစ်ဆေးပါ။
+- Iroha အထူးညွှန်ကြားချက်များကို ပြန်လည်အကောင်အထည်ဖော်ပါ။
+- ငွေပေးငွေယူနှင့်ပိတ်ဆို့ခြင်းအကူးအပြောင်းများအတွက်စံသတ်မှတ်ချက်များ။
+- ငွေပေးငွေယူဘဝသံသရာနှင့်ပြည်နယ်များပြန်လည်လုပ်ဆောင်ခဲ့သည်။
+- ဘဝသံသရာနှင့်ပြည်နယ်များကိုပိတ်ဆို့သည်။
+- မှန်ကန်သည့် ချို့ယွင်းချက်အား ပြင်ဆင်ပါ၊ `sumeragi` စက်ဝိုင်းအား block_build_time_ms ဖွဲ့စည်းမှုဘောင်ကန့်သတ်ချက်ဖြင့် စင့်ခ်လုပ်ထားသည်။
+- `sumeragi` မော်ဂျူးအတွင်းတွင် Sumeragi အယ်လဂိုရီသမ်၏ ထုပ်ပိုးမှု။
+- Iroha ကွန်ရက်သေတ္တာအတွက် လှောင်ပြောင်ခြင်း မော်ဂျူး
+- async-std API သို့ ပြောင်းရွှေ့ခြင်း။
+- ကွန်ရက်ပုံသဏ္ဍန်အင်္ဂါရပ်။
+- Asynchronous ဆက်စပ်ကုဒ်ကို ရှင်းလင်းပါ။
+- ငွေပေးငွေယူလုပ်ဆောင်ခြင်းကွင်းအတွင်း စွမ်းဆောင်ရည်ပိုကောင်းအောင်ပြုလုပ်ခြင်း။
+- သော့အတွဲများ၏ မျိုးဆက်ကို Iroha စတင်မှ ထုတ်ယူခဲ့သည်။
+- Docker ထုပ်ပိုးမှု Iroha ကို အကောင်အထည်ဖော်နိုင်သည်
+- Sumeragi အခြေခံ ဇာတ်လမ်းကို မိတ်ဆက်ပါ။
+- Iroha CLI သုံးစွဲသူ။
+- ခုံတန်းလျားအဖွဲ့ကိုကွပ်မျက်ပြီးနောက် iroha ကိုချပေးပါ။
+- `sumeragi` ကို ပေါင်းစပ်ပါ။
+- `sort_peers` အကောင်အထည်ဖော်မှုကို ယခင်တုံး hash ဖြင့် rand shuffle မျိုးစေ့ချခြင်းသို့ ပြောင်းပါ။
+- မျိုးတူ module တွင် Message wrapper ကို ဖယ်ရှားပါ။
+- `torii::uri` နှင့် `iroha_network` အတွင်းရှိ ကွန်ရက်ဆိုင်ရာ အချက်အလက်များကို ထုပ်ပိုးပါ။
+- ဟာ့ဒ်ကုဒ်ကိုင်တွယ်ခြင်းအစား အကောင်အထည်ဖော်ခဲ့သည့် Peer ညွှန်ကြားချက်ကို ထည့်ပါ။
+- ယုံကြည်ရသောရွယ်တူများစာရင်းမှတစ်ဆင့် ရွယ်တူချင်းဆက်သွယ်မှု။
+- Torii အတွင်းရှိ ကွန်ရက်တောင်းဆိုမှုများကို ကိုင်တွယ်ခြင်း၏ စာဝှက်များ။
+- crypto module အတွင်းရှိ crypto ယုတ္တိဗေဒကို ဖုံးအုပ်ထားသည်။- payload အဖြစ် အချိန်တံဆိပ်နှင့် ယခင်ဘလောက် hash ပါသော ဆိုင်းဘုတ်ကို ပိတ်ပါ။
+- Crypto လုပ်ဆောင်ချက်များကို module ၏ထိပ်တွင်ထားရှိပြီး Signature တွင်ထည့်သွင်းထားသော ursa signer နှင့်အလုပ်လုပ်ပါ။
+- Sumeragi ကနဦး။
+- သိမ်းဆည်းခြင်းမပြုမီ ကမ္ဘာ့နိုင်ငံတော်မြင်ကွင်းကိုယ်ပွားရှိ ငွေပေးငွေယူလမ်းညွှန်ချက်များကို သက်သေပြပါ။
+- ငွေလွှဲလက်ခံမှုတွင် လက်မှတ်များကို စစ်ဆေးပါ။
+- Request deserialization တွင် bug ကိုပြင်ပါ။
+- Iroha လက်မှတ်ကို အကောင်အထည်ဖော်ခြင်း။
+- Codebase ကိုရှင်းလင်းရန် Blockchain entity ကိုဖယ်ရှားခဲ့သည်။
+- Transactions API တွင် အပြောင်းအလဲများ- ပိုမိုကောင်းမွန်သော ဖန်တီးမှုနှင့် တောင်းဆိုမှုများဖြင့် လုပ်ဆောင်ပါ။
+- ငွေပေးငွေယူ၏အချည်းနှီးသော vector ဖြင့်ပိတ်ဆို့မှုများကိုဖန်တီးမည့် bug ကိုပြင်ပါ။
+- ဆိုင်းငံ့ထားသော ငွေလွှဲမှုများကို ထပ်ဆင့်ပို့ပါ။
+ - u128 Norito ကုဒ်လုပ်ထားသော TCP ပက်ကတ်တွင် ပျောက်ဆုံးနေသော byte နှင့် အမှားပြင်ဆင်ပါ။
+- နည်းလမ်းများ ခြေရာခံခြင်းအတွက် ရည်ညွှန်းချက် မက်ခရို။
+- P2p မော်ဂျူး။
+- torii နှင့် client တွင် iroha_network ကိုအသုံးပြုခြင်း။
+- ISI အချက်အလက်အသစ်ထည့်ပါ။
+- ကွန်ရက်အခြေအနေအတွက် သတ်သတ်မှတ်မှတ်အမျိုးအစား နံပတ်များ။
+- Box တွင် <dyn Error> ကို String ဖြင့် အစားထိုးထားသည်။
+- ကွန်ရက်စကားပြောနားထောင်ပါ။
+- ငွေပေးငွေယူများအတွက် ကနဦးတရားဝင်အထောက်အထားပြယုဂ်။
+- Iroha_network သေတ္တာ။
+- Io၊ IntoContract နှင့် IntoQuery စရိုက်လက္ခဏာများအတွက် macro ကိုရယူပါ။
+- Iroha-Client အတွက် မေးခွန်းများ အကောင်အထည်ဖော်ခြင်း။
+- Commands များကို ISI စာချုပ်များအဖြစ်သို့ ပြောင်းလဲခြင်း။
+- conditional multisig အတွက် အဆိုပြုထားသော ဒီဇိုင်းကို ထည့်ပါ။
+- ကုန်တင်လုပ်ငန်းခွင်များသို့ ရွှေ့ပြောင်းခြင်း။
+- မော်ဂျူးများပြောင်းရွှေ့ခြင်း။
+- ပတ်ဝန်းကျင်ပြောင်းလဲမှုများမှတစ်ဆင့် ပြင်ပဖွဲ့စည်းမှုပုံစံ။
+- Torii အတွက် တောင်းဆိုချက်များကို ကိုင်တွယ်ပြီး ရယူပါ။
+- Github ci ပြင်ဆင်ခြင်း။
+- စမ်းသပ်ပြီးနောက် ကုန်တင်ကုန်ချလုပ်ကွက်များကို သန့်ရှင်းစေခြင်း။
+- blocks များဖြင့် directory ကိုရှင်းလင်းရန် function တစ်ခုပါရှိသော `test_helper_fns` module ကိုမိတ်ဆက်ပေးပါ။
+- Merkle tree မှတစ်ဆင့် တရားဝင်အတည်ပြုချက်ကို အကောင်အထည်ဖော်ပါ။
+- အသုံးမပြုသော derive ကိုဖယ်ရှားပါ။
+- async ကို လွှင့်တင်ပါ/ စောင့်မျှော်ပြီး မစောင့်ဆိုင်းသော `wsv::put` ကို ပြင်ဆင်ပါ။
+- `futures` သေတ္တာမှ Join ကိုသုံးပါ။
+- parallel store execution ကို အကောင်အထည်ဖော်ပါ- disk သို့ စာရေးခြင်းနှင့် WSV ကို မွမ်းမံခြင်းများ ပြိုင်တူဖြစ်နေပါသည်။
+- (de)serialization အတွက် ပိုင်ဆိုင်မှုအစား အကိုးအကားများကို သုံးပါ။
+- ဖိုင်များမှကုဒ်ကိုထုတ်သည်။
+- ursa::blake2 ကိုသုံးပါ။
+- ပံ့ပိုးကူညီမှုလမ်းညွှန်တွင် mod.rs အကြောင်း စည်းမျဉ်း။
+- Hash 32 bytes ။
+- Blake2 hash။
+- Disk သည် ပိတ်ဆို့ရန် ရည်ညွှန်းချက်များကို လက်ခံသည်။
+- commands module နှင့် Initial Merkle Tree ကို ပြန်လည်ပြင်ဆင်ခြင်း။
+- ပြန်လည်ပြုပြင်ထားသော module များဖွဲ့စည်းပုံ။
+- မှန်ကန်သောပုံစံချခြင်း။
+- read_all သို့ doc မှတ်ချက်များ ထည့်ပါ။
+- `read_all` ကို အကောင်အထည်ဖော်ပါ၊ သိုလှောင်မှုစမ်းသပ်မှုများကို ပြန်လည်ဖွဲ့စည်းကာ စမ်းသပ်မှုများကို async လုပ်ဆောင်ချက်များဖြင့် async စမ်းသပ်မှုများအဖြစ် ပြောင်းလဲပါ။
+- မလိုအပ်သော ပြောင်းလဲနိုင်သော ဖမ်းယူမှုကို ဖယ်ရှားပါ။
+- ပြဿနာကိုသုံးသပ်ပါ၊ clippy ကိုပြင်ပါ။
+- dash ကိုဖယ်ရှားပါ။
+- ဖော်မတ်စစ်ဆေးမှုကိုထည့်ပါ။
+- တိုကင်ထည့်ပါ။
+- github လုပ်ဆောင်ချက်များအတွက် rust.yml ဖန်တီးပါ။
+- disk သိုလှောင်မှုပုံစံကို မိတ်ဆက်ပါ။
+- ပစ္စည်းလွှဲပြောင်းစမ်းသပ်မှုနှင့်လုပ်ဆောင်နိုင်စွမ်း။
+- structs များသို့ ပုံသေ ကနဦးအစကို ထည့်ပါ။
+- MSTCache struct ၏အမည်ကိုပြောင်းပါ။
+- မေ့နေသောချေးထည့်ပါ။
+- iroha2 ကုဒ်၏ ကနဦး အကြမ်းဖျင်း။
+- ကနဦး Kura API။
+- အခြေခံဖိုင်အချို့ကိုထည့်ကာ iroha v2 အတွက် အမြင်ကိုဖော်ပြသည့် စက္ကူဖြူ၏ပထမမူကြမ်းကိုလည်း ထုတ်ပြန်ပါ။
+- အခြေခံ iroha v2 ဌာနခွဲ။
 
 ## [1.5.0] - 2022-04-08
 
-### CI/CD changes
-- Remove Jenkinsfile and JenkinsCI.
+### CI/CD အပြောင်းအလဲများ
+- Jenkinsfile နှင့် JenkinsCI ကိုဖယ်ရှားပါ။
 
-### Added
+### ထည့်ပေးထားပါတယ်။
 
-- Add RocksDB storage implementation for Burrow.
-- Introduce traffic optimization with Bloom-filter
-- Update `MST` module network to be located in `OS` module in `batches_cache`.
-- Propose traffic optimization.
+- Burrow အတွက် RocksDB သိုလှောင်မှုကို ထည့်သွင်းပါ။
+- Bloom-filter ဖြင့် traffic optimization ကို မိတ်ဆက်ပါ။
+- `batches_cache` ရှိ `OS` မော်ဂျူးတွင်တည်ရှိရန် `MST` မော်ဂျူးကွန်ရက်ကို အပ်ဒိတ်လုပ်ပါ။
+- ယာဉ်အသွားအလာ ကောင်းမွန်အောင် လုပ်ဆောင်ရန် အဆိုပြုပါ။
 
-### Documentation
+### စာရွက်စာတမ်း
 
-- Fix build. Add DB differences, migration practice, healthcheck endpoint, information about iroha-swarm tool.
+- တည်ဆောက်မှုကိုပြုပြင်ပါ။ DB ခြားနားချက်များ၊ ရွှေ့ပြောင်းနေထိုင်မှုအလေ့အကျင့်၊ ကျန်းမာရေးစစ်ဆေးသည့် အဆုံးမှတ်၊ iroha-swarm ကိရိယာအကြောင်း အချက်အလက်များကို ထည့်ပါ။
 
-### Other
+### အခြား
 
-- Requirement fix for doc build.
-- Trim release documentation to spotlight the remaining critical follow-up item.
-- Fix 'check if docker image exists' /build all skip_testing.
-- /build all skip_testing.
-- /build skip_testing; And more docs.
-- Add `.github/_README.md`.
-- Remove `.packer`.
-- Remove changes on test parameter.
-- Use new parameter to skip test stage.
-- Add to workflow.
-- Remove repository dispatch.
-- Add repository dispatch.
-- Add parameter for testers.
-- Remove `proposal_delay` timeout.
+- doc တည်ဆောက်မှုအတွက် လိုအပ်ချက်များ ပြင်ဆင်ခြင်း။
+- ကျန်ရှိသော အရေးကြီးသော နောက်ဆက်တွဲ အကြောင်းအရာကို မီးမောင်းထိုးပြရန် ထုတ်ဝေသည့် စာရွက်စာတမ်းများကို ချုံ့ပါ။
+- 'docker ပုံရှိမရှိ စစ်ဆေးပါ' / skip_testing အားလုံးကို တည်ဆောက်ပါ။
+- /skip_testing အားလုံးကို တည်ဆောက်ပါ။
+- /build skip_testing; နှင့် နောက်ထပ်စာရွက်စာတမ်းများ။
+- `.github/_README.md` ကိုထည့်ပါ။
+- `.packer` ကို ဖယ်ရှားပါ။
+- စမ်းသပ်မှု parameter တွင်ပြောင်းလဲမှုများကိုဖယ်ရှားပါ။
+- စမ်းသပ်မှုအဆင့်ကိုကျော်ရန် ကန့်သတ်ချက်အသစ်ကို အသုံးပြုပါ။
+- အလုပ်အသွားအလာတွင်ထည့်ပါ။
+- repository dispatch ကိုဖယ်ရှားပါ။
+- repository dispatch ကိုထည့်ပါ။
+- စမ်းသပ်သူများအတွက် parameter ကိုထည့်ပါ။
+- `proposal_delay` အချိန်ကုန်ခြင်းကို ဖယ်ရှားပါ။
 
 ## [1.4.0] - 2022-01-31
 
-### Added
+### ထည့်ပေးထားပါတယ်။
 
-- Add syncing node state
-- Adds metrics for RocksDB
-- Add healthcheck interfaces via http and metrics.
+- ထပ်တူပြုခြင်း node အခြေအနေကိုထည့်ပါ။
+- RocksDB အတွက် မက်ထရစ်များကို ထည့်ပါ။
+- http နှင့် မက်ထရစ်များမှတစ်ဆင့် ကျန်းမာရေးစစ်ဆေးမှု အင်တာဖေ့စ်များကို ထည့်ပါ။
 
-### Fixes
+### ပြင်ဆင်မှုများ
 
-- Fix column families in Iroha v1.4-rc.2
-- Add 10-bit bloom filter in Iroha v1.4-rc.1
+- Iroha v1.4-rc.2 တွင် ကော်လံမိသားစုများကို ပြင်ဆင်ပါ။
+- Iroha v1.4-rc.1 တွင် 10-bit bloom filter ကိုထည့်ပါ။
 
-### Documentation
+### စာရွက်စာတမ်း
 
-- Add zip and pkg-config to list of build deps.
-- Update readme: fix broken links to build status, build guide, and so on.
-- Fix Config and Docker Metrics.
+- build deps စာရင်းတွင် zip နှင့် pkg-config ကိုထည့်ပါ။
+- readme ကို အပ်ဒိတ်လုပ်ပါ- အခြေအနေတည်ဆောက်ရန်၊ တည်ဆောက်မှုလမ်းညွှန်စသည်ဖြင့် ပျက်နေသောလင့်ခ်များကို ပြင်ဆင်ပါ။
+- Config နှင့် Docker Metrics ကိုပြင်ပါ။
 
-### Other
+### အခြား
 
-- Update GHA docker tag.
-- Fix Iroha 1 compile errors when compiling with g++11.
-- Replace `max_rounds_delay` with `proposal_creation_timeout`.
-- Update sample config file to remove old DB connection params.
+- GHA docker tag ကို အပ်ဒိတ်လုပ်ပါ။
+- g++11 ဖြင့် compiling လုပ်သောအခါ Iroha 1 compile အမှားများကို ပြင်ဆင်ပါ။
+- `max_rounds_delay` ကို `proposal_creation_timeout` ဖြင့် အစားထိုးပါ။
+- DB ချိတ်ဆက်မှုဘောင်များကို ဖယ်ရှားရန်အတွက် နမူနာ config ဖိုင်ကို အပ်ဒိတ်လုပ်ပါ။

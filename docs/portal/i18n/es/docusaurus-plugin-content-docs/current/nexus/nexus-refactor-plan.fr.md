@@ -4,115 +4,97 @@ direction: ltr
 source: docs/portal/docs/nexus/nexus-refactor-plan.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: nexus-refactor-plan
-title: Plan de refactorisation du ledger Sora Nexus
-description: Miroir de `docs/source/nexus_refactor_plan.md`, detaillant le travail de nettoyage par phases pour la base de code Iroha 3.
+id: plan-refactor-nexus
+título: Plan de refactorización del libro mayor Sora Nexus
+descripción: Espejo de `docs/source/nexus_refactor_plan.md`, detalla el trabajo de limpieza por fases para la base del código Iroha 3.
 ---
 
-:::note Source canonique
-Cette page reflete `docs/source/nexus_refactor_plan.md`. Gardez les deux copies alignees jusqu'a ce que l'edition multilingue arrive dans le portal.
+:::nota Fuente canónica
+Esta página refleja `docs/source/nexus_refactor_plan.md`. Gardez les dos copias alineadas justo ce que la edición multilingue llega al portal.
 :::
 
-# Plan de refactorisation du ledger Sora Nexus
+# Plan de refactorización del libro mayor Sora Nexus
 
-Ce document capture le roadmap immediat du refactor du Sora Nexus Ledger ("Iroha 3"). Il reflete la topologie actuelle du depot et les regressions observees dans la comptabilite genesis/WSV, le consensus Sumeragi, les triggers de smart contracts, les requetes de snapshots, les bindings de host pointer-ABI et les codecs Norito. L'objectif est de converger vers une architecture coherente et testable sans tenter de livrer toutes les corrections dans un patch monolithique.
+Este documento captura la hoja de ruta inmediata del refactor de Sora Nexus Ledger ("Iroha 3"). Refleja la topología actual del depósito y las regresiones observadas en la compatibilidad génesis/WSV, el consenso Sumeragi, los activadores de contratos inteligentes, las solicitudes de instantáneas, las vinculaciones del puntero de host-ABI y los códecs Norito. El objetivo es converger con una arquitectura coherente y comprobable sin necesidad de guardar todas las correcciones en un parche monolítico.## 0. Principios directores
+- Preservar un comportamiento determinante sobre el material heterogéneo; Utilice la aceleración única a través de la opción de inclusión de indicadores de funciones con respaldos idénticos.
+- Norito es el sofá de serialización. Todo cambio de estado/esquema debe incluir las pruebas de codificación/decodificación de ida y vuelta Norito y las actualizaciones del día.
+- La configuración transita por `iroha_config` (usuario -> actual -> valores predeterminados). Suprima los interruptores ambientales ad hoc de las rutas de producción.
+- La política ABI reste V1 y no negociable. Los hosts no deben rechazar la determinación de los tipos de puntero/llamadas al sistema inconnus.
+- `cargo test --workspace` y las pruebas doradas (`ivm`, `norito`, `integration_tests`) descansan en la puerta de base para cada jalón.## 1. Instantánea de la topología del depósito
+- `crates/iroha_core`: actores Sumeragi, WSV, génesis del cargador, canalizaciones (consulta, superposición, carriles zk), host de pegamento de contratos inteligentes.
+- `crates/iroha_data_model`: esquema autorizado para donantes y solicitudes en cadena.
+- `crates/iroha`: Cliente API utilizado por CLI, pruebas, SDK.
+- `crates/iroha_cli`: operador CLI que refleja actualmente muchas API en `iroha`.
+- `crates/ivm`: VM de código de bytes Kotodama, puntos de entrada del puntero de integración-ABI del host.
+- `crates/norito`: códec de serialización con adaptadores JSON y backends AoS/NCB.
+- `integration_tests`: afirmaciones entre componentes couvrant genesis/bootstrap, Sumeragi, activadores, paginación, etc.
+- Los documentos descritos dejan los objetivos de Sora Nexus Ledger (`nexus.md`, `new_pipeline.md`, `ivm.md`), pero la implementación está fragmentada y parcialmente obsoleta según la relación con el código.
 
-## 0. Principes directeurs
-- Preserver un comportement deterministe sur du materiel heterogene; utiliser l'acceleration uniquement via des feature flags opt-in avec des fallbacks identiques.
-- Norito est la couche de serialisation. Tout changement d'etat/schema doit inclure des tests de round-trip Norito encode/decode et des mises a jour de fixtures.
-- La configuration transite par `iroha_config` (user -> actual -> defaults). Supprimer les toggles d'environnement ad-hoc des paths de production.
-- La politique ABI reste V1 et non negociable. Les hosts doivent rejeter deterministiquement les pointer types/syscalls inconnus.
-- `cargo test --workspace` et les golden tests (`ivm`, `norito`, `integration_tests`) restent le gate de base pour chaque jalon.
-
-## 1. Snapshot de la topologie du depot
-- `crates/iroha_core`: acteurs Sumeragi, WSV, loader genesis, pipelines (query, overlay, zk lanes), glue host des smart contracts.
-- `crates/iroha_data_model`: schema autoritatif pour les donnees et requetes on-chain.
-- `crates/iroha`: API client utilisee par CLI, tests, SDK.
-- `crates/iroha_cli`: CLI operateur, reflete actuellement de nombreuses APIs dans `iroha`.
-- `crates/ivm`: VM de bytecode Kotodama, points d'entree d'integration pointer-ABI du host.
-- `crates/norito`: codec de serialisation avec adaptateurs JSON et backends AoS/NCB.
-- `integration_tests`: assertions cross-component couvrant genesis/bootstrap, Sumeragi, triggers, pagination, etc.
-- Les docs decrivent deja les objectifs du Sora Nexus Ledger (`nexus.md`, `new_pipeline.md`, `ivm.md`), mais l'implementation est fragmentee et partiellement obsolete par rapport au code.
-
-## 2. Piliers de refactor et jalons
-
-### Phase A - Fondations et observabilite
-1. **Telemetrie WSV + Snapshots**
-   - Etablir une API canonique de snapshots dans `state` (trait `WorldStateSnapshot`) utilisee par queries, Sumeragi et CLI.
-   - Utiliser `scripts/iroha_state_dump.sh` pour produire des snapshots deterministes via `iroha state dump --format norito`.
-2. **Determinisme Genesis/Bootstrap**
-   - Refactoriser l'ingestion genesis pour passer par un pipeline unique base sur Norito (`iroha_core::genesis`).
-   - Ajouter une couverture d'integration/regression qui rejoue genesis plus le premier bloc et verifie des racines WSV identiques entre arm64/x86_64 (suivi dans `integration_tests/tests/genesis_replay_determinism.rs`).
-3. **Tests de fixity cross-crate**
-   - Etendre `integration_tests/tests/genesis_json.rs` pour valider les invariants WSV, pipeline et ABI dans un seul harness.
-   - Introduire un scaffold `cargo xtask check-shape` qui panic sur schema drift (suivi dans le backlog DevEx tooling; voir l'action item dans `scripts/xtask/README.md`).
-
-### Phase B - WSV et surface de requetes
-1. **Transactions de state storage**
-   - Collapser `state/storage_transactions.rs` en un adaptateur transactionnel qui applique l'ordre de commit et la detection de conflits.
-   - Des unit tests verifient desormais que les modifications asset/world/triggers font rollback en cas d'echec.
-2. **Refactor du modele de requetes**
-   - Deplacer la logique de pagination/cursor dans des composants reutilisables sous `crates/iroha_core/src/query/`. Aligner les representations Norito dans `iroha_data_model`.
-   - Ajouter des snapshot queries pour triggers, assets et roles avec un ordre deterministe (suivi via `crates/iroha_core/tests/snapshot_iterable.rs` pour la couverture actuelle).
-3. **Consistance des snapshots**
-   - S'assurer que le CLI `iroha ledger query` utilise le meme chemin de snapshot que Sumeragi/fetchers.
-   - Les tests de regression de snapshots CLI se trouvent sous `tests/cli/state_snapshot.rs` (feature-gated pour les runs lents).
-
-### Phase C - Pipeline Sumeragi
-1. **Topologie et gestion des epoques**
-   - Extraire `EpochRosterProvider` en trait avec des implementations basees sur des snapshots de stake WSV.
-   - `WsvEpochRosterAdapter::from_peer_iter` fournit un constructeur simple, friendly pour mocks dans benches/tests.
-2. **Simplification du flux de consensus**
-   - Reorganiser `crates/iroha_core/src/sumeragi/*` en modules: `pacemaker`, `aggregation`, `availability`, `witness` avec des types partages sous `consensus`.
-   - Remplacer le message passing ad-hoc par des enveloppes Norito typees et introduire des property tests de view-change (suivi dans le backlog messaging Sumeragi).
-3. **Integration lane/proof**
-   - Aligner les lane proofs avec les engagements DA et garantir une gating RBC uniforme.
-   - Le test d'integration end-to-end `integration_tests/tests/extra_functional/seven_peer_consistency.rs` verifie maintenant le chemin avec RBC active.
-
-### Phase D - Smart contracts et hosts pointer-ABI
-1. **Audit de la frontiere host**
-   - Consolider les checks de pointer-type (`ivm::pointer_abi`) et les adaptateurs de host (`iroha_core::smartcontracts::ivm::host`).
-   - Les attentes de pointer table et les bindings de host manifest sont couverts par `crates/iroha_core/tests/ivm_pointer_abi_tlv_types.rs` et `ivm_host_mapping.rs`, qui exercent les mappings TLV golden.
-2. **Sandbox d'execution des triggers**
-   - Refactoriser les triggers pour passer par un `TriggerExecutor` commun qui applique gas, validation de pointers et journaling d'evenements.
-   - Ajouter des tests de regression pour les triggers call/time couvrant les chemins d'echec (suivi via `crates/iroha_core/tests/trigger_failure.rs`).
-3. **Alignement CLI & client**
-   - S'assurer que les operations CLI (`audit`, `gov`, `sumeragi`, `ivm`) reposent sur les fonctions client partagees `iroha` pour eviter le drift.
-   - Les tests de snapshots JSON du CLI vivent dans `tests/cli/json_snapshot.rs`; gardez-les a jour pour que la sortie core continue de correspondre a la reference JSON canonique.
-
-### Phase E - Durcissement du codec Norito
-1. **Registry de schemas**
-   - Creer un registry de schemas Norito sous `crates/norito/src/schema/` pour sourcer les encodages canoniques des types core.
-   - Ajout de doc tests verifiant l'encodage de payloads d'exemple (`norito::schema::SamplePayload`).
-2. **Refresh des golden fixtures**
-   - Mettre a jour les golden fixtures `crates/norito/tests/*` pour correspondre au nouveau schema WSV une fois le refactor livre.
-   - `scripts/norito_regen.sh` regenere les golden JSON Norito de facon deterministe via le helper `norito_regen_goldens`.
-3. **Integration IVM/Norito**
-   - Valider la serialisation des manifests Kotodama end-to-end via Norito, en garantissant une metadata pointer ABI coherente.
-   - `crates/ivm/tests/manifest_roundtrip.rs` maintient la parite Norito encode/decode pour les manifests.
-
-## 3. Preoccupations transversales
-- **Strategie de tests**: Chaque phase promeut unit tests -> crate tests -> integration tests. Les tests en echec capturent les regressions actuelles; les nouveaux tests evitent leur retour.
-- **Documentation**: Apres chaque phase, mettre a jour `status.md` et reporter les items ouverts dans `roadmap.md` tout en supprimant les taches terminees.
-- **Benchmarks de performance**: Maintenir les benches existants dans `iroha_core`, `ivm` et `norito`; ajouter des mesures de base post-refactor pour valider l'absence de regressions.
-- **Feature flags**: Conserver des toggles au niveau crate uniquement pour les backends qui requierent des toolchains externes (`cuda`, `zk-verify-batch`). Les chemins SIMD CPU sont toujours construits et selectionnes a l'execution; fournir des fallbacks scalaires deterministes pour le materiel non supporte.
-
-## 4. Actions immediates
-- Scaffolding de la Phase A (snapshot trait + wiring telemetrie) - voir les taches actionnables dans les mises a jour du roadmap.
-- L'audit recent des defauts pour `sumeragi`, `state` et `ivm` a revele les points suivants:
-  - `sumeragi`: des allowances de dead-code protegent le broadcast des preuves de view-change, l'etat de replay VRF et l'export telemetrie EMA. Ils restent gates jusqu'a ce que la simplification du flux de consensus de la Phase C et les livrables d'integration lane/proof soient livrees.
-  - `state`: le nettoyage de `Cell` et le routage telemetrie passent sur la piste telemetrie WSV de la Phase A, tandis que les notes SoA/parallel-apply basculent dans le backlog d'optimisation de pipeline de la Phase C.
-  - `ivm`: l'exposition du toggle CUDA, la validation des enveloppes et la couverture Halo2/Metal se mappent au travail host-boundary de la Phase D plus le theme transversal d'acceleration GPU; les kernels restent dans le backlog GPU dedie jusqu'a maturite.
-- Preparer un RFC cross-team resumant ce plan pour sign-off avant de livrer des changements de code invasifs.
-
-## 5. Questions ouvertes
-- RBC doit-il rester optionnel apres P1, ou est-il obligatoire pour les lanes du ledger Nexus? Decision des parties prenantes requise.
-- Doit-on imposer des groupes de composabilite DS en P1 ou les laisser desactives jusqu'a maturite des lane proofs?
-- Quelle est la localisation canonique des parametres ML-DSA-87? Candidat: nouveau crate `crates/fastpq_isi` (creation en attente).
+## 2. Piliers de refactor et jalons### Fase A - Fundaciones y observabilidad
+1. **Telemetría WSV + Instantáneas**
+   - Establecer una API canónica de instantáneas en `state` (rasgo `WorldStateSnapshot`) utilizada para consultas, Sumeragi y CLI.
+   - Utilice `scripts/iroha_state_dump.sh` para producir instantáneas determinadas a través de `iroha state dump --format norito`.
+2. **Determinismo Génesis/Bootstrap**
+   - Refactorizador de la génesis de la ingestión para pasar por una base única de tubería en Norito (`iroha_core::genesis`).
+   - Ajouter une couverture d'integration/regression qui rejoue genesis plus le premier block et verifie des racines WSV identiques entre arm64/x86_64 (suivi dans `integration_tests/tests/genesis_replay_determinism.rs`).
+3. **Pruebas de fijación entre cajas**
+   - Utilice `integration_tests/tests/genesis_json.rs` para validar los invariantes WSV, pipeline y ABI en un solo arnés.
+   - Introduzca un andamio `cargo xtask check-shape` que pánico en la deriva del esquema (suivi dans le backlog DevEx tools; vea el elemento de acción en `scripts/xtask/README.md`).### Fase B - WSV y superficie de solicitudes
+1. **Transacciones de almacenamiento estatal**
+   - Collapser `state/storage_transactions.rs` es un adaptador de transacciones que aplica el orden de confirmación y la detección de conflictos.
+   - Las pruebas unitarias verifican que las modificaciones de activos/mundo/triggers font rollback en caso de control.
+2. **Refactor del modelo de solicitudes**
+   - Reemplace la lógica de paginación/cursor en los componentes reutilizables bajo `crates/iroha_core/src/query/`. Alinee las representaciones Norito en `iroha_data_model`.
+   - Agregar consultas de instantáneas para activadores, activos y roles con un orden determinado (suivi vía `crates/iroha_core/tests/snapshot_iterable.rs` para la cobertura actual).
+3. **Consistencia de las instantáneas**
+   - Asegúrese de que la CLI `iroha ledger query` utilice el meme chemin de snapshot que Sumeragi/fetchers.
+   - Las pruebas de regresión de instantáneas CLI se encuentran en `tests/cli/state_snapshot.rs` (con funciones controladas para ejecutar lentes).### Fase C - Tubería Sumeragi
+1. **Topología y gestión de épocas**
+   - Extraire `EpochRosterProvider` con implementaciones basadas en instantáneas de participación WSV.
+   - `WsvEpochRosterAdapter::from_peer_iter` proporciona un constructor simple y amigable para simulaciones en bancos/pruebas.
+2. **Simplificación del flujo de consenso**
+   - Reorganizador `crates/iroha_core/src/sumeragi/*` en módulos: `pacemaker`, `aggregation`, `availability`, `witness` con los tipos de particiones bajo `consensus`.
+   - Reemplace el mensaje que pasa ad-hoc por los sobres tipo Norito e introduzca las pruebas de propiedad de cambio de vista (suivi dans le backlog message Sumeragi).
+3. **Carril de integración/prueba**
+   - Alinee las pruebas de carril con los compromisos DA y garantice una puerta uniforme de RBC.
+   - La prueba de integración de extremo a extremo `integration_tests/tests/extra_functional/seven_peer_consistency.rs` verifica el mantenimiento del camino con RBC activo.### Fase D: contratos inteligentes y puntero de hosts-ABI
+1. **Anfitrión de auditoría de la frontera**
+   - Consolide las comprobaciones de tipo de puntero (`ivm::pointer_abi`) y los adaptadores de host (`iroha_core::smartcontracts::ivm::host`).
+   - Los asistentes de la tabla de punteros y las vinculaciones del manifiesto del host están cubiertos por `crates/iroha_core/tests/ivm_pointer_abi_tlv_types.rs` e `ivm_host_mapping.rs`, que ejercen las asignaciones TLV golden.
+2. **Sandbox de ejecución de activadores**
+   - Refactorizador de activadores para pasar por un `TriggerExecutor` común que aplica gas, validación de punteros y registro de eventos.
+   - Agregar pruebas de regresión para los activadores de llamada/tiempo que cubren los caminos de control (suivi vía `crates/iroha_core/tests/trigger_failure.rs`).
+3. **Alineación CLI y cliente**
+   - Asegúrese de que las operaciones CLI (`audit`, `gov`, `sumeragi`, `ivm`) se encuentren en las funciones del cliente partagees `iroha` para evitar la deriva.
+   - Las pruebas de instantáneas JSON de CLI viven en `tests/cli/json_snapshot.rs`; Guarde el día para que la salida principal continúe correspondiendo a la referencia JSON canónica.### Fase E - Configuración del códec Norito
+1. **Registro de esquemas**
+   - Cree un registro de esquemas Norito en `crates/norito/src/schema/` para obtener las codificaciones canónicas de los tipos principales.
+   - Agregar pruebas de documentos que verifican la codificación de cargas útiles del ejemplo (`norito::schema::SamplePayload`).
+2. **Actualizar los accesorios dorados**
+   - Mettre un día en los accesorios dorados `crates/norito/tests/*` para corresponder al nuevo esquema WSV una vez le refactor livre.
+   - `scripts/norito_regen.sh` regenera el JSON dorado Norito de manera determinada a través del asistente `norito_regen_goldens`.
+3. **Integración IVM/Norito**
+   - Validar la serialización de manifiestos Kotodama de extremo a extremo a través de Norito, garantizando un puntero de metadatos ABI coherente.
+   - `crates/ivm/tests/manifest_roundtrip.rs` mantiene la partición Norito codifica/decodifica para los manifiestos.## 3. Preocupaciones transversales
+- **Estrategia de pruebas**: Pruebas unitarias de promesa de cada fase -> pruebas de cajas -> pruebas de integración. Les tests en echec capturen les regressions actuelles; les nouveaux tests evitant leur retour.
+- **Documentación**: Después de cada fase, mettre a jour `status.md` et reporter les items ouverts dans `roadmap.md` tout en supprimant les taches terminees.
+- **Parámetros de rendimiento**: Mantener los bancos existentes en `iroha_core`, `ivm` y `norito`; Agregue las medidas de base posteriores al refactor para validar la ausencia de regresiones.
+- **Indicadores de funciones**: Conservar los conmutadores en el nivel de caja exclusivo para los backends que requieren cadenas de herramientas externas (`cuda`, `zk-verify-batch`). Los caminos SIMD CPU están siempre construidos y seleccionados en la ejecución; Fournir des fallbacks scalaires deterministes pour le material non supporte.## 4. Acciones inmediatas
+- Scaffolding de la Phase A (rasgo instantáneo + telemetría de cableado) - vea los taches accionables en las actualizaciones del día de la hoja de ruta.
+- La auditoría reciente de los valores predeterminados para `sumeragi`, `state` y `ivm` revela los puntos siguientes:
+  - `sumeragi`: los permisos de código muerto protegen la transmisión de las preferencias de cambio de vista, el estado de reproducción VRF y la telemetría de exportación EMA. Ils restent gates jusqu'a ce que la simplificación del flujo de consenso de la Fase C et les livrables d'integration lane/proof soient livrees.
+  - `state`: el nettoyage de `Cell` y la telemetría de ruta pasada por la telemetría de pista WSV de la Fase A, así como las notas SoA/parallel-apply basculent en el backlog de optimización de tubería de la Fase C.
+  - `ivm`: la exposición del conmutador CUDA, la validación de sobres y la cobertura Halo2/Metal se asignan al límite del host de trabajo de la Fase D más el tema transversal de aceleración de la GPU; Los núcleos reposan en la acumulación de GPU deben madurar.
+- Preparador de un resumen RFC entre equipos de este plan para aprobar antes de liberar los cambios de código invasivo.## 5. Preguntas abiertas
+- ¿RBC tiene opciones adicionales después de P1, o es obligatorio para los carriles del libro mayor Nexus? Decisión des partes prenantes requise.
+- ¿Doit-on imponer des groupes de composabilite DS en P1 ou les laisser desactives jusqu'a madurite des laneproofs?
+- ¿Qué es la localización canónica de los parámetros ML-DSA-87? Candidato: caja nouveau `crates/fastpq_isi` (creación en attente).
 
 ---
 
-_Derniere mise a jour: 2025-09-12_
+_Última puesta en marcha del día: 2025-09-12_

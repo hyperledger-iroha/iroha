@@ -6,72 +6,73 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: c7ab0877a6f43402d6ec13a44c4a7c2b68e4a49e6103bb50d7469d9e71aaa953
 source_last_modified: "2026-01-03T18:07:57.001158+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# MOCHI Packaging Guide
+# موچی پیکیجنگ گائیڈ
 
-This guide explains how to build the MOCHI desktop supervisor bundle, inspect
-the generated artefacts, and tune the runtime overrides that ship with the
-bundle. It complements the quickstart by focusing on reproducible packaging
-and CI usage.
+اس گائیڈ میں بتایا گیا ہے کہ موچی ڈیسک ٹاپ سپروائزر بنڈل ، معائنہ کرنے کا طریقہ کیسے بنایا جائے
+تیار کردہ نوادرات ، اور رن ٹائم اوور رائڈس کو ٹیون کریں جو جہاز کے ساتھ جہاز ہے
+بنڈل یہ تولیدی پیکیجنگ پر توجہ مرکوز کرکے کوئیک اسٹارٹ کی تکمیل کرتا ہے
+اور CI استعمال۔
 
-## Prerequisites
+## شرائط
 
-- Rust toolchain (edition 2024 / Rust 1.82+) with workspace dependencies
-  already built.
-- `irohad`, `iroha_cli`, and `kagami` compiled for the desired target. The
-  bundler reuses binaries from `target/<profile>/`.
-- Sufficient disk space for the bundle output under `target/` or a custom
-  destination.
+- ورک اسپیس انحصار کے ساتھ مورچا ٹولچین (ایڈیشن 2024 / مورچا 1.82+)
+  پہلے ہی بنایا گیا ہے۔
+- `irohad` ، `iroha_cli` ، اور `kagami` مطلوبہ ہدف کے لئے مرتب کیا گیا۔
+  بنڈلر `target/<profile>/` سے بائنریز کو دوبارہ استعمال کرتا ہے۔
+- `target/` یا کسی رواج کے تحت بنڈل آؤٹ پٹ کے لئے کافی ڈسک کی جگہ
+  منزل
 
-Build the dependencies once before running the bundler:
+بنڈلر کو چلانے سے پہلے ایک بار انحصار بنائیں:
 
 ```bash
 cargo build -p irohad -p iroha_cli -p iroha_kagami
 ```
 
-## Building the bundle
+## بنڈل بنانا
 
-Invoke the dedicated `xtask` command from the repository root:
+ذخیرہ جڑ سے سرشار `xtask` کمانڈ کی درخواست کریں:
 
 ```bash
 cargo xtask mochi-bundle
 ```
 
-By default this produces a release bundle under `target/mochi-bundle/` with a
-filename derived from the host OS and architecture (for example,
-`mochi-macos-aarch64-release.tar.gz`). Use the following flags to customise
-the build:
+پہلے سے طے شدہ طور پر یہ `target/mochi-bundle/` کے تحت ایک ریلیز بنڈل تیار کرتا ہے
+میزبان OS اور فن تعمیر سے اخذ کردہ فائل نام (مثال کے طور پر ،
+`mochi-macos-aarch64-release.tar.gz`)۔ اپنی مرضی کے مطابق مندرجہ ذیل جھنڈوں کا استعمال کریں
+تعمیر:
 
-- `--profile <name>` – choose a Cargo profile (`release`, `debug`, or a
-  custom profile).
-- `--no-archive` – keep the expanded directory without creating a `.tar.gz`
-  archive (useful for local testing).
-- `--out <path>` – write bundles to a custom directory instead of
-  `target/mochi-bundle/`.
-- `--kagami <path>` – supply a prebuilt `kagami` executable to include in the
-  archive. When omitted, the bundler reuses (or builds) the binary from the
-  selected profile.
-- `--matrix <path>` – append bundle metadata to a JSON matrix file (created if
-  missing) so CI pipelines can record every host/profile artefact produced in a
-  run. Entries include the bundle directory, manifest path and SHA-256, optional
-  archive location, and the latest smoke-test result.
-- `--smoke` – execute the packaged `mochi --help` as a lightweight smoke gate
-  after bundling; failures surface missing dependencies before publishing an
-  artefact.
-- `--stage <path>` – copy the finished bundle (and archive when produced) into
-  a staging directory so multi-platform builds can deposit artefacts in one
-  location without extra scripting.
+- `--profile <name>` - ایک کارگو پروفائل منتخب کریں (`release` ، `debug` ، یا a
+  کسٹم پروفائل)۔
+- `--no-archive` - `.tar.gz` بنانے کے بغیر توسیع شدہ ڈائرکٹری کو رکھیں
+  آرکائیو (مقامی جانچ کے لئے مفید)۔
+- `--out <path>` - اس کے بجائے کسٹم ڈائرکٹری میں بنڈل لکھیں
+  `target/mochi-bundle/`۔
+- `--kagami <path>` - ایک پری بلٹ `kagami` کی فراہمی کے لئے قابل عمل
+  آرکائیو جب اسے چھوڑ دیا جاتا ہے تو ، بنڈلر بائنری سے دوبارہ (یا تعمیر کرتا ہے)
+  منتخب پروفائل۔
+- `--matrix <path>` - JSON میٹرکس فائل میں بنڈل میٹا ڈیٹا کو ضمیمہ کریں (اگر تخلیق کیا گیا ہو
+  لاپتہ) لہذا سی آئی پائپ لائنز ہر میزبان/پروفائل آرٹ فیکٹ کو ریکارڈ کرسکتی ہے
+  چلائیں اندراجات میں بنڈل ڈائرکٹری ، ظاہر راستہ اور SHA-256 ، اختیاری شامل ہیں
+  محفوظ شدہ دستاویزات کا مقام ، اور تازہ ترین دھواں ٹیسٹ کا نتیجہ۔
+- `--smoke` - پیکیجڈ `mochi --help` کو ہلکا پھلکا دھواں گیٹ کے طور پر انجام دیں
+  بنڈل کے بعد ؛ ناکامیوں کی سطح کو شائع کرنے سے پہلے سطح پر انحصار غائب ہے
+  نوادرات
+- `--stage <path>` - تیار شدہ بنڈل (اور جب تیار کردہ آرکائیو) میں کاپی کریں
+  ایک اسٹیجنگ ڈائرکٹری جس میں ملٹی پلیٹ فارم کی تعمیرات ایک میں نوادرات جمع کراسکتی ہیں
+  اضافی اسکرپٹ کے بغیر مقام۔
 
-The command copies `mochi-ui-egui`, `kagami`, `LICENSE`, the sample
-configuration, and `mochi/BUNDLE_README.md` into the bundle. A deterministic
-`manifest.json` is generated alongside the binaries so CI jobs can track file
-hashes and sizes.
+کمانڈ `mochi-ui-egui` ، `kagami` ، `LICENSE` ، نمونہ کی کاپی کرتا ہے
+تشکیل ، اور `mochi/BUNDLE_README.md` بنڈل میں۔ ایک تعصب
+`manifest.json` بائنریز کے ساتھ ساتھ تیار کیا گیا ہے تاکہ CI ملازمتیں فائل کو ٹریک کرسکیں
+ہیش اور سائز۔
 
-## Bundle layout and verification
+## بنڈل لے آؤٹ اور توثیق
 
-An expanded bundle follows the layout documented in `BUNDLE_README.md`:
+ایک توسیع شدہ بنڈل `BUNDLE_README.md` میں دستاویزی ترتیب کی پیروی کرتا ہے:
 
 ```
 bin/mochi
@@ -82,56 +83,54 @@ manifest.json
 LICENSE
 ```
 
-The `manifest.json` file lists every artefact with its SHA-256 hash. Verify
-the bundle after copying it to another system:
+`manifest.json` فائل ہر نوادرات کو اپنے SHA-256 ہیش کے ساتھ درج کرتی ہے۔ تصدیق کریں
+کسی دوسرے سسٹم میں کاپی کرنے کے بعد بنڈل:
 
 ```bash
 jq -r '.files[] | "\(.sha256)  \(.path)"' manifest.json | sha256sum --check
 ```
 
-CI pipelines can cache the expanded directory, sign the archive, or publish
-the manifest alongside release notes. The manifest includes the generator
-profile, target triple, and creation timestamp to aid provenance tracking.
+سی آئی پائپ لائنز توسیع شدہ ڈائرکٹری کو کیش کر سکتی ہیں ، محفوظ شدہ دستاویزات پر دستخط کرسکتی ہیں ، یا شائع کرسکتی ہیں
+ریلیز نوٹ کے ساتھ منشور۔ منشور میں جنریٹر شامل ہے
+پروفائل ، ٹارگٹ ٹرپل ، اور پروویژن ٹریکنگ میں مدد کے لئے تخلیق ٹائم اسٹیمپ۔
 
-## Runtime overrides
+## رن ٹائم اوور رائڈز
 
-MOCHI discovers helper binaries and runtime locations through CLI flags or
-environment variables:
+موچی نے سی ایل آئی کے جھنڈوں کے ذریعے مددگار بائنریز اور رن ٹائم مقامات کا پتہ چلا یا
+ماحولیاتی متغیرات:- `--data-root` / `MOCHI_DATA_ROOT` - ہم مرتبہ کے لئے استعمال ہونے والے ورک اسپیس کو اوور رائڈ کریں
+  تشکیل ، اسٹوریج ، اور نوشتہ جات۔
+- `--profile` - ٹوپولوجی پریسیٹس کے درمیان سوئچ (`single-peer` ،
+  `four-peer-bft`)۔
+- `--torii-start` ، `--p2p-start` - مختص کرتے وقت استعمال ہونے والے بیس بندرگاہوں کو تبدیل کریں
+  خدمات
+- `--irohad` / `MOCHI_IROHAD` - ایک مخصوص `irohad` بائنری پر نقطہ۔
+- `--kagami` / `MOCHI_KAGAMI` - بنڈل `kagami` کو اوور رائڈ کریں۔
+- `--iroha-cli` / `MOCHI_IROHA_CLI` - اختیاری CLI مددگار کو اوور رائڈ کریں۔
+- `--restart-mode <never|on-failure>` - خودکار دوبارہ شروع کرنے والوں کو غیر فعال کریں یا مجبور کریں
+  صریح بیک آف پالیسی۔
+- `--restart-max <attempts>` - جب دوبارہ شروع کرنے کی کوششوں کی تعداد کو اوور رائڈ کریں
+  `on-failure` وضع میں چل رہا ہے۔
+- `--restart-backoff-ms <millis>` - خود کار طریقے سے دوبارہ شروع ہونے کے لئے بیس بیک آف سیٹ کریں۔
+- `MOCHI_CONFIG` - ایک کسٹم `config/local.toml` راستہ فراہم کریں۔
 
-- `--data-root` / `MOCHI_DATA_ROOT` – override the workspace used for peer
-  configs, storage, and logs.
-- `--profile` – switch between topology presets (`single-peer`,
-  `four-peer-bft`).
-- `--torii-start`, `--p2p-start` – change the base ports used when allocating
-  services.
-- `--irohad` / `MOCHI_IROHAD` – point at a specific `irohad` binary.
-- `--kagami` / `MOCHI_KAGAMI` – override the bundled `kagami`.
-- `--iroha-cli` / `MOCHI_IROHA_CLI` – override the optional CLI helper.
-- `--restart-mode <never|on-failure>` – disable automatic restarts or force the
-  exponential backoff policy.
-- `--restart-max <attempts>` – override the number of restart attempts when
-  running in `on-failure` mode.
-- `--restart-backoff-ms <millis>` – set the base backoff for automatic restarts.
-- `MOCHI_CONFIG` – provide a custom `config/local.toml` path.
+CLI مدد (`mochi --help`) مکمل پرچم کی فہرست پرنٹ کرتی ہے۔ ماحولیات کو ختم کرنا
+لانچ پر اثر ڈالیں اور اس کے اندر ترتیبات کے ڈائیلاگ کے ساتھ مل سکتے ہیں
+ui.
 
-The CLI help (`mochi --help`) prints the full flag list. Environment overrides
-take effect on launch and can be combined with the Settings dialog inside the
-UI.
+## CI استعمال کے اشارے
 
-## CI usage hints
-
-- Run `cargo xtask mochi-bundle --no-archive` to generate a directory that can
-  be zipped with platform-specific tooling (ZIP for Windows, tarballs for
-  Unix).
-- Capture bundle metadata with `cargo xtask mochi-bundle --matrix dist/matrix.json`
-  so release jobs can publish a single JSON index listing every host/profile
-  artefact produced in the pipeline.
-- Use `cargo xtask mochi-bundle --stage /mnt/staging/mochi` (or similar) on each
-  build agent to upload the bundle and archive into a shared directory that the
-  publishing job can consume.
-- Publish both the archive and `manifest.json` so operators can verify bundle
-  integrity.
-- Store the generated directory as a build artefact to seed smoke tests that
-  exercise the supervisor with deterministically packaged binaries.
-- Record bundle hashes in release notes or in the `status.md` log for future
-  provenance checks.
+- ایک ڈائریکٹری تیار کرنے کے لئے `cargo xtask mochi-bundle --no-archive` چلائیں جو کر سکتا ہے
+  پلیٹ فارم سے متعلق ٹولنگ (ونڈوز کے لئے زپ ، کے لئے ٹربالس کے لئے زپ) کے ساتھ زپ کریں
+  UNIX)۔
+- `cargo xtask mochi-bundle --matrix dist/matrix.json` کے ساتھ بنڈل میٹا ڈیٹا پر قبضہ کریں
+  لہذا ریلیز ملازمتیں ہر میزبان/پروفائل کی فہرست میں ایک واحد JSON انڈیکس شائع کرسکتی ہیں
+  پائپ لائن میں تیار کردہ نوادرات۔
+- ہر ایک پر `cargo xtask mochi-bundle --stage /mnt/staging/mochi` (یا اسی طرح) استعمال کریں
+  بنڈل اپ لوڈ کرنے کے لئے ایجنٹ بنائیں اور مشترکہ ڈائریکٹری میں محفوظ شدہ دستاویزات بنائیں
+  اشاعت کی نوکری استعمال کر سکتی ہے۔
+- آرکائیو اور `manifest.json` دونوں کو شائع کریں تاکہ آپریٹرز بنڈل کی تصدیق کرسکیں
+  سالمیت
+- بیجوں کے دھواں ٹیسٹوں کے لئے تیار کردہ ڈائرکٹری کو بلڈ آرٹ فیکٹ کے طور پر اسٹور کریں
+  اختیاری طور پر پیکیجڈ بائنریز کے ساتھ سپروائزر کی ورزش کریں۔
+- ریلیز نوٹ میں یا `status.md` لاگ میں مستقبل کے لئے بنڈل ہیش ریکارڈ کریں
+  پروویژن چیک

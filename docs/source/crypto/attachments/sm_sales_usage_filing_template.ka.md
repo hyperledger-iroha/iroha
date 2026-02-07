@@ -7,90 +7,88 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 14f32b40ff71fa4eef698eac80d8d7dd27104b46b84523d735d054dedea1c47a
 source_last_modified: "2025-12-29T18:16:35.938696+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% SM2/SM3/SM4 Sales & Usage Filing (销售/使用备案) Template
-% Hyperledger Iroha Compliance Working Group
+% SM2/SM3/SM4 გაყიდვების და გამოყენების შეტანის (销售/使用备案) შაბლონი
+% Hyperledger Iroha შესაბამისობის სამუშაო ჯგუფი
 % 2026-05-06
 
-# Instructions
+#ინსტრუქცია
 
-Use this template when filing deployment usage with an SCA office for onshore
-operators. Provide one submission per deployment cluster or data space. Update
-the placeholders with operator-specific details and attach the evidence listed
-in the checklist.
+გამოიყენეთ ეს შაბლონი SCA-ს ოფისში განლაგების გამოყენებისას ხმელეთზე
+ოპერატორები. მიაწოდეთ ერთი წარდგენა განლაგების კლასტერზე ან მონაცემთა სივრცეში. განახლება
+ადგილის დამფუძნებლები ოპერატორის სპეციფიკური დეტალებით და დაურთოთ ჩამოთვლილი მტკიცებულებები
+საკონტროლო სიაში.
 
-# 1. Operator & Deployment Summary
+# 1. ოპერატორის და განლაგების შეჯამება
 
-| Field | Value |
+| ველი | ღირებულება |
 |-------|-------|
-| Operator name | {{ OPERATOR_NAME }} |
-| Business registration ID | {{ REG_ID }} |
-| Registered address | {{ ADDRESS }} |
-| Primary contact (name / title / email / phone) | {{ CONTACT }} |
-| Deployment identifier | {{ DEPLOYMENT_ID }} |
-| Deployment location(s) | {{ LOCATIONS }} |
-| Filing type | Sales / Usage (销售/使用备案) |
-| Filing date | {{ YYYY-MM-DD }} |
+| ოპერატორის სახელი | {{ OPERATOR_NAME }} |
+| ბიზნესის რეგისტრაციის ID | {{ REG_ID }} |
+| რეგისტრირებული მისამართი | {{ მისამართი }} |
+| პირველადი კონტაქტი (სახელი / სათაური / ელექტრონული ფოსტა / ტელეფონი) | {{ კონტაქტი }} |
+| განლაგების იდენტიფიკატორი | {{ DEPLOYMENT_ID }} |
+| განლაგების მდებარეობა(ებ)ი | {{ მდებარეობები }} |
+| ფაილის ტიპი | გაყიდვები / გამოყენება (销售/使用备案) |
+| შეტანის თარიღი | {{ წწწ-თთ-დდ }} |
 
-# 2. Deployment Details
+# 2. განლაგების დეტალები
 
-- Software build ID / hash: `{{ BUILD_HASH }}`
-- Build source: {{ BUILD_SOURCE }} (e.g., operator-built from source, vendor-provided binary).
-- Activation date: {{ ACTIVATION_DATE }}
-- Planned maintenance windows: {{ MAINTENANCE_CADENCE }}
-- Node roles participating in SM signing:
-  | Node | Role | SM features enabled | Key vault location |
-  |------|------|---------------------|--------------------|
-  | {{ NODE_ID }} | {{ ROLE }} | {{ FEATURES }} | {{ VAULT }} |
+- პროგრამული უზრუნველყოფის კონსტრუქციის ID / ჰეში: `{{ BUILD_HASH }}`
+- აგების წყარო: {{ BUILD_SOURCE }} (მაგ., ოპერატორის მიერ შექმნილი წყაროდან, მომწოდებლის მიერ მოწოდებული ორობითი).
+- გააქტიურების თარიღი: {{ ACTIVATION_DATE }}
+- დაგეგმილი ტექნიკური ფანჯრები: {{ MAINTENANCE_CADENCE }}
+- კვანძის როლები, რომლებიც მონაწილეობენ SM ხელმოწერაში:
+  | კვანძი | როლი | SM ფუნქციები ჩართულია | გასაღები სარდაფის ადგილმდებარეობა |
+  |------|------|--------------------|-------------------|
+  | {{ NODE_ID }} | {{ როლი }} | {{ მახასიათებლები }} | {{ VAULT }} |
 
-# 3. Cryptographic Controls
+# 3. კრიპტოგრაფიული კონტროლი
 
-- Allowed algorithms: {{ ALGORITHMS }} (ensure SM set matches configuration).
-- Key lifecycle summary:
-  | Stage | Description |
+- დაშვებული ალგორითმები: {{ ალგორითმები }} (დარწმუნდით, რომ SM ნაკრები შეესაბამება კონფიგურაციას).
+- ძირითადი სასიცოცხლო ციკლის შეჯამება:
+  | სცენა | აღწერა |
   |-------|-------------|
-  | Generation | {{ KEY_GENERATION }} |
-  | Storage | {{ KEY_STORAGE }} |
-  | Rotation | {{ KEY_ROTATION }} |
-  | Revocation | {{ KEY_REVOCATION }} |
-- Distinct identity (`distid`) policy: {{ DISTID_POLICY }}
-- Configuration excerpt (`crypto` section): provide Norito/JSON snapshot with hashes.
+  | თაობა | {{ KEY_GENERATION }} |
+  | შენახვა | {{ KEY_STORAGE }} |
+  | როტაცია | {{ KEY_ROTATION }} |
+  | გაუქმება | {{ გასაღები_გაუქმება }} |
+- განსხვავებული პირადობის (`distid`) პოლიტიკა: {{ DISTID_POLICY }}
+- კონფიგურაციის ამონაწერი (`crypto` სექცია): მიაწოდეთ Norito/JSON სნეპშოტი ჰეშებით.
 
-# 4. Telemetry & Audit Trails
+# 4. ტელემეტრია და აუდიტის ბილიკები
 
-- Monitoring endpoints: {{ METRICS_ENDPOINTS }} (`/metrics`, dashboards).
-- Logged metrics: `crypto.sm.verification_total`, `crypto.sm.sign_total`,
-  latency histograms, error counters.
-- Log retention policy: {{ LOG_RETENTION }} (≥ three years recommended).
-- Audit log storage location: {{ AUDIT_STORAGE }}
+- ბოლო წერტილების მონიტორინგი: {{ METRICS_ENDPOINTS }} (`/metrics`, დაფები).
+- შესული მეტრიკა: `crypto.sm.verification_total`, `crypto.sm.sign_total`,
+  შეყოვნების ჰისტოგრამები, შეცდომების მრიცხველები.
+- ჟურნალის შენახვის პოლიტიკა: {{ LOG_RETENTION }} (რეკომენდებულია ≥ სამი წელი).
+- აუდიტის ჟურნალის შენახვის მდებარეობა: {{ AUDIT_STORAGE }}
 
-# 5. Incident Response & Contacts
+# 5. ინციდენტის რეაგირება და კონტაქტები
 
-| Role | Name | Phone | Email | SLA |
+| როლი | სახელი | ტელეფონი | ელფოსტა | SLA |
 |------|------|-------|-------|-----|
-| Security operations lead | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} | {{ SLA }} |
-| Crypto on-call | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} | {{ SLA }} |
-| Legal / compliance | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} | {{ SLA }} |
-| Vendor support (if applicable) | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} | {{ SLA }} |
+| უსაფრთხოების ოპერაციების წამყვანი | {{ სახელი }} | {{ ტელეფონი }} | {{ EMAIL }} | {{ SLA }} |
+| კრიპტო გამოძახება | {{ სახელი }} | {{ ტელეფონი }} | {{ EMAIL }} | {{ SLA }} |
+| სამართლებრივი / შესაბამისობა | {{ სახელი }} | {{ ტელეფონი }} | {{ EMAIL }} | {{ SLA }} |
+| გამყიდველის მხარდაჭერა (ასეთის არსებობის შემთხვევაში) | {{ სახელი }} | {{ ტელეფონი }} | {{ EMAIL }} | {{ SLA }} |
 
-# 6. Attachments Checklist
+# 6. დანართების ჩამონათვალი- [ ] კონფიგურაციის სნეპშოტი (Norito + JSON) ჰეშებით.
+- [ ] დეტერმინისტული აღნაგობის მტკიცებულება (ჰეშები, SBOM, განმეორებადობის შენიშვნები).
+- [ ] ტელემეტრიის დაფის ექსპორტი და განგაშის განმარტებები.
+- [ ] ინციდენტზე რეაგირების გეგმა და გამოძახების როტაციის დოკუმენტი.
+- [ ] ოპერატორის მომზადების დამადასტურებელი ან რენტაბელური ქვითარი.
+- [ ] ექსპორტის კონტროლის განაცხადი მიწოდებული არტეფაქტების ასახვით.
+- [ ] შესაბამისი სახელშეკრულებო ხელშეკრულებების ან პოლიტიკის შეწყვეტის ასლები.
 
-- [ ] Configuration snapshot (Norito + JSON) with hashes.
-- [ ] Proof of deterministic build (hashes, SBOM, reproducibility notes).
-- [ ] Telemetry dashboard exports and alert definitions.
-- [ ] Incident response plan and on-call rotation document.
-- [ ] Operator training acknowledgement or runbook receipt.
-- [ ] Export-control statement mirroring delivered artefacts.
-- [ ] Copies of relevant contractual agreements or policy waivers.
+# 7. ოპერატორის დეკლარაცია
 
-# 7. Operator Declaration
+> ჩვენ ვადასტურებთ, რომ ზემოთ ჩამოთვლილი განლაგება შეესაბამება PRC-ის რეკლამას
+> კრიპტოგრაფიის რეგულაციები, რომ SM-ზე ჩართული სერვისები იცავენ დოკუმენტირებულს
+> ინციდენტზე რეაგირებისა და ტელემეტრიის პოლიტიკა, და ეს იქნება აუდიტის არტეფაქტები
+> ინახება მინიმუმ სამი წლის განმავლობაში.
 
-> We confirm that the deployment listed above complies with PRC commercial
-> cryptography regulations, that SM-enabled services follow the documented
-> incident response and telemetry policies, and that audit artefacts will be
-> retained for at least three years.
-
-- Authorised signer: ________________________
-- Date: ________________________
-
+- უფლებამოსილი ხელმომწერი: _______________________
+- თარიღი: _______________________

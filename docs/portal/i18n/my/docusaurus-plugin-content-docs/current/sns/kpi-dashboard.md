@@ -6,57 +6,59 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: SNS KPI dashboard
 description: Live Grafana panels that aggregate registrar, freeze, and revenue metrics for SN-8a.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Sora Name Service KPI Dashboard
+# Sora အမည်ဝန်ဆောင်မှု KPI ဒက်ရှ်ဘုတ်
 
-The KPI dashboard gives stewards, guardians, and regulators a single place to
-review adoption, error, and revenue signals before the monthly annex cadence
-(SN-8a). The Grafana definition ships in the repository at
-`dashboards/grafana/sns_suffix_analytics.json` and the portal mirrors the same
-panels via an embedded iframe so the experience matches the internal Grafana
-instance.
+KPI ဒက်ရှ်ဘုတ်သည် ဘဏ္ဍာစိုးများ၊ အုပ်ထိန်းသူများနှင့် စည်းကမ်းထိန်းသူများကို တစ်နေရာတည်းတွင် ပေးသည်။
+လစဉ်နောက်ဆက်တွဲပုံစံမစမီ မွေးစားခြင်း၊ အမှားအယွင်းနှင့် ဝင်ငွေအချက်ပြမှုများကို ပြန်လည်သုံးသပ်ပါ။
+(SN-8a)။ Grafana အဓိပ္ပါယ်ဖွင့်ဆိုချက်မှာ သိုလှောင်ခန်းတွင် ပို့ဆောင်ပေးပါသည်။
+`dashboards/grafana/sns_suffix_analytics.json` နှင့် portal သည် တူညီသည်။
+ထည့်သွင်းထားသော iframe မှတစ်ဆင့် အကန့်များကို အတွေ့အကြုံသည် အတွင်းပိုင်း Grafana နှင့် ကိုက်ညီစေရန်၊
+ဥပမာ။
 
-## Filters & Data Sources
+## စစ်ထုတ်မှုများနှင့် ဒေတာအရင်းအမြစ်များ
 
-- **Suffix filter** – drives the `sns_registrar_status_total{suffix}` queries so
-  `.sora`, `.nexus`, and `.dao` can be inspected independently.
-- **Bulk release filter** – scopes the `sns_bulk_release_payment_*` metrics so
-  finance can reconcile a specific registrar manifest.
-- **Metrics** – pulls from Torii (`sns_registrar_status_total`,
-  `torii_request_duration_seconds`), guardian CLI (`guardian_freeze_active`),
-  `sns_governance_activation_total`, and the bulk-onboarding helper metrics.
+- **Suffix filter** – `sns_registrar_status_total{suffix}` queries များကို မောင်းနှင်ပေးပါသည်။
+  `.sora`၊ `.nexus` နှင့် `.dao` ကို လွတ်လပ်စွာ စစ်ဆေးနိုင်ပါသည်။
+- **အစုလိုက်ထုတ်လွှတ်မှု စစ်ထုတ်ခြင်း** – `sns_bulk_release_payment_*` မက်ထရစ်များကို အတိုင်းအတာများ ချဲ့ထွင်ပေးသည်
+  ဘဏ္ဍာရေးဆိုင်ရာ တိကျသော မှတ်ပုံတင်အရာရှိ၏ ဖော်ပြချက်ကို ညှိနှိုင်းနိုင်ပါသည်။
+- **မက်ထရစ်** – Torii (`sns_registrar_status_total`၊
+  `torii_request_duration_seconds`၊ အုပ်ထိန်းသူ CLI (`guardian_freeze_active`)၊
+  `sns_governance_activation_total`၊ နှင့် အစုလိုက်အပြုံလိုက် စတင်အသုံးပြုသည့် အထောက်အကူ မက်ထရစ်များ။
 
-## Panels
+## ပြားများ
 
-1. **Registrations (last 24h)** – number of successful registrar events for the
-   selected suffix.
-2. **Governance activations (30d)** – charter/addendum motions recorded by the
-   CLI.
-3. **Registrar throughput** – per-suffix rate of successful registrar actions.
-4. **Registrar error modes** – 5 minute rate of error-labelled
-   `sns_registrar_status_total` counters.
-5. **Guardian freeze windows** – live selectors where `guardian_freeze_active`
-   reports an open freeze ticket.
-6. **Net payment units by asset** – totals reported by
-   `sns_bulk_release_payment_net_units` per asset.
-7. **Bulk requests per suffix** – manifest volumes per suffix id.
-8. **Net units per request** – ARPU-style calculation derived from the release
-   metrics.
+1. **မှတ်ပုံတင်ခြင်း (နောက်ဆုံး 24 နာရီ)** – အောင်မြင်သော မှတ်ပုံတင်အရာရှိ ဖြစ်ရပ်များ အရေအတွက်၊
+   ရွေးချယ်ထားသော နောက်ဆက်တွဲ။
+2. **အုပ်ချုပ်မှုစတင်မှုများ (30d)** – မှမှတ်တမ်းတင်ထားသော ပဋိညာဉ်စာတမ်း/ထပ်တိုးလှုပ်ရှားမှုများ
+   CLI
+3. **မှတ်ပုံတင်အရာရှိ ဖြတ်သန်းမှု** – အောင်မြင်သော မှတ်ပုံတင်အရာရှိ လုပ်ဆောင်မှုများ၏ နောက်ဆက်တွဲနှုန်း။
+4. **မှတ်ပုံတင်သူ အမှားမုဒ်များ** – အမှားအမည်တပ်ထားသော 5 မိနစ်နှုန်း
+   `sns_registrar_status_total` ကောင်တာများ။
+5. **Guardian အေးခဲနေသော ပြတင်းပေါက်များ** – `guardian_freeze_active` ရှိသည့် တိုက်ရိုက်ရွေးချယ်မှုများ
+   အအေးခန်း လက်မှတ်ကို ဖွင့်ပြီး အစီရင်ခံပါတယ်။
+6. ** ပိုင်ဆိုင်မှုအလိုက် အသားတင်ငွေပေးချေမှုယူနစ်** – ကဖော်ပြသော စုစုပေါင်း
+   ပစ္စည်းတစ်ခုလျှင် `sns_bulk_release_payment_net_units`။
+7. **နောက်ဆက်တစ်ခုအတွက် အစုလိုက်တောင်းဆိုမှုများ** – နောက်ဆက် ID တစ်ခုအတွက် ပမာဏများကို ထင်ရှားစွာဖော်ပြခြင်း။
+8. **တောင်းဆိုမှုတစ်ခုအတွက် အသားတင်ယူနစ်** – ထုတ်ဝေမှုမှ ဆင်းသက်လာသော ARPU ပုံစံ တွက်ချက်မှု
+   တိုင်းတာမှုများ။
 
-## Monthly KPI Review Checklist
+## လစဉ် KPI ပြန်လည်သုံးသပ်ခြင်းစာရင်း
 
-The finance lead drives a recurring review on the first Tuesday of every month:
+ဘဏ္ဍာရေးခေါင်းဆောင်သည် လစဉ်၏ပထမအင်္ဂါနေ့တွင် ထပ်တလဲလဲပြန်လည်သုံးသပ်မှုကို တွန်းအားပေးသည်-
 
-1. Open the portal’s **Analytics → SNS KPI** page (or Grafana dashboard `sns-kpis`).
-2. Capture a PDF/CSV export of the registrar throughput and revenue tables.
-3. Compare suffixes for SLA breaches (error rate spikes, frozen selectors >72 h,
-   ARPU deltas >10 %).
-4. Log summaries + action items in the relevant annex entry under
-   `docs/source/sns/regulatory/<suffix>/YYYY-MM.md`.
-5. Attach the exported dashboard artefacts to the annex commit and link them in
-   the council agenda.
+1. ပေါ်တယ်၏ **Analytics → SNS KPI** စာမျက်နှာ (သို့မဟုတ် Grafana ဒက်ရှ်ဘုတ် `sns-kpis`) ကိုဖွင့်ပါ။
+2. မှတ်ပုံတင်အရာရှိ၏ ဖြတ်တောက်မှုနှင့် ဝင်ငွေဇယားများ၏ PDF/CSV တင်ပို့မှုကို ဖမ်းယူပါ။
+3. SLA ချိုးဖောက်မှုများအတွက် နောက်ဆက်တွဲများကို နှိုင်းယှဉ်ပါ (အမှားအယွင်းနှုန်းမြင့်တက်မှုများ၊ အေးခဲနေသော ရွေးချယ်မှုများ > 72 နာရီ၊
+   ARPU မြစ်ဝကျွန်းပေါ်ဒေသ > 10%)။
+4. သက်ဆိုင်ရာနောက်ဆက်တွဲထည့်သွင်းမှုအောက်ရှိ မှတ်တမ်းအကျဉ်းချုပ် + လုပ်ဆောင်မှုအရာများ
+   `docs/source/sns/regulatory/<suffix>/YYYY-MM.md`။
+5. တင်ပို့ထားသော ဒက်ရှ်ဘုတ်မှ ပစ္စည်းများ ကို နောက်ဆက်တွဲ commit တွင် ပူးတွဲပြီး ၎င်းတို့ကို ချိတ်ဆက်ပါ။
+   ကောင်စီအစီအစဉ်။
 
-If the review uncovers SLA breaches, file a PagerDuty incident for the affected
-owner (registrar duty manager, guardian on-call, or steward program lead) and
-track the remediation in the annex log.
+သုံးသပ်ချက်တွင် SLA ချိုးဖောက်မှုများကို ဖော်ထုတ်ပါက၊ ထိခိုက်နစ်နာသူများအတွက် PagerDuty ဖြစ်ရပ်ကို တိုင်ကြားပါ။
+ပိုင်ရှင် (မှတ်ပုံတင်အရာရှိ တာဝန်မန်နေဂျာ၊ အုပ်ထိန်းသူထံ ဖုန်းခေါ်ဆိုမှု သို့မဟုတ် ဘဏ္ဍာစိုးအစီအစဉ် ဦးဆောင်သူ) နှင့်
+နောက်ဆက်တွဲမှတ်တမ်းတွင် ပြန်လည်ပြင်ဆင်မှုကို ခြေရာခံပါ။

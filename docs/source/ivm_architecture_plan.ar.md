@@ -6,83 +6,82 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: da8a99adbbcf1d8b209a25da32e256c0dad2860633f373d7410a3a91d790c938
 source_last_modified: "2026-01-21T10:21:48.087325+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# IVM Architecture Refactor Plan
+# IVM خطة إعادة البناء للهندسة المعمارية
 
-This plan captures the short-term milestones for reshaping the Iroha Virtual Machine
-(IVM) into clearer layers while preserving security and performance characteristics.
-It focuses on isolating responsibilities, making host integrations safer, and
-preparing the Kotodama language stack for extraction into a standalone crate.
+تلخص هذه الخطة المعالم قصيرة المدى لإعادة تشكيل الجهاز الظاهري Iroha
+(IVM) إلى طبقات أكثر وضوحًا مع الحفاظ على خصائص الأمان والأداء.
+وهو يركز على عزل المسؤوليات، وجعل عمليات تكامل المضيف أكثر أمانًا، و
+إعداد مكدس اللغة Kotodama لاستخراجه في صندوق مستقل.
 
-## Goals
+## الأهداف
 
-1. **Layered runtime façade** – introduce an explicit runtime interface so the VM
-   core can be embedded behind a narrow trait and alternative front-ends can evolve
-   without touching internal modules.
-2. **Host/syscall boundary  hardening** – route syscall dispatch through a
-   dedicated adapter that enforces ABI policy and pointer validation before any host
-   code executes.
-3. **Language/tooling separation** – move Kotodama specific code to a new crate and
-   keep only the bytecode execution surface in `ivm`.
-4. **Configuration cohesion** – unify acceleration and feature toggles so they are
-   driven through `iroha_config`, removing environment-based knobs in production
-   paths.
+1. ** واجهة وقت التشغيل ذات الطبقات ** - تقديم واجهة وقت تشغيل واضحة حتى يتمكن الجهاز الافتراضي
+   يمكن تضمين النواة خلف سمة ضيقة ويمكن أن تتطور الواجهات الأمامية البديلة
+   دون لمس الوحدات الداخلية.
+2. **تقوية حدود المضيف/اتصال النظام** - توجيه إرسال اتصال النظام من خلال أ
+   محول مخصص يفرض سياسة ABI والتحقق من صحة المؤشر قبل أي مضيف
+   يتم تنفيذ التعليمات البرمجية.
+3. **فصل اللغة/الأدوات** - انقل الكود المحدد Kotodama إلى صندوق جديد و
+   احتفظ فقط بسطح تنفيذ الرمز الثانوي في `ivm`.
+4. **تماسك التكوين** – توحيد التسارع وتبديل الميزات بحيث تكون كذلك
+   مدفوعة من خلال `iroha_config`، وإزالة المقابض المعتمدة على البيئة في الإنتاج
+   المسارات.
 
-## Phase Breakdown
+## انهيار المرحلة
 
-### Phase 1 – Runtime façade (in progress)
-- Add a `runtime` module that defines a `VmEngine` trait describing lifecycle
-  operations (`load_program`, `execute`, host plumbing).
-- Teach `IVM` to implement the trait.  This keeps the existing struct but allows
-  consumers (and future tests) to depend on the interface instead of concrete
-  types.
-- Start shedding direct module re-exports from `lib.rs` so callers import via the
-  façade when possible.
+### المرحلة الأولى – واجهة وقت التشغيل (قيد التنفيذ)
+- أضف وحدة `runtime` التي تحدد سمة `VmEngine` التي تصف دورة الحياة
+  العمليات (`load_program`، `execute`، السباكة المضيفة).
+- تعليم `IVM` تنفيذ السمة.  هذا يحافظ على البنية الحالية ولكنه يسمح
+  المستهلكين (والاختبارات المستقبلية) إلى الاعتماد على الواجهة بدلاً من الخرسانة
+  أنواع.
+- ابدأ في التخلص من عمليات إعادة التصدير المباشرة للوحدة من `lib.rs` بحيث يقوم المتصلون بالاستيراد عبر
+  الواجهة عندما يكون ذلك ممكنا.
 
-**Security / performance impact**: The façade restricts direct access to internal
-state; only safe entry points are exposed.  This makes it easier to audit host
-interactions and reason about gas or TLV handling.
+** التأثير على الأمن / الأداء **: الواجهة تقيد الوصول المباشر إلى الداخل
+الدولة؛ يتم كشف نقاط الدخول الآمنة فقط.  وهذا يجعل من السهل تدقيق المضيف
+التفاعلات والسبب حول التعامل مع الغاز أو TLV.
 
-### Phase 2 – Syscall dispatcher
-- Introduce a `SyscallDispatcher` component that wraps `IVMHost` and enforces ABI
-  policy and pointer validation once, in one location.
-- Migrate the default host and mock hosts to use the dispatcher, removing
-  duplicated validation logic.
-- Make dispatcher pluggable so hosts can supply custom instrumentation without
-  bypassing safety checks.
-- Provide a `SyscallDispatcher::shared(...)` helper so cloned VMs can forward
-  syscalls through a shared `Arc<Mutex<..>>` host without each worker building
-  bespoke wrappers.
+### المرحلة الثانية – مرسل Syscall
+- تقديم مكون `SyscallDispatcher` الذي يلتف `IVMHost` ويفرض ABI
+  التحقق من صحة السياسة والمؤشر مرة واحدة، في مكان واحد.
+- ترحيل المضيف الافتراضي والمضيفين الوهميين لاستخدام المرسل، وإزالة
+  منطق التحقق المكرر.
+- اجعل المرسل قابلاً للتوصيل حتى يتمكن المضيفون من توفير أدوات مخصصة بدونها
+  تجاوز فحوصات السلامة.
+- توفير مساعد `SyscallDispatcher::shared(...)` حتى تتمكن الأجهزة الافتراضية المستنسخة من إعادة التوجيه
+  syscalls من خلال مضيف `Arc<Mutex<..>>` مشترك دون بناء كل عامل
+  مغلفات مخصصة.
 
-**Security / performance impact**: Centralised gating protects against hosts that
-forget to call `is_syscall_allowed`, and it allows future caching of pointer
-validations for repeated syscalls.
+**التأثير على الأمان/الأداء**: تعمل البوابة المركزية على الحماية من الأجهزة المضيفة التي
+ننسى الاتصال بـ `is_syscall_allowed`، وهو يسمح بالتخزين المؤقت للمؤشر في المستقبل
+التحقق من صحة syscalls المتكررة.
 
-### Phase 3 – Kotodama extraction
-- Kotodama compiler extracted to `crates/kotodama_lang` (from `crates/ivm/src/kotodama`).
-- Provide a minimal bytecode API that the VM consumes (`compile_to_ivm_bytecode`).
+### المرحلة الثالثة – استخراج Kotodama
+- تم استخراج المترجم Kotodama إلى `crates/kotodama_lang` (من `crates/ivm/src/kotodama`).
+- توفير الحد الأدنى من واجهة برمجة تطبيقات الرمز الثانوي التي يستهلكها الجهاز الظاهري (`compile_to_ivm_bytecode`).
 
-**Security / performance impact**: Decoupling lowers the attack surface of the VM
-core and allows language innovation without risking interpreter regressions.
+**التأثير على الأمان/الأداء**: يؤدي الفصل إلى تقليل سطح الهجوم الخاص بالجهاز الافتراضي
+الأساسية وتسمح بالابتكار اللغوي دون المخاطرة بتراجعات المترجم الفوري.### المرحلة الرابعة – توحيد التكوين
+- خيارات تسريع الخيط من خلال الإعدادات المسبقة `iroha_config` (على سبيل المثال، تمكين الواجهات الخلفية لوحدة معالجة الرسومات) مع الحفاظ على تجاوزات البيئة الحالية (`IVM_DISABLE_CUDA`، `IVM_DISABLE_METAL`) كمفاتيح إيقاف في وقت التشغيل.
+- كشف كائن `RuntimeConfig` من خلال الواجهة الجديدة حتى يختار المضيفون
+  سياسات التسارع الحتمية صراحة.
 
-### Phase 4 – Configuration consolidation
-- Thread acceleration options through `iroha_config` presets (e.g., enabling GPU backends) while keeping the existing environment overrides (`IVM_DISABLE_CUDA`, `IVM_DISABLE_METAL`) as runtime kill switches.
-- Expose a `RuntimeConfig` object through the new façade so hosts select
-  deterministic acceleration policies explicitly.
+**التأثير على الأمان/الأداء**: يؤدي التخلص من عمليات التبديل المستندة إلى البيئة إلى تجنب الصمت
+انحراف التكوين ويضمن السلوك الحتمي عبر عمليات النشر.
 
-**Security / performance impact**: Eliminating env-based toggles avoids silent
-configuration drift and ensures deterministic behaviour across deployments.
+## الخطوات التالية الفورية
 
-## Immediate next steps
+- أنهِ المرحلة الأولى بإضافة سمة الواجهة وتحديث مواقع الاتصال عالية المستوى إلى
+  تعتمد عليه.
+- تدقيق عمليات إعادة التصدير العامة للتأكد فقط من الواجهة وواجهات برمجة التطبيقات العامة بشكل متعمد
+  تسرب من الصندوق.
+- نموذج أولي لواجهة برمجة تطبيقات مرسل syscall في وحدة نمطية منفصلة وترحيل ملف
+  المضيف الافتراضي بمجرد التحقق من صحته.
 
-- Finish Phase 1 by adding the façade trait and updating high-level call sites to
-  depend on it.
-- Audit public re-exports to ensure only the façade and deliberately public APIs
-  leak out of the crate.
-- Prototype the syscall dispatcher API in a separate module and migrate the
-  default host once validated.
-
-Progress on each phase will be tracked in `status.md` once the implementation is
-underway.
+سيتم تتبع التقدم في كل مرحلة في `status.md` بمجرد التنفيذ
+جارية.

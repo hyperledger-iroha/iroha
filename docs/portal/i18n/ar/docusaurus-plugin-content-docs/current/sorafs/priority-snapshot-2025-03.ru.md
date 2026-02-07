@@ -4,35 +4,37 @@ direction: rtl
 source: docs/portal/docs/sorafs/priority-snapshot-2025-03.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: priority-snapshot-2025-03
-title: Снимок приоритетов — март 2025 (Бета)
-description: Зеркало steering snapshot Nexus 2025-03; ожидает ACKs перед публичным rollout.
+المعرف: لقطة الأولوية-2025-03
+العنوان: أولويات الصور — مارس 2025 (نسخة تجريبية)
+الوصف: لقطة توجيهية Зерокало Nexus 2025-03; قم بمتابعة ACKs قبل الطرح العام.
 ---
 
-> Канонический источник: `docs/source/sorafs/priority_snapshot_2025-03.md`
+> المؤرخ الكنسي: `docs/source/sorafs/priority_snapshot_2025-03.md`
 >
-> Статус: **Бета / ожидаются ACKs steering** (Networking, Storage, Docs leads).
+> الحالة: ** بيتا / توجيه ACKs ** (الشبكات والتخزين والمستندات).
 
-## Обзор
+## ملاحظة
 
-Мартовский snapshot удерживает инициативы docs/content-network в согласии с
-доставочными треками SoraFS (SF-3, SF-6b, SF-9). Как только все leads подтвердят
-snapshot в канале steering Nexus, удалите примечание “Beta” выше.
+لقطة مارتوف تشرف على مبادرة docs/content-network في دعمها
+المعدات المتاحة SoraFS (SF-3, SF-6b, SF-9). عندما يستجيب كل العملاء المحتملين
+لقطة في قناة التوجيه Nexus، قم بإعادة تشغيل "بيتا" مرة أخرى.
 
-### Фокусные темы
+### موضوعات التركيز
 
-1. **Распространить snapshot приоритетов** — собрать acknowledgements и
-   зафиксировать их в minutes совета от 2025-03-05.
-2. **Закрыть kickoff Gateway/DNS** — отрепетировать новый facilitation kit (Раздел 6
-   в runbook) до воркшопа 2025-03-03.
-3. **Миграция операторских runbooks** — портал `Runbook Index` уже live; открыть beta
-   preview URL после sign-off onboarding для reviewers.
-4. **Треки доставки SoraFS** — согласовать оставшуюся работу SF-3/6b/9 с планом/roadmap:
-   - Worker ingestion PoR + status endpoint в `sorafs-node`.
-   - Полировка CLI/SDK bindings в интеграциях orchestrator Rust/JS/Swift.
-   - Wiring runtime для координатора PoR и события GovernanceLog.
+1. **تحديد أولويات اللقطة** — احصل على الشكر والتقدير
+   قم بتأكيدها خلال دقائق من تاريخ 05-03-2025.
+2. **فتح بوابة البداية/DNS** — استخدام مجموعة أدوات تسهيل جديدة (Rasdel 6)
+   في دليل التشغيل) حتى 2025-03-03.
+3. **دفاتر تشغيل مشغلي الهجرة** — البوابة `Runbook Index` لا تزال حية; فتح النسخة التجريبية
+   معاينة عنوان URL بعد تسجيل الخروج وتأهيل المراجعين.
+4. **طرق التسليم SoraFS** — الاشتراك في العمل على SF-3/6b/9 بالخطة/خريطة الطريق:
+   - استيعاب العامل PoR + نقطة نهاية الحالة в `sorafs-node`.
+   - استنساخ روابط CLI/SDK مع التكامل المنسق Rust/JS/Swift.
+   - وقت تشغيل الأسلاك لمنسق PoR وسجل GovernanceLog.
 
-См. исходный файл для полной таблицы, distribution checklist и log entries.
+سم. ملف موجود للألواح الكاملة وقائمة مراجعة التوزيع وإدخالات السجل.

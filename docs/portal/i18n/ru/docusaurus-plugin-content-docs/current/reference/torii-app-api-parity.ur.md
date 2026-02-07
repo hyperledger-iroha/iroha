@@ -4,38 +4,40 @@ direction: ltr
 source: docs/portal/docs/reference/torii-app-api-parity.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: torii-app-api-parity
-title: Torii ایپ API برابری کا آڈٹ
-description: TORII-APP-1 جائزے کی نقل تاکہ SDK اور پلیٹ فارم ٹیمیں عوامی کوریج کی تصدیق کر سکیں۔
+идентификатор: torii-app-api-parity
+title: Torii API-интерфейс API
+описание: TORII-APP-1 Приложение для SDK, которое может быть использовано в качестве приложения. سکیں۔
 ---
 
-حیثیت: مکمل 2026-03-21  
-مالکان: Torii Platform، SDK Program Lead  
-روڈمیپ حوالہ: TORII-APP-1 — `app_api` برابری آڈٹ
+Дата: Дата: 21 марта 2026 г.  
+Имя: Torii Platform, руководитель программы SDK.  
+Приложение: TORII-APP-1 — `app_api` برابری آڈٹ
 
-یہ صفحہ اندرونی `TORII-APP-1` آڈٹ (`docs/source/torii/app_api_parity_audit.md`) کی عکاسی کرتا ہے تاکہ مونو-ریپو سے باہر کے قارئین دیکھ سکیں کہ کون سی `/v1/*` سطحیں وائرڈ، ٹیسٹ شدہ اور دستاویزی ہیں۔ یہ آڈٹ ان راستوں کو ٹریک کرتا ہے جو `Torii::add_app_api_routes`، `add_contracts_and_vk_routes` اور `add_connect_routes` کے ذریعے دوبارہ ایکسپورٹ ہوتے ہیں۔
+یہ صفحہ اندرونی `TORII-APP-1` آڈٹ (`docs/source/torii/app_api_parity_audit.md`) کی کاسی کرتا ہے تاکہ مونو-ریپو Если вы хотите использовать `/v1/*`, вы можете использовать `/v1/*`. اور دستاویزی ہیں۔ Если вы хотите использовать `Torii::add_app_api_routes`, `add_contracts_and_vk_routes` и `add_connect_routes`, выберите нужный вариант. ذریعے دوبارہ ایکسپورٹ ہوتے ہیں۔
 
 ## دائرہ کار اور طریقہ
 
-آڈٹ `crates/iroha_torii/src/lib.rs:256-522` میں عوامی ری ایکسپورٹس اور feature gating والے روٹ بلڈرز کا جائزہ لیتا ہے۔ روڈمیپ میں ہر `/v1/*` سطح کے لئے ہم نے درج ذیل تصدیق کی:
+`crates/iroha_torii/src/lib.rs:256-522` может помочь вам с функцией стробирования функций, которая может быть отключена. ہے۔ Если у вас есть `/v1/*`, вы можете использовать следующую информацию:
 
-- `crates/iroha_torii/src/routing.rs` میں handler کی نفاذ اور DTO تعریفات۔
-- `app_api` یا `connect` فیچر گروپس کے تحت روٹر رجسٹریشن۔
+- `crates/iroha_torii/src/routing.rs` — обработчик для работы с DTO
+- `app_api` یا `connect` может быть использовано в качестве защитного средства.
 - موجودہ انٹیگریشن/یونٹ ٹیسٹس اور طویل مدتی کوریج کے ذمہ دار ٹیم۔
 
-اکاؤنٹ اثاثہ/ٹرانزیکشن فہرستیں اور اثاثہ ہولڈر لسٹنگز موجودہ pagination/backpressure حدود کے علاوہ پری فلٹرنگ کے لئے اختیاری `asset_id` query پیرامیٹرز قبول کرتی ہیں۔
+موجودہ Нумерация страниц/обратное давление. Чтобы получить информацию о запросе `asset_id`, выполните следующие действия. ہیں۔
 
 ## تصدیق اور کینونیکل دستخط
 
-- ایپ کے لئے GET/POST اینڈپوائنٹس اختیاری کینونیکل ریکوئسٹ ہیڈرز (`X-Iroha-Account`, `X-Iroha-Signature`) قبول کرتے ہیں جو `METHOD\n/path\nsorted_query\nsha256(body)` سے بنائے جاتے ہیں؛ Torii انہیں executor ویلیڈیشن سے پہلے `QueryRequestWithAuthority` میں لپیٹتا ہے تاکہ یہ `/query` کی عکاسی کریں۔
-- SDK ہیلپرز تمام بنیادی کلائنٹس میں دستیاب ہیں:
+- Для получения или отправки сообщений GET/POST (`X-Iroha-Account`, `X-Iroha-Signature`) کرتے ہیں جو `METHOD\n/path\nsorted_query\nsha256(body)` سے بنائے جاتے ہیں؛ Torii انہیں executor ویلیڈیشن سے پہلے `QueryRequestWithAuthority` میں لپیٹتا ہے تاکہ یہ `/query` کی عکاسی کریں۔
+- SDK позволяет использовать дополнительные возможности:
   - JS/TS: `canonicalRequest.js` سے `buildCanonicalRequestHeaders({ accountId, method, path, query, body, privateKey })`.
-  - Swift: `CanonicalRequest.signingHeaders(accountId:method:path:query:body:signer:)`.
+  - Свифт: `CanonicalRequest.signingHeaders(accountId:method:path:query:body:signer:)`.
   - Android (Kotlin/Java): `CanonicalRequestSigner.signingHeaders(accountId, method, path, query, body, signer)`.
-- مثالیں:
+- Сообщение:
 ```ts
 import { buildCanonicalRequestHeaders } from "@iroha2/iroha-js";
 const headers = buildCanonicalRequestHeaders({ accountId: "ih58...", method: "get", path: "/v1/accounts/ih58.../assets", query: "limit=5", body: "", privateKey });
@@ -57,89 +59,85 @@ val headers = CanonicalRequestSigner.signingHeaders("ih58...", "get", "/v1/accou
 ## اینڈپوائنٹ فہرست
 
 ### اکاؤنٹ اجازتیں (`/v1/accounts/{id}/permissions`) — کورڈ
-- Handler: `handle_v1_account_permissions` (`crates/iroha_torii/src/routing.rs:16873`).
-- DTOs: `filter::Pagination` + `AccountPermissionListItem` (`crates/iroha_torii/src/routing.rs:16867`).
-- Router binding: `Torii::add_app_api_routes` (`crates/iroha_torii/src/lib.rs:6678-6797`).
-- Tests: `crates/iroha_torii/tests/accounts_endpoints.rs:126` اور `crates/iroha_torii/tests/account_query_subrouter_smoke.rs:146`.
-- Owner: Torii Platform.
-- Notes: جواب Norito JSON body ہے جس میں `items`/`total` ہے، جو SDK pagination helpers سے مطابقت رکھتا ہے۔
+- Обработчик: `handle_v1_account_permissions` (`crates/iroha_torii/src/routing.rs:16873`).
+- DTO: `filter::Pagination` + `AccountPermissionListItem` (`crates/iroha_torii/src/routing.rs:16867`).
+- Привязка роутера: `Torii::add_app_api_routes` (`crates/iroha_torii/src/lib.rs:6678-6797`).
+- Тесты: `crates/iroha_torii/tests/accounts_endpoints.rs:126` или `crates/iroha_torii/tests/account_query_subrouter_smoke.rs:146`.
+- Владелец: Платформа Torii.
+- Примечания: Norito JSON body и `items`/`total`, а также помощники разбиения на страницы SDK. رکھتا ہے۔
 
-### Alias OPRF تشخیص (`POST /v1/aliases/voprf/evaluate`) — کورڈ
-- Handler: `handler_alias_voprf_evaluate` (`crates/iroha_torii/src/lib.rs:5645-5660`).
-- DTOs: `AliasVoprfEvaluateRequestDto`, `AliasVoprfEvaluateResponseDto`, `AliasVoprfBackendDto`
+### Псевдоним OPRF تشخیص (`POST /v1/aliases/voprf/evaluate`) — کورڈ
+- Обработчик: `handler_alias_voprf_evaluate` (`crates/iroha_torii/src/lib.rs:5645-5660`).
+- DTO: `AliasVoprfEvaluateRequestDto`, `AliasVoprfEvaluateResponseDto`, `AliasVoprfBackendDto`.
   (`crates/iroha_torii/src/routing.rs:809-865`).
-- Router binding: `Torii::add_alias_routes` (`crates/iroha_torii/src/lib.rs:6357-6380`).
-- Tests: handler کے inline tests (`crates/iroha_torii/src/lib.rs:9945-9986`) کے ساتھ SDK کوریج
+- Привязка роутера: `Torii::add_alias_routes` (`crates/iroha_torii/src/lib.rs:6357-6380`).
+- Тесты: обработчик и встроенные тесты (`crates/iroha_torii/src/lib.rs:9945-9986`) и SDK.
   (`javascript/iroha_js/test/toriiClient.test.js:72`).
-- Owner: Torii Platform.
-- Notes: جواب کی سطح deterministic hex اور backend identifiers نافذ کرتی ہے؛ SDKs اس DTO کو استعمال کرتے ہیں۔
-
-### Proof SSE ایونٹس (`GET /v1/events/sse`) — کورڈ
-- Handler: `handle_v1_events_sse` فلٹر سپورٹ کے ساتھ (`crates/iroha_torii/src/routing.rs:14008-14133`).
-- DTOs: `EventsSseParams` (`crates/iroha_torii/src/routing.rs:14000-14006`) اور proof filter wiring.
-- Router binding: `Torii::add_app_api_routes` (`crates/iroha_torii/src/lib.rs:6678-6797`).
-- Tests: proof مخصوص SSE suites (`crates/iroha_torii/tests/sse_proof_envelope_hash.rs`,
-  `sse_proof_callhash.rs`, `sse_proof_verified_fields.rs`, `sse_proof_rejected_fields.rs`) اور pipeline SSE smoke test
+- Владелец: Платформа Torii.
+- Примечания: например, детерминированные шестнадцатеричные идентификаторы серверной части и другие. Использование SDK и DTO### Доказательство SSE ایونٹس (`GET /v1/events/sse`) — کورڈ
+- Обработчик: `handle_v1_events_sse` в случае необходимости (`crates/iroha_torii/src/routing.rs:14008-14133`).
+- DTO: `EventsSseParams` (`crates/iroha_torii/src/routing.rs:14000-14006`) для проводки защитного фильтра.
+- Привязка роутера: `Torii::add_app_api_routes` (`crates/iroha_torii/src/lib.rs:6678-6797`).
+- Тесты: проверочные пакеты SSE (`crates/iroha_torii/tests/sse_proof_envelope_hash.rs`,
+  `sse_proof_callhash.rs`, `sse_proof_verified_fields.rs`, `sse_proof_rejected_fields.rs`) испытание трубопровода на дым SSE
   (`integration_tests/tests/events/sse_smoke.rs`).
-- Owner: Torii Platform (runtime), Integration Tests WG (fixtures).
-- Notes: proof filter راستے end-to-end توثیق شدہ ہیں؛ دستاویزات `docs/source/zk_app_api.md` میں ہیں۔
+- Владелец: Torii Платформа (среда выполнения), WG Integration Tests (фиксации).
+- Примечания: фильтр проверки сквозной توثیق شدہ ہیں؛ دستاویزات `docs/source/zk_app_api.md` میں ہیں۔
 
 ### کنٹریکٹ لائف سائیکل (`/v1/contracts/*`) — کورڈ
-- Handlers: `handle_post_contract_deploy` (`crates/iroha_torii/src/routing.rs:5511-5566`),
-  `handle_post_contract_instance` (`crates/iroha_torii/src/routing.rs:3464-3512`),
-  `handle_post_contract_instance_activate` (`crates/iroha_torii/src/routing.rs:3408-3459`),
-  `handle_post_contract_call` (`crates/iroha_torii/src/routing.rs:3534-3607`),
+- Обработчики: `handle_post_contract_deploy` (`crates/iroha_torii/src/routing.rs:5511-5566`),
+  И18НИ00000089Х (И18НИ00000090Х),
+  И18НИ00000091Х (И18НИ00000092Х),
+  И18НИ00000093Х (И18НИ00000094Х),
   `handle_get_contract_code_bytes` (`crates/iroha_torii/src/routing.rs:3237-3304`).
-- DTOs: `DeployContractDto`, `DeployAndActivateInstanceDto`, `ActivateInstanceDto`, `ContractCallDto`
+- DTO: `DeployContractDto`, `DeployAndActivateInstanceDto`, `ActivateInstanceDto`, `ContractCallDto`.
   (`crates/iroha_torii/src/routing.rs:3124-3463`).
-- Router binding: `Torii::add_contracts_and_vk_routes` (`crates/iroha_torii/src/lib.rs:6456-6483`).
-- Tests: router/integration suites `contracts_deploy_integration.rs`, `contracts_activate_integration.rs`,
-  `contracts_instance_activate_integration.rs`, `contracts_call_integration.rs`,
+- Привязка роутера: `Torii::add_contracts_and_vk_routes` (`crates/iroha_torii/src/lib.rs:6456-6483`).
+- Тесты: комплекты маршрутизаторов/интеграции `contracts_deploy_integration.rs`, `contracts_activate_integration.rs`,
+  И18НИ00000106Х, И18НИ00000107Х,
   `contracts_instances_list_router.rs`.
-- Owner: Smart Contract WG کے ساتھ Torii Platform.
-- Notes: اینڈپوائنٹس سائن شدہ ٹرانزیکشنز کو قطار میں ڈالते ہیں اور مشترکہ ٹیلیمیٹری میٹرکس (`handle_transaction_with_metrics`) کو دوبارہ استعمال کرتے ہیں۔
+- Владелец: Smart Contract WG Платформа Torii.
+- Примечания: اینڈپوائنٹس سائن شدہ ٹرانزیکشنز کو قطار میں ڈالते ہیں اور مشترکہ ٹیلیمیٹری میٹرکس (`handle_transaction_with_metrics`) для получения дополнительной информации
 
 ### ویریفائنگ کی لائف سائیکل (`/v1/zk/vk/*`) — کورڈ
-- Handlers: `handle_post_vk_register`, `handle_post_vk_update`, `handle_post_vk_deprecate`
-  (`crates/iroha_torii/src/routing.rs:4282-4382`) اور `handle_get_vk` (`crates/iroha_torii/src/routing.rs:4384-4418`).
-- DTOs: `ZkVkRegisterDto`, `ZkVkUpdateDto`, `ZkVkDeprecateDto`, `VkListQuery`, `ProofFindByIdQueryDto`
+- Обработчики: `handle_post_vk_register`, `handle_post_vk_update`, `handle_post_vk_deprecate`
+  (`crates/iroha_torii/src/routing.rs:4282-4382`) или `handle_get_vk` (`crates/iroha_torii/src/routing.rs:4384-4418`).
+- DTO: `ZkVkRegisterDto`, `ZkVkUpdateDto`, `ZkVkDeprecateDto`, `VkListQuery`, `ProofFindByIdQueryDto`.
   (`crates/iroha_torii/src/routing.rs:3619-4279`).
-- Router binding: `Torii::add_contracts_and_vk_routes` (`crates/iroha_torii/src/lib.rs:6456-6483`).
-- Tests: `crates/iroha_torii/tests/zk_vk_get_integration.rs`,
-  `crates/iroha_torii/tests/zk_verify_handler_integration.rs`,
+- Привязка роутера: `Torii::add_contracts_and_vk_routes` (`crates/iroha_torii/src/lib.rs:6456-6483`).
+- Тесты: `crates/iroha_torii/tests/zk_vk_get_integration.rs`,
+  И18НИ00000126Х,
   `crates/iroha_torii/tests/zk_vote_tally_handler.rs`.
-- Owner: ZK Working Group کے ساتھ Torii Platform سپورٹ۔
-- Notes: DTOs Norito schemas کے مطابق ہیں جنہیں SDKs ریفرنس کرتے ہیں؛ rate limiting `limits.rs` کے ذریعے نافذ ہے۔
+- Владелец: Рабочая группа ZK کے ساتھ Torii Платформа سپورٹ۔
+- Примечания: Схемы DTO Norito и другие SDK могут быть использованы. Ограничение скорости `limits.rs` کے ذریعے نافذ ہے۔
 
-### Nexus Connect (`/v1/connect/*`) — کورڈ (feature `connect`)
-- Handlers: `handle_connect_session`, `handler_connect_session_delete`, `handle_connect_ws`,
-  `handle_connect_status` (`crates/iroha_torii/src/routing.rs:1562-2136`).
-- DTOs: `ConnectSessionRequest`, `ConnectSessionResponse` (`crates/iroha_torii/src/routing.rs:1534-1559`),
-  `ConnectSessionStatusDto` (`crates/iroha_torii/src/routing.rs:2004-2035`).
-- Router binding: `Torii::add_connect_routes` (`crates/iroha_torii/src/lib.rs:6645-6661`).
-- Tests: `crates/iroha_torii/tests/connect_gating.rs` (feature gating, سیشن لائف سائیکل، WS handshake) اور
-  router feature matrix کوریج (`crates/iroha_torii/tests/router_feature_matrix.rs:804-876`).
-- Owner: Nexus Connect WG.
-- Notes: rate limit keys `limits::rate_limit_key` کے ذریعے ٹریک ہوتے ہیں؛ ٹیلیمیٹری counters `connect.*` میٹرکس کو فیڈ کرتے ہیں۔
+### Nexus Connect (`/v1/connect/*`) — کورڈ (функция `connect`)
+- Обработчики: `handle_connect_session`, `handler_connect_session_delete`, `handle_connect_ws`,
+  И18НИ00000134Х (И18НИ00000135Х).
+- DTO: `ConnectSessionRequest`, `ConnectSessionResponse` (`crates/iroha_torii/src/routing.rs:1534-1559`),
+  И18НИ00000139Х (И18НИ00000140Х).
+- Привязка роутера: `Torii::add_connect_routes` (`crates/iroha_torii/src/lib.rs:6645-6661`).
+- Тесты: `crates/iroha_torii/tests/connect_gating.rs` (функция стробирования, подтверждение соединения WS).
+  Матрица функций маршрутизатора کوریج (`crates/iroha_torii/tests/router_feature_matrix.rs:804-876`).
+- Владелец: Nexus Connect WG.
+- Примечания: клавиши ограничения скорости `limits::rate_limit_key` могут быть отключены или отключены. ٹیلیمیٹری счетчики `connect.*`
 
-### Kaigi relay ٹیلیمیٹری — کورڈ
-- Handlers: `handle_v1_kaigi_relays`, `handle_v1_kaigi_relay_detail`,
-  `handle_v1_kaigi_relays_health`, `handle_v1_kaigi_relays_sse`
+### Реле Кайги ٹیلیمیٹری — کورڈ
+- Обработчики: `handle_v1_kaigi_relays`, `handle_v1_kaigi_relay_detail`,
+  И18НИ00000149Х, И18НИ00000150Х
   (`crates/iroha_torii/src/routing.rs:14510-14787`).
-- DTOs: `KaigiRelaySummaryDto`, `KaigiRelaySummaryListDto`,
-  `KaigiRelayDetailDto`, `KaigiRelayDomainMetricsDto`,
-  `KaigiRelayHealthSnapshotDto` (`crates/iroha_torii/src/routing.rs:932-1046`).
-- Router binding: `Torii::add_app_api_routes`
+- DTO: `KaigiRelaySummaryDto`, `KaigiRelaySummaryListDto`,
+  И18НИ00000154Х, И18НИ00000155Х,
+  И18НИ00000156Х (И18НИ00000157Х).
+- Привязка роутера: `Torii::add_app_api_routes`
   (`crates/iroha_torii/src/lib.rs:6805-6840`).
-- Tests: `crates/iroha_torii/tests/kaigi_endpoints.rs`.
-- Notes: SSE stream عالمی broadcast چینل کو دوبارہ استعمال کرتا ہے جبکہ ٹیلیمیٹری پروفائل gating نافذ کرتا ہے؛ response schemas `docs/source/torii/kaigi_telemetry_api.md` میں دستاویزی ہیں۔
+- Тесты: `crates/iroha_torii/tests/kaigi_endpoints.rs`.
+- Примечания: трансляция SSE-потока может быть выполнена в режиме стробирования или в режиме стробирования. کرتا ہے؛ схемы ответов `docs/source/torii/kaigi_telemetry_api.md` میں دستاویزی ہیں۔
 
-## ٹیسٹ کوریج خلاصہ
-
-- Router smoke tests (`crates/iroha_torii/tests/router_feature_matrix.rs`) یقینی بناتے ہیں کہ feature combinations ہر route رجسٹر کریں اور OpenAPI generation sync میں رہے۔
-- Endpoint مخصوص suites اکاؤنٹ queries، contract lifecycle، ZK verifying keys، proof SSE filters اور Nexus Connect رویوں کو کور کرتے ہیں۔
-- SDK parity harnesses (JavaScript, Swift, Python) پہلے سے Alias VOPRF اور SSE endpoints استعمال کرتے ہیں؛ اضافی کام درکار نہیں۔
+## ٹیسٹ کوریج خلاصہ- Дымовые тесты маршрутизатора (`crates/iroha_torii/tests/router_feature_matrix.rs`). Доступны комбинации функций. Маршрутизация и синхронизация поколений OpenAPI. رہے۔
+- Пакеты конечных точек, запросы, жизненный цикл контракта, проверка ключей ZK, фильтры SSE для проверки подлинности и Nexus Connect.
+- Средства контроля четности SDK (JavaScript, Swift, Python) и псевдоним VOPRF для конечных точек SSE. اضافی کام درکار نہیں۔
 
 ## اس مرآۃ کو اپ ٹو ڈیٹ رکھنا
 
-جب Torii app API کا رویہ بدلے تو اس صفحے اور سورس آڈٹ (`docs/source/torii/app_api_parity_audit.md`) کو اپ ڈیٹ کریں تاکہ SDK مالکان اور بیرونی قارئین ہم آہنگ رہیں۔
+API приложения Torii может быть использован для создания приложения (`docs/source/torii/app_api_parity_audit.md`). Использование SDK для создания дополнительных приложений

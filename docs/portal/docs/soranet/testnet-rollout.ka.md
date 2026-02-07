@@ -11,82 +11,83 @@ id: testnet-rollout
 title: SoraNet testnet rollout (SNNet-10)
 sidebar_label: Testnet Rollout (SNNet-10)
 description: Phased activation plan, onboarding kit, and telemetry gates for SoraNet testnet promotions.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
+:::შენიშვნა კანონიკური წყარო
 :::
 
-SNNet-10 coordinates the staged activation of the SoraNet anonymity overlay across the network. Use this plan to translate the roadmap bullet into concrete deliverables, runbooks, and telemetry gates so every operator understands the expectations before SoraNet becomes the default transport.
+SNNet-10 კოორდინაციას უწევს SoraNet ანონიმურობის გადაფარვის ეტაპობრივ აქტივაციას ქსელში. გამოიყენეთ ეს გეგმა საგზაო რუქის ტყვიის გადასათარგმნად კონკრეტულ მიწოდებებად, წიგნებში და ტელემეტრიის კარიბჭედ, რათა ყველა ოპერატორმა გაიგოს მოლოდინები, სანამ SoraNet გახდება ნაგულისხმევი ტრანსპორტი.
 
-## Launch phases
+## გაშვების ფაზები
 
-| Phase | Timeline (target) | Scope | Required artefacts |
-|-------|-------------------|-------|--------------------|
-| **T0 — Closed Testnet** | Q4 2026 | 20–50 relays across ≥3 ASNs operated by core contributors. | Testnet onboarding kit, guard pinning smoke suite, baseline latency + PoW metrics, brownout drill log. |
-| **T1 — Public Beta** | Q1 2027 | ≥100 relays, guard rotation enabled, exit bonding enforced, SDK betas default to SoraNet with `anon-guard-pq`. | Updated onboarding kit, operator verification checklist, directory publishing SOP, telemetry dashboard pack, incident rehearsal reports. |
-| **T2 — Mainnet Default** | Q2 2027 (gated on SNNet-6/7/9 completion) | Production network defaults to SoraNet; obfs/MASQUE transports and PQ ratchet enforcement enabled. | Governance approval minutes, direct-only rollback procedure, downgrade alarms, signed success metrics report. |
+| ფაზა | ვადები (სამიზნე) | ფარგლები | საჭირო არტეფაქტები |
+|-------|------------------|-------|-------------------|
+| **T0 — დახურული სატესტო ქსელი** | Q4 2026 | 20-50 რელე ≥3 ASN-ზე, რომელსაც მართავს ძირითადი კონტრიბუტორები. | სატესტო ქსელის ჩასასვლელი ნაკრები, მცველის ჩამაგრების კვამლის კომპლექტი, საბაზისო შეყოვნება + PoW მეტრიკა, ბურღული საბურღი ჟურნალი. |
+| **T1 — საჯარო ბეტა ** | Q1 2027 | ≥100 რელე, დამცავი როტაცია ჩართული, გასასვლელი შემაკავშირებელი ძალა, SDK ბეტა ნაგულისხმევი SoraNet-ით `anon-guard-pq`. | განახლებული საბორტო ნაკრები, ოპერატორის შემოწმების სია, დირექტორიას გამოქვეყნების SOP, ტელემეტრიის დაფის პაკეტი, ინციდენტების რეპეტიციის ანგარიშები. |
+| **T2 — მთავარი ქსელის ნაგულისხმევი ** | Q2 2027 (გადაფარებული SNNet-6/7/9 დასრულებაზე) | წარმოების ქსელი ნაგულისხმევია SoraNet; ჩართულია obfs/MASQUE ტრანსპორტირება და PQ ratchet აღსრულება. | მმართველობის დამტკიცების წუთები, მხოლოდ პირდაპირი დაბრუნების პროცედურა, შემცირების სიგნალიზაცია, ხელმოწერილი წარმატების მეტრიკის ანგარიში. |
 
-There is **no skip path**—each phase must ship the telemetry and governance artefacts from the preceding stage before promotion.
+არ არსებობს **გამოტოვების გზა**—თითოეულმა ფაზამ უნდა გაიგზავნოს ტელემეტრია და მართვის არტეფაქტები წინა ეტაპიდან დაწინაურებამდე.
 
-## Testnet onboarding kit
+## სატესტო ქსელის ჩამონტაჟების ნაკრები
 
-Every relay operator receives a deterministic package with the following files:
+ყველა სარელეო ოპერატორი იღებს დეტერმინისტულ პაკეტს შემდეგი ფაილებით:
 
-| Artefact | Description |
+| არტეფაქტი | აღწერა |
 |----------|-------------|
-| `01-readme.md` | Overview, contact points, and timeline. |
-| `02-checklist.md` | Pre-flight checklist (hardware, network reachability, guard policy verification). |
-| `03-config-example.toml` | Minimal SoraNet relay + orchestrator configuration aligned with SNNet-9 compliance blocks, including a `guard_directory` block that pins the latest guard snapshot hash. |
-| `04-telemetry.md` | Instructions for wiring the SoraNet privacy metrics dashboards and alert thresholds. |
-| `05-incident-playbook.md` | Brownout/downgrade response procedure with escalation matrix. |
-| `06-verification-report.md` | Template operators complete and return once smoke tests pass. |
+| `01-readme.md` | მიმოხილვა, საკონტაქტო პუნქტები და ვადები. |
+| `02-checklist.md` | ფრენის წინ საკონტროლო სია (ტექნიკა, ქსელის ხელმისაწვდომობა, დაცვის პოლიტიკის შემოწმება). |
+| `03-config-example.toml` | მინიმალური SoraNet რელე + ორკესტრატორის კონფიგურაცია, რომელიც შეესაბამება SNNet-9 შესაბამისობის ბლოკებს, მათ შორის `guard_directory` ბლოკს, რომელიც ამაგრებს უახლეს მცველის სნეპშოტის ჰეშს. |
+| `04-telemetry.md` | ინსტრუქციები SoraNet-ის კონფიდენციალურობის მეტრიკის დაფებისა და გაფრთხილების ზღვრების გაყვანილობის შესახებ. |
+| `05-incident-playbook.md` | გათიშვის/დაქვეითების პასუხის პროცედურა ესკალაციის მატრიცით. |
+| `06-verification-report.md` | შაბლონის ოპერატორები ავსებენ და ბრუნდებიან კვამლის ტესტების გავლის შემდეგ. |
 
-A rendered copy lives in `docs/examples/soranet_testnet_operator_kit/`. Each promotion refreshes the kit; version numbers track the phase (for example, `testnet-kit-vT0.1`).
+გაფორმებული ასლი ცხოვრობს `docs/examples/soranet_testnet_operator_kit/`-ში. თითოეული აქცია განაახლებს კომპლექტს; ვერსიის ნომრები აკონტროლებს ფაზას (მაგალითად, `testnet-kit-vT0.1`).
 
-For public-beta (T1) operators, the concise onboarding brief in `docs/source/soranet/snnet10_beta_onboarding.md` summarises prerequisites, telemetry deliverables, and the submission workflow while pointing back to the deterministic kit and validator helpers.
+საჯარო ბეტა (T1) ოპერატორებისთვის, `docs/source/soranet/snnet10_beta_onboarding.md`-ში შეყვანის მოკლე შინაარსი აჯამებს წინაპირობებს, ტელემეტრიის მიწოდებას და წარდგენის სამუშაო პროცესს, ხოლო მიუთითებს დეტერმინისტულ კომპლექტზე და ვალიდატორის დამხმარეებზე.
 
-`cargo xtask soranet-testnet-feed` generates the JSON feed that aggregates the promotion window, relay roster, metrics report, drill evidence, and attachment hashes referenced by the stage-gate template. Sign drill logs plus attachments with `cargo xtask soranet-testnet-drill-bundle` first so the feed can record `drill_log.signed = true`.
+`cargo xtask soranet-testnet-feed` აგენერირებს JSON არხს, რომელიც აერთიანებს სარეკლამო ფანჯარას, რელეების სიას, მეტრიკის ანგარიშს, საბურღი მტკიცებულებებს და დანართის ჰეშებს, რომლებიც მითითებულია ეტაპის კარიბჭის შაბლონით. ჯერ მოაწერეთ საბურღი ჟურნალები პლუს დანართები `cargo xtask soranet-testnet-drill-bundle`-ით, რათა არხმა შეძლოს `drill_log.signed = true` ჩაწერა.
 
-## Success metrics
+## წარმატების მეტრიკა
 
-Promotion between phases is gated on the following telemetry, collected for a minimum of two weeks:
+ფაზებს შორის დაწინაურება ხდება შემდეგი ტელემეტრიით, რომელიც გროვდება მინიმუმ ორი კვირის განმავლობაში:
 
-- `soranet_privacy_circuit_events_total`: 95 % of circuits complete without brownout or downgrade events; remaining 5 % capped by PQ supply.
-- `sorafs_orchestrator_policy_events_total{outcome="brownout"}`: &lt;1 % of fetch sessions per day trigger brownout outside scheduled drills.
-- `soranet_privacy_gar_reports_total`: variance within ±10 % of expected GAR category mix; spikes must be explained by approved policy updates.
-- PoW ticket success rate: ≥99 % within the 3 s target window; reported via `soranet_privacy_throttles_total{scope="congestion"}`.
-- Latency (95th percentile) per region: &lt;200 ms once circuits are fully built, captured via `soranet_privacy_rtt_millis{percentile="p95"}`.
+- `soranet_privacy_circuit_events_total`: სქემების 95% სრულდება გაფუჭების ან შემცირების მოვლენების გარეშე; დარჩენილი 5% დახურულია PQ მიწოდებით.
+- `sorafs_orchestrator_policy_events_total{outcome="brownout"}`: დღეში ჩამოტანის სესიების <1% იწვევს დაგეგმილ წვრთნების მიღმა გაფუჭებას.
+- `soranet_privacy_gar_reports_total`: ვარიაცია მოსალოდნელი GAR კატეგორიის ნაზავის ±10% ფარგლებში; მწვერვალები უნდა აიხსნას დამტკიცებული პოლიტიკის განახლებით.
+- PoW ბილეთის წარმატების მაჩვენებელი: ≥99% 3-ის სამიზნე ფანჯარაში; მოხსენებული `soranet_privacy_throttles_total{scope="congestion"}`-ით.
+- შეყოვნება (95-ე პროცენტული) თითო რეგიონში: <200 ms სქემების სრულად აშენების შემდეგ, გადაღებული `soranet_privacy_rtt_millis{percentile="p95"}`-ის საშუალებით.
 
-Dashboard and alert templates live in `dashboard_templates/` and `alert_templates/`; mirror them into your telemetry repository and add them to CI lint checks. Use `cargo xtask soranet-testnet-metrics` to generate the governance-facing report before requesting promotion.
+დაფის და გაფრთხილების შაბლონები ცოცხალია `dashboard_templates/` და `alert_templates/`; ასახეთ ისინი თქვენს ტელემეტრიის საცავში და დაამატეთ ისინი CI lint ჩეკებში. გამოიყენეთ `cargo xtask soranet-testnet-metrics` მმართველობის შესახებ მოხსენების გენერირებისთვის დაწინაურების მოთხოვნამდე.
 
-Stage-gate submissions must follow `docs/source/soranet/snnet10_stage_gate_template.md`, which links to the ready-to-copy Markdown form stored under `docs/examples/soranet_testnet_stage_gate/stage_gate_report_template.md`.
+სასცენო კარიბჭის წარდგენა უნდა შეესაბამებოდეს `docs/source/soranet/snnet10_stage_gate_template.md`, რომელიც მიბმულია ასლის მზა Markdown ფორმასთან, რომელიც ინახება `docs/examples/soranet_testnet_stage_gate/stage_gate_report_template.md`-ში.
 
-## Verification checklist
+## შემოწმების სია
 
-Operators must sign off on the following before entering each phase:
+თითოეულ ფაზაში შესვლამდე ოპერატორებმა ხელი უნდა მოაწერონ შემდეგს:
 
-- ✅ Relay advert signed with current admission envelope.
-- ✅ Guard rotation smoke test (`tools/soranet-relay --check-rotation`) passes.
-- ✅ `guard_directory` points at the latest `GuardDirectorySnapshotV2` artefact and `expected_directory_hash_hex` matches the committee digest (relay startup logs the validated hash).
-- ✅ PQ ratchet metrics (`sorafs_orchestrator_pq_ratio`) stay above target thresholds for the requested stage.
-- ✅ GAR compliance config matches the latest tag (see SNNet-9 catalogue).
-- ✅ Downgrade alarm simulation (disable collectors, expect alert within 5 min).
-- ✅ PoW/DoS drill executed with documented mitigation steps.
+- ✅ რელე რეკლამა ხელმოწერილი მიმდინარე მისაღები კონვერტით.
+- ✅ მცველის ბრუნვის კვამლის ტესტი (`tools/soranet-relay --check-rotation`) გადის.
+- ✅ `guard_directory` ქულა უახლეს `GuardDirectorySnapshotV2` არტეფაქტზე და `expected_directory_hash_hex` ემთხვევა კომიტეტის დაიჯესტს (რელეს გაშვება აღრიცხავს დადასტურებულ ჰეშის).
+- ✅ PQ კვერთხის მეტრიკა (`sorafs_orchestrator_pq_ratio`) რჩება სამიზნე ზღვრებზე ზემოთ მოთხოვნილი ეტაპისთვის.
+- ✅ GAR შესაბამისობის კონფიგურაცია ემთხვევა უახლეს ტეგს (იხილეთ SNNet-9 კატალოგი).
+- ✅ გააუქმეთ განგაშის სიმულაცია (გამორთეთ კოლექციონერები, დაელოდეთ გაფრთხილებას 5 წუთში).
+- ✅ PoW/DoS საბურღი შესრულებული დოკუმენტირებული შემარბილებელი ნაბიჯებით.
 
-A pre-filled template is included in the onboarding kit. Operators submit the completed report to the governance helpdesk before receiving production credentials.
+წინასწარ შევსებული შაბლონი მოყვება ჩასვლის კომპლექტში. ოპერატორები წარუდგენენ დასრულებულ ანგარიშს მმართველობის დახმარების ცენტრში წარმოების სერთიფიკატების მიღებამდე.
 
-## Governance & reporting
+## მმართველობა და ანგარიშგება
 
-- **Change control:** promotions require Governance Council approval recorded in the council minutes and attached to the status page.
-- **Status digest:** publish weekly updates summarising relay count, PQ ratio, brownout incidents, and outstanding action items (stored in `docs/source/status/soranet_testnet_digest.md` once the cadence starts).
-- **Rollbacks:** maintain a signed rollback plan that returns the network to the previous phase within 30 minutes, including DNS/guard cache invalidation and client communication templates.
+- **შეცვალეთ კონტროლი:** დაწინაურება მოითხოვს მმართველი საბჭოს თანხმობას, რომელიც ჩაიწერება საბჭოს ოქმში და თან ერთვის სტატუსის გვერდზე.
+- **სტატუსის დაიჯესტი:** გამოაქვეყნეთ ყოველკვირეული განახლებები, რომლებიც აჯამებს რელეების რაოდენობას, PQ კოეფიციენტს, ავარიის შემთხვევებს და მოქმედების გამორჩეულ ერთეულებს (ინახება `docs/source/status/soranet_testnet_digest.md`-ში კადენციის დაწყებისთანავე).
+- **გაბრუნება:** შეინარჩუნეთ ხელმოწერილი დაბრუნების გეგმა, რომელიც აბრუნებს ქსელს წინა ფაზაში 30 წუთის განმავლობაში, მათ შორის DNS/მცველი ქეშის გაუქმება და კლიენტის კომუნიკაციის შაბლონები.
 
-## Supporting assets
+## დამხმარე აქტივები
 
-- `cargo xtask soranet-testnet-kit [--out <dir>]` materialises the onboarding kit from `xtask/templates/soranet_testnet/` into the target directory (defaults to `docs/examples/soranet_testnet_operator_kit/`).
-- `cargo xtask soranet-testnet-metrics --input <metrics.json> [--out <path|->]` evaluates the SNNet-10 success metrics and emits a structured pass/fail report suitable for governance reviews. A sample snapshot lives in `docs/examples/soranet_testnet_metrics_sample.json`.
-- Grafana and Alertmanager templates live under `dashboard_templates/soranet_testnet_overview.json` and `alert_templates/soranet_testnet_rules.yml`; copy them into your telemetry repository or wire them into CI lint checks.
-- The downgrade communication template for SDK/portal messaging resides in `docs/source/soranet/templates/downgrade_communication_template.md`.
-- Weekly status digests should use `docs/source/status/soranet_testnet_weekly_digest.md` as the canonical form.
+- `cargo xtask soranet-testnet-kit [--out <dir>]` ახორციელებს ინსტალაციის კომპლექტს `xtask/templates/soranet_testnet/`-დან სამიზნე დირექტორიაში (ნაგულისხმევი `docs/examples/soranet_testnet_operator_kit/`).
+- `cargo xtask soranet-testnet-metrics --input <metrics.json> [--out <path|->]` აფასებს SNNet-10 წარმატების მეტრიკას და გამოსცემს სტრუქტურირებულ ანგარიშს, რომელიც შესაფერისია მმართველობის მიმოხილვისთვის. ნიმუშის სნეფშოტი ცხოვრობს `docs/examples/soranet_testnet_metrics_sample.json`-ში.
+- Grafana და Alertmanager შაბლონები მოქმედებს `dashboard_templates/soranet_testnet_overview.json` და `alert_templates/soranet_testnet_rules.yml` ქვეშ; დააკოპირეთ ისინი ტელემეტრიის საცავში ან გადაიტანეთ ისინი CI lint ჩეკებში.
+- SDK/პორტალის შეტყობინებების შემცირების კომუნიკაციის შაბლონი განთავსებულია `docs/source/soranet/templates/downgrade_communication_template.md`-ში.
+- ყოველკვირეული სტატუსის დაიჯესტებმა უნდა გამოიყენონ `docs/source/status/soranet_testnet_weekly_digest.md`, როგორც კანონიკური ფორმა.
 
-Pull requests should update this page alongside any artefact or telemetry changes so the rollout plan stays canonical.
+გაყვანის მოთხოვნები უნდა განახლდეს ამ გვერდის ნებისმიერ არტეფაქტთან ან ტელემეტრიულ ცვლილებებთან ერთად, რათა დანერგვის გეგმა კანონიკური დარჩეს.

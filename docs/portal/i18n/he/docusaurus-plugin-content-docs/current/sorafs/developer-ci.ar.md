@@ -4,6 +4,8 @@ direction: rtl
 source: docs/portal/docs/sorafs/developer-ci.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
@@ -17,7 +19,7 @@ description: شغّل واجهة SoraFS CLI داخل خطوط أنابيب GitHu
 تعكس هذه الصفحة `docs/source/sorafs/developer/ci.md`. احرص على إبقاء النسختين متزامنتين إلى أن يتم إيقاف الوثائق القديمة.
 :::
 
-# وصفات CI
+# ותק CI
 
 تستفيد خطوط أنابيب SoraFS من التجزئة الحتمية، وتوقيع المانيفست، والتحقق من الأدلة. يحافظ سطح أوامر
 `sorafs_cli` على قابلية نقل تلك الخطوات بين مزودي CI. تسلط هذه الصفحة الضوء على الوصفات المعتمدة وتشير
@@ -143,5 +145,5 @@ sorafs:publish:
 
 - قوالب end-to-end (تتضمن مساعدات Bash، وإعداد هوية اتحادية، وخطوات تنظيف): `docs/examples/sorafs_ci.md`
 - مرجع CLI الذي يغطي كل الخيارات: `docs/source/sorafs_cli.md`
-- متطلبات الحوكمة/الأسماء المستعارة قبل الإرسال:
+- מידע כללי:
   `docs/source/sorafs/provider_admission_policy.md`

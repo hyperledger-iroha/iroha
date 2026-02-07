@@ -9,18 +9,19 @@ source_last_modified: "2026-01-22T16:26:46.526983+00:00"
 translation_last_reviewed: 2026-02-07
 title: Reserve Ledger Digest & Dashboards
 description: How to turn `sorafs reserve ledger` output into telemetry, dashboards, and alerts for the Reserve+Rent policy.
+translator: machine-google-reviewed
 ---
 
-The Reserve+Rent policy (roadmap item **SFM‑6**) now ships the `sorafs reserve`
-CLI helpers plus the `scripts/telemetry/reserve_ledger_digest.py` translator so
-treasury runs can emit deterministic rent/reserve transfers. This page mirrors
-the workflow defined in `docs/source/sorafs_reserve_rent_plan.md` and explains
-how to wire the new transfer feed into Grafana + Alertmanager so economics and
-governance reviewers can audit every billing cycle.
+Reserve+Rent քաղաքականությունը (ճանապարհային քարտեզի կետ **SFM‑6**) այժմ առաքում է `sorafs reserve`
+CLI օգնականները գումարած `scripts/telemetry/reserve_ledger_digest.py` թարգմանիչը
+գանձապետական վազքերը կարող են առաջացնել որոշիչ վարձավճար/պահուստային փոխանցումներ: Այս էջը հայելի է
+`docs/source/sorafs_reserve_rent_plan.md`-ում սահմանված աշխատանքային հոսքը և բացատրում է
+ինչպես միացնել փոխանցման նոր հոսքը Grafana + Alertmanager, որպեսզի տնտեսագիտություն և
+Կառավարման վերանայողները կարող են աուդիտի ենթարկել վճարման յուրաքանչյուր ցիկլ:
 
-## End-to-end workflow
+## Աշխատանքի ավարտից մինչև վերջ
 
-1. **Quote + ledger projection**
+1. ** Մեջբերում + մատյանային պրոյեկցիա **
    ```bash
    sorafs reserve quote \
      --storage-class hot \
@@ -37,11 +38,11 @@ governance reviewers can audit every billing cycle.
     --asset-definition xor#sora \
     --json-out artifacts/sorafs_reserve/ledger/provider-alpha-apr.json
    ```
-   The ledger helper attaches a `ledger_projection` block (rent due, reserve
-   shortfall, top-up delta, underwriting booleans) plus the Norito `Transfer`
-   ISIs needed to move XOR between the treasury and reserve accounts.
+   Գրասենյակի օգնականը կցում է `ledger_projection` բլոկ (վարձավճար, պահուստ
+   դեֆիցիտ, լիցքավորման դելտա, տեղաբաշխման բուլյաններ) գումարած Norito `Transfer`
+   ISI-ներն անհրաժեշտ են XOR-ը գանձապետական և պահուստային հաշիվների միջև տեղափոխելու համար:
 
-2. **Generate the digest + Prometheus/NDJSON outputs**
+2. **Ստեղծեք digest + Prometheus/NDJSON ելքեր**
    ```bash
    python3 scripts/telemetry/reserve_ledger_digest.py \
      --ledger artifacts/sorafs_reserve/ledger/provider-alpha-apr.json \
@@ -51,41 +52,41 @@ governance reviewers can audit every billing cycle.
      --ndjson-out artifacts/sorafs_reserve/ledger/provider-alpha-apr.ndjson \
      --out-prom artifacts/sorafs_reserve/ledger/provider-alpha-apr.prom
    ```
-   The digest helper normalises micro‑XOR totals into XOR, records whether the
-   projection meets underwriting, and emits the **transfer feed** metrics
-   `sorafs_reserve_ledger_transfer_xor` and
-   `sorafs_reserve_ledger_instruction_total`. When multiple ledgers need to be
-   processed (e.g., a batch of providers), repeat `--ledger`/`--label` pairs and
-   the helper writes a single NDJSON/Prometheus file containing every digest so
-   dashboards ingest the entire cycle without bespoke glue. The `--out-prom`
-   file targets a node-exporter textfile collector—drop the `.prom` file into
-   the exporter’s watched directory or upload it to the telemetry bucket
-   consumed by the Reserve dashboard job—while `--ndjson-out` feeds the same
-   payloads into data pipelines.
+   Դիջեստի օգնականը նորմալացնում է micro-XOR-ի գումարները XOR-ի, արձանագրում, թե արդյոք
+   պրոյեկցիան համապատասխանում է տեղաբաշխմանը և թողարկում է **փոխանցման հոսք** չափումները
+   `sorafs_reserve_ledger_transfer_xor` և
+   `sorafs_reserve_ledger_instruction_total`. Երբ պետք է լինեն մի քանի մատյաններ
+   մշակված (օրինակ՝ մատակարարների խմբաքանակ), կրկնել `--ledger`/`--label` զույգերը և
+   օգնականը գրում է մեկ NDJSON/Prometheus ֆայլ, որը պարունակում է յուրաքանչյուր ամփոփում
+   վահանակները կլանում են ամբողջ ցիկլը առանց պատվիրված սոսինձի: `--out-prom`
+   ֆայլը ուղղված է հանգույց արտահանող տեքստային ֆայլերի հավաքագրողին. գցել `.prom` ֆայլը
+   արտահանողի դիտված գրացուցակը կամ վերբեռնել այն հեռաչափության դույլում
+   սպառվում է «Պահուստային վահանակի» աշխատանքի կողմից, մինչդեռ `--ndjson-out`-ը նույնն է սնվում
+   ծանրաբեռնվածություն տվյալների խողովակաշարերում:
 
-3. **Publish artefacts + evidence**
-   - Store digests under `artifacts/sorafs_reserve/ledger/<provider>/` and link
-     the Markdown summary from your weekly economics report.
-   - Attach the JSON digest to the rent burn-down (so auditors can replay the
-     math) and include the checksum inside the governance evidence packet.
-   - If the digest signals a top-up or underwriting breach, reference the alert
-     IDs (`SoraFSReserveLedgerTopUpRequired`,
-     `SoraFSReserveLedgerUnderwritingBreach`) and note which transfer ISIs were
-     applied.
+3. **Հրապարակեք արտեֆակտներ + ապացույցներ**
+   - Պահեք մարսողությունները `artifacts/sorafs_reserve/ledger/<provider>/`-ի տակ և հղեք
+     Markdown-ի ամփոփագիրը ձեր շաբաթական տնտեսագիտական զեկույցից:
+   - Կցեք JSON digest-ը վարձավճարի այրմանը (որպեսզի աուդիտորները կարողանան կրկնել
+     մաթեմատիկա) և ներառել ստուգիչ գումարը կառավարման ապացույցների փաթեթի ներսում:
+   - Եթե digest-ը ազդարարում է լիցքավորման կամ տեղաբաշխման խախտման մասին, նշեք ահազանգը
+     ID-ներ (`SoraFSReserveLedgerTopUpRequired`,
+     `SoraFSReserveLedgerUnderwritingBreach`) և նշեք, թե որ փոխանցման ISI-ներն են եղել
+     դիմել է.
 
-## Metrics → dashboards → alerts
+## Չափումներ → վահանակներ → ահազանգեր
 
-| Source metric | Grafana panel | Alert / policy hook | Notes |
-|---------------|---------------|---------------------|-------|
-| `torii_da_rent_base_micro_total`, `torii_da_protocol_reserve_micro_total`, `torii_da_provider_reward_micro_total` | “DA Rent Distribution (XOR/hour)” in `dashboards/grafana/sorafs_capacity_health.json` | Feed the weekly treasury digest; spikes in reserve flow propagate into `SoraFSCapacityPressure` (`dashboards/alerts/sorafs_capacity_rules.yml`). |
-| `torii_da_rent_gib_months_total` | “Capacity Usage (GiB-months)” (same dashboard) | Pair with the ledger digest to prove the invoiced storage matches the XOR transfers. |
-| `sorafs_reserve_ledger_rent_due_xor`, `sorafs_reserve_ledger_reserve_shortfall_xor`, `sorafs_reserve_ledger_top_up_shortfall_xor` | “Reserve Snapshot (XOR)” + status cards in `dashboards/grafana/sorafs_reserve_economics.json` | `SoraFSReserveLedgerTopUpRequired` fires when `requires_top_up=1`; `SoraFSReserveLedgerUnderwritingBreach` fires when `meets_underwriting=0`. |
-| `sorafs_reserve_ledger_transfer_xor`, `sorafs_reserve_ledger_instruction_total` | “Transfers by Kind”, “Latest Transfer Breakdown”, and the coverage cards in `dashboards/grafana/sorafs_reserve_economics.json` | `SoraFSReserveLedgerInstructionMissing`, `SoraFSReserveLedgerRentTransferMissing`, and `SoraFSReserveLedgerTopUpTransferMissing` warn when the transfer feed is absent or zeroed even though rent/top-up is required; the coverage cards fall to 0% in the same cases. |
+| Աղբյուրի մետրիկ | Grafana վահանակ | Զգուշացում / քաղաքականության կեռիկ | Ծանոթագրություններ |
+|------------------------------------------------------|-------|
+| `torii_da_rent_base_micro_total`, `torii_da_protocol_reserve_micro_total`, `torii_da_provider_reward_micro_total` | «DA Rent Distribution (XOR/hour)» `dashboards/grafana/sorafs_capacity_health.json`-ում | Կերակրե՛ք գանձապետարանի շաբաթական դիջեստը; Պահուստային հոսքի հասկերը տարածվում են `SoraFSCapacityPressure` (`dashboards/alerts/sorafs_capacity_rules.yml`) մեջ: |
+| `torii_da_rent_gib_months_total` | «Հզորությունների օգտագործում (GiB- ամիսներ)» (նույն վահանակ) | Զուգակցեք մատյանների ամփոփագրի հետ՝ ապացուցելու համար, որ հաշիվ-ապրանքագրված պահեստը համապատասխանում է XOR փոխանցումներին: |
+| `sorafs_reserve_ledger_rent_due_xor`, `sorafs_reserve_ledger_reserve_shortfall_xor`, `sorafs_reserve_ledger_top_up_shortfall_xor` | «Reserve Snapshot (XOR)» + կարգավիճակի քարտեր `dashboards/grafana/sorafs_reserve_economics.json`-ում | `SoraFSReserveLedgerTopUpRequired` կրակվում է, երբ `requires_top_up=1`; `SoraFSReserveLedgerUnderwritingBreach` կրակվում է, երբ `meets_underwriting=0`: |
+| `sorafs_reserve_ledger_transfer_xor`, `sorafs_reserve_ledger_instruction_total` | «Տրանսֆերներ ըստ տեսակի», «Վերջին փոխանցումների բաշխում» և ծածկույթի քարտերը `dashboards/grafana/sorafs_reserve_economics.json`-ում | `SoraFSReserveLedgerInstructionMissing`, `SoraFSReserveLedgerRentTransferMissing` և `SoraFSReserveLedgerTopUpTransferMissing` նախազգուշացնում են, երբ փոխանցման հոսքը բացակայում է կամ զրոյացված է, թեև վարձակալություն/լրացում է պահանջվում. ծածկույթի քարտերը նույն դեպքերում ընկնում են մինչև 0%: |
 
-When a rent cycle completes, refresh the Prometheus/NDJSON snapshots, confirm
-that the Grafana panels pick up the new `label`, and attach screenshots +
-Alertmanager IDs to the rent governance packet. This proves the CLI projection,
-telemetry, and governance artefacts all stem from the **same** transfer feed and
-keeps the roadmap’s economics dashboards aligned with the Reserve+Rent
-automation. The coverage cards should read 100% (or 1.0) and the new alerts
-should clear once rent and reserve top-up transfers are present in the digest.
+Երբ վարձակալության ցիկլը ավարտվի, թարմացրեք Prometheus/NDJSON նկարները, հաստատեք
+որ Grafana վահանակները վերցնում են նոր `label`-ը և կցում սքրինշոթեր +
+Alertmanager ID-ներ վարձակալության կառավարման փաթեթին: Սա ապացուցում է CLI պրոյեկցիան,
+հեռաչափությունը և կառավարման արտեֆակտները բոլորը բխում են **նույն** փոխանցման հոսքից և
+պահում է ճանապարհային քարտեզի տնտեսական վահանակները՝ Reserve+Rent-ի հետ համահունչ
+ավտոմատացում։ Ծածկույթի քարտերը պետք է կարդան 100% (կամ 1.0) և նոր ահազանգերը
+պետք է մաքրվի, երբ վարձակալության և պահուստի համալրման փոխանցումները ներառվեն ամփոփագրում:

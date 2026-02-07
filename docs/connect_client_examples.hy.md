@@ -7,20 +7,21 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 2ecdf23dc61024ae4c509806700773d9b34ddd36076c1182cbeccd3654b29144
 source_last_modified: "2026-01-05T18:22:23.392202+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-## Iroha Connect Client Examples (TypeScript and Kotlin)
+## Iroha Connect Client Օրինակներ (TypeScript և Kotlin)
 
-This document shows minimal client-side snippets implementing v0 rules:
-- AEAD AAD binds outer header (version, sid, dir, seq, kind=Ciphertext).
-- Nonce derived from `seq` (12-byte IETF nonce: 0x00000000 || seq_le).
-- Post‑Approve control frames (Close/Reject) sent encrypted.
+Այս փաստաթուղթը ցույց է տալիս հաճախորդի կողմից v0 կանոնների իրականացման նվազագույն հատվածներ.
+- AEAD AAD-ը կապում է արտաքին վերնագիրը (տարբերակ, sid, dir, seq, kind = գաղտնագիր):
+- Nonce-ը ստացված է `seq`-ից (12 բայթ IETF nonce՝ 0x00000000 || seq_le):
+- Հետհաստատման կառավարման շրջանակները (Փակել/Մերժել) ուղարկվել են կոդավորված:
 
-These are illustrative; hardening/production checks omitted.
+Սրանք պատկերավոր են. կարծրացման/արտադրության ստուգումները բաց են թողնվել:
 
 ### TypeScript (libsodium + WebCrypto)
 
-Dependencies: `libsodium-wrappers` (X25519, BLAKE2b, ChaCha20‑Poly1305), WebCrypto (HKDF‑SHA‑256).
+Կախվածություններ՝ `libsodium-wrappers` (X25519, BLAKE2b, ChaCha20‑Poly1305), WebCrypto (HKDF‑SHA‑256):
 
 ```ts
 import sodium from 'libsodium-wrappers';
@@ -99,9 +100,9 @@ async function openEnvelope(k: Uint8Array, sid: Uint8Array, dir: 'A2W'|'W2A', se
 })();
 ```
 
-### Kotlin (JDK 11 + BouncyCastle)
+### Կոտլին (JDK 11 + BouncyCastle)
 
-Dependencies:
+Կախվածություններ:
 
 ```kotlin
 dependencies { implementation("org.bouncycastle:bcprov-jdk15on:1.78.1") }
@@ -199,7 +200,7 @@ fun main() {
 }
 ```
 
-Notes:
-- Client computes `sid` (32 bytes; base64url/hex) and POSTs it to `/v1/connect/session` to obtain one‑time tokens; server echoes `sid`. Join WS with `Authorization: Bearer <token>` or `Sec-WebSocket-Protocol: iroha-connect.token.v1.<base64url(token)>`.
-- After keys exist (Approve), send Close/Reject in encrypted payloads.
-- Dedupe keys and `seq` must be monotonic per direction for app/wallet frames; `Envelope.seq == frame.seq`. Server events use a separate server-side sequence and are excluded from AEAD/dedupe.
+Նշումներ:
+- Հաճախորդը հաշվարկում է `sid` (32 բայթ; base64url/hex) և այն POST է դնում `/v1/connect/session`-ում՝ մեկանգամյա ժետոններ ստանալու համար; սերվերի արձագանքները `sid`. Միացեք WS-ին `Authorization: Bearer <token>` կամ `Sec-WebSocket-Protocol: iroha-connect.token.v1.<base64url(token)>`-ի հետ:
+- Բանալիների առկայությունից հետո (Հաստատել), ուղարկեք Փակել/Մերժել կոդավորված բեռների մեջ:
+- Dedupe ստեղները և `seq`-ը պետք է միապաղաղ լինեն հավելվածների/դրամապակի շրջանակների համար ըստ ուղղության; `Envelope.seq == frame.seq`. Սերվերի իրադարձությունները օգտագործում են սերվերի կողմից առանձին հաջորդականություն և բացառված են AEAD/dedupe-ից:

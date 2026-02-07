@@ -7,33 +7,34 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 459e8ed4612da7cfa68053e4e299b2f68e7620d4f3b98a8a721ebf8327829ea1
 source_last_modified: "2026-01-08T21:57:18.412403+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# JDG Attestations: Guard, Rotation, and Retention
+# JDG attestatsiyalari: qo'riqlash, aylanish va saqlash
 
-This note documents the v1 JDG attestation guard that now ships in `iroha_core`.
+Ushbu eslatma hozirda `iroha_core` da jo'natiladigan v1 JDG attestatsiya qo'riqchisini hujjatlashtiradi.
 
-- **Committee manifests:** Norito-encoded `JdgCommitteeManifest` bundles carry per-dataspace rotation
-  schedules (`committee_id`, ordered members, threshold, `activation_height`, `retire_height`).
-  Manifests are loaded with `JdgCommitteeSchedule::from_path` and enforce strictly increasing
-  activation heights with an optional grace overlap (`grace_blocks`) between retiring/activating
-  committees.
-- **Attestation guard:** `JdgAttestationGuard` enforces dataspace binding, expiry, stale bounds,
-  committee id/threshold matching, signer membership, supported signature schemes, and optional
-  SDN validation via `JdgSdnEnforcer`. Size caps, max lag, and allowed signature schemes are
-  constructor parameters; `validate(attestation, dataspace, current_height)` returns the active
-  committee or a structured error.
-  - `scheme_id = 1` (`simple_threshold`): per-signer signatures, optional signer bitmap.
-  - `scheme_id = 2` (`bls_normal_aggregate`): single pre-aggregated BLS-normal signature over the
-    attestation hash; signer bitmap optional, defaults to all signers in the attestation. BLS
-    aggregate validation requires a valid PoP per committee member in the manifest; missing or
-    invalid PoPs reject the attestation.
-  Configure the allow-list via `governance.jdg_signature_schemes`.
-- **Retention store:** `JdgAttestationStore` tracks attestations per dataspace with a configurable
-  per-dataspace cap, pruning oldest entries on insert. Call `for_dataspace` or
-  `for_dataspace_and_epoch` to retrieve audit/replay bundles.
-- **Tests:** Unit coverage now exercises valid committee selection, unknown signer rejection, stale
-  attestation rejection, unsupported scheme ids, and retention pruning. See
+- **Qo'mitaning ma'lumotlari:** Norito kodli `JdgCommitteeManifest` to'plamlari har bir ma'lumot maydoni aylanishini ta'minlaydi
+  jadvallar (`committee_id`, buyurtma qilingan a'zolar, pol, `activation_height`, `retire_height`).
+  Manifestlar `JdgCommitteeSchedule::from_path` bilan yuklanadi va ularni qat'iy ravishda oshiradi
+  faollashtirish balandliklari ixtiyoriy mos kelishi (`grace_blocks`) bilan bekor qilish/faollashtirish o'rtasida
+  qo'mitalar.
+- **Attestatsiya qo'riqchisi:** `JdgAttestationGuard` ma'lumotlar maydonini bog'lash, amal qilish muddati, eskirgan chegaralarni ta'minlaydi,
+  qoʻmita identifikatori/eshik chegarasi, imzolovchi aʼzoligi, qoʻllab-quvvatlanadigan imzo sxemalari va ixtiyoriy
+  `JdgSdnEnforcer` orqali SDN tekshiruvi. Hajmi kattaligi, maksimal kechikish va ruxsat etilgan imzo sxemalari
+  konstruktor parametrlari; `validate(attestation, dataspace, current_height)` faolni qaytaradi
+  qo'mita yoki tuzilgan xato.
+  - `scheme_id = 1` (`simple_threshold`): har bir imzolovchi imzosi, ixtiyoriy imzo bitmap.
+  - `scheme_id = 2` (`bls_normal_aggregate`): bitta oldindan yig'ilgan BLS-normal imzo
+    attestatsiya xeshi; imzolovchi bitmap ixtiyoriy, attestatsiyadagi barcha imzolovchilar uchun birlamchi. BLS
+    agregat tekshirish manifestda har bir qo'mita a'zosi uchun haqiqiy PoPni talab qiladi; yo'qolgan yoki
+    yaroqsiz POPlar attestatsiyani rad etadi.
+  `governance.jdg_signature_schemes` orqali ruxsat etilgan ro'yxatni sozlang.
+- **Saqlash do'koni:** `JdgAttestationStore` sozlanishi mumkin bo'lgan ma'lumotlar maydoni uchun attestatsiyalarni kuzatib boradi.
+  har bir ma'lumot maydoni qopqog'i, qo'shimchadagi eng qadimgi yozuvlarni kesish. `for_dataspace` yoki
+  Audit/takrorlash paketlarini olish uchun `for_dataspace_and_epoch`.
+- **Testlar:** Birlik qamrovi endi qo'mitaning haqiqiy tanlovini, noma'lum imzolovchini rad etishni, eskirganligini amalga oshiradi
+  attestatsiyani rad etish, qo'llab-quvvatlanmaydigan sxema identifikatorlari va ushlab turishni kesish. Qarang
   `crates/iroha_core/src/jurisdiction.rs`.
 
-The guard rejects schemes outside the configured allow-list.
+Qo'riqchi tuzilgan ruxsatnomalar ro'yxatidan tashqari sxemalarni rad etadi.

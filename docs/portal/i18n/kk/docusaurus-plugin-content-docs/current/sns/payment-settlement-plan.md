@@ -8,35 +8,37 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SNS Payment & Settlement Plan
 sidebar_label: Payment & settlement plan
 description: Playbook for routing SNS registrar revenue, reconciling steward/treasury splits, and producing evidence bundles.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-> Canonical source: [`docs/source/sns/payment_settlement_plan.md`](../../../source/sns/payment_settlement_plan.md).
+> Канондық көз: [`docs/source/sns/payment_settlement_plan.md`](../../../source/sns/payment_settlement_plan.md).
 
-Roadmap task **SN-5 — Payment & Settlement Service** introduces a deterministic
-payment layer for the Sora Name Service. Every registration, renewal, or refund
-must emit a structured Norito payload so treasury, stewards, and governance can
-replay the financial flows without spreadsheets. This page distills the spec
-for portal audiences.
+Жол картасының тапсырмасы **SN-5 — Төлем және есеп айырысу қызметі** детерминиститті енгізеді
+Sora Name қызметі үшін төлем қабаты. Әрбір тіркеу, жаңарту немесе қайтару
+құрылымдық Norito пайдалы жүктемені шығаруы керек, сондықтан қазынашылық, басқарушылар және басқару
+қаржылық ағындарды электрондық кестелерсіз қайталаңыз. Бұл бет спецификацияны көрсетеді
+портал аудиторияларына арналған.
 
-## Revenue model
+## Табыс үлгісі
 
-- Base fee (`gross_fee`) derives from the registrar pricing matrix.  
-- Treasury receives `gross_fee × 0.70`, stewards receive the remainder minus
-  referral bonuses (capped at 10 %).  
-- Optional holdbacks allow governance to pause steward payouts during disputes.  
-- Settlement bundles expose a `ledger_projection` block with the concrete
-  `Transfer` ISIs so automation can post XOR movements straight into Torii.
+- Негізгі алым (`gross_fee`) тіркеушінің баға матрицасынан алынады.  
+- Қазынашылық `gross_fee × 0.70` алады, басқарушылар қалған минусты алады
+  жолдама бонустары (10%-бен шектелген).  
+- Қосымша шектеулер басқаруға даулар кезінде басқарушы төлемдерін уақытша тоқтатуға мүмкіндік береді.  
+- Шөгінділер `ledger_projection` блогын бетонмен ашады
+  `Transfer` ISI автоматтандыру XOR қозғалыстарын тікелей Torii ішіне орналастыра алады.
 
-## Services & automation
+## Қызметтер және автоматтандыру
 
-| Component | Purpose | Evidence |
+| Құрамдас | Мақсаты | Дәлелдер |
 |-----------|---------|----------|
-| `sns_settlementd` | Applies policy, signs bundles, surfaces `/v1/sns/settlements`. | JSON bundle + hash. |
-| Settlement queue & writer | Idempotent queue + ledger submitter driven by `iroha_cli app sns settlement ledger`. | Bundle hash ↔ tx hash manifest. |
-| Reconciliation job | Daily diff + monthly statement under `docs/source/sns/reports/`. | Markdown + JSON digest. |
-| Refund desk | Governance-approved refunds via `/settlements/{id}/refund`. | `RefundRecordV1` + ticket. |
+| `sns_settlementd` | Саясатты қолданады, бумаларды, `/v1/sns/settlements` беттерін белгілейді. | JSON жинағы + хэш. |
+| Есеп айырысу кезегі & жазушы | Idempotent кезек + `iroha_cli app sns settlement ledger` басқаратын бухгалтерлік кітап жіберуші. | Бума хэші ↔ tx хэш манифесті. |
+| Салыстыру жұмысы | Күнделікті айырмашылық + `docs/source/sns/reports/` бойынша айлық есеп. | Markdown + JSON дайджест. |
+| Қайтару үстелі | `/settlements/{id}/refund` арқылы басқару мақұлдаған қайтарулар. | `RefundRecordV1` + билет. |
 
-CI helpers mirror these flows:
+CI көмекшілері мына ағындарды көрсетеді:
 
 ```bash
 # Quote & ledger projection
@@ -49,27 +51,27 @@ iroha_cli app sns settlement ledger --bundle artifacts/sns/settlements/2026-05/m
 iroha_cli app sns settlement reconcile --period 2026-05 --out docs/source/sns/reports/settlement_202605.md
 ```
 
-## Observability & reporting
+## Бақылау және есеп беру
 
-- Dashboards: `dashboards/grafana/sns_payment_settlement.json` for treasury vs
-  steward totals, referral payouts, queue depth, and refund latency.
-- Alerts: `dashboards/alerts/sns_payment_settlement_rules.yml` monitors pending
-  age, reconciliation failures, and ledger drift.
-- Statements: daily digests (`settlement_YYYYMMDD.{json,md}`) roll into monthly
-  reports (`settlement_YYYYMM.md`) which are uploaded both to Git and the
-  governance object store (`s3://sora-governance/sns/settlements/<period>/`).
-- Governance packets bundle dashboards, CLI logs, and approvals before council
-  sign-off.
+- Бақылау тақталары: `dashboards/grafana/sns_payment_settlement.json` қазынашылыққа қарсы
+  басқарушы қорытындылары, жолдама төлемдері, кезек тереңдігі және қайтару кідірісі.
+- Ескертулер: `dashboards/alerts/sns_payment_settlement_rules.yml` мониторлары күтілуде
+  жасы, салыстыру сәтсіздігі және кітаптың дрейфі.
+- Мәлімдеме: күнделікті дайджесттер (`settlement_YYYYMMDD.{json,md}`) ай сайынғы
+  Git және сайтқа жүктеп салынған есептер (`settlement_YYYYMM.md`).
+  басқару нысандарының қоймасы (`s3://sora-governance/sns/settlements/<period>/`).
+- Басқару пакеттері бақылау тақталарын, CLI журналдарын және кеңес алдында мақұлдауларды біріктіреді
+  шығу.
 
-## Rollout checklist
+## Шығарылымды тексеру тізімі
 
-1. Prototype quote + ledger helpers and capture a staging bundle.
-2. Launch `sns_settlementd` with queue + writer, wire dashboards, and exercise
-   alert tests (`promtool test rules ...`).
-3. Deliver refund helper plus monthly statement template; mirror artefacts into
+1. Дәйексөз + кітап көмекшілерінің прототипін жасаңыз және кезеңдік буманы түсіріңіз.
+2. `sns_settlementd` бағдарламасын кезек + жазушы, сым бақылау тақталары және жаттығу арқылы іске қосыңыз
+   ескерту сынақтары (`promtool test rules ...`).
+3. Қайтару көмекшісін және ай сайынғы есеп үлгісін жеткізіңіз; айна артефактілері
    `docs/portal/docs/sns/reports/`.
-4. Run a partner rehearsal (full month of settlements) and capture the
-   governance vote marking SN-5 as complete.
+4. Серіктес репетициясын орындаңыз (есеп айырысулардың толық айы) және түсіріңіз
+   басқару дауысы SN-5 аяқталды деп белгіленеді.
 
-Refer back to the source document for the exact schema definitions, open
-questions, and future amendments.
+Нақты схема анықтамалары үшін бастапқы құжатты қараңыз, ашыңыз
+сұрақтар және алдағы түзетулер.

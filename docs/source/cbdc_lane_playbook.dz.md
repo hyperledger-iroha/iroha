@@ -10,33 +10,34 @@ translation_last_reviewed: 2026-02-07
 title: CBDC Lane Playbook
 sidebar_label: CBDC Lane Playbook
 description: Reference configuration, whitelist flow, and compliance evidence for permissioned CBDC lanes on SORA Nexus.
+translator: machine-google-reviewed
 ---
 
-# CBDC Private Lane Playbook (NX-6)
+# CBDC སྒེར་གྱི་ལམ་དེབ་ (NX-6)
 
-> **Roadmap linkage:** NX-6 (CBDC private lane template & whitelist flow) and NX-14 (Nexus runbooks).  
-> **Owners:** Financial Services WG, Nexus Core WG, Compliance WG.  
-> **Status:** Drafting — implementation hooks exist across `crates/iroha_data_model::nexus`, `crates/iroha_core::governance::manifest`, and `integration_tests/tests/nexus/lane_registry.rs`, but the CBDC-specific manifests, whitelists, and operator runbooks were missing. This playbook documents the reference configuration and onboarding workflow so CBDC deployments can proceed deterministically.
+> **རད་མེཔ་མཐུད་ལམ་:** NX-6 (CBDC སྒེར་གྱི་ལེན་ལེན་ཊེམ་པེལེཊི་དང་ དཀར་མདངས་རྒྱུན་འབབ་) དང་ NX-14 (Nexus རན་བུཀསི)།  
+>*ཇོ་བདག་:** དངུལ་འབྲེལ་ཞབས་ཏོག་ WG, Nexus ཀོར་ཌབ་ལུ་ཇི་, མཐུན་སྒྲིག་ཌབ་ལུ་ཨེག།  
+> **Status:** ཟིན་བྲིས་ — ལག་ལེན་འཐབ་པའི་ ཧུཀ་ཚུ་ `crates/iroha_data_model::nexus`, `crates/iroha_core::governance::manifest`, དང་ `integration_tests/tests/nexus/lane_registry.rs` ཚུ་ནང་ ཡོདཔ་ཨིན། འ་ནི་རྩེད་དེབ་འདི་གིས་ གཞི་བསྟུན་རིམ་སྒྲིག་དང་ ལཱ་གི་རྒྱུན་རིམ་ཚུ་ ཡིག་ཐོག་ལུ་བཀོད་དེ་ཡོདཔ་ལས་ སི་བི་ཌི་སི་བཀྲམ་སྤེལ་འདི་ གཏན་འབེབས་བཟོ་ཚུགས།
 
-## Scope & Roles
+## ཁྱབ་ཁོངས་དང་འགན་ཁུར།
 
-- **Central bank lane (“CBDC lane”):** Permissioned validators, custodial settlement buffers, and programmable-money policies. Runs as a restricted dataspace + lane pair with its own governance manifest.
-- **Wholesale/retail bank dataspaces:** Participant DS that hold UAIDs, receive capability manifests, and may be whitelisted for atomic AXT with the CBDC lane.
-- **Programmable-money dApps:** External DS that consume CBDC flows through `ComposabilityGroup` routing once whitelisted.
-- **Governance & compliance:** Parliament (or equivalent module) approves lane manifests, capability manifests, and whitelist changes; compliance stores evidence bundles alongside Norito manifests.
+- **དབུས་དངུལ་ཁང་གི་ལམ་ (“CBDC ལམ་”):** ཆོག་མཆན་བདེན་དཔྱད་འབད་མི་ དོ་དམ་གཞིས་ཆགས་བཱ་ཕར་ཚུ་ དེ་ལས་ ལས་རིམ་བཟོ་ཚུགས་པའི་ ཏི་རུ་གི་སྲིད་བྱུས། བཀག་ཆ་འབད་ཡོད་པའི་གནད་སྡུད་ས་སྟོང་ + ལྕགས་ཆ་ཆ་གཅིག་སྦེ་གཡོག་བཀོལཝ་ཨིན།
+- **Wholesale/retail bank dataspass:** UAIDs ཚུ་འཛིན་མི་ DS བཅའ་མར་གཏོགས་མི་ DS གིས་ ལྕོགས་གྲུབ་ཀྱི་མངོན་གསལ་ཚུ་ཐོབ་ཚུགསཔ་ཨིནམ་དང་ རྡུལ་ཕྲན་ AXT གི་དོན་ལུ་ CBDC ལམ་དང་གཅིག་ཁར་ དཀརཔོ་ཐོ་ཡིག་བཀོད་ཚུགས།
+- **ལས་རིམ་བཟོ་བཏུབ་པའི་དངུལ་ dApps:** ཕྱིའི་ཌི་ཨེསི་གིས་ CBDC འདི་ དཀརཔོ་ཐོ་ཡིག་བཟོ་ཚརཝ་ད་ `ComposabilityGroup` འགྲུལ་ལམ་བརྒྱུད་དེ་ འགྱོཝ་ཨིན།
+- **གཞུང་སྐྱོང་དང་ བསྟར་སྤྱོད་:** སྤྱི་ཚོགས་ (ཡང་ན་ དེ་དང་འདྲ་མཉམ་གྱི་ཚད་གཞི་) གིས་ ལམ་ཕྱོགས་ཀྱི་གསལ་སྟོན་ཚུ་ ཆ་འཇོག་འབདཝ་ཨིན། བསྟར་སྤྱོད་ཀྱིས་ I1NT00000003X གི་གསལ་སྟོན་དང་གཅིག་ཁར་ སྒྲུབ་བྱེད་ཚུ་ གསོག་འཇོག་འབདཝ་ཨིན།
 
-**Dependencies**
+**བརྟེན་པ་**
 
-1. Lane catalog + dataspace catalog wiring (`docs/source/nexus_lanes.md`, `defaults/nexus/config.toml`).
-2. Lane manifest enforcement (`crates/iroha_core/src/governance/manifest.rs`, queue gating in `crates/iroha_core/src/queue.rs`).
-3. Capability manifests + UAIDs (`crates/iroha_data_model/src/nexus/manifest.rs`).
-4. Scheduler TEU quotas + metrics (`integration_tests/tests/scheduler_teu.rs`, `docs/source/telemetry.md`).
+1. ལམ་གྱི་ཐོ་གཞུང་ + གནས་སྡུད་ས་སྟོང་ཐོ་གཞུང་གློག་ཐག་ (`docs/source/nexus_lanes.md`, `defaults/nexus/config.toml`).
+2. ལམ་གྱི་གསལ་སྟོན་བསྟར་སྤྱོད་ (`crates/iroha_core/src/governance/manifest.rs`, `crates/iroha_core/src/queue.rs` ནང་ གྱལ་རིམ་གྱི་ གྱལ་རིམ་ཐོབ་ཐངས།)
+3. ལྕོགས་གྲུབ་ཀྱི་གསལ་སྟོན་ + ཡུ་ཨེ་ཨའི་ཌི་ (`crates/iroha_data_model/src/nexus/manifest.rs`).
+4. ཐོ་གཞུང་ TEU quotas + མེ་ཊིགསི་ (`integration_tests/tests/scheduler_teu.rs`, `docs/source/telemetry.md`).
 
-## 1. Reference Lane Layout
+## 1. དཔྱད་གཞིའི་སྒྲིག་ལམ།
 
-### 1.1 Lane catalog & dataspace entries
+### 1.1 ལམ་གྱི་ཐོ་གཞུང་དང་ གནད་སྡུད་ས་སྒོའི་ཐོ་འགོད་ཚུ།
 
-Add dedicated entries to `[[nexus.lane_catalog]]` and `[[nexus.dataspace_catalog]]`. The example below extends `defaults/nexus/config.toml` with a CBDC lane that reserves 1 500 TEU per slot and throttles starvation to six slots, plus matching dataspace aliases for wholesale banks and retail wallets.
+`[[nexus.lane_catalog]]` དང་ `[[nexus.dataspace_catalog]]` ལུ་ བརྩོན་ཤུགས་ཅན་གྱི་ཐོ་བཀོད་ཚུ་ཁ་སྐོང་འབད། དཔེར་ན་ Norito འདི་ CBDC ལམ་དང་གཅིག་ཁར་ རྒྱ་སྐྱེད་འབད་དེ་ཡོདཔ་ད་ དེ་ཡང་ CBDC གི་ལམ་དང་གཅིག་ཁར་ 1500 TEU རེ་ལུ་ TEU དང་ ཐོར་ཊིལ་ཚུ་ བཀྲེས་ལྟོགས་དྲུག་ལུ་ བཞག་སྟེ་ཡོདཔ་མ་ཚད་ དངུལ་ཁང་དང་ཚོང་ཁང་ཚུ་གི་དོན་ལུ་ མཐུན་སྒྲིག་གནས་སྡུད་ས་སྒོ་ཚུ་ མཐུན་སྒྲིག་འབདཝ་ཨིན།
 
 ```toml
 lane_count = 5
@@ -87,14 +88,14 @@ instruction = "cbdc::*"
 description = "Route CBDC contracts to the restricted lane"
 ```
 
-**Notes**
+**དྲན་འཛིན་**
 
-- `metadata.scheduler.teu_capacity` and `metadata.scheduler.starvation_bound_slots` feed the TEU gauges exercised by `integration_tests/tests/scheduler_teu.rs`. Operators must keep them in sync with acceptance results so `nexus_scheduler_lane_teu_capacity` matches the template.
-- Every dataspace alias above must appear in governance manifests and capability manifests (see below) so admission rejects drift automatically.
+- `metadata.scheduler.teu_capacity` དང་ `metadata.scheduler.starvation_bound_slots` `integration_tests/tests/scheduler_teu.rs` གིས་ལག་ལེན་འཐབ་མི་ ཊི་ཨི་ཡུ་ འཇལ་ཚད་ཚུ་ ཕིཌ་འབདཝ་ཨིན། བཀོལ་སྤྱོད་པ་ཚུ་གིས་ ངོས་ལེན་གྲུབ་འབྲས་དང་གཅིག་ཁར་ དུས་མཉམ་སྦེ་བཞག་དགོཔ་ལས་ `nexus_scheduler_lane_teu_capacity` ཚུ་ ཊེམ་པེལེཊི་དང་མཐུན་སྒྲིག་འབདཝ་ཨིན།
+- གོང་འཁོད་ཀྱི་གནད་སྡུད་གཞན་ཆ་མཉམ་ གཞུང་སྐྱོང་མངོན་གསལ་ནང་འོང་དགོཔ་དང་ ལྕོགས་གྲུབ་ཀྱི་གསལ་སྟོན་ཚུ་ ༼འོག་ལུ་བལྟ་༽ དེ་འབདཝ་ལས་ འཛུལ་ཞུགས་བཀག་ཆ་བཀག་ཆ་འདི་ རང་བཞིན་གྱིས་ཨིན།
 
-### 1.2 Lane manifest skeleton
+### 1.2 ལམ་ཕྱོགས་ཀྱི་ཀེང་རུས་དང་།
 
-Lane manifests live under the directory configured via `nexus.registry.manifest_directory` (see `crates/iroha_config/src/parameters/actual.rs`). File names should match lane aliases (`cbdc.manifest.json`). The schema mirrors the governance manifest tests in `integration_tests/tests/nexus/lane_registry.rs`.
+ལམ་ཐིག་འདི་གིས་ `nexus.registry.manifest_directory` བརྒྱུད་དེ་ རིམ་སྒྲིག་འབད་ཡོད་པའི་ སྣོད་ཐོ་འོག་ལུ་ ཐད་རི་བ་རི་ གསལ་སྟོན་འབདཝ་ཨིན། ཡིག་སྣོད་མིང་ཚུ་ ལམ་གྱི་མཉམ་མཐུན་ཚུ་དང་མཐུན་དགོཔ་ཨིན། (`cbdc.manifest.json`) འཆར་གཞི་འདི་གིས་ གཞུང་སྐྱོང་གསལ་སྟོན་གྱི་ བརྟག་དཔྱད་ཚུ་ `integration_tests/tests/nexus/lane_registry.rs` ནང་ལུ་ གསལ་སྟོན་འབདཝ་ཨིན།
 
 ```json
 {
@@ -140,16 +141,14 @@ Lane manifests live under the directory configured via `nexus.registry.manifest_
 }
 ```
 
-Key requirements:
+གཙོ་བོའི་དགོས་མཁོ།- བདེན་དཔྱད་འབད་མི་ **must** be canonical IH58 རྩིས་ཐོ་ IDs (མེད་ `@domain`; མེན) ཐོ་གཞུང་ནང་ལུ་ཡོད་པའི་ `@domain` འདི་ གསལ་ཏོག་ཏོ་སྦེ་ ལམ་སྟོན་འབད་མི་བརྡ་སྟོན་སྦེ་རྐྱངམ་ཅིག་ཨིན། མང་སིག་ཚད་གཞི་ (≥2) ལུ་ `quorum` གཞི་སྒྲིག་འབད།
+- ཉེན་སྲུང་འབད་ཡོད་པའི་མིང་གི་ས་སྒོ་ཚུ་ `Queue::push` གིས་ བསྟར་སྤྱོད་འབད་ཡོདཔ་ལས་ (Norito བལྟ།) དེ་འབདཝ་ལས་ CBDC གན་རྒྱ་ཆ་མཉམ་གྱིས་ `gov_namespace` + `gov_contract_id` གསལ་བཀོད་འབད་དགོ།
+- `composability_group` ས་ཁོངས་ཚུ་གིས་ `docs/source/nexus.md` §8.6 ནང་གསལ་བཀོད་འབད་ཡོད་པའི་ལས་རིམ་གྱི་རྗེས་སུ་འབྲང་ཡོདཔ་ཨིན། ཇོ་བདག་ (CBDC lane) གིས་ ཐོ་ཡིག་དཀརཔོ་དང་ བསྡོམས་རྩིས་ཚུ་ བཀྲམ་སྤེལ་འབདཝ་ཨིན། དཀརཔོ་ཐོ་ཡིག་བཀོད་ཡོད་པའི་ཌི་ཨེསི་གིས་ `group_id_hex` + `activation_epoch` རྐྱངམ་ཅིག་གསལ་བཀོད་འབདཝ་ཨིན།
+- གསལ་སྟོན་འདི་འདྲ་བཤུས་རྐྱབ་པའི་ཤུལ་ལས་ `cargo test -p integration_tests nexus::lane_registry -- --nocapture` འདི་ གཡོག་བཀོལ་མི་འདི་གིས་ Norito འདི་མངོན་གསལ་འབདཝ་ཨིན།
 
-- Validators **must** be canonical IH58 account IDs (no `@domain`; append `@domain` only as an explicit routing hint) that exist in the catalog. Set `quorum` to the multisig threshold (≥2).
-- Protected namespaces are enforced by `Queue::push` (see `crates/iroha_core/src/queue.rs`), so all CBDC contracts must specify `gov_namespace` + `gov_contract_id`.
-- `composability_group` fields follow the schema described in `docs/source/nexus.md` §8.6; the owner (CBDC lane) supplies the whitelist and quotas. Whitelisted DS manifests only specify the `group_id_hex` + `activation_epoch`.
-- After copying the manifest, run `cargo test -p integration_tests nexus::lane_registry -- --nocapture` to confirm `LaneManifestRegistry::from_config` loads it.
+### 1.3 ལྕོགས་གྲུབ་གསལ་སྟོན་ (ཡུ་ཨེ་ཨའི་ཌི་སྲིད་བྱུས།)
 
-### 1.3 Capability manifests (UAID policies)
-
-Capability manifests (`AssetPermissionManifest` in `crates/iroha_data_model/src/nexus/manifest.rs`) bind a `UniversalAccountId` to deterministic allowances. Publish them via the Space Directory so banks and dApps can fetch signed policies.
+ལྕོགས་གྲུབ་ཀྱི་གསལ་སྟོན་ (`AssetPermissionManifest` in Norito) གིས་ `UniversalAccountId` གིས་ གཏན་འབེབས་འཐུས་ལུ་ མཐུད་ཡོདཔ་ཨིན། དེ་ཚུ་ གནམ་སྟོང་སྣོད་ཐོ་བརྒྱུད་དེ་ དཔར་བསྐྲུན་འབད་དེ་ དངུལ་ཁང་དང་ ཌི་ཨེཔ་ཚུ་གིས་ མཚན་རྟགས་བཀོད་ཡོད་པའི་ སྲིད་བྱུས་ཚུ་ ཐོབ་ཚུགས།
 
 ```json
 {
@@ -192,31 +191,29 @@ Capability manifests (`AssetPermissionManifest` in `crates/iroha_data_model/src/
 }
 ```
 
-- Deny rules win even when an allow rule matches (`ManifestVerdict::Denied`), so place all explicit denies after the relevant allows.
-- Use `AllowanceWindow::PerSlot` for atomic payment handles and `PerMinute`/`PerDay` for rolling customer limits.
-- A single manifest per UAID/dataspace suffices; activations and expiries enforce policy rotation cadence.
-- The lane runtime now expires manifests automatically once `expiry_epoch` is reached,
-  so operations teams simply monitor `SpaceDirectoryEvent::ManifestExpired`,
-  archive the `nexus_space_directory_revision_total` delta, and verify Torii shows
-  `status = "Expired"`. The CLI `manifest expire` command remains available for
-  manual overrides or evidence backfills.
+- ལམ་ལུགས་མཐུན་སྒྲིག་འབད་ཆོག་པའི་དུས་ཚོད་ (`ManifestVerdict::Denied`) ནང་ལུ་ཡང་ ལམ་ལུགས་ཚུ་ཆ་འཇོག་འབད་ནི་ལས་ ཁས་མ་ལེན།
+- རྡུལ་ཕྲན་སྤྲོད་ལེན་གྱི་ ལག་ཆ་ཚུ་གི་དོན་ལུ་ `AllowanceWindow::PerSlot` ལག་ལེན་འཐབ།
+- ཡུ་ཨེ་ཨའི་ཌི་/གནས་སྡུད་ས་ཆའི་ལངམ་རེ་ལུ་ མངོན་གསལ་གཅིག་པ། སྲིད་བྱུས་བསྒྱིར་ཚད་ཀྱི་ འཛུལ་སྤྱོད་ཚུ་ ཤུགས་ལྡན་བཟོ་ནི་དང་ དུས་ཡོལ་ཚུ་ བསྟར་སྤྱོད་འབདཝ་ཨིན།
+- ལམ་གྱི་གཡོག་བཀོལ་བའི་དུས་ཚོད་འདི་ ད་ལྟོ་ `expiry_epoch` ལུ་ལྷོད་པའི་སྐབས་ རང་བཞིན་གྱིས་ གསལ་སྟོན་འབདཝ་ཨིན།
+  དེ་འབདཝ་ལས་ བཀོལ་སྤྱོད་སྡེ་ཚན་ཚུ་གིས་ `SpaceDirectoryEvent::ManifestExpired`, གིས་ འཇམ་ཏོང་ཏོ་སྦེ་ ལྟ་རྟོག་འབདཝ་ཨིན།
+  `nexus_space_directory_revision_total` ཌེལ་ཊ་དང་ Torii ཚུ་བདེན་དཔྱད་འབད།
+  `status = "Expired"`. སི་ཨེལ་ཨའི་ `manifest expire` བརྡ་བཀོད་འདི་ དོན་ལུ་ འཐོབ་ཚུགསཔ་ཨིན།
+  ལག་དེབ་འདི་ རྒྱབ་བཤུད་ཡང་ན་ སྒྲུབ་བྱེད་རྒྱབ་བསྐྱོར་བཀང་ཡོདཔ།
 
-## 2. Bank Onboarding & Whitelist Workflow
+## 2. དངུལ་ཁང་ནང་བཀོད་དང་ དཀར་ཆག་ལཱ་གི་རྒྱུན་རིམ།
 
-| Phase | Owner(s) | Actions | Evidence |
-|-------|----------|---------|----------|
-| 0. Intake | CBDC PMO | Collect KYC dossier, technical DS manifest, validator list, UAID mapping. | Intake ticket, signed DS manifest draft. |
-| 1. Governance approval | Parliament / Compliance | Review intake pack, countersign `cbdc.manifest.json`, approve `AssetPermissionManifest`. | Signed governance minutes, manifest commit hash. |
-| 2. Capability issuance | CBDC lane ops | Encode manifests via `norito::json::to_string_pretty`, store under Space Directory, notify operators. | Manifest JSON + norito `.to` file, BLAKE3 digest. |
-| 3. Whitelist activation | CBDC lane ops | Append DSID to `composability_group.whitelist`, bump `activation_epoch`, distribute manifest; update dataspace routing if needed. | Diff of manifest, `kagami config diff` output, governance approval ID. |
-| 4. Rollout validation | QA Guild / Ops | Run integration tests, TEU load tests, and programmable-money replay (see below). | `cargo test` logs, TEU dashboards, programmable-money fixture results. |
-| 5. Evidence archive | Compliance WG | Bundle manifests, approvals, capability digests, test outputs, and Prometheus scrapes under `artifacts/nexus/cbdc_<stamp>/`. | Evidence tarball, checksum file, council sign-off. |
+| དུས་རིམ་ | ཇོ་བདག་(ཚུ་) | བྱ་བ་ | སྒྲུབ་བྱེད་ |
+|--|-|-|-|----------------------------------------- |
+| ༠. ནང་བསྐྱོད་ | CBDC PMO | ཀེ་ཝའི་སི་ ཡིག་ཆ་ཚུ་ བསྡུ་སྒྲིག་འབད། འཕྲུལ་རིག་ ཌི་ཨེསི་ གསལ་སྟོན་ བདེན་དཔྱད་ཐོ་ཡིག་ ཡུ་ཨའི་ཨའི་ཌི་ སབ་ཁྲ་ཚུ། | འཛུལ་སྤྱོད་ཀྱི་ ཤོག་འཛིན་ DS མཚན་རྟགས་བཀོད་ཡོདཔ། |
+| 1. གཞུང་སྐྱོང་གནང་བ། | སྤྱི་ཚོགས་ / བསྟར་སྤྱོད་ | བསྐྱར་ཞིབ་ནང་ ཐུམ་སྒྲིལ་ `cbdc.manifest.json` ལུ་ མིང་རྟགས་བཀོད། `AssetPermissionManifest` ཆ་འཇོག་འབད། | མཚན་རྟགས་བཀོད་པའི་གཞུང་གི་སྐར་མ་དང་ ཧེཤ་ གསལ་སྟོན་འབད། |
+| 2. ལྕོགས་གྲུབ་སྤྲོད་ལེན། | CBDC ལམ་གྱི་ཨོཔ་ཚུ་ | ཨིན་ཀོཌི་གིས་ `norito::json::to_string_pretty` བརྒྱུད་དེ་ གསལ་སྟོན་འབདཝ་ཨིན་ གནམ་སྟོང་སྣོད་ཐོ་འོག་ལུ་གསོག་འཇོག་འབད་ བཀོལ་སྤྱོད་པ་ཚུ་ལུ་བརྡ་སྟོན། | Manifest JSON + norito Prometheus ཡིག་སྣོད་, BLAKE3 ཟས་བཅུད་འཇལ། |
+| 3. དཀར་པོའི་ཤུགས་རྐྱེན། | CBDC ལམ་གྱི་ཨོཔ་ཚུ་ | DSID ལུ་ `composability_group.whitelist`, bump `activation_epoch`, གསལ་སྟོན་འདི་ བཀྲམ་སྤེལ་འབད། དགོས་མཁོ་ཡོད་པ་ཅིན་ གནད་སྡུད་ས་སྟོང་རྒྱུན་ལམ་དུས་མཐུན་བཟོ་ནི། | གསལ་སྟོན་གྱི་ཁྱད་པར་ `kagami config diff` ཐོན་འབྲས་, གཞུང་སྐྱོང་ཆ་འཇོག་ ID. |
+| 4. བཤུད་བརྙན་བདེན་དཔྱད། | QA Guild / Ops | མཉམ་བསྡོམས་བརྟག་དཔྱད་དང་ ཊི་ཨི་ཡུ་ མངོན་གསལ་བརྟག་དཔྱད་ དེ་ལས་ ལས་རིམ་བཟོ་ཚུགས་པའི་ ཏི་རུ་བསྐྱར་རྩེད་ཚུ་ གཡོག་བཀོལ་དགོ།(འོག་ལུ་བལྟ།) | `cargo test` དྲན་ཐོ་ཚུ་, ཊི་ཨི་ཡུ་ ཌེཤ་བོརཌི་ ལས་རིམ་བཟོ་ཚུགས་པའི་-དངུལ་སྒྲིག་གྲུབ་འབྲས། |
+| 5. སྒྲུབ་བྱེད་ཡིག་མཛོད་ | བསྟར་སྤྱོད་ WG | བཱན་ཌལ་གྱིས་ གནང་བ་དང་ ལྕོགས་གྲུབ་བཞུ་ནི་ བརྟག་དཔྱད་ཐོན་སྐྱེད་ དེ་ལས་ `artifacts/nexus/cbdc_<stamp>/` གི་འོག་ལུ་ Prometheus གི་ བརྡ་རྟགས་ཚུ་ གསལ་སྟོན་འབདཝ་ཨིན། | སྒྲུབ་བྱེད་ཀྱི་ ཏར་བཱོལ་ ཅེག་སམ་ཡིག་སྣོད་ ཚོགས་སྡེའི་མིང་རྟགས་བཀོད་ནི། |
 
-### Audit bundle helper
-
-Use the `iroha app space-directory manifest audit-bundle` helper from the Space Directory
-playbook to snapshot each capability manifest before filing the evidence packet.
-Provide the manifest JSON (or `.to` payload) and dataspace profile:
+### རྩིས་ཞིབ་བང་མཛོད་རོགས་སྐྱོར།གནམ་སྟོང་སྣོད་ཐོ་ནང་ལས་ `iroha app space-directory manifest audit-bundle` གྲོགས་རམ་འདི་ལག་ལེན་འཐབ།
+སྒྲུབ་བྱེད་ཐུམ་སྒྲིལ་མ་བཙུགས་པའི་ཧེ་མ་ ལྕོགས་གྲུབ་རེ་རེ་གིས་ གསལ་སྟོན་འབད་ནི།
+གསལ་སྟོན་འདི་ JSON (ཡང་ན་ `.to` པེ་ལོཌི་) དང་ གནད་སྡུད་ས་སྒོ་གསལ་སྡུད་ཚུ་བྱིན།
 
 ```bash
 iroha app space-directory manifest audit-bundle \
@@ -226,24 +223,24 @@ iroha app space-directory manifest audit-bundle \
   --notes "CBDC wholesale refresh"
 ```
 
-The command emits canonical JSON/Norito/hash copies alongside
-`audit_bundle.json`, which records the UAID, dataspace id, activation/expiry
-epochs, manifest hash, and profile audit hooks while enforcing the required
-`SpaceDirectoryEvent` subscriptions. Drop the bundle inside the evidence
-directory so auditors and regulators can replay the exact bytes later.
+བརྡ་བཀོད་འདི་གིས་ ཀེ་ནོ་ནིཀ་ཇེ་ཨེསི་ཨོ་ཨེན་/Norito/hash འདྲ་བཤུས་ཚུ་ མཉམ་དུ་བཏོནམ་ཨིན།
+ཡུ་ཨེ་ཨའི་ཌི་དང་ གནད་སྡུད་ས་སྟོང་ཨི་ཌི་ ཤུགས་ལྡན་བཟོ་ནི/འཚོལཝ་ཨིན།
+དགོས་མཁོ་འདི་བཀག་དམ་འབད་བའི་སྐབས་ epochs དང་ གསལ་སྟོན་ཧེ་ཤི་ དེ་ལས་ གསལ་སྡུད་རྩིས་ཞིབ་ཀྱི་ ཧུཀ་ཚུ་ བསྟར་སྤྱོད་འབད་བའི་སྐབས་ བཀོད་སྒྲིག་འབད་བའི་སྐབས་ བཀོད་སྒྲིག་འབདཝ་ཨིན།
+`SpaceDirectoryEvent` མཁོ་མངགས་འབད་མི་ཚུ། སྒྲུབ་བྱེད་ཀྱི་ནང་དུ་བསྡམས་བཞག་པ།
+རྩིས་ཞིབ་པ་དང་ ཁྲིམས་ལུགས་ཚུ་གིས་ ཤུལ་ལས་ བཱའིཊ་ངོ་མ་ཚུ་ ལོག་རྩེད་ཚུགས།
 
-### 2.1 Commands & validations
+### 2.1 བརྡ་བཀོད་དང་བདེན་དཔང་།
 
-1. **Lane manifests:** `cargo test -p integration_tests nexus::lane_registry -- --nocapture lane_manifest_registry_loads_fixture_manifests`.
-2. **Scheduler quotas:** `cargo test -p integration_tests scheduler_teu -- queue_teu_backlog_matches_metering queue_routes_transactions_across_configured_lanes`.
-3. **Manual smoke:** `irohad --sora --config configs/soranexus/nexus/config.toml --chain 0000…` with manifest directory pointing to the CBDC files, then hit `/v1/sumeragi/status` and verify `lane_governance.manifest_ready=true` for the CBDC lane.
-4. **Whitelist consistency test:** `cargo test -p integration_tests nexus::cbdc_whitelist -- --nocapture` exercises `integration_tests/tests/nexus/cbdc_whitelist.rs`, parsing `fixtures/space_directory/profile/cbdc_lane_profile.json` and the referenced capability manifests to ensure every whitelist entry’s UAID, dataspace, activation epoch, and allowance list matches the Norito manifests under `fixtures/space_directory/capability/`. Attach the test log to the NX-6 evidence bundle whenever the whitelist or manifests change.
+1. **ལེན་ནེ་ མངོན་གསལ་:** `cargo test -p integration_tests nexus::lane_registry -- --nocapture lane_manifest_registry_loads_fixture_manifests`.
+2. **Shechuler quotas:** `cargo test -p integration_tests scheduler_teu -- queue_teu_backlog_matches_metering queue_routes_transactions_across_configured_lanes`.
+3. **ལག་ཐོག་ཐ་མག:** `irohad --sora --config configs/soranexus/nexus/config.toml --chain 0000…` གསལ་སྟོན་སྣོད་ཐོ་ CBDC ཡིག་སྣོད་ཚུ་ལུ་སྟོན་ཞིནམ་ལས་ `/v1/sumeragi/status` ལུ་ཨེབ་སྟེ་ CBDC ལམ་གྱི་དོན་ལུ་ `lane_governance.manifest_ready=true` བདེན་དཔྱད་འབད།
+4. **དཀརཔོ་གི་རིམ་མཐུན་བརྟག་དཔྱད་:** `cargo test -p integration_tests nexus::cbdc_whitelist -- --nocapture` ལག་ལེན་ཚུ་ `integration_tests/tests/nexus/cbdc_whitelist.rs`, `fixtures/space_directory/profile/cbdc_lane_profile.json` གིས་ `fixtures/space_directory/profile/cbdc_lane_profile.json` དབྱེ་དཔྱད་འབདཝ་ཨིན། `fixtures/space_directory/profile/cbdc_lane_profile.json` གིས་ དཀརཔོ་ཐོ་ཡིག་ཐོ་བཀོད་ཀྱི་ཡུ་ཨེ་ཨའི་ཌི་ གནད་སྡུད་ས་སྟོང་ ཤུགས་ལྡན་བཟོ་བའི་དུས་སྐབས་ཚུ་དང་མཐུན་སྒྲིག་འབད་ནི་ལུ་ ངེས་གཏན་བཟོ་ནི་དང་ ཆོག་ཐམ་གྱི་ཐོ་ཡིག་འདི་ འོག་ལུ་ Norito གསལ་སྟོན་འབདཝ་ཨིན། `fixtures/space_directory/capability/`. བརྟག་དཔྱད་དྲན་ཐོ་འདི་ NX-6 སྒྲུབ་བྱེད་ཀྱི་བང་རིམ་ལུ་མཉམ་སྦྲགས་འབད།
 
-### 2.2 CLI snippets
+### ༢.༢ ཀླི་ཨའི་ སྦུང་ཚད།
 
-- Generate UAID + manifest skeleton via `cargo run -p iroha_cli -- manifest cbdc --uaid <hash> --dataspace 11 --template cbdc_wholesale`.
-- Publish capability manifest to Torii (Space Directory) using `iroha app space-directory manifest publish --manifest cbdc_wholesale.manifest.to` (or `--manifest-json cbdc_wholesale.manifest.json`); the submitting account must hold `CanPublishSpaceDirectoryManifest` for the CBDC dataspace.
-- Publish via HTTP if the ops desk is running remote automation:
+- UAID + `cargo run -p iroha_cli -- manifest cbdc --uaid <hash> --dataspace 11 --template cbdc_wholesale` བརྒྱུད་དེ་ ཀེང་རུས་གསལ་སྟོན་འབད།
+- Torii (Space Directory) ལུ་ `iroha app space-directory manifest publish --manifest cbdc_wholesale.manifest.to` (ཡང་ན་ `--manifest-json cbdc_wholesale.manifest.json`) ལག་ལེན་འཐབ་སྟེ་ གསལ་སྟོན་འབད། ཕུལ་མི་རྩིས་ཐོ་འདི་གིས་ སི་བི་ཌི་སི་གནས་སྡུད་གནམ་སྟོང་གི་དོན་ལུ་ `CanPublishSpaceDirectoryManifest` འཛིན་དགོ།
+- ཨོཔ་སི་ ཌེཀསི་གིས་ ཐག་རིང་རང་བཞིན་རང་བཞིན་གཡོག་བཀོལ་དོ་ཡོད་པ་ཅིན་ ཨེཆ་ཊི་ཊི་པི་བརྒྱུད་དེ་ དཔར་བསྐྲུན་འབད་ནི།
 
   ```bash
   curl -X POST https://torii.soranexus/v1/space-directory/manifests \
@@ -256,10 +253,10 @@ directory so auditors and regulators can replay the exact bytes later.
           }'
   ```
 
-  Torii returns `202 Accepted` once the publish transaction is queued; the same
-  CIDR/API-token gates apply and the on-chain permission requirement matches the
-  CLI workflow.
-- Emergency revocation can be issued remotely by POSTing to Torii:
+  Torii གིས་ དཔར་བསྐྲུན་ཚོང་འབྲེལ་འདི་ གྱལ་རིམ་འབད་ཚར་བའི་ཤུལ་ལས་ `202 Accepted` སླར་ལོག་འབདཝ་ཨིན། དེ་བཟུམ་སྦེ་
+  སི་ཨའི་ཌི་ཨར་/ཨེ་པི་ཨའི་-ཊོ་ཀེན་གཱེཊིསི་གིས་ འཇུག་སྤྱོད་འབད་ཞིནམ་ལས་ རྒྱུན་རིམ་གནང་བའི་གནང་བ་དགོས་མཁོ་འདི་ མཐུན་སྒྲིག་འབདཝ་ཨིན།
+  CLI ལཱ་གི་རྒྱུན་རིམ།
+- ཛ་དྲག་ཆ་མེད་བཟོ་ནི་འདི་ POSTing ལུ་ POSTing ལུ་ ཐག་རིང་ལས་ བཏོན་ཚུགས།
 
   ```bash
   curl -X POST https://torii.soranexus/v1/space-directory/manifests/revoke \
@@ -274,58 +271,54 @@ directory so auditors and regulators can replay the exact bytes later.
           }'
   ```
 
-  Torii returns `202 Accepted` once the revoke transaction is queued; the same
-  CIDR/API-token gates apply as other app endpoints, and `CanPublishSpaceDirectoryManifest`
-  is still required on-chain.
-- Rotate whitelist membership: edit `cbdc.manifest.json`, bump `activation_epoch`, and redeploy via secure copy to all validators; `LaneManifestRegistry` hot-reloads on the configured poll interval.
+  Torii གིས་ བཏོན་གཏང་ནིའི་ཚོང་འབྲེལ་འདི་ གྱལ་རིམ་འབད་ཚར་བའི་ཤུལ་ལས་ `202 Accepted` སླར་ལོག་འབདཝ་ཨིན། དེ་བཟུམ་སྦེ་
+  CIDR/API-ཊོ་ཀེན་གཱེཊིསི་འདི་ གློག་རིམ་མཐའ་མ་གཞན་ཚུ་སྦེ་འཇུག་སྤྱོད་འབད་ཡོདཔ་དང་ `CanPublishSpaceDirectoryManifest`
+  འདི་ ད་ལྟོ་ཡང་ རིམ་ཐེངས་དགོཔ་ཨིན།
+- ཐོ་ཡིག་དཀརཔོ་གི་འཐུས་མི་: ཞུན་དག་ `cbdc.manifest.json`, bump `activation_epoch`, དང་ བདེན་དཔྱད་འབད་མི་ཆ་མཉམ་ལུ་ ཉེན་སྲུང་ཅན་གྱི་འདྲ་བཤུས་བརྒྱུད་དེ་ ལོག་ལེན། རིམ་སྒྲིག་འབད་ཡོད་པའི་འོས་བསྡུའི་བར་མཚམས་གུ་ Nexus ཧོཊ་-བསྐྱར་ལོག།
 
-## 3. Compliance Evidence Bundle
+## 3. མཐུན་སྒྲིག་སྒྲུབ་པའི་བདེན་པ།
 
-Store artefacts under `artifacts/nexus/cbdc_rollouts/<YYYYMMDDThhmmZ>/` and attach the digest to the governance ticket.
+`artifacts/nexus/cbdc_rollouts/<YYYYMMDDThhmmZ>/` གི་འོག་ལུ་ ཅ་རྙིང་ཚུ་ གསོག་འཇོག་འབད་ཞིནམ་ལས་ ཟས་བཅུད་འདི་ གཞུང་སྐྱོང་གི་ཤོག་འཛིན་ལུ་ མཐུད་དགོ།
 
-| File | Description |
-|------|-------------|
-| `cbdc.manifest.json` | Signed lane manifest with whitelist diff (before/after). |
-| `capability/<uaid>.manifest.json` & `.to` | Norito + JSON capability manifests for each UAID. |
-| `compliance/kyc_<bank>.pdf` | Regulator-facing KYC attestation. |
-| `metrics/nexus_scheduler_lane_teu_capacity.prom` | Prometheus scrape proving TEU headroom. |
-| `tests/cargo_test_nexus_lane_registry.log` | Log from the manifest test run. |
-| `tests/cargo_test_scheduler_teu.log` | Log proving TEU routing passes. |
-| `programmable_money/axt_replay.json` | Replay transcript demonstrating programmable-money interoperability (see section 4). |
-| `approvals/governance_minutes.md` | Signed approval minutes referencing manifest hash + activation epoch. |
+| ཡིག་སྣོད་ | འགྲེལ་བཤད་ |
+|-------|-------------------------------------------------------------------------------------------------
+| Prometheus ཐོ་ཡིག་དཀརཔོ་གི་ཌིཕ་དང་གཅིག་ཁར་ མཚན་རྟགས་བཀོད་ཡོད་པའི་ལམ་འདི་ གསལ་སྟོན་ (ཧེ་མ་/ཤུལ་ལས་)། |
+| `capability/<uaid>.manifest.json` & `.to` | Norito + JSON ལྕོགས་གྲུབ་འདི་གིས་ ཡུ་ཨའི་ཨའི་ཌི་རེ་རེ་གི་དོན་ལུ་ གསལ་སྟོན་འབདཝ་ཨིན། |
+| `compliance/kyc_<bank>.pdf` | བཀག་འཛིན་འབད་མི་-གདོང་ལན་འབད་མི་ KYC བདེན་དཔང་། |
+| `metrics/nexus_scheduler_lane_teu_capacity.prom` | Prometheus ཊི་ཨི་ཡུ་གི་མགུ་ཏོ་ཁང་མིག་བདེན་དཔང་འབད་ཡོདཔ། |
+| `tests/cargo_test_nexus_lane_registry.log` | གསལ་སྟོན་བརྟག་དཔྱད་གཡོག་བཀོལ་ནི་ལས་ ནང་བསྐྱོད་འབད། |
+| `tests/cargo_test_scheduler_teu.log` | དྲན་ཐོ་ TEU འགྲུལ་ལམ་ཚུ་ བདེན་ཁུངས་བཀལ་ནི། |
+| `programmable_money/axt_replay.json` | ལས་རིམ་བཟོ་ཚུགས་པའི་ ཏི་རུ་གི་ཕན་ཚུན་འབྲེལ་བ་ཡོདཔ་སྦེ་ བསྐྱར་དུ་གཏང་ནི། (དོན་ཚན་༤ པ་བལྟ།) |
+| `approvals/governance_minutes.md` | མཚན་རྟགས་ཆ་འཇོག་སྐར་མ་གཞི་བསྟུན་འབད་མི་འདི་གིས་ གསལ་སྟོན་ཧེཤ་ + ཤུགས་ལྡན་བཟོ་བའི་དུས་སྐབས་ལུ། |**བདེན་དཔྱད་ཡིག་གཟུགས་:** run `ci/check_cbdc_rollout.sh` གིས་ གཞུང་སྐྱོང་ཤོག་བྱང་ལུ་མ་བཙུགས་པའི་ཧེ་མ་ སྒྲུབ་བྱེད་བསྡུ་སྒྲིག་འདི་ མཇུག་བསྡུ་ཡི་ཟེར་ བདེན་ཁུངས་བཀལ་ནིའི་དོན་ལུ་ཨིན། གྲོགས་རམ་པ་འདི་གིས་ `artifacts/nexus/cbdc_rollouts/` (ཡང་ན་ `CBDC_ROLLOUT_BUNDLE=<path>`) ལུ་ `cbdc.manifest.json` རེ་རེ་ལུ་ གསལ་སྟོན་/བརྟན་ཚུགས་པའི་སྡེ་ཚན་ལུ་དབྱེ་དཔྱད་འབདཝ་ཨིན། metrics scrapes དང་ `cargo test` དྲན་ཐོ་ཚུ་གིས་ ལས་རིམ་བཟོ་ཚུགས་པའི་ ཏི་རུ་བསྐྱར་རྩེད་འདི་ བདེན་དཔྱད་འབདཝ་ཨིནམ་དང་ ཆ་འཇོག་སྐར་མ་ཚུ་ ཤུགས་ལྡན་བཟོ་བའི་དུས་སྐབས་དང་ གསལ་སྟོན་གྱི་ཧེཤ་ཚུ་ ངེས་གཏན་བཟོཝ་ཨིན། གསར་ཤོས་ rev གིས་ NX-6 ནང་ལུ་ཡོད་པའི་ ཉེན་སྲུང་གི་རེ་ལི་ཚུ་ཡང་ བསྟར་སྤྱོད་འབདཝ་ཨིན། quorum འདི་ གསལ་བསྒྲགས་འབད་ཡོད་པའི་ བདེན་དཔྱད་ཆ་ཚན་ལས་ བརྒལ་མི་ཚུགས། ཉེན་སྲུང་འབད་ཡོད་པའི་མིང་གི་ས་སྒོ་ཚུ་ སྟོངམ་མེན་པའི་ ཡིག་རྒྱུན་ཚུ་ དགོཔ་ཨིན་ དེ་ལས་ ལྕོགས་གྲུབ་ཀྱི་མངོན་རྟགས་ཚུ་གིས་ གཅིག་མཚུངས་སྦེ་ ཡར་སེང་འབད་ཡོད་པའི་ `activation_epoch`/`expiry_epoch` ཆ་ཚུ་ ལེགས་ཤོམ་སྦེ་གྲུབ་ཡོདཔ་ཨིན། `Allow`/`Deny` ནུས་པ། `fixtures/nexus/cbdc_rollouts/` གི་འོག་ལུ་ དཔེ་ཚད་སྒྲུབ་བྱེད་ཀྱི་ཐུམ་སྒྲིལ་འདི་ མཉམ་བསྡོམས་བརྟག་དཔྱད་ `integration_tests/tests/nexus/cbdc_rollout_bundle.rs` གིས་ བདེན་དཔྱད་འབད་མི་འདི་ CI ནང་ལུ་བཞག་སྟེ་ ལག་ལེན་འཐབ་ཨིན།
 
-**Validation script:** run `ci/check_cbdc_rollout.sh` to assert the evidence bundle is complete before attaching it to the governance ticket. The helper scans `artifacts/nexus/cbdc_rollouts/` (or `CBDC_ROLLOUT_BUNDLE=<path>`) for every `cbdc.manifest.json`, parses the manifest/composability group, verifies each capability manifest has a matching `.to` file, checks for `kyc_*.pdf` attestations, confirms the TEU metrics scrape plus `cargo test` logs, validates the programmable-money replay JSON, and ensures the approval minutes cite the activation epoch and manifest hash. The latest rev also enforces safety rails called out in NX-6: quorum cannot exceed the declared validator set, protected namespaces must be non-empty strings, and capability manifests must declare monotonically increasing `activation_epoch`/`expiry_epoch` pairs with well-formed `Allow`/`Deny` effects. A sample evidence pack under `fixtures/nexus/cbdc_rollouts/` is exercised by the integration test `integration_tests/tests/nexus/cbdc_rollout_bundle.rs`, keeping the validator wired into CI.
+## 4. ལས་རིམ-དངུལ་འབོར་གྱི་ཕན་ཚུན་འབྲེལ་བ།
 
-## 4. Programmable-Money Interoperability
+དངུལ་ཁང་ཅིག་ (གནས་སྡུད་ས་སྟོང་༡༡) དང་ སིལ་སིབ་ཌི་ཨེ་པི་ (གནད་སྡུད་ས་སྟོང་༡༢) གཉིས་ཆ་ར་ `ComposabilityGroupId` ནང་ དཀརཔོ་སྦེ་ ཐོ་བཀོད་འབད་བའི་སྐབས་ ལས་རིམ་བཟོ་ཚུགས་པའི་ ཏི་རུ་ཚུ་ `docs/source/nexus.md` §8.6 ལས་ AXT གི་དཔེ་རིས་ལུ་ གཞི་བཞག་སྟེ་ ཐོ་བཀོད་འབདཝ་ཨིན།
 
-Once a bank (dataspace 11) and retail dApp (dataspace 12) are both whitelisted in the same `ComposabilityGroupId`, programmable-money flows follow the AXT pattern from `docs/source/nexus.md` §8.6:
+༡ ཚོང་འབྲེལ་ཌི་ཨེ་པི་གིས་ དེ་གི་ཡུ་ཨེ་ཨའི་ཌི་ + ཨེགསི་ཊི་ བཞུ་བཅོས་ལུ་ མཐུད་ཡོད་པའི་ རྒྱུ་དངོས་ཀྱི་ ལག་ཆས་ཅིག་ ཞུ་བ་འབདཝ་ཨིན། CBDC lane གིས་ `AssetPermissionManifest::evaluate` བརྒྱུད་དེ་ ལག་ཆ་འདི་ བདེན་དཔྱད་འབདཝ་ཨིན།
+2. DS གཉིས་ཆ་ར་གིས་ མཉམ་སྦྱོར་གྱི་སྡེ་ཚན་ཅོག་འཐདཔ་སྦེ་གསལ་བསྒྲགས་འབདཝ་ལས་ རྡུལ་ཕྲན་ཚུ་གིས་ CBDC ལམ་ནང་ལུ་ རྡུལ་ཕྲན་ཚུ་ བཙུགས་ནིའི་དོན་ལུ་ བརྡལ་བཤིག་གཏངམ་ཨིན།
+༣༽ ལག་ལེན་འཐབ་པའི་སྐབས་ CBDC DS གིས་ AML/KYC གི་བདེན་ཁུངས་ཚུ་ དེ་གི་གློག་ལམ་ནང་ བསྟར་སྤྱོད་འབདཝ་ཨིན།
+༤ བདེན་ཁུངས་རྒྱུ་ཆ་ (FASTPQ + DA ཁས་བླངས་) ཚུ་ CBDC ལམ་ཁར་རྐྱངམ་ཅིག་སྡོད་ཡོདཔ་ཨིན། མཉམ་བསྡོམས་འབད་ཡོད་པའི་ཐོ་བཀོད་ཚུ་གིས་ སྒེར་གྱི་གནས་སྡུད་མ་བཏོན་པར་ འཛམ་གླིང་མངའ་སྡེ་གི་གཏན་འབེབས་འདི་ བཞགཔ་ཨིན།
 
-1. Retail dApp requests an asset handle bound to its UAID + AXT digest. The CBDC lane verifies the handle via `AssetPermissionManifest::evaluate` (deny wins, allowances enforced).
-2. Both DS declare the same composability group so routing collapses them into the CBDC lane for atomic inclusion (`LaneRoutingPolicy` uses `group_id` when mutually whitelisted).
-3. During execution, the CBDC DS enforces AML/KYC proofs inside its circuit (`use_asset_handle` pseudocode in `nexus.md`), while the dApp DS updates local business state only after the CBDC fragment succeeds.
-4. Proof material (FASTPQ + DA commitments) stays confined to the CBDC lane; merge-ledger entries keep the global state deterministic without leaking private data.
+ལས་རིམ་བཟོ་བཏུབ་པའི་དངུལ་བསྐྱར་རྩེད་ཀྱི་གཏན་མཛོད་ནང་ཚུད་དགོཔ།
 
-The programmable-money replay archive should include:
+- AXT འགྲེལ་བཤད་ + འཛིན་སྐྱོང་ཞུ་བ་/ལན་གསལ་ཚུ།
+- Norito-incoded ཚོང་འབྲེལ་ཡིག་ཤུགས།
+- གྲུབ་འབྲས་ཐོབ་ཐངས་ (ལམ་ལུ་དགའ་སྤྲོ་, ལམ་བཀག་ཆ་)།
+- `telemetry::fastpq.execution_mode` དང་ `nexus_scheduler_lane_teu_slot_committed`, དང་ `lane_commitments` གི་དོན་ལུ་ ཊེ་ལི་མི་ཊི་གི་ཆ་ཤས་ཚུ་.
 
-- AXT descriptor + handle request/responses.
-- Norito-encoded transaction envelope.
-- Resulting receipts (happy path, deny path).
-- Telemetry snippets for `telemetry::fastpq.execution_mode`, `nexus_scheduler_lane_teu_slot_committed`, and `lane_commitments`.
+## 5. བལྟ་རྟོག་དང་རུན་དེབ་ཚུ།
 
-## 5. Observability & Runbooks
+- **མེ་ཊིགསི་:** བལྟ་རྟོག་པ་ `nexus_scheduler_lane_teu_capacity`, `nexus_scheduler_lane_teu_slot_committed`, `nexus_scheduler_lane_teu_deferral_total{reason}`, `governance_manifest_admission_total`, དང་ `governance_manifest_admission_total`, དང་ `lane_governance_sealed_total` (Torii, (Torii, (`docs/source/telemetry.md`)
+- **གནད་སྡུད་བཀོད་སྒྲིག་ཚུ་:** སི་བྷི་ཌི་སི་ལེན་གྲལ་ཐིག་དང་གཅིག་ཁར་ `docs/source/grafana_scheduler_teu.json` རྒྱ་སྐྱེད་འབད། ཐོ་ཡིག་དཀརཔོ་གི་དོན་ལུ་ པེ་ནཱལ་ཚུ་ཁ་སྐོང་བརྐྱབ། (མཆན་འགྲེལ་རེ་རེ་བཞིན་) དང་ ལྕོགས་གྲུབ་ཀྱི་དུས་ཚོད་རྫོགས་པའི་མདོང་ལམ་ཚུ་ཨིན།
+- **Alerts:** སྐར་མ་༡༥ གི་དོན་ལུ་ `rate(nexus_scheduler_lane_teu_deferral_total{reason="cap_exceeded"}[5m]) > 0` དང་ ཡང་ན་ `lane_governance.manifest_ready=false` འདི་ འོས་བསྡུའི་བར་མཚམས་གཅིག་ལས་ལྷག་སྟེ་ གནས་ཏེ་ཡོདཔ་ཨིན།
+- **Runbook pointers:** `docs/source/governance_api.md` ནང་ མིང་ས་སྒོ་ལམ་སྟོན་དང་ ལས་རིམ་བཟོ་ཚུགས་པའི་-དངུལ་གྱི་དཀའ་ངལ་སེལ་ཐབས་འབད་ནི་ལུ་ `docs/source/nexus.md` ནང་ འབྲེལ་མཐུད།
 
-- **Metrics:** Monitor `nexus_scheduler_lane_teu_capacity`, `nexus_scheduler_lane_teu_slot_committed`, `nexus_scheduler_lane_teu_deferral_total{reason}`, `governance_manifest_admission_total`, and `lane_governance_sealed_total` (see `docs/source/telemetry.md`).
-- **Dashboards:** Extend `docs/source/grafana_scheduler_teu.json` with a CBDC lane row; add panels for whitelist churn (annotations every activation epoch) and capability expiry pipelines.
-- **Alerts:** Trigger when `rate(nexus_scheduler_lane_teu_deferral_total{reason="cap_exceeded"}[5m]) > 0` for 15 minutes or when `lane_governance.manifest_ready=false` persists beyond one poll interval.
-- **Runbook pointers:** Link to protected-namespace guidance in `docs/source/governance_api.md` and programmable-money troubleshooting in `docs/source/nexus.md`.
+## 6. ངོས་ལེན་དཔྱད་གཞི།- [ ] CBDC ལམ་ཐིག་འདི་ `nexus.lane_catalog` ནང་ TEU མེ་ཊ་ཌེ་ཊ་མཐུན་སྒྲིག་འབད་དེ་ ཊི་ཨི་ཡུ་བརྟག་དཔྱད་ཚུ་དང་བཅས་གསལ་བསྒྲགས་འབད་ཡོདཔ་ཨིན།
+- [ ] མཚན་རྟགས་བཀོད་ཡོད་པའི་ `cbdc.manifest.json` གསལ་སྟོན་སྣོད་ཐོ་ནང་ཡོད་པའི་ `cargo test -p integration_tests nexus::lane_registry` བརྒྱུད་དེ་ བདེན་དཔྱད་འབད་ཡོདཔ་ཨིན།
+- [ ] ནུས་སྟོབས་གསལ་སྟོན་ཚུ་ ཡུ་ཨའི་ཌི་རེ་རེ་གི་དོན་ལུ་ བཏོན་ཡོདཔ་དང་ གནམ་སྟོང་སྣོད་ཐོ་ནང་ གསོག་འཇོག་འབད་ཡོདཔ་ཨིན། ཁས་ལེན་འབད་ནི་/ངེས་པར་དུ་ ཡུ་ནིཊ་བརྟག་དཔྱད་ (`crates/iroha_data_model/src/nexus/manifest.rs`) བརྒྱུད་དེ་ བདེན་དཔྱད་འབད་བཅུག།
+- [ ] གཞུང་སྐྱོང་ཆ་འཇོག་ཨའི་ཌི་, `activation_epoch`, དང་ Prometheus སྒྲུབ་བྱེད་ཚུ་དང་གཅིག་ཁར་ཐོ་བཀོད་འབད་མི་ ཐོ་ཡིག་དཀརཔོ་གི་ཤུགས་ལྡན་བཟོ་ཡོདཔ།
+- [ ] ལས་རིམ་བཟོ་བའི་དངུལ་བསྐྱར་རྩེད་ཀྱི་གཏན་མཛོད་དང་ ལག་ཆ་སྤྲོད་ཐངས་དང་ ངོས་ལེན་མེད་པའི་ དེ་ལས་ རྒྱུན་འགྲུལ་ཚུ་ འབད་བཅུགཔ་ཨིན།
+- [ ] ཀིརིཔ་ཊོ་གཱ་ར་ཕིག་ བཞུ་བཅོས་དང་གཅིག་ཁར་ སྐྱེལ་བཙུགས་འབད་མི་ སྒྲུབ་བྱེད་ཚུ་ གཞུང་སྐྱོང་གི་ ཤོག་འཛིན་ལས་ མཐུད་དེ་ཡོདཔ་ད་ དེ་ལས་ NX-6 མཐོ་རིམ་ཤེས་ཚད་མཐར་འཁྱོལ་མི་ཚུ་ 🈯 ལས་ 🈺 ཚུན་ཚོད་ཨིན།
 
-## 6. Acceptance Checklist
-
-- [ ] CBDC lane declared in `nexus.lane_catalog` with TEU metadata matching TEU tests.
-- [ ] Signed `cbdc.manifest.json` present in the manifest directory, validated via `cargo test -p integration_tests nexus::lane_registry`.
-- [ ] Capability manifests issued for every UAID and stored in Space Directory; deny/allow precedence verified via unit tests (`crates/iroha_data_model/src/nexus/manifest.rs`).
-- [ ] Whitelist activation recorded with governance approval ID, `activation_epoch`, and Prometheus evidence.
-- [ ] Programmable-money replay archived, demonstrating handle issuance, denial, and allow flows.
-- [ ] Evidence bundle uploaded with cryptographic digest, linked from governance ticket and `status.md` once NX-6 graduates from 🈯 to 🈺.
-
-Following this playbook satisfies the documentation deliverable for NX-6 and unblocks future roadmap items (NX-12/NX-15) by providing a deterministic template for CBDC lane configuration, whitelist onboarding, and programmable-money interoperability.
+འདི་གི་ཤུལ་ལས་ རྩེད་དེབ་འདི་ NX-6 གི་དོན་ལུ་ ཡིག་ཆ་ཚུ་ བསྒྲུབ་ཚུགསཔ་ཨིནམ་དང་ མ་འོངས་པའི་ ལམ་གྱི་ས་ཁྲ་རྣམ་གྲངས་ (NX-12/NX-15) གིས་ CBDC ལམ་གྱི་རིམ་སྒྲིག་གི་དོན་ལུ་ ཊེམ་པེལེཊི་ཅིག་བྱིན་ཏེ་ ཐོ་ཡིག་དཀརཔོ་བཙུགས་ནི་དང་ ལས་རིམ་བཟོ་ཚུགས་པའི་ ཏི་རུ་གི་ཕན་ཚུན་ལག་ལེན་འཐབ་ཚུགསཔ་ཨིན།

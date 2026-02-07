@@ -7,232 +7,223 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 2a0ce1be46f9c468915f50de5e38e2f34657b26bf4243fb5ea45dab175789393
 source_last_modified: "2026-01-05T09:28:12.002460+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Android AND6 Compliance Checklist
+# Android AND6 შესაბამისობის შემოწმება
 
-This checklist tracks the compliance deliverables that gate milestone **AND6 -
-CI & Compliance Hardening**. It consolidates the regulatory artefacts requested
-in `roadmap.md` and defines the storage layout under
-`docs/source/compliance/android/` so Release Engineering, Support, and Legal
-can reference the same evidence set before approving Android releases.
+ეს საკონტროლო სია აკონტროლებს შესაბამისობის მიწოდებებს, რომლებიც კარიბჭის ეტაპს აღწევს **AND6 -
+CI და შესაბამისობის გამკვრივება**. ის აერთიანებს მოთხოვნილ მარეგულირებელ არტეფაქტებს
+`roadmap.md`-ში და განსაზღვრავს შენახვის განლაგებას ქვეშ
+`docs/source/compliance/android/` ამიტომ გამოუშვით ინჟინერია, მხარდაჭერა და იურიდიული
+შეუძლია მიმართოს იმავე მტკიცებულებებს, სანამ Android-ის გამოშვებებს დაამტკიცებს.
 
-## Scope & Owners
+## სფერო და მფლობელები
 
-| Area | Deliverables | Primary Owner | Backup / Reviewer |
-|------|--------------|---------------|-------------------|
-| EU regulatory bundle | ETSI EN 319 401 security target, GDPR DPIA summary, SBOM attestation, evidence log | Compliance & Legal (Sofia Martins) | Release Engineering (Alexei Morozov) |
-| Japan regulatory bundle | FISC security controls checklist, bilingual StrongBox attestation bundles, evidence log | Compliance & Legal (Daniel Park) | Android Program Lead |
-| Device lab readiness | Capacity tracking, contingency triggers, escalation log | Hardware Lab Lead | Android Observability TL |
+| ფართობი | მიწოდება | ძირითადი მფლობელი | სარეზერვო / მიმომხილველი |
+|------|--------------|-------------|------------------|
+| ევროკავშირის მარეგულირებელი პაკეტი | ETSI EN 319 401 უსაფრთხოების სამიზნე, GDPR DPIA შეჯამება, SBOM ატესტაცია, მტკიცებულების ჟურნალი | შესაბამისობა და იურიდიული (Sofia Martins) | გამოშვების ინჟინერია (ალექსეი მოროზოვი) |
+| იაპონიის მარეგულირებელი პაკეტი | FISC უსაფრთხოების კონტროლის ჩამონათვალი, ორენოვანი StrongBox ატესტაციის პაკეტები, მტკიცებულებების ჟურნალი | შესაბამისობა და სამართლებრივი (დანიელ პარკი) | Android პროგრამის წამყვანი |
+| მოწყობილობის ლაბორატორიის მზადყოფნა | სიმძლავრის თვალყურის დევნება, საგანგებო სიტუაციების გამომწვევები, ესკალაციის ჟურნალი | ტექნიკის ლაბორატორია წამყვანი | Android დაკვირვებადობა TL |
 
-## Artefact Matrix
+## არტეფაქტის მატრიცა| არტეფაქტი | აღწერა | შენახვის გზა | განაახლეთ Cadence | შენიშვნები |
+|----------|------------|------------|---------------|-------|
+| ETSI EN 319 401 უსაფრთხოების სამიზნე | ნარატივი, რომელიც აღწერს უსაფრთხოების მიზნებს/ვარაუდებს Android SDK ბინარებისთვის. | `docs/source/compliance/android/eu/security_target.md` | გადაამოწმეთ ყოველი GA + LTS გამოშვება. | უნდა მოიყვანოს build წარმოშობის ჰეშები გამოშვების მატარებლისთვის. |
+| GDPR DPIA რეზიუმე | მონაცემთა დაცვაზე ზემოქმედების შეფასება ტელემეტრიას/ლოგინგს მოიცავს. | `docs/source/compliance/android/eu/gdpr_dpia_summary.md` | წლიური + მატერიალური ტელემეტრიის ცვლილებამდე. | მითითების რედაქციის პოლიტიკა `sdk/android/telemetry_redaction.md`-ში. |
+| SBOM ატესტაცია | ხელმოწერილი SBOM პლუს SLSA წარმოშობა Gradle/Maven არტეფაქტებისთვის. | `docs/source/compliance/android/eu/sbom_attestation.md` | ყოველი GA გამოშვება. | გაუშვით `scripts/android_sbom_provenance.sh <version>` CycloneDX ანგარიშების გენერირებისთვის, პაკეტებისა და შემოწმების ჯამების შესაქმნელად. |
+| FISC უსაფრთხოების კონტროლის ჩამონათვალი | დასრულებული საკონტროლო სიის რუკების SDK კონტროლის FISC მოთხოვნები. | `docs/source/compliance/android/jp/fisc_controls_checklist.md` | წლიური + JP პარტნიორი პილოტების წინაშე. | მიუთითეთ ორენოვანი სათაურები (EN/JP). |
+| StrongBox ატესტაციის პაკეტი (JP) | თითო მოწყობილობაზე ატესტაციის შეჯამება + ჯაჭვი JP რეგულატორებისთვის. | `docs/source/compliance/android/jp/strongbox_attestation.md` | როდესაც ახალი აპარატურა შედის აუზში. | მიუთითეთ დაუმუშავებელი არტეფაქტები `artifacts/android/attestation/<device>/`-ში. |
+| იურიდიული ხელმოწერის მემორანდუმი | კონსულტაციის შეჯამება, რომელიც მოიცავს ETSI/GDPR/FISC სფეროს, კონფიდენციალურობის პოზას და თანდართული არტეფაქტების დაკავების ჯაჭვს. | `docs/source/compliance/android/eu/legal_signoff_memo.md` | ყოველ ჯერზე, როცა არტეფაქტის ნაკრები იცვლება ან ემატება ახალი იურისდიქცია. | შენიშვნების მითითებები ჰეშები მტკიცებულებების ჟურნალიდან და ბმულები მოწყობილობა-ლაბორატორიის საგანგებო პაკეტთან. |
+| მტკიცებულებათა ჟურნალი | წარმოდგენილი არტეფაქტების ინდექსი ჰეშის/დროის შტამპის მეტამონაცემებით. | `docs/source/compliance/android/evidence_log.csv` | განახლდება, როდესაც ზემოთ მოცემული ნებისმიერი ჩანაწერი იცვლება. | დაამატეთ Buildkite ბმული + მიმომხილველის გაფორმება. |
+| მოწყობილობა-ლაბორატორიული ინსტრუმენტების ნაკრები | სლოტ-სპეციფიკური ტელემეტრია, რიგი და ატესტაციის მტკიცებულებები ჩაწერილია `device_lab_instrumentation.md`-ში განსაზღვრული პროცესით. | `artifacts/android/device_lab/<slot>/` (იხ. `docs/source/compliance/android/device_lab_instrumentation.md`) | ყოველი დაჯავშნილი სლოტი + ჩავარდნილი საბურღი. | გადაიღეთ SHA-256 მანიფესტები და მიუთითეთ სლოტის ID მტკიცებულებათა ჟურნალში + საკონტროლო სიაში. |
+| მოწყობილობა-ლაბორატორიის დაჯავშნის ჟურნალი | ჯავშნის სამუშაო პროცესი, დამტკიცებები, სიმძლავრის სნეპშოტები და ესკალაციის კიბე გამოიყენება StrongBox აუზების შესანარჩუნებლად ≥80% გაყინვის დროს. | `docs/source/compliance/android/device_lab_reservation.md` | განაახლეთ დაჯავშნის შექმნისას/შეცვლისას. | იხილეთ `_android-device-lab` ბილეთების ID და ყოველკვირეული კალენდრის ექსპორტი, რომელიც მითითებულია პროცედურაში. |
+| Device-lab failover runbook & drill bundle | კვარტალური სარეპეტიციო გეგმა და არტეფაქტის მანიფესტი, რომელიც ასახავს სარეპეტიციო ზოლებს, Firebase ადიდებული რიგს და გარე StrongBox რეტეინერის მზადყოფნას. | `docs/source/compliance/android/device_lab_failover_runbook.md` + `artifacts/android/device_lab_contingency/<YYYYMMDD>-failover-drill/` | კვარტალური (ან ტექნიკის ჩამონათვალის ცვლილების შემდეგ). | ჩაწერეთ საბურღი ID-ები მტკიცებულების ჟურნალში და მიამაგრეთ მანიფესტის ჰეში + PagerDuty ექსპორტი, რომელიც მითითებულია runbook-ში. |
 
-| Artifact | Description | Storage Path | Refresh Cadence | Notes |
-|----------|-------------|--------------|-----------------|-------|
-| ETSI EN 319 401 security target | Narrative describing security objectives/assumptions for Android SDK binaries. | `docs/source/compliance/android/eu/security_target.md` | Revalidate every GA + LTS release. | Must cite build provenance hashes for the release train. |
-| GDPR DPIA summary | Data protection impact assessment covering telemetry/logging. | `docs/source/compliance/android/eu/gdpr_dpia_summary.md` | Annual + before material telemetry changes. | Reference redaction policy in `sdk/android/telemetry_redaction.md`. |
-| SBOM attestation | Signed SBOM plus SLSA provenance for the Gradle/Maven artifacts. | `docs/source/compliance/android/eu/sbom_attestation.md` | Every GA release. | Run `scripts/android_sbom_provenance.sh <version>` to generate CycloneDX reports, cosign bundles, and checksums. |
-| FISC security controls checklist | Completed checklist mapping SDK controls to FISC requirements. | `docs/source/compliance/android/jp/fisc_controls_checklist.md` | Annual + before JP partner pilots. | Provide bilingual headings (EN/JP). |
-| StrongBox attestation bundle (JP) | Per-device attestation summary + chain for JP regulators. | `docs/source/compliance/android/jp/strongbox_attestation.md` | When new hardware enters the pool. | Point to raw artefacts under `artifacts/android/attestation/<device>/`. |
-| Legal sign-off memo | Counsel summary covering ETSI/GDPR/FISC scope, privacy posture, and chain of custody for attached artefacts. | `docs/source/compliance/android/eu/legal_signoff_memo.md` | Every time the artefact bundle changes or a new jurisdiction is added. | Memo references hashes from the evidence log and links to the device-lab contingency bundle. |
-| Evidence log | Index of submitted artefacts with hash/timestamp metadata. | `docs/source/compliance/android/evidence_log.csv` | Updated whenever any entry above changes. | Add Buildkite link + reviewer sign-off. |
-| Device-lab instrumentation bundle | Slot-specific telemetry, queue, and attestation evidence recorded with the process defined in `device_lab_instrumentation.md`. | `artifacts/android/device_lab/<slot>/` (see `docs/source/compliance/android/device_lab_instrumentation.md`) | Every reserved slot + failover drill. | Capture SHA-256 manifests and reference the slot ID in the evidence log + checklist. |
-| Device-lab reservation log | Booking workflow, approvals, capacity snapshots, and escalation ladder used to keep StrongBox pools ≥80 % during freezes. | `docs/source/compliance/android/device_lab_reservation.md` | Update whenever reservations are created/changed. | Reference the `_android-device-lab` ticket IDs and weekly calendar export noted in the procedure. |
-| Device-lab failover runbook & drill bundle | Quarterly rehearsal plan and artefact manifest demonstrating fallback lanes, Firebase burst queue, and external StrongBox retainer readiness. | `docs/source/compliance/android/device_lab_failover_runbook.md` + `artifacts/android/device_lab_contingency/<YYYYMMDD>-failover-drill/` | Quarterly (or after hardware roster changes). | Log drill IDs in the evidence log and attach the manifest hash + PagerDuty export noted in the runbook. |
+> **მინიშნება:** PDF-ების ან გარედან ხელმოწერილი არტეფაქტების მიმაგრებისას, შეინახეთ მოკლე
+> მარკდაუნის შეფუთვა ცხრილის ბილიკზე, რომელიც უკავშირდება უცვლელ არტეფაქტს
+> მმართველობის წილი. ეს ინარჩუნებს რეპოს მსუბუქ წონას და ინარჩუნებს მას
+> აუდიტის ბილიკი.
 
-> **Tip:** When attaching PDFs or externally signed artefacts, store a short
-> Markdown wrapper in the tabled path that links to the immutable artefact in
-> the governance share. This keeps the repo lightweight while preserving the
-> audit trail.
+## ევროკავშირის მარეგულირებელი პაკეტი (ETSI/GDPR)ევროკავშირის პაკეტი აერთიანებს ზემოთ მოცემულ სამ არტეფაქტს, პლუს იურიდიულ მემორანდუმს:
 
-## EU Regulatory Packet (ETSI/GDPR)
+- განაახლეთ `security_target.md` გამოშვების იდენტიფიკატორით, Torii მანიფესტის ჰეშით,
+  და SBOM დაიჯესტი, რათა აუდიტორებმა შეძლონ ბინარების შედარება დეკლარირებულ ფარგლებს შორის.
+- შეინახეთ DPIA რეზიუმე შესაბამისობაში ტელემეტრიის რედაქციის უახლეს პოლიტიკასთან და
+  მიამაგრეთ Norito განსხვავების ამონაწერი, რომელიც მითითებულია `docs/source/sdk/android/telemetry_redaction.md`-ში.
+- SBOM ატესტაციის ჩანაწერი უნდა შეიცავდეს: CycloneDX JSON ჰეშს, წარმომავლობას
+  შეფუთვის ჰეში, cosign განაცხადი და Buildkite სამუშაო URL, რომელმაც შექმნა ისინი.
+- `legal_signoff_memo.md` უნდა აღწეროს რჩევა/თარიღი, ჩამოთვალოს ყველა არტეფაქტი +
+  SHA-256, გამოიკვეთეთ ნებისმიერი საკომპენსაციო კონტროლი და დაუკავშირდით მტკიცებულებების ჟურნალის რიგს
+  პლუს PagerDuty ბილეთის ID, რომელიც აკონტროლებდა დამტკიცებას.
 
-The EU packet ties together the three artefacts above plus the legal memo:
+## იაპონიის მარეგულირებელი პაკეტი (FISC/StrongBox)
 
-- Update `security_target.md` with the release identifier, Torii manifest hash,
-  and SBOM digest so auditors can match binaries to the declared scope.
-- Keep the DPIA summary aligned with the latest telemetry redaction policy and
-  attach the Norito diff excerpt referenced in `docs/source/sdk/android/telemetry_redaction.md`.
-- The SBOM attestation entry should include: CycloneDX JSON hash, provenance
-  bundle hash, cosign statement, and the Buildkite job URL that generated them.
-- `legal_signoff_memo.md` must capture the counsel/date, list every artefact +
-  SHA-256, outline any compensating controls, and link to the evidence log row
-  plus the PagerDuty ticket ID that tracked the approval.
+იაპონიის მარეგულირებლები ელიან პარალელურ პაკეტს ორენოვანი დოკუმენტაციით:
 
-## Japan Regulatory Packet (FISC/StrongBox)
-
-Japan’s regulators expect a parallel bundle with bilingual documentation:
-
-- `fisc_controls_checklist.md` mirrors the official spreadsheet; fill both the
-  EN and JA columns and reference the specific section of `sdk/android/security.md`
-  or the StrongBox attestation bundle that satisfies each control.
-- `strongbox_attestation.md` summarises the latest runs of
+- `fisc_controls_checklist.md` ასახავს ოფიციალურ ცხრილს; შეავსეთ ორივე
+  EN და JA სვეტები და მიუთითეთ `sdk/android/security.md`-ის კონკრეტული განყოფილება
+  ან StrongBox ატესტაციის ნაკრები, რომელიც აკმაყოფილებს თითოეულ კონტროლს.
+- `strongbox_attestation.md` აჯამებს უახლეს გაშვებებს
   `docs/source/sdk/android/readiness/android_strongbox_attestation_bundle.md`
-  (per-device JSON + Norito envelopes). Embed links to the immutable artefacts
-  under `artifacts/android/attestation/<device>/` and note the rotation cadence.
-- Record the bilingual cover letter template that ships with submissions inside
-  `docs/source/compliance/android/jp/README.md` so Support can reuse it.
-- Update the evidence log with a single row that references the checklist, the
-  attestation bundle hash, and any JP partner ticket IDs tied to the delivery.
+  (ერთ მოწყობილობაზე JSON + Norito კონვერტები). ჩასვით უცვლელი არტეფაქტების ბმულები
+  ქვეშ `artifacts/android/attestation/<device>/` და აღნიშნეთ ბრუნვის კადენცია.
+- ჩაწერეთ ორენოვანი სამოტივაციო წერილის შაბლონი, რომელიც მოწოდებულია შიგნით
+  `docs/source/compliance/android/jp/README.md`, რათა მხარდაჭერამ შეძლოს მისი ხელახლა გამოყენება.
+- განაახლეთ მტკიცებულებათა ჟურნალი ერთი რიგით, რომელიც მიუთითებს საკონტროლო სიაზე
+  ატესტაციის ნაკრების ჰეში და JP პარტნიორის ნებისმიერი ბილეთის ID, რომელიც დაკავშირებულია მიწოდებასთან.
 
-## Submission Workflow
+## წარდგენის სამუშაო პროცესი
 
-1. **Draft** - Owner prepares the artefact, records the planned filename from
-   the table above, and opens a PR containing the updated Markdown stub plus a
-   checksum of the external attachment.
-2. **Review** - Release Engineering confirms provenance hashes match the staged
-   binaries; Compliance verifies regulatory language; Support ensures SLAs and
-   telemetry policies are referenced correctly.
-3. **Sign-off** - Approvers add their names and dates to the `Sign-off` table
-   below. The evidence log is updated with the PR URL and Buildkite run.
-4. **Publish** - After SRE governance sign-off, link the artefact in
-   `status.md` and update the Android Support Playbook references.
+1. **Draft** - მფლობელი ამზადებს არტეფაქტს, ჩაწერს დაგეგმილი ფაილის სახელს
+   ზემოთ მოცემულ ცხრილში და ხსნის PR-ს, რომელიც შეიცავს განახლებულ Markdown stub პლუს a
+   გარე დანართის საკონტროლო ჯამი.
+2. **მიმოხილვა** - გამოშვების ინჟინერია ადასტურებს, რომ წარმოშობის ჰეშები ემთხვევა დადგმულს
+   ბინარები; შესაბამისობა ამოწმებს მარეგულირებელ ენას; მხარდაჭერა უზრუნველყოფს SLA-ებს და
+   ტელემეტრიის პოლიტიკა სწორად არის მითითებული.
+3. **გასვლა** - დამმტკიცებლები ამატებენ თავიანთ სახელებს და თარიღებს `Sign-off` ცხრილში
+   ქვემოთ. მტკიცებულების ჟურნალი განახლებულია PR URL-ით და Buildkite-ით.
+4. **გამოქვეყნება** - SRE მმართველობის ხელმოწერის შემდეგ, დააკავშირეთ არტეფაქტი
+   `status.md` და განაახლეთ Android-ის მხარდაჭერის Playbook მითითებები.
 
-### Sign-off Log
+### შესვლის ჟურნალი
 
-| Artefact | Reviewed By | Date | PR / Evidence |
-|----------|-------------|------|---------------|
-| *(pending)* | - | - | - |
+| არტეფაქტი | განხილული | თარიღი | PR / მტკიცებულება |
+|----------|------------|-----|--------------|
+| *(მოლოდინში)* | - | - | - |
 
-## Device Lab Reservation & Contingency Plan
+## მოწყობილობის ლაბორატორიის დაჯავშნა და საგანგებო გეგმა
 
-To mitigate the **device lab availability** risk called out in the roadmap:
+**მოწყობილობის ლაბორატორიის ხელმისაწვდომობის** რისკის შესამცირებლად, მითითებულია საგზაო რუკაში:- თვალყური ადევნეთ ყოველკვირეულ მოცულობას `docs/source/compliance/android/evidence_log.csv`-ში
+  (სვეტი `device_lab_capacity_pct`). გაფრთხილების გამოშვების ინჟინერია ხელმისაწვდომობის შემთხვევაში
+  ეცემა 70%-ზე ქვემოთ ზედიზედ ორი კვირის განმავლობაში.
+- შეინახეთ StrongBox/ზოგადი ზოლები შემდეგი
+  `docs/source/compliance/android/device_lab_reservation.md` ყოველი წინ
+  გაყინვა, რეპეტიცია ან შესაბამისობის გაწმენდა, ამიტომ მოითხოვეთ, დამტკიცებები და არტეფაქტები
+  დაფიქსირებულია `_android-device-lab` რიგში. დააკავშირეთ მიღებული ბილეთების ID
+  მტკიცებულების ჟურნალში სიმძლავრის კადრების ჩაწერისას.
+- ** სარეზერვო აუზები:** პირველი ადიდებული Pixel-ის საერთო აუზში; თუ ჯერ კიდევ გაჯერებულია,
+  განრიგი Firebase Test Lab კვამლი მუშაობს CI ვალიდაციისთვის.
+- **გარე ლაბორატორიული დამჭერი:** შეინახეთ რეტეინერი StrongBox-ის პარტნიორთან
+  ლაბორატორია, ასე რომ ჩვენ შეგვიძლია დავჯავშნოთ აპარატურა ფანჯრების გაყინვის დროს (მინიმუმ 7 დღიანი ტყვია).
+- **ესკალაცია:** გაზარდეთ `AND6-device-lab` ინციდენტი PagerDuty-ში, როდესაც ორივე
+  პირველადი და სარეზერვო აუზები ეცემა 50%-ზე ქვემოთ. ტექნიკის ლაბორატორიის წამყვანი
+  კოორდინაციას უწევს SRE-ს მოწყობილობების ხელახლა პრიორიტეტიზაციისთვის.
+- ** წარუმატებელი მტკიცებულებების პაკეტები:** შეინახეთ ყველა რეპეტიცია ქვეშ
+  `artifacts/android/device_lab_contingency/<YYYYMMDD>/` დაჯავშნით
+  მოთხოვნა, PagerDuty ექსპორტი, ტექნიკის მანიფესტი და აღდგენის ტრანსკრიპტი. მითითება
+  პაკეტი `device_lab_contingency.md`-დან და დაამატეთ SHA-256 მტკიცებულების ჟურნალში
+  ასე რომ, ლეგალს შეუძლია დაამტკიცოს, რომ საგანგებო სამუშაო პროცესი განხორციელდა.
+- **კვარტალური წვრთნები:** ივარჯიშეთ რბოლის წიგნში
+  `docs/source/compliance/android/device_lab_failover_runbook.md`, მიამაგრეთ
+  შედეგად მიღებული პაკეტის გზა + მანიფესტის ჰეში `_android-device-lab` ბილეთამდე და
+  ასახეთ საბურღი ID როგორც გაუთვალისწინებელ ჟურნალში, ასევე მტკიცებულებათა ჟურნალში.
 
-- Track weekly capacity in `docs/source/compliance/android/evidence_log.csv`
-  (column `device_lab_capacity_pct`). Alert Release Engineering if availability
-  falls below 70 % for two consecutive weeks.
-- Reserve StrongBox/general lanes following
-  `docs/source/compliance/android/device_lab_reservation.md` ahead of every
-  freeze, rehearsal, or compliance sweep so requests, approvals, and artefacts
-  are captured in the `_android-device-lab` queue. Link the resulting ticket IDs
-  in the evidence log when recording capacity snapshots.
-- **Fallback pools:** burst to the shared Pixel pool first; if still saturated,
-  schedule Firebase Test Lab smoke runs for CI validation.
-- **External lab retainer:** maintain the retainer with the StrongBox partner
-  lab so we can reserve hardware during freeze windows (minimum 7-day lead).
-- **Escalation:** raise `AND6-device-lab` incident in PagerDuty when both the
-  primary and fallback pools drop below 50 % capacity. The Hardware Lab Lead
-  coordinates with SRE to re-prioritise devices.
-- **Failover evidence bundles:** store every rehearsal under
-  `artifacts/android/device_lab_contingency/<YYYYMMDD>/` with the reservation
-  request, PagerDuty export, hardware manifest, and recovery transcript. Reference
-  the bundle from `device_lab_contingency.md` and add the SHA-256 to the evidence log
-  so Legal can prove the contingency workflow was exercised.
-- **Quarterly drills:** exercise the runbook in
-  `docs/source/compliance/android/device_lab_failover_runbook.md`, attach the
-  resulting bundle path + manifest hash to the `_android-device-lab` ticket, and
-  mirror the drill ID in both the contingency log and evidence log.
+დაარეგისტრირეთ საგანგებო გეგმის ყოველი გააქტიურება
+`docs/source/compliance/android/device_lab_contingency.md` (თარიღის ჩათვლით,
+გამომწვევი, მოქმედებები და შემდგომი მოქმედებები).
 
-Document every activation of the contingency plan in
-`docs/source/compliance/android/device_lab_contingency.md` (include date,
-trigger, actions, and follow-ups).
+## სტატიკური ანალიზის პროტოტიპი
 
-## Static-Analysis Prototype
-
-- `make android-lint` wraps `ci/check_android_javac_lint.sh`, compiling
-  `java/iroha_android` and the shared `java/norito_java` sources with
-  `javac --release 21 -Xlint:all -Werror` (with the flagged categories noted in
-- After compilation, the script enforces the AND6 dependency policy with
-  `jdeps --summary`, failing if any module outside the approved allowlist
-  (`java.base`, `java.net.http`, `jdk.httpserver`) appears. This keeps the
-  Android surface aligned with the SDK council’s “no hidden JDK dependencies”
-  requirement before StrongBox compliance reviews.
-- CI now runs the same gate via
-  `.github/workflows/android-lint.yml`, which invokes
-  `ci/check_android_javac_lint.sh` on every push/PR that touches the Android or
-  shared Norito Java sources and uploads `artifacts/android/lint/jdeps-summary.txt`
-  so compliance reviews can reference a signed module list without rerunning the
-  script locally.
-- Set `ANDROID_LINT_KEEP_WORKDIR=1` when you need to retain the temporary
-  workspace. The script already copies the generated module summary into
-  `artifacts/android/lint/jdeps-summary.txt`; set
+- `make android-lint` ახვევს `ci/check_android_javac_lint.sh`, კომპილაცია
+  `java/iroha_android` და გაზიარებული `java/norito_java` წყაროები
+  `javac --release 21 -Xlint:all -Werror` (დროშით მონიშნული კატეგორიებით აღნიშნული
+- შედგენის შემდეგ, სკრიპტი ახორციელებს AND6 დამოკიდებულების პოლიტიკას
+  `jdeps --summary`, ვერ მოხერხდა, თუ რომელიმე მოდული არ არის დამტკიცებული ნებადართული სიის გარეთ
+  (`java.base`, `java.net.http`, `jdk.httpserver`) გამოჩნდება. ეს ინარჩუნებს
+  ანდროიდის ზედაპირი შეესაბამება SDK საბჭოს „არ არის ფარული JDK დამოკიდებულებები“
+  მოთხოვნა StrongBox შესაბამისობის მიმოხილვამდე.
+- CI ახლა გადის იმავე ჭიშკრის გავლით
+  `.github/workflows/android-lint.yml`, რომელიც იწვევს
+  `ci/check_android_javac_lint.sh` ყოველ დაწკაპუნებაზე/PR, რომელიც ეხება Android-ს ან
+  გააზიარა Norito ჯავის წყაროები და ატვირთვები `artifacts/android/lint/jdeps-summary.txt`
+  ასე რომ, შესაბამისობის მიმოხილვებს შეუძლია მიუთითოს ხელმოწერილი მოდულების სია ხელახლა გაშვების გარეშე
+  სკრიპტი ადგილობრივად.
+- დააყენეთ `ANDROID_LINT_KEEP_WORKDIR=1`, როდესაც გჭირდებათ დროებითი შენარჩუნება
+  სამუშაო სივრცე. სკრიპტი უკვე აკოპირებს გენერირებულ მოდულის შეჯამებას
+  `artifacts/android/lint/jdeps-summary.txt`; კომპლექტი
   `ANDROID_LINT_SUMMARY_OUT=docs/source/compliance/android/evidence/android_lint_jdeps.txt`
-  (or similar) when you require an additional, versioned artefact for audits.
-  Engineers should still run the command locally before submitting Android PRs
-  that touch Java sources and attach the recorded summary/log to compliance
-  reviews. Reference it from release notes as “Android javac lint + dependency
-  scan”.
+  (ან მსგავსი), როდესაც აუდიტის ჩასატარებლად გჭირდებათ დამატებითი, ვერსიული არტეფაქტი.
+  ინჟინრებმა მაინც უნდა აწარმოონ ბრძანება ადგილობრივად Android PR-ების გაგზავნამდე
+  რომ შეეხოთ ჯავის წყაროებს და დაურთოთ ჩაწერილი რეზიუმე/ლოგის შესაბამისობას
+  მიმოხილვები. მიუთითეთ იგი გამოშვების შენიშვნებიდან, როგორც „Android javac lint + დამოკიდებულება
+  სკანირება”.
 
-## CI Evidence (Lint, Tests, Attestation)
-
-- `.github/workflows/android-and6.yml` now runs all AND6 gates (javac lint +
-  dependency scan, Android test suite, StrongBox attestation verifier, and
-  device-lab slot validation) on every PR/push touching the Android surface.
-- `ci/run_android_tests.sh` wraps `ci/run_android_tests.sh` and emits
-  a deterministic summary at `artifacts/android/tests/test-summary.json` while
-  persisting the console log to `artifacts/android/tests/test.log`. Attach both
-  files to compliance packets when referencing CI runs.
-- `scripts/android_strongbox_attestation_ci.sh --summary-out` produces
-  `artifacts/android/attestation/ci-summary.json`, validating the bundled
-  attestation chains under `artifacts/android/attestation/**` for StrongBox and
-  TEE pools.
+## CI მტკიცებულება (Lint, ტესტები, ატესტაცია)- `.github/workflows/android-and6.yml` ახლა გადის ყველა AND6 კარიბჭეს (javac lint +
+  დამოკიდებულების სკანირება, Android ტესტის კომპლექტი, StrongBox ატესტაციის დამადასტურებელი და
+  მოწყობილობა-ლაბორატორიის სლოტის ვალიდაცია) ყოველი პიარ/ბიძგი, რომელიც ეხება Android ზედაპირს.
+- `ci/run_android_tests.sh` ახვევს `ci/run_android_tests.sh` და გამოსცემს
+  დეტერმინისტული შეჯამება `artifacts/android/tests/test-summary.json`-ზე ხოლო
+  კონსოლის ჟურნალის შენარჩუნება `artifacts/android/tests/test.log`-ზე. მიამაგრეთ ორივე
+  ფაილები შესაბამისობის პაკეტებთან CI გაშვებების მითითებისას.
+- `scripts/android_strongbox_attestation_ci.sh --summary-out` აწარმოებს
+  `artifacts/android/attestation/ci-summary.json`, ამოწმებს შეფუთულს
+  საატესტაციო ჯაჭვები ქვეშ `artifacts/android/attestation/**` for StrongBox და
+  TEE აუზები.
 - `scripts/check_android_device_lab_slot.py --root fixtures/android/device_lab`
-  verifies the sample slot (`slot-sample/`) used in CI and can be pointed at
-  real runs under `artifacts/android/device_lab/<slot-id>/` with
-  `--require-slot --json-out <dest>` to prove instrumentation bundles follow
-  the documented layout. CI writes the validation summary to
-  `artifacts/android/device_lab/summary.json`; the sample slot includes
-  placeholder telemetry/attestation/queue/log extracts plus a recorded
-  `sha256sum.txt` for reproducible hashes.
+  ამოწმებს ნიმუშის სლოტს (`slot-sample/`), რომელიც გამოიყენება CI-ში და შეიძლება მიუთითებდეს
+  რეალური მუშაობს `artifacts/android/device_lab/<slot-id>/` ქვეშ
+  `--require-slot --json-out <dest>` ინსტრუმენტების პაკეტების დასამტკიცებლად მოჰყვება
+  დოკუმენტირებული განლაგება. CI წერს ვალიდაციის შეჯამებას
+  `artifacts/android/device_lab/summary.json`; ნიმუშის სლოტი მოიცავს
+  ჩანაცვლების ტელემეტრია/ატესტაცია/რიგი/ლოგის ამონაწერები პლუს ჩაწერილი
+  `sha256sum.txt` რეპროდუცირებადი ჰეშებისთვის.
 
 ## Device-Lab Instrumentation Workflow
 
-Every reservation or failover rehearsal must follow the
-`device_lab_instrumentation.md` guide so telemetry, queue, and attestation
-artefacts line up with the booking log:
+ყოველი დაჯავშნა ან წარუმატებელი რეპეტიცია უნდა მოჰყვეს
+`device_lab_instrumentation.md` სახელმძღვანელო ტელემეტრია, რიგი და ატესტაცია
+არტეფაქტები შეესაბამება დაჯავშნის ჟურნალს:
 
-1. **Seed slot artefacts.** Create
-   `artifacts/android/device_lab/<slot>/` with the standard sub-folders and run
-   `shasum` after the slot closes (see the “Artifact Layout” section of the new
-   guide).
-2. **Run instrumentation commands.** Execute the telemetry/queue capture,
-   override digest, StrongBox harness, and lint/dependency scan exactly as
-   documented so the outputs mirror CI.
-3. **File evidence.** Update
-   `docs/source/compliance/android/evidence_log.csv` and the reservation ticket
-   with the slot ID, SHA-256 manifest path, and corresponding dashboard/Buildkite
-   links.
+1. **Seed slot artefacts.** შექმნა
+   `artifacts/android/device_lab/<slot>/` სტანდარტული ქვესაქაღალდეებით და გაუშვით
+   `shasum` სლოტის დახურვის შემდეგ (იხ. განყოფილება „Artifact Layout“ ახალი
+   სახელმძღვანელო).
+2. ** გაუშვით ინსტრუმენტული ბრძანებები. ** შეასრულეთ ტელემეტრია / რიგის დაჭერა,
+   უგულებელყოფა დაიჯესტი, StrongBox აღკაზმულობა და ლაქები/დამოკიდებულების სკანირება ზუსტად ისე, როგორც
+   დოკუმენტირებულია ისე, რომ შედეგები ასახავს CI.
+3. ** ფაილის მტკიცებულება. ** განახლება
+   `docs/source/compliance/android/evidence_log.csv` და დაჯავშნის ბილეთი
+   სლოტის ID-ით, SHA-256 მანიფესტის ბილიკით და შესაბამისი დაფის/Buildkite-ით
+   ბმულები.
 
-Attach the artefact folder and the hash manifest to the AND6 release packet for
-the affected freeze window. Governance reviewers will reject checklists that do
-not cite a slot identifier plus the instrumentation guide.
+მიამაგრეთ არტეფაქტის საქაღალდე და ჰეშის მანიფესტი AND6 გამოშვების პაკეტს
+დაზარალებული გაყინვის ფანჯარა. მმართველობის მიმომხილველები უარს იტყვიან იმ საკონტროლო სიებზე, რომლებიც ამას აკეთებენ
+არ მიუთითოთ სლოტის იდენტიფიკატორი პლუს ინსტრუმენტული სახელმძღვანელო.
 
-### Reservation & Failover Readiness Evidence
+### დაჯავშნა და წარუმატებლობის მზადყოფნის მტკიცებულება
 
-Roadmap item “Regulatory artefact approvals & lab contingency” requires more
-than instrumentation. Every AND6 packet must also reference the proactive
-reservation workflow and quarterly failover rehearsal:
+საგზაო რუქის პუნქტი „მარეგულირებელი არტეფაქტის დამტკიცება და ლაბორატორიული შემთხვევები“ მეტს მოითხოვს
+ვიდრე ინსტრუმენტაცია. ყოველი AND6 პაკეტი ასევე უნდა მიუთითებდეს პროაქტიულზე
+დაჯავშნის სამუშაო პროცესი და კვარტალური შეცდომის რეპეტიცია:- ** დაჯავშნის სათამაშო წიგნი (`device_lab_reservation.md`).** მიჰყევით დაჯავშნას
+  ცხრილი (მიყვანის დრო, მფლობელები, სლოტის სიგრძე), საზიარო კალენდრის ექსპორტი მეშვეობით
+  `scripts/android_device_lab_export.py` და ჩაწერეთ `_android-device-lab`
+  ბილეთების ID-ები ტევადობის სნეპშოტებთან ერთად `evidence_log.csv`-ში. სათამაშო წიგნი
+  ხაზს უსვამს ესკალაციის კიბეს და გაუთვალისწინებელ ფაქტორებს; დააკოპირეთ ეს დეტალები
+  საკონტროლო სიის ჩანაწერში, როდესაც ჯავშნები გადადის ან მოცულობა მცირდება ქვემოთ
+  80% საგზაო რუკის მიზანი.
+- **Failover-ის საბურღი წიგნაკი (`device_lab_failover_runbook.md`).** შეასრულეთ
+  კვარტალური რეპეტიცია (გათიშვის სიმულაცია → სარეზერვო ზოლების ხელშეწყობა → ჩართვა
+  Firebase burst + გარე StrongBox პარტნიორი) და შეინახეთ არტეფაქტები ქვეშ
+  `artifacts/android/device_lab_contingency/<drill-id>/`. თითოეული შეკვრა უნდა
+  შეიცავდეს მანიფესტს, PagerDuty ექსპორტს, Buildkite-ის გაშვების ბმულებს, Firebase burst-ს
+  მოხსენება და დამჭერის აღიარება მითითებულია წიგნში. მითითება
+  საბურღი ID, SHA-256 მანიფესტი და შემდგომი ბილეთი როგორც მტკიცებულებების ჟურნალში, ასევე
+  ეს ჩამონათვალი.
 
-- **Reservation playbook (`device_lab_reservation.md`).** Follow the booking
-  table (lead times, owners, slot lengths), export the shared calendar via
-  `scripts/android_device_lab_export.py`, and record `_android-device-lab`
-  ticket IDs alongside capacity snapshots in `evidence_log.csv`. The playbook
-  spells out the escalation ladder and contingency triggers; copy those details
-  into the checklist entry when reservations move or capacity drops below the
-  80 % roadmap target.
-- **Failover drill runbook (`device_lab_failover_runbook.md`).** Execute the
-  quarterly rehearsal (simulate outage → promote fallback lanes → engage
-  Firebase burst + external StrongBox partner) and store the artefacts under
-  `artifacts/android/device_lab_contingency/<drill-id>/`. Each bundle must
-  contain the manifest, PagerDuty export, Buildkite run links, Firebase burst
-  report, and retainer acknowledgement noted in the runbook. Reference the
-  drill ID, SHA-256 manifest, and follow-up ticket in both the evidence log and
-  this checklist.
+ეს დოკუმენტები ერთად ადასტურებს, რომ მოწყობილობის სიმძლავრის დაგეგმვა, გათიშვის რეპეტიციები,
+და ინსტრუმენტული პაკეტები იზიარებენ იმავე აუდიტის კვალს, რომელსაც ითხოვს
+საგზაო რუკა და იურიდიული მიმომხილველები.
 
-Together these documents prove that device capacity planning, outage rehearsals,
-and the instrumentation bundles share the same audited trail demanded by the
-roadmap and legal reviewers.
+## მიმოხილვა Cadence
 
-## Review Cadence
-
-- **Quarterly** - Validate that EU/JP artefacts are up to date; refresh
-  evidence log hashes; rehearse provenance capture.
-- **Pre-release** - Run this checklist during every GA/LTS cutover and attach
-  the completed log to the release RFC.
-- **Post-incident** - If a Sev 1/2 incident touches telemetry, signing, or
-  attestation, update the relevant artefact stubs with remediation notes and
-  capture the reference in the evidence log.
+- **კვარტალური** - დაადასტურეთ, რომ EU/JP არტეფაქტები განახლებულია; განაახლეთ
+  მტკიცებულება ჟურნალის ჰეშები; წარმოშობის დაჭერის რეპეტიცია.
+- **წინასწარ გამოშვება** - გაუშვით ეს სია ყოველი GA/LTS ამოღების დროს და მიამაგრეთ
+  დასრულებული ჟურნალი გამოშვების RFC-ში.
+- **შემთხვევის შემდგომი ** - თუ Sev 1/2 ინციდენტი ეხება ტელემეტრიას, ხელმოწერას ან
+  ატესტაცია, განაახლეთ შესაბამისი არტეფაქტის ნაკერები სარემედაციო ჩანაწერებით და
+  აღბეჭდეთ მითითება მტკიცებულებათა ჟურნალში.

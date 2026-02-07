@@ -6,55 +6,56 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 8bb3e19ca5eb661d202b5e3b9cd118207ded277e8ff717e16a342b71e7a67857
 source_last_modified: "2026-01-03T18:07:59.200257+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# AND6 EU Legal Sign-off Memo Template
+# AND6 Шаблон юридической записки ЕС
 
-This memo records the legal review required by roadmap item **AND6** before the
-EU (ETSI/GDPR) artefact packet is submitted to regulators. Counsel should clone
-this template per release, populate the fields below, and store the signed copy
-alongside the immutable artefacts referenced in the memo.
+В этой памятке записана юридическая проверка, требуемая пунктом дорожной карты **И6**, перед
+Пакет артефактов ЕС (ETSI/GDPR) передается регулирующим органам. Адвокат должен клонировать
+этот шаблон для каждого выпуска, заполните поля ниже и сохраните подписанную копию.
+наряду с неизменяемыми артефактами, упомянутыми в записке.
 
-## Summary
+## Резюме
 
-- **Release / Train:** `<e.g., 2026.1 GA>`
-- **Review date:** `<YYYY-MM-DD>`
-- **Counsel / Reviewer:** `<name + organisation>`
-- **Scope:** `ETSI EN 319 401 security target, GDPR DPIA summary, SBOM attestation`
-- **Associated tickets:** `<governance or legal issue IDs>`
+- **Выпуск/Обработка:** `<e.g., 2026.1 GA>`
+- **Дата проверки:** `<YYYY-MM-DD>`
+- **Советник/Рецензент:** `<name + organisation>`
+- **Объем:** `ETSI EN 319 401 security target, GDPR DPIA summary, SBOM attestation`
+- **Связанные билеты:** `<governance or legal issue IDs>`
 
-## Artefact Checklist
+## Контрольный список артефактов
 
-| Artefact | SHA-256 | Location / Link | Notes |
+| Артефакт | ША-256 | Местоположение / Ссылка | Заметки |
 |----------|---------|-----------------|-------|
-| `security_target.md` | `<hash>` | `docs/source/compliance/android/eu/security_target.md` + governance archive | Confirm release identifiers & threat model adjustments. |
-| `gdpr_dpia_summary.md` | `<hash>` | Same directory / localization mirrors | Ensure redaction policy references match `sdk/android/telemetry_redaction.md`. |
-| `sbom_attestation.md` | `<hash>` | Same directory + cosign bundle in evidence bucket | Verify CycloneDX + provenance signatures. |
-| Evidence log row | `<hash>` | `docs/source/compliance/android/evidence_log.csv` | Row number `<n>` |
-| Device-lab contingency bundle | `<hash>` | `artifacts/android/device_lab_contingency/<YYYYMMDD>/*.tgz` | Confirms failover rehearsal tied to this release. |
+| `security_target.md` | `<hash>` | `docs/source/compliance/android/eu/security_target.md` + архив управления | Подтвердите идентификаторы выпусков и корректировки модели угроз. |
+| `gdpr_dpia_summary.md` | `<hash>` | Тот же каталог/зеркала локализации | Убедитесь, что ссылки на политику редактирования соответствуют `sdk/android/telemetry_redaction.md`. |
+| `sbom_attestation.md` | `<hash>` | Тот же каталог + пакет cosign в сегменте доказательств | Проверьте подписи происхождения CycloneDX +. |
+| Строка журнала доказательств | `<hash>` | `docs/source/compliance/android/evidence_log.csv` | Номер строки `<n>` |
+| Пакет действий на случай непредвиденных обстоятельств «устройство-лаборатория» | `<hash>` | `artifacts/android/device_lab_contingency/<YYYYMMDD>/*.tgz` | Подтверждает репетицию отработки отказа, связанную с этим выпуском. |
 
-> Attach additional rows if the packet contains more files (for example, privacy
-> appendices or DPIA translations). Every artefact must reference its immutable
-> upload target and the Buildkite job that produced it.
+> Прикрепите дополнительные строки, если пакет содержит больше файлов (например, конфиденциальность).
+> приложения или переводы DPIA). Каждый артефакт должен ссылаться на свой неизменяемый объект.
+> загрузить цель и задание Buildkite, которое ее создало.
 
-## Findings & Exceptions
+## Выводы и исключения
 
-- `None.` *(Replace with bullet list covering residual risks, compensating
-  controls, or required follow-up actions.)*
+- `None.` *(Заменить маркированным списком, охватывающим остаточные риски, компенсирующие
+  средства контроля или необходимые последующие действия.)*
 
-## Approval
+## Одобрение
 
-- **Decision:** `<Approved / Approved with conditions / Blocked>`
-- **Signature / Timestamp:** `<digital signature or email reference>`
-- **Follow-up owners:** `<team + due date for any conditions>`
+- **Решение:** `<Approved / Approved with conditions / Blocked>`
+- **Подпись/временная метка:** `<digital signature or email reference>`
+- **Последующие владельцы:** `<team + due date for any conditions>`
 
-Upload the final memo to the governance evidence bucket, copy the SHA-256 into
-`docs/source/compliance/android/evidence_log.csv`, and link the upload path in
-`status.md`. If the decision is “Blocked,” escalate to the AND6 steering
-committee and document remediation steps in both the roadmap hot-list and the
-device-lab contingency log.
+Загрузите окончательную заметку в корзину доказательств управления, скопируйте SHA-256 в
+`docs/source/compliance/android/evidence_log.csv` и укажите путь загрузки в
+`status.md`. Если решение «Заблокировано», обратитесь к управляющему AND6.
+комитет и шаги по исправлению документов как в «горячем списке» дорожной карты, так и в «горячем списке»
+журнал непредвиденных ситуаций в лаборатории устройства.

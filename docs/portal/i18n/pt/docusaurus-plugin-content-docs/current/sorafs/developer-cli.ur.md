@@ -4,23 +4,25 @@ direction: ltr
 source: docs/portal/docs/sorafs/developer-cli.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: developer-cli
-title: SoraFS CLI cookbook
-sidebar_label: CLI cookbook
-description: Consolidated `sorafs_cli` surface کا task-focused walkthrough۔
+id: desenvolvedor-cli
+título: Livro de receitas CLI SoraFS
+sidebar_label: livro de receitas CLI
+descrição: Superfície `sorafs_cli` consolidada کا passo a passo focado em tarefas۔
 ---
 
-:::note مستند ماخذ
+:::nota مستند ماخذ
 :::
 
-Consolidated `sorafs_cli` surface (جو `sorafs_car` crate کے ذریعے `cli` feature کے ساتھ فراہم ہوتا ہے) SoraFS artifacts تیار کرنے کے لیے درکار ہر قدم expose کرتا ہے۔ اس cookbook کو عام workflows پر سیدھا جانے کے لیے استعمال کریں؛ operational context کے لیے اسے manifest pipeline اور orchestrator runbooks کے ساتھ pair کریں۔
+Superfície `sorafs_cli` consolidada (caixa `sorafs_car` کے ذریعے recurso `cli` کے ساتھ فراہم ہوتا ہے) Artefatos SoraFS تیار کرنے کے لیے درکار ہر قدم expor کرتا ہے۔ O livro de receitas e os fluxos de trabalho são os mais importantes para você contexto operacional کے لیے اسے pipeline de manifesto اور runbooks do orquestrador کے ساتھ par کریں۔
 
-## Package payloads
+## Cargas úteis do pacote
 
-Deterministic CAR archives اور chunk plans بنانے کے لیے `car pack` استعمال کریں۔ اگر handle فراہم نہ ہو تو command خودکار طور پر SF-1 chunker منتخب کرتا ہے۔
+Arquivos CAR determinísticos e planos de blocos بنانے کے لیے `car pack` استعمال کریں۔ اگر handle فراہم نہ ہو تو command خودکار طور پر SF-1 chunker منتخب کرتا ہے۔
 
 ```bash
 sorafs_cli car pack \
@@ -30,11 +32,11 @@ sorafs_cli car pack \
   --summary-out artifacts/video.car.json
 ```
 
-- Default chunker handle: `sorafs.sf1@1.0.0`.
-- Directory inputs lexicographic order میں walk ہوتے ہیں تاکہ checksums مختلف پلیٹ فارمز پر بھی stable رہیں۔
-- JSON summary میں payload digests، فی chunk metadata، اور registry/orchestrator کے ذریعے پہچانا گیا root CID شامل ہوتا ہے۔
+- Alça do chunker padrão: `sorafs.sf1@1.0.0`.
+- Ordem lexicográfica de entradas de diretório میں walk ہوتے ہیں تاکہ somas de verificação مختلف پلیٹ فارمز پر بھی stable رہیں۔
+- Resumo JSON میں resumos de carga útil, فی metadados de pedaços, registro / orquestrador کے ذریعے پہچانا گیا root CID شامل ہوتا ہے۔
 
-## Construct manifests
+## Construir manifestos
 
 ```bash
 sorafs_cli manifest build \
@@ -46,11 +48,11 @@ sorafs_cli manifest build \
   --manifest-json-out artifacts/video.manifest.json
 ```
 
-- `--pin-*` options براہ راست `sorafs_manifest::ManifestBuilder` میں `PinPolicy` fields سے map ہوتے ہیں۔
-- `--chunk-plan` تب دیں جب آپ چاہتے ہوں کہ CLI submission سے پہلے SHA3 chunk digest دوبارہ compute کرے؛ ورنہ وہ summary میں embed شدہ digest reuse کرتا ہے۔
-- JSON output Norito payload کی عکاسی کرتا ہے تاکہ reviews کے دوران diffs سیدھے ہوں۔
+- Opções `--pin-*` براہ راست `sorafs_manifest::ManifestBuilder` میں Campos `PinPolicy` سے mapa ہوتے ہیں۔
+- `--chunk-plan` تب دیں جب آپ چاہتے ہوں کہ Envio CLI سے پہلے SHA3 chunk digest دوبارہ computar کرے؛ ورنہ وہ resumo میں incorporar شدہ digerir reutilizar کرتا ہے۔
+- Saída JSON Carga útil Norito کی عکاسی کرتا ہے تاکہ comentários کے دوران diffs سیدھے ہوں۔
 
-## Sign manifests without long-lived keys
+## Assinar manifestos sem chaves de longa duração
 
 ```bash
 sorafs_cli manifest sign \
@@ -60,11 +62,11 @@ sorafs_cli manifest sign \
   --identity-token-env SIGSTORE_ID_TOKEN
 ```
 
-- Inline tokens، environment variables یا file-based sources قبول کرتا ہے۔
-- Provenance metadata (`token_source`, `token_hash_hex`, chunk digest) شامل کرتا ہے اور raw JWT کو محفوظ نہیں کرتا، جب تک `--include-token=true` نہ ہو۔
+- Tokens embutidos, variáveis de ambiente e fontes baseadas em arquivo قبول کرتا ہے۔
+- Metadados de proveniência (`token_source`, `token_hash_hex`, resumo de pedaços) Não
 - CI میں بہتر کام کرتا ہے: GitHub Actions OIDC کے ساتھ `--identity-token-provider=github-actions` استعمال کریں۔
 
-## Submit manifests to Torii
+## Envie manifestos para Torii
 
 ```bash
 sorafs_cli manifest submit \
@@ -79,11 +81,11 @@ sorafs_cli manifest submit \
   --summary-out artifacts/video.submit.json
 ```
 
-- Alias proofs کے لیے Norito decoding کرتا ہے اور Torii کو POST کرنے سے پہلے انہیں manifest digest سے match کرتا ہے۔
-- Plan سے chunk SHA3 digest دوبارہ compute کرتا ہے تاکہ mismatch attacks روکے جا سکیں۔
-- Response summaries بعد کی auditing کے لیے HTTP status، headers، اور registry payloads محفوظ کرتی ہیں۔
+- Provas de alias کے لیے Norito decodificação کرتا ہے اور Torii کو POST کرنے سے پہلے انہیں manifest digest سے match کرتا ہے۔
+- Planejar سے pedaço SHA3 digest دوبارہ computar کرتا ہے تاکہ ataques de incompatibilidade روکے جا سکیں۔
+- Resumos de respostas, auditoria, status HTTP, cabeçalhos e cargas úteis do registro.
 
-## Verify CAR contents and proofs
+## Verifique o conteúdo e as provas do CAR
 
 ```bash
 sorafs_cli proof verify \
@@ -92,10 +94,10 @@ sorafs_cli proof verify \
   --summary-out artifacts/video.verify.json
 ```
 
-- PoR tree دوبارہ بناتا ہے اور payload digests کو manifest summary کے ساتھ compare کرتا ہے۔
-- Replication proofs کو governance میں submit کرتے وقت مطلوبہ counts اور identifiers capture کرتا ہے۔
+- Árvore PoR دوبارہ بناتا ہے اور resumos de carga útil کو resumo do manifesto کے ساتھ comparar کرتا ہے۔
+- Provas de replicação کو governança میں enviar کرتے وقت مطلوبہ contagens اور captura de identificadores کرتا ہے۔
 
-## Stream proof telemetry
+## Telemetria à prova de fluxo
 
 ```bash
 sorafs_cli proof stream \
@@ -106,16 +108,14 @@ sorafs_cli proof stream \
   --stream-token "$(cat stream.token)" \
   --summary-out artifacts/video.proof_stream.json \
   --governance-evidence-dir artifacts/video.proof_stream_evidence
-```
+```- ہر prova transmitida کے لیے itens NDJSON emitem کرتا ہے (`--emit-events=false` سے repetição بند کریں)۔
+- Contagens de sucesso/falha, histogramas de latência, falhas amostradas e resumo JSON میں agregado کرتا ہے تاکہ raspagem de logs de painéis کیے بغیر نتائج دکھا سکیں۔
+- جب relatório de falhas de gateway کرے یا verificação PoR local (`--por-root-hex` کے ذریعے) provas rejeitadas کرے تو saída diferente de zero دیتا ہے۔ execuções de ensaio کے لیے `--max-failures` e `--max-verification-failures` سے ajuste de limites کریں۔
+- آج PoR کو suporte کرتا ہے؛ PDP e PoTR SF-13/SF-14 são um envelope que pode ser reutilizado
+- `--governance-evidence-dir` resumo renderizado, metadados (carimbo de data e hora, versão CLI, URL do gateway, resumo do manifesto), اور manifest کی ایک copiar فراہم کردہ diretório میں لکھتا ہے تاکہ pacotes de governança evidência de fluxo de prova کو executar دوبارہ کیے بغیر arquivo کر سکیں۔
 
-- ہر streamed proof کے لیے NDJSON items emit کرتا ہے (`--emit-events=false` سے replay بند کریں)۔
-- Success/failure counts، latency histograms، اور sampled failures کو summary JSON میں aggregate کرتا ہے تاکہ dashboards logs scrape کیے بغیر نتائج دکھا سکیں۔
-- جب gateway failures report کرے یا local PoR verification (`--por-root-hex` کے ذریعے) proofs reject کرے تو non-zero exit دیتا ہے۔ rehearsal runs کے لیے `--max-failures` اور `--max-verification-failures` سے thresholds adjust کریں۔
-- آج PoR کو support کرتا ہے؛ PDP اور PoTR SF-13/SF-14 آنے پر اسی envelope کو reuse کریں گے۔
-- `--governance-evidence-dir` rendered summary، metadata (timestamp, CLI version, gateway URL, manifest digest)، اور manifest کی ایک copy فراہم کردہ directory میں لکھتا ہے تاکہ governance packets proof-stream evidence کو run دوبارہ کیے بغیر archive کر سکیں۔
+## Referências adicionais
 
-## Additional references
-
-- `docs/source/sorafs_cli.md` — تمام flags کی جامع دستاویزات۔
-- `docs/source/sorafs_proof_streaming.md` — proof telemetry schema اور Grafana dashboard template۔
-- `docs/source/sorafs/manifest_pipeline.md` — chunking، manifest composition، اور CAR handling پر تفصیلی جائزہ۔
+- `docs/source/sorafs_cli.md` — Sinalizadores de تمام کی جامع دستاویزات۔
+- `docs/source/sorafs_proof_streaming.md` — esquema de telemetria de prova e modelo de painel Grafana۔
+- `docs/source/sorafs/manifest_pipeline.md` — chunking, composição do manifesto, e manuseio de CAR پر تفصیلی جائزہ۔

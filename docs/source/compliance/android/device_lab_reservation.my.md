@@ -7,103 +7,102 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 05dc578338882ddfcdf2410b0643774ceb8212f28739ba94ac83edf087b9b5dc
 source_last_modified: "2025-12-29T18:16:35.924530+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Android Device Lab Reservation Procedure (AND6/AND7)
+# Android စက်ပစ္စည်း ဓာတ်ခွဲခန်း ကြိုတင်မှာယူမှု လုပ်ငန်းစဉ် (AND6/AND7)
 
-This playbook describes how the Android team books, confirms, and audits device
-lab time for milestones **AND6** (CI & compliance hardening) and **AND7**
-(observability readiness). It complements the contingency log in
-`docs/source/compliance/android/device_lab_contingency.md` by ensuring capacity
-shortfalls are avoided in the first place.
+ဤကစားနည်းစာအုပ်သည် Android အဖွဲ့မှ စာအုပ်များ၊ အတည်ပြုခြင်းနှင့် စာရင်းစစ်ကိရိယာကို မည်သို့ဖော်ပြသည်
+မှတ်တိုင်များအတွက် ဓာတ်ခွဲခန်းအချိန် **AND6** (CI နှင့် လိုက်လျောညီထွေ တင်းမာခြင်း) နှင့် **AND7**
+(ကြည့်ရှုနိုင်မှု စေတနာ)။ ၎င်းသည် အရေးပေါ်ဝင်ရောက်မှုကို ဖြည့်စွက်ပေးသည်။
+`docs/source/compliance/android/device_lab_contingency.md` စွမ်းရည်ကို သေချာစေပါသည်။
+အားနည်းချက်များကို ဦးစွာရှောင်ရှားပါ။
 
 ## 1. Goals & Scope
 
-- Keep the StrongBox + general device pools above the roadmap-mandated 80 %
-  capacity target throughout freeze windows.
-- Provide a deterministic calendar so CI, attestation sweeps, and chaos
-  rehearsals never compete for the same hardware.
-- Capture an auditable trail (requests, approvals, post-run notes) that feeds
-  the AND6 compliance checklist and the evidence log.
+- လမ်းပြမြေပုံအရ လုပ်ပိုင်ခွင့် 80% အထက်တွင် StrongBox + ယေဘူယျစက်ပစ္စည်းစုများကို ထားရှိပါ။
+  အေးခဲနေသော ပြတင်းပေါက်များတစ်လျှောက် စွမ်းရည်ပစ်မှတ်။
+- သတ်မှတ်ပြဋ္ဌာန်းထားသော ပြက္ခဒိန်တစ်ခု ပေး၍ CI၊ အထောက်အထား ရှင်းရှင်းလင်းလင်း နှင့် ပရမ်းပတာဖြစ်နေသည်။
+  အစမ်းလေ့ကျင့်မှုများသည် တူညီသော ဟာ့ဒ်ဝဲအတွက် ဘယ်တော့မှ မပြိုင်ပါ။
+- စာရင်းစစ်နိုင်သောလမ်းကြောင်း (တောင်းဆိုချက်များ၊ အတည်ပြုချက်များ၊ လုပ်ဆောင်ပြီးနောက်မှတ်စုများ) ကို ဖမ်းယူပါ
+  AND6 လိုက်နာမှု စစ်ဆေးရေးစာရင်းနှင့် အထောက်အထားမှတ်တမ်း။
 
-This procedure covers the dedicated Pixel lanes, the shared fallback pool, and
-the external StrongBox lab retainer referenced in the roadmap. Ad‑hoc emulator
-usage is out of scope.
+ဤလုပ်ထုံးလုပ်နည်းသည် သီးသန့် Pixel လမ်းကြောင်းများ၊ မျှဝေထားသော လှည့်ကွက်များ နှင့် အကျုံးဝင်ပါသည်။
+လမ်းပြမြေပုံတွင် ကိုးကားထားသော ပြင်ပ StrongBox ဓာတ်ခွဲခန်းထိန်းသိမ်းသူ။ Ad-hoc emulator
+အသုံးပြုမှုမှာ ဘောင်မဝင်ပါ။
 
 ## 2. Reservation Windows
 
-| Pool / Lane | Hardware | Default Slot Length | Booking Lead Time | Owner |
-|-------------|----------|---------------------|-------------------|-------|
-| `pixel8pro-strongbox-a` | Pixel 8 Pro (StrongBox) | 4 h | 3 business days | Hardware Lab Lead |
-| `pixel8a-ci-b` | Pixel 8a (CI general) | 2 h | 2 business days | Android Foundations TL |
-| `pixel7-fallback` | Pixel 7 shared pool | 2 h | 1 business day | Release Engineering |
-| `firebase-burst` | Firebase Test Lab smoke queue | 1 h | 1 business day | Android Foundations TL |
-| `strongbox-external` | External StrongBox lab retainer | 8 h | 7 calendar days | Program Lead |
+| ရေကူးကန်/လမ်းသွယ်| ဟာ့ဒ်ဝဲ | ပုံသေ အပေါက် အရှည် | ကြိုတင်စာရင်းသွင်းချိန် | ပိုင်ရှင် |
+|----------------|----------|---------------------------------|--------------------|--------|
+| `pixel8pro-strongbox-a` | Pixel8Pro (StrongBox) | 4h | အလုပ်ချိန် 3 ရက် | Hardware Lab Lead |
+| `pixel8a-ci-b` | Pixel8a (CI အထွေထွေ) | 2h | အလုပ်ချိန် 2 ရက် | Android Foundations TL |
+| `pixel7-fallback` | Pixel7 မျှဝေထားသော ရေကူးကန် | 2h | အလုပ်ချိန် 1 ရက် | အင်ဂျင်နီယာဌာန |
+| `firebase-burst` | Firebase Test Lab မီးခိုးတန်းစီ | 1h | အလုပ်ချိန် 1 ရက် | Android Foundations TL |
+| `strongbox-external` | ပြင်ပ StrongBox ဓာတ်ခွဲခန်း ထိန်းသိမ်းသူ | 8h | ပြက္ခဒိန် ၇ ရက် | အစီအစဉ် ဦးဆောင် |
 
-Slots are booked in UTC; overlapping reservations require explicit approval
-from the Hardware Lab Lead.
+အကွက်များကို UTC တွင် ကြိုတင်စာရင်းသွင်းထားသည်။ ထပ်နေသော ကြိုတင်မှာယူမှုများသည် ပြတ်သားစွာ အတည်ပြုချက် လိုအပ်သည်။
+Hardware Lab Lead မှ
 
-## 3. Request Workflow
+## 3. အလုပ်အသွားအလာကို တောင်းဆိုပါ။
 
-1. **Prepare context**
-   - Update `docs/source/sdk/android/android_strongbox_device_matrix.md` with
-     the devices you plan to exercise and the readiness tag
-     (`attestation`, `ci`, `chaos`, `partner`).
-   - Collect the latest capacity snapshot from
-     `docs/source/sdk/android/android_strongbox_capture_status.md`.
-2. **Submit request**
-   - File a ticket in the `_android-device-lab` queue using the template in
-     `docs/examples/android_device_lab_request.md` (owner, dates, workloads,
-     fallback requirement).
-   - Attach any regulatory dependencies (e.g. AND6 attestation sweep, AND7
-     telemetry drill) and link to the relevant roadmap entry.
-3. **Approval**
-   - Hardware Lab Lead reviews within one business day, confirms slot in the
-     shared calendar (`Android Device Lab – Reservations`), and updates the
-     `device_lab_capacity_pct` column in
-     `docs/source/compliance/android/evidence_log.csv`.
-4. **Execution**
-   - Run the scheduled jobs; record Buildkite run IDs or tooling logs.
-   - Note any deviations (hardware swaps, overruns).
-5. **Closure**
-   - Comment on the ticket with artefacts/links.
-   - If the run was compliance-related, update
-     `docs/source/compliance/android/and6_compliance_checklist.md` and add a row
-     to `evidence_log.csv`.
+1. **အကြောင်းအရာကို ပြင်ဆင်ပါ**
+   - `docs/source/sdk/android/android_strongbox_device_matrix.md` ဖြင့် အပ်ဒိတ်လုပ်ပါ။
+     သင်လေ့ကျင့်ရန် စီစဉ်ထားသော စက်များနှင့် အဆင်သင့်ဖြစ်မှု tag
+     (`attestation`, `ci`, `chaos`, `partner`)။
+   - နောက်ဆုံးပေါ်စွမ်းရည်လျှပ်တစ်ပြက်ကိုစုဆောင်းပါ။
+     `docs/source/sdk/android/android_strongbox_capture_status.md`။
+2. **တောင်းဆိုမှုကို တင်သွင်းပါ**
+   - နမူနာပုံစံကို အသုံးပြု၍ `_android-device-lab` တန်းစီတွင် လက်မှတ်တစ်ခုတင်ပါ။
+     `docs/examples/android_device_lab_request.md` (ပိုင်ရှင်၊ ရက်စွဲများ၊ အလုပ်တာဝန်များ၊
+     ဆုတ်ယုတ်မှု လိုအပ်ချက်)။
+   - စည်းမျဉ်းစည်းကမ်းဆိုင်ရာ မှီခိုမှုတစ်ခုခုကို ပူးတွဲပါ (ဥပမာ AND6 သက်သေပြခြင်း၊ AND7
+     telemetry drill) နှင့် သက်ဆိုင်ရာ လမ်းပြမြေပုံ entry ကို ချိတ်ဆက်ပါ။
+3. **ခွင့်ပြုချက်**
+   - လုပ်ငန်းရက်တစ်ရက်အတွင်း Hardware Lab မှ ဦးဆောင်သုံးသပ်ချက်များ၊ အထိုင်ရှိ အပေါက်ကို အတည်ပြုသည်။
+     မျှဝေထားသော ပြက္ခဒိန် (`Android Device Lab – Reservations`) နှင့် အပ်ဒိတ်လုပ်ပါ။
+     `device_lab_capacity_pct` ကော်လံ
+     `docs/source/compliance/android/evidence_log.csv`။
+4. **ကွပ်မျက်ခြင်း**
+   - စီစဉ်ထားသောအလုပ်များကိုလုပ်ဆောင်ပါ။ Buildkite run IDs သို့မဟုတ် tooling မှတ်တမ်းများကို မှတ်တမ်းတင်ပါ။
+   - သွေဖည်မှုများ (ဟာ့ဒ်ဝဲ လဲလှယ်မှု၊ လွန်ကဲမှုများ) ကို သတိပြုပါ။
+5. **ပိတ်**
+   - လက်မှတ်ပေါ်တွင် artefacts/links များနှင့်အတူမှတ်ချက်။
+   - အကယ်၍ လုပ်ဆောင်မှုသည် လိုက်နာမှု နှင့် ပတ်သက်ပါက အပ်ဒိတ်လုပ်ပါ။
+     `docs/source/compliance/android/and6_compliance_checklist.md` နှင့် အတန်းထည့်ပါ။
+     `evidence_log.csv` သို့။
 
-Requests that impact partner demos (AND8) must cc Partner Engineering.
+ပါတနာသရုပ်ပြ (AND8) အကျိုးသက်ရောက်စေသော တောင်းဆိုချက်များသည် cc Partner Engineering ဖြစ်ရပါမည်။
 
-## 4. Change & Cancellation
+## 4. Change & Cancellation- **အချိန်ဇယား-** မူရင်းလက်မှတ်ကို ပြန်ဖွင့်ပါ၊ အထိုင်အသစ်ကို အဆိုပြုပြီး အပ်ဒိတ်လုပ်ပါ။
+  ပြက္ခဒိန်ဝင်ရောက်မှု။ အပေါက်အသစ်သည် 24 နာရီအတွင်းတွင်၊ Hardware Lab Lead + SRE ကို ping လုပ်ပါ။
+  တိုက်ရိုက်
+- **အရေးပေါ်ဖျက်သိမ်းခြင်း-** အရေးပေါ်အစီအစဉ်ကို လိုက်နာပါ။
+  (`device_lab_contingency.md`) နှင့် trigger/action/follow-up အတန်းများကို မှတ်တမ်းတင်ပါ။
+- ** Overruns :** ပြေးခြင်းသည် ၎င်း၏ slot ကို > 15 မိနစ်ထက်ကျော်လွန်ပါက အပ်ဒိတ်တစ်ခုတင်ပြီး အတည်ပြုပါ။
+  နောက်ကြိုတင်မှာယူမှု ဆက်လက်လုပ်ဆောင်နိုင်မလား။ မဟုတ်ရင် fallback ကို လက်လွှဲလိုက်ပါ။
+  ရေကူးကန် သို့မဟုတ် Firebase ကွဲလမ်းကြောင်း။
 
-- **Reschedule:** reopen the original ticket, propose a new slot, and update the
-  calendar entry. If the new slot is within 24 h, ping Hardware Lab Lead + SRE
-  directly.
-- **Emergency cancellation:** follow the contingency plan
-  (`device_lab_contingency.md`) and record the trigger/action/follow-up rows.
-- **Overruns:** if a run exceeds its slot by >15 min, post an update and confirm
-  whether the next reservation can proceed; otherwise hand off to the fallback
-  pool or Firebase burst lane.
+## 5. အထောက်အထား & စာရင်းစစ်
 
-## 5. Evidence & Auditing
+| Artefact | တည်နေရာ | မှတ်စုများ |
+|----------|----------|------|
+| ကြိုတင်လက်မှတ်များ | `_android-device-lab` လူတန်း (Jira) | အပတ်စဉ် အနှစ်ချုပ်ကို တင်ပို့ရန်။ အထောက်အထားမှတ်တမ်းတွင် လက်မှတ် ID များကို ချိတ်ဆက်ပါ။ |
+| ပြက္ခဒိန် တင်ပို့မှု | `artifacts/android/device_lab/<YYYY-WW>-calendar.{ics,json}` | သောကြာနေ့တိုင်း `scripts/android_device_lab_export.py --ics-url <calendar_ics_feed>` ကိုဖွင့်ပါ။ အကူအညီပေးသူက စစ်ထုတ်ထားသော `.ics` ဖိုင်အပြင် ISO အပတ်အတွက် JSON အကျဉ်းချုပ်ကို သိမ်းဆည်းပေးသောကြောင့် စာရင်းစစ်များသည် လက်ဖြင့်ဒေါင်းလုဒ်လုပ်စရာမလိုဘဲ ဖိုင်နှစ်ခုလုံးကို ပူးတွဲတင်နိုင်ပါသည်။ |
+| စွမ်းရည် လျှပ်တစ်ပြက် | `docs/source/compliance/android/evidence_log.csv` | ဘွတ်ကင်/ပိတ်မှုတိုင်းပြီးနောက် အပ်ဒိတ်လုပ်ပါ။ |
+| အပြေးမှတ်စုများ | `docs/source/compliance/android/device_lab_contingency.md` (အရေးပေါ်အခြေအနေရှိပါက) သို့မဟုတ် လက်မှတ်မှတ်ချက် | စာရင်းစစ်များအတွက် လိုအပ်ပါသည်။ |
 
-| Artefact | Location | Notes |
-|----------|----------|-------|
-| Reservation tickets | `_android-device-lab` queue (Jira) | Export weekly summary; link ticket IDs in evidence log. |
-| Calendar export | `artifacts/android/device_lab/<YYYY-WW>-calendar.{ics,json}` | Run `scripts/android_device_lab_export.py --ics-url <calendar_ics_feed>` each Friday; the helper saves the filtered `.ics` file plus a JSON summary for the ISO week so audits can attach both artefacts without manual downloads. |
-| Capacity snapshots | `docs/source/compliance/android/evidence_log.csv` | Update after every booking/closure. |
-| Post-run notes | `docs/source/compliance/android/device_lab_contingency.md` (if contingency) or ticket comment | Required for audits. |
+သုံးလတစ်ကြိမ် လိုက်နာမှုပြန်လည်သုံးသပ်မှုအတွင်း ပြက္ခဒိန်တင်ပို့မှု၊ လက်မှတ်အနှစ်ချုပ်ကို ပူးတွဲပါ
+AND6 စစ်ဆေးရန်စာရင်းတင်သွင်းခြင်းသို့ အထောက်အထားမှတ်တမ်း ကောက်နုတ်ချက်။
 
-During quarterly compliance reviews, attach the calendar export, ticket summary,
-and evidence log excerpt to the AND6 checklist submission.
+### ပြက္ခဒိန် ထုတ်ယူမှု အလိုအလျောက်စနစ်
 
-### Calendar export automation
-
-1. Obtain the ICS feed URL (or download a `.ics` file) for “Android Device Lab – Reservations”.
-2. Execute
+1. “Android စက်ပစ္စည်းဓာတ်ခွဲခန်း – ကြိုတင်မှာယူမှုများ” အတွက် ICS ဖိဒ် URL (သို့မဟုတ် `.ics` ဖိုင်ကို ဒေါင်းလုဒ်လုပ်ပါ) ရယူပါ။
+2. အကောင်အထည်ဖော်ပါ။
 
    ```bash
    python3 scripts/android_device_lab_export.py \
@@ -111,68 +110,66 @@ and evidence log excerpt to the AND6 checklist submission.
      --week <ISO week, defaults to current>
    ```
 
-   The script writes both `artifacts/android/device_lab/<YYYY-WW>-calendar.ics`
-   and `...-calendar.json`, capturing the selected ISO week.
-3. Upload the generated files with the weekly evidence packet and reference the
-   JSON summary in `docs/source/compliance/android/evidence_log.csv` when
-   logging device-lab capacity.
+   ဇာတ်ညွှန်းသည် `artifacts/android/device_lab/<YYYY-WW>-calendar.ics` နှစ်ခုစလုံးကို ရေးသားသည်။
+   နှင့် `...-calendar.json`၊ ရွေးချယ်ထားသော ISO ရက်သတ္တပတ်ကို ရိုက်ကူးသည်။
+3. ထုတ်လုပ်ထားသောဖိုင်များကို အပတ်စဉ် အထောက်အထားထုပ်ပိုးမှုဖြင့် အပ်လုဒ်လုပ်ပြီး ကိုးကားပါ။
+   JSON အနှစ်ချုပ်ကို `docs/source/compliance/android/evidence_log.csv` မှာလိုက်တာ
+   သစ်ခုတ်ကိရိယာ-ဓာတ်ခွဲခန်းစွမ်းရည်။
 
 ## 6. Escalation Ladder
 
-1. Hardware Lab Lead (primary)
+1. Hardware Lab Lead (မူလတန်း)
 2. Android Foundations TL
-3. Program Lead / Release Engineering (for freeze windows)
-4. External StrongBox lab contact (when retainer is invoked)
+3. ပရိုဂရမ် ဦးဆောင်/ဖြန့်ချိရေး အင်ဂျင်နီယာ (အေးခဲထားသော ပြတင်းပေါက်များအတွက်)
+4. ပြင်ပ StrongBox ဓာတ်ခွဲခန်း အဆက်အသွယ် (ထိန်းသိမ်းသူကို ဖိတ်ခေါ်သောအခါ)
 
-Escalations must be logged in the ticket and mirrored in the weekly Android
-status mail.
+အကဲဖြတ်မှုများသည် လက်မှတ်တွင် အကောင့်ဝင်ပြီး အပတ်စဉ် Android တွင် ထင်ဟပ်နေရပါမည်။
+အခြေအနေမေးလ်။
 
-## 7. Related Documents
+## 7. ဆက်စပ်စာရွက်စာတမ်းများ
 
-- `docs/source/compliance/android/device_lab_contingency.md` — incident log for
-  capacity shortfalls.
-- `docs/source/compliance/android/and6_compliance_checklist.md` — master
-  deliverables checklist.
-- `docs/source/sdk/android/android_strongbox_device_matrix.md` — hardware
-  coverage tracker.
+- `docs/source/compliance/android/device_lab_contingency.md` — ဖြစ်ရပ်မှတ်တမ်း
+  စွမ်းရည် ချို့ယွင်းချက်များ။
+- `docs/source/compliance/android/and6_compliance_checklist.md` — မာစတာ
+  ပေးပို့နိုင်သောစာရင်း။
+- `docs/source/sdk/android/android_strongbox_device_matrix.md` — ဟာ့ဒ်ဝဲ
+  လွှမ်းခြုံခြေရာခံ။
 - `docs/source/sdk/android/android_strongbox_attestation_run_log.md` —
-  StrongBox attestation evidence referenced by AND6/AND7.
+  AND6/AND7 မှ ကိုးကားထားသော StrongBox သက်သေအထောက်အထား။
 
-Maintaining this reservation procedure satisfies the roadmap action item “define
-device-lab reservation procedure” and keeps partner-facing compliance artefacts
-in sync with the rest of the Android readiness plan.
+ဤကြိုတင်စာရင်းသွင်းခြင်းလုပ်ငန်းစဉ်ကို ထိန်းသိမ်းခြင်းသည် လမ်းပြမြေပုံလုပ်ဆောင်မှုအကြောင်းအရာအား ကျေနပ်စေပါသည်။
+စက်ပစ္စည်း-ဓာတ်ခွဲခန်း ကြိုတင်မှာကြားခြင်းလုပ်ငန်းစဉ်" နှင့် ပါတနာ-ရင်ဆိုင်နေရသော လိုက်နာမှုဆိုင်ရာ အထောက်အထားများကို ထိန်းသိမ်းထားသည်။
+ကျန်သော Android အဆင်သင့်အစီအစဉ်နှင့် ထပ်တူပြုပါသည်။
 
 ## 8. Failover Drill Procedure & Contacts
 
-Roadmap item AND6 also requires a quarterly failover rehearsal. The full,
-step-by-step instructions live in
-`docs/source/compliance/android/device_lab_failover_runbook.md`, but the high
-level workflow is summarised below so requestors can plan drills alongside
-routine reservations.
+လမ်းပြမြေပုံ အကြောင်းအရာ AND6 သည်လည်း သုံးလတစ်ကြိမ် ပျက်ကွက်သည့် အစမ်းလေ့ကျင့်မှု လိုအပ်ပါသည်။ အပြည့်အစုံ၊
+အဆင့်ဆင့် ညွှန်ကြားချက်များ ရှင်သန်နေပါသည်။
+`docs/source/compliance/android/device_lab_failover_runbook.md` မြင့်သည်။
+အဆင့်လုပ်ငန်းအသွားအလာကို အောက်တွင် အကျဉ်းချုံ့ထားသောကြောင့် တောင်းဆိုသူများသည် လေ့ကျင့်ခန်းများနှင့်အတူ ပူးတွဲစီစဉ်နိုင်သည်။
+ပုံမှန်ကြိုတင်မှာယူမှုများ။1. **အစမ်းလေ့ကျင့်မှုကို အချိန်ဇယားဆွဲပါ-** ထိခိုက်သောလမ်းကြောများကို ပိတ်ဆို့ပါ (`pixel8pro-strongbox-a`၊
+   မျှဝေထားသော fallback pool၊ `firebase-burst`၊ external StrongBox retainer)
+   ပြက္ခဒိန်နှင့် `_android-device-lab` သည် လေ့ကျင့်မှုမတိုင်မီ အနည်းဆုံး 7 ရက်ကြိုတင် တန်းစီသည်။
+2. **မီးပြတ်တောက်မှုကို အတုယူပါ-** ပင်မလမ်းကြောင်းကို ဖယ်ထုတ်ပါ၊ PagerDuty ကို အစပျိုးပါ။
+   (`AND6-device-lab`) ဖြစ်ရပ်နှင့် မှီခိုနေသော Buildkite အလုပ်များကို မှတ်သားထားပါ။
+   runbook တွင်ဖော်ပြထားသော drill ID။
+3. **မအောင်မြင်ပါ-** Pixel7 အလှည့်ကျလမ်းကြောင်းကို မြှင့်တင်ပါ၊ Firebase ဆက်တိုက်စတင်ပါ။
+   အစုံလိုက်၊ 6 နာရီအတွင်း ပြင်ပ StrongBox ပါတနာနှင့် ထိတွေ့ဆက်ဆံပါ။ ဖမ်းသည်။
+   Buildkite သည် URL များ၊ Firebase တင်ပို့မှုများနှင့် ထိန်းသိမ်းသူအသိအမှတ်ပြုချက်များကို လုပ်ဆောင်သည်။
+4. **အတည်ပြုပြီး ပြန်လည်ရယူပါ-** သက်သေခံချက် + CI အလုပ်ချိန်များကို အတည်ပြုပါ၊ ၎င်းကို ပြန်လည်ထည့်သွင်းပါ။
+   မူရင်းလမ်းကြောင်းများ၊ `device_lab_contingency.md` နှင့် အထောက်အထားမှတ်တမ်းကို အပ်ဒိတ်လုပ်ပါ။
+   အစုအဝေးလမ်းကြောင်း + checksums နှင့်အတူ။
 
-1. **Schedule the drill:** Block the affected lanes (`pixel8pro-strongbox-a`,
-   fallback pool, `firebase-burst`, external StrongBox retainer) in the shared
-   calendar and `_android-device-lab` queue at least 7 days ahead of the drill.
-2. **Simulate outage:** Depool the primary lane, trigger the PagerDuty
-   (`AND6-device-lab`) incident, and annotate the dependent Buildkite jobs with
-   the drill ID noted in the runbook.
-3. **Fail over:** Promote the Pixel 7 fallback lane, initiate the Firebase burst
-   suite, and engage the external StrongBox partner within 6 hours. Capture
-   Buildkite run URLs, Firebase exports, and retainer acknowledgements.
-4. **Validate and restore:** Verify attestation + CI runtimes, reinstate the
-   original lanes, and update `device_lab_contingency.md` plus the evidence log
-   with the bundle path + checksums.
+### ဆက်သွယ်ရန် & Escalation အကိုးအကား
 
-### Contact & Escalation Reference
-
-| Role | Primary Contact | Channel(s) | Escalation Order |
-|------|-----------------|------------|------------------|
-| Hardware Lab Lead | Priya Ramanathan | `@android-lab` Slack · +81-3-5550-1234 | 1 |
-| Device Lab Ops | Mateo Cruz | `_android-device-lab` queue | 2 |
+| အခန်းကဏ္ဍ | ပင်မအဆက်အသွယ် | ချန်နယ်(များ) | Escalation Order |
+|--------|-----------------|-----------------|------------------|
+| Hardware Lab Lead | Priya Ramanathan | `@android-lab` Slack · +81-3-5550-1234 | ၁ |
+| စက်ပစ္စည်း ဓာတ်ခွဲခန်း ဝန်ဆောင်မှု | Mateo Cruz | `_android-device-lab` လူတန်း | 2 |
 | Android Foundations TL | Elena Vorobeva | `@android-foundations` Slack | 3 |
-| Release Engineering | Alexei Morozov | `release-eng@iroha.org` | 4 |
-| External StrongBox Lab | Sakura Instruments NOC | `noc@sakura.example` · +81-3-5550-9876 | 5 |
+| ဖြန့်ချိရေးအင်ဂျင်နီယာ | Alexei Morozov | `release-eng@iroha.org` | 4 |
+| ပြင်ပ StrongBox Lab | Sakura တူရိယာ NOC | `noc@sakura.example` · +81-3-5550-9876 | 5 |
 
-Escalate sequentially if the drill uncovers blocking issues or if any fallback
-lane cannot be brought online within 30 minutes. Always record the escalation
-notes in the `_android-device-lab` ticket and mirror them in the contingency log.
+လေ့ကျင့်မှုတွင် ပိတ်ဆို့ခြင်းပြဿနာများကို ဖော်ထုတ်ပါက သို့မဟုတ် ဆုတ်ယုတ်မှုရှိပါက ဆက်တိုက်လုပ်ဆောင်ပါ။
+လမ်းကြောင်းကို မိနစ် 30 အတွင်း အွန်လိုင်းသို့ ယူဆောင်၍ မရပါ။ တိုးတက်မှုကို အမြဲမှတ်တမ်းတင်ထားပါ။
+`_android-device-lab` လက်မှတ်ရှိ မှတ်စုများ နှင့် ၎င်းတို့အား အရေးပေါ်မှတ်တမ်းတွင် ရောင်ပြန်ဟပ်ပါ။

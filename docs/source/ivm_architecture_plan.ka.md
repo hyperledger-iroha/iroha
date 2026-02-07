@@ -7,82 +7,81 @@ generator: scripts/sync_docs_i18n.py
 source_hash: da8a99adbbcf1d8b209a25da32e256c0dad2860633f373d7410a3a91d790c938
 source_last_modified: "2026-01-21T19:17:13.236818+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# IVM Architecture Refactor Plan
+# IVM არქიტექტურის რეფაქტორის გეგმა
 
-This plan captures the short-term milestones for reshaping the Iroha Virtual Machine
-(IVM) into clearer layers while preserving security and performance characteristics.
-It focuses on isolating responsibilities, making host integrations safer, and
-preparing the Kotodama language stack for extraction into a standalone crate.
+ეს გეგმა ასახავს მოკლევადიან ეტაპებს Iroha ვირტუალური მანქანის გადაფორმებისთვის
+(IVM) უფრო მკაფიო ფენებად, უსაფრთხოებისა და შესრულების მახასიათებლების შენარჩუნებით.
+ის ყურადღებას ამახვილებს პასუხისმგებლობების იზოლირებაზე, მასპინძელთა ინტეგრაციის უსაფრთხოებაზე და
+Kotodama ენის დასტას დამოუკიდებელ ყუთში ამოსაღებად მომზადება.
 
-## Goals
+## გოლები
 
-1. **Layered runtime façade** – introduce an explicit runtime interface so the VM
-   core can be embedded behind a narrow trait and alternative front-ends can evolve
-   without touching internal modules.
-2. **Host/syscall boundary  hardening** – route syscall dispatch through a
-   dedicated adapter that enforces ABI policy and pointer validation before any host
-   code executes.
-3. **Language/tooling separation** – move Kotodama specific code to a new crate and
-   keep only the bytecode execution surface in `ivm`.
-4. **Configuration cohesion** – unify acceleration and feature toggles so they are
-   driven through `iroha_config`, removing environment-based knobs in production
-   paths.
+1. **ფენიანი გაშვების ფასადი** – წარმოგიდგენთ ექსპლიციურად გაშვების ინტერფეისს VM-ში
+   ბირთვი შეიძლება იყოს ჩასმული ვიწრო მახასიათებლის მიღმა და ალტერნატიული წინა ბოლოები შეიძლება განვითარდეს
+   შიდა მოდულების შეხების გარეშე.
+2. **მასპინძლის/სისკალის საზღვრის გამკვრივება** – მარშრუტი syscall გაგზავნის მეშვეობით
+   გამოყოფილი ადაპტერი, რომელიც ახორციელებს ABI პოლიტიკას და მაჩვენებლის ვალიდაციას ნებისმიერი ჰოსტის წინაშე
+   კოდი ახორციელებს.
+3. **ენის/ინსტრუმენტების განცალკევება** – გადაიტანეთ Kotodama კონკრეტული კოდი ახალ ყუთში და
+   შეინახეთ მხოლოდ ბაიტიკოდის შესრულების ზედაპირი `ivm`-ში.
+4. **კონფიგურაციის თანმიმდევრულობა** - გააერთიანეთ აჩქარება და ფუნქციების გადართვა ისე, რომ ისინი იყოს
+   იმართება `iroha_config`-ით, მოხსნის გარემოზე დაფუძნებულ სახელურებს წარმოებაში
+   ბილიკები.
 
-## Phase Breakdown
+## ფაზის ავარია
 
-### Phase 1 – Runtime façade (in progress)
-- Add a `runtime` module that defines a `VmEngine` trait describing lifecycle
-  operations (`load_program`, `execute`, host plumbing).
-- Teach `IVM` to implement the trait.  This keeps the existing struct but allows
-  consumers (and future tests) to depend on the interface instead of concrete
-  types.
-- Start shedding direct module re-exports from `lib.rs` so callers import via the
-  façade when possible.
+### ფაზა 1 – გაშვების ფასადი (მიმდინარეობს)
+- დაამატეთ `runtime` მოდული, რომელიც განსაზღვრავს `VmEngine` თვისებას, რომელიც აღწერს სიცოცხლის ციკლს
+  ოპერაციები (`load_program`, `execute`, მასპინძელი სანტექნიკა).
+- ასწავლეთ `IVM` თვისების განხორციელება.  ეს ინარჩუნებს არსებულ სტრუქტურას, მაგრამ საშუალებას აძლევს
+  მომხმარებლები (და მომავალი ტესტები) ბეტონის ნაცვლად ინტერფეისზე დამოკიდებული
+  ტიპები.
+- დაიწყეთ პირდაპირი მოდულის რეექსპორტის ჩამოგდება `lib.rs`-დან, რათა აბონენტების იმპორტი მოხდეს
+  ფასადი, როდესაც ეს შესაძლებელია.
 
-**Security / performance impact**: The façade restricts direct access to internal
-state; only safe entry points are exposed.  This makes it easier to audit host
-interactions and reason about gas or TLV handling.
+**უსაფრთხოება / შესრულებაზე გავლენა **: ფასადი ზღუდავს პირდაპირ წვდომას შიდა
+სახელმწიფო; მხოლოდ უსაფრთხო შესვლის წერტილებია გამოვლენილი.  ეს აადვილებს მასპინძლის აუდიტს
+ურთიერთქმედება და მიზეზი გაზის ან TLV დამუშავების შესახებ.
 
-### Phase 2 – Syscall dispatcher
-- Introduce a `SyscallDispatcher` component that wraps `IVMHost` and enforces ABI
-  policy and pointer validation once, in one location.
-- Migrate the default host and mock hosts to use the dispatcher, removing
-  duplicated validation logic.
-- Make dispatcher pluggable so hosts can supply custom instrumentation without
-  bypassing safety checks.
-- Provide a `SyscallDispatcher::shared(...)` helper so cloned VMs can forward
-  syscalls through a shared `Arc<Mutex<..>>` host without each worker building
-  bespoke wrappers.
+### ფაზა 2 – Syscall დისპეჩერი
+- შემოიტანეთ `SyscallDispatcher` კომპონენტი, რომელიც ახვევს `IVMHost`-ს და აძლიერებს ABI-ს
+  პოლიტიკა და მაჩვენებლის ვალიდაცია ერთხელ, ერთ ადგილას.
+- გადაიტანეთ ნაგულისხმევი ჰოსტი და იმიტირებული მასპინძლები დისპეჩერის გამოსაყენებლად, წაშლა
+  დუბლირებული ვალიდაციის ლოგიკა.
+- გახადეთ დისპეტჩერი ჩამრთველი, რათა მასპინძლებმა შეძლონ მორგებული ინსტრუმენტების მიწოდება გარეშე
+  უსაფრთხოების შემოწმების გვერდის ავლით.
+- მიაწოდეთ `SyscallDispatcher::shared(...)` დამხმარე, რათა კლონირებულმა VM-ებმა შეძლონ გადაგზავნა
+  syscals გაზიარებული `Arc<Mutex<..>>` ჰოსტის მეშვეობით თითოეული მუშა შენობის გარეშე
+  შეკვეთით შეფუთვები.
 
-**Security / performance impact**: Centralised gating protects against hosts that
-forget to call `is_syscall_allowed`, and it allows future caching of pointer
-validations for repeated syscalls.
+**უსაფრთხოება / შესრულებაზე გავლენა **: ცენტრალიზებული კარიბჭე იცავს მასპინძლებისგან
+დაივიწყეთ `is_syscall_allowed` დარეკვა და ის საშუალებას იძლევა მომავალში ქეშირების მაჩვენებელი
+ვალიდაცია განმეორებითი syscals-ისთვის.
 
-### Phase 3 – Kotodama extraction
-- Kotodama compiler extracted to `crates/kotodama_lang` (from `crates/ivm/src/kotodama`).
-- Provide a minimal bytecode API that the VM consumes (`compile_to_ivm_bytecode`).
+### ფაზა 3 – Kotodama მოპოვება
+- Kotodama შემდგენელი ამოღებული `crates/kotodama_lang`-ზე (`crates/ivm/src/kotodama`-დან).
+- უზრუნველყოთ მინიმალური ბაიტიკოდის API, რომელსაც VM მოიხმარს (`compile_to_ivm_bytecode`).
 
-**Security / performance impact**: Decoupling lowers the attack surface of the VM
-core and allows language innovation without risking interpreter regressions.
+**უსაფრთხოება / შესრულებაზე ზემოქმედება **: დაწყვილება ამცირებს VM-ის თავდასხმის ზედაპირს
+ძირითადი და საშუალებას აძლევს ენის ინოვაციას თარჯიმნის რეგრესიების რისკის გარეშე.### ფაზა 4 – კონფიგურაციის კონსოლიდაცია
+- ძაფების აჩქარების ვარიანტები `iroha_config` წინასწარ დაყენების საშუალებით (მაგ., GPU backend-ების ჩართვა) არსებული გარემოს უგულებელყოფის შენარჩუნებისას (`IVM_DISABLE_CUDA`, `IVM_DISABLE_METAL`), როგორც გაშვების დროის მოკვლის გადამრთველები.
+- გამოავლინეთ `RuntimeConfig` ობიექტი ახალი ფასადის მეშვეობით, რათა მასპინძლებმა აირჩიონ
+  ცალსახად დეტერმინისტული აჩქარების პოლიტიკა.
 
-### Phase 4 – Configuration consolidation
-- Thread acceleration options through `iroha_config` presets (e.g., enabling GPU backends) while keeping the existing environment overrides (`IVM_DISABLE_CUDA`, `IVM_DISABLE_METAL`) as runtime kill switches.
-- Expose a `RuntimeConfig` object through the new façade so hosts select
-  deterministic acceleration policies explicitly.
+**უსაფრთხოება / შესრულებაზე გავლენა **: env-ზე დაფუძნებული გადამრთველების აღმოფხვრა თავიდან აიცილებს ჩუმად
+კონფიგურაციის დრიფტი და უზრუნველყოფს განმსაზღვრელ ქცევას განლაგებაში.
 
-**Security / performance impact**: Eliminating env-based toggles avoids silent
-configuration drift and ensures deterministic behaviour across deployments.
+## დაუყოვნებლივი შემდეგი ნაბიჯები
 
-## Immediate next steps
+- დაასრულეთ 1 ფაზა ფასადის მახასიათებლის დამატებით და მაღალი დონის ზარის საიტების განახლებით
+  დამოკიდებული მასზე.
+- აუდიტი საჯარო რეექსპორტის, რათა უზრუნველყოს მხოლოდ ფასადი და განზრახ საჯარო API
+  გაჟონვა ყუთიდან.
+- შექმენით syscall დისპეჩერის API პროტოტიპი ცალკე მოდულში და გადაიტანეთ
+  ნაგულისხმევი ჰოსტი ერთხელ დადასტურებული.
 
-- Finish Phase 1 by adding the façade trait and updating high-level call sites to
-  depend on it.
-- Audit public re-exports to ensure only the façade and deliberately public APIs
-  leak out of the crate.
-- Prototype the syscall dispatcher API in a separate module and migrate the
-  default host once validated.
-
-Progress on each phase will be tracked in `status.md` once the implementation is
-underway.
+თითოეულ ფაზაში პროგრესი თვალყურს ადევნებთ `status.md`-ში, როგორც კი განხორციელდება
+მიმდინარეობს.

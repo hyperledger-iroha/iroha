@@ -6,32 +6,33 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 6feb2b03bd8f6a41de693a0c3f3c4ffc058072bc7942e2bc50b3fd9770aa56d4
 source_last_modified: "2026-01-03T18:08:01.368173+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Genesis Bootstrap from Trusted Peers
+# Genesis Bootstrap من أقرانهم الموثوقين
 
-Iroha peers without a local `genesis.file` can fetch a signed genesis block from trusted peers
-using the Norito-encoded bootstrap protocol.
+يمكن لأقران Iroha بدون `genesis.file` المحلي جلب كتلة تكوين موقعة من أقران موثوق بهم
+باستخدام بروتوكول التمهيد المشفر Norito.
 
-- **Protocol:** peers exchange `GenesisRequest` (`Preflight` for metadata, `Fetch` for payload) and
-  `GenesisResponse` frames keyed by `request_id`. Responders include the chain id, signer pubkey,
-  hash, and an optional size hint; payloads are returned only on `Fetch`, and duplicate request ids
-  receive `DuplicateRequest`.
-- **Guards:** responders enforce an allowlist (`genesis.bootstrap_allowlist` or the trusted peers
-  set), chain-id/pubkey/hash matching, rate limits (`genesis.bootstrap_response_throttle`), and a
-  size cap (`genesis.bootstrap_max_bytes`). Requests outside the allowlist receive `NotAllowed`, and
-  payloads signed by the wrong key receive `MismatchedPubkey`.
-- **Requester flow:** when storage is empty and `genesis.file` is unset (and
-  `genesis.bootstrap_enabled=true`), the node preflights trusted peers with the optional
-  `genesis.expected_hash`, then fetches the payload, validates signatures via `validate_genesis_block`,
-  and persists `genesis.bootstrap.nrt` alongside Kura before applying the block. Bootstrap retries
-  honor `genesis.bootstrap_request_timeout`, `genesis.bootstrap_retry_interval`, and
+- **البروتوكول:** تبادل الأقران `GenesisRequest` (`Preflight` للبيانات الوصفية، و`Fetch` للحمولة) و
+  إطارات `GenesisResponse` ذات مفاتيح بواسطة `request_id`. يتضمن المستجيبون معرف السلسلة، ومفتاح التوقيع، و
+  التجزئة، وتلميح حجم اختياري؛ يتم إرجاع الحمولات فقط على `Fetch`، ومعرفات الطلب المكررة
+  تلقي `DuplicateRequest`.
+- **الحراس:** يفرض المستجيبون القائمة المسموح بها (`genesis.bootstrap_allowlist` أو النظراء الموثوق بهم
+  set)، ومطابقة معرف السلسلة/مفتاح النشر/التجزئة، وحدود المعدل (`genesis.bootstrap_response_throttle`)، و
+  الحد الأقصى للحجم (`genesis.bootstrap_max_bytes`). تتلقى الطلبات خارج القائمة المسموح بها `NotAllowed`، و
+  الحمولات الموقعة بواسطة المفتاح الخاطئ تتلقى `MismatchedPubkey`.
+- **تدفق الطالب:** عندما يكون التخزين فارغًا ويكون `genesis.file` غير محدد (و
+  `genesis.bootstrap_enabled=true`)، تقوم العقدة بإجراء اختبارات مبدئية للأقران الموثوق بهم باستخدام الخيار الاختياري
+  `genesis.expected_hash`، ثم يقوم بإحضار الحمولة والتحقق من صحة التوقيعات عبر `validate_genesis_block`،
+  ويستمر `genesis.bootstrap.nrt` بجانب Kura قبل تطبيق الكتلة. يعيد Bootstrap المحاولة
+  الشرف `genesis.bootstrap_request_timeout`، `genesis.bootstrap_retry_interval`، و
   `genesis.bootstrap_max_attempts`.
-- **Failure modes:** requests are rejected for allowlist misses, chain/pubkey/hash mismatches, size
-  cap violations, rate limits, missing local genesis, or duplicate request ids. Conflicting hashes
-  across peers abort the fetch; no responders/timeouts fall back to local configuration.
-- **Operator steps:** ensure at least one trusted peer is reachable with a valid genesis, configure
-  `bootstrap_allowlist`/`bootstrap_max_bytes`/`bootstrap_response_throttle` and the retry knobs, and
-  optionally pin `expected_hash` to avoid accepting mismatched payloads. Persisted payloads can be
-  reused on subsequent boots by pointing `genesis.file` to `genesis.bootstrap.nrt`.
+- **أوضاع الفشل:** يتم رفض الطلبات بسبب الأخطاء في القائمة المسموح بها، وعدم تطابق السلسلة/المفتاح العام/التجزئة، والحجم
+  انتهاكات الحد الأقصى، أو حدود الأسعار، أو التكوين المحلي المفقود، أو معرفات الطلبات المكررة. التجزئة المتضاربة
+  عبر أقرانهم إحباط الجلب؛ لا يعود المستجيبون/المهلات إلى التكوين المحلي.
+- **خطوات المشغل:** تأكد من إمكانية الوصول إلى نظير واحد موثوق به على الأقل من خلال تكوين صالح وتكوينه
+  `bootstrap_allowlist`/`bootstrap_max_bytes`/`bootstrap_response_throttle` ومقابض إعادة المحاولة، و
+  اختياريًا، قم بتثبيت `expected_hash` لتجنب قبول حمولات غير متطابقة. يمكن أن تكون الحمولات المستمرة
+  يُعاد استخدامه في عمليات التمهيد اللاحقة عن طريق الإشارة من `genesis.file` إلى `genesis.bootstrap.nrt`.

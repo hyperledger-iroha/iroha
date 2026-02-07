@@ -7,122 +7,119 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 473b2b49d32c32d2b884b670ba35e9aa3d0606cfd451d441a7ca927c1160311d
 source_last_modified: "2025-12-29T18:16:35.923579+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Android Device Lab Failover Drill Runbook (AND6/AND7)
+# አንድሮይድ መሳሪያ ላብ ያልተሳካ ቁፋሮ Runbook (AND6/AND7)
 
-This runbook captures the procedure, evidence requirements, and contact matrix
-used when exercising the **device-lab contingency plan** referenced in
-`roadmap.md` (§“Regulatory artefact approvals & lab contingency”). It complements
-the reservation workflow (`device_lab_reservation.md`) and the incident log
-(`device_lab_contingency.md`) so compliance reviewers, legal counsel, and SRE
-have a single source of truth for how we validate failover readiness.
+ይህ Runbook የአሰራር ሂደቱን፣ የማስረጃ መስፈርቶችን እና የግንኙነት ማትሪክስ ይይዛል
+ውስጥ የተጠቀሰውን **የመሣሪያ-ላብራቶሪ ድንገተኛ እቅድ** ሲለማመዱ ጥቅም ላይ ይውላል
+`roadmap.md` (§“የቁጥጥር የዕደ ጥበብ ማረጋገጫዎች እና የላብራቶሪ ድንገተኛ ሁኔታ”)። ያሟላል።
+የቦታ ማስያዣ የስራ ፍሰት (`device_lab_reservation.md`) እና የአደጋው ምዝግብ ማስታወሻ
+(`device_lab_contingency.md`) ተገዢዎችን፣ የህግ አማካሪዎችን እና SRE
+ያልተሳካ ዝግጁነትን እንዴት እንደምናረጋግጥ አንድ የእውነት ምንጭ ይኑርዎት።
 
-## Purpose & Cadence
+## ዓላማ እና Cadence
 
-- Demonstrate that the Android StrongBox + general device pools can fail over
-  to the fallback Pixel lanes, shared pool, Firebase Test Lab burst queue, and
-  external StrongBox retainer without missing AND6/AND7 SLAs.
-- Produce an evidence bundle that legal can attach to ETSI/FISC submissions
-  ahead of the Feb compliance review.
-- Run at least once per quarter, plus any time the lab hardware roster changes
-  (new devices, retirement, or maintenance longer than 24 h).
+- አንድሮይድ StrongBox + አጠቃላይ የመሳሪያ ገንዳዎች ሊሳኩ እንደሚችሉ አሳይ
+  ወደ ኋለኛው የፒክሴል መስመሮች፣ የጋራ ገንዳ፣ የFirebase ሙከራ ላብራቶሪ ፍንዳታ ወረፋ፣ እና
+  ውጫዊ StrongBox retainer ያለ AND6/AND7 SLAs.
+- ከETSI/FISC ማቅረቢያዎች ጋር ህጋዊ ሊያያይዘው የሚችለውን የማስረጃ ጥቅል አዘጋጅ
+  ከፌብሩዋሪ ተገዢነት ግምገማ በፊት።
+- ቢያንስ በሩብ አንድ ጊዜ ያሂዱ፣ በተጨማሪም በማንኛውም ጊዜ የላብራቶሪ ሃርድዌር ዝርዝር ሲቀየር
+  (አዲስ መሣሪያዎች፣ ጡረታ ወይም ጥገና ከ24 ሰዓት በላይ)።
 
-| Drill ID | Date | Scenario | Evidence Bundle | Status |
-|----------|------|----------|-----------------|--------|
-| DR-2026-02-Q1 | 2026-02-20 | Simulated Pixel 8 Pro lane outage + attestation backlog with AND7 telemetry rehearsal | `artifacts/android/device_lab_contingency/20260220-failover-drill/` | ✅ Completed — bundle hashes recorded in `docs/source/compliance/android/evidence_log.csv`. |
-| DR-2026-05-Q2 | 2026-05-22 (scheduled) | StrongBox maintenance overlap + Nexus rehearsal | `artifacts/android/device_lab_contingency/20260522-failover-drill/` *(pending)* — `_android-device-lab` ticket **AND6-DR-202605** holds the reservations; bundle will be populated post-drill. | 🗓 Scheduled — calendar block added to “Android Device Lab – Reservations” per AND6 cadence. |
+| የመሰርሰሪያ መታወቂያ | ቀን | ሁኔታ | ማስረጃ ቅርቅብ | ሁኔታ |
+|-------------|--------|
+| DR-2026-02-Q1 | 2026-02-20 | የፒክሰል8ፕሮ መስመር መቆራረጥ + የማረጋገጫ መዝገብ ከ AND7 ቴሌሜትሪ ልምምድ ጋር | `artifacts/android/device_lab_contingency/20260220-failover-drill/` | ✅ ተጠናቋል - በ`docs/source/compliance/android/evidence_log.csv` ውስጥ የተመዘገበ የጥቅል ሀሽ። |
+| DR-2026-05-Q2 | 2026-05-22 (የተያዘለት) | የ StrongBox ጥገና መደራረብ + Nexus ልምምድ | `artifacts/android/device_lab_contingency/20260522-failover-drill/` *(በመጠባበቅ ላይ)* - `_android-device-lab` ቲኬት **AND6-DR-202605** የተያዙ ቦታዎችን ይይዛል። ጥቅል ከቁፋሮ በኋላ ይሞላል። | 🗓 መርሐግብር የተያዘለት - የቀን መቁጠሪያ እገዳ ወደ "አንድሮይድ መሳሪያ ቤተ ሙከራ - ቦታ ማስያዣዎች" በAND6 ታክሏል። |
 
-## Procedure
+#ሂደት።
 
-### 1. Pre-drill preparation
+### 1. የቅድመ-ቁፋሮ ዝግጅት
 
-1. Confirm baseline capacity in `docs/source/sdk/android/android_strongbox_capture_status.md`.
-2. Export the reservation calendar for the target ISO week via
+1. በ `docs/source/sdk/android/android_strongbox_capture_status.md` ውስጥ የመነሻ አቅምን ያረጋግጡ.
+2. ለታለመው የ ISO ሳምንት የቦታ ማስያዣ ካሌንደርን በ በኩል ይላኩ።
    `python3 scripts/android_device_lab_export.py --week <ISO week>`.
-3. File `_android-device-lab` ticket
-   `AND6-DR-<YYYYMM>` with scope (“failover drill”), planned slots, and affected
-   workloads (attestation, CI smoke, telemetry chaos).
-4. Update the contingency log template in `device_lab_contingency.md` with a
-   placeholder row for the drill date.
+3. ፋይል `_android-device-lab` ትኬት
+   `AND6-DR-<YYYYMM>` ወሰን ያለው ("የማይሳካለት መሰርሰሪያ")፣ የታቀዱ ክፍተቶች እና የተጎዱ
+   የሥራ ጫና (ማስረጃ፣ CI ጭስ፣ የቴሌሜትሪ ትርምስ)።
+4. በ `device_lab_contingency.md` ውስጥ ያለውን የአደጋ ጊዜ ምዝግብ አብነት በኤ
+   ቦታ ያዥ ረድፍ ለመሰርሰሪያው ቀን።
 
-### 2. Simulate failure conditions
+### 2. የውድቀት ሁኔታዎችን አስመስለው
 
-1. Disable or depool the primary lane (`pixel8pro-strongbox-a`) inside the lab
-   scheduler and tag the reservation entry as “drill”.
-2. Trigger a mock outage alert in PagerDuty (`AND6-device-lab` service) and
-   capture the notification export for the evidence bundle.
-3. Annotate the Buildkite jobs that normally consume the lane
-   (`android-strongbox-attestation`, `android-ci-e2e`) with the drill ID.
+1. በቤተ ሙከራ ውስጥ ዋናውን መስመር (`pixel8pro-strongbox-a`) ያሰናክሉ ወይም ያሰናክሉ
+   መርሐግብር አዘጋጅ እና የቦታ ማስያዣ ግቤትን እንደ “ቁፋሮ” መለያ ይስጡት።
+2. በፔጀርዱቲ (`AND6-device-lab` አገልግሎት) ውስጥ የማስመሰል ማስጠንቀቂያ ያስነሱ እና
+   የማስረጃ ጥቅል የማሳወቂያ ወደ ውጭ መላክን ይያዙ።
+3. በተለምዶ ሌይን የሚበሉትን የBuildkite ስራዎችን ያብራሩ
+   (`android-strongbox-attestation`፣ `android-ci-e2e`) ከመሰርሰሪያ መታወቂያው ጋር።
 
-### 3. Failover execution
+### 3. ያልተሳካ አፈፃፀም1. የመመለሻ Pixel7 መስመርን ወደ ዋናው CI ኢላማ ያስተዋውቁ እና የጊዜ ሰሌዳውን ያስይዙ
+   በእሱ ላይ የታቀዱ የሥራ ጫናዎች.
+2. በ`firebase-burst` ሌይን በኩል የFirebase Test Lab burst Suiteን ቀስቅሰው
+   የ StrongBox ሽፋን ወደ የጋራ ሲሸጋገር የችርቻሮ-Wallet ጭስ ይፈትሻል
+   መስመር. ለኦዲት በቲኬቱ ውስጥ የCLI ጥሪን (ወይም ኮንሶል ወደ ውጭ መላክ) ይያዙ
+   እኩልነት.
+3. የውጭውን StrongBox ላብራቶሪ መያዣን ለአጭር ጊዜ የማረጋገጫ መጥረግ ያሳትፉ።
+   የምዝግብ ማስታወሻ ዕውቅና ከዚህ በታች እንደተገለጸው.
+4. ሁሉንም የBuildkite አሂድ መታወቂያዎች፣ የFirebase job URLs እና የማቆያ ግልባጮችን በ ውስጥ ይቅረጹ
+   የ`_android-device-lab` ትኬት እና የማስረጃ ጥቅል መግለጫ።
 
-1. Promote the fallback Pixel 7 lane to primary CI target and schedule the
-   planned workloads against it.
-2. Trigger the Firebase Test Lab burst suite via the `firebase-burst` lane for
-   the retail-wallet smoke tests while StrongBox coverage moves to the shared
-   lane. Capture the CLI invocation (or console export) in the ticket for audit
-   parity.
-3. Engage the external StrongBox lab retainer for a short attestation sweep;
-   log contact acknowledgement as described below.
-4. Record all Buildkite run IDs, Firebase job URLs, and retainer transcripts in
-   the `_android-device-lab` ticket and the evidence bundle manifest.
+### 4. ማረጋገጥ እና መመለስ
 
-### 4. Validation & rollback
+1. የማረጋገጫ/CI runtimesን ከመነሻ መስመር ጋር ያወዳድሩ። ባንዲራ deltas>10% ወደ
+   የሃርድዌር ላብ መሪ።
+2. ዋናውን መስመር ወደነበረበት ይመልሱ እና የአቅም ቅጽበቱን እና ዝግጁነቱን ያዘምኑ
+   ማትሪክስ አንዴ ማረጋገጫ ካለፈ።
+3. የመጨረሻውን ረድፍ ወደ `device_lab_contingency.md` በመቀስቀስ፣ በድርጊቶች፣
+   እና ክትትል.
+4. `docs/source/compliance/android/evidence_log.csv` ያዘምኑ በ፡
+   የጥቅል መንገድ፣ SHA-256 አንጸባራቂ፣ የBuildkite አሂድ መታወቂያዎች፣ PagerDuty ወደ ውጪ መላክ ሃሽ እና
+   ገምጋሚ ማቋረጥ።
 
-1. Compare attestation/CI runtimes against baseline; flag deltas >10 % to the
-   Hardware Lab Lead.
-2. Restore the primary lane and update the capacity snapshot plus the readiness
-   matrix once validation passes.
-3. Append the final row to `device_lab_contingency.md` with trigger, actions,
-   and follow-ups.
-4. Update `docs/source/compliance/android/evidence_log.csv` with:
-   bundle path, SHA-256 manifest, Buildkite run IDs, PagerDuty export hash, and
-   reviewer sign-off.
+## የማስረጃ ጥቅል አቀማመጥ
 
-## Evidence Bundle Layout
+| ፋይል | መግለጫ |
+|-------------|
+| `README.md` | ማጠቃለያ (የቁፋሮ መታወቂያ፣ ወሰን፣ ባለቤቶች፣ የጊዜ መስመር)። |
+| `bundle-manifest.json` | በጥቅሉ ውስጥ ላለው እያንዳንዱ ፋይል የSHA-256 ካርታ። |
+| `calendar-export.{ics,json}` | የ ISO-ሳምንት ቦታ ማስያዣ ቀን መቁጠሪያ ከኤክስፖርት ስክሪፕት። |
+| `pagerduty/incident_<id>.json` | PagerDuty ወደ ውጪ መላክ የማስጠንቀቂያ + የዕውቅና ጊዜ መስመርን ያሳያል። |
+| `buildkite/<job>.txt` | ለተጎዱ ስራዎች ዩአርኤሎችን እና ምዝግብ ማስታወሻዎችን ያሂዱ። |
+| `firebase/burst_report.json` | የFirebase ሙከራ ቤተ ሙከራ የፍንዳታ ማስፈጸሚያ ማጠቃለያ። |
+| `retainer/acknowledgement.eml` | ከውጪው StrongBox ቤተ ሙከራ ማረጋገጫ። |
+| `photos/` | ሃርድዌር በድጋሚ በኬብል ከተሰራ የአማራጭ ፎቶዎች/የላብ ቶፖሎጂ ቅጽበታዊ ገጽ እይታዎች። |
 
-| File | Description |
-|------|-------------|
-| `README.md` | Summary (drill ID, scope, owners, timeline). |
-| `bundle-manifest.json` | SHA-256 map for every file in the bundle. |
-| `calendar-export.{ics,json}` | ISO-week reservation calendar from the export script. |
-| `pagerduty/incident_<id>.json` | PagerDuty incident export showing alert + acknowledgement timeline. |
-| `buildkite/<job>.txt` | Buildkite run URLs & logs for affected jobs. |
-| `firebase/burst_report.json` | Firebase Test Lab burst execution summary. |
-| `retainer/acknowledgement.eml` | Confirmation from the external StrongBox lab. |
-| `photos/` | Optional photos/screenshots of lab topology if hardware was re-cabled. |
+ጥቅሉን በ
+`artifacts/android/device_lab_contingency/<YYYYMMDD>-failover-drill/` እና መዝገብ
+ከማስረጃ መዝገብ ውስጥ ያለው አንጸባራቂ ቼክ እና የብአዴን6 ተገዢነት ማረጋገጫ ዝርዝር።
 
-Store the bundle at
-`artifacts/android/device_lab_contingency/<YYYYMMDD>-failover-drill/` and record
-the manifest checksum inside the evidence log plus the AND6 compliance checklist.
+## ዕውቂያ እና መጨመር ማትሪክስ
 
-## Contact & Escalation Matrix
+| ሚና | ዋና ግንኙነት | ቻናል(ዎች) | ማስታወሻ |
+|-------------|--------|-------|
+| የሃርድዌር ላብ አመራር | Priya Ramanathan | `@android-lab` Slack · +81-3-5550-1234 | በጣቢያው ላይ ያሉ ድርጊቶች እና የቀን መቁጠሪያ ዝማኔዎች ባለቤት ናቸው። |
+| Device Lab Ops | Mateo Cruz | `_android-device-lab` ወረፋ | የቦታ ማስያዣ ትኬቶችን + ጥቅል ሰቀላዎችን ያስተባብራል። |
+| የምህንድስና ልቀቅ | Alexei Morozov | መልቀቅ Eng Slack · `release-eng@iroha.org` | የBuildkite ማስረጃን ያረጋግጣል + hashes ያትማል። |
+| ውጫዊ StrongBox ቤተ ሙከራ | Sakura መሣሪያዎች NOC | `noc@sakura.example` · +81-3-5550-9876 | የማቆያ ግንኙነት; በ6 ሰአት ውስጥ መገኘቱን ያረጋግጡ። |
+| Firebase ፍንዳታ አስተባባሪ | ቴሳ ራይት | `@android-ci` Slack | ውድቀት ሲያስፈልግ የFirebase ሙከራ ላብ አውቶማቲክን ያነሳሳል። |
 
-| Role | Primary Contact | Channel(s) | Notes |
-|------|-----------------|------------|-------|
-| Hardware Lab Lead | Priya Ramanathan | `@android-lab` Slack · +81-3-5550-1234 | Owns on-site actions and calendar updates. |
-| Device Lab Ops | Mateo Cruz | `_android-device-lab` queue | Coordinates reservation tickets + bundle uploads. |
-| Release Engineering | Alexei Morozov | Release Eng Slack · `release-eng@iroha.org` | Validates Buildkite evidence + publishes hashes. |
-| External StrongBox Lab | Sakura Instruments NOC | `noc@sakura.example` · +81-3-5550-9876 | Retainer contact; confirm availability within 6 h. |
-| Firebase Burst Coordinator | Tessa Wright | `@android-ci` Slack | Triggers Firebase Test Lab automation when fallback is needed. |
+አንድ መሰርሰሪያ የማገድ ችግሮችን ካወቀ በሚከተለው ቅደም ተከተል ጨምር፡
+1. የሃርድዌር ላብ መሪ
+2. አንድሮይድ ፋውንዴሽን TL
+3. የፕሮግራም መሪ / የመልቀቅ ምህንድስና
+4. ተገዢነት አመራር + የህግ አማካሪ (መሰርሰሪያ የቁጥጥር ስጋትን ካሳየ)
 
-Escalate in the following order if a drill uncovers blocking issues:
-1. Hardware Lab Lead
-2. Android Foundations TL
-3. Program Lead / Release Engineering
-4. Compliance Lead + Legal Counsel (if drill reveals regulatory risk)
-
-## Reporting & Follow-Ups
-
-- Link this runbook alongside the reservation procedure whenever referencing
-  failover readiness in `roadmap.md`, `status.md`, and governance packets.
-- Email the quarterly drill recap to Compliance + Legal with the evidence bundle
-  hash table and attach the `_android-device-lab` ticket export.
-- Mirror key metrics (time-to-failover, workloads restored, outstanding actions)
-  inside `status.md` and the AND7 hot-list tracker so reviewers can trace the
-  dependency to a concrete rehearsal.
+## ሪፖርት ማድረግ እና ክትትል- በማንኛውም ጊዜ በማጣቀሻ ጊዜ ይህንን የሩጫ መጽሐፍ ከቦታ ማስያዣ ሂደት ጋር ያገናኙት።
+  አለመሳካት ዝግጁነት በ`roadmap.md`፣ `status.md` እና የአስተዳደር ፓኬቶች።
+- የሩብ ዓመቱን የድጋሚ መግለጫ ወደ Compliance + Legal ከማስረጃ ጥቅል ጋር ኢሜል ያድርጉ
+  የሃሽ ጠረጴዛ እና የ`_android-device-lab` ትኬት ወደ ውጭ መላክን ያያይዙ።
+- ቁልፍ መለኪያዎችን ያንጸባርቁ (ጊዜ-ወደ-ውድቀት፣ የስራ ጫናዎች ወደ ነበሩበት ተመልሰዋል፣ አስደናቂ እርምጃዎች)
+  በ `status.md` እና በ AND7 የሙቅ ዝርዝር መከታተያ ውስጥ ገምጋሚዎች መከታተል እንዲችሉ
+  ተጨባጭ ልምምድ ላይ ጥገኛ መሆን.

@@ -4,29 +4,31 @@ direction: ltr
 source: docs/portal/docs/sorafs/orchestrator-ops.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: orchestrator-ops
-title: Runbook по эксплуатации оркестратора SoraFS
-sidebar_label: Runbook оркестратора
+identifiant : orchestrator-ops
+titre : Runbook pour les exploitants d'entreprises SoraFS
+sidebar_label : gestionnaire du Runbook
 description: Пошаговое операционное руководство по развёртыванию, мониторингу и откату мульти-источникового оркестратора.
 ---
 
 :::note Канонический источник
-Эта страница отражает `docs/source/sorafs/runbooks/sorafs_orchestrator_ops.md`. Держите обе копии синхронизированными, пока набор документации Sphinx не будет полностью мигрирован.
+Cette page correspond à `docs/source/sorafs/runbooks/sorafs_orchestrator_ops.md`. Vous pouvez obtenir des copies de synchronisation pour pouvoir documenter Sphinx et ne pas pouvoir les transférer.
 :::
 
-Этот runbook проводит SRE через подготовку, развёртывание и эксплуатацию мульти-источникового fetch-оркестратора. Он дополняет руководство разработчика процедурами, рассчитанными на прод-роллауты, включая поэтапное включение и занесение пиров в чёрный список.
+Ce runbook fournit SRE pour le développement et l'exploitation de plusieurs systèmes de récupération d'infrastructures. En ajoutant des procédures de démarrage de robots, en passant par les programmes de production, y compris la validation et la configuration des pilotes dans чёрный список.
 
-> **См. также:** [Runbook по мульти-источниковому rollout](./multi-source-rollout.md) посвящён волнам развёртывания на уровне флота и экстренному отклонению провайдеров. Используйте его для координации governance / staging, а этот документ — для повседневной эксплуатации оркестратора.
+> **См. также:** [Runbook pour le déploiement multi-systèmes] (./multi-source-rollout.md) permet de modifier votre plan d'eau et votre extension. провайдеров. Il s'agit d'un document destiné à la coordination de la gouvernance/mise en scène et à l'organisation de l'exécution commerciale.
 
-## 1. Предстартовый чек-лист
+## 1. Liste de contrôle préalable
 
 1. **Собрать входные данные от провайдеров**
-   - Последние анонсы провайдеров (`ProviderAdvertV1`) и снимок телеметрии для целевого флота.
-   - План payload (`plan.json`), полученный из тестируемого манифеста.
-2. **Сформировать детерминированный scoreboard**
+   - Последние анонсы провайдеров (`ProviderAdvertV1`) et снимок телеметрии для целевого флота.
+   - Plan de charge utile (`plan.json`), disponible dans le manifeste de test.
+2. **Сформировать детерминированный tableau de bord**
 
    ```bash
    sorafs_fetch \
@@ -39,30 +41,30 @@ description: Пошаговое операционное руководство 
      --json-out artifacts/session.summary.json
    ```
 
-   - Убедитесь, что `artifacts/scoreboard.json` содержит каждого прод-провайдера как `eligible`.
-   - Архивируйте JSON-сводку вместе со scoreboard; аудиторы опираются на счётчики ретраев чанков при сертификации запроса на изменение.
-3. **Dry-run с fixtures** — Выполните ту же команду на публичных fixtures из `docs/examples/sorafs_ci_sample/`, чтобы убедиться, что бинарник оркестратора соответствует ожидаемой версии, прежде чем трогать прод-пayloads.
+   - Assurez-vous que `artifacts/scoreboard.json` correspond à votre fournisseur de produit `eligible`.
+   - Архивируйте JSON-сводку вместе со tableau de bord ; Les auditeurs s'occupent des retours d'informations avant la certification en vue de l'enregistrement.
+3. **Fonctionnement à sec avec les luminaires** — Consultez votre commande pour les luminaires publics à l'aide de `docs/examples/sorafs_ci_sample/`, afin de déterminer ce que l'opérateur binaire propose. Les versions actuelles, avant de pouvoir ajouter des charges utiles de production.
 
-## 2. Процедура поэтапного rollout
+## 2. Déploiement du processus de livraison
 
 1. **Канарейка (≤2 провайдера)**
-   - Пересоберите scoreboard и запустите с `--max-peers=2`, чтобы ограничить оркестратор небольшим подмножеством.
-   - Мониторьте:
-     - `sorafs_orchestrator_active_fetches`
-     - `sorafs_orchestrator_fetch_failures_total{reason!="retry"}`
-     - `sorafs_orchestrator_retries_total`
-   - Продолжайте, когда доля ретраев держится ниже 1% для полного fetch манифеста и ни один провайдер не накапливает ошибок.
+   - Sélectionnez le tableau de bord et utilisez le `--max-peers=2` pour que l'opérateur ne soit pas en mesure de le faire.
+   - Surveillez :
+     -`sorafs_orchestrator_active_fetches`
+     -`sorafs_orchestrator_fetch_failures_total{reason!="retry"}`
+     -`sorafs_orchestrator_retries_total`
+   - Le produit, alors que le remboursement ne coûte pas 1% pour récupérer le manifeste et que votre fournisseur ne capte pas votre ordinateur.
 2. **Этап разгона (50% провайдеров)**
-   - Увеличьте `--max-peers` и перезапустите со свежим снимком телеметрии.
-   - Сохраняйте каждый запуск с `--provider-metrics-out` и `--chunk-receipts-out`. Храните артефакты ≥7 дней.
-3. **Полный rollout**
-   - Уберите `--max-peers` (или установите его на полный набор eligible).
-   - Включите режим оркестратора в клиентских деплоях: распространяйте сохранённый scoreboard и JSON-конфиг через систему управления конфигурацией.
-   - Обновите дашборды, чтобы показывать `sorafs_orchestrator_fetch_duration_ms` p95/p99 и гистограммы ретраев по регионам.
+   - Utilisez le `--max-peers` et installez-vous sur votre téléphone.
+   - Connectez-vous à `--provider-metrics-out` et `--chunk-receipts-out`. Храните артефакты ≥7 jours.
+3. **Déploiement complet**
+   - Utilisez `--max-peers` (ou choisissez-le pour être éligible).
+   - Cliquez sur le gestionnaire d'entreprise pour les déploiements clients : configurez le tableau de bord social et la configuration JSON pour la configuration du système.
+   - Ouvrez les frontières pour rechercher `sorafs_orchestrator_fetch_duration_ms` p95/p99 et les enregistrements d'histogramme selon la région.
 
-## 3. Блокировка и усиление пиров
+## 3. Blocage et utilisation des pirates
 
-Используйте overrides политики скоринга в CLI, чтобы разбирать проблемных провайдеров без ожидания обновлений governance.
+Utilisez les remplacements des politiques de notation dans la CLI pour résoudre les problèmes des fournisseurs sans mettre en place une gouvernance approfondie.
 
 ```bash
 sorafs_fetch \
@@ -74,36 +76,34 @@ sorafs_fetch \
   --deny-provider=beta \
   --boost-provider=gamma=5 \
   --json-out artifacts/override.summary.json
-```
+```- `--deny-provider` inclut l'alias de votre utilisateur lors de la session privée.
+- `--boost-provider=<alias>=<weight>` permet à votre fournisseur de planifier. Les informations relatives à la normalisation de votre tableau de bord sont également utilisées au niveau local.
+- Sélectionnez les remplacements dans les fichiers d'incident et utilisez les fichiers JSON pour que la commande puisse configurer la solution après l'installation. первопричины.
 
-- `--deny-provider` исключает указанный alias из рассмотрения в текущей сессии.
-- `--boost-provider=<alias>=<weight>` повышает вес провайдера в планировщике. Значения добавляются к нормализованному весу scoreboard и применяются только к локальному запуску.
-- Зафиксируйте overrides в инцидент-тикете и приложите JSON-выходы, чтобы ответственная команда могла согласовать состояние после устранения первопричины.
+Pour les travaux postaux, vous devez utiliser un système de télémétrie (vous serez pénalisé) ou vous publierez une publicité sur les futurs étudiants. потоков до очистки CLI-override.
 
-Для постоянных изменений обновите исходную телеметрию (пометьте нарушителя как penalised) или пересоздайте advert с обновлёнными бюджетами потоков до очистки CLI-override.
+## 4. Rasbor сбоев
 
-## 4. Разбор сбоев
+Comment récupérer le pad :
 
-Когда fetch падает:
+1. Avant d'entrer en contact avec les objets d'art suivants :
+   -`scoreboard.json`
+   -`session.summary.json`
+   -`chunk_receipts.json`
+   -`provider_metrics.json`
+2. Vérifiez le `session.summary.json` sur le moteur de course :
+   - `no providers were supplied` → vérifier le réglage et l'entretien.
+   - `retry budget exhausted ...` → sélectionnez `--retry-budget` ou activez les périphériques non installés.
+   - `no compatible providers available ...` → vérifier les métadonnées du fournisseur.
+3. Demandez à votre fournisseur d'utiliser `sorafs_orchestrator_provider_failures_total` et assurez-vous que le ticket est disponible selon les paramètres métriques.
+4. Sélectionnez fetch of flaïn avec `--scoreboard-json` et le téléphone pour déterminer votre connexion.
 
-1. Перед повторным запуском соберите следующие артефакты:
-   - `scoreboard.json`
-   - `session.summary.json`
-   - `chunk_receipts.json`
-   - `provider_metrics.json`
-2. Проверьте `session.summary.json` на человекочитаемую строку ошибки:
-   - `no providers were supplied` → проверьте пути к провайдерам и объявления.
-   - `retry budget exhausted ...` → увеличьте `--retry-budget` или исключите нестабильных пиров.
-   - `no compatible providers available ...` → проверьте метаданные диапазонных возможностей провайдера-нарушителя.
-3. Сопоставьте имя провайдера с `sorafs_orchestrator_provider_failures_total` и создайте тикет-наблюдение, если метрика резко растёт.
-4. Воспроизведите fetch офлайн с `--scoreboard-json` и захваченной телеметрией, чтобы детерминированно воспроизвести сбой.
+## 5. Restauration
 
-## 5. Rollback
+Que choisir l'opérateur de déploiement :
 
-Чтобы откатить rollout оркестратора:
+1. Connectez-vous à la configuration avec `--max-peers=1` (les faits ouvrent la planification multi-établissement) ou contactez les clients de l'entreprise. одноисточниковый fetch-путь.
+2. Remplacez l'outil `--boost-provider` par le tableau de bord affiché de manière neutre.
+3. Produisez les mesures de l'organisateur de mini-soutiens, afin de répondre à l'opération de récupération en cours.
 
-1. Распространите конфигурацию с `--max-peers=1` (фактически отключает мульти-источниковое планирование) или верните клиентов на устаревший одноисточниковый fetch-путь.
-2. Уберите любые overrides `--boost-provider`, чтобы scoreboard вернулся к нейтральному весу.
-3. Продолжайте собирать метрики оркестратора минимум сутки, чтобы подтвердить отсутствие оставшихся fetch-операций.
-
-Дисциплинированный сбор артефактов и поэтапные rollouts гарантируют безопасную эксплуатацию мульти-источникового оркестратора на разнородных флотах провайдеров при сохранении требований по наблюдаемости и аудиту.
+Les déploiements de distribution d'articles d'art et d'affaires garantissent l'exclusivité d'un entrepreneur multi-industriel pour les entreprises Les flottes fournissent des services de sécurité pour les travaux d'audit et d'audit.

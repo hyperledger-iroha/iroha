@@ -10,283 +10,278 @@ translation_last_reviewed: 2026-02-07
 id: nexus-spec
 title: Sora Nexus technical specification
 description: Full mirror of `docs/source/nexus.md`, covering the architecture and design constraints for the Iroha 3 (Sora Nexus) ledger.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
-This page mirrors `docs/source/nexus.md`. Keep both copies aligned until the translation backlog lands in the portal.
+:::དྲན་ཐོའི་འབྱུང་ཁུངས།
+ཤོག་ངོས་འདིའི་ནང་ `docs/source/nexus.md` ལ་སྤྲོ་སྣང་། འདྲ་བཤུས་གཉིས་ཆ་ར་ སྐད་སྒྱུར་གྱི་རྒྱབ་གཞིའི་ ས་གཞི་ཚུ་ དྲྭ་ཐོག་ནང་ མ་ལྷོད་ཚུན་ཚོད་ ཕྲང་སྒྲིག་འབད་བཞག།
 :::
 
-#! Iroha 3 – Sora Nexus Ledger: Technical Design Specification
+#! Iroha – སོ་ར་ I18NT0000026X Ledger: བཟོ་རིག་བཟོ་བཀོད་ཀྱི་ཁྱད་ཆོས།
 
-This document proposes the Sora Nexus Ledger architecture for Iroha 3, evolving Iroha 2 toward a single global, logically unified ledger organized around Data Spaces (DS). Data Spaces provide strong privacy domains (“private data spaces”) and open participation (“public data spaces”). The design preserves composability across the global ledger while ensuring strict isolation and confidentiality for private‑DS data, and introduces data‑availability scaling via erasure coding across Kura (block storage) and WSV (World State View).
+ཡིག་ཆ་འདི་གིས་ Sora I18NT0000027X Iroha 3 གི་དོན་ལུ་ Sora I18NT0000027X གིས་ I18NT000000015X འདི་ འཛམ་གླིང་ཡོངས་ཁྱབ་ཅིག་ལུ་ འཕེལ་རྒྱས་འགྱོ་དོ་ཡོདཔ་ཨིན། གནད་སྡུད་བར་སྟོང་ཚུ་གིས་ སྒེར་གསང་མངའ་ཁོངས་ཤུགས་ཅན་ (“སྒེར་སྡེ་གནས་སྡུད་ས་སྟོང་”) དང་ ཁ་ཕྱེ་སྟེ་ བཅའ་མར་གཏོགས་ (“མི་མང་གནས་སྡུད་ཀྱི་ས་སྟོང་”) བྱིནམ་ཨིན། བཟོ་བཀོད་འདི་གིས་ འཛམ་གླིང་གི་ རྩིས་ཁྲ་ནང་ལུ་ མཉམ་བསྡོམ་འབད་ཚུགས་པའི་ ཉམས་སྲུང་འབདཝ་ཨིནམ་དང་ སྒེར་གྱི་གནས་སྡུད་འདི་ རང་རྐྱངམ་ཅིག་སྦེ་བཞག་ནི་དང་ གསང་བ་སྦེ་བཞག་ནི་ དེ་ལས་ ཀུ་ར་ ༼བཀག་ཆ་གསོག་འཇོག་༽ དང་ ཌབ་ལུ་ཨེསི་ཝི་ ༼འཛམ་གླིང་གི་གནས་སྟངས་༽ ཚུ་ནང་ལས་ གནས་སྡུད་ཐོབ་ཚུགས་པའི་ འཇལ་ཚད་ཚུ་ འགོ་བཙུགསཔ་ཨིན།
 
-The same repository builds both Iroha 2 (self-hosted networks) and Iroha 3 (SORA Nexus). Execution is powered by
-the shared Iroha Virtual Machine (IVM) and Kotodama toolchain, so contracts and bytecode artifacts remain
-portable across self-hosted deployments and the Nexus global ledger.
+དེ་བཟུམ་མའི་ མཛོད་ཁང་གིས་ I18NT0000016X གཉིས་ཆ་རའི་ (རང་དོན་ཧོསཊི་ཡོངས་འབྲེལ་) དང་ Iroha 3 (I18NT000000048X I18NT0000028X) གཉིས་ཆ་ར་བཟོ་བསྐྲུན་འབདཝ་ཨིན། བཀོལ་སྤྱོད་འདི་ 11111111111111111111111རང་གིས་སྤྱོད་ཡོད།
+བརྗེ་སོར་གྱི་ Iroha བར་ཅུ་ཡལ་འཕྲུལ་ཆས་ (IVM) དང་ Kotodama ལག་ཆས་ཀྱི་ ལག་ཆས་ཚུ་ དེ་འབདཝ་ལས་ གན་རྒྱ་དང་ བཱའིཊི་ཀོཌི་ཅ་རྙིང་ཚུ་ ལུས་ཡོདཔ་ཨིན།
+རང་གིས་རང་ལུ་གཙོ་བོར་བསྟེན་པའི་བཀྲམ་སྤེལ་དང་ Nexus འཛམ་གླིང་ལེཌ་ཇར་ཚུ་ནང་ འབག་བཏུབ་ཨིན།
 
-Goals
-- One global logical ledger composed from many cooperating validators and Data Spaces.
-- Private Data Spaces for permissioned operation (e.g., CBDCs), with data never leaving the private DS.
-- Public Data Spaces with open participation, Ethereum-like permissionless access.
-- Composable smart contracts across Data Spaces, subject to explicit permissions for access to private‑DS assets.
-- Performance isolation so public activity cannot degrade private‑DS internal transactions.
-- Data availability at scale: erasure‑coded Kura and WSV to support effectively unbounded data while keeping private‑DS data private.
+རིལ་ཚང
+- འཛམ་གླིང་ཡོངས་ཁྱབ་ཀྱི་ གཏན་ཚིག་ཅན་གྱི་ ལག་དེབ་ཅིག་ མཉམ་འབྲེལ་བདེན་དཔྱད་འབད་མི་དང་ གནས་སྡུད་བར་སྟོང་ཚུ་ ལེ་ཤ་ཅིག་ལས་ བརྩམས་ཡོདཔ་ཨིན།
+- གནང་བ་ཡོད་པའི་བཀོལ་སྤྱོད་ཀྱི་དོན་ལུ་ སྒེར་གྱི་གནས་སྡུད་བར་སྟོང་ཚུ་ (དཔེར་ན་ སི་བི་ཌི་སི་ཚུ་) གནས་སྡུད་ཚུ་ སྒེར་གྱི་ཌི་ཨེསི་ལས་ ནམ་ཡང་མ་བཞག་པས།
+- མི་མང་གནས་སྡུད་ཀྱི་ས་སྟོང་ ཁ་ཕྱེ་སྟེ་བཅའ་མར་གཏོགས་མི་ ཨེ་ཐི་རི་ཡམ་བཟུམ་གྱི་གནང་བ་མེད་པའི་འཛུལ་སྤྱོད་ཚུ།
+- གནད་སྡུད་ས་སྟོང་ཚུ་ནང་ མཉམ་བསྡོམས་འབད་བཏུབ་པའི་ གན་རྒྱ་ཚུ་ སྒེར་གྱི་རྒྱུ་དངོས་ཚུ་ ཐོབ་ནིའི་དོན་ལུ་ གསལ་ཏོག་ཏོ་སྦེ་ གནང་བ་བྱིན་དགོ།
+- ལས་དོན་སོ་སོ་སྦེ་བཞག་མི་འདི་གིས་ མི་མང་གི་ལས་སྣ་ཚུ་གིས་ སྒེར་གྱི་ནང་འཁོད་ཚོང་འབྲེལ་ཚུ་ ཉམས་བཅུག་མི་ཚུགས།
+- གནས་སྡུད་འཐོབ་ཚུགས་པའི་ཚད་གཞི་: སྒེར་གྱི་གནས་སྡུད་སྒེར་སྡེ་བཞག་པའི་སྐབས་ མཐུད་ལམ་མེད་པའི་གནས་སྡུད་ཕན་ནུས་ཅན་སྦེ་རྒྱབ་སྐྱོར་འབད་ནིའི་དོན་ལུ་ ཀུ་ར་དང་ཌབ་ལུ་ཨེསི་ཝི་འདི་བཏོན་བཏང་ཡོདཔ་ཨིན།
 
-Non‑Goals (Initial Phase)
-- Defining token economics or validator incentives; scheduling and staking policies are pluggable.
-- Introducing a new ABI version; changes target ABI v1 with explicit syscall and pointer‑ABI extensions per IVM policy.
+དམིགས་ཡུལ་མིན་པའི་ (འགོ་འཁྲིད་དུས་རིམ་)།
+- ཊོ་ཀེན་དཔལ་འབྱོར་ཡང་ན་ བདེན་དཔྱད་ཀྱི་སེམས་ཤུགས་ཚུ་ ངེས་ཚིག་བརྗོད་ནི། དུས་ཚོད་བཀོད་སྒྲིག་དང་ བགོ་ལ་གི་སྲིད་བྱུས་ཚུ་ འབྲེལ་འཐུད་འབད་ཚུགས།
+- ཨེ་བྷི་ཨའི་ཐོན་རིམ་གསརཔ་ཅིག་འགོ་བཙུགས་ནི། དམིགས་ཚད་ ABI v1 འདི་ གསལ་རི་རི་སི་ཀཱལ་དང་ དཔག་བྱེད་-ཨེ་བི་ཨའི་ རྒྱ་བསྐྱེད་ཚུ་ IVM སྲིད་བྱུས་ལུ་ བསྒྱུར་བཅོས་འབད་ཡོདཔ་ཨིན།
 
-Terminology
-- Nexus Ledger: The global logical ledger formed by composing Data Space (DS) blocks into a single, ordered history and state commitment.
-- Data Space (DS): A bounded execution and storage domain with its own validators, governance, privacy class, DA policy, quotas, and fee policy. Two classes exist: public DS and private DS.
-- Private Data Space: Permissioned validators and access control; transaction data and state never leave the DS. Only commitments/metadata are anchored globally.
-- Public Data Space: Permissionless participation; full data and state are publicly available.
-- Data Space Manifest (DS Manifest): A Norito-encoded manifest that declares DS parameters (validators/QC keys, privacy class, ISI policy, DA parameters, retention, quotas, ZK policy, fees). The manifest hash is anchored on the nexus chain. Unless overridden, DS quorum certificates use ML‑DSA‑87 (Dilithium5‑class) as the default post‑quantum signature scheme.
-- Space Directory: A global on‑chain directory contract that tracks DS manifests, versions, and governance/rotation events for resolvability and audits.
-- DSID: A globally unique identifier for a Data Space. Used to namespace all objects and references.
-- Anchor: A cryptographic commitment from a DS block/header included into the nexus chain to bind DS history into the global ledger.
-- Kura: Iroha block storage. Extended here with erasure‑coded blob storage and commitments.
-- WSV: Iroha World State View. Extended here with versioned, snapshot‑capable, erasure‑coded state segments.
-- IVM: Iroha Virtual Machine for smart contract execution (Kotodama bytecode `.to`).
- - AIR: Algebraic Intermediate Representation. An algebraic view of computation for STARK‑style proofs, describing execution as field‑based traces with transition and boundary constraints.
+ཐ་སྙད་རིག་པ།
+- Nexus Ledger: གནད་སྡུད་བར་སྟོང་ (DS) བརྩམ་ཐོག་ལས་ བཟོ་མི་ འཛམ་གླིང་ཚད་མའི་ ལག་དེབ་འདི་གིས་ བྱུང་རབ་དང་ མངའ་སྡེ་གི་ཁས་བླངས་གཅིག་ནང་ གཅིག་ནང་ བཀོདཔ་ཨིན།
+- གནས་སྡུད་ས་སྟོང་ (DS): མཐའ་མཚམས་བཀོལ་སྤྱོད་དང་ གསོག་འཇོག་མངའ་ཁོངས་ རང་ཉིད་ཀྱི་བདེན་དཔྱད་དང་ གཞུང་སྐྱོང་ སྒེར་སྡེ་ ཌི་ཨེ་སྲིད་བྱུས་ བསྡོམས་རྩིས་ ཁྲལ་གྱི་སྲིད་བྱུས་ཚུ་དང་གཅིག་ཁར་ ཡོདཔ་ཨིན། སློབ་ཚན་གཉིས་ཡོད་མི། མི་མང་DS དང་སྒེར་གྱི་DS.
+- སྒེར་གྱི་གནས་སྡུད་བར་སྟོང་: འཛུལ་ཞུགས་བདེན་དཔྱད་འབད་མི་དང་ འཛུལ་སྤྱོད་ཚད་འཛིན་; ཚོང་འབྲེལ་གནས་སྡུད་དང་གནས་སྟངས་ཀྱིས་ ཌི་ཨེསི་འདི་ ནམ་ཡང་མི་བཞག་པས། འཛམ་གླིང་ནང་ལུ་ ཁས་བླངས་/མེ་ཊ་ཌེ་ཊ་ཚུ་རྐྱངམ་ཅིག་ གཞི་བཙུགས་འབད་ཡོདཔ་ཨིན།
+- མི་མང་གནས་སྡུད་ས་སྟོང་: ཆོག་ཐམ་མེད་པའི་བཅའ་མར་གཏོགས་མི། གནས་སྡུད་ཆ་ཚང་དང་མངའ་སྡེ་ཚུ་ མི་མང་ལུ་ཐོབ་ཚུགས།
+- གནད་སྡུད་ས་སྟོང་ཤེས་རྟོགས་ (DS Manifest): ཌའི་ཨེསི་ཚད་གཞི་ཚུ་གསལ་བསྒྲགས་འབདཝ་ཨིན་ (བདེན་དཔྱད་/ཀིའུ་སི་ལྡེ་མིག་, སྒེར་དོན་དབྱེ་རིམ་, ཌི་ཨེ་པེ་ར་མི་ཊར་, བཀག་འཛིན་ ཚད་དང་ ཟེག་སྲིད་བྱུས་ འཐུས་ཚུ་) གསལ་བསྒྲགས་འབདཝ་ཨིན། གསལ་སྟོན་གྱི་ཧེཤ་འདི་ ནེགསི་རིམ་སྒྲིག་གུ་ལུ་ གཞི་བསྟུན་འབདཝ་ཨིན། མ་ཚུད་ཚུན་ཚོད་ ཌི་ཨེསི་ཀོ་རམ་ལག་ཁྱེར་ཚུ་གིས་ ཨེམ་ཨེལ་‐ཌི་ཨེསི་ཨེ་‐༨༧ (ཌི་ལི་ཐི་ཡམ་༥‐དབྱེ་རིམ་) འདི་ སྔོན་སྒྲིག་པོསཊི་པོར-ཀོའི་ཊམ་མིང་རྟགས་འཆར་གཞི་སྦེ་ལག་ལེན་འཐབ་ཨིན།
+- གནམ་སྟོང་སྣོད་ཐོ།: ཌི་ཨེསི་ གསལ་སྟོན་དང་ ཐོན་རིམ་ དེ་ལས་ གཞུང་སྐྱོང་/བསྒྱིར་ཚད་ཀྱི་ལས་རིམ་ཚུ་ བསྐྱར་ལོག་འབད་ཚུགས་ནི་དང་ རྩིས་ཞིབ་འབད་ནིའི་དོན་ལུ་ འཛམ་གླིང་ཡོངས་ཁྱབ་ཀྱི་ སྣོད་ཐོ་ནང་ གན་ཡིག་ཅིག།
+- DSID: གནད་སྡུད་བར་སྟོང་ཅིག་གི་དོན་ལུ་ འཛམ་གླིང་ཡོངས་ཁྱབ་ཀྱི་ཁྱད་པར་ངོས་འཛིན་འབད་མི་ཅིག། དངོས་པོ་དང་ གཞི་བསྟུན་ཚུ་ཆ་མཉམ་གྱི་བར་སྟོང་མིང་བཏགས་ནི་ལུ་ལག་ལེན་འཐབ་ཨིན།
+- ཨེན་ཀོར་: ཌི་ཨེསི་བྱུང་རབས་འདི་ འཛམ་གླིང་ལེཌ་ཇར་ལུ་ མཐུད་ནིའི་དོན་ལུ་ ནེགསི་རིམ་སྒྲིག་ནང་ལུ་ བཙུགས་ཡོད་པའི་ ཌི་ཨེསི་བཀག་ཆ་/མགོ་ཡིག་ལས་ ཀིརིཔ་ཊོ་གཱར་ཕིག་ཁས་བླངས་ཅིག།
+- ཀུ་ར་: Iroha བཀག་ཆ་གསོག་འཇོག་། འདི་ཁར་ རྩ་མེད་བཏང་ཡོད་པའི་ བློ་རིག་གསོག་འཇོག་དང་ ཁས་བླངས་ཚུ་གི་ཐོག་ལས་ རྒྱ་སྐྱེད་འབད་ཡོདཔ་ཨིན།
+- WSV: I18NT000000020X འཛམ་གླིང་མངའ་སྡེའི་མཐོང་སྣང་། འདི་ཁར་ ཐོན་རིམ་དང་ པར་ལེན་འབད་ཚུགསཔ་ དེ་ལས་ གསང་ཡིག་བཙུགས་ཡོད་པའི་ གནས་སྟངས་ཆ་ཤས་ཚུ་ རྩ་བསྐྲད་གཏང་ཡོདཔ་ཨིན།
+- IVM: I18NT0000021X གན་ཡིག་བཟོ་བའི་དོན་ལུ་ བརྡ་དོན་འཕྲུལ་ཆས་ (I18NT000000002X བཱའིཊི་ཀོཌི་ `.to`).
+ - AIR: ཚབ་རྩིས་བར་མའི་ངོ་ཚབ། STARK‐Style གི་བདེན་ཁུངས་ཚུ་གི་དོན་ལས་ རྩིས་བཏོན་གྱི་ ཚབ་རྩིས་རིག་པའི་མཐོང་སྣང་དང་ འཕོ་སོར་དང་ས་མཚམས་ཀྱི་ཐོགས་ལུ་ ལག་ལེན་འཐབ་ནི་འདི་ ས་ཁོངས་གཞི་བཞག་པའི་ འཚོལ་ཞིབ་ཅིག་སྦེ་ འགྲེལ་བཤད་རྐྱབ་ཨིན།
 
-Data Spaces Model
-- Identity: `DataSpaceId (DSID)` identifies a DS and namespaces everything. DS can be instantiated at two granularities:
-  - Domain‑DS: `ds::domain::<domain_name>` — execution and state scoped to a domain.
-  - Asset‑DS: `ds::asset::<domain_name>::<asset_name>` — execution and state scoped to a single asset definition.
-  Both forms coexist; transactions can touch multiple DSIDs atomically.
-- Manifest lifecycle: DS creation, updates (key rotation, policy changes), and retirement are recorded in the Space Directory. Each per‑slot DS artifact references the latest manifest hash.
-- Classes: Public DS (open participation, public DA) and Private DS (permissioned, confidential DA). Hybrid policies are possible via manifest flags.
-- Policies per DS: ISI permissions, DA parameters `(k,m)`, encryption, retention, quotas (min/max tx share per block), ZK/optimistic proof policy, fees.
-- Governance: DS membership and validator rotation defined by the manifest’s governance section (on-chain proposals, multisig, or external governance anchored by nexus transactions and attestations).
+གནད་སྡུད་བར་སྟོང་གི་དཔེ་སྟོན།
+- ངོ་རྟགས་: `DataSpaceId (DSID)` གིས་ ཌི་ཨེསི་ཅིག་ངོས་འཛིན་འབདཝ་ཨིནམ་དང་ ག་ར་གི་ས་སྒོ་ཚུ་ཨིན། DS འདི་ གཞི་རིམ་གཉིས་ནང་ བྱུང་རྐྱེན་འབད་ཚུགས།
+  - མངའ་ཁོངས་: I18NI000000063X — བཀོལ་སྤྱོད་དང་ མངའ་སྡེའི་ཁྱབ་ཁོངས་ མངའ་ཁོངས་ཅིག་ལུ་ཁྱབ་ཡོདཔ།
+  - རྒྱུ་དངོས་: `ds::asset::<domain_name>::<asset_name>` — རྒྱུ་དངོས་ངེས་ཚིག་གཅིག་ལུ་ ལག་ལེན་འཐབ་ནི་དང་ མངའ་སྡེ་གི་ཁྱབ་ཁོངས།
+  རྣམ་པ་གཉིས་ཆ་ར་མཉམ་གནས་འབདཝ་ཨིན། ཚོང་འབྲེལ་ཚུ་གིས་ ཌི་ཨེསི་ཨའི་ཌི་སྣ་མང་ཚུ་ རྡུལ་ཕྲན་གྱི་ཐོག་ལས་ ལགཔ་བརྐྱབ་ཚུགས།
+- མ་ཕེསཊ་མི་ཚེ་འཁོར་རིམ་: ཌི་ཨེསི་གསར་བསྐྲུན་དང་ དུས་མཐུན་བཟོ་ནི་ (ལྡེ་མིག་བསྒྱིར་ནི་ སྲིད་བྱུས་བསྒྱུར་བཅོས་) དང་ དགོངས་ཞུ་ཚུ་ གནམ་སྟོང་སྣོད་ཐོ་ནང་ ཐོ་བཀོད་འབད་ཡོདཔ་ཨིན། DS aryfact རེ་རེ་གིས་ གསལ་སྟོན་གྱི་ གསལ་སྟོན་གསརཔ་འདི་ ཁུངས་གཏུག་འབདཝ་ཨིན།
+- སློབ་ཚན་ཚུ་ མི་མང་ཌི་ཨེསི་ (ཁ་ཕྱེ་མི་ མི་མང་ཌི་ཨེ་) དང་ སྒེར་གྱི་ DS (གསང་བའི་ DA) ཚུ་ཨིན། ཧའིབ་རིཌ་སྲིད་བྱུས་ཚུ་ གསལ་སྟོན་དར་ཆ་ཚུ་བརྒྱུད་དེ་འབྱུང་སྲིད།
+- སྲིད་བྱུས་རེ་ལུ་: ISI གནང་བ་, DA ཚད་གཞི་ `(k,m)`, གསང་བཟོ, བཀག་འཛིན་, quotas (min/max tx བཀག་ཆ་རེ་ལུ་) , ZK/Optiestic བདེན་དཔྱད་སྲིད་བྱུས་, འཐུས་ཚུ།
+- གཞུང་སྐྱོང་: DS གི་འཐུས་མི་དང་ བདེན་དཔྱད་ཀྱི་བསྒྱིར་ཚད་ གསལ་སྟོན་གྱི་ གཞུང་སྐྱོང་སྡེ་ཚན་གྱིས་ ངེས་ཚིག་བཀོད་ཡོདཔ་ཨིན།
 
-Capability manifests & UAID
-- Universal accounts: Every participant receives a deterministic UAID (`UniversalAccountId` in `crates/iroha_data_model/src/nexus/manifest.rs`) that spans all dataspaces. Capability manifests (`AssetPermissionManifest`) bind a UAID to a specific dataspace, activation/expiry epochs, and an ordered list of allow/deny `ManifestEntry` rules that scope `dataspace`, `program_id`, `method`, `asset`, and optional AMX roles. Deny rules always win; the evaluator emits either `ManifestVerdict::Denied` with an audit reason or an `Allowed` grant with the matching allowance metadata.
-- Allowances: Each allow entry carries deterministic `AllowanceWindow` buckets (`PerSlot`, `PerMinute`, `PerDay`) plus an optional `max_amount`. Hosts and SDKs consume the same Norito payload, so enforcement remains identical across hardware and SDK implementations.
-- Audit telemetry: The Space Directory broadcasts `SpaceDirectoryEvent::{ManifestActivated, ManifestExpired, ManifestRevoked}` (`crates/iroha_data_model/src/events/data/space_directory.rs`) whenever a manifest changes state. The new `SpaceDirectoryEventFilter` surface allows Torii/data-event subscribers to monitor UAID manifest updates, revocations, and deny-wins decisions without custom plumbing.
+ལྕོགས་གྲུབ་གསལ་སྟོན་དང་ཡུ་ཨེ་ཨའི་ཌི་
+- ཡོངས་ཁྱབ་རྩིས་ཐོ་: བཅའ་མར་གཏོགས་མི་རེ་རེ་གིས་ གནད་སྡུད་ས་སྒོ་ཚུ་ཆ་མཉམ་ཁྱབ་སྟེ་ཡོད་མི་ I18NI000000067X ནང་ལུ་ གཏན་འབེབས་ཡུ་ཨེ་ཨའི་ཌི་ (`UniversalAccountId`) ཐོབ་ཨིན། ལྕོགས་གྲུབ་ཀྱི་གསལ་སྟོན་ (I18NI0000068X) དམིགས་བསལ་གནས་སྡུད་ས་སྒོ་ཅིག་དང་ ཤུགས་ལྡན་/འཚོལ་ཞིབ་དུས་རབས་ དེ་ལས་ ཆོག་ཡིག་ I18NI000000069X གི་ གོ་རིམ་ཅན་གྱི་ཐོ་ཡིག་ཅིག་ལུ་ UAID ཅིག་མཐུདཔ་ཨིན། I18NI000000073X, དང་གདམ་ཁ་ཅན་གྱི་ཨེ་ཨེམ་ཨེགསི་འགན་ཁུར། ཁྲིམས་ལུགས་བཀག་སྡོམ་འདི་ཨ་རྟག་རང་རྒྱལ་ཁ་ཨིན། བརྟག་ཞིབ་འབད་མི་གིས་ རྩིས་ཞིབ་ཀྱི་རྒྱུ་མཚན་དང་གཅིག་ཁར་ I18NI0000074X གང་རུང་ཅིག་ ཡང་ན་ མཐུན་སྒྲིག་འཐུས་མེ་ཊ་ཌ་ཊ་དང་གཅིག་ཁར་ `Allowed` གྲོགས་རམ་ཅིག་ བཏོནམ་ཨིན།
+- འཐུས་ཚུ་: རེ་རེ་གིས་ འཛུལ་སྤྱོད་འབད་བཅུགཔ་ཨིན། `AllowanceWindow` buckets (I18NI00000000077X, I18NI0000000078X, I18NI0000000079X) དང་ I18NI0000000079X) དེ་ལས་ I18NI000000089X. ཧོསིཊི་དང་ཨེསི་ཌི་ཀེ་ཚུ་གིས་ Norito པེ་ལོཌ་འདི་ ཅོག་འཐདཔ་འབདཝ་ལས་ བཀག་ཆ་འབད་ནི་འདི་ མཐུན་རྐྱེན་དང་ ཨེསི་ཌི་ཀེ་ ལག་ལེན་འཐབ་ཐངས་ཚུ་ནང་ ཅོག་འཐདཔ་སྦེ་རང་ ལུས་ཡོདཔ་ཨིན།
+- རྩིས་ཞིབ་བརྡ་འཕྲིན་: གནམ་སྟོང་སྣོད་ཐོ་འདི་གིས་ གསལ་སྟོན་གྱི་བསྒྱུར་བཅོས་འབད་བའི་སྐབས་ I18NI0000081X (`crates/iroha_data_model/src/events/data/space_directory.rs`) རྒྱང་བསྒྲགས་འབདཝ་ཨིན། I18NI000000083X ཁ་ཐོག་འདི་གིས་ UAID གསལ་སྟོན་དུས་མཐུན་བཟོ་ནི་དང་ ཆ་མེད་གཏང་ནི་ དེ་ལས་ རང་མོས་ཅན་གྱི་ཆུ་གཡུར་མེད་པར་ རྒྱལ་ཁ་ཐོབ་ནིའི་གྲོས་ཐག་བཅད་མི་ཚུ་ ལྟ་རྟོག་འབད་ནི་ལུ་ I18NT000000046X/data-events གི་ མཐུན་རྐྱེན་བྱིན་བཅུགཔ་ཨིན།
 
-For end-to-end operator evidence, SDK migration notes, and manifest publishing checklists, mirror this section with the Universal Account Guide (`docs/source/universal_accounts_guide.md`). Keep both documents aligned whenever UAID policy or tooling changes.
+མཇུག་ལས་མཇུག་ཚུན་ཚོད་ བཀོལ་སྤྱོད་པའི་སྒྲུབ་བྱེད་ཚུ་གི་དོན་ལུ་ ཨེསི་ཌི་ཀེ་གནས་སྤོ་དྲན་ཐོ་ཚུ་དང་ དཔར་བསྐྲུན་ཐོ་ཡིག་ཚུ་གསལ་སྟོན་འབད། ཡིག་ཆ་གཉིས་ཆ་རང་ ཡུ་ཨའི་ཨའི་ཌི་སྲིད་བྱུས་ཡང་ན་ ལག་ཆས་བསྒྱུར་བཅོས་ཚུ་ག་དུས་འབད་རུང་ ཕྲང་སྒྲིག་འབད་བཞག་དགོ།
 
-High‑Level Architecture
-1) Global Composition Layer (Nexus Chain)
-- Maintains a single, canonical ordering of 1‑second Nexus Blocks that finalize atomic transactions spanning one or more Data Spaces (DS). Every committed transaction updates the unified global world state (vector of per‑DS roots).
-- Contains minimal metadata plus aggregated proofs/QCs to ensure composability, finality, and fraud detection (DSIDs touched, per‑DS state roots before/after, DA commitments, per‑DS validity proofs, and the DS quorum certificate using ML‑DSA‑87). No private data is included.
-- Consensus: Single global, pipelined BFT committee of size 22 (3f+1 with f=7), selected from a pool of up to ~200k potential validators by an epochal VRF/stake mechanism. The nexus committee sequences transactions and finalizes the block within 1s.
+མཐོ་རིམ་བཟོ་རིག།
+༡༽ འཛམ་གླིང་སྒྲུང་བསྟུན་བང་རིམ་ (Nexus རིམ་སྒྲིག)
+- སྐར་ཆ་༡ གི་ སྐར་ཆ་༡ གི་ ཀེ་ནོ་ནིཀ་གོ་རིམ་བདག་འཛིན་འཐབ་སྟེ་ གནས་སྡུད་བར་སྟོང་གཅིག་དང་ ཡང་ན་ དེ་ལས་མངམ་ལུ་ རྡུལ་ཕྲན་ཚོང་འབྲེལ་ཚུ་ མཇུག་བསྡུ་བཅུག་ནི། ཁས་བླངས་འབད་ཡོད་པའི་ཚོང་འབྲེལ་རེ་རེ་གིས་ གཅིག་སྒྲིལ་འཛམ་གླིང་གནས་སྟངས་ (Ded རེ་རེ་གི་ vector) དུས་མཐུན་བཟོ་ཡོདཔ་ཨིན།
+- མཉམ་བསྡོམས་མེ་ཊ་ཌེ་ཊ་ དང་ ཀིའུ་སི་ཚུ་ བསྡོམས་རྩིས་དང་ མཐའ་དཔྱད་ དེ་ལས་ གཡོ་སྒྱུ་བརྟག་དཔྱད་འབད་ནིའི་དོན་ལུ་ བསྡོམས་རྩིས་/ཀིའུ་སི་ཚུ་ཡོདཔ་ཨིན། སྒེར་གྱི་གནད་སྡུད་ཚུ་ མ་ཚུད།
+- མོས་མཐུན་: འཛམ་གླིང་ཡོངས་ཁྱབ་ཅིག་གིས་ ཚད་གཞི་ ༢༢ (༣f+༡ དང་ f=༧) གི་ ཆུ་རྫིང་ལས་ ~200k གི་འོས་འབབ་བདེན་དཔྱད་འབད་མི་ཚུ་ epochal VRF/བཀག་ཆ་ཐབས་ལམ་གྱིས་ སེལ་འཐུ་འབད་ཡོདཔ་ཨིན། འབྲེལ་མཐུན་ཚོགས་ཆུང་གིས་ ཚོང་འབྲེལ་ཚུ་ གོ་རིམ་བཟོ་སྟེ་ ༡s གི་ནང་འཁོད་ལུ་ བཀག་ཆ་འདི་ མཇུག་བསྡུཝ་ཨིན།
 
-2) Data Space Layer (Public/Private)
-- Executes per‑DS fragments of global transactions, updates DS‑local WSV, and produces per‑block validity artifacts (aggregated per‑DS proofs and DA commitments) that roll up into the 1‑second Nexus Block.
-- Private DS encrypt data‑at‑rest and data‑in‑flight among authorized validators; only commitments and PQ validity proofs leave the DS.
-- Public DS export full data bodies (via DA) and PQ validity proofs.
+༢༽ གནད་སྡུད་བར་སྟོང་བང་རིམ་ (མི་མང་/སྒེར་སྡེ།)
+- འཛམ་གླིང་ཚོང་འབྲེལ་གྱི་ཆ་ཤས་ཚུ་ ལག་ལེན་འཐབ་ནི་དང་ DS‐lock WSV དུས་མཐུན་བཟོ་སྟེ་ ཆ་གནས་ཀྱི་ཆ་གནས་ཚུ་ བཏོནམ་ཨིན།
+- སྒེར་གྱི་ DS གསང་བཟོ་གནས་སྡུད་དང་ ངལ་གསོ་དང་ གནད་སྡུད་ཚུ་ དབང་ཚད་ཡོད་པའི་བདེན་དཔྱད་འབད་མི་ཚུ་གི་ནང་འཁོད་ལུ་ གཉིད་ལམ་ནང་ཨིན། ཁས་བླངས་རྐྱངམ་ཅིག་དང་ PQ ཆ་གནས་བདེན་ཁུངས་ཚུ་གིས་ DS བཞགཔ་ཨིན།
+- མི་མང་ཌི་ཨེསི་ཕྱིར་གཏོང་གནས་སྡུད་ཆ་ཚང་ (via DA) དང་ PQ ཆ་གནས་བདེན་དཔང་ཚུ།
 
-3) Atomic Cross‑Data‑Space Transactions (AMX)
-- Model: Each user transaction may touch multiple DS (e.g., domain DS and one or more asset DS). It commits atomically in a single Nexus Block or aborts; no partial effects.
-- Prepare‑Commit within 1s: For each candidate transaction, touched DS execute in parallel against the same snapshot (start‑of‑slot DS roots) and produce per‑DS PQ validity proofs (FASTPQ‑ISI) and DA commitments. The nexus committee commits the transaction only if all required DS proofs verify and the DA certificates arrive (≤300 ms target); otherwise the transaction is re‑scheduled for the next slot.
-- Consistency: Read‑write sets are declared; conflict detection occurs at commit against the start‑of‑slot roots. Lock‑free optimistic execution per DS avoids global stalls; atomicity is enforced by the nexus commit rule (all‑or‑nothing across DS).
-- Privacy: Private DS export only proofs/commitments tied to pre/post DS roots. No raw private data leaves the DS.
+༣༽ རྡུལ་ཕྲན་བརྒལ་བའི་དུས་ཚོད།
+- དཔེ་གཟུགས་: ལག་ལེན་པའི་ཚོང་འབྲེལ་རེ་རེ་གིས་ DS སྣ་མང་ལུ་ཨེབ་གཏང་འབད་འོང་ (དཔེར་ན་ མངའ་ཁོངས་ DS དང་ གཅིག་ཡང་ན་ རྒྱུ་དངོས་ DS)། འདི་གིས་ རྡུལ་ཕྲན་གྱི་ཐོག་ལས་ Nexus བཀག་ཆ་ཡང་ན་ མངལ་སྟོངམ་སྦེ་འབདཝ་ཨིན། ཆ་ཤས་ཅིག་གི་གནོད་པ་མེད།
+- ༡s ནང་འཁོད་ལུ་ ཁས་བླངས་འབདཝ་ཨིན། འབྲེལ་མཐུན་ཚོགས་ཆུང་གིས་ དགོས་མཁོའི་ཌི་ཨེསི་བདེན་ཁུངས་ཚུ་ ཆ་མཉམ་བདེན་དཔྱད་འབད་དེ་ ཌི་ཨེ་ལག་ཁྱེར་ཚུ་ལྷོད་པ་ཅིན་རྐྱངམ་ཅིག་ ཚོང་འབྲེལ་འབདཝ་ཨིན། (≤300 ms དམིགས་གཏད་); དེ་མེན་པ་ཅིན་ ཚོང་འབྲེལ་འདི་ ཤུལ་མམ་གྱི་ས་སྒོ་གི་དོན་ལུ་ ལོག་སྟེ་དུས་ཚོད་བཀོད་ཡོདཔ་ཨིན།
+- མཐུན་སྒྲིག: ལྷག་ཐངས་ཆ་ཚན་ཚུ་གསལ་བསྒྲགས་འབད་ཡོདཔ་ཨིན། འཁྲུག་རྩོད་བརྟག་དཔྱད་འདི་ འགོ་བཙུགས་པའི་འགོ་བཙུགས་ལུ་ ངོ་རྒོལ་འབདཝ་ཨིན། DS རེ་ལུ་ རིན་མེད་རེ་བ་ཅན་གྱི་ལག་ལེན་འདི་གིས་ འཛམ་གླིང་ཚོང་ཁང་ཚུ་ བཀག་བཞགཔ་ཨིན། རྡུལ་ཕྲན་འདི་ ཤུལ་མའི་ལམ་ལུགས་ཀྱིས་ བསྟར་སྤྱོད་འབདཝ་ཨིན།
+- སྒེར་གསང་: སྒེར་དོན་ཌི་ཨེསི་ཕྱིར་འདྲེན་བདེན་དཔང་/བཀག་ཆ་ཚུ་རྐྱངམ་ཅིག་ ཌི་ཨེསི་རྩ་བ་ཚུ་དང་འབྲེལ་བ་ཡོདཔ་ཨིན། སྒེར་གྱི་གནས་སྡུད་ངོ་མ་གིས་ ཌི་ཨེསི་འདི་བཞག་མི་བཞག།༤༽ གནས་སྡུད་ཐོབ་ཚུགསཔ་ (DA) འབྱུང་ཁུངས་གསང་ཨང་།
+- ཀུ་ར་གིས་ གཟུགས་དང་ ཌབ་ལུ་ཨེསི་ཝི་ པར་ཚུ་ བཏོན་གཏང་ནིའི་ བརྡ་རྟགས་སྦེ་ གསོག་འཇོག་འབདཝ་ཨིན། མི་མང་གི་བང་སྒྲོམ་ཚུ་ ཁྱབ་ཆེཝ་སྦེ་ བརྗེ་སོར་འབདཝ་ཨིན། སྒེར་གྱི་བོལ་ཚུ་ གསང་བཟོས་ཆ་ཤས་ཚུ་དང་གཅིག་ཁར་ སྒེར་གྱི་ EDS བདེན་དཔྱད་འབད་མི་ཚུ་གི་ནང་འཁོད་ལུ་རྐྱངམ་ཅིག་ གསོག་འཇོག་འབདཝ་ཨིན།
+- DA ཁས་བླངས་ཚུ་ DS arifacts དང་ Nexus གཉིས་ཆ་རའི་ནང་ ཐོ་བཀོད་འབད་དེ་ སྒེར་གྱི་ནང་དོན་ཚུ་ གསལ་སྟོན་མ་འབད་བར་ དཔེ་ཚད་དང་ ལོག་ཐོབ་ནི་གི་ ངེས་གཏན་ཚུ་ ལྕོགས་ཅན་བཟོ་སྟེ་ཡོདཔ་ཨིན།
 
-4) Data Availability (DA) with Erasure Coding
-- Kura stores block bodies and WSV snapshots as erasure-coded blobs. Public blobs are widely sharded; private blobs are stored only within private‑DS validators, with encrypted chunks.
-- DA Commitments are recorded in both DS artifacts and Nexus Blocks, enabling sampling and recovery guarantees without revealing private contents.
+བཀག་ཆ་དང་ བཀོལ་བཀོད།
+- གནད་སྡུད་ས་སྟོང་བདེན་ཁུངས་ཅན་གྱི་ཅ་ཆས། (༡s གི་ས་སྒོ་རེ་ལུ་ ཌི་ཨེསི་རེ་ལུ་)
+  - ས་སྒོའི་: ཌིསིཌ་, ས་ལོཊ, པིརི་_སི་ཊེཊ་_རྩ་བ་, པི་སི་ཊེཊ་_རྩ་བ་, ds_tx_set_hash, kura_da_commitment, wsv_da_commitment, wass_has, ds_qc), ds_validity_proof (FASTPQ‑ཨའི་ཨེསི་ཨའི་)།
+  - སྒེར་གྱི་ཕྱིར་གཏོང་གི་ཅ་ཆས་ཚུ་ གནས་སྡུད་གཟུགས་མེད་པའི་ ཅ་ཆས་ཚུ་ཨིན། མི་མང་DS གིས་ DA བརྒྱུད་དེ་གཟུགས་པོའི་ཐོབ་ཐང་བཅུག།
 
-Block and Commit Structure
-- Data Space Proof Artifact (per 1s slot, per DS)
-  - Fields: dsid, slot, pre_state_root, post_state_root, ds_tx_set_hash, kura_da_commitment, wsv_da_commitment, manifest_hash, ds_qc (ML‑DSA‑87), ds_validity_proof (FASTPQ‑ISI).
-  - Private‑DS export artifacts without data bodies; public DS allow body retrieval via DA.
+- Nexus སྡེབ་ཚན་ (1s གདམ་ཁ།)
+  - ས་སྒོ་ཚུ་: ས་སྒོ་: བཀག་ཆ་_གྱངས་ཁ་, གུག་ཤད་_ཧ་ཤི་ སེལོཊ་_དུས་ཚོད་, ཊི་ཨེགསི་_ཐོ་ཡིག་ (ཨེཌ་ཌི་ཨེསི་ཨའི་ཌི་ཚུ་དང་བཅས་པའི་རྡུལ་ཕྲན་བརྒལ་བའི་ཚོང་འབྲེལ་ཚུ་) ds_artfacts[], ནེགསི་སཱསི་_qc.
+  - ལས་འགན་: དགོས་མཁོའི་ DS aryfact བདེན་དཔྱད་འབད་མི་ རྡུལ་ཕྲན་ཚོང་འབྲེལ་ཆ་མཉམ་མཇུག་བསྡུཝ་ཨིན། གོ་རིམ་གཅིག་ནང་ ཌི་ཨེསི་རྩ་བའི་ འཛམ་གླིང་རྒྱལ་ཁབ་ཀྱི་ ཝེཀ་ཊར་འདི་ དུས་མཐུན་བཟོཝ་ཨིན།
 
-- Nexus Block (1s cadence)
-  - Fields: block_number, parent_hash, slot_time, tx_list (atomic cross‑DS transactions with DSIDs touched), ds_artifacts[], nexus_qc.
-  - Function: finalizes all atomic transactions whose required DS artifacts verify; updates the global world state vector of DS roots in one step.
+མོས་མཐུན་དང་ ལས་རིམ།
+- Nexus རིམ་སྒྲིག་མོས་མཐུན་: འཛམ་གླིང་ཡོངས་ཁྱབ་ཀྱི་ རྐྱངམ་ཅིག་ བི་ཨེཕ་ཊི་ (Sumeragi-class) འདི་ ༢༢-མཛུབ་གནོན་ཚོགས་ཆུང་ (༣f+༡ དང་གཅིག་ཁར་ f=༧ དང་ f=༧) དམིགས་གཏད་ ༡༢ བཀག་ཆ་༡ དང་ ༡ མཇུག་བསྡུ། ཚོགས་ཆུང་གི་འཐུས་མི་ཚུ་ འདེམས་ངོ་ ༢༠༠k ལས་ VRF/stake བརྒྱུད་དེ་ གདམ་འཐུ་འབདཝ་ཨིན། rotation གིས་ དབང་ཚད་ཕྱིར་སྤེལ་དང་ བཀག་འཛིན་གྱི་ བཀག་འཛིན་ཚུ་ རྒྱུན་སྐྱོང་འཐབ་ཨིན།
+- གནས་སྡུད་ས་སྟོང་མོས་མཐུན་: ཌི་ཨེསི་རེ་རེ་གིས་ བདེན་དཔྱད་འབད་མི་ཚུ་གི་བར་ན་ རང་སོའི་བི་ཨེཕ་ཊི་འདི་ གཡོག་བཀོལ་ནིའི་དོན་ལུ་ བསྒྱིར་ཆས་རེ་ལུ་ བཀོལ་སྤྱོད་འབདཝ་ཨིན། ལམ་གྱི་རི་ལེ་ཚོགས་ཆུང་ཚུ་ I18NI000000085X ལུ་ གནད་སྡུད་ས་སྒོ་ `fault_tolerance` སྒྲིག་སྟངས་ལག་ལེན་འཐབ་སྟེ་ ཚད་གཞི་བཟོ་སྟེ་ཡོདཔ་ད་ དེ་ཡང་ I18NI0000087X དང་ཅིག་ཁར་ མཐུད་ཡོད་པའི་ VRF epoch ལས་ གནད་སྡུད་གནམ་སྟོང་བདེན་དཔྱད་ཀྱི་ epoch ལས་ དཔེ་ཚད་རེ་ལུ་ གཏན་འབེབས་བཟོཝ་ཨིན། སྒེར་གྱི་ DS འདི་ གནང་བ་བྱིན་ཡོདཔ་ཨིན། མི་མང་DS གིས་ ཁ་ཕྱེ་བའི་སྡོད་གནས་ལུ་ འགོག་ཐབས་འབད་བཅུག། འཛམ་གླིང་ འབྲེལ་མཐུན་ཚོགས་ཆུང་དེ་ འགྱུར་བ་མེད་པར་ ཡོད།
+- ཚོང་འབྲེལ་ལས་རིམ་: ལག་ལེན་པ་ཚུ་གིས་ ཌི་ཨེསི་ཨའི་ཌི་ཚུ་ གསལ་བསྒྲགས་འབད་དེ་ ཡིག་ཐོག་ཆ་ཚན་ལྷག་མི་ཚུ་ རྡུལ་ཕྲན་ཚོང་འབྲེལ་ཚུ་ བཙུགས། DS བཀོལ་སྤྱོད་ཀྱི་ནང་འཁོད་ལུ་ མཉམ་དུ་སྦེ་ ལག་ལེན་འཐབ་ཨིན། འབྲེལ་མཐུན་ཚོགས་ཆུང་གིས་ ཌི་ཨེསི་ཨར་ཕེཀཊི་ཚུ་ བདེན་དཔྱད་འབད་ནི་དང་ ཌི་ཨེ་ལག་ཁྱེར་ཚུ་ དུས་ཚོད་ཁར་ཨིན་པ་ཅིན་ ༡ སི་བཀག་ཆ་ནང་ ཚོང་འབྲེལ་ཚུ་ ཚུདཔ་ཨིན། (≤300 ms)
+- ལཱ་འགན་སོ་སོ་སྦེ་བཞག་ནི་: ཌི་ཨེསི་རེ་རེ་ལུ་ རང་དབང་གི་ མེམ་པུལ་དང་ ལག་ལེན་འཐབ་ཐངས་ཡོདཔ་ཨིན། Per‐DS quotas གིས་ DS ལུ་རེག་པའི་ ཚོང་འབྲེལ་ག་དེམ་ཅིག་ བཀག་ཆ་འབད་ཚུགསཔ་ཨིན་ན་དང་ སྒེར་གྱི་ DS གི་ བར་ཆད་ཚུ་ བཀག་ཐབས་འབདཝ་ཨིན།
 
-Consensus and Scheduling
-- Nexus Chain Consensus: Single global, pipelined BFT (Sumeragi-class) with a 22-node committee (3f+1 with f=7) targeting 1s blocks and 1s finality. Committee members are epochally selected via VRF/stake from ~200k candidates; rotation maintains decentralization and censorship resistance.
-- Data Space Consensus: Each DS runs its own BFT among its validators to produce per‑slot artifacts (proofs, DA commitments, DS QC). Lane-relay committees are sized at `3f+1` using the dataspace `fault_tolerance` setting and are sampled deterministically per epoch from the dataspace validator pool using the VRF epoch seed bound with `(dataspace_id, lane_id)`. Private DS are permissioned; public DS allow open liveness subject to anti‑Sybil policies. The global nexus committee remains unchanged.
-- Transaction Scheduling: Users submit atomic transactions declaring touched DSIDs and read‑write sets. DS execute in parallel within the slot; the nexus committee includes the transaction in the 1s block if all DS artifacts verify and DA certificates are timely (≤300 ms).
-- Performance Isolation: Each DS has independent mempools and execution. Per‑DS quotas bound how many transactions touching a given DS can be committed per block to avoid head‑of‑line blocking and protect private DS latency.
+གནད་སྡུད་དཔེ་ཚད་དང་མིང་།
+- DS‐ཤེས་ཚད་ཅན་གྱི་ངོ་རྟགས་ཚུ་: ངོ་བོ་ཆ་མཉམ་ (མངའ་ཁོངས་དང་རྩིས་ཁྲ་ རྒྱུ་དངོས་ དེ་ལས་ འགན་ཁུར་) ཚུ་ `dsid` གིས་ འོས་འབབ་ཡོདཔ་ཨིན། དཔེར་ན་: `ds::<domain>::account`, I18NI000000090X.
+- འཛམ་གླིང་གཞི་བསྟུན་: འཛམ་གླིང་གཞི་བསྟུན་འདི་ ཊུཔ་ལི་ `(dsid, object_id, version_hint)` ཨིནམ་དང་ འདི་ཡང་ འབྲེལ་མཐུན་བང་རིམ་ནང་ ཡང་ན་ ཕར་ཚུར་ལག་ལེན་འཐབ་ནིའི་དོན་ལུ་ AMX འགྲེལ་བཤད་ནང་ རྒྱུན་ཐག་གུ་བཙུགས་ཚུགས།
+- I18NT000000007X རིམ་སྒྲིག་: ཕར་ཚུར་འཕྲིན་དོན་ཚུ་ཆ་མཉམ་ (ཨེམ་ཨེགསི་འགྲེལ་བཤད་, བདེན་དཔང་) Norito ཀོ་ཌེཀསི་ལག་ལེན་འཐབ་ཨིན། ཐོན་སྐྱེད་འགྲུལ་ལམ་ནང་ སར་ཌི་ལག་ལེན་མེད།
 
-Data Model and Namespacing
-- DS‑Qualified IDs: All entities (domains, accounts, assets, roles) are qualified by `dsid`. Example: `ds::<domain>::account`, `ds::<domain>::asset#precision`.
-- Global References: A global reference is a tuple `(dsid, object_id, version_hint)` and can be placed on‑chain in the nexus layer or in AMX descriptors for cross‑DS use.
-- Norito Serialization: All cross‑DS messages (AMX descriptors, proofs) use Norito codecs. No serde usage in production paths.
+གན་ཡིག་དང་ IVM རྒྱ་བསྐྱེད་པ།
+- ལག་ལེན་སྐབས་དོན་: `dsid` འདི་ IVM ལག་ལེན་འཐབ་པའི་སྐབས་དོན་ལུ་ཁ་སྐོང་འབད། Kotodama གན་རྒྱ་ཚུ་ དུས་རྒྱུན་དུ་ དམིགས་བསལ་གྱི་གནས་སྡུད་བར་སྟོང་གི་ནང་འཁོད་ལུ་ ལག་ལེན་འཐབ་ཨིན།
+- རྡུལ་ཕྲན་ཁྲོ་གཏུགས།
+  - I18NI000000093X / `amx_commit()` གིས་ I18NT0000005X ཧོསིཊི་ནང་ རྡུལ་ཕྲན་སྣ་མང་ཚོང་འབྲེལ་ཅིག་ གཏན་འབེབས་བཟོཝ་ཨིན།
+  - `amx_touch(dsid, key)` གིས་ ལྷག་ནི་/འབྲི་ནི་གི་དམིགས་ཡུལ་ ས་སྒོ་ཚུ་ འགལ་འཛོལ་གྱི་ འཁྲུག་རྩོད་ཀྱི་དོན་ལུ་ གསལ་བསྒྲགས་འབདཝ་ཨིན།
+  - `verify_space_proof(dsid, proof, statement)` → བུ་ལོ།
+  - I18NI000000097X → གྲུབ་འབྲས་ (སྲིད་བྱུས་ཆོག་ཐམ་དང་ འཛིན་སྐྱོང་ནུས་ཅན་ཨིན་པ་ཅིན་རྐྱངམ་ཅིག་ བཀོལ་སྤྱོད་འབད་ཆོགཔ་ཨིན།)
+- རྒྱུ་དངོས་ ཧན་ཌི་དང་ འཐུས་ཚུ།
+  - རྒྱུ་དངོས་བཀོལ་སྤྱོད་ཚུ་ ཌི་ཨེསི་གི་ཨའི་ཨེསི་ཨའི་/འགན་ཁུར་སྲིད་བྱུས་ཚུ་གིས་ གནང་བ་བྱིན་ཡོདཔ་ཨིན། འཐུས་ཚུ་ DS གི་རླངས་རྫས་ཀྱི་རྟགས་མཚན་ནང་ སྤྲོདཔ་ཨིན། གདམ་ཁའི་ལྕོགས་གྲུབ་ཀྱི་རྟགས་མཚན་དང་ སྲིད་བྱུས་ཕྱུགཔོ་ ༼མང་ཉུང་དང་ཚད་གཞི་ དེ་ལས་ ས་ཁམས་རིག་པ་༽ ཚུ་ ཤུལ་ལས་ རྡུལ་ཕྲན་གྱི་དཔེ་ཚད་བསྒྱུར་བཅོས་མ་འབད་བར་ ཤུལ་ལས་ ཁ་སྐོང་བཀོད་ཚུགས།
+- ཌི་ཊར་མི་ནི་ཟམ་: རིམ་ལུགས་གསརཔ་ཆ་མཉམ་རང་ གཙང་མ་དང་ གཏན་འབེབས་བྱིན་ཡོད་པའི་ ཨིན་པུཊི་ཚུ་ཨིནམ་དང་ ཨེ་ཨེམ་ཨེགསི་ ལྷག་ནི་/འབྲི་ནིའི་ཆ་ཚན་ཚུ་ གསལ་བསྒྲགས་འབདཝ་ཨིན། གསང་བའི་དུས་ཚོད་དང་མཐའ་འཁོར་གནས་སྟངས་ཀྱི་གནོད་པ་མེད།
 
-Smart Contracts and IVM Extensions
-- Execution Context: Add `dsid` to IVM execution context. Kotodama contracts always execute within a specific Data Space.
-- Atomic Cross‑DS Primitives:
-  - `amx_begin()` / `amx_commit()` demarcate an atomic multi‑DS transaction in the IVM host.
-  - `amx_touch(dsid, key)` declares read/write intent for conflict detection against slot snapshot roots.
-  - `verify_space_proof(dsid, proof, statement)` → bool
-  - `use_asset_handle(handle, op, amount)` → result (operation permitted only if policy allows and handle is valid)
-- Asset Handles and Fees:
-  - Asset operations are authorized by the DS’s ISI/role policies; fees are paid in the DS’s gas token. Optional capability tokens and richer policy (multi‑approver, rate‑limits, geofencing) can be added later without changing the atomic model.
-- Determinism: All new syscalls are pure and deterministic given inputs and declared AMX read/write sets. No hidden time or environment effects.
-
-Post‑Quantum Validity Proofs (Generalized ISIs)
-- FASTPQ‑ISI (PQ, no trusted setup): A kernelized, hash‑based argument that generalizes the transfer design to all ISI families while targeting sub‑second proving for 20k‑scale batches on GPU‑class hardware.
-  - Operational profile:
-    - Production nodes construct the prover through `fastpq_prover::Prover::canonical`, which now always initialises the production backend; the deterministic mock has been removed.【crates/fastpq_prover/src/proof.rs:126】
-    - `zk.fastpq.execution_mode` (config) and `irohad --fastpq-execution-mode` allow operators to pin CPU/GPU execution deterministically while the observer hook records requested/resolved/backend triples for fleet audits.【crates/iroha_config/src/parameters/user.rs:1357】【crates/irohad/src/main.rs:270】【crates/irohad/src/main.rs:2192】【crates/iroha_telemetry/src/metrics.rs:8887】
-- Arithmetization:
-  - KV‑Update AIR: Treat WSV as a typed key‑value map committed via Poseidon2‑SMT. Each ISI expands to a small set of read‑check‑write rows over keys (accounts, assets, roles, domains, metadata, supply).
-  - Opcode‑gated constraints: A single AIR table with selector columns enforces per‑ISI rules (conservation, monotonic counters, permissions, range checks, bounded metadata updates).
-  - Lookup arguments: Transparent, hash‑committed tables for permissions/roles, asset precisions, and policy parameters avoid heavy bitwise constraints.
-- State commitments and updates:
-  - Aggregated SMT Proof: All touched keys (pre/post) are proven against `old_root`/`new_root` using a compressed frontier with deduped siblings.
-  - Invariants: Global invariants (e.g., total supply per asset) are enforced via multiset equality between effect rows and tracked counters.
-- Proof system:
-  - FRI‑style polynomial commitments (DEEP‑FRI) with high arity (8/16) and blow‑up 8–16; Poseidon2 hashes; Fiat‑Shamir transcript with SHA‑2/3.
-  - Optional recursion: DS‑local recursive aggregation to compress micro‑batches to one proof per slot if needed.
-- Scope and examples covered:
-  - Assets: transfer, mint, burn, register/unregister asset definitions, set precision (bounded), set metadata.
-  - Accounts/Domains: create/remove, set key/threshold, add/remove signatories (state‑only; signature checks are attested by DS validators, not proven inside the AIR).
-  - Roles/Permissions (ISI): grant/revoke roles and permissions; enforced by lookup tables and monotonic policy checks.
-  - Contracts/AMX: AMX begin/commit markers, capability mint/revoke if enabled; proven as state transitions and policy counters.
-- Out‑of‑AIR checks to preserve latency:
-  - Signatures and heavy cryptography (e.g., ML‑DSA user signatures) are verified by DS validators and attested in the DS QC; the validity proof covers only state consistency and policy compliance. This keeps proofs PQ and fast.
-- Performance targets (illustrative, 32‑core CPU + single modern GPU):
-  - 20k mixed ISIs with small key‑touch (≤8 keys/ISI): ~0.4–0.9 s prove, ~150–450 KB proof, ~5–15 ms verify.
-  - Heavier ISIs (more keys/rich constraints): micro‑batch (e.g., 10×2k) + recursion to keep per‑slot <1 s.
-- DS Manifest configuration:
+Post‐Quantum བདེན་དཔྱད་བདེན་དཔང་ (སྤྱིར་བཏང་ཨའི་ཨེསི་ཨའི་)
+- FASTPQ‐ISI (PQ no retale setup): ཀར་ནེལ་བཟོ་ཡོད་པའི་ ཧེཤ་གཞི་བཞག་པའི་གྲོས་བསྡུར་འདི་ ISI བཟའ་ཚང་ཚུ་ལུ་ སྤོ་བཤུད་ཀྱི་བཟོ་བཀོད་འདི་ སྤྱིར་བཏང་སྦེ་ ISI བཟའ་ཚང་ཚུ་ལུ་ སྤྱིར་བཏང་བཟོཝ་ཨིན།
+  - བཀོལ་སྤྱོད་གསལ་སྡུད།
+    - ཐོན་སྐྱེད་ཀྱི་མཐུད་མཚམས་འདི་གིས་ `fastpq_prover::Prover::canonical` བརྒྱུད་དེ་ དཔེ་སྟོན་བཟོ་བསྐྲུན་འབདཝ་ཨིན། 【crates/fastpq_prover/src/proof.s:126】
+    - `zk.fastpq.execution_mode` (config) དང་ I18NI000000100X གིས་ བཀོལ་སྤྱོད་པ་ཚུ་ལུ་ སི་པི་ཡུ་/ཇི་པི་ཡུ་ལག་ལེན་འཐབ་ནི་ལུ་ གཏན་འབེབས་བཟོ་བཅུགཔ་ཨིན། རྩིས་ཞིབ་པ།【ཀརེ་ཊི་/ཨི་རོ་ཧ་_ཀོན་སི།/src/parameters/user.rs:1357】                                                                                          ཨི་རོ་ཧད་/ src/main. s:270】【【【【ཧད་/སྲི/སྲོད/མ་ནི།2192】                                                                                                                                                                                                                                    
+- ཨེ་རི་ཐི་མེ་ཊི་བཟོ་ནི།
+  - KV‐Update AIR: Poseidon2‐SMT བརྒྱུད་དེ་ འབད་ཡོད་པའི་ ཡིག་དཔར་ཅན་གྱི་ལྡེ་མིག་གནས་གོང་སབ་ཁྲ་ཅིག་སྦེ་ ཌབ་ལུ་ཨེསི་ཝི་ བརྩི་འཇོག་འབད། ISI རེ་རེ་གིས་ ལྡེ་མིག་ཚུ་གུ་ལྷག་ཞིབ་དཔྱད་འབད་མི་གྲལ་ཐིག་ཆུང་ཀུ་ཅིག་ལུ་ རྒྱ་སྐྱེད་འབདཝ་ཨིན་ (རྩིས་ཁྲ་དང་ རྒྱུ་དངོས་ འགན་ཁུར་ མངའ་ཁོངས་ མེ་ཊ་ཌེ་ཊ་ བཀྲམ་སྤེལ་)།
+  - Opcode‐gated contints: སེལ་འཐུ་འབད་མི་ཀེར་ཐིག་ཚུ་ཡོད་མི་ AIR ཐིག་ཁྲམ་རྐྱང་པ་ -ISI ལམ་ལུགས་ཚུ་ (ཉམས་སྲུང་དང་ མོ་ནོ་ཊོན་ གྱངས་ཁ་ གནང་བ་ ཁྱབ་ཚད་ཞིབ་དཔྱད་ མཐའ་མཚམས་མེ་ཊ་ཌེ་ཊ་དུས་མཐུན་བཟོ་ནི་) རེ་ལུ་ བསྟར་སྤྱོད་འབདཝ་ཨིན།
+  - བལྟ་རྟོག་སྒྲུབ་བྱེད་: དྭངས་གསལ་དང་ དྭངས་གསལ་དང་ ཧེ་ཤི་ ལས་འགན་ཐིག་ཁྲམ་ཚུ་ གནང་བ་/འགན་ཁུར་ རྒྱུ་དངོས་ཀྱི་ སྔོན་སྒྲིག་ དེ་ལས་ སྲིད་བྱུས་ཚད་གཞི་ཚུ་གིས་ བིཊི་ཝའིསི་ བར་ཆད་ཚུ་ བཀགཔ་ཨིན།
+- རྒྱལ་ཁབ་ཀྱི་ཁས་བླངས་དང་དུས་མཐུན་ཚུ།
+  - བསྡོམས་རྩིས་ཨེསི་ཨེམ་ཊི་བདེན་དཔང་: ཨེབ་ཡོད་པའི་ལྡེ་མིག་ཆ་མཉམ་ (སྔོན་/པོསཊི་) ཚུ་ I18NI00000010101X/`new_root` ལུ་ བསྡམ་བཞག་ཡོད་པའི་ སྤུན་ཆ་ཚུ་དང་གཅིག་ཁར་ བསྡམ་བཞག་ཡོད་པའི་ སྤུན་ཆ་ཚུ་ལག་ལེན་འཐབ་སྟེ་ བདེན་ཁུངས་བཀལ་ཡོདཔ་ཨིན།
+  - འགྱུར་ལྡོག་མེད་མི་: འཛམ་གླིང་འགྱུར་ལྡོག་མེད་མི་ (དཔེར་ན་ རྒྱུ་དངོས་རེ་ལུ་ ཡོངས་བསྡོམས་བཀྲམ་སྤེལ་) ཚུ་ ནུས་པ་གྲལ་ཐིག་དང་ བརྟག་ཞིབ་ཀྱི་གྱངས་ཁ་གི་བར་ན་ ཆ་ཚན་སྣ་ཚོགས་ཀྱི་ འདྲ་མཉམ་བརྒྱུད་དེ་ བསྟར་སྤྱོད་འབདཝ་ཨིན།
+- བདེན་དཔང་ལམ་ལུགས།
+  - FRI‐Style polynomial ཁས་བླངས་ (DEEP‐FRI) དང་ རིགས་བརྒྱུད་མཐོ་དྲགས་ (༨/༡༦) དང་ ༨-༡༦ བརྡུང་བ། Poseidon2 ཧ་ཤེད།; SHA‐2/3 དང་མཉམ་དུ་ Fiat‐Shimer ཡིག་ཆ།
+  - གདམ་ཁ་ཅན་གྱི་བསྐྱར་འབྱུང་: DS‐local བསྐྱར་ལོག་བསྡོམས་རྩིས་འདི་ དགོཔ་འདྲཝ་ཅིག་འབད་བ་ཅིན་ མའི་ཀོ་རོ་ཕྲ་རིང་གཅིག་ལུ་ ཕྲ་གཟུགས་གཅིག་ལུ་ བསྡམ་བཞག་ནི།
+- གོ་སྐབས་དང་དཔེ་ཚུ་ཁྱབ་ནི།
+  - རྒྱུ་དངོས་: སྤོ་བཤུད་དང་ མིན་ཊི་ མེ་འབར་ ཐོ་བཀོད་/ཐོ་བཀོད་མ་འབད་བའི་ རྒྱུ་དངོས་ངེས་ཚིག་ གཞི་སྒྲིག་གཏན་གཏན་ (མཐའ་མཚམས་) གཞི་སྒྲིག་ མེ་ཊ་ཌེ་ཊ་.
+  - རྩིས་ཁྲ་/མངའ་ཁོངས་ཚུ་: གསར་བསྐྲུན་/བཏོན་གཏང་ནི་དང་ ལྡེ་མིག་/ཐགཔ་བཙུགས་ནི་ ཁ་སྐོང་/བཏོན་གཏང་ནི་ (མངའ་སྡེ་-རྐྱངམ་ཅིག་; མཚན་རྟགས་ཞིབ་དཔྱད་ཚུ་ ཨེ་ཨའི་ཨར་ ནང་འཁོད་ལུ་ བདེན་ཁུངས་མ་བཏོན་པར་ ཌི་ཨེསི་བདེན་དཔྱད་འབད་མི་ཚུ་གིས་ བདེན་ཁུངས་བཀལ་ཡོདཔ་ཨིན།)།
+  - འགན་ཁུར་/ཆོག་ཐམ་ (ISI): གྲོགས་རམ་/ཆ་མེད་གཏང་མི་འགན་ཁུར་དང་གནང་བ་ཚུ། བལྟ་ཞིབ་ཐིག་ཁྲམ་དང་ མོ་ནོ་ཊོ་ནིག་སྲིད་བྱུས་ཞིབ་དཔྱད་ཚུ་གིས་ བསྟར་སྤྱོད་འབད་ཡོདཔ།
+  - གན་རྒྱ་ཚུ་/AX: AMX གིས་ ལྕོགས་ཅན་བཟོ་ཡོད་པ་ཅིན་ ལྕོགས་གྲུབ་ཀྱི་ མིན་ཊི་/ཆ་མེད་གཏང་ནི། རྒྱལ་ཁབ་ཀྱི་འགྱུར་བ་དང་ སྲིད་བྱུས་ཀྱི་ རྒྱབ་འགལ་སྦེ་ བདེན་ཁུངས་བསྐྱལ་ཡོདཔ་ཨིན།
+- བསྐྱར་ལོག་ཉམས་སྲུང་འབད་ནིའི་དོན་ལུ་ ཨེ་ཨའི་ཨར་ ཞིབ་དཔྱད་ཚུ་ཕྱིར་ཐོན་འབད།
+  - མཚན་རྟགས་དང་ ལྗིད་ཅན་གྱི་གསང་ཡིག་ (དཔེར་ན་ ML‐DSA spress glient) DS བདེན་དཔྱད་འབད་མི་ཚུ་གིས་ བདེན་དཔྱད་འབད་དེ་ DS QC ནང་ བདེན་ཁུངས་བཀལ་ཡོདཔ་ཨིན། ཆ་གནས་ཅན་གྱི་བདེན་ཁུངས་འདི་གིས་ མངའ་སྡེ་གི་རིམ་མཐུན་དང་སྲིད་བྱུས་མཐུན་སྒྲིག་རྐྱངམ་ཅིག་ཁྱབ་ཨིན། འདི་གིས་ PQ དང་ མགྱོགས་དྲགས་སྦེ་བཞགཔ་ཨིན།
+- ལཱ་འགན་དམིགས་ཚད་ (པར་རིས་, ༣༢‐core CPU + དེང་སང་གི་ GPU གཅིག་):
+  - 20k སླ་བསྲེ་ ISIs དང་ ལྡེ་མིག་ཆུང་ཀུ་ (≤8 ལྡེ་མིག་/ISI): ~0.4–0.9 s གིས་ བདེན་ཁུངས་, ~150–450 KB བདེན་ཁུངས་ ~5–15 ms བདེན་བཤད་འབད་ཡོདཔ།
+  - ལྗིད་ཅན་གྱི་ ISIs (ལྡེ་མིག་མངམ་/ཕྱུགཔོ་གི་བཀག་ཆ་): མའི་ཀོརོ་-བེཆ་ (དཔེར་ན་ ༡༠×༢ཀེ་) + རེ་རེ་ལུ་ <༡ s བཞག་ནིའི་དོན་ལུ་ བསྐྱར་འབྱུང་།
+- DS ངོ་མའི་རིམ་སྒྲིག་:
   - `zk.policy = "fastpq_isi"`
-  - `zk.hash = "poseidon2"`, `zk.fri = { blowup: 8|16, arity: 8|16 }`
+  - `zk.hash = "poseidon2"`, `zk.fri = { blowup: 8|16, arity: 8|16 }`,
   - `state.commitment = "smt_poseidon2"`
   - `zk.recursion = { none | local }`
-  - `attestation.signatures_in_proof = false` (signatures verified by DS QC)
-  - `attestation.qc_signature = "ml_dsa_87"` (default; alternatives must be explicitly declared)
-- Fallbacks:
-  - Complex/custom ISIs may use a general STARK (`zk.policy = "stark_fri_general"`) with deferred proof and 1 s finality via QC attestation + slashing on invalid proofs.
-  - Non‑PQ options (e.g., Plonk with KZG) require a trusted setup and are no longer supported in the default build.
+  - `attestation.signatures_in_proof = false` (DS QC གིས་བདེན་དཔྱད་འབད་ཡོད་པའི་མིང་རྟགས་ཚུ།)
+  - `attestation.qc_signature = "ml_dsa_87"` (སྔོན་སྒྲིག་; ཐབས་གཞན་ཚུ་གསལ་ཏོག་ཏོ་སྦེ་གསལ་བསྒྲགས་འབད་དགོ།)
+- ཕོལ་བེཀ་ཚུ།
+  - མགུ་རྙོག་དྲགས་/ཚོང་མགྲོན་པ་ ISIs གིས་ སྤྱིར་བཏང་ STARK (`zk.policy = "stark_fri_general"`) གིས་ ཕར་འགྱངས་འབད་ཡོད་པའི་བདེན་ཁུངས་དང་ QC བདེན་དཔང་བརྒྱུད་དེ་ ༡ s མཇུག་འདི་ ལག་ལེན་འཐབ་བཏུབ།
+  - མེན་པའི་གདམ་ཁ་མེན་མི་ (དཔེར་ན་ ཀེ་ཛེ་ཇི་ with པི་ལོནཀ་) བློ་གཏད་ཅན་གྱི་གཞི་སྒྲིག་དགོཔ་ཨིནམ་དང་ སྔོན་སྒྲིག་བཟོ་བསྐྲུན་ནང་ ད་ལས་ཕར་རྒྱབ་སྐྱོར་མེདཔ་ཨིན།
 
-AIR Primer (for Nexus)
-- Execution trace: A matrix with width (register columns) and length (steps). Each row is a logical step of ISI processing; columns hold pre/post values, selectors, and flags.
-- Constraints:
-  - Transition constraints: enforce row‑to‑row relations (e.g., post_balance = pre_balance − amount for a debit row when `sel_transfer = 1`).
-  - Boundary constraints: bind public I/O (old_root/new_root, counters) to the first/last rows.
-  - Lookups/permutations: ensure membership and multiset equalities against committed tables (permissions, asset params) without bit‑heavy circuits.
-- Commitment and verification:
-  - Prover commits to traces via hash‑based encodings and constructs low‑degree polynomials that are valid iff constraints hold.
-  - Verifier checks low‑degree via FRI (hash‑based, post‑quantum) with a few Merkle openings; cost is logarithmic in steps.
-- Example (Transfer): registers include pre_balance, amount, post_balance, nonce, and selectors. Constraints enforce non‑negativity/range, conservation, and nonce monotonicity, while an aggregated SMT multi‑proof links pre/post leaves to old/new roots.
+AIR Primer (Nexus གི་དོན་ལུ་)
+- ལག་ལེན་འཐབ་ནིའི་རྗེས་འཇུག་: རྒྱ་ཚད་(ཐོ་བཀོད་ནང་ཐིག་)དང་རིང་ཚད་ (གོ་རིམ་)ཡོད་པའི་མེ་ཊིགསི་ཅིག། གྲལ་ཐིག་རེ་རེ་བཞིན་ ISI ལས་སྦྱོར་གྱི་གཏན་ཚིག་ཅན་གྱི་རིམ་པ་ཨིན། ཀེར་ཐིག་ཚུ་གིས་ སྔོན་སྒྲིག་/པོསཊི་གནས་གོང་ཚུ་དང་ སེལ་འཐུ་འབད་མི་ དེ་ལས་ དར་ཆ་ཚུ་འཛིན་བཟུང་འབདཝ་ཨིན།
+- བཀག་ཆ་:
+  - འགྱུར་བའི་བཀག་ཆ་: གྲལ་ཐིག་ གྲལ་ཐིག་ འདི་ འབྲེལ་མཐུན་ལུ་ བསྟར་སྤྱོད་འབད་ (དཔེར་ན་ post_balance = Pre_benarce − བསྡོམས་ − `sel_transfer = 1`)
+  - ས་མཚམས་བཀག་ཆ་ཚུ་: མི་མང་ཨའི་/ཨོ་ (རྙིངམོ་_root/new_root, case) ཚུ་ གྱལ་རིམ་དང་པ་/མཇུག་གི་གྲལ་ཐིག་ཚུ་ལུ་བསྡམས།
+  - བལྟ་རྟོག་/ཕར་ཚུར་ཚུ་: བིཊི་ཧེ་ཧེ་ཝའི་གློག་ལམ་མེད་པའི་ ཁས་བླངས་ཐིག་ཁྲམ་ཚུ་ལུ་ འཐུས་མི་དང་ སྣ་མང་ཆ་ཚན་འདྲ་མཉམ་ཚུ་ ངེས་གཏན་བཟོ།
+- ཁས་བླངས་དང་བདེན་དཔང་།
+  - དཔེ་རིས་འདི་གིས་ ཧེཤ་གཞི་བཞག་པའི་ཨེན་ཀོ་ཌིང་ཚུ་བརྒྱུད་དེ་ འཚོལ་ཞིབ་འབདཝ་ཨིནམ་དང་ ཆ་རྐྱེན་ཅན་གྱི་ ཧུམ་ཐག་བཀག་ཆ་འབད་མི་ པོ་ལི་ནོ་མིའལ་དམའ་ཤོས་ཚུ་ བཟོ་བཀོད་འབདཝ་ཨིན།
+  - བདེན་དཔྱད་འབད་མི་ཚུ་གིས་ Merkle ཁ་ཕྱེ་མི་དག་པ་ཅིག་དང་གཅིག་ཁར་ FRI (hash‐based, post‐quantum) བརྒྱུད་དེ་ དམའ་བའི་གནས་ཚད་བརྟག་དཔྱད་འབདཝ་ཨིན། འགྲོ་སོང་འདི་ གོ་རིམ་ནང་ ལོ་ག་རི་དམ་ཨིན།
+- དཔེ་ (Transfer): ཐོ་བཀོད་ཚུ་ནང་ pre_balance, vomen, post_balance, nonce, དང་ གདམ་འཐུ་འབད་མི་ཚུ་ཚུདཔ་ཨིན། བཀག་ཆ་ཚུ་གིས་ ངན་ལྷད་མེད་པའི་/ཁྱབ་ཚད་ ཉམས་སྲུང་དང་ གཅིག་རྐྱང་གཅིག་རྐྱང་པའི་ བསྟར་སྤྱོད་འབདཝ་ཨིན་རུང་ བསྡོམས་རྩིས་ཨེསི་ཨེམ་ཊི་ སྣ་མང་མཐུད་ལམ་འདི་གིས་ སྔོན་འགྲོའི་/སྒྲིག་བཀོད་འདི་ རྩ་བ་རྙིངམ་/གསརཔ་ལུ་ འགྱོཝ་ཨིན།ABI དང་ Syscall འཕེལ་འགྱུར་ (ABI v1)
+- (པར་རིས་མིང་) ཁ་སྐོང་འབད་ནིའི་དོན་ལུ་ སི་ཀཱལསི་ཚུ།
+  - I18NI00000000112X, I18NI000000113X, I18NI0000000114X, I18NI00000000115X, I18NI000000115, I18NI000000116X.
+- ཁ་སྐོང་བརྐྱབ་ནི་ལུ་ དཔག་བྱེད་‐ཨེ་བི་ཨའི་ དབྱེ་བ་ཚུ།
+  - I18NI0000000117X, I18NI000000118X, I18NI0000000119X, I18NI000000120X.
+- དགོས་མཁོའི་དུས་མཐུན་ཚུ།
+  - `ivm::syscalls::abi_syscall_list()` ལུ་ཁ་སྐོང་རྐྱབས་ (བཞག་ཐངས་) སྲིད་བྱུས་དང་འཁྲིལ་ཏེ་ སྒོ་སྡོད།
+  - ཧོསིཊི་ཚུ་ནང་ `VMError::UnknownSyscall` ལུ་ མ་ཤེས་པའི་ཨང་གྲངས་ཚུ་ སབ་ཁྲ་བཟོ།
+  - དུས་མཐུན་བརྟག་དཔྱད་: syscall ཐོ་ཡིག་གསེར་དང་ ABI hash, དཔག་བྱེད་ཀྱི་དབྱེ་བ་ ID གསེར་དང་སྲིད་བྱུས་བརྟག་དཔྱད་ཚུ།
+  - ཡིག་ཆ་: `crates/ivm/docs/syscalls.md`, I18NI0000000124X, I18NI000000125X.
 
-ABI and Syscall Evolution (ABI v1)
-- Syscalls to add (illustrative names):
-  - `SYS_AMX_BEGIN`, `SYS_AMX_TOUCH`, `SYS_AMX_COMMIT`, `SYS_VERIFY_SPACE_PROOF`, `SYS_USE_ASSET_HANDLE`.
-- Pointer‑ABI Types to add:
-  - `PointerType::DataSpaceId`, `PointerType::AmxDescriptor`, `PointerType::AssetHandle`, `PointerType::ProofBlob`.
-- Required updates:
-  - Add to `ivm::syscalls::abi_syscall_list()` (keep ordering), gate by policy.
-  - Map unknown numbers to `VMError::UnknownSyscall` in hosts.
-  - Update tests: syscall list golden, ABI hash, pointer type ID goldens, and policy tests.
-  - Docs: `crates/ivm/docs/syscalls.md`, `status.md`, `roadmap.md`.
+སྒེར་དོན་དཔེ་སྟོན།
+- སྒེར་སྡེ་གནས་སྡུད་ཀྱི་ བཀག་ཆ་: བརྗེ་སོར་གྱི་གཟུགས་དང་ མངའ་སྡེའི་ཁྱད་པར་ དེ་ལས་ སྒེར་གྱི་ཌི་ཨེསི་གི་དོན་ལུ་ ཌབ་ལུ་ཨེསི་ཝི་གི་པར་ཚུ་ སྒེར་གྱི་བདེན་དཔྱད་ཆ་ཚན་འོག་མ་འདི་ ནམ་ཡང་མ་བཞག།
+- མི་མང་གསལ་སྟོན་: མགོ་ཡིག་དང་ ཌི་ཨེ་ཁས་བླངས་ དེ་ལས་ པི་ཀིའུ་ཆ་གནས་བདེན་ཁུངས་ཚུ་རྐྱངམ་ཅིག་ ཕྱིར་འདྲེན་འབདཝ་ཨིན།
+- གདམ་ཁའི་ ZK བདེན་དཔང་: སྒེར་གྱི་ DS གིས་ ནང་འཁོད་གནས་སྟངས་གསལ་སྟོན་མ་འབད་བར་ འབྲེལ་མཐུན་གྱི་ བྱ་སྤྱོད་ཚུ་ འབད་ཚུགས་པའི་ ZK བདེན་དཔྱད་ (དཔེར་ན་ འདྲ་མཉམ་ལངམ་སྦེ་ སྲིད་བྱུས་ལུ་ བསམ་པ་རྫོགས་ཏེ་ཡོདཔ་) བཏོན་ཚུགས།
+- འཛུལ་སྤྱོད་ཚད་འཛིན་: གནང་བ་འདི་ ཌི་ཨེསི་ནང་ལུ་ ISI/འགན་ཁུར་སྲིད་བྱུས་ཚུ་གིས་ བསྟར་སྤྱོད་འབདཝ་ཨིན། ལྕོགས་གྲུབ་བརྡ་མཚོན་ཚུ་གདམ་ཁ་ཅན་ཨིནམ་ལས་ དགོ་པ་ཅིན་ ཤུལ་ལས་ འགོ་བཙུགས་ཚུགས།
 
-Privacy Model
-- Private Data Containment: Transaction bodies, state diffs, and WSV snapshots for private DS never leave the private validator subset.
-- Public Exposure: Only headers, DA commitments, and PQ validity proofs are exported.
-- Optional ZK Proofs: Private DS may produce ZK proofs (e.g., balance sufficient, policy satisfied) enabling cross‑DS actions without revealing internal state.
-- Access Control: Authorization is enforced by ISI/role policies inside the DS. Capability tokens are optional and can be introduced later if needed.
+ལས་དོན་སོ་སོའི་ཟུར་བཞག་དང་ QoS
+- ཌི་ཨེསི་རེ་ལུ་ མོས་མཐུན་དང་ མེམ་པུལ་ དེ་ལས་ གསོག་འཇོག་ཚུ་ སོ་སོ་སྦེ་ བཏོན་དགོ།
+- Nexus DS རེ་ལུ་ quotas འདི་ མཐའ་མཚམས་བཙུགས་པའི་དུས་ཚོད་བཀག་ཆ་འབད་ནི་དང་ མགུ་ཏོ་གི་གྲལ་ཐིག་བཀག་ཆ་འབད་ནི་ལས་ བཀག་ཆ་འབད་ནི།
+- ཌི་ཨེསི་རེ་ལུ་ ཁག་འབག་ཐོན་ཁུངས་འཆར་དངུལ་ (ཀམ་པུ་ཊར་/དྲན་ཚད་/ཨའི་ཨོ་), I18NT0000005X ཧོསིཊི་གིས་ བསྟར་སྤྱོད་འབད་ཡོདཔ་ཨིན། མི་མང་‐DS གི་རྩོད་རྙོག་གིས་ སྒེར་གྱི་མ་དངུལ་ཚུ་ བཀོལ་སྤྱོད་འབད་མི་ཚུགས།
+- དུས་མཉམ་མེན་པའི་ ཀོལ-ཌི་ཨེསི་འབོད་བརྡ་ཚུ་གིས་ སྒེར་གྱི་ལག་ལེན་ནང་ལུ་ ཡུན་རིངམོ་སྦེ་སྒུག་སྡོད་མི་ཚུ་ སྤང་དགོ།
 
-Performance Isolation and QoS
-- Separate consensus, mempools, and storage per DS.
-- Nexus scheduling quotas per DS to bound anchor inclusion time and avoid head-of-line blocking.
-- Contract resource budgets per DS (compute/memory/IO), enforced by IVM host. Public‑DS contention cannot consume private‑DS budgets.
-- Asynchronous cross‑DS calls avoid long synchronous waits inside private‑DS execution.
-
-Data Availability and Storage Design
+གནད་སྡུད་ཐོབ་ཚུགསཔ་དང་གསོག་འཇོག་བཟོ་བཀོད།
 1) Erasure Coding
-- Use systematic Reed‑Solomon (e.g., GF(2^16)) for blob‑level erasure coding of Kura blocks and WSV snapshots: parameters `(k, m)` with `n = k + m` shards.
-- Default parameters (proposed, public DS): `k=32, m=16` (n=48), enabling recovery from up to 16 shard losses with ~1.5× expansion. For private DS: `k=16, m=8` (n=24) within the permissioned set. Both are configurable per DS Manifest.
-- Public Blobs: Shards distributed across many DA nodes/validators with sampling‑based availability checks. DA commitments in headers allow light clients to verify.
-- Private Blobs: Shards encrypted and distributed only within private‑DS validators (or designated custodians). Global chain carries only DA commitments (no shard locations or keys).
+- ཀུ་ར་བཀག་ཆ་དང་ ཌབ་ལུ་ཨེསི་ཝི་ པར་ཆས་ཚུ་གི་ བློ་སྟོབས་བཏོན་ནིའི་དོན་ལུ་ ལམ་ལུགས་ཅན་གྱི་ རིཌ་-སོ་ལོ་མོན་ (དཔེར་ན་ ཇི་ཨེཕ་(༢^༡༦)) ལག་ལེན་འཐབ།
+- སྔོན་སྒྲིག་ཚད་གཞི་ཚུ་ (གྲོས་འཆར་བཀོད་ཡོདཔ་, མི་མང་ཌི་ཨེསི་): `k=32, m=16` (n=48), ~1.5× རྒྱ་བསྐྱེད་དང་གཅིག་ཁར་ ༡༦ ཤརཌི་གྱོང་རྒུད་ལས་ སླར་གསོ་འབད་བཅུགཔ་ཨིན། སྒེར་གྱི་ཌི་ཨེསི་: `k=16, m=8` (n=24) གནང་བ་ཡོད་པའི་ཆ་ཚན་གྱི་ནང་འཁོད་ལུ་། གཉིས་ཆ་ར་ DS Manifst རེ་ལུ་རིམ་སྒྲིག་འབད་ཚུགསཔ་ཨིན།
+- མི་མང་བློ་སྤོབས་: དཔེ་ཚད་གཞི་བཞག་པའི་འཐོབ་ཚུགས་པའི་ཞིབ་དཔྱད་ཚུ་དང་གཅིག་ཁར་ DA མཐུད་མཚམས་/བདེན་དཔྱད་འབད་མི་ལེ་ཤ་ཅིག་ནང་ བཀྲམ་སྤེལ་འབད་ཡོདཔ་ཨིན། མགོ་ཡིག་ནང་ DA ཁས་བླངས་ཚུ་གིས་ མཁོ་མངགས་འབད་མི་ཚུ་ལུ་ བདེན་དཔྱད་འབད་བཅུགཔ་ཨིན།
+- སྒེར་གྱི་བློ་སྤོབས་: གསང་བཟོས་གསང་བཟོས་འབད་ཞིནམ་ལས་ སྒེར་གྱི་-DS བདེན་དཔྱད་འབད་མི་ཚུ་གི་ནང་འཁོད་ལུ་རྐྱངམ་ཅིག་བཀྲམ་སྤེལ་འབད་ཡོདཔ་ཨིན་ (ཡང་ན་ ངོས་འཛིན་འབད་མི་ བདག་འཛིན་འཐབ་མི་) འཛམ་གླིང་རྒྱུན་རིམ་གྱིས་ ཌི་ཨེ་ཁས་བླངས་རྐྱངམ་ཅིག་ འབག་འོང་།(ཤེར་ཌི་ས་གནས་ ཡང་ན་ ལྡེ་མིག་ཚུ་མེད།)
 
-2) Commitments and Sampling
-- For each blob: compute a Merkle root over shards and include it in `*_da_commitment`. Remain PQ by avoiding elliptic‑curve commitments.
-- DA Attesters: VRF‑sampled regional attesters (e.g., 64 per region) issue an ML‑DSA‑87 certificate attesting successful shard sampling. Target DA attestation latency ≤300 ms. Nexus committee validates certificates instead of pulling shards.
+༢༽ ཁས་བླངས་དང་དཔེ་ཚད་བཏོན་ནི།
+- བློ་སྤོབས་རེ་རེ་གི་དོན་ལུ་ ཤོག་ལེབ་གུ་ལས་ མེར་ཀལ་གྱི་རྩ་བ་རྩིས་སྟོན་ཞིནམ་ལས་ I18NI000000130X ནང་ལུ་ཚུད་དགོ། Remain PQ གིས་ སྒོང་དབྱིབས་‐ གུག་གུགཔ་གི་ཁས་བླངས་ཚུ་ སྤང་ཐོག་ལས་ཨིན།
+- DA Adtestagers: VRF ལུང་ཕྱོགས་བདེན་དཔང་འབད་མི་ VRF གིས་ ༼དཔེར་ན་ ལུང་ཕྱོགས་རེ་ལུ་ ༦༤༽ ML‐DSA‐༨༧ ལག་ཁྱེར་ཅིག་ མཐར་འཁྱོལ་ཅན་སྦེ་ དཔེ་ཚད་མཐར་འཁྱོལ་ཅན་སྦེ་ བཏོནམ་ཨིན། དམིགས་ཚད་ DA བདེན་དཔང་འབད་ནིའི་ འཕྲོ་མཐུད་ ≤300 ms. Nexus ཚོགས་ཆུང་གིས་ ཤོག་འཛིན་འཐེན་ནིའི་ཚབ་ལུ་ ལག་ཁྱེར་ཚུ་ བདེན་དཔྱད་འབདཝ་ཨིན།
 
-3) Kura Integration
-- Blocks store transaction bodies as erasure-coded blobs with Merkle commitments.
-- Headers carry blob commitments; bodies are retrievable via DA network for public DS and via private channels for private DS.
+༣༽ ཀུ་ར་མཉམ་སྡེབ་འབད་ནི།
+- བཀག་ཆ་ཚུ་ ཚོང་འབྲེལ་ཚུ་ མེར་ཀལ་ཁས་བླངས་ཚུ་དང་གཅིག་ཁར་ གསང་རྟགས་བཀོད་ཡོད་པའི་ བཱོལ་ཚུ་ བཏོན་གཏང་ནི་སྦེ་ གསོག་འཇོག་འབད་ཡོདཔ།
+- མགོ་ཡིག་ཚུ་གིས་ བློ་སྤོབས་ཚུ་ འབག་འོང་། gods ཚུ་ མི་མང་ DS གི་དོན་ལུ་ DA ཡོངས་འབྲེལ་དང་ སྒེར་གྱི་ DS གི་དོན་ལུ་ སྒེར་གྱི་རྒྱུན་ལམ་བརྒྱུད་དེ་ ལོག་ཐོབ་ཚུགས།
 
-4) WSV Integration
-- WSV Snapshotting: Periodically checkpoint DS state into chunked, erasure-coded snapshots with commitments recorded in headers. Between snapshots, maintain change logs. Public snapshots are widely sharded; private snapshots remain within private validators.
-- Proof‑Carrying Access: Contracts can provide (or request) state proofs (Merkle/Verkle) anchored by snapshot commitments. Private DS may supply zero‑knowledge attestations instead of raw proofs.
+༤༽ WSV མཉམ་སྡེབ།
+- WSV པར་ལེན་འབད་ནི: དུས་མཚམས་ལུ་ ཞིབ་དཔྱད་ས་ཚིགས་ DS མངའ་སྡེ་འདི་ ཆ་ཤས་ནང་ལུ་ ཆ་ཤས་སྦེ་བཟོ་སྟེ་ མགོ་ཡིག་ནང་ ཐོ་བཀོད་འབད་ཡོད་པའི་ཁས་བླངས་ཚུ་དང་གཅིག་ཁར་ གསང་ཡིག་བཙུགས་ཡོད་པའི་ པར་ལེན་ཚུ་ བཏོན་གཏང་། པར་རིས་ཚུ་གི་བར་ན་ བསྒྱུར་བཅོས་དྲན་ཐོ་ཚུ་རྒྱུན་སྐྱོང་འབད། མི་མང་གི་པར་ཚུ་ ཁྱབ་ཆེཝ་སྦེ་ བརྡལ་བཤིག་གཏང་ཡོདཔ་ཨིན། སྒེར་གྱི་པར་ལེན་ཚུ་ སྒེར་གྱི་བདེན་དཔྱད་འབད་མི་ཚུ་གི་ནང་འཁོད་ལུ་ ལུས་ཡོདཔ་ཨིན།
+- བདེན་དཔང་འབད་ཚུགས: གན་རྒྱ་ཚུ་གིས་ གནས་སྟངས་བདེན་ཁུངས་ཚུ་ (ཡང་ན་ ཞུ་བ་) ཁས་བླངས་ཚུ་ པར་ལེན་ཐོག་ལས་ བྱིན་ཚུགས། སྒེར་གྱི་ DS གིས་ བདེན་ཁུངས་ངོ་མ་གི་ཚབ་ལུ་ ཀླད་ཀོར་ཤེས་ཡོན་གྱི་ བདེན་ཁུངས་ཚུ་ བཀྲམ་སྤེལ་འབད་འོང་།
 
-5) Retention and Pruning
-- No pruning for public DS: retain all Kura bodies and WSV snapshots via DA (horizontal scaling). Private DS may define internal retention, but exported commitments remain immutable. Nexus layer retains all Nexus Blocks and DS artifact commitments.
+༥༽ ཉེར་མཁོའི་ཉེར་མཁོ།
+- མི་མང་གི་དོན་ལུ་ གཤག་བཅོས་འབད་ནི་མེདཔ་ལས་ ཀུ་ར་གཟུགས་དང་ ཌབ་ལུ་ཨེསི་ཝི་ཚུ་ ཌི་ཨེ་བརྒྱུད་དེ་ བཞག་དགོ། སྒེར་གྱི་DS གིས་ ནང་འཁོད་བཞག་སའི་ ངེས་ཚིག་བཀོད་ཚུགས་ནི་ཨིན་རུང་ ཕྱིར་ཚོང་འཐབ་མི་ ཁས་བླངས་ཚུ་ བསྒྱུར་བཅོས་མེདཔ་སྦེ་ ལུས་ཡོདཔ་ཨིན། I18NT0000041X བང་རིམ་གྱིས་ I18NT0000042X བཀག་ཆ་དང་ DS ཅ་རྙིང་ཁས་བླངས་ཚུ་ག་ར་ བདག་འཛིན་འཐབ་ཨིན།
 
-Networking and Node Roles
-- Global Validators: Participate in nexus consensus, validate Nexus Blocks and DS artifacts, perform DA checks for public DS.
-- Data Space Validators: Run DS consensus, execute contracts, manage local Kura/WSV, handle DA for their DS.
-- DA Nodes (optional): Store/publicize public blobs, facilitate sampling. For private DS, DA nodes are co-located with validators or trusted custodians.
+དྲ་རྒྱ་དང་ ནོཌ་འགན་ཁུར།
+- འཛམ་གླིང་བདེན་དཔྱད་འབད་མི་: འབྲེལ་འཐུད་ནང་ བཅའ་མར་གཏོགས་ནི། Nexus བདེན་དཔྱད་འབད་ བདེན་དཔྱད་འབད་ སྡེབ་ཚན་དང་ DS ཅ་རྙིང་ཚུ་ མི་མང་ཌི་ཨེསི་གི་དོན་ལུ་ ཌི་ཨེ་ཞིབ་དཔྱད་འབད།
+- གནས་སྡུད་བར་སྟོང་བདེན་དཔྱད་འབད་མི་: གཡོག་བཀོལ་བའི་ གན་རྒྱ་ཚུ་ ལག་ལེན་འཐབ་ནི། ས་གནས་ཀྱི་ཀུ་ར་/ཌབ་ལུ་ཨེསི་ཝི་ འཛིན་སྐྱོང་འཐབ་ནི།
+- DA Nodes (གདམ་ཁ་ཅན་): མི་མང་གི་བློ་སྤོབས་ཚུ་ གསོག་འཇོག་/དཔེ་བསྐྲུན་འབད་ནི། དཔེ་ཚད་བཟོ་ནི་ལུ་ཕན་ཐོགས། སྒེར་གྱི་DS གི་དོན་ལུ་ DA མཐུད་མཚམས་ཚུ་ བདེན་དཔྱད་འབད་མི་དང་ ཡང་ན་ བློ་གཏད་ཅན་གྱི་བདག་འཛིན་འཐབ་མི་ཚུ་དང་གཅིག་ཁར་ མཉམ་འབྲེལ་འབདཝ་ཨིན།
 
-System‑Level Improvements and Considerations
-- Sequencing/mempool decoupling: Adopt a DAG mempool (e.g., Narwhal‑style) feeding a pipelined BFT at the nexus layer to lower latency and improve throughput without changing the logical model.
-- DS quotas and fairness: Per‑DS per‑block quotas and weight caps to avoid head‑of‑line blocking and ensure predictable latency for private DS.
-- DS attestation (PQ): Default DS quorum certificates use ML‑DSA‑87 (Dilithium5‑class). This is post‑quantum and larger than EC signatures but acceptable at one QC per slot. DS may explicitly opt for ML‑DSA‑65/44 (smaller) or EC signatures if declared in the DS Manifest; public DS are strongly encouraged to keep ML‑DSA‑87.
-- DA attesters: For public DS, use VRF‑sampled regional attesters that issue DA certificates. The nexus committee validates certificates instead of raw shard sampling; private DS keep DA attestations internal.
-- Recursion and epoch proofs: Optionally aggregate multiple micro‑batches within a DS into one recursive proof per slot/epoch to keep proof sizes and verify time steady under high load.
-- Lane scaling (if needed): If a single global committee becomes a bottleneck, introduce K parallel sequencing lanes with a deterministic merge. This preserves a single global order while scaling horizontally.
-- Deterministic acceleration: Provide SIMD/CUDA feature‑gated kernels for hashing/FFT with a bit‑exact CPU fallback to preserve cross‑hardware determinism.
-- Lane activation thresholds (proposal): Enable 2–4 lanes if either (a) p95 finality exceeds 1.2 s for >3 consecutive minutes, or (b) per‑block occupancy exceeds 85% for >5 minutes, or (c) incoming tx rate would require >1.2× block capacity at sustained levels. Lanes deterministically bucket transactions by DSID hash and merge in the nexus block.
+རིམ་ལུགས་‑གནས་རིམ་ལེགས་བཅོས་དང་བསམ་གཞི།
+- གོ་རིམ་སྒྲིག་/mempool decoupling: DAG mempool (དཔེར་ན་ Narwhal‑style) གིས་ འབྲེལ་འཐུད་བང་རིམ་ནང་ འཕྲེད་ཐིག་ལུ་ འཕྲེད་ཐིག་ལུ་ འཕྲེད་ཐིག་ལུ་ བྱིན་མི་ ཆུ་མཛོད་ཅིག་ བཟའ་ནི་དང་ ཚད་མ་རིག་པའི་དཔེ་ཚད་བསྒྱུར་བཅོས་མ་འབད་བར་ ཐོན་འབྲས་ཡར་དྲག་གཏང་ནི།
+- DS quotas དང་དྲང་བདེན་: Per‐DS རེ་རེ་ལུ་ block quotas དང་ ལྗིད་ཚད་ཀྱི་ མགུ་ཏོག་ཚུ་ མགུ་ཏོ་བཀག་བཞག་ནི་ལས་ བཀག་ཐབས་ལུ་ སྒེར་གྱི་ DS གི་དོན་ལུ་ སྔོན་དཔག་འབད་ཚུགས་པའི་ འཕྲོ་མཐུད་ཚུ་ ངེས་གཏན་བཟོ་ནི།
+- DS བདེན་ཁུངས་ (PQ): སྔོན་སྒྲིག་ཌི་ཨེསི་ ཀོར་རམ་ལག་ཁྱེར་ཚུ་གིས་ ཨེམ་ཨེལ་‐ཌི་ཨེསི་ཨེ་‐༨༧ (ཌི་ལི་ཐི་ཡམ་༥‐དབྱེ་རིམ་) ལག་ལེན་འཐབ་ཨིན། འདི་ འབོར་ཚད་ཀྱི་ post‐quantum དང་ EC མཚན་རྟགས་ལས་ སྦོམ་ཡོད་རུང་ ས་སྒོ་རེ་ལུ་ QC གཅིག་ནང་ ངོས་ལེན་འབད་ཚུགས། DS གིས་ DS མཚོན་རྟགས་ནང་ གསལ་བསྒྲགས་འབད་བ་ཅིན་ ML‐DSA 65/44 (smaller) ཡང་ན་ EC མཚན་རྟགས་ཚུ་ གསལ་ཏོག་ཏོ་སྦེ་ གདམ་ཁ་རྐྱབ་ཚུགས། མི་མང་DS གིས་ ML-DSA‐87 བཞག་དགོ་པའི་སེམས་ཤུགས་ཤུགས་སྦེ་རང་ཡོདཔ་ཨིན།
+- DA repacters: མི་མང་ཌི་ཨེསི་གི་དོན་ལུ་ ཌི་ཨེ་ལག་ཁྱེར་ཚུ་བཏོན་མི་ ཝི་ཨར་ཨེཕ་ ལུང་ཕྱོགས་བདེན་དཔང་འབད་མི་ ལུང་ཕྱོགས་བདེན་དཔང་འབད་མི་ཚུ་ལག་ལེན་འཐབ། འབྲེལ་མཐུན་ཚོགས་ཆུང་གིས་ ཤརཌི་དཔེ་ཚད་ཀྱི་ཚབ་ལུ་ ལག་ཁྱེར་ཚུ་ བདེན་དཔྱད་འབདཝ་ཨིན། private DS DA གིས་ ནང་ན་ལུ་ བདེན་ཁུངས་ཚུ་ བཞགཔ་ཨིན།
+- བསྐྱར་འབྱུང་དང་ དུས་སྐབས་ཀྱི་བདེན་ཁུངས་ཚུ་ གདམ་ཁ་ཅན་སྦེ་ DS ནང་འཁོད་ལུ་ མའི་ཀོརོ་བེཊ་ལེ་ཤ་ཅིག་ བསྐྱར་ལོག་བདེན་ཁུངས་གཅིག་ལུ་ བསྡུ་སྒྲིག་འབད།
+- ལམ་གྱི་ཚད་འཇལ་ནི་ (དགོ་པ་ཅིན་) འཛམ་གླིང་ཚོགས་ཆུང་གཅིག་ བར་ཆད་ཅིག་ལུ་འགྱུར་བ་ཅིན་ གཏན་འབེབས་མཉམ་བསྡོམས་འབད་དེ་ ཀེ་ མཉམ་ཐིག་རྒྱུན་རིམ་ཚུ་ ངོ་སྤྲོད་འབད། འདི་གིས་ ཐད་སྙོམས་སྦེ་ཚད་འཇལ་བའི་སྐབས་ ཡོངས་ཁྱབ་གོ་རིམ་གཅིག་ ཉམས་སྲུང་འབདཝ་ཨིན།
+- གཏན་འབེབས་མགྱོགས་ཚད་: སིམ་ཌི་/སི་ཡུ་ཌི་ཨེ་ཁྱད་རྣམ་གྱི་ གཱར་ནེལ་ཚུ་ ཧ་ཤིང་/ཨེཕ་ཨེཕ་ཊི་གི་དོན་ལུ་ ཀོརསི་ཧརཌི་ཝེར་གཏན་འབེབས་བཟོ་ནི་ ཉམས་སྲུང་འབད་ནི་ལུ་ ཕྲང་ཏང་ཏ་ སི་པི་ཡུ་ ལོབ་ཚུ་བྱིནམ་ཨིན།
+- ལམ་གྱི་ཤུགས་ལྡན་གྱི་ཚད་གཞི་ (གྲོས་འཆར་): གལ་སྲིད་ (ཀ) p95 མཐའ་མ་འདི་ སྐར་མ་༣ >༣ ལུ་ སྐར་ཆ་༣ ལུ་ ༡.༢ ལས་ལྷག་སྟེ་ཡོད་པ་ཅིན་ ལམ་ཐིག་༢-༤ ལྕོགས་ཅན་བཟོ། Lanes གིས་ DSID hash གིས་ བཱ་ཀེཊ་ཚོང་འབྲེལ་ཚུ་ གཏན་འབེབས་བཟོཝ་ཨིནམ་དང་ ཤུལ་མམ་གྱི་སྡེ་ཚན་ནང་ མཉམ་བསྡོམས་འབདཝ་ཨིན།
 
-Fees and Economics (Initial Defaults)
-- Gas unit: per‑DS gas token with metered compute/IO; fees are paid in the DS’s native gas asset. Conversion across DS is an application concern.
-- Inclusion priority: round‑robin across DS with per‑DS quotas to preserve fairness and 1s SLOs; within a DS, fee bidding can break ties.
-- Future: optional global fee market or MEV‑minimizing policies can be explored without changing atomicity or PQ proof design.
+འཐུས་དང་དཔལ་འབྱོར་ (ཐོག་མའི་སྔོན་འཕེལ།)
+- རླངས་རྫས་ཆ་ཚན། འཐུས་འདི་ DS གི་རླངས་རྫས་རྒྱུ་དངོས་ནང་ལུ་ སྤྲོདཔ་ཨིན། DS བརྒྱུད་དེ་ ཁ་སླབ་ནི་འདི་ ཞུ་ཡིག་གི་ཚ་གྱང་ཅིག་ཨིན།
+- གྲངས་སུ་བཙུགས་པའི་གཙོ་རིམ་: DS ནང་འཁོད་ལུ་ སྒོར་སྒོར་སྦེ་ དྲང་བདེན་དང་ SLOs ཚུ་ ཉམས་སྲུང་འབད་ནི་གི་དོན་ལུ་ ཌི་ཨེསི་རེ་ལུ་ སྒོར་སྒོར་སྦེ་ཡོདཔ་ཨིན། DS ནང་ལུ་ འཐུས་སྤྲོད་ནི་འདི་གིས་ འབྲེལ་མཐུན་ཚུ་ བརྡལ་བཤིག་གཏང་ཚུགས།
+- མ་འོངས་པ་: གདམ་ཁ་ཅན་གྱི་འཛམ་གླིང་འཐུས་ཚོང་ཁང་ཡང་ན་ MEV‐minimization སྲིད་བྱུས་ཚུ་ རྡུལ་ཕྲན་དང་ ཡང་ན་ PQ བདེན་དཔང་མེད་པར་ འཚོལ་ཞིབ་འབད་ཚུགས།
 
-Cross‑Data‑Space Workflow (Example)
-1) A user submits an AMX transaction touching public DS P and private DS S: move asset X from S to beneficiary B whose account is in P.
-2) Within the slot, P and S each execute their fragment against the slot snapshot. S verifies authorization and availability, updates its internal state, and produces a PQ validity proof and DA commitment (no private data leaked). P prepares the corresponding state update (e.g., mint/burn/locking in P according to policy) and its proof.
-3) The nexus committee verifies both DS proofs and DA certificates; if both verify within the slot, the transaction is committed atomically in the 1s Nexus Block, updating both DS roots in the global world state vector.
-4) If any proof or DA certificate is missing/invalid, the transaction aborts (no effects), and the client may resubmit for the next slot. No private data leaves S at any step.
+འབྲེལ།-གནས་སྡུད་བཀོད།
+༡༽ ལག་ལེན་པ་ཅིག་གིས་ མི་མང་ཌི་ཨེསི་པི་དང་ སྒེར་གྱི་ཌི་ཨེསི་ཨེསི་: ཨེསི་ལས་ ཨེསི་ལས་ ཁེ་ཕན་ཐོབ་མི་ བི་ལུ་ རྩིས་ཁྲ་ནང་ཡོད་མི་ ཨེ་ཨེམ་ཨེགསི་ཚོང་འབྲེལ་ཅིག་ ཕུལཝ་ཨིན།
+༢༽ ས་སྒོ་ནང་ལུ་ P དང་ S གིས་ ཁོང་རའི་ཆ་ཤས་ཚུ་ བཤུད་བརྙན་གྱི་པར་ལུ་ལག་ལེན་འཐབ་ཨིན། S གིས་ གནང་བ་དང་ འཐོབ་ཚུགས་མི་ཚུ་ བདེན་དཔྱད་འབདཝ་ཨིནམ་དང་ དེ་གི་ནང་ཁུལ་གནས་སྟངས་དུས་མཐུན་བཟོ་སྟེ་ པི་ཀིའུ་ ཆ་གནས་བདེན་ཁུངས་དང་ ཌི་ཨེ་ཁས་བླངས་ (སྒེར་གྱི་གནས་སྡུད་བཏོན་མ་ཚུགས) བཏོནམ་ཨིན། P གིས་ དེ་དང་མཐུན་པའི་གནས་སྟངས་དུས་མཐུན་བཟོ་ནི་ (དཔེར་ན་ མིཊི་/བཱརན་/ལྡེ་མིག་འདི་ སྲིད་བྱུས་དང་འཁྲིལ་ཏེ་ པི་ནང་) དང་ དེ་གི་བདེན་ཁུངས་བཟོཝ་ཨིན།
+༣༽ གྲོས་གཞི་ཚོགས་ཆུང་གིས་ DS གི་བདེན་ཁུངས་དང་ DA ལག་ཁྱེར་གཉིས་ཆ་ར་ བདེན་དཔྱད་འབདཝ་ཨིན། གལ་སྲིད་ གཉིས་ཆ་ར་ ས་སྒོ་ནང་ལུ་ བདེན་དཔྱད་འབད་བ་ཅིན་ ཚོང་འབྲེལ་འདི་ 1s I18NT0000044X Block ནང་ལུ་ རྡུལ་ཕྲན་གྱི་ཐོག་ལས་ འབད་ཡོདཔ་ད་ འཛམ་གླིང་རྒྱལ་ཁབ་ཀྱི་ ཝེག་ཊར་ནང་ལུ་ DS རྩ་གཉིས་ཆ་ར་ དུས་མཐུན་བཟོ་སྟེ་ཡོདཔ་ཨིན།
+༤༽ གལ་སྲིད་ བདེན་ཁུངས་ ཡང་ན་ ཌི་ཨེ་ ལག་ཁྱེར་གང་རུང་ཅིག་ མེདཔ་/ ནུས་མེད་ཨིན་པ་ཅིན་ ཚོང་འབྲེལ་འདི་ བརྐུ་མི་ཚུ་ ༼གནོད་པ་མེདཔ་༽ དང་ མཁོ་མངགས་འབད་མི་གིས་ ཤུལ་མམ་གྱི་ ས་སྒོ་གི་དོན་ལུ་ ལོག་སྟེ་ བསྡུ་སྒྲིག་འབད་ཚུགས། སྒེར་གྱི་གནས་སྡུད་གཅིག་གིས་ཡང་ S གོ་རིམ་གང་རུང་ལུ་ S བཞགཔ་ཨིན།
 
-- Security Considerations
-- Deterministic Execution: IVM syscalls remain deterministic; cross‑DS outcomes are driven by AMX commit and finality, not wall‑clock or network timing.
-- Access Control: ISI permissions in private DS restrict who may submit transactions and what operations are allowed. Capability tokens encode fine‑grained rights for cross‑DS use.
-- Confidentiality: End‑to‑end encryption for private‑DS data, erasure‑coded shards stored only among authorized members, optional ZK proofs for external attestations.
-- DoS Resistance: Isolation at mempool/consensus/storage layers prevents public congestion from impacting private‑DS progress.
+- ཉེན་སྲུང་བསམ་གཞི།
+- ཐག་གཅོད་ལག་ལེན།: IVM syscalls ཚུ་ གཏན་འབེབས་སྦེ་ལུསཔ་ཨིན། cross‐DS གི་གྲུབ་འབྲས་ཚུ་ AMX ཁས་བླངས་དང་མཐའ་དཔྱད་ཀྱིས་ འདྲུད་བདའཝ་ཨིན་ དེ་ཡང་ གྱང་དང་ཆུ་ཚོད་ ཡང་ན་ ཡོངས་འབྲེལ་དུས་ཚོད་མེན།
+- འཛུལ་སྤྱོད་ཚད་འཛིན་: སྒེར་གྱི་ཌི་ཨེསི་བཀག་དམ་ནང་ ཨའི་ཨེསི་ཨའི་གནང་བ་ཚུ་ ཚོང་འབྲེལ་ཚུ་ བཙུགས་མི་དང་ བཀོལ་སྤྱོད་ག་ཅི་འབད་ཆོགཔ་ཨིན་ན། ལྕོགས་གྲུབ་ཀྱི་ཊོ་ཀེན་ཚུ་གིས་ ཀོརསི་ཌི་ཨེསི་ལག་ལེན་གྱི་དབང་ཆ་ལེགས་ཤོམ་ཚུ་ བརྡ་སྟོནམ་ཨིན།
+- གསང་བའི་གནས་ཚུལ་: སྒེར་གྱི་གནས་སྡུད་ཀྱི་དོན་ལུ་ གསང་བཟོའི་མཇུག་བསྡུ། དབང་ཚད་ཡོད་པའི་འཐུས་མི་ཚུ་གི་ནང་འཁོད་ལུ་རྐྱངམ་ཅིག་ གསོག་འཇོག་འབད་ཡོད་པའི་ གསང་ཡིག་ཚུ་ བཏོན་གཏང་། ཕྱི་ཁའི་བདེན་དཔང་འབད་ནིའི་དོན་ལུ་ གདམ་ཁ་ཅན་གྱི་ ZK བདེན་དཔྱད་ཚུ།
+- DoS ངོ་རྒོལ་: མེམ་པུལ་/མོས་མཐུན་/གསོག་འཇོག་བང་རིམ་ནང་ སོ་སོ་སྦེ་བཞག་མི་འདི་གིས་ སྒེར་གྱི་གོང་འཕེལ་ལུ་ ཕན་གནོད་འབྱུང་ནི་ལས་ བཀག་ཆ་འབདཝ་ཨིན།Iroha ཆ་ཤས།
+- iroha_data_model: ངོ་སྤྲོད་ `DataSpaceId`, DS‐འོས་འབབ་ཅན་གྱི་ངོས་འཛིན་ཚུ་, AMX འགྲེལ་བཤད་ (ལྷག་/འབྲི་རྩོམ་ཆ་ཚན་) བདེན་དཔང་/DA ཁས་བླངས་དབྱེ་བ་ཚུ། Norito རིམ་སྒྲིག།
+- ivm: AMX (`amx_begin`, `amx_commit`, `amx_touch`, དང་ DA བདེན་དཔང་ཚུ་; དུས་མཐུན་བཟོ་མི་ ABI བརྟག་དཔྱད་/ཡིག་ཆ་ v1 ལུ་ སྲིད་བྱུས་ཚུ།
+- iroha_core: ལག་ལེན་འཐབ་ཐངས་ཀྱི་ ནེགསི་ལས་རིམ་བཟོ་མི་ གནམ་སྟོང་སྣོད་ཐོ་ ཨེ་ཨེམ་ཨེགསི་ ལམ་སྟོན་/བདེན་དཔྱད་ ཌི་ཨེསི་ ཅ་རྙིང་བདེན་དཔྱད་ དེ་ལས་ ཌི་ཨེ་དཔེ་ཚད་དང་ བསྡོམས་རྩིས་ཚུ་གི་དོན་ལུ་ སྲིད་བྱུས་བསྟར་སྤྱོད་འབདཝ་ཨིན།
+- གནམ་སྟོང་སྣོད་ཐོ་དང་ མངོན་གསལ་འབད་མི་: ཐགཔ་ཨེཕ་ཨེམ་ཨེསི་ མཐའ་མཚམས་མེ་ཊ་ཌེ་ཊ་ (དང་ གཞན་མི་སྤྱིར་བཏང་ཞབས་ཏོག་འགྲེལ་བཤད་) ཌི་ཨེསི་བརྒྱུད་དེ་ གསལ་སྟོན་འབདཝ་ལས་ གནད་སྡུད་བར་སྟོང་ནང་ མཐུད་པའི་སྐབས་ ནའུསི་ རང་བཞིན་ ཌི་སི་རྙིཀ་འཚོལ་ཞིབ་འབདཝ་ཨིན།
+- kura: བཏོན་གཏང་ནི་གི་ཨང་རྟགས་དང་ ཁས་བླངས་ སྒེར་སྡེ་/མི་མང་སྲིད་བྱུས་ལུ་བརྩི་མཐོང་འབད་མི་ བརྡ་རྟགས་ཚུ་ ལོག་ཐོབ་ནིའི་ APIs ཚུ་ཡོད་པའི་ བློ་རིག་ཚོང་ཁང་།
+- WSV: པར་ལེན་དང་ ཆ་ཤས་ ཁས་བླངས་ཚུ། proof APIs; AMX འཁྲུག་རྩོད་བརྟག་དཔྱད་དང་བདེན་དཔྱད་དང་གཅིག་ཁར་ མཉམ་བསྡོམས་འབད་ཡོདཔ།
+- irohad: མཐུད་མཚམས་འགན་ཁུར། DA གི་དོན་ལུ་དྲ་རྒྱ། འཐུས་མིའི་འཐུས་མི་/བདེན་དཔང་། རིམ་སྒྲིག་ `iroha_config` བརྒྱུད་དེ་ རིམ་སྒྲིག་ (བཟོ་བསྐྲུན་ལམ་ལུགས་ནང་ env བསྒྱུར་བཅོས་འབད་མེད།)
 
-Changes to Iroha Components
-- iroha_data_model: Introduce `DataSpaceId`, DS‑qualified identifiers, AMX descriptors (read/write sets), proof/DA commitment types. Norito‑only serialization.
-- ivm: Add syscalls and pointer‑ABI types for AMX (`amx_begin`, `amx_commit`, `amx_touch`), and DA proofs; update ABI tests/docs per v1 policy.
-- iroha_core: Implement nexus scheduler, Space Directory, AMX routing/validation, DS artifact verification, and policy enforcement for DA sampling and quotas.
-- Space Directory & manifest loaders: Thread FMS endpoint metadata (and other common-good service descriptors) through DS manifest parsing so nodes auto-discover local service endpoints when joining a Data Space.
-- kura: Blob store with erasure coding, commitments, retrieval APIs respecting private/public policies.
-- WSV: Snapshotting, chunking, commitments; proof APIs; integration with AMX conflict detection and verification.
-- irohad: Node roles, networking for DA, private‑DS membership/authentication, configuration via `iroha_config` (no env toggles in production paths).
+རིམ་སྒྲིག་དང་ གཏན་འཁེལ་གྱི་ བསམ་གཞི།
+- རན་དུས་ཀྱི་སྤྱོད་ལམ་ཆ་མཉམ་ `iroha_config` བརྒྱུད་དེ་ བཟོ་བསྐྲུན་པ་/ཧོསིཊི་ཚུ་བརྒྱུད་དེ་ ཐགཔ་བཏགས་ཡོདཔ་ཨིན། བཟོ་སྐྲུན་གྱི་ཨེན་ཝི་ སོར་བསྒྱུར་མེད།
+- མཐུན་རྐྱེན་གྱི་མགྱོགས་ཚད་ (SIMD/NEON/METAL/CUDA) འདི་གདམ་ཁ་ཅན་དང་ ཁྱད་རྣམ་-gated ཨིན། གཏན་འབེབས་ཀྱི་ ཕོལཀ་ཚུ་གིས་ མཐུན་རྐྱེན་ཚུ་ནང་ གྲུབ་འབྲས་འདྲ་མཚུངས་བཟོ་དགོཔ་ཨིན།
+ - Post‐Quantum སྔོན་སྒྲིག་: DS ཆ་མཉམ་གྱིས་ PQ ཆ་གནས་བདེན་ཁུངས་ (STARK/FRI) དང་ ML‐DSA‐87 སྔོན་སྒྲིག་ཐོག་ལས་ DS QCs གི་དོན་ལུ་ལག་ལེན་འཐབ་དགོ། གདམ་ཁ་ཅན་ཚུ་ལུ་ DS ངོ་མཚར་ཅན་གྱི་གསལ་བསྒྲགས་དང་ སྲིད་བྱུས་ཆ་འཇོག་གསལ་ཏོག་ཏོ་སྦེ་དགོཔ་ཨིན།
 
-Configuration and Determinism
-- All runtime behavior configured via `iroha_config` and threaded through constructors/hosts. No production env toggles.
-- Hardware acceleration (SIMD/NEON/METAL/CUDA) is optional and feature-gated; deterministic fallbacks must produce identical results across hardware.
- - Post‑Quantum default: All DS must use PQ validity proofs (STARK/FRI) and ML‑DSA‑87 for DS QCs by default. Alternatives require explicit DS Manifest declaration and policy approval.
+གནས་སྤོ་འགྲུལ་ལམ། (I18NT0000023X 2 → Iroha ༣)
+༡༽ གནས་སྡུད་དཔེ་ཚད་ནང་ གནས་སྡུད་ཀྱི་འོས་འབབ་ཅན་གྱི་ IDs དང་ མཐའ་མའི་བཀག་ཆ་/འཛམ་གླིང་གནས་སྟངས་ཀྱི་གྲུབ་ཆ་ཚུ་ ངོ་སྤྲོད་འབད་ནི། འགྱུར་བའི་སྐབས་ I18NT0000025X 2 བཞག་ནིའི་དོན་ལུ་ ཁྱད་རྣམ་གྱི་དར་ཆ་ཚུ་ཁ་སྐོང་རྐྱབས།
+༢༽ ཀུ་ར་/ཌབ་ལུ་ཨེསི་ཝི་ ཀོཌིང་རྒྱབ་རྟེན་ཚུ་ ཁྱད་རྣམ་རྒྱལ་དར་གྱི་རྒྱབ་ཁར་ ཕྱིར་བཏོན་འབད་ཞིནམ་ལས་ ད་ལྟོའི་རྒྱབ་ཐག་ཚུ་ སྔོན་སྒྲིག་སྦེ་ སྔོན་སྒྲིག་སྦེ་ ཉམས་སྲུང་འབདཝ་ཨིན།
+༣༽ ཨེ་ཨེམ་ཨེགསི་ (རྡུལ་ཕྲན་མལ་ཊི་‐ཌི་ཨེསི་) ལག་ལེན་གྱི་དོན་ལུ་ I18NT0000058X syscalls དང་ དཔག་བྱེད་དབྱེ་བ་ཚུ་ ཁ་སྐོང་འབད། བརྟག་དཔྱད་དང་ ཡིག་ཆ་ཚུ་ རྒྱ་སྐྱེད་འབད་ནི། བཞག ABI v1.
+༤༽ མི་མང་གི་ DS དང་ ༡ གི་བཀག་ཆ་གཅིག་ཡོད་པའི་ ཉུང་མཐའི་ མཐུད་རྐྱེན་གྱི་ རིམ་སྒྲིག་འབད་ནི། དེ་ལས་ སྒེར་གྱི་སྒེར་གྱི་ ཕྱིར་གཏོང་འབད་མི་ བདེན་ཁུངས་/ཁས་བླངས་ཚུ་རྐྱངམ་ཅིག་ ཁ་སྐོང་འབད།
+༥༽ རྡུལ་ཕྲན་བརྒལ་བའི་ཚོང་འབྲེལ་ (AMX) དང་ DS‐local FASTPQ‐IISI བདེན་ཁུངས་དང་ DA བདེན་དཔང་འབད་མི་ཚུ་དང་གཅིག་ཁར་ རྒྱ་སྐྱེད་འབད་ནི། DS ནང་འཁོད་ལུ་ ML-DSA‐87 QCs ལྕོགས་ཅན་བཟོཝ་ཨིན།
 
-Migration Path (Iroha 2 → Iroha 3)
-1) Introduce data‑space‑qualified IDs and nexus block/global state composition in data model; add feature flags to keep Iroha 2 legacy modes during transition.
-2) Implement Kura/WSV erasure‑coding backends behind feature flags, preserving current backends as defaults during early phases.
-3) Add IVM syscalls and pointer types for AMX (atomic multi‑DS) operations; extend tests and docs; keep ABI v1.
-4) Deliver minimal nexus chain with a single public DS and 1s blocks; then add first private‑DS pilot exporting proofs/commitments only.
-5) Expand to full atomic cross‑DS transactions (AMX) with DS‑local FASTPQ‑ISI proofs and DA attesters; enable ML‑DSA‑87 QCs across DS.
+བརྟག་དཔྱད་ཐབས་ལམ།
+- གནད་སྡུད་དཔེ་ཚད་དབྱེ་བ་ཚུ་གི་དོན་ལུ་ ཡུ་ནིཊི་བརྟག་དཔྱད། Norito roundrips, AMX syscall སྤྱོད་ལམ་, དང་ བདེན་དཔང་ཨིན་ཀོ་ཌི/ཌི་ཀོ་ཌིང་།
+- I18NT000000059X བརྟག་དཔྱད་གསརཔ་ སི་ཀཱལ་དང་ ཨེ་བི་ཨའི་གསེར་གྱི་བརྟག་དཔྱད་ཚུ།
+- རྡུལ་ཕྲན་བརྒལ་བའི་ཚོང་འབྲེལ་གྱི་དོན་ལུ་ མཉམ་བསྡོམས་བརྟག་དཔྱད། (ངེས་གཏན་/ལོག་པ་) DA ཨེག་ཊི་ཊར་ འཕྲོ་མཐུད་དམིགས་ཚད་ (≤300 ms), དང་ ལས་འགན་སོ་སོ་སྦེ་ བཀལ་བའི་འོག་ལུ་ ལཱ་འབདཝ་ཨིན།
+- DS QC བདེན་དཔྱད་ཀྱི་དོན་ལུ་ ཉེན་སྲུང་བརྟག་དཔྱད་ (ML‐DSA‐༨༧) འཁྲུག་རྩོད་བརྟག་དཔྱད་/བཀག་ཆའི་ཡིག་བརྡ་དང་ གསང་བའི་ཤརཌ་གི་ཆུ་བཤལ་སྔོན་འགོག་ཚུ་གི་དོན་ལུ་ཨིན།
 
-Testing Strategy
-- Unit tests for data model types, Norito roundtrips, AMX syscall behaviors, and proof encoding/decoding.
-- IVM tests for new syscalls and ABI goldens.
-- Integration tests for atomic cross‑DS transactions (positive/negative), DA attester latency targets (≤300 ms), and performance isolation under load.
-- Security tests for DS QC verification (ML‑DSA‑87), conflict detection/abort semantics, and confidential shard leakage prevention.
+### NX-18 བརྒྱུད་འཕྲིན་དང་རྔོན་བུའི་རྒྱུ་ཆ།
 
-### NX-18 Telemetry & Runbook Assets
+- **I18NT000004X བཀོད་སྒྲིག་:** I18NI000000137X གིས་ ད་ལྟོ་ “I18NI00000000137X གིས་ “I18NT0000004X ལམ་ཐིག་མཐའ་མཇུག་ & Oracles” འདི་ NX‑ ༡༨ གིས་ཞུ་བ་འབདཝ་ཨིན། པེ་ནཱལ་ཚུ་གིས་ I18NI000000000138X གུ་ I18NI000000139X, I18NI000000140X, DA འཐོབ་ཚུགས་པའི་ཉེན་བརྡ་ (I18NI000000141X), oracle གི་གོང་ཚད་/staleness/TWAP/haircut gauges, དང་ ཚེ་སྲོག་ `iroha_settlement_buffer_xor` བཱ་ཕར་པེ་ནཱལ་ཚུ་གིས་ བདེན་ཁུངས་བཀལ་ཚུགས། 1s slot, DA, དང་ དངུལ་ཁང་ SLOs ཚུ་ བེ་སི་པོག་འདྲི་དཔྱད་མེདཔ་ཨིན།
+- **Runbook:** `docs/source/runbooks/nexus_lane_finality.md` གིས་ འབོད་བརྡ་ཐོག་ལུ་ཡོད་པའི་ལཱ་གི་རྒྱུན་རིམ་ (thresholds, བྱུང་རིམ་གྱི་ཐིག་དང་ སྒྲུབ་བྱེད་བཏོན་ནི་ ཟང་ཟིང་སྦྱོང་བརྡར་) ཚུ་ ཡིག་ཐོག་ལུ་བཀོད་དེ་ཡོདཔ་ཨིན།
+- **འཕྲུལ་རིག་གྲོགས་རམ་པ་:** ད་ལྟོ་ཡོད་པའི་ `scripts/telemetry/compare_dashboards.py` འདི་ ཌེཤ་བོརཌི་ཕྱིར་འདྲེན་འབད་ནི་ལུ་ ལོག་སྟེ་ལག་ལེན་འཐབ། (གནས་རིམ་/པོརཌི་ཌིཕཊ་) ཌི་ཨེ་/ཀོརམ/ཨོར་ཀལ་/བཱ་ཕར་ཨེསི་ཨེལ་ཨོ་ཚུ་ སྒོ་ར་སྒོ་ར་སྒོ་ར་ནང་ I18NI000000146X གཡོག་བཀོལ། I18NI000000000147X འགྲུལ་ལམ་དང་ ཡང་ན་ ཟང་ཟིང་གི་སྦྱོང་བརྡར་གྱི་སྐབས་ལུ་ NX‐18 གི་དམག་སྦྱོང་རེ་རེ་གིས་ I18NI000000148X གི་སྤྲོད་ལེན་འདི་ མཐུན་སྒྲིག་འབདཝ་ཨིན།
 
-- **Grafana board:** `dashboards/grafana/nexus_lanes.json` now exports the “Nexus Lane Finality & Oracles” dashboard requested by NX‑18. Panels cover `histogram_quantile()` on `iroha_slot_duration_ms`, `iroha_da_quorum_ratio`, DA availability warnings (`sumeragi_da_gate_block_total{reason="missing_local_data"}`), oracle price/staleness/TWAP/haircut gauges, and the live `iroha_settlement_buffer_xor` buffer panel so operators can prove the 1 s slot, DA, and treasury SLOs without bespoke queries.
-- **Runbook:** `docs/source/runbooks/nexus_lane_finality.md` documents the on-call workflow (thresholds, incident steps, evidence capture, chaos drills) that accompanies the dashboard, fulfilling the “publish operator dashboards/runbooks” bullet from NX‑18.
-- **Telemetry helpers:** reuse the existing `scripts/telemetry/compare_dashboards.py` to diff exported dashboards (preventing staging/prod drift), run `scripts/telemetry/nx18_acceptance.py --json-out artifacts/nx18/nx18_acceptance.json <metrics.prom>` inside `ci/check_nexus_lane_smoke.sh` to gate DA/quorum/oracle/buffer/slot SLOs, and call `scripts/telemetry/check_nexus_audit_outcome.py` during routed-trace or chaos rehearsals so every NX‑18 drill archives the matching `nexus.audit.outcome` payload.
+ཁ་ཕྱེ་བའི་དྲི་བ་ (གསལ་བྱེད་དགོས་མཁོ།)
+༡༽ ཚོང་འབྲེལ་གྱི་མིང་རྟགས་: གྲོས་ཐག་ — མཐའ་མཇུག་ལག་ལེན་པ་ཚུ་གིས་ ཁོང་རའི་དམིགས་གཏད་ཌི་ཨེསི་ཁྱབ་བསྒྲགས་འབད་མི་ མཚན་རྟགས་བཀོད་ནིའི་ཨཱལ་གོ་རི་དམ་གང་རུང་ཅིག་ འཐུ་ཚུགས། (Ed25519, secp256k1, ML‐DSA, ལ་སོགས་པ་ཚུ་) ཧོསིཊི་ཚུ་གིས་ གསལ་སྟོན་ནང་ སྣ་མང་/གུག་གུགཔ་གི་ལྕོགས་གྲུབ་ཀྱི་རྒྱལ་དར་ཚུ་ བསྟར་སྤྱོད་འབད་དགོཔ་མ་ཚད་ གཏན་འབེབས་ཀྱི་ མར་ཕབ་ཚུ་བྱིན་དགོཔ་མ་ཚད་ ཨེལ་གོ་རི་དམ་ཚུ་ སླ་བསྲེ་རྐྱབ་པའི་སྐབས་ ཡིག་ཆའི་ འཕྲོ་མཐུད་ཀྱི་ བརྡ་སྟོན་ཚུ་ བྱིན་དགོཔ་ཨིན། ཁྱད་དུ་འཕགས་པ་: I18NT0000004X/SDKs དང་ འཛུལ་ཞུགས་བརྟག་དཔྱད་ཚུ་ དུས་མཐུན་བཟོ།
+༢༽ རླངས་རྫས་ཀྱི་དཔལ་འབྱོར་: ཌི་ཨེསི་རེ་རེ་གིས་ ས་གནས་ཀྱི་རྟགས་མཚན་ནང་ རླངས་རྫས་ཚུ་ བརྡ་སྟོན་ཚུགས་ནི་དང་ འཛམ་གླིང་གཞིས་ཆགས་འཐུས་ཚུ་ SORA XOR ནང་ སྤྲོད་ཚུགས། མཐོང་སྣང་: ཚད་ལྡན་བསྒྱུར་བཅོས་འགྲུལ་ལམ་ (public-lane DEX དང་ གཞན་མི་དངུལ་འབབ་འབྱུང་ཁུངས་) དང་ ལག་དེབ་ཀྱི་ ཧུཀ་ དེ་ལས་ ཌི་ཨེསི་གི་དོན་ལུ་ ཉེན་སྲུང་ཚུ་ ཕབ་ལེན་འབད་ནི་དང་ ཡང་ན་ གོང་ཚད་ཀླད་ཀོར་གྱི་ ཚོང་འབྲེལ་ཚུ་ ངེས་ཚིག་བརྗོདཔ་ཨིན།
+3) DA attesters: Target number per region and threshold (e.g., 64 sampled, 43‑of‑64 ML‑DSA‑87 signatures) to meet ≤300 ms while maintaining durability. ང་བཅས་ཀྱིས་ ཉིནམ་གཅིག་ལས་ ལུང་ཕྱོགས་གང་རུང་ཅིག་ བཙུགས་དགོཔ་ཨིན་ན?
+༤༽ སྔོན་སྒྲིག་ DA ཚད་གཞི་ཚུ་ ང་བཅས་ཀྱིས་ མི་མང་ DS `k=32, m=16` གྲོས་འཆར་བཀོད་ཡོདཔ་ཨིན། ཁྱོད་ཀྱིས་ ཌི་ཨེསི་དབྱེ་རིམ་ལ་ལུ་ཅིག་གི་དོན་ལུ་ མ་དགོ་པའི་གསལ་སྡུད་ (དཔེར་ན་ I18NI0000151X) མཐོ་དྲགས་དགོཔ་ཨིན་ན?
+༥༽ DS granularity: ཌོ་མེན་དང་རྒྱུ་དངོས་གཉིས་ཀ་ DS ཡིན། ང་བཅས་ཀྱིས་ DS (domain DS གི་ཕམ་སྦེ་ རྒྱུ་དངོས་ DS) གི་གདམ་ཁ་ཅན་གྱི་ སྲིད་བྱུས་ཚུ་ རིགས་བརྒྱུད་ཀྱི་ རིགས་བརྒྱུད་ཡོད་མི་དང་ ཡང་ན་ v1 གི་དོན་ལུ་ ཕྲང་ཏང་ཏ་སྦེ་བཞག་དགོཔ་ཨིན་ན་?
+༦༽ ལྗིད་ཅན་གྱི་ ISIs: ང་བཅས་ཀྱིས་ ༼ཀ༽ བཀག་ཆ་ཚུ་ནང་ རྡུལ་ཕྲན་གྱི་གོ་རིམ་ཆུང་ཀུ་སྦེ་ བགོ་བཤའ་རྐྱབ་དགོཔ་ཨིན་ན་ ཡང་ན་ ༼ག༽ དར་ཆ་གསལ་ཏོག་ཏོ་སྦེ་ ཕྱིར་འགྱངས་འབད་བཅུག་དགོཔ་ཨིན་ན?
+༧༽ འཁྲུག་རྩོད་ཚུ་: མཁོ་མངགས་འབད་མི་ མཁོ་མངགས་འབད་མི་འདི་ ལངམ་སྦེ་ཡོདཔ་ཨིན་ན་ ཡང་ན་ གཙོ་འཛིན་གྱིས་ ཉེན་སྲུང་གི་དོན་ལུ་ རང་བཞིན་གྱིས་ རང་གིས་རང་ རང་གིས་རང་ རང་གིས་རང་ བཙུགས་ཏེ་ ཤེས་རྟོགས་འབད་དགོཔ་ཨིན་ན།
 
-Open Questions (Clarification Needed)
-1) Transaction signatures: Decision — end users are free to pick any signing algorithm that their target DS advertises (Ed25519, secp256k1, ML‑DSA, etc.). Hosts must enforce multisig/curve capability flags in manifests, provide deterministic fallbacks, and document latency implications when mixing algorithms. Outstanding: finalise capability negotiation flow across Torii/SDKs and update admission tests.
-2) Gas economics: Each DS may denominate gas in a local token, while global settlement fees are paid in SORA XOR. Outstanding: define the standard conversion path (public-lane DEX vs. other liquidity sources), ledger accounting hooks, and safeguards for DS that subsidise or zero-price transactions.
-3) DA attesters: Target number per region and threshold (e.g., 64 sampled, 43‑of‑64 ML‑DSA‑87 signatures) to meet ≤300 ms while maintaining durability. Any regions we must include from day one?
-4) Default DA parameters: We proposed public DS `k=32, m=16` and private DS `k=16, m=8`. Do you want a higher redundancy profile (e.g., `k=30, m=20`) for certain DS classes?
-5) DS granularity: Domains and assets can both be DS. Should we support hierarchical DS (domain DS as parent of asset DS) with optional inheritance of policies, or keep them flat for v1?
-6) Heavy ISIs: For complex ISIs that cannot produce sub‑second proofs, should we (a) reject them, (b) split into smaller atomic steps across blocks, or (c) allow delayed inclusion with explicit flags?
-7) Cross‑DS conflicts: Is client‑declared read/write set sufficient, or should the host infer and expand it automatically for safety (at cost of more conflicts)?
-
-Appendix: Compliance with Repository Policies
-- Norito is used for all wire formats and JSON serialization via Norito helpers.
-- ABI v1 only; no runtime toggles for ABI policies. Syscall and pointer-type additions follow the documented evolution process with golden tests.
-- Determinism preserved across hardware; acceleration is optional and gated.
-- No serde in production paths; no environment-based configuration in production.
+ཟུར་དེབ་: མཛོད་ཁང་སྲིད་བྱུས་དང་མཐུན་པ།
+- I18NT0000000011X འདི་ གློག་ཐག་རྩ་སྒྲིག་ཆ་མཉམ་དང་ JSON རིམ་སྒྲིག་ I18NT00000012 གྲོགས་རམ་ཚུ་བརྒྱུད་དེ་ ལག་ལེན་འཐབ་ཨིན།
+- ABI v1 རྐྱངམ་གཅིག; ཨེ་བི་ཨའི་སྲིད་བྱུས་ཚུ་གི་དོན་ལུ་ རན་དུས་ཚོད་སོར་བསྒྱུར་མེད། Syscall དང་ pointer གི་ཁ་སྐོང་ཚུ་ གསེར་གྱི་བརྟག་དཔྱད་དང་གཅིག་ཁར་ ཡིག་ཐོག་ལུ་བཀོད་ཡོད་པའི་འཕེལ་འགྱུར་གྱི་བྱ་རིམ་ལུ་ གཞི་བཞགཔ་ཨིན།
+- མཐུན་རྐྱེན་ནང་ ཉམས་སྲུང་འབད་ཡོད་པའི་ གཏན་འབེབས་བཟོ་ནི། མགྱོགས་ཚད་འདི་གདམ་ཁ་ཅན་དང་ སྒོ་སྒྲིག།
+- ཐོན་སྐྱེད་ཀྱི་ལམ་ནང་ སར་ཌི་མེད། བཟོ་བསྐྲུན་ནང་ མཐའ་འཁོར་གཞི་བཞག་པའི་རིམ་སྒྲིག་མ་འབད་བ།

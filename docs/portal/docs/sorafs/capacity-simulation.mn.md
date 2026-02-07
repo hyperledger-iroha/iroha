@@ -11,41 +11,42 @@ id: capacity-simulation
 title: SoraFS Capacity Simulation Runbook
 sidebar_label: Capacity Simulation Runbook
 description: Exercising the SF-2c capacity marketplace simulation toolkit with reproducible fixtures, Prometheus exports, and Grafana dashboards.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
+::: Каноник эх сурвалжийг анхаарна уу
 :::
 
-This runbook explains how to run the SF-2c capacity marketplace simulation kit and visualise the resulting metrics. It validates quota negotiation, failover handling, and slashing remediation end-to-end using the deterministic fixtures in `docs/examples/sorafs_capacity_simulation/`. Capacity payloads still use `sorafs_manifest_stub capacity`; use `iroha app sorafs toolkit pack` for manifest/CAR packaging flows.
+Энэхүү runbook нь SF-2c багтаамжийн зах зээлийн симуляцийн иж бүрдлийг хэрхэн ажиллуулж, үр дүнгийн хэмжигдэхүүнийг дүрслэн харуулахыг тайлбарладаг. Энэ нь `docs/examples/sorafs_capacity_simulation/` дахь детерминистик бэхэлгээг ашиглан квотын тохиролцоо, бүтэлгүйтлийн зохицуулалт, таслах засварыг төгсгөлөөс нь баталгаажуулдаг. Багтаамжийн ачаалал нь `sorafs_manifest_stub capacity`-г ашигладаг хэвээр байна; manifest/CAR савлагааны урсгалын хувьд `iroha app sorafs toolkit pack` ашиглана уу.
 
-## 1. Generate CLI artefacts
+## 1. CLI олдворуудыг үүсгэх
 
 ```bash
 cd $REPO_ROOT/docs/examples/sorafs_capacity_simulation
 ./run_cli.sh ./artifacts
 ```
 
-`run_cli.sh` wraps `sorafs_manifest_stub capacity` to emit Norito payloads, base64 blobs, Torii request bodies, and JSON summaries for:
+`run_cli.sh` нь `sorafs_manifest_stub capacity`-ийг ороож, Norito ачаалал, base64 blob, Torii хүсэлтийн биетүүд болон JSON хураангуйг:
 
-- Three provider declarations participating in the quota negotiation scenario.
-- A replication order allocating the staged manifest across those providers.
-- Telemetry snapshots for the pre-outage baseline, outage interval, and failover recovery.
-- A dispute payload requesting slashing after the simulated outage.
+- Квотын хэлэлцээрийн хувилбарт гурван ханган нийлүүлэгчийн мэдүүлэг.
+- Үе шаттай манифестийг тэдгээр үйлчилгээ үзүүлэгчдийн дунд хуваарилах хуулбарлах дараалал.
+- Тасалдлын өмнөх суурь үзүүлэлт, тасалдалын интервал болон бүтэлгүйтлийг сэргээхэд зориулсан телеметрийн агшин зургууд.
+- Загварчилсан тасалдлын дараа таслахыг хүссэн ачааны маргаан.
 
-All artefacts land under `./artifacts` (override by passing a different directory as the first argument). Inspect the `_summary.json` files for human-readable context.
+Бүх олдворууд `./artifacts`-ийн дагуу бууна (эхний аргумент болгон өөр лавлахаар дамжуулж дарна уу). `_summary.json` файлуудыг хүн унших боломжтой эсэхийг шалгана уу.
 
-## 2. Aggregate results & emit metrics
+## 2. Үр дүнг нэгтгэж, хэмжигдэхүүнийг ялгаруулна
 
 ```bash
 ./analyze.py --artifacts ./artifacts
 ```
 
-The analyzer produces:
+Анализатор нь дараахь зүйлийг үүсгэдэг.
 
-- `capacity_simulation_report.json` - aggregated allocations, failover deltas, and dispute metadata.
-- `capacity_simulation.prom` - Prometheus textfile metrics (`sorafs_simulation_*`) suitable for the node-exporter textfile collector or a standalone scrape job.
+- `capacity_simulation_report.json` - нэгтгэсэн хуваарилалт, шилжүүлгийн дельта болон маргааны мета өгөгдөл.
+- `capacity_simulation.prom` - Prometheus текст файлын хэмжигдэхүүн (`sorafs_simulation_*`) зангилаа экспортлогч текст файл цуглуулагч эсвэл бие даасан хусах ажилд тохиромжтой.
 
-Example Prometheus scrape configuration:
+Жишээ Prometheus хусах тохиргоо:
 
 ```yaml
 scrape_configs:
@@ -60,22 +61,22 @@ scrape_configs:
       format: ["prometheus"]
 ```
 
-Point the textfile collector at `capacity_simulation.prom` (when using node-exporter copy it into the directory passed via `--collector.textfile.directory`).
+Текст файл цуглуулагчийг `capacity_simulation.prom` руу чиглүүлээрэй (зангилаа экспортлогч ашиглах үед үүнийг `--collector.textfile.directory`-ээр дамжуулсан лавлах руу хуулна уу).
 
-## 3. Import the Grafana dashboard
+## 3. Grafana хяналтын самбарыг импортлох
 
-1. In Grafana, import `dashboards/grafana/sorafs_capacity_simulation.json`.
-2. Bind the `Prometheus` datasource variable to the scrape target configured above.
-3. Verify the panels:
-   - **Quota Allocation (GiB)** shows committed/assigned balances for each provider.
-   - **Failover Trigger** flips to *Failover Active* when the outage metrics stream in.
-   - **Uptime Drop During Outage** charts the percentage loss for provider `alpha`.
-   - **Requested Slash Percentage** visualises the remediation ratio extracted from the dispute fixture.
+1. Grafana, импорт `dashboards/grafana/sorafs_capacity_simulation.json`.
+2. `Prometheus` мэдээллийн эх үүсвэрийн хувьсагчийг дээр тохируулсан хусах зорилттой холбоно.
+3. Самбаруудыг шалгана уу:
+   - **Квотын хуваарилалт (GiB)** нь үйлчилгээ үзүүлэгч бүрийн хувьд хүлээсэн/тогтоосон үлдэгдлийг харуулдаг.
+   - **Гүйцэтгэх триггер** нь тасалдалын хэмжигдэхүүн орж ирэхэд *Гэмтлээс идэвхтэй* рүү шилждэг.
+   - **Зогслын үед ажиллах хугацаа буурах** нь `alpha` үйлчилгээ үзүүлэгчийн алдагдлын хувийг графикаар харуулав.
+   - **Хүссэн налуу зураасны хувь** нь маргааны хэрэглүүрээс гаргаж авсан засварын харьцааг харуулдаг.
 
-## 4. Expected checks
+## 4. Хүлээгдэж буй шалгалтууд
 
-- `sorafs_simulation_quota_total_gib{scope="assigned"}` equals `600` while the committed total remains >=600.
-- `sorafs_simulation_failover_triggered` reports `1` and the replacement provider metric highlights `beta`.
-- `sorafs_simulation_slash_requested` reports `0.15` (15% slash) for the `alpha` provider identifier.
+- `sorafs_simulation_quota_total_gib{scope="assigned"}` нь `600`-тэй тэнцүү байхад хүлээгдэж буй нийт хэмжээ >=600 хэвээр байна.
+- `sorafs_simulation_failover_triggered` `1` мэдээлдэг ба орлуулах үйлчилгээ үзүүлэгчийн хэмжүүр нь `beta`-г онцолдог.
+- `sorafs_simulation_slash_requested` нь `alpha` үйлчилгээ үзүүлэгчийн танигчийн хувьд `0.15` (15% налуу зураас) гэж мэдээлдэг.
 
-Run `cargo test -p sorafs_car --features cli --test capacity_simulation_toolkit` to confirm the fixtures are still accepted by the CLI schema.
+`cargo test -p sorafs_car --features cli --test capacity_simulation_toolkit`-г ажиллуулж бэхэлгээг CLI схемээр хүлээн зөвшөөрсөн хэвээр байгаа эсэхийг баталгаажуулна уу.

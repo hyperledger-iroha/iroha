@@ -4,25 +4,27 @@ direction: rtl
 source: docs/portal/docs/sorafs/developer-ci.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: developer-ci
-title: Receitas de CI da SoraFS
-sidebar_label: Receitas de CI
-description: Execute o CLI da SoraFS em pipelines do GitHub e GitLab com assinatura sem chaves.
+ID: ڈویلپر-سی آئی
+عنوان: SoraFS CI ترکیبیں
+سائڈبار_لیبل: سی آئی ترکیبیں
+تفصیل: گٹھب اور گٹ لیب پائپ لائنوں پر SoraFS CLI کو کیلی لیس سائننگ کے ساتھ چلائیں۔
 ---
 
-:::note Fonte canonica
-Esta pagina espelha `docs/source/sorafs/developer/ci.md`. Mantenha ambas as copias sincronizadas.
+::: نوٹ کینونیکل ماخذ
+یہ صفحہ `docs/source/sorafs/developer/ci.md` کا آئینہ دار ہے۔ دونوں کاپیاں ہم آہنگ رکھیں۔
 :::
 
-# Receitas de CI
+# CI ترکیبیں
 
-Pipelines da SoraFS se beneficiam de chunking deterministico, assinatura de manifests e verificacao de proofs. A superficie de comandos
-`sorafs_cli` mantem esses passos portaveis entre provedores de CI. Esta pagina destaca as receitas canonicas e aponta para templates prontos para uso.
+SoraFS پائپ لائنز کا تعی .ن چنکنگ ، مینی فیسٹ سائننگ اور پروف چیکنگ سے فائدہ ہوتا ہے۔ کمانڈ کی سطح
+`sorafs_cli` ان اقدامات کو CI فراہم کرنے والوں میں پورٹیبل رکھتا ہے۔ اس صفحے میں کیننیکل ترکیبیں پر روشنی ڈالی گئی ہے اور استعمال کے لئے تیار ٹیمپلیٹس کی نشاندہی کی گئی ہے۔
 
-## GitHub Actions (sem chaves)
+## گٹ ہب ایکشن (چابیاں کے بغیر)
 
 ```yaml
 name: sorafs-artifacts
@@ -95,13 +97,13 @@ jobs:
           path: artifacts/
 ```
 
-Pontos chave:
+کلیدی نکات:
 
-- Nenhuma chave de assinatura estatica e armazenada; tokens OIDC sao obtidos sob demanda.
-- Artefatos (CAR, manifest, bundle, resumos de proofs) sao enviados para revisao.
-- O job reutiliza os mesmos esquemas Norito usados nos rollouts de producao.
+- کوئی مستحکم ، ذخیرہ شدہ دستخطی چابیاں نہیں۔ OIDC ٹوکن طلب کے مطابق حاصل کیے جاتے ہیں۔
+- نمونے (کار ، منشور ، بنڈل ، پروف خلاصے) کو جائزہ لینے کے لئے بھیجا گیا ہے۔
+- نوکری اسی Norito اسکیموں کو دوبارہ تیار کرتی ہے جو پروڈکشن رول آؤٹ میں استعمال ہوتی ہیں۔
 
-## GitLab CI
+## گٹ لیب سی آئی
 
 ```yaml
 stages:
@@ -135,12 +137,12 @@ sorafs:publish:
       - artifacts/
 ```
 
-- Provisione `SIGSTORE_ID_TOKEN` via federacao de identidade de workload do GitLab ou um segredo selado antes de executar a etapa de publish.
-- A falha de qualquer etapa do CLI faz o pipeline parar, preservando artefatos consistentes.
+- اشاعت `SIGSTORE_ID_TOKEN` گٹ لیب ورک بوجھ شناختی فیڈریشن کے ذریعے یا شائع مرحلہ چلانے سے پہلے ایک مہر بند راز۔
+- کسی بھی سی ایل آئی قدم کی ناکامی پائپ لائن کو رکنے کا سبب بنتی ہے ، جس سے مستقل نمونے کا تحفظ ہوتا ہے۔
 
-## Recursos adicionais
+## اضافی خصوصیات
 
-- Templates end-to-end (inclui helpers Bash, configuracao de identidade federada e passos de limpeza): `docs/examples/sorafs_ci.md`
-- Referencia do CLI cobrindo todas as opcoes: `docs/source/sorafs_cli.md`
-- Requisitos de governanca/alias antes do envio:
+-اختتام سے آخر میں ٹیمپلیٹس (بش مددگار ، فیڈریٹڈ شناخت کی تشکیل اور صفائی کے اقدامات شامل ہیں): `docs/examples/sorafs_ci.md`
+- CLI حوالہ تمام اختیارات کا احاطہ کرتا ہے: `docs/source/sorafs_cli.md`
+- جمع کرانے سے پہلے گورننس/الیاسنگ کی ضروریات:
   `docs/source/sorafs/provider_admission_policy.md`

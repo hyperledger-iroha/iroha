@@ -11,33 +11,34 @@ id: dispute-revocation-runbook
 title: SoraFS Dispute & Revocation Runbook
 sidebar_label: Dispute & Revocation Runbook
 description: Governance workflow for filing SoraFS capacity disputes, coordinating revocations, and evacuating data deterministically.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
-:::
+::: ማስታወሻ ቀኖናዊ ምንጭ
+::
 
-## Purpose
+#ዓላማ
 
-This runbook guides governance operators through filing SoraFS capacity disputes, coordinating revocations, and ensuring data evacuation completes deterministically.
+ይህ Runbook የአስተዳደር ኦፕሬተሮችን SoraFS የአቅም አለመግባባቶችን በማቅረብ፣ ስረዛዎችን በማስተባበር እና የውሂብ መልቀቅ በቆራጥነት መጠናቀቁን በማረጋገጥ ይመራል።
 
-## 1. Assess the Incident
+## 1. ክስተቱን ይገምግሙ
 
-- **Trigger conditions:** detection of SLA breach (uptime/PoR failure), replication shortfall, or billing disagreement.
-- **Confirm telemetry:** capture `/v1/sorafs/capacity/state` and `/v1/sorafs/capacity/telemetry` snapshots for the provider.
-- **Notify stakeholders:** Storage Team (provider operations), Governance Council (decision body), Observability (dashboard updates).
+- ** ቀስቅሴ ሁኔታዎች፡** የ SLA ጥሰትን መለየት (የጊዜ/PoR ውድቀት)፣ የማባዛት እጥረት፣ ወይም የሂሳብ አከፋፈል አለመግባባት።
+- ** ቴሌሜትሪ አረጋግጥ:** ለአቅራቢው `/v1/sorafs/capacity/state` እና `/v1/sorafs/capacity/telemetry` ቅጽበተ-ፎቶዎችን ያንሱ።
+- **ለባለድርሻ አካላት ያሳውቁ፡** የማከማቻ ቡድን (የአቅራቢዎች ስራዎች)፣ የአስተዳደር ምክር ቤት (የውሳኔ አካል)፣ ታዛቢነት (የዳሽቦርድ ዝመናዎች)።
 
-## 2. Prepare Evidence Bundle
+## 2. የማስረጃ ጥቅል ያዘጋጁ
 
-1. Collect raw artefacts (telemetry JSON, CLI logs, auditor notes).
-2. Normalize into a deterministic archive (for example, a tarball); record:
-   - BLAKE3-256 digest (`evidence_digest`)
-   - Media type (`application/zip`, `application/jsonl`, and so on)
-   - Hosting URI (object storage, SoraFS pin, or Torii-accessible endpoint)
-3. Store the bundle in the governance evidence collection bucket with write-once access.
+1. ጥሬ እቃዎች (ቴሌሜትሪ JSON, CLI ምዝግብ ማስታወሻዎች, የኦዲተር ማስታወሻዎች) ይሰብስቡ.
+2. ወደ መወሰኛ ማህደር (ለምሳሌ ታርቦል) መደበኛ ማድረግ; መዝገብ፡
+   - BLAKE3-256 መፍጨት (`evidence_digest`)
+   - የሚዲያ ዓይነት (`application/zip`፣ I18NI0000013X፣ እና የመሳሰሉት)
+   - URI ማስተናገድ (የነገር ማከማቻ፣ SoraFS ፒን፣ ወይም I18NT0000003X-ተደራሽ የመጨረሻ ነጥብ)
+3. ጥቅሉን በአስተዳደር የማስረጃ ማሰባሰቢያ ባልዲ ውስጥ ያከማቹ ከጽሑፍ አንድ ጊዜ ጋር።
 
-## 3. File the Dispute
+## 3. ክርክሩን ያስገቡ
 
-1. Create a spec JSON for `sorafs_manifest_stub capacity dispute`:
+1. ለ`sorafs_manifest_stub capacity dispute` ልዩ JSON ይፍጠሩ፡
 
    ```json
    {
@@ -57,7 +58,7 @@ This runbook guides governance operators through filing SoraFS capacity disputes
    }
    ```
 
-2. Run the CLI:
+2. CLI ን ያሂዱ፡-
 
    ```bash
    sorafs_manifest_stub capacity dispute \
@@ -70,38 +71,38 @@ This runbook guides governance operators through filing SoraFS capacity disputes
      --private-key=ed25519:<key>
    ```
 
-3. Review `dispute_summary.json` (confirm kind, evidence digest, timestamps).
-4. Submit the request JSON to Torii `/v1/sorafs/capacity/dispute` via the governance transaction queue. Capture the `dispute_id_hex` response value; it anchors follow-up revocation actions and audit reports.
+3. `dispute_summary.json` ይገምግሙ (አይነት፣ የማስረጃ መፍጨት፣ የጊዜ ማህተሞችን ያረጋግጡ)።
+4. ጥያቄውን JSON በ Torii `/v1/sorafs/capacity/dispute` በአስተዳደር ግብይት ወረፋ አስረክብ። የ `dispute_id_hex` ምላሽ እሴትን ያንሱ; ተከታታይ የመሻር እርምጃዎችን እና የኦዲት ሪፖርቶችን ያስቀምጣል.
 
-## 4. Evacuation & Revocation
+## 4. መልቀቅ እና መሻር
 
-1. **Grace window:** notify the provider of impending revocation; allow evacuation of pinned data when policy permits.
-2. **Generate `ProviderAdmissionRevocationV1`:**
-   - Use `sorafs_manifest_stub provider-admission revoke` with the approved reason.
-   - Verify signatures and the revocation digest.
-3. **Publish revocation:**
-   - Submit the revocation request to Torii.
-   - Ensure provider adverts are blocked (expect `torii_sorafs_admission_total{result="rejected",reason="admission_missing"}` to climb).
-4. **Update dashboards:** flag the provider as revoked, reference the dispute ID, and link the evidence bundle.
+1. **የጸጋ መስኮት፡** ስለሚመጣው መሻር አቅራቢውን ያሳውቁ፤ ፖሊሲ ሲፈቅድ የተሰካውን ውሂብ ለመልቀቅ ፍቀድ።
+2. ** `ProviderAdmissionRevocationV1` ፍጠር:**
+   - ከተፈቀደው ምክንያት `sorafs_manifest_stub provider-admission revoke` ይጠቀሙ።
+   - ፊርማዎችን እና የመሻር ሂደቱን ያረጋግጡ።
+3. ** መሻርን አትም::**
+   - የመሻር ጥያቄውን ለTorii ያስገቡ።
+   - የአቅራቢዎች ማስታወቂያዎች መዘጋታቸውን ያረጋግጡ (`torii_sorafs_admission_total{result="rejected",reason="admission_missing"}` ለመውጣት ይጠብቁ)።
+4. ** ዳሽቦርዶችን ያዘምኑ፡** አቅራቢውን እንደተሻረ ይጠቁሙ፣ የክርክር መታወቂያውን ያጣሩ እና የማስረጃውን ጥቅል ያገናኙ።
 
-## 5. Post-Mortem & Follow-Up
+## 5. ከሞት በኋላ እና ክትትል
 
-- Record the timeline, root cause, and remediation actions in the governance incident tracker.
-- Determine restitution (stake slashing, fee clawbacks, customer refunds).
-- Document learnings; update SLA thresholds or monitoring alerts if required.
+- የጊዜ መስመርን፣ ዋና መንስኤን እና የማስተካከያ እርምጃዎችን በአስተዳደር ክስተት መከታተያ ውስጥ ይመዝግቡ።
+- መመለስን ይወስኑ (የካስማ መቆራረጥ ፣ የክፍያ መጨናነቅ ፣ የደንበኛ ተመላሽ ገንዘቦች)።
+- የሰነድ ትምህርቶች; አስፈላጊ ከሆነ የ SLA ገደቦችን ያዘምኑ ወይም ማንቂያዎችን ይቆጣጠሩ።
 
-## 6. Reference Materials
+## 6. የማጣቀሻ እቃዎች
 
 - `sorafs_manifest_stub capacity dispute --help`
-- `docs/source/sorafs/storage_capacity_marketplace.md` (dispute section)
-- `docs/source/sorafs/provider_admission_policy.md` (revocation workflow)
-- Observability dashboard: `SoraFS / Capacity Providers`
+- `docs/source/sorafs/storage_capacity_marketplace.md` (የክርክር ክፍል)
+- `docs/source/sorafs/provider_admission_policy.md` (የመሻሪያ የስራ ፍሰት)
+- ታዛቢነት ዳሽቦርድ: `SoraFS / Capacity Providers`
 
-## Checklist
+#የማረጋገጫ ዝርዝር
 
-- [ ] Evidence bundle captured and hashed.
-- [ ] Dispute payload validated locally.
-- [ ] Torii dispute transaction accepted.
-- [ ] Revocation executed (if approved).
-- [ ] Dashboards/runbooks updated.
-- [ ] Post-mortem filed with governance council.
+- [ ] ማስረጃ ቅርቅብ ተይዟል እና ሃሽ።
+- [ ] የሙግት ጭነት በአገር ውስጥ ተረጋግጧል።
+- [ ] Torii የሙግት ግብይት ተቀባይነት አግኝቷል።
+- [ ] መሻር ተፈጽሟል (ከተፈቀደ)።
+- [ ] ዳሽቦርዶች/ runbooks ተዘምነዋል።
+- [ ] የአስከሬን ምርመራ ለአስተዳደር ምክር ቤት ቀረበ።

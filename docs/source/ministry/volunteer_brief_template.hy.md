@@ -9,70 +9,69 @@ source_last_modified: "2025-12-29T18:16:35.984008+00:00"
 translation_last_reviewed: 2026-02-07
 title: Volunteer Brief Template
 summary: Structured template for roadmap item MINFO-3a covering balanced briefs, fact tables, conflict disclosures, and moderation tags.
+translator: machine-google-reviewed
 ---
 
-# Volunteer Brief Template (MINFO-3a)
+# Կամավորների համառոտ ձևանմուշ (MINFO-3a)
 
-Roadmap reference: **MINFO-3a — Balanced brief templates & conflict disclosure.**
+Ճանապարհային քարտեզի տեղեկանք՝ **MINFO-3a — Հավասարակշռված հակիրճ ձևանմուշներ և կոնֆլիկտների բացահայտում:**
 
-Volunteer brief submissions summarise positions that citizen panels want governance to review when blacklist changes or other Ministry enforcement motions are proposed. MINFO-3a requires that every brief follows a deterministic structure so the transparency pipeline can (1) render comparable fact tables, (2) confirm that conflicts-of-interest are disclosed, and (3) drop or flag off-topic submissions automatically. This page defines the canonical fields, CSV-style fact table layout, and moderation tags expected by the tooling shipped in `cargo xtask ministry-transparency`.
+Կամավորների հակիրճ ներկայացումները ամփոփում են այն դիրքորոշումները, որոնք քաղաքացիների հանձնաժողովները ցանկանում են, որ կառավարումը վերանայի, երբ առաջարկվում են սև ցուցակում փոփոխություններ կամ նախարարության կիրարկման այլ միջնորդություններ: MINFO-3a-ն պահանջում է, որ յուրաքանչյուր ամփոփագիր հետևի դետերմինիստական ​​կառուցվածքին, որպեսզի թափանցիկության խողովակաշարը կարողանա (1) ներկայացնել համադրելի փաստերի աղյուսակներ, (2) հաստատել, որ շահերի բախումը բացահայտված է, և (3) ինքնաբերաբար հանել կամ դրոշակել թեմայից դուրս ներկայացումները: Այս էջը սահմանում է կանոնական դաշտերը, CSV ոճով փաստերի աղյուսակի դասավորությունը և չափավորության պիտակները, որոնք սպասվում են `cargo xtask ministry-transparency`-ում առաքված գործիքակազմի կողմից:
 
-> **Norito schema:** the `iroha_data_model::ministry::VolunteerBriefV1` struct (version `1`) is now the authoritative schema for all submissions. Tooling and portal validators call `VolunteerBriefV1::validate` before publishing a brief or referencing it in panel summaries.
+> **Norito սխեման.** `iroha_data_model::ministry::VolunteerBriefV1` կառուցվածքը (տարբերակ `1`) այժմ հեղինակավոր սխեման է բոլոր ներկայացումների համար: Գործիքների և պորտալի վավերացնողները զանգահարում են `VolunteerBriefV1::validate`՝ նախքան համառոտ հրապարակելը կամ այն ​​հղում անելը վահանակի ամփոփագրերում:
 
-## Submission payload structure
+## Ներկայացման օգտակար բեռի կառուցվածքը
 
-| Section | Fields | Requirements |
+| Բաժին | Դաշտեր | Պահանջներ |
 |---------|--------|--------------|
-| **Envelope** | `version` (u16) | Must be `1`. The version guard allows the Ministry to evolve the schema without ambiguity. |
-| **Identity & stance** | `brief_id` (string, unique per calendar year), `proposal_id` (links to the blacklist or policy motion), `language` (BCP-47), `stance` (`support`/`oppose`/`context`), `submitted_at` (RFC 3339) | All fields required. `stance` feeds dashboards and must match the allowed vocabulary. |
-| **Author info** | `author.name`, `author.organization` (optional), `author.contact`, `author.no_conflicts_certified` (bool) | `author.contact` is redacted from public dashboards but stored in the raw artefact. Set `no_conflicts_certified: true` only if the author attests that no disclosures apply. |
-| **Summary** | `summary.title`, `summary.abstract`, `summary.requested_action` | Textual overview surfaced beside the fact table. Limit `summary.abstract` to ≤2 000 characters. |
-| **Fact table** | `fact_table` array (see next section) | Required even for short briefs. The CLI and transparency ingest job reject submissions without a fact table. |
-| **Disclosures** | `disclosures` array OR `author.no_conflicts_certified: true` | Each disclosure row must include `type` (`financial`, `employment`, `governance`, `family`, `other`), `entity`, `relationship`, and `details`. |
-| **Moderation metadata** | `moderation.off_topic` (bool), `moderation.tags` (array of enum strings), `moderation.notes` | Used by reviewers to suppress astroturfing or unrelated submissions. Off-topic entries do not contribute to dashboards. |
+| **Ծրար** | `version` (u16) | Պետք է լինի `1`: Տարբերակային պահակը թույլ է տալիս նախարարությանը զարգացնել սխեման առանց երկիմաստության: |
+| **Ինքնություն և դիրքորոշում** | `brief_id` (տող, եզակի օրացուցային տարվա համար), `proposal_id` (հղումներ սև ցուցակին կամ քաղաքականության միջնորդությանը), `language` (BCP-47), `stance` (`support`/`oppose`/`context`), `submitted_at` (RFC3339) | Բոլոր դաշտերը պարտադիր են: `stance`-ը սնուցում է վահանակները և պետք է համապատասխանի թույլատրված բառապաշարին: |
+| **Հեղինակային տվյալներ** | `author.name`, `author.organization` (ըստ ցանկության), `author.contact`, `author.no_conflicts_certified` (բուլ) | `author.contact`-ը վերցված է հանրային վահանակներից, բայց պահվում է չմշակված արտեֆակտում: Սահմանեք `no_conflicts_certified: true` միայն այն դեպքում, եթե հեղինակը հաստատում է, որ որևէ բացահայտում չի կիրառվում: |
+| **Ամփոփում** | `summary.title`, `summary.abstract`, `summary.requested_action` | Տեքստային ակնարկը հայտնվել է փաստերի աղյուսակի կողքին: Սահմանափակել `summary.abstract`-ը մինչև ≤2000 նիշ: |
+| **Փաստերի աղյուսակ** | `fact_table` զանգված (տես հաջորդ բաժինը) | Պահանջվում է նույնիսկ կարճ շապիկների համար։ CLI-ն և թափանցիկությունը ներառում է աշխատանքը մերժում են ներկայացումները առանց փաստերի աղյուսակի: |
+| **Բացահայտումներ** | `disclosures` զանգված ԿԱՄ `author.no_conflicts_certified: true` | Բացահայտման յուրաքանչյուր տող պետք է ներառի `type` (`financial`, `employment`, `governance`, `family`, `family`, `other`, I18038X, I1809 `relationship` և `details`: |
+| **Չափավորող մետատվյալներ** | `moderation.off_topic` (bool), `moderation.tags` (enum տողերի զանգված), `moderation.notes` | Օգտագործվում է գրախոսողների կողմից՝ ճնշելու աստղագուշակությունը կամ անկապ ներկայացումները: Թեմայից դուրս գրառումները չեն նպաստում վահանակներին: |
 
-## Fact table specification
+## Փաստերի աղյուսակի ճշգրտում
 
-Each `fact_table` row captures a machine-readable claim. Store the rows as JSON objects with the following fields:
-
-| Field | Description |
+Յուրաքանչյուր `fact_table` տող ներառում է մեքենայական ընթեռնելի պահանջ: Պահպանեք տողերը որպես JSON օբյեկտներ հետևյալ դաշտերով.| Դաշտային | Նկարագրություն |
 |-------|-------------|
-| `claim_id` | Stable identifier (e.g., `VB-2026-04-F1`). |
-| `claim` | Single-sentence statement of fact or impact. |
-| `status` | One of `corroborated`, `disputed`, `context-only`. |
-| `impact` | Array containing one or more of `governance`, `technical`, `compliance`, `community`. |
-| `citations` | Non-empty array of strings. URLs, Torii case IDs, or CID references are accepted. |
-| `evidence_digest` | Optional BLAKE3 checksum of supporting documents. |
+| `claim_id` | Կայուն նույնացուցիչ (օրինակ՝ `VB-2026-04-F1`): |
+| `claim` | Փաստի կամ ազդեցության մեկ նախադասություն. |
+| `status` | `corroborated`, `disputed`, `context-only`-ից մեկը: |
+| `impact` | Զանգված, որը պարունակում է մեկ կամ ավելի `governance`, `technical`, `compliance`, `community`: |
+| `citations` | Տողերի ոչ դատարկ զանգված: URL-ները, Torii գործի ID-ները կամ CID հղումներն ընդունվում են: |
+| `evidence_digest` | Օժանդակ փաստաթղթերի կամընտիր BLAKE3 ստուգիչ գումար: |
 
-Automation notes:
-- The ingest job counts `fact_rows` and `fact_rows_with_citation` to build publication scorecards. Rows without citations still appear in the human-readable table but are tracked as missing evidence.
-- Keep claims concise and reference the same identifiers used in governance proposals so cross-linking is deterministic.
+Ավտոմատացման նշումներ.
+- Ներառվող աշխատանքը հաշվում է `fact_rows` և `fact_rows_with_citation`՝ հրապարակումների գնահատականներ ստեղծելու համար: Առանց մեջբերումների տողերը դեռևս հայտնվում են մարդու կողմից ընթեռնելի աղյուսակում, սակայն դրանք դիտվում են որպես բացակայող ապացույցներ:
+- Պահպանեք պահանջները հակիրճ և հղում կատարեք կառավարման առաջարկներում օգտագործվող նույն նույնացուցիչներին, որպեսզի խաչաձեւ կապը որոշիչ լինի:
 
-## Conflict disclosure requirements
+## Կոնֆլիկտների բացահայտման պահանջներ
 
-1. Provide at least one disclosure entry when a financial, employment, governance, or familial tie exists.
-2. Use `author.no_conflicts_certified: true` to assert “no known conflicts.” Submissions must include either a disclosure entry or a `true` certification; otherwise, they’re flagged during ingest.
-3. Include `disclosures[i].evidence` whenever public documentation exists (e.g., corporate filings, DAO votes). Evidence is optional for “none” certifications but strongly recommended.
+1. Տրամադրել բացահայտման առնվազն մեկ գրառում, երբ առկա են ֆինանսական, աշխատանքային, կառավարման կամ ընտանեկան կապեր:
+2. Օգտագործեք `author.no_conflicts_certified: true`՝ «հայտնի կոնֆլիկտներ չկան» հաստատելու համար: Ներկայացումները պետք է ներառեն կամ բացահայտման գրառում կամ `true` հավաստագիր; հակառակ դեպքում դրանք նշագրվում են ներթափանցման ժամանակ:
+3. Ներառեք `disclosures[i].evidence`, երբ առկա են հանրային փաստաթղթեր (օրինակ՝ կորպորատիվ փաստաթղթեր, DAO-ի ձայներ): Ապացույցները պարտադիր են «ոչ մի» հավաստագրերի համար, բայց խստորեն խորհուրդ են տրվում:
 
-## Moderation tags & off-topic handling
+## Չափավորող պիտակներ և թեմայից դուրս կառավարում
 
-Moderation reviewers can label submissions before they enter the transparency pipeline:
+Մոդերատորների վերանայողները կարող են պիտակավորել ներկայացումները նախքան դրանք թափանցիկության խողովակաշար մտնելը.
 
-- `moderation.off_topic: true` removes the entry from aggregate counts while incrementing an `off_topic_rejections` counter. The row is still available in raw archives for audit.
-- `moderation.tags` accepts enum values: `duplicate`, `needs-translation`, `needs-follow-up`, `spam`, `astroturf`, `policy-escalation`. Tags help downstream reviewers triage without re-reading the full brief.
-- `moderation.notes` stores a short justification for the moderation decision (≤512 characters).
+- `moderation.off_topic: true`-ը հեռացնում է մուտքագրումը համախառն թվերից՝ միաժամանակ ավելացնելով `off_topic_rejections` հաշվիչը: Շարքը դեռ հասանելի է չմշակված արխիվներում՝ աուդիտի համար:
+- `moderation.tags` ընդունում է թվային արժեքները՝ `duplicate`, `needs-translation`, `needs-follow-up`, `spam`, `astroturf`, I180NI73X0 Պիտակներն օգնում են ներքևում գտնվող վերանայողներին ստուգել առանց ամբողջական ամփոփագիրը նորից կարդալու:
+- `moderation.notes`-ը պահպանում է չափավորության որոշման կարճ հիմնավորումը (≤512 նիշ):
 
-## Submission checklist
+## Ներկայացման ստուգաթերթ
 
-1. Fill out the JSON payload using this template or the helper CLI described below.
-2. Populate at least one fact table row; include citations for each row.
-3. Provide disclosures or explicitly set `author.no_conflicts_certified: true`.
-4. Attach moderation metadata (default `off_topic: false`) so reviewers can triage quickly.
-5. Validate the payload with `cargo xtask ministry-transparency ingest --volunteer <file>` or any Norito validator before uploading.
+1. Լրացրեք JSON-ի օգտակար բեռը՝ օգտագործելով այս ձևանմուշը կամ ստորև նկարագրված օգնական CLI-ը:
+2. Լրացրեք փաստերի աղյուսակի առնվազն մեկ տող; ներառել մեջբերումներ յուրաքանչյուր տողի համար:
+3. Տրամադրել բացահայտումներ կամ հստակ սահմանել `author.no_conflicts_certified: true`:
+4. Կցեք մոդերավորման մետատվյալները (կանխադրված `off_topic: false`), որպեսզի վերանայողները կարողանան արագ ստուգել:
+5. Վավերացրեք օգտակար բեռը `cargo xtask ministry-transparency ingest --volunteer <file>`-ով կամ որևէ Norito վավերացնողով նախքան վերբեռնումը:
 
-## Validation CLI (MINFO-3)
+## Վավերացում CLI (MINFO-3)
 
-The repository now ships a dedicated validator for volunteer briefs:
+Պահեստն այժմ ուղարկում է հատուկ վավերացնող կամավորների ամփոփագրերի համար.
 
 ```bash
 cargo xtask ministry-transparency volunteer-validate \
@@ -80,32 +79,30 @@ cargo xtask ministry-transparency volunteer-validate \
   --json-output artifacts/ministry/volunteer_lint_report.json
 ```
 
-Key behaviour:
+Հիմնական վարքագիծ.- Ընդունում է առանձին JSON օբյեկտներ *կամ* համառոտագրերի զանգվածներ; մի քանի անգամ անցեք `--input`՝ մի քանի ֆայլեր մեկ վազքի ընթացքում ցցելու համար:
+- թողարկում է համառոտ ամփոփագիր, որը ցույց է տալիս սխալների և նախազգուշացումների քանակը. նախազգուշացումներն ընդգծում են մեջբերումների դատարկ ցուցակները կամ չափազանց երկար նշումները, մինչդեռ սխալներն արգելափակում են հրապարակումը:
+- Ապահովում է, որ պահանջվող դաշտերը (`brief_id`, `proposal_id`, `stance`, փաստերի աղյուսակի բովանդակությունը, բացահայտումները կամ `no_conflicts_certified`) համապատասխանում են այս ձևանմուշին, և որ enum արժեքները մնան փաստաթղթավորված բառապաշարների մեջ:
+- Երբ `--json-output <path>`-ը դրված է, վավերացնողը գրում է մեքենայաընթեռնելի մանիֆեստ՝ ամփոփելով յուրաքանչյուր համառոտ (առաջարկի ID, դիրքորոշում, կարգավիճակ, սխալներ/նախազգուշացումներ): Պորտալի `npm run generate:volunteer-lint` հրամանը սպառում է այս մանիֆեստը՝ յուրաքանչյուր առաջարկի էջի կողքին ցուցադրելու lint կարգավիճակը:
 
-- Accepts individual JSON objects *or* arrays of briefs; pass `--input` multiple times to lint several files in one run.
-- Emits a per-brief summary showing the number of errors and warnings; warnings highlight empty citation lists or overlong notes, while errors block publication.
-- Ensures required fields (`brief_id`, `proposal_id`, `stance`, fact table contents, disclosures or `no_conflicts_certified`) match this template and that enum values stay within the documented vocabularies.
-- When `--json-output <path>` is set the validator writes a machine-readable manifest summarising every brief (proposal id, stance, status, errors/warnings). The portal’s `npm run generate:volunteer-lint` command consumes this manifest to display lint status next to each proposal page.
+Ինտեգրեք հրամանը պորտալի աշխատանքային հոսքերի կամ CI-ի մեջ, որպեսզի կամավորների ներկայացումները համապատասխանեն **MINFO-3**-ին, նախքան դրանք հասնեն թափանցիկության ներդրման աշխատանքին:
 
-Integrate the command into portal workflows or CI to keep volunteer submissions compliant with **MINFO-3** before they reach the transparency ingest job.
+## Օգտակար բեռի օրինակ
 
-## Example payload
+Տե՛ս `docs/examples/ministry/volunteer_brief_template.json` լրիվ համալրված օրինակի համար, ներառյալ փաստերի աղյուսակի տողերը, բացահայտումները և չափավորության պիտակները: Ներքևի վահանակները սպառում են չմշակված JSON-ը և ավտոմատ կերպով հաշվարկում.
 
-See `docs/examples/ministry/volunteer_brief_template.json` for a fully populated example, including fact table rows, disclosures, and moderation tags. Downstream dashboards consume the raw JSON and automatically calculate:
-
-- `total_briefs` (off-topic submissions excluded)
+- `total_briefs` (թեմայից դուրս ներկայացումները բացառվում են)
 - `fact_rows` / `fact_rows_with_citation`
 - `disclosures_missing`
 - `off_topic_rejections`
 
-If new fields are required, update this document and the ingest summariser (`xtask/src/ministry.rs`) in the same change so the governance evidence remains reproducible.
+Եթե նոր դաշտեր են պահանջվում, թարմացրեք այս փաստաթուղթը և ներածման ամփոփիչը (`xtask/src/ministry.rs`) նույն փոփոխությամբ, որպեսզի կառավարման ապացույցները մնան վերարտադրելի:
 
-## Publication SLA & portal surfacing (MINFO-3)
+## Հրապարակում SLA և պորտալի մակերես (MINFO-3)
 
-To keep citizen submissions transparent, the portal now publishes briefs on a fixed cadence once they pass validation:
+Քաղաքացիների դիմումները թափանցիկ պահելու համար պորտալն այժմ հրապարակում է ամփոփագրեր ֆիքսված արագության վերաբերյալ, երբ դրանք վավերացումն անցնեն.
 
-1. **T+0–6 hours:** submissions land via the volunteer intake form or `cargo xtask ministry-transparency ingest`. Validators run `VolunteerBriefV1::validate`, reject malformed payloads, and emit lint reports (missing disclosures, duplicate fact IDs, etc.).
-2. **T+6–24 hours:** accepted briefs are queued for translation/triage. Moderation tags (`needs-translation`, `duplicate`, `policy-escalation`, …) are applied, and off-topic entries are archived but excluded from aggregate counts.
-3. **T+24–48 hours:** the portal publishes the brief alongside the corresponding proposal page. Each published proposal now links to “Volunteer Opinions” so reviewers can read support/oppose/context briefs without opening raw JSON.
+1. **T+0–6 ժամ:** ներկայացումները կատարվում են կամավորների ընդունման ձևի կամ `cargo xtask ministry-transparency ingest`-ի միջոցով: Վավերացնողներն աշխատում են `VolunteerBriefV1::validate`-ով, մերժում են սխալ ձևավորված օգտակար բեռները և թողարկում են ցողունային հաշվետվություններ (բացակայող բացահայտումներ, կրկնվող փաստերի նույնացուցիչներ և այլն):
+2. **T+6–24hours:** ընդունված համառոտագրերը հերթագրվում են թարգմանության/տրիաժի համար: Կիրառվում են մոդերացիոն պիտակներ (`needs-translation`, `duplicate`, `policy-escalation`,…), իսկ թեմայից դուրս գրառումները արխիվացվում են, բայց բացառվում են ընդհանուր թվերից:
+3. **T+24–48hours:** պորտալը հրապարակում է համառոտագիրը համապատասխան առաջարկի էջի կողքին: Յուրաքանչյուր հրապարակված առաջարկ այժմ կապվում է «Կամավորների կարծիքներին», որպեսզի գրախոսները կարողանան կարդալ աջակցություն/հակառակել/համատեքստային ամփոփագրեր՝ առանց չմշակված JSON բացելու:
 
-If a submission is marked `policy-escalation` or `astroturf`, the SLA tightens to **12 hours** so governance can respond quickly. Operators can audit the SLA via the **Volunteer Briefs** page in the docs portal (`docs/portal/docs/ministry/volunteer-briefs.md`), which lists the latest publication windows, lint status, and links to Norito artefacts.
+Եթե ​​ներկայացումը նշված է `policy-escalation` կամ `astroturf`, SLA-ն խստացնում է մինչև **12 ժամ**, որպեսզի կառավարումը կարողանա արագ արձագանքել: Օպերատորները կարող են ստուգել SLA-ն փաստաթղթերի պորտալում **Կամավոր ամփոփագրեր** էջի միջոցով (`docs/portal/docs/ministry/volunteer-briefs.md`), որտեղ թվարկված են վերջին հրապարակման պատուհանները, լինտի կարգավիճակը և հղումները դեպի Norito արտեֆակտներ:

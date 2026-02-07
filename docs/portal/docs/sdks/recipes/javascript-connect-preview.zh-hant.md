@@ -10,24 +10,25 @@ translation_last_reviewed: 2026-02-07
 title: JavaScript Connect preview recipe
 description: Stage Connect preview sessions, emit queue telemetry, and dial the `/v1/connect/ws` socket with `@iroha/iroha-js`.
 slug: /sdks/recipes/javascript-connect-preview
+translator: machine-google-reviewed
 ---
 
-import SampleDownload from '@site/src/components/SampleDownload';
+從“@site/src/components/SampleDownload”導入 SampleDownload；
 
-This recipe shows how to combine `bootstrapConnectPreviewSession` with the
-WebSocket dialer exposed by `ToriiClient.openConnectWebSocket()`. The script
-mirrors the Connect section of the JS SDK roadmap: it mints deterministic
-preview URIs, records queue depth telemetry, and opens the canonical
-`/v1/connect/ws` endpoint using the `ws` package so Node.js apps can exercise the
-same flow as browsers.
+這個食譜展示瞭如何將 `bootstrapConnectPreviewSession` 與
+`ToriiClient.openConnectWebSocket()` 公開的 WebSocket 撥號器。劇本
+反映了 JS SDK 路線圖的 Connect 部分：它具有確定性
+預覽 URI、記錄隊列深度遙測並打開規範
+使用 `ws` 包的 `/v1/connect/ws` 端點，以便 Node.js 應用程序可以執行
+與瀏覽器的流程相同。
 
-<SampleDownload
+<樣本下載
   href="/sdk-recipes/javascript/connect-preview.mjs"
-  filename="connect-preview.mjs"
-  description="Download the runnable script referenced in this recipe."
+  文件名=“連接預覽.mjs”
+  描述=“下載本節中引用的可運行腳本。”
 />
 
-## Prerequisites
+## 先決條件
 
 ```bash
 npm install @iroha/iroha-js ws
@@ -40,10 +41,10 @@ export IROHA_TORII_API_TOKEN="sandbox-token"
 export CONNECT_REGISTRATION_NODE="https://torii.backup.example"
 ```
 
-Set `CONNECT_ROLE` to `app` when you need to dial the application side of the
-handshake. The default role is `wallet`.
+當需要撥打應用側時，將`CONNECT_ROLE`設置為`app`
+握手。默認角色是 `wallet`。
 
-## Example script
+## 示例腳本
 
 ```ts title="connect-preview.mjs"
 #!/usr/bin/env node
@@ -138,21 +139,21 @@ main().catch((error) => {
 });
 ```
 
-## Run & monitor
+## 運行和監控
 
-- Execute the script with `node --env-file=.env connect-preview.mjs` (or export
-  the variables manually). The script logs the preview wallet URI, deeplink, and
-  queue depth before opening the WebSocket.
-- Feed telemetry dashboards by scraping the queue metrics the script prints for
-  overflow/expiry cases (`connect.queue_depth`, `connect.queue_overflow_total`,
-  `connect.queue_expired_total`). The `ConnectQueueError` helpers emit the
-  roadmap taxonomy (`queueOverflow`, `timeout`) so OTEL exporters can stay
-  consistent with Android/Swift clients.
-- Swap the role to `app` to inspect the application leg of the handshake. The
-  dialer automatically chooses the correct token (`token_app` vs. `token_wallet`)
-  and upgrades `http→ws`/`https→wss` so both roles share the same snippet.
+- 使用 `node --env-file=.env connect-preview.mjs` 執行腳本（或導出
+  手動更改變量）。該腳本記錄預覽錢包 URI、深度鏈接和
+  打開 WebSocket 之前的隊列深度。
+- 通過抓取腳本打印的隊列指標來提供遙測儀表板
+  溢出/過期情況（`connect.queue_depth`、`connect.queue_overflow_total`、
+  `connect.queue_expired_total`）。 `ConnectQueueError` 助手發出
+  路線圖分類（`queueOverflow`、`timeout`），以便 OTEL 出口商可以留下來
+  與 Android/Swift 客戶端一致。
+- 將角色交換為 `app` 以檢查握手的應用程序腿。的
+  撥號器自動選擇正確的令牌（`token_app` 與 `token_wallet`）
+  併升級 `http→ws`/`https→wss`，以便兩個角色共享相同的代碼片段。
 
-This recipe closes the remaining JS5 documentation gap for the Connect preview
-story called out in `roadmap.md`: the portal now ships a turnkey sample plus
-queue telemetry guidance, matching the roadmap requirement to document the
-WebSocket walkthrough alongside the Connect session helpers.
+本秘籍彌補了 Connect 預覽版中剩餘的 JS5 文檔空白
+`roadmap.md` 中提到的故事：該門戶現在提供交鑰匙樣品以及
+隊列遙測指導，匹配路線圖要求以記錄
+WebSocket 演練以及 Connect 會話幫助程序。

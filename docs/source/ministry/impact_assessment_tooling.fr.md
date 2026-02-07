@@ -6,40 +6,41 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 89be62d7bb2bb79fd994d207489d310ef4c997be53447fbee8ac1f7b758d3beb
 source_last_modified: "2026-01-03T18:07:57.641039+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Impact Assessment Tooling (MINFO‑4b)
+# Outils d'évaluation d'impact (MINFO‑4b)
 
-Roadmap reference: **MINFO‑4b — Impact assessment tooling.**  
-Owner: Governance Council / Analytics
+Référence de la feuille de route : **MINFO‑4b — Outils d'évaluation d'impact.**  
+Propriétaire : Conseil de gouvernance / Analytics
 
-This note documents the `cargo xtask ministry-agenda impact` command that now
-produces the automated hash-family diff required for referendum packets. The
-tool consumes validated Agenda Council proposals, the duplicate registry, and
-an optional denylist/policy snapshot so reviewers can see exactly which
-fingerprints are new, which collide with existing policy, and how many entries
-each hash family contributes.
+Cette note documente la commande `cargo xtask ministry-agenda impact` qui désormais
+produit la différence automatisée de famille de hachage requise pour les paquets référendaires. Le
+L'outil consomme les propositions validées du Conseil de l'Ordre du jour, le registre en double et
+un instantané facultatif de liste de refus/de politique afin que les réviseurs puissent voir exactement lequel
+les empreintes digitales sont nouvelles, qui entrent en conflit avec la politique existante et combien d'entrées
+chaque famille de hachage contribue.
 
-## Inputs
+## Entrées
 
-1. **Agenda proposals.** One or more files that follow
+1. **Propositions d'ordre du jour.** Un ou plusieurs dossiers qui suivent
    [`docs/source/ministry/agenda_council_proposal.md`](agenda_council_proposal.md).
-   Pass them explicitly with `--proposal <path>` or point the command at a
-   directory via `--proposal-dir <dir>` and every `*.json` file under that path
-   is included.
-2. **Duplicate registry (optional).** A JSON file matching
-   `docs/examples/ministry/agenda_duplicate_registry.json`. Conflicts are
-   reported under `source = "duplicate_registry"`.
-3. **Policy snapshot (optional).** A lightweight manifest that lists every
-   fingerprint already enforced by GAR/Ministry policy. The loader expects the
-   schema shown below (see
+   Transmettez-les explicitement avec `--proposal <path>` ou pointez la commande vers un
+   répertoire via `--proposal-dir <dir>` et chaque fichier `*.json` sous ce chemin
+   est inclus.
+2. **Registre en double (facultatif).** Un fichier JSON correspondant
+   `docs/examples/ministry/agenda_duplicate_registry.json`. Les conflits sont
+   signalé sous `source = "duplicate_registry"`.
+3. **Instantané de stratégie (facultatif).** Un manifeste léger qui répertorie chaque
+   empreinte digitale déjà appliquée par la politique du GAR/du Ministère. Le chargeur attend le
+   schéma ci-dessous (voir
    [`docs/examples/ministry/policy_snapshot_example.json`](../../examples/ministry/policy_snapshot_example.json)
-   for a complete sample):
+   pour un échantillon complet) :
 
 ```json
 {
@@ -56,10 +57,10 @@ each hash family contributes.
 }
 ```
 
-Any entry whose `hash_family:hash_hex` fingerprint matches a proposal target is
-reported under `source = "policy_snapshot"` with the referenced `policy_id`.
+Toute entrée dont l'empreinte `hash_family:hash_hex` correspond à une cible de proposition est
+signalé sous `source = "policy_snapshot"` avec la référence `policy_id`.
 
-## Usage
+## Utilisation
 
 ```bash
 cargo xtask ministry-agenda impact \
@@ -69,8 +70,8 @@ cargo xtask ministry-agenda impact \
   --out artifacts/ministry/impact/AC-2026-001.json
 ```
 
-Additional proposals can be appended via repeated `--proposal` flags or by
-supplying a directory that contains an entire referendum batch:
+Des propositions supplémentaires peuvent être ajoutées via des indicateurs `--proposal` répétés ou en
+fournir un répertoire contenant un lot référendaire complet :
 
 ```bash
 cargo xtask ministry-agenda impact \
@@ -79,12 +80,12 @@ cargo xtask ministry-agenda impact \
   --out artifacts/ministry/impact/2026-03-31.json
 ```
 
-The command prints the generated JSON to stdout when `--out` is omitted.
+La commande imprime le JSON généré sur la sortie standard lorsque `--out` est omis.
 
-## Output
+## Sortie
 
-The report is a signed-off artefact (record it under the referendum packet’s
-`artifacts/ministry/impact/` directory) with the following structure:
+Le rapport est un artefact signé (enregistrez-le sous le dossier référendaire).
+`artifacts/ministry/impact/`) avec la structure suivante :
 
 ```json
 {
@@ -125,13 +126,13 @@ The report is a signed-off artefact (record it under the referendum packet’s
 }
 ```
 
-Attach this JSON to every referendum dossier alongside the neutral summary so
-panelists, jurors, and governance observers can see the exact blast radius of
-each proposal. The output is deterministic (sorted by hash family) and safe to
-include in CI/runbooks; if the duplicate registry or policy snapshot changes,
-rerun the command and attach the refreshed artefact before the vote opens.
+Joignez ce JSON à chaque dossier référendaire aux côtés du résumé neutre afin
+les panélistes, les jurés et les observateurs de la gouvernance peuvent voir le rayon d'explosion exact de
+chaque proposition. La sortie est déterministe (triée par famille de hachage) et sûre à
+inclure dans CI/runbooks ; si le registre en double ou l'instantané de politique change,
+réexécutez la commande et attachez l'artefact actualisé avant l'ouverture du vote.
 
-> **Next step:** feed the generated impact report into
-> [`cargo xtask ministry-panel packet`](referendum_packet.md) so the
-> `ReferendumPacketV1` dossier contains both the hash-family breakdown and the
-> detailed conflict list for the proposal under review.
+> **Étape suivante :** introduisez le rapport d'impact généré dans
+> [`cargo xtask ministry-panel packet`](referendum_packet.md) donc le
+> Le dossier `ReferendumPacketV1` contient à la fois la répartition des familles de hachage et le
+> liste détaillée des conflits pour la proposition en cours d'examen.

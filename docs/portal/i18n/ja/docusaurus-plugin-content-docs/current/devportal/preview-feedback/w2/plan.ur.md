@@ -4,46 +4,48 @@ direction: ltr
 source: docs/portal/docs/devportal/preview-feedback/w2/plan.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: preview-feedback-w2-plan
-title: W2 کمیونٹی intake پلان
-sidebar_label: W2 پلان
-description: کمیونٹی preview cohort کے لئے intake، approvals، اور evidence checklist۔
+id: プレビュー-フィードバック-w2-plan
+タイトル: W2 摂取量
+サイドバーラベル: W2 پلان
+説明: プレビュー コホート、摂取、承認、証拠チェックリスト
 ---
 
-| آئٹم | تفصیل |
+| और देखें評価 |
 | --- | --- |
-| لہر | W2 - کمیونٹی reviewers |
-| ہدف ونڈو | Q3 2025 ہفتہ 1 (عارضی) |
+|ああ | W2 - レビュー担当者 |
+| فدف ونڈو | 2025 年第 3 四半期 ہفتہ 1 (عارضی) |
 | آرٹیفیکٹ ٹیگ (منصوبہ) | `preview-2025-06-15` |
 | ٹریکر ایشو | `DOCS-SORA-Preview-W2` |
 
-## مقاصد
+## 大事
 
-1. کمیونٹی intake criteria اور vetting workflow کی تعریف کرنا۔
-2. تجویز کردہ roster اور acceptable-use addendum کے لئے governance approval حاصل کرنا۔
-3. checksum سے verify شدہ preview artefact اور telemetry bundle کو نئی ونڈو کے لئے ریفریش کرنا۔
-4. دعوت بھیجنے سے پہلے Try it proxy اور dashboards کو stage کرنا۔
+1. 採用基準と審査ワークフロー
+2. 名簿、使用可能補遺、ガバナンスの承認、および承認
+3. チェックサム検証、プレビュー アーティファクト、テレメトリ バンドル、チェックサム、チェックサム
+4. プロキシを試す ダッシュボード ステージ ステージ
 
 ## ٹاسک بریک ڈاؤن
 
-| ID | ٹاسک | مالک | مقررہ تاریخ | اسٹیٹس | نوٹس |
+| ID |ありがとう |意味 | और देखें और देखेंにゅう |
 | --- | --- | --- | --- | --- | --- |
-| W2-P1 | کمیونٹی intake criteria (eligibility, max slots, CoC requirements) تیار کرنا اور governance کو گردش کرنا | Docs/DevRel lead | 2025-05-15 | ✅ مکمل | intake پالیسی `DOCS-SORA-Preview-W2` میں merge ہوئی اور 2025-05-20 کے council میٹنگ میں endorse ہوئی۔ |
-| W2-P2 | request template کو کمیونٹی سوالات کے ساتھ اپ ڈیٹ کرنا (motivation, availability, localization needs) | Docs-core-01 | 2025-05-18 | ✅ مکمل | `docs/examples/docs_preview_request_template.md` میں اب Community سیکشن شامل ہے، جو intake فارم میں حوالہ ہے۔ |
-| W2-P3 | intake پلان کے لئے governance approval حاصل کرنا (meeting vote + recorded minutes) | Governance liaison | 2025-05-22 | ✅ مکمل | ووٹ 2025-05-20 کو متفقہ طور پر پاس ہوا؛ minutes + roll call `DOCS-SORA-Preview-W2` میں لنک ہیں۔ |
-| W2-P4 | W2 ونڈو کے لئے Try it proxy staging + telemetry capture شیڈول کرنا (`preview-2025-06-15`) | Docs/DevRel + Ops | 2025-06-05 | ✅ مکمل | change ticket `OPS-TRYIT-188` منظور اور 2025-06-09 02:00-04:00 UTC میں execute ہوا؛ Grafana screenshots ٹکٹ کے ساتھ archive ہیں۔ |
-| W2-P5 | نیا preview artefact tag (`preview-2025-06-15`) build/verify کرنا اور descriptor/checksum/probe logs archive کرنا | Portal TL | 2025-06-07 | ✅ مکمل | `scripts/preview_wave_preflight.sh --tag preview-2025-06-15 ...` 2025-06-10 کو چلایا گیا؛ outputs `artifacts/docs_preview/W2/preview-2025-06-15/` میں محفوظ ہیں۔ |
-| W2-P6 | کمیونٹی invite roster تیار کرنا (<=25 reviewers, staged batches) governance approved contact info کے ساتھ | Community manager | 2025-06-10 | ✅ مکمل | پہلے cohort کے 8 community reviewers منظور ہوئے؛ request IDs `DOCS-SORA-Preview-REQ-C01...C08` tracker میں لاگ ہیں۔ |
+| W2-P1 |採用基準 (資格、最大スロット数、CoC 要件) ガバナンスと管理 |ドキュメント/DevRel リード | 2025-05-15 | ✅ और देखें摂取 پالیسی `DOCS-SORA-Preview-W2` میں merge ہوئی اور 2025-05-20 کے 議会 میٹنگ میں 支持 ہوئی۔ |
+| W2-P2 |リクエスト テンプレート (モチベーション、可用性、ローカリゼーションのニーズ) | リクエスト テンプレートドキュメントコア-01 | 2025-05-18 | ✅ और देखें `docs/examples/docs_preview_request_template.md` میں اب コミュニティ سیکشن شامل ہے، جو 摂取量 میں حوالہ ہے۔ |
+| W2-P3 |ガバナンス承認の摂取 (会議の投票 + 記録された議事録) |ガバナンス連絡窓口 | 2025-05-22 | ✅ और देखें ووٹ 2025-05-20 کو متفقہ طور پر پاس ہوا؛分 + 点呼 `DOCS-SORA-Preview-W2` میں لنک ہیں۔ |
+| W2-P4 | W2 のプロキシ ステージング + テレメトリ キャプチャを試す (`preview-2025-06-15`) |ドキュメント/DevRel + オペレーション | 2025-06-05 | ✅ और देखें変更チケット `OPS-TRYIT-188` منظور اور 2025-06-09 02:00-04:00 UTC میں 実行 ہوا؛ Grafana スクリーンショット ٹکٹ کے ساتھ アーカイブ ہیں۔ |
+| W2-P5 |アーティファクト タグのプレビュー (`preview-2025-06-15`) 記述子/チェックサム/プローブ ログ アーカイブの構築/検証ポータルTL | 2025-06-07 | ✅ और देखें `scripts/preview_wave_preflight.sh --tag preview-2025-06-15 ...` 2025-06-10 ٩و چلایا گیا؛出力 `artifacts/docs_preview/W2/preview-2025-06-15/` میں محفوظ ہیں۔ |
+| W2-P6 |招待者名簿 (<=25 人のレビュー担当者、段階的なバッチ) ガバナンス承認済みの連絡先情報コミュニティマネージャー | 2025-06-10 | ✅ और देखें参加者 8 人のコミュニティ レビュアー منظور ہوئے؛リクエスト ID `DOCS-SORA-Preview-REQ-C01...C08` トラッカー میں لاگ ہیں۔ |
 
-## Evidence checklist
+## 証拠チェックリスト
 
-- [x] governance approval record (meeting notes + vote link) `DOCS-SORA-Preview-W2` کے ساتھ منسلک ہے۔
-- [x] Updated request template `docs/examples/` کے تحت commit ہے۔
-- [x] `preview-2025-06-15` descriptor، checksum log، probe output، link report، اور Try it proxy transcript `artifacts/docs_preview/W2/` میں محفوظ ہیں۔
-- [x] Grafana screenshots (`docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals`) W2 preflight window کے لئے محفوظ ہیں۔
-- [x] Invite roster table میں reviewer IDs، request tickets، اور approval timestamps dispatch سے پہلے بھرے گئے (tracker کے W2 سیکشن میں دیکھیں)۔
+- [x] ガバナンス承認記録 (会議メモ + 投票リンク) `DOCS-SORA-Preview-W2` کے ساتھ منسلک ہے۔
+- [x] 更新されたリクエスト テンプレート `docs/examples/` ٩ے تحت commit ہے۔
+- [x] `preview-2025-06-15` 記述子、チェックサム ログ、プローブ出力、リンク レポート、試用プロキシ トランスクリプト `artifacts/docs_preview/W2/` میں محفوظ ہیں۔
+- [x] Grafana スクリーンショット (`docs.preview.integrity`、`TryItProxyErrors`、`DocsPortal/GatewayRefusals`) W2 プリフライト ウィンドウ
+- [x] 名簿テーブルの招待、レビュアー ID、チケットのリクエスト、承認タイムスタンプの発送、承認タイムスタンプの発送、 (トラッカー کے W2 、 سیکشن میں دیکھیں)۔
 
-یہ پلان اپ ڈیٹ رکھیں؛ tracker اسے ریفرنس کرتا ہے تاکہ DOCS-SORA roadmap واضح طور پر دیکھ سکے کہ W2 invitations سے پہلے کیا باقی ہے۔
+یہ پلان اپ ڈیٹ رکھیں؛トラッカー اسے ریفرنس کرتا ہے تاکہ DOCS-SORA ロードマップ واضح طور پر دیکھ سکے کہ W2 招待状 سے پہلے کیا और देखें

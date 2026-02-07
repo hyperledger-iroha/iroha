@@ -7,70 +7,71 @@ generator: scripts/sync_docs_i18n.py
 source_hash: c52d7f2c5ec9dc4cda81895561bc1261659935c94bf3f7febb0867f4981fe616
 source_last_modified: "2026-01-22T16:26:46.472177+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Repo Custodian Acknowledgement Template
+# Репо кастодианының растау үлгісі
 
-Use this template when a repo (bilateral or tri-party) references a custodian
-via `RepoAgreement::custodian`. The goal is to record the custody SLA, routing
-accounts, and drill contacts before assets move. Copy the template into your
-evidence directory (for example
-`artifacts/finance/repo/<slug>/custodian_ack_<custodian>.md`), fill the
-placeholders, and hash the file as part of the governance packet described in
+Репо (екі жақты немесе үш жақты) кастодианға сілтеме жасағанда осы үлгіні пайдаланыңыз
+`RepoAgreement::custodian` арқылы. Мақсат - сақтау SLA, маршруттауды жазу
+тіркелгілерді және активтерді жылжытпас бұрын контактілерді бұрғылау. Үлгіні компьютеріңізге көшіріңіз
+дәлелдер каталогы (мысалы
+`artifacts/finance/repo/<slug>/custodian_ack_<custodian>.md`), толтырыңыз
+толтырғыштарды және файлды бөлімінде сипатталған басқару пакетінің бөлігі ретінде хэштеңіз
 `docs/source/finance/repo_ops.md` §2.8.
 
-## 1. Metadata
+## 1. Метадеректер
 
-| Field | Value |
+| Өріс | Мән |
 |-------|-------|
-| Agreement identifier | `<repo-yyMMdd-XX>` |
-| Custodian account id | `<ih58...>` |
-| Prepared by / date | `<custodian ops lead>` |
-| Desk contacts acknowledged | `<desk lead + counterparty>` |
-| Evidence directory | ``artifacts/finance/repo/<slug>/`` |
+| Келісім идентификаторы | `<repo-yyMMdd-XX>` |
+| Кастодиандық шот идентификаторы | `<ih58...>` |
+| Дайындалған / күні | `<custodian ops lead>` |
+| Жұмыс үстеліндегі контактілер расталды | `<desk lead + counterparty>` |
+| Дәлелдер анықтамалығы | ``artifacts/finance/repo/<slug>/`` |
 
-## 2. Custody Scope
+## 2. Қамқорлық аясы
 
-- **Collateral definitions received:** `<list of asset definition ids>`
-- **Cash leg currency / settlement rail:** `<xor#sora / other>`
-- **Custody window:** `<start/end timestamps or SLA summary>`
-- **Standing instructions:** `<hash + path to standing instruction document>`
-- **Automation prerequisites:** `<scripts, configs, or runbooks custodian will invoke>`
+- **Алынған қамтамасыз ету анықтамалары:** `<list of asset definition ids>`
+- **Қолма-қол ақша / есеп айырысу рельсі:** `<xor#sora / other>`
+- **Қамқорлық терезесі:** `<start/end timestamps or SLA summary>`
+- **Тұрақты нұсқаулар:** `<hash + path to standing instruction document>`
+- **Автоматтандырудың алғышарттары:** `<scripts, configs, or runbooks custodian will invoke>`
 
-## 3. Routing & Monitoring
+## 3. Маршруттау және бақылау
 
-| Item | Value |
+| Элемент | Мән |
 |------|-------|
-| Custody wallet / ledger account | `<asset ids or ledger path>` |
-| Monitoring channel | `<Slack/phone/on-call rotation>` |
-| Drill contact | `<primary + backup>` |
-| Required alerts | `<PagerDuty service, Grafana board, etc.>` |
+| Кастодиандық әмиян / бухгалтерлік шот | `<asset ids or ledger path>` |
+| Бақылау арнасы | `<Slack/phone/on-call rotation>` |
+| Бұрғылау контактісі | `<primary + backup>` |
+| Міндетті ескертулер | `<PagerDuty service, Grafana board, etc.>` |
 
-## 4. Statements
+## 4. Мәлімдеме
 
-1. *Custody readiness:* “We reviewed the staged `repo initiate` payload with the
-   identifiers above and are prepared to accept collateral under the SLA listed
-   in §2.”
-2. *Rollback commitment:* “We will execute the rollback playbook named above if
-   directed by the incident commander, and will provide CLI logs plus hashes in
+1. *Қамқорлыққа дайындығы:* «Біз кезеңдік `repo initiate` пайдалы жүктемесін қарастырдық.
+   жоғарыдағы идентификаторлар және тізімде көрсетілген SLA бойынша кепілді қабылдауға дайын
+   §2-де.»
+2. *Қайтару міндеттемесі:* «Біз жоғарыда аталған кері ойнату кітабын орындаймыз, егер
+   оқиға командирі басқарады және CLI журналдарын және хэштерді қамтамасыз етеді
    `governance/drills/<timestamp>.log`.”
-3. *Evidence retention:* “We will keep the acknowledgement, standing
-   instructions, and CLI logs for at least `<duration>` and provide them to the
-   finance council upon request.”
+3. *Дәлелдерді сақтау:* «Мойындауды, тұрып қалдырамыз
+   нұсқауларды және кем дегенде `<duration>` үшін CLI журналдарын және оларды
+   сұранысы бойынша қаржы кеңесі».
 
-Sign below (electronic signatures acceptable when routed through the governance
-tracker).
+Төменде қол қойыңыз (басқару арқылы жіберілген кезде қолайлы электрондық қолтаңбалар
+трекер).
 
-| Name | Role | Signature / date |
+| Аты | Рөл | Қолы / күні |
 |------|------|------------------|
-| `<custodian ops lead>` | Custodian operator | `<signature>` |
-| `<desk lead>` | Desk | `<signature>` |
-| `<counterparty>` | Counterparty | `<signature>` |
+| `<custodian ops lead>` | Кастодиан оператор | `<signature>` |
+| `<desk lead>` | Үстел | `<signature>` |
+| `<counterparty>` | Контрагент | `<signature>` |
 
-> Once signed, hash the file (example: `sha256sum custodian_ack_<cust>.md`) and
-> record the digest in the governance packet table so reviewers can verify the
-> acknowledgement bytes referenced during the vote.
+> Қол қойылғаннан кейін файлды хэштеңіз (мысалы: `sha256sum custodian_ack_<cust>.md`) және
+> дайджестті басқару пакеті кестесіне жазыңыз, осылайша шолушылар тексере алады
+> дауыс беру кезінде сілтеме жасалған растау байттары.

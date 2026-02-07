@@ -4,49 +4,51 @@ direction: rtl
 source: docs/portal/docs/sorafs/migration-roadmap.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: "Feuille de route de migration SoraFS"
+عنوان: "مائیگریشن روڈ میپ SoraFS"
 ---
 
-> Adapte de [`docs/source/sorafs/migration_roadmap.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/migration_roadmap.md).
+> [`docs/source/sorafs/migration_roadmap.md`] (https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/migration_roadmap.md) سے موافقت پذیر۔
 
-# Feuille de route de migration SoraFS (SF-1)
+# ہجرت روڈ میپ SoraFS (SF-1)
 
-Ce document operationalise les directives de migration capturees dans
-`docs/source/sorafs_architecture_rfc.md`. Il developpe les livrables SF-1 en
-jalons prets a executer, criteres de passage et checklists des responsables afin
-que les equipes storage, governance, DevRel et SDK coordonnent la transition du
+اس دستاویز میں ہجرت کے رہنما خطوط کو عملی شکل دی گئی ہے
+`docs/source/sorafs_architecture_rfc.md`۔ وہ SF-1 کی فراہمی میں تیار ہوتا ہے
+تیار کرنے کے لئے تیار سنگ میل ، معیار اور مینیجر چیک لسٹس کے مطابق
+کہ اسٹوریج ، گورننس ، ڈیوریل اور ایس ڈی کے ٹیمیں منتقلی کو مربوط کرتی ہیں
 
-La feuille de route est volontairement deterministe: chaque jalon nomme les
-artefacts requis, les invocations de commandes et les etapes d'attestation pour
-que les pipelines downstream produisent des sorties identiques et que la
-governance conserve une trace auditable.
+روڈ میپ جان بوجھ کر تعی .ن ہے: ہر سنگ میل کا نام ہے
+مطلوبہ نمونے ، کمانڈ کی درخواستیں ، اور تصدیق کے اقدامات
+کہ بہاو پائپ لائنز ایک جیسے نتائج برآمد کرتی ہیں اور یہ کہ
+گورننس ایک آڈٹیبل ریکارڈ رکھتا ہے۔
 
-## Vue d'ensemble des jalons
+## سنگ میل کا جائزہ
 
-| Jalon | Fenetre | Objectifs principaux | Doit livrer | Owners |
-|-------|---------|----------------------|-------------|--------|
-| **M1 - Enforcement deterministe** | Semaines 7-12 | Exiger des fixtures signees et preparer les preuves d'alias pendant que les pipelines adoptent les expectation flags. | Verification nightly des fixtures, manifests signes par le conseil, entrees staging du registre d'alias. | Storage, Governance, SDKs |
+| سنگ میل | ونڈو | اہم مقاصد | لازمی طور پر فراہمی | مالکان |
+| ------- | --------- | ------------ | -------- | -------- |
+| ** M1 - تعی .ن کرنے والے نفاذ ** | ہفتوں 7-12 | دستخط شدہ فکسچر کی ضرورت ہوتی ہے اور عرفی ثبوت تیار کرتے ہیں جبکہ پائپ لائنز توقع کے جھنڈوں کو اپناتے ہیں۔ | رات کے وقت فکسچر کی توثیق ، ​​بورڈ کے ذریعہ دستخط شدہ منشور ، عرف رجسٹر سے اندراجات۔ | اسٹوریج ، گورننس ، ایس ڈی کے |
 
-Le statut des jalons est suivi dans `docs/source/sorafs/migration_ledger.md`. Toutes
-les modifications de cette feuille de route DOIVENT mettre a jour le registre afin
-que governance et release engineering restent synchronises.
+سنگ میل کی حیثیت کو `docs/source/sorafs/migration_ledger.md` میں ٹریک کیا گیا ہے۔ سب
+اس روڈ میپ میں ہونے والی تبدیلیوں کو رجسٹری کو اپ ڈیٹ کرنا ہوگا
+کہ گورننس اور ریلیز انجینئرنگ ہم آہنگ ہے۔
 
-## Pistes de travail
+## کام کے راستے
 
-### 2. Adoption du pinning deterministe
+### 2. ڈٹرمینسٹک پن کو اپنانا
 
-| Etape | Jalon | Description | Owner(s) | Sortie |
-|-------|-------|-------------|----------|--------|
-| Repetitions de fixtures | M0 | Dry-runs hebdomadaires comparant les digests locaux de chunks avec `fixtures/sorafs_chunker`. Publier un rapport sous `docs/source/sorafs/reports/`. | Storage Providers | `determinism-<date>.md` avec matrice pass/fail. |
-| Exiger les signatures | M1 | `ci/check_sorafs_fixtures.sh` + `.github/workflows/sorafs-fixtures-nightly.yml` echouent si signatures ou manifests derivent. Les overrides de dev exigent un waiver governance attache au PR. | Tooling WG | Log CI, lien vers ticket de waiver (si applicable). |
-| Expectation flags | M1 | Les pipelines appellent `sorafs_manifest_stub` avec des expectations explicites pour figer les sorties: | Docs CI | Scripts mis a jour referencant les expectation flags (voir bloc de commande ci-dessous). |
-| Pinning registry-first | M2 | `sorafs pin propose` et `sorafs pin approve` enveloppent les soumissions de manifest; le CLI par defaut utilise `--require-registry`. | Governance Ops | Log d'audit du CLI registry, telemetrie des propositions ratees. |
-| Parite observabilite | M3 | Des dashboards Prometheus/Grafana alertent quand les inventaires de chunks divergent des manifests registry; alertes branchees sur l'astreinte ops. | Observability | Lien dashboard, IDs des regles d'alerte, resultats GameDay. |
+| مرحلہ | سنگ میل | تفصیل | مالک (زبانیں) | باہر نکلیں |
+| ------- | ------- | ------------- | --------- | -------- |
+| حقیقت کی تکرار | M0 | `fixtures/sorafs_chunker` کے ساتھ مقامی حصہ ڈائجسٹوں کا موازنہ کرنے والے ہفتہ وار خشک رنز۔ `docs/source/sorafs/reports/` کے تحت ایک رپورٹ شائع کریں۔ | اسٹوریج فراہم کرنے والے | `determinism-<date>.md` پاس/فیل میٹرکس کے ساتھ۔ |
+| دستخطوں کی ضرورت ہے | M1 | `ci/check_sorafs_fixtures.sh` + `.github/workflows/sorafs-fixtures-nightly.yml` اگر دستخط یا ظاہر ہوتا ہے تو ناکام ہوجاتا ہے۔ دیو اوور رائڈس کے لئے PR سے منسلک گورننس چھوٹ کی ضرورت ہوتی ہے۔ | ٹولنگ ڈبلیو جی | لاگ CI ، چھوٹ کے ٹکٹ سے لنک کریں (اگر قابل اطلاق ہو)۔ |
+| توقع کے جھنڈے | M1 | پائپ لائنز `sorafs_manifest_stub` کو کالوں کو منجمد کرنے کی واضح توقعات کے ساتھ کال کریں: | CI دستاویزات | توقع کے جھنڈوں کا حوالہ دیتے ہوئے تازہ ترین اسکرپٹس (نیچے کمانڈ بلاک دیکھیں)۔ |
+| پننگ رجسٹری فرسٹ | ایم 2 | `sorafs pin propose` اور `sorafs pin approve` لپیٹے ہوئے مینی فیسٹ گذارشات ؛ پہلے سے طے شدہ CLI `--require-registry` استعمال کرتا ہے۔ | اوپس گورننس | سی ایل آئی رجسٹری آڈٹ لاگ ، ناکام تجاویز کا ٹیلی میٹری۔ |
+| برابری کا مشاہدہ | M3 | ڈیش بورڈز Prometheus/Grafana انتباہ جب رجسٹری کے منشور سے انوینٹریوں کو ہٹاتے ہیں۔ آن لائن کال سے منسلک انتباہات۔ | مشاہدہ | ڈیش بورڈ لنک ، الرٹ رول آئی ڈی ، گیم ڈے کے نتائج۔ |
 
-#### Commande canonique de publication
+#### کیننیکل پبلک کمانڈ
 
 ```bash
 cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
@@ -60,50 +62,48 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
   --dag-codec=0x71
 ```
 
-Remplacez les valeurs de digest, taille et CID par les references attendues
-recensees dans l'entree du registre de migration pour l'artefact.
+متوقع حوالوں کے ساتھ ڈائجسٹ ، سائز اور سی آئی ڈی اقدار کو تبدیل کریں
+نمونے کے لئے ہجرت رجسٹری کے اندراج میں درج ہے۔
 
-### 3. Transition des alias et communications
+### 3. عرف منتقلی اور مواصلات| مرحلہ | سنگ میل | تفصیل | مالک (زبانیں) | باہر نکلیں |
+| ------- | ------- | ------------- | --------- | -------- |
+| اسٹیجنگ میں عرف ثبوت | M1 | پن رجسٹری اسٹیجنگ میں عرف کے دعووں کو رجسٹر کریں اور مرکل کے ثبوتوں کو ظاہر (`--alias`) سے منسلک کریں۔ | گورننس ، دستاویزات | عرف نام کے ساتھ مینی فیسٹ + رجسٹری کے تبصرے کے ساتھ موجود ثبوتوں کا بنڈل۔ |
+| ثبوت کا نفاذ | ایم 2 | گیٹ ویز `Sora-Proof` حالیہ ہیڈر کے بغیر ظاہر ہوتا ہے۔ سی آئی نے ثبوت کو بازیافت کرنے کے لئے مرحلہ `sorafs alias verify` شامل کیا۔ | نیٹ ورکنگ | گیٹ وے کنفیگ پیچ + CI آؤٹ پٹ کامیاب تصدیق پر قبضہ کر رہا ہے۔ |
 
-| Etape | Jalon | Description | Owner(s) | Sortie |
-|-------|-------|-------------|----------|--------|
-| Preuves d'alias en staging | M1 | Enregistrer les claims d'alias dans le Pin Registry staging et attacher des preuves Merkle aux manifests (`--alias`). | Governance, Docs | Bundle de preuves stocke a cote du manifest + commentaire du registre avec le nom d'alias. |
-| Enforcement des preuves | M2 | Les gateways rejettent les manifests sans headers `Sora-Proof` recents; CI ajoute l'etape `sorafs alias verify` pour recuperer les preuves. | Networking | Patch de config gateway + sortie CI capturant la verification reussie. |
+### 4. مواصلات اور آڈٹ
 
-### 4. Communication et audit
+- ** رجسٹری ڈسپلن: ** ریاست کی ہر تبدیلی (حقیقت میں بہاؤ ، رجسٹری جمع کرانا ،
+  عرف ایکٹیویشن) میں ایک تاریخ کا نوٹ شامل کرنا ہوگا
+  `docs/source/sorafs/migration_ledger.md`۔
+- ** گورننس منٹ: ** کونسل سیشنز جو پن رجسٹری میں تبدیلیوں کی منظوری دیتے ہیں یا
+  عرف پالیسیوں کو اس روڈ میپ اور رجسٹری کا حوالہ دینا ہوگا۔
+- ** بیرونی مواصلات: ** ڈیوریل ہر سنگ میل پر تازہ کاریوں کو شائع کرتا ہے (بلاگ + چینلوگ ایکسٹریکٹ)
+  تعصب کی ضمانتوں اور عرف کے نظام الاوقات کو اجاگر کرنا۔
 
-- **Discipline du registre:** chaque changement d'etat (drift de fixtures, soumission registry,
-  activation d'alias) doit ajouter une note datee dans
-  `docs/source/sorafs/migration_ledger.md`.
-- **Minutes de gouvernance:** les sessions du conseil approuvant les changements du pin registry ou
-  les politiques d'alias doivent referencer cette feuille de route et le registre.
-- **Comms externes:** DevRel publie des mises a jour a chaque jalon (blog + extrait de changelog)
-  mettant en avant les garanties deterministes et les calendriers d'alias.
+## انحصار اور خطرات
 
-## Dependances et risques
+| لت | اثر | تخفیف |
+| ------------ | -------- | ------------ |
+| پن رجسٹری معاہدہ کی دستیابی | ایم 2 پن فرسٹ رول آؤٹ کو بلاکس۔ | ری پلے ٹیسٹوں کے ساتھ ایم 2 سے پہلے معاہدہ تیار کریں۔ استحکام تک فال بیک لفافہ برقرار رکھیں۔ |
+| بورڈ پر دستخط کرنے والی چابیاں | ظاہر لفافوں اور رجسٹری کی منظوری کے لئے ضروری ہے۔ | دستخطی تقریب `docs/source/sorafs/signing_ceremony.md` میں دستاویزی۔ اوورلیپ کے ساتھ گردش اور رجسٹر میں نوٹ کریں۔ |
+| SDK کی رہائی کیڈینس | کلائنٹ کو ایم 3 سے پہلے عرفی ثبوتوں کا احترام کرنا ہوگا۔ | سنگ میل کے دروازوں کے ساتھ کھڑکیوں کی رہائی کو سیدھ کریں۔ ٹیمپلیٹس کو جاری کرنے کے لئے ہجرت کی چیک لسٹ شامل کریں۔ |
 
-| Dependance | Impact | Mitigation |
-|------------|--------|------------|
-| Disponibilite du contrat Pin Registry | Bloque le rollout M2 pin-first. | Preparer le contrat avant M2 avec des tests de replay; maintenir un fallback envelope jusqu'a stabilite. |
-| Cles de signature du conseil | Requises pour les envelopes de manifest et les approbations registry. | Ceremony de signature documentee dans `docs/source/sorafs/signing_ceremony.md`; rotation avec chevauchement et note dans le registre. |
-| Cadence de release SDK | Les clients doivent honorer les preuves d'alias avant M3. | Aligner les fenetres de release SDK sur les gates des jalons; ajouter des checklists de migration aux templates de release. |
+بقایا خطرات اور تخفیفات `docs/source/sorafs_architecture_rfc.md` میں شامل ہیں
+اور ایڈجسٹمنٹ کے دوران کراس چیک کیا جانا چاہئے۔
 
-Les risques residuels et mitigations sont reprennent dans `docs/source/sorafs_architecture_rfc.md`
-et doivent etre recoupes lors des ajustements.
+## باہر نکلنے کے معیار کی چیک لسٹ
 
-## Checklist des criteres de sortie
+| سنگ میل | معیار |
+| ------- | --------- |
+| M1 | - مسلسل سات دن تک گرین فکسچر کی نوکری۔  - عرف اسٹیجنگ ثبوت CI میں تصدیق شدہ۔  - گورننس توقع کے جھنڈوں کی پالیسی کی توثیق کرتی ہے۔ |
 
-| Jalon | Criteres |
-|-------|----------|
-| M1 | - Job nightly des fixtures vert pendant sept jours consecutifs. <br /> - Preuves d'alias staging verifiees en CI. <br /> - Governance ratifie la politique d'expectation flags. |
+## مینجمنٹ کو تبدیل کریں
 
-## Gestion du changement
+1. PR اس فائل کو اپ ڈیٹ کرنے کے ذریعے ایڈجسٹمنٹ کی تجویز کریں ** اور **
+   `docs/source/sorafs/migration_ledger.md`۔
+2. PR کی تفصیل میں گورننس منٹ اور CI کے ثبوت لنک کریں۔
+3. انضمام کے بعد ، اسٹوریج + ڈیوریل لسٹ کو خلاصہ اور اعمال کے ساتھ مطلع کریں
+   آپریٹرز سے توقع
 
-1. Proposer des ajustements via PR mettant a jour ce fichier **et**
-   `docs/source/sorafs/migration_ledger.md`.
-2. Lier les minutes de gouvernance et les preuves CI dans la description du PR.
-3. Apres merge, notifier la liste storage + DevRel avec un resume et les actions
-   attendues des operateurs.
-
-Suivre cette procedure garantit que le rollout SoraFS reste deterministe,
-auditable et transparent entre les equipes participant au lancement Nexus.
+اس طریقہ کار کی پیروی کرنے سے اس بات کی ضمانت ملتی ہے کہ رول آؤٹ SoraFS تعصب پسند رہتا ہے ،
+Nexus لانچ میں حصہ لینے والی ٹیموں کے مابین قابل اظہار اور شفاف۔

@@ -4,28 +4,30 @@ direction: ltr
 source: docs/portal/docs/norito/examples/transfer-asset.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-slug: /norito/examples/transfer-asset
-title: Перевести актив между аккаунтами
-description: Простой сценарий перевода активов, отражающий quickstart'ы SDK и walkthrough'ы реестра.
-source: examples/transfer/transfer.ko
+slug: /norito/ejemplos/transfer-asset
+título: Перевести актив между аккаунтами
+descripción: Establecimiento de escenarios activos, SDK de inicio rápido y registro de tutoriales.
+fuente: ejemplos/transfer/transfer.ko
 ---
 
-Простой сценарий перевода активов, отражающий quickstart'ы SDK и walkthrough'ы реестра.
+Hay escenarios previos activos, un SDK de inicio rápido y un registro de tutoriales.
 
 ## Пошаговый обход реестра
 
-- Предварительно пополните Alice целевым активом (например через сниппет `register and mint` или потоки quickstart SDK).
-- Выполните точку входа `do_transfer`, чтобы перевести 10 единиц от Alice к Bob, удовлетворяя разрешению `AssetTransferRole`.
-- Проверьте балансы (`FindAccountAssets`, `iroha_cli ledger assets list`) или подпишитесь на события pipeline, чтобы наблюдать результат перевода.
+- La popular aplicación Alice (por ejemplo, el fragmento `register and mint` o el SDK de inicio rápido).
+- Utilice este vídeo `do_transfer`, ya lleva 10 ediciones de Alice y Bob, siguiendo el ejemplo `AssetTransferRole`.
+- Pruebe los saldos (`FindAccountAssets`, `iroha_cli ledger assets list`) o conecte la tubería de sobытия, para que pueda obtener el resultado deseado.
 
 ## Связанные руководства SDK
 
-- [Quickstart Rust SDK](/sdks/rust)
-- [Quickstart Python SDK](/sdks/python)
-- [Quickstart JavaScript SDK](/sdks/javascript)
+- [SDK de inicio rápido de Rust](/sdks/rust)
+- [SDK de Python de inicio rápido](/sdks/python)
+- [SDK de JavaScript de inicio rápido](/sdks/javascript)
 
 [Скачать исходник Kotodama](/norito-snippets/transfer-asset.ko)
 

@@ -4,49 +4,51 @@ direction: ltr
 source: docs/portal/docs/sorafs/capacity-simulation.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: capacity-simulation
-title: Runbook de simulación de capacidad de SoraFS
-sidebar_label: Runbook de simulación de capacidad
-description: Ejecutar el toolkit de simulación del marketplace de capacidad SF-2c con fixtures reproducibles, exportaciones de Prometheus y dashboards de Grafana.
+идентификатор: моделирование емкости
+название: Runbook моделирования мощности SoraFS
+Sidebar_label: Runbook моделирования производительности
+описание: Воспользуйтесь набором инструментов для моделирования рынка емкости SF-2c с воспроизводимыми приспособлениями, экспортом Prometheus и приборными панелями Grafana.
 ---
 
-:::note Fuente canónica
-Esta página refleja `docs/source/sorafs/runbooks/sorafs_capacity_simulation.md`. Mantén ambas copias sincronizadas hasta que el conjunto de documentación heredada en Sphinx se haya migrado por completo.
+:::примечание Фуэнте каноника
+Эта страница отражает `docs/source/sorafs/runbooks/sorafs_capacity_simulation.md`. Нам пришлось скопировать синхронизированные копии того, что комплект документации был передан в Сфинкс, если он полностью мигрировал.
 :::
 
-Este runbook explica cómo ejecutar el kit de simulación del marketplace de capacidad SF-2c y visualizar las métricas resultantes. Valida la negociación de cuotas, el manejo de failover y la remediación de slashing de extremo a extremo usando los fixtures deterministas en `docs/examples/sorafs_capacity_simulation/`. Los payloads de capacidad aún usan `sorafs_manifest_stub capacity`; usa `iroha app sorafs toolkit pack` para los flujos de empaquetado de manifest/CAR.
+Это объяснение Runbook включает в себя набор для моделирования рынка производительности SF-2c и визуализацию полученных результатов. Подтвердите согласование настроек, управление аварийным переключением и исправление экстремальных и экстремальных значений с использованием детерминированных приборов в `docs/examples/sorafs_capacity_simulation/`. Потеря полезной нагрузки при использовании `sorafs_manifest_stub capacity`; США `iroha app sorafs toolkit pack` для упаковки в манифест/CAR.
 
-## 1. Generar artefactos de CLI
+## 1. Генерация артефактов CLI
 
 ```bash
 cd $REPO_ROOT/docs/examples/sorafs_capacity_simulation
 ./run_cli.sh ./artifacts
 ```
 
-`run_cli.sh` envuelve `sorafs_manifest_stub capacity` para emitir payloads Norito, blobs base64, cuerpos de solicitud para Torii y resúmenes JSON para:
+`run_cli.sh` конвертирует `sorafs_manifest_stub capacity` для отправки полезных данных Norito, больших двоичных объектов base64, запроса на Torii и резюме JSON для:
 
-- Tres declaraciones de proveedores que participan en el escenario de negociación de cuotas.
-- Una orden de replicación que asigna el manifiesto en staging entre esos proveedores.
-- Snapshots de telemetría para el baseline previo a la caída, el intervalo de caída y la recuperación por failover.
-- Un payload de disputa solicitando slashing tras la caída simulada.
+- Три заявления проверяющих, участвующих в сценарии переговоров.
+- Порядок репликации, который назначается для проявления в постановке между этими поставщиками.
+- Снимки телеметрии для предыдущего базового состояния, интервала между событиями и восстановления для аварийного переключения.
+- Полезная нагрузка по запросу спора разрезает имитацию tras la caída.
 
-Todos los artefactos se escriben bajo `./artifacts` (puedes reemplazarlo pasando un directorio diferente como primer argumento). Inspecciona los archivos `_summary.json` para contexto legible.
+Все артефакты записаны как `./artifacts` (можно повторно указать другую директорию в качестве первого аргумента). Проверьте архивы `_summary.json` для разборчивости контекста.
 
-## 2. Agregar resultados y emitir métricas
+## 2. Совокупность результатов и показателей выбросов
 
 ```bash
 ./analyze.py --artifacts ./artifacts
 ```
 
-El analizador produce:
+El analizador производит:
 
-- `capacity_simulation_report.json` - asignaciones agregadas, deltas de failover y metadatos de disputa.
-- `capacity_simulation.prom` - métricas de textfile de Prometheus (`sorafs_simulation_*`) adecuadas para el textfile collector de node-exporter o un scrape job independiente.
+- `capacity_simulation_report.json` — назначение агрегатов, изменений при отказе и метаданных спора.
+- `capacity_simulation.prom` — метрики текстового файла Prometheus (`sorafs_simulation_*`), подходящие для сборщика текстовых файлов с помощью узла-экспортера или независимого задания очистки.
 
-Ejemplo de configuración de scrape de Prometheus:
+Пример конфигурации очистки Prometheus:
 
 ```yaml
 scrape_configs:
@@ -61,22 +63,20 @@ scrape_configs:
       format: ["prometheus"]
 ```
 
-Apunta el textfile collector a `capacity_simulation.prom` (si usas node-exporter, cópialo al directorio pasado vía `--collector.textfile.directory`).
+Подключите сборщик текстовых файлов к `capacity_simulation.prom` (если вы используете экспортер узлов, скопируйте его в папку, расположенную через `--collector.textfile.directory`).
 
-## 3. Importar el dashboard de Grafana
+## 3. Импортируйте панель управления Grafana.
 
-1. En Grafana, importa `dashboards/grafana/sorafs_capacity_simulation.json`.
-2. Vincula la variable del datasource `Prometheus` al scrape target configurado arriba.
-3. Verifica los paneles:
-   - **Quota Allocation (GiB)** muestra los balances comprometidos/asignados de cada proveedor.
-   - **Failover Trigger** cambia a *Failover Active* cuando entran las métricas de caída.
-   - **Uptime Drop During Outage** grafica la pérdida porcentual para el proveedor `alpha`.
-   - **Requested Slash Percentage** visualiza la proporción de remediación extraída del fixture de disputa.
+1. En Grafana, импорт `dashboards/grafana/sorafs_capacity_simulation.json`.
+2. Выделите переменную источника данных `Prometheus` и выберите цель очистки, настроенную заранее.
+3. Проверка панелей:
+   - **Распределение квот (ГиБ)** должно осуществляться по компромиссным/назначаемым каждодневным счетам.
+   - **Триггер аварийного переключения** активируется в режиме *Аварийное переключение* при входе в систему показателей.
+   - **Снижение времени бесперебойной работы во время отключения**
+   - **Запрошенный процент сокращения** позволяет визуализировать долю дополнительного исправления спорных моментов.
 
-## 4. Comprobaciones esperadas
+## 4. Эсперадас Comprobaciones- `sorafs_simulation_quota_total_gib{scope="assigned"}` эквивалентен `600` при общем снижении содержания мантиена >=600.
+- `sorafs_simulation_failover_triggered` отчет `1` и метрика поставщика повторной замены `beta`.
+- `sorafs_simulation_slash_requested` сообщает `0.15` (15% косой черты) для идентификатора подтверждения `alpha`.
 
-- `sorafs_simulation_quota_total_gib{scope="assigned"}` equivale a `600` mientras el total comprometido se mantiene >=600.
-- `sorafs_simulation_failover_triggered` reporta `1` y la métrica del proveedor de reemplazo resalta `beta`.
-- `sorafs_simulation_slash_requested` reporta `0.15` (15% de slash) para el identificador de proveedor `alpha`.
-
-Ejecuta `cargo test -p sorafs_car --features cli --test capacity_simulation_toolkit` para confirmar que los fixtures siguen siendo aceptados por el esquema de la CLI.
+Выведите `cargo test -p sorafs_car --features cli --test capacity_simulation_toolkit`, чтобы подтвердить, что все приборы были приняты для выполнения команды CLI.

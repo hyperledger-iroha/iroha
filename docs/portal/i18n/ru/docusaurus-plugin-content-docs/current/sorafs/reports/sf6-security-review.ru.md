@@ -4,76 +4,74 @@ direction: ltr
 source: docs/portal/docs/sorafs/reports/sf6-security-review.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: Отчет по безопасности SF-6
-summary: Результаты и последующие действия по независимой оценке keyless signing, proof streaming и пайплайнов отправки manifests.
+Название: Отчет по безопасности СФ-6
+Краткое описание: Результаты и действия в зависимости от качества подписи без ключа, потоковой передачи данных и отчетов пайплайнов.
 ---
 
 # Отчет по безопасности SF-6
 
-**Окно оценки:** 2026-02-10 → 2026-02-18  
-**Лиды проверки:** Security Engineering Guild (`@sec-eng`), Tooling Working Group (`@tooling-wg`)  
-**Область:** SoraFS CLI/SDK (`sorafs_cli`, `sorafs_car`, `sorafs_manifest`), proof streaming APIs, обработка manifests в Torii, интеграция Sigstore/OIDC, CI release hooks.  
+**Окно оценки:** 10.02.2026 → 18.02.2026  
+**Лиды проверки:** Гильдия инженеров безопасности (`@sec-eng`), Рабочая группа по инструментам (`@tooling-wg`)  
+**Область:** SoraFS CLI/SDK (`sorafs_cli`, `sorafs_car`, `sorafs_manifest`), API-интерфейсы проверки потоковой передачи, манифесты обработки в Torii, интеграция. Sigstore/OIDC, крючки освобождения CI.  
 **Артефакты:**  
 - Исходники CLI и тесты (`crates/sorafs_car/src/bin/sorafs_cli.rs`)  
-- Torii handlers manifest/proof (`crates/iroha_torii/src/sorafs/api.rs`)  
-- Release automation (`ci/check_sorafs_cli_release.sh`, `scripts/release_sorafs_cli.sh`)  
-- Deterministic parity harness (`crates/sorafs_car/tests/sorafs_cli.rs`, [Отчет о паритете GA SoraFS Orchestrator](./orchestrator-ga-parity.md))
+- Torii манифест/доказательство обработчиков (`crates/iroha_torii/src/sorafs/api.rs`)  
+- Автоматизация выпуска (`ci/check_sorafs_cli_release.sh`, `scripts/release_sorafs_cli.sh`)  
+- Обвязка детерминированной четности (`crates/sorafs_car/tests/sorafs_cli.rs`, [Отчет о паритете GA SoraFS Orchestrator](./orchestrator-ga-parity.md))
 
 ## Методология
 
-1. **Threat modelling workshops** отразили возможности атакующих для рабочих станций разработчиков, CI систем и Torii узлов.  
-2. **Code review** сфокусировался на поверхностях учетных данных (обмен токенами OIDC, keyless signing), валидации Norito manifests и back-pressure в proof streaming.  
-3. **Dynamic testing** воспроизводило fixture manifests и симулировало сбои (token replay, manifest tampering, усеченные proof streams) с помощью parity harness и специальных fuzz drives.  
-4. **Configuration inspection** проверило defaults `iroha_config`, обработку флагов CLI и release scripts, чтобы обеспечить детерминированные и аудируемые прогоны.  
-5. **Process interview** подтвердило remediation flow, escalation paths и сбор audit evidence совместно с release owners Tooling WG.
+1. **Семинары по моделированию угроз** развили возможности атакующих для рабочих процессов разработчиков, CI-систем и узлов Torii.  
+2. **Просмотр кода** сосредоточился на поверхностных слоях учетных данных (обмен токенами OIDC, подписание без ключа), валидации манифестов Norito и обратном давлении в потоковой передаче доказательств.  
+3. **Динамическое тестирование** воспроизводило манифесты устройств и симулировало их (воспроизведение токенов, подделка манифестов, усеченные контрольные потоки) с помощью системы контроля четности и специальных фазз-драйверов.  
+4. **Проверка конфигурации** проверено по умолчанию `iroha_config`, обработка флагов CLI и скриптов выпуска, чтобы обеспечить детерминированные и проверяемые прогоны.  
+5. **Процесс собеседования** подтвердил поток исправлений, пути эскалации и сбор доказательств аудита совместно с владельцами релизов Tooling WG.
 
-## Сводка находок
-
-| ID | Severity | Area | Finding | Resolution |
+## Сводка находок| удостоверение личности | Серьезность | Площадь | Нахождение | Разрешение |
 |----|----------|------|---------|------------|
-| SF6-SR-01 | High | Keyless signing | Default аудитория OIDC tokens была неявной в CI templates, что создавало риск cross-tenant replay. | Добавлено явное требование `--identity-token-audience` в release hooks и CI templates ([release process](../developer-releases.md), `docs/examples/sorafs_ci.md`). CI теперь падает, если аудитория не указана. |
-| SF6-SR-02 | Medium | Proof streaming | Back-pressure paths принимали неограниченные буферы подписчиков, что позволяло исчерпать память. | `sorafs_cli proof stream` ограничивает размеры каналов с детерминированным truncation, логирует Norito summaries и abort'ит поток; Torii mirror обновлен, чтобы ограничить response chunks (`crates/iroha_torii/src/sorafs/api.rs`). |
-| SF6-SR-03 | Medium | Отправка manifests | CLI принимал manifests без проверки встроенных chunk plans, когда `--plan` отсутствовал. | `sorafs_cli manifest submit` теперь пересчитывает и сравнивает CAR digests, если не указан `--expect-plan-digest`, отклоняя mismatches и выдавая remediation hints. Тесты покрывают успех/ошибки (`crates/sorafs_car/tests/sorafs_cli.rs`). |
-| SF6-SR-04 | Low | Audit trail | В release checklist не было подписанного журнала утверждения security review. | Добавлен раздел [release process](../developer-releases.md), требующий приложить hashes memo review и URL тикета sign-off перед GA. |
+| СФ6-СР-01 | Высокий | Бесключевая подпись | Токены аудитории по умолчанию OIDC были неявной в шаблонах CI, что создавало риск повторного воспроизведения между арендаторами. | Добавлено требование `--identity-token-audience` в хуках выпуска и шаблонах CI ([процесс выпуска](../developer-releases.md), `docs/examples/sorafs_ci.md`). CI теперь падает, если аудитория не указана. |
+| СФ6-СР-02 | Средний | Доказательство потоковой передачи | Обратные пути содержат неограниченные буферы подписчиков, что приводит к исчерпанию памяти. | `sorafs_cli proof stream` ограничивает размеры с определенным усечением, логирует сводки Norito и прерывает поток; Зеркало Torii обновлено, чтобы подтвердить фрагменты ответа (`crates/iroha_torii/src/sorafs/api.rs`). |
+| СФ6-СР-03 | Средний | Отправка манифестов | CLI принимал манифесты без проверки встроенных планов блоков, когда `--plan` отсутствовал. | `sorafs_cli manifest submit` теперь пересчитывает и сравнивает дайджесты CAR, если не указано `--expect-plan-digest`, отклоняя несоответствия и выдавая подсказки по исправлению. Тесты раскрывают/успехи (`crates/sorafs_car/tests/sorafs_cli.rs`). |
+| СФ6-СР-04 | Низкий | Аудиторский след | В контрольном списке выпуска не было подписанного документа проверки безопасности. | Добавлен раздел [процесс выпуска](../developer-releases.md), требующий приложить проверку хэшей заметки и подписание URL-тикета перед GA. |
 
-Все high/medium находки были исправлены в окно ревью и подтверждены действующим parity harness. Критических скрытых проблем не осталось.
+Все высокие/средние находки были исправлены в окне просмотра и подтверждены действующим протоколом четности. Критических скрытых проблем не осталось.
 
-## Валидация контролей
+## Проверка контролей
 
-- **Credential scope:** CI templates теперь требуют явных audience и issuer утверждений; CLI и release helper завершаются ошибкой, если `--identity-token-audience` не указан вместе с `--identity-token-provider`.  
-- **Deterministic replay:** Обновленные тесты покрывают положительные/отрицательные потоки отправки manifests, гарантируя, что mismatched digests остаются недетерминированными ошибками и выявляются до обращения к сети.  
-- **Proof streaming back-pressure:** Torii теперь стримит PoR/PoTR items через ограниченные каналы, а CLI хранит только усеченные samples latency + пять примеров отказов, предотвращая неограниченный рост подписчиков и сохраняя детерминированные summaries.  
-- **Observability:** Счетчики proof streaming (`torii_sorafs_proof_stream_*`) и CLI summaries фиксируют причины abort, давая операторам audit breadcrumbs.  
-- **Documentation:** Гайды для разработчиков ([developer index](../developer-index.md), [CLI reference](../developer-cli.md)) отмечают security-sensitive флаги и escalation workflows.
+- **Область учетных данных:** шаблоны CI теперь требуют явных заявлений аудитории и издателя; CLI и Release Helper завершаются ошибкой, если `--identity-token-audience` не указан вместе с `--identity-token-provider`.  
+- **Детерминированный повтор:** Обновленные тесты выявляют положительные/отрицательные потоки сообщений, гарантируя, что несовпадающие дайджесты остаются недетерминированными ошибками и выявляются до обращения к сети.  
+- **Противное давление потоковой передачи:** Torii теперь стримит элементы PoR/PoTR через ограниченные каналы, CLI хранит только усеченные выборки задержки + пять примеров отказов, предотвращающую неограниченный рост подписчиков и сохраняющую определенные сводки.  
+- **Наблюдаемость:** Счетчики подтверждают потоковую передачу (`torii_sorafs_proof_stream_*`) и сводки CLI фиксируют причину прерывания, давая операторам хлебные крошки аудита.  
+- **Документация:** Гайды для разработчиков ([индекс разработчика](../developer-index.md), [ссылка CLI](../developer-cli.md)) отмечают чувствительные к безопасности флаги и рабочие процессы эскалации.
 
-## Дополнения к release checklist
+## Дополнения к выпуску контрольного списка
 
-Release managers **обязаны** приложить следующие доказательства при продвижении GA кандидата:
+Релиз-менеджеры **обязаны** приложить следующие доказательства при продвижении кандидата ГА:
 
-1. Hash последнего memo security review (этот документ).  
-2. Ссылка на тикет remediation (например, `governance/tickets/SF6-SR-2026.md`).  
-3. Output `scripts/release_sorafs_cli.sh --manifest ... --bundle-out ... --signature-out ...` с явными аргументами audience/issuer.  
-4. Логи parity harness (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`).  
-5. Подтверждение, что release notes Torii включают telemetry counters bounded proof streaming.
+1. Хэшируйте последнюю проверку безопасности заметки (этот документ).  
+2. Ссылка на исправление тикета (например, `governance/tickets/SF6-SR-2026.md`).  
+3. Вывод `scripts/release_sorafs_cli.sh --manifest ... --bundle-out ... --signature-out ...` с явными аргументами аудитории/эмитента.  
+4. Логи четности (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`).  
+5. Подтверждение, что примечания к выпуску Torii включают ограниченную потоковую передачу данных счетчиков телеметрии.Непредоставление документов выше блокирует подписание GA.
 
-Непредоставление артефактов выше блокирует GA sign-off.
-
-**Reference hashes артефактов (sign-off 2026-02-20):**
+**Справочные хэши документов (подписано 20 февраля 2026 г.):**
 
 - `sf6_security_review.md` — `66001d0b53d8e7ed5951a07453121c075dea931ca44c11f1fcd1571ed827342a`
 
-## Оставшиеся follow-ups
+## Оставшиеся продолжения
 
-- **Threat model refresh:** Повторять эту ревизию ежеквартально или перед крупными добавлениями флагов CLI.  
-- **Fuzzing coverage:** Транспортные кодировки proof streaming fuzz'ятся через `fuzz/proof_stream_transport`, охватывая payloads identity, gzip, deflate и zstd.  
-- **Incident rehearsal:** Запланировать операторское упражнение, симулирующее компрометацию токена и rollback manifest, чтобы документация отражала отработанные процедуры.
+- **Обновление модели угроз:** Повторять эту ревизию ежеквартально или перед существенным добавлением флагов CLI.  
+- **Покрытие фаззинга:** Транспортные кодировки доказательства потоковой передачи fuzz'ятся через `fuzz/proof_stream_transport`, охватывая идентичность полезных данных, gzip, deflate и zstd.  
+- **Репетиция инцидента:** Запланировать операторское неожиданное, симулирующее компрометацию токена и манифест отката, чтобы документация отражала отработанные процедуры.
 
-## Approval
+## Одобрение
 
-- Представитель Security Engineering Guild: @sec-eng (2026-02-20)  
-- Представитель Tooling Working Group: @tooling-wg (2026-02-20)
+- Представитель Гильдии инженеров безопасности: @sec-eng (20 февраля 2026 г.)  
+- Представитель рабочей группы по инструментам: @tooling-wg (20 февраля 2026 г.)
 
-Храните подписанные approvals вместе с release artefact bundle.
+Храните подписанные утверждения вместе с выпуском пакета артефактов.

@@ -7,31 +7,32 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 6feb2b03bd8f6a41de693a0c3f3c4ffc058072bc7942e2bc50b3fd9770aa56d4
 source_last_modified: "2025-12-29T18:16:35.962003+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Genesis Bootstrap from Trusted Peers
+# Сенімді әріптестерден Genesis Bootstrap
 
-Iroha peers without a local `genesis.file` can fetch a signed genesis block from trusted peers
-using the Norito-encoded bootstrap protocol.
+Iroha жергілікті `genesis.file` құрдастары сенімді құрдастардан қол қойылған генезис блогын ала алады
+Norito кодталған bootstrap протоколын пайдалану.
 
-- **Protocol:** peers exchange `GenesisRequest` (`Preflight` for metadata, `Fetch` for payload) and
-  `GenesisResponse` frames keyed by `request_id`. Responders include the chain id, signer pubkey,
-  hash, and an optional size hint; payloads are returned only on `Fetch`, and duplicate request ids
-  receive `DuplicateRequest`.
-- **Guards:** responders enforce an allowlist (`genesis.bootstrap_allowlist` or the trusted peers
-  set), chain-id/pubkey/hash matching, rate limits (`genesis.bootstrap_response_throttle`), and a
-  size cap (`genesis.bootstrap_max_bytes`). Requests outside the allowlist receive `NotAllowed`, and
-  payloads signed by the wrong key receive `MismatchedPubkey`.
-- **Requester flow:** when storage is empty and `genesis.file` is unset (and
-  `genesis.bootstrap_enabled=true`), the node preflights trusted peers with the optional
-  `genesis.expected_hash`, then fetches the payload, validates signatures via `validate_genesis_block`,
-  and persists `genesis.bootstrap.nrt` alongside Kura before applying the block. Bootstrap retries
-  honor `genesis.bootstrap_request_timeout`, `genesis.bootstrap_retry_interval`, and
+- **Протокол:** құрдастары `GenesisRequest` (метадеректер үшін `Preflight`, пайдалы жүктеме үшін `Fetch`) және
+  `request_id` арқылы кілттелген `GenesisResponse` кадрлары. Жауап берушілерге тізбек идентификаторы, қол қоюшы кілті,
+  хэш және қосымша өлшем туралы анықтама; пайдалы жүктемелер тек `Fetch` және қайталанатын сұрау идентификаторларында қайтарылады
+  `DuplicateRequest` алыңыз.
+- **Күзетшілер:** жауап берушілер рұқсат етілген тізімді (`genesis.bootstrap_allowlist` немесе сенімді серіктестер) бекітеді
+  жинақ), тізбек идентификаторы/pubkey/хэш сәйкестігі, жылдамдық шектеулері (`genesis.bootstrap_response_throttle`) және
+  өлшем қақпағы (`genesis.bootstrap_max_bytes`). Рұқсат етілген тізімнен тыс сұраулар `NotAllowed` алады және
+  қате кілтпен қол қойылған пайдалы жүктемелер `MismatchedPubkey` алады.
+- **Сұраныс ағыны:** жад бос және `genesis.file` орнатылмаған кезде (және
+  `genesis.bootstrap_enabled=true`), түйін сенімді құрдастарды міндетті емес параметрлермен алдын ала іске қосады
+  `genesis.expected_hash`, содан кейін пайдалы жүктемені алады, `validate_genesis_block` арқылы қолтаңбаларды тексереді,
+  және блокты қолданбас бұрын Курамен бірге `genesis.bootstrap.nrt` сақталады. Bootstrap әрекетін қайталайды
+  құрмет `genesis.bootstrap_request_timeout`, `genesis.bootstrap_retry_interval`, және
   `genesis.bootstrap_max_attempts`.
-- **Failure modes:** requests are rejected for allowlist misses, chain/pubkey/hash mismatches, size
-  cap violations, rate limits, missing local genesis, or duplicate request ids. Conflicting hashes
-  across peers abort the fetch; no responders/timeouts fall back to local configuration.
-- **Operator steps:** ensure at least one trusted peer is reachable with a valid genesis, configure
-  `bootstrap_allowlist`/`bootstrap_max_bytes`/`bootstrap_response_throttle` and the retry knobs, and
-  optionally pin `expected_hash` to avoid accepting mismatched payloads. Persisted payloads can be
-  reused on subsequent boots by pointing `genesis.file` to `genesis.bootstrap.nrt`.
+- **Сәтсіздік режимдері:** рұқсат етілген тізімді жіберіп алу, тізбек/pubkey/хэш сәйкессіздіктері, өлшем үшін сұраулар қабылданбайды.
+  шекті бұзу, мөлшерлеме шектеулері, жергілікті генезис жоқ немесе қайталанатын сұрау идентификаторлары. Қайшылықты хэштер
+  қатарластар алуды тоқтатады; ешбір жауап берушілер/тайм-ауттар жергілікті конфигурацияға оралмайды.
+- **Оператор қадамдары:** жарамды генезисі бар кем дегенде бір сенімді теңдестің қол жетімді екеніне көз жеткізіңіз, конфигурациялаңыз
+  `bootstrap_allowlist`/`bootstrap_max_bytes`/`bootstrap_response_throttle` және қайталау түймелері, және
+  сәйкес келмейтін пайдалы жүктемелерді қабылдамау үшін қосымша `expected_hash` түйреуіші. Тұрақты пайдалы жүктемелер болуы мүмкін
+  `genesis.file` - `genesis.bootstrap.nrt` көрсету арқылы келесі етіктерде қайта пайдаланылады.

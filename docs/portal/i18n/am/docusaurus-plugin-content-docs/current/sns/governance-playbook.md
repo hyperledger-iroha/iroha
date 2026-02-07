@@ -4,223 +4,223 @@ direction: ltr
 source: docs/portal/docs/sns/governance-playbook.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 ---
-id: governance-playbook
-title: Sora Name Service Governance Playbook
-sidebar_label: Governance playbook
-description: Runbook for council, guardian, steward, and registrar workflows referenced by SN-1/SN-6.
+መታወቂያ: አስተዳደር-ጨዋታ መጽሐፍ
+ርዕስ: Sora ስም አገልግሎት አስተዳደር Playbook
+sidebar_label: አስተዳደር playbook
+መግለጫ፡ Runbook ለምክር ቤት፣ ለአሳዳጊ፣ መጋቢ እና ሬጅስትራር የስራ ፍሰቶች በSN-1/SN-6 የተጠቀሱ።
 ---
 
-:::note Canonical Source
-This page mirrors `docs/source/sns/governance_playbook.md` and now serves as
-the canonical portal copy. The source file persists for translation PRs.
-:::
+::: ማስታወሻ ቀኖናዊ ምንጭ
+ይህ ገጽ `docs/source/sns/governance_playbook.md`ን ያንጸባርቃል እና አሁን ያገለግላል
+ቀኖናዊው ፖርታል ቅጂ. የምንጭ ፋይሉ ለትርጉም PRs ይቆያል።
+::
 
-# Sora Name Service Governance Playbook (SN-6)
+# የሶራ ስም አገልግሎት የአስተዳደር መጫወቻ መጽሐፍ (SN-6)
 
-**Status:** Drafted 2026-03-24 — living reference for SN-1/SN-6 readiness  
-**Roadmap links:** SN-6 “Compliance & Dispute Resolution”, SN-7 “Resolver & Gateway Sync”, ADDR-1/ADDR-5 address policy  
-**Prerequisites:** Registry schema in [`registry-schema.md`](./registry-schema.md), registrar API contract in [`registrar-api.md`](./registrar-api.md), address UX guidance in [`address-display-guidelines.md`](./address-display-guidelines.md), and account structure rules in [`docs/account_structure.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/account_structure.md).
+** ሁኔታ፡** የተረቀቀው 2026-03-24 - ለ SN-1/SN-6 ዝግጁነት ሕያው ማጣቀሻ  
+**የሮድ ካርታ አገናኞች፡** SN-6 “ተገዢነት እና አለመግባባት አፈታት”፣ SN-7 “መፍትሄ እና መተላለፊያ ማመሳሰል”፣ ADDR-1/ADDR-5 የአድራሻ መመሪያ  
+**ቅድመ-ሁኔታዎች፡** በ[`registry-schema.md`](I18NU0000019X)፣ የመዝጋቢ API ውል በ[`registrar-api.md`](./registrar-api.md)፣ የUX መመሪያን አድራሻ [`address-display-guidelines.md`](./address-display-guidelines.md)፣ እና የመለያ መዋቅር ደንቦች በ[`docs/account_structure.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/account_structure.md)።
 
-This playbook describes how the Sora Name Service (SNS) governance bodies adopt
-charters, approve registrations, escalate disputes, and prove that resolver and
-gateway states remain in sync. It fulfils the roadmap requirement that the
-`sns governance ...` CLI, Norito manifests, and audit artefacts share a single
-operator-facing reference before N1 (public launch).
+ይህ የመጫወቻ መጽሐፍ የሶራ ስም አገልግሎት (ኤስኤንኤስ) የአስተዳደር አካላት እንዴት እንደሚቀበሉ ይገልጻል
+ቻርተሮች፣ ምዝገባዎችን ማጽደቅ፣ አለመግባባቶችን ማሳደግ፣ እና ያንን ፈቺ አረጋግጡ እና
+የጌትዌይ ግዛቶች እንደተመሳሰሉ ይቆያሉ። የፍኖተ ካርታውን መስፈርት ያሟላል።
+`sns governance ...` CLI፣ Norito ይገለጣል፣ እና የኦዲት ቅርሶች አንድ ነጠላ ይጋራሉ።
+ከኤን 1 በፊት (በሕዝብ ማስጀመር) ፊት ለፊት ያለው ኦፕሬተር ማጣቀሻ።
 
-## 1. Scope & Audience
+## 1. ስፋት እና ታዳሚዎች
 
-The document targets:
+ሰነዱ ያነጣጠረው፡-
 
-- Governance Council members who vote on charters, suffix policies, and dispute
-  outcomes.
-- Guardian board members who issue emergency freezes and review reversals.
-- Suffix stewards who run the registrar queues, approve auctions, and manage
-  revenue splits.
-- Resolver/gateway operators responsible for SoraDNS propagation, GAR updates,
-  and telemetry guardrails.
-- Compliance, treasury, and support teams who must demonstrate that every
-  governance action left auditable Norito artefacts.
+- በቻርተሮች፣ ቅጥያ ፖሊሲዎች እና ሙግቶች ላይ ድምጽ የሚሰጡ የአስተዳደር ምክር ቤት አባላት
+  ውጤቶች.
+- የአደጋ ጊዜ እገዳዎችን የሚያወጡ እና የተገላቢጦሽ ሁኔታዎችን የሚገመግሙ የጠባቂ ቦርድ አባላት።
+- የመዝጋቢ ወረፋዎችን የሚያካሂዱ፣ ጨረታዎችን የሚያጸድቁ እና የሚያስተዳድሩ ቅጥያ አስተዳዳሪዎች
+  የገቢ ክፍፍል.
+- ለሶራ ዲ ኤን ኤስ ስርጭት ፣ GAR ዝመናዎች ኃላፊነት ያላቸው የሪልቨር/የበረንዳ ኦፕሬተሮች ፣
+  እና ቴሌሜትሪ መከላከያዎች.
+- ተገዢነት፣ ግምጃ ቤት እና የድጋፍ ቡድኖች ያንን እያንዳንዱን ማሳየት አለባቸው
+  I18NT0000005X ቅርሶች ኦዲት ሊደረጉ የሚችሉ የአስተዳደር እርምጃዎች ቀርተዋል።
 
-It covers the closed-beta (N0), public launch (N1), and expansion (N2) phases
-enumerated in `roadmap.md` by linking each workflow to required evidence,
-dashboards, and escalation paths.
+የዝግ-ቤታ (N0)፣ የህዝብ ማስጀመሪያ (N1) እና የማስፋፊያ (N2) ደረጃዎችን ይሸፍናል።
+በ `roadmap.md` ውስጥ የተዘረዘረው እያንዳንዱን የስራ ሂደት ከሚፈለገው ማስረጃ ጋር በማያያዝ፣
+ዳሽቦርዶች፣ እና የመስፋፋት መንገዶች።
 
-## 2. Roles & Contact Map
+## 2. ሚናዎች እና የእውቂያ ካርታ
 
-| Role | Core responsibilities | Primary artefacts & telemetry | Escalation |
-|------|----------------------|-------------------------------|------------|
-| Governance Council | Draft and ratify charters, suffix policies, dispute verdicts, and steward rotations. | `docs/source/sns/governance_addenda/`, `artifacts/sns/governance/*`, council ballots stored via `sns governance charter submit`. | Council chair + governance docket tracker. |
-| Guardian Board | Issue soft/hard freezes, emergency canons, and 72 h reviews. | Guardian tickets emitted by `sns governance freeze`, override manifests logged under `artifacts/sns/guardian/*`. | Guardian on-call rotation (≤15 min ACK). |
-| Suffix Stewards | Run registrar queues, auctions, pricing tiers, and customer comms; acknowledge compliances. | Steward policies in `SuffixPolicyV1`, pricing reference sheets, steward acknowledgements stored beside regulatory memos. | Steward program lead + suffix-specific PagerDuty. |
-| Registrar & Billing Ops | Operate `/v1/sns/*` endpoints, reconcile payments, emit telemetry, and maintain CLI snapshots. | Registrar API ([`registrar-api.md`](./registrar-api.md)), `sns_registrar_status_total` metrics, payment proofs archived under `artifacts/sns/payments/*`. | Registrar duty manager and treasury liaison. |
-| Resolver & Gateway Operators | Keep SoraDNS, GAR, and gateway state aligned with registrar events; stream transparency metrics. | [`docs/source/soradns/deterministic_hosts.md`](../../../source/soradns/deterministic_hosts.md), [`docs/source/reports/soradns_transparency.md`](../../../source/reports/soradns_transparency.md), `dashboards/alerts/soradns_transparency_rules.yml`. | Resolver SRE on-call + gateway ops bridge. |
-| Treasury & Finance | Apply 70/30 revenue split, referral carve-outs, tax/treasury filings, and SLA attestations. | Revenue accrual manifests, Stripe/treasury exports, quarterly KPI appendices under `docs/source/sns/regulatory/`. | Finance controller + compliance officer. |
-| Compliance & Regulatory Liaison | Track global obligations (EU DSA, etc.), update KPI covenants, and file disclosures. | Regulatory memos in `docs/source/sns/regulatory/`, reference decks, `ops/drill-log.md` entries for tabletop rehearsals. | Compliance program lead. |
-| Support / SRE On-call | Handle incidents (collisions, billing drift, resolver outages), coordinate customer messaging, and own runbooks. | Incident templates, `ops/drill-log.md`, staged lab evidence, Slack/war-room transcripts archived under `incident/`. | SNS on-call rotation + SRE management. |
+| ሚና | ዋና ኃላፊነቶች | የመጀመሪያ ደረጃ ቅርሶች እና ቴሌሜትሪ | መጨመር |
+|-----------------|-------------|
+| አስተዳደር ምክር ቤት | ቻርተሮችን፣ ቅጥያ ፖሊሲዎችን፣ የክርክር ፍርዶችን እና የመጋቢ ሽክርክሮችን ማርቀቅ እና ማጽደቅ። | `docs/source/sns/governance_addenda/`፣ `artifacts/sns/governance/*`፣ የምክር ቤት ምርጫዎች በ`sns governance charter submit` ተከማችተዋል። | የምክር ቤት ሊቀመንበር + የአስተዳደር ዶኬት መከታተያ። |
+| ጠባቂ ቦርድ | ለስላሳ/ጠንካራ በረዶዎች፣ የአደጋ ጊዜ ቀኖናዎች እና የ72 ሰአታት ግምገማዎችን ይስጡ። | በI18NI0000050X የተለቀቀው የጠባቂ ትኬቶች፣በ`artifacts/sns/guardian/*` ስር የገቡ መግለጫዎችን መሻር። | ጠባቂ በጥሪ ላይ ማሽከርከር (≤15 ደቂቃ ACK)። |
+| ቅጥያ መጋቢዎች | የመዝጋቢ ወረፋዎችን፣ ጨረታዎችን፣ የዋጋ ደረጃዎችን እና የደንበኞችን ኮሞችን ያሂዱ፤ ተገዢነትን መቀበል። | በI18NI0000052X ውስጥ ያሉ የመጋቢ ፖሊሲዎች፣ የዋጋ አወጣጥ ማጣቀሻ ወረቀቶች፣ የመጋቢ እውቅናዎች ከቁጥጥር ማስታወሻዎች ጎን ተከማችተዋል። | መጋቢ ፕሮግራም መሪ + ቅጥያ-ተኮር PagerDuty። |
+| ሬጅስትራር እና የሂሳብ አከፋፈል | `/v1/sns/*` የመጨረሻ ነጥቦችን ያስኬዱ፣ ክፍያዎችን ያስታርቁ፣ ቴሌሜትሪ ያሰራጩ እና የCLI ቅጽበተ-ፎቶዎችን ያቆዩ። | የመመዝገቢያ API ([`registrar-api.md`](./registrar-api.md))፣ `sns_registrar_status_total` ሜትሪክስ፣ የክፍያ ማረጋገጫዎች በ`artifacts/sns/payments/*` ተቀምጠዋል። | የመመዝገቢያ ተረኛ አስተዳዳሪ እና የግምጃ ቤት ግንኙነት። |
+| መፍትሄ ሰጪ እና መተላለፊያ ኦፕሬተሮች | SoraDNS፣ GAR እና ጌትዌይ ሁኔታ ከመዝጋቢ ክስተቶች ጋር እንዲጣጣሙ ያድርጉ። የዥረት ግልጽነት መለኪያዎች. | [`docs/source/soradns/deterministic_hosts.md`](../../../source/soradns/deterministic_hosts.md)፣ [`docs/source/reports/soradns_transparency.md`](../../../source/reports/soradns_transparency.md)፣ `dashboards/alerts/soradns_transparency_rules.yml`። | መፍትሄ ሰጪ SRE በጥሪ + ጌትዌይ ኦፕስ ድልድይ። |
+| ግምጃ ቤት እና ፋይናንስ | 70/30 የገቢ ክፍፍል፣ ሪፈራል ቀረጻዎች፣ የታክስ/የግምጃ ቤት ሰነዶች እና የ SLA ማረጋገጫዎችን ያመልክቱ። | የገቢ ማጠራቀሚያ መግለጫዎች፣ ስትሪፕ/ግምጃ ቤት ወደ ውጭ መላክ፣ በየሩብ ዓመቱ የKPI አባሪዎች በ`docs/source/sns/regulatory/`። | የፋይናንስ ተቆጣጣሪ + ተገዢነት መኮንን. |
+| ተገዢነት እና የቁጥጥር ግንኙነት | አለምአቀፍ ግዴታዎችን (EU DSA, ወዘተ) ይከታተሉ, የ KPI ቃል ኪዳኖችን ያዘምኑ እና መግለጫዎችን ፋይል ያድርጉ. | በ I18NI0000061X ውስጥ ያሉ የቁጥጥር ማስታወሻዎች ፣ የማጣቀሻ ሰሌዳዎች ፣ `ops/drill-log.md` ግቤቶች ለጠረጴዛዎች ልምምዶች። | የታዛዥነት መርሃ ግብር መሪ. |
+| ድጋፍ / SRE ጥሪ ላይ | ክስተቶችን (ግጭቶችን፣ የክፍያ መጠየቂያዎችን፣ የመፍታት መቋረጥን)፣ የደንበኞችን መልእክት አስተባባሪ እና የራሳችሁን የሩጫ መጽሐፍት። | የክስተት አብነቶች፣ I18NI0000063X፣ ደረጃ የተደረገ የላብራቶሪ ማስረጃ፣ Slack/war-room ግልባጮች በ`incident/` ስር ተቀምጠዋል። | የኤስኤንኤስ ጥሪ ላይ ማሽከርከር + SRE አስተዳደር። |
 
-## 3. Canonical Artefacts & Data Sources
+## 3. ቀኖናዊ ቅርሶች እና የመረጃ ምንጮች
 
-| Artefact | Location | Purpose |
-|----------|----------|---------|
-| Charter + KPI addenda | `docs/source/sns/governance_addenda/` | Version-controlled signed charters, KPI covenants, and governance decisions referenced by CLI votes. |
-| Registry schema | [`registry-schema.md`](./registry-schema.md) | Canonical Norito structures (`NameRecordV1`, `SuffixPolicyV1`, `RevenueAccrualEventV1`). |
-| Registrar contract | [`registrar-api.md`](./registrar-api.md) | REST/gRPC payloads, `sns_registrar_status_total` metrics, and governance hook expectations. |
-| Address UX guide | [`address-display-guidelines.md`](./address-display-guidelines.md) | Canonical IH58 (preferred) + compressed (`sora`, second-best) renderings mirrored by wallets/explorers. |
-| SoraDNS / GAR docs | [`docs/source/soradns/deterministic_hosts.md`](../../../source/soradns/deterministic_hosts.md), [`docs/source/reports/soradns_transparency.md`](../../../source/reports/soradns_transparency.md) | Deterministic host derivation, transparency tailer workflow, and alert rules. |
-| Regulatory memos | `docs/source/sns/regulatory/` | Jurisdictional intake notes (e.g., EU DSA), steward acknowledgements, template annexes. |
-| Drill log | `ops/drill-log.md` | Record of chaos and IR rehearsals required before phase exits. |
-| Artefact storage | `artifacts/sns/` | Payment proofs, guardian tickets, resolver diffs, KPI exports, and signed CLI output produced by `sns governance ...`. |
+| Artefact | አካባቢ | ዓላማ |
+|-------------|-------|
+| ቻርተር + KPI addda | `docs/source/sns/governance_addenda/` | በስሪት ቁጥጥር የሚደረግባቸው የተፈረሙ ቻርተሮች፣ KPI ቃል ኪዳኖች እና የአስተዳደር ውሳኔዎች በCLI ድምጾች ተጠቅሰዋል። |
+| መዝገብ ቤት | [`registry-schema.md`](./registry-schema.md) | ቀኖናዊ Norito መዋቅሮች (I18NI0000067X, `SuffixPolicyV1`, I18NI0000069X). |
+| የመዝጋቢ ውል | [`registrar-api.md`](./registrar-api.md) | REST/gRPC የሚጫኑ ጭነቶች፣ `sns_registrar_status_total` መለኪያዎች እና የአስተዳደር መንጠቆ የሚጠበቁ ነገሮች። |
+| አድራሻ UX መመሪያ | [`address-display-guidelines.md`](./address-display-guidelines.md) | ቀኖናዊ IH58 (ተመራጭ) + የታመቀ (`sora`፣ ሁለተኛ-ምርጥ) አተረጓጎም በኪስ ቦርሳ/አሳሾች የተንጸባረቀ። |
+| SoraDNS / GAR ሰነዶች | [`docs/source/soradns/deterministic_hosts.md`](../../../source/soradns/deterministic_hosts.md), [`docs/source/reports/soradns_transparency.md`](../../../source/reports/soradns_transparency.md) | ቆራጥ አስተናጋጅ አመጣጥ፣ ግልጽነት ሰፋ ያለ የስራ ፍሰት እና የማንቂያ ደንቦች። |
+| የቁጥጥር ማስታወሻዎች | `docs/source/sns/regulatory/` | የዳኝነት ቅበላ ማስታወሻዎች (ለምሳሌ፣ EU DSA)፣ የመጋቢ እውቅናዎች፣ የአብነት ተጨማሪዎች። |
+| የመሰርሰሪያ መዝገብ | `ops/drill-log.md` | የምዕራፍ መውጣት ከመጀመሩ በፊት የሚያስፈልገው ትርምስ እና የIR ልምምዶች መዝገብ። |
+| Artefact ማከማቻ | `artifacts/sns/` | በ`sns governance ...` የተመረተ የክፍያ ማረጋገጫዎች፣ የአሳዳጊ ቲኬቶች፣ የፈታሽ ልዩነቶች፣ KPI ወደ ውጭ መላክ እና የተፈረመ የCLI ውፅዓት። |
 
-All governance actions must reference at least one artefact in the table above
-so auditors can reconstruct the decision trail within 24 hours.
+ሁሉም የአስተዳደር ተግባራት ከላይ ባለው ሠንጠረዥ ውስጥ ቢያንስ አንድ ቅርስ መጥቀስ አለባቸው
+ስለዚህ ኦዲተሮች የውሳኔውን መንገድ በ 24 ሰዓታት ውስጥ እንደገና መገንባት ይችላሉ።
 
-## 4. Lifecycle Playbooks
+## 4. የህይወት ኡደት መጫወቻ መጽሃፎች
 
 ### 4.1 Charter & Steward Motions
 
-| Step | Owner | CLI / Evidence | Notes |
-|------|-------|----------------|-------|
-| Draft addendum & KPI deltas | Council rapporteur + steward lead | Markdown template stored under `docs/source/sns/governance_addenda/YY/` | Include KPI covenant IDs, telemetry hooks, and activation conditions. |
-| Submit proposal | Council chair | `sns governance charter submit --input SN-CH-YYYY-NN.md` (produces `CharterMotionV1`) | CLI emits Norito manifest stored under `artifacts/sns/governance/<id>/charter_motion.json`. |
-| Vote & guardian acknowledgement | Council + guardians | `sns governance ballot cast --proposal <id>` and `sns governance guardian-ack --proposal <id>` | Attach hashed minutes and quorum proofs. |
-| Steward acceptance | Steward program | `sns governance steward-ack --proposal <id> --signature <file>` | Required before suffix policies change; record envelope under `artifacts/sns/governance/<id>/steward_ack.json`. |
-| Activation | Registrar ops | Update `SuffixPolicyV1`, refresh registrar caches, publish note in `status.md`. | Activation timestamp logged to `sns_governance_activation_total`. |
-| Audit log | Compliance | Append entry to `docs/source/sns/regulatory/<jurisdiction>/<cycle>.md` and drill log if tabletop performed. | Include references to telemetry dashboards and policy diffs. |
+| ደረጃ | ባለቤት | CLI / ማስረጃ | ማስታወሻ |
+|--------|--------|
+| ረቂቅ ተጨማሪ & KPI deltas | የምክር ቤት ዘጋቢ + መጋቢ መሪ | በ I18NI0000080X ስር የተከማቸ የማርክ ማድረጊያ አብነት | የKPI ቃል ኪዳን መታወቂያዎችን፣ የቴሌሜትሪ መንጠቆዎችን እና የማግበር ሁኔታዎችን ያካትቱ። |
+| ፕሮፖዛል አስገባ | የምክር ቤቱ ሊቀመንበር | `sns governance charter submit --input SN-CH-YYYY-NN.md` (`CharterMotionV1` ያዘጋጃል) | CLI በ `artifacts/sns/governance/<id>/charter_motion.json` ስር የተከማቸ Norito አንጸባራቂን ያወጣል። |
+| ድምጽ እና ሞግዚት እውቅና | ምክር ቤት + አሳዳጊዎች | `sns governance ballot cast --proposal <id>` እና `sns governance guardian-ack --proposal <id>` | የተጠለፉ ደቂቃዎችን እና የምልአተ ጉባኤ ማስረጃዎችን ያያይዙ። |
+| መጋቢ ተቀባይነት | መጋቢ ፕሮግራም | `sns governance steward-ack --proposal <id> --signature <file>` | የቅጥያ ፖሊሲዎች ከመቀየሩ በፊት የሚፈለግ; በ I18NI0000087X ስር የመዝገብ ፖስታ። |
+| ማግበር | ሬጅስትራር ops | `SuffixPolicyV1` ያዘምኑ፣ የመዝጋቢ መሸጎጫዎችን ያድሱ፣ ማስታወሻ በ`status.md` ውስጥ ያትሙ። | የማግበር ጊዜ ማህተም ወደ `sns_governance_activation_total` ገብቷል። |
+| የኦዲት መዝገብ | ተገዢነት | ወደ I18NI0000091X ግቤት ጨምር እና የጠረጴዛው ጫፍ ከተሰራ የመሰርሰሪያ መዝገብ። | የቴሌሜትሪ ዳሽቦርዶች እና የፖሊሲ ልዩነቶች ማጣቀሻዎችን ያካትቱ። |
 
-### 4.2 Registration, Auction & Pricing Approvals
+### 4.2 ምዝገባ፣ ጨረታ እና የዋጋ አወጣጥ ማረጋገጫዎች
 
-1. **Preflight:** Registrar queries `SuffixPolicyV1` to confirm pricing tier,
-   available terms, and grace/redemption windows. Keep pricing sheets synced to
-   the 3/4/5/6–9/10+ tier table (base tier + suffix coefficients) documented in
-   the roadmap.
-2. **Sealed-bid auctions:** For premium pools, run the 72 h commit / 24 h reveal
-   cycle via `sns governance auction commit` / `... reveal`. Publish the commit
-   list (hashes only) under `artifacts/sns/auctions/<name>/commit.json` so
-   auditors can verify randomness.
-3. **Payment verification:** Registrars validate `PaymentProofV1` against
-   treasury splits (70% treasury / 30% steward with ≤10% referral carve-out).
-   Store the Norito JSON under `artifacts/sns/payments/<tx>.json` and link it in
-   the registrar response (`RevenueAccrualEventV1`).
-4. **Governance hook:** Attach `GovernanceHookV1` for premium/guarded names
-   referencing council proposal ids and steward signatures. Missing hooks result
-   in `sns_err_governance_missing`.
-5. **Activation + resolver sync:** Once Torii emits the registry event, trigger
-   the resolver transparency tailer to confirm the new GAR/zone state propagated
-   (see §4.5).
-6. **Customer disclosure:** Update the customer-facing ledger (wallet/explorer)
-   via the shared fixtures in [`address-display-guidelines.md`](./address-display-guidelines.md), ensuring IH58 and
-   compressed renderings match copy/QR guidance.
+1. **ቅድመ በረራ፡** የዋጋ ደረጃን ለማረጋገጥ `SuffixPolicyV1` የመዝጋቢ ጥያቄዎች፣
+   የሚገኙ ውሎች፣ እና ጸጋ/ቤዛ መስኮቶች። የዋጋ ሉሆችን ከ ጋር ማመሳሰል ያቆዩ
+   የ3/4/5/6-9/10+ የደረጃ ሰንጠረዥ (መሰረታዊ እርከን + ቅጥያ ኮፊሸን) በ ውስጥ ተመዝግቧል።
+   የመንገድ ካርታው.
+2. ** የታሸጉ የጨረታ ጨረታዎች:** ለዋና ገንዳዎች የ 72h ቁርጠኝነትን / 24h ገላጭ
+   ዑደት በ `sns governance auction commit` / I18NI0000094X. ቁርጠኝነትን ያትሙ
+   ዝርዝር (ሀሽ ብቻ) በI18NI0000095X so
+   ኦዲተሮች የዘፈቀደነትን ማረጋገጥ ይችላሉ።
+3. ** የክፍያ ማረጋገጫ፡** መዝጋቢዎች I18NI0000096Xን ያረጋግጣሉ።
+   የግምጃ ቤት ክፍፍል (70% ግምጃ ቤት / 30% መጋቢ ከ ≤10% ሪፈራል ቀረፃ ጋር)።
+   Norito JSON በ I18NI0000097X ስር ያከማቹ እና ያገናኙት
+   የመዝጋቢው ምላሽ (`RevenueAccrualEventV1`)።
+4. ** የአስተዳደር መንጠቆ፡** ለዋና/የተጠበቁ ስሞች `GovernanceHookV1` ያያይዙ
+   የማጣቀሻ ምክር ቤት ፕሮፖዛል መታወቂያዎች እና መጋቢ ፊርማዎች። የጠፋ መንጠቆዎች ውጤት
+   በ `sns_err_governance_missing`.
+5. **Activation + solver sync:** አንዴ Torii የመዝገቡን ክስተት ካወጣ በኋላ ቀስቅሰው
+   አዲሱን የጋር/የዞን ግዛት መስፋፋቱን ለማረጋገጥ የፍቺው ግልፅነት ቸርቻሪ
+   (§4.5 ይመልከቱ)።
+6. **የደንበኛ ይፋ ማድረግ፡** ደንበኛን የሚመለከት ደብተር (ቦርሳ/አሳሽ) አዘምን
+   በ[`address-display-guidelines.md`](./address-display-guidelines.md)፣ IH58 በማረጋገጥ እና
+   የታመቀ አተረጓጎም ግልባጭ/QR መመሪያ።
 
-### 4.3 Renewals, Billing & Treasury Reconciliation
+### 4.3 እድሳት፣ የሂሳብ አከፋፈል እና የግምጃ ቤት ማስታረቅ- **የእድሳት የስራ ፍሰት፡** መዝጋቢዎች የ30 ቀን ጸጋን + የ60 ቀን መቤዠትን ያስገድዳሉ።
+  በ `SuffixPolicyV1` ውስጥ የተገለጹ መስኮቶች. ከ60 ቀናት በኋላ ደች ተከታታዮችን እንደገና ይከፈቱ
+  (7 ቀናት፣ 10× ክፍያ 15% በቀን እየበሰበሰ) በራስ-ሰር በ`sns አስተዳደር በኩል ይጀምራል
+  እንደገና ክፈት'
+- **የገቢ ክፍፍል፡** እያንዳንዱ እድሳት ወይም ማስተላለፍ ሀ
+  `RevenueAccrualEventV1`. የግምጃ ቤት ወደ ውጭ የሚላኩ (CSV/ፓርኬት) መታረቅ አለባቸው
+  እነዚህ ክስተቶች በየቀኑ; ማረጋገጫዎችን ከ `artifacts/sns/treasury/<date>.json` ጋር ያያይዙ።
+- **የማጣቀሻ ቅርጻ ቅርጾች፡** አማራጭ የማጣቀሻ መቶኛዎች በቅጥያ ክትትል ይደረግባቸዋል።
+  `referral_share` ወደ መጋቢ ፖሊሲ በማከል. መዝጋቢዎች የመጨረሻውን ይለቃሉ
+  የተከፈለ እና የማከማቻ ሪፈራል ከክፍያ ማረጋገጫው ጎን ይታያል።
+- **የሪፖርት አቀራረብ፡** ፋይናንስ ወርሃዊ የKPI አባሪዎችን (ምዝገባዎች፣
+  እድሳት, ARPU, ሙግት / ቦንድ አጠቃቀም) ስር
+  `docs/source/sns/regulatory/<suffix>/YYYY-MM.md`. ዳሽቦርዶች መጎተት አለባቸው
+  ተመሳሳዩ ወደ ውጭ የሚላኩ ሠንጠረዦች ስለዚህ I18NT0000002X ቁጥሮች ከደብዳቤ ማስረጃዎች ጋር ይዛመዳሉ።
+- ** ወርሃዊ የ KPI ግምገማ: ** የመጀመሪያው-ማክሰኞ የፍተሻ ነጥብ የፋይናንስ መሪን ያጣምራል,
+  ተረኛ, እና ፕሮግራም PM. [SNS KPI ዳሽቦርድ](./kpi-dashboard.md) ክፈት
+  (የ`sns-kpis`/`dashboards/grafana/sns_suffix_analytics.json` ፖርታል መክተት)
+  የመዝጋቢውን የውጤት መጠን + የገቢ ሠንጠረዦችን ወደ ውጭ መላክ ፣ በአባሪው ውስጥ ሎግ ዴልታስ ፣
+  እና ቅርሶቹን ከማስታወሻው ጋር አያይዘው. ግምገማው ከተገኘ አንድ ክስተት ቀስቅሰው
+  SLA መጣስ (መስኮቶች ያቀዘቅዙ> 72 ሰ ፣ የመዝጋቢ ስህተት ነጠብጣቦች ፣ የ ARPU ተንሸራታች)።
 
-- **Renewal workflow:** Registrars enforce the 30 day grace + 60 day redemption
-  windows specified in `SuffixPolicyV1`. After 60 days the Dutch reopen sequence
-  (7 days, 10× fee decaying 15%/day) triggers automatically via `sns governance
-  reopen`.
-- **Revenue split:** Each renewal or transfer creates a
-  `RevenueAccrualEventV1`. Treasury exports (CSV/Parquet) must reconcile to
-  these events daily; attach proofs to `artifacts/sns/treasury/<date>.json`.
-- **Referral carve-outs:** Optional referral percentages are tracked per suffix
-  by adding `referral_share` to the steward policy. Registrars emit the final
-  split and store referral manifests beside the payment proof.
-- **Reporting cadence:** Finance posts monthly KPI annexes (registrations,
-  renewals, ARPU, dispute/bond utilisation) under
-  `docs/source/sns/regulatory/<suffix>/YYYY-MM.md`. Dashboards should pull from
-  the same exported tables so Grafana numbers match ledger evidence.
-- **Monthly KPI review:** The first-Tuesday checkpoint pairs the finance lead,
-  steward on duty, and program PM. Open the [SNS KPI dashboard](./kpi-dashboard.md)
-  (portal embed of `sns-kpis` / `dashboards/grafana/sns_suffix_analytics.json`),
-  export the registrar throughput + revenue tables, log deltas in the annex,
-  and attach the artefacts to the memo. Trigger an incident if the review finds
-  SLA breaches (freeze windows >72 h, registrar error spikes, ARPU drift).
+### 4.4 ቅዝቃዞች፣ ክርክሮች እና ይግባኞች
 
-### 4.4 Freezes, Disputes & Appeals
+| ደረጃ | ባለቤት | ድርጊት እና ማስረጃ | SLA |
+|-------|---
+| ለስላሳ የማቀዝቀዣ ጥያቄ | መጋቢ / ድጋፍ | የፋይል ቲኬት `SNS-DF-<id>` ከክፍያ ማረጋገጫዎች፣ ከክርክር ማስያዣ ማጣቀሻ እና ከተነካካ መራጭ(ዎች) ጋር። | ≤4ሰአት ከምግብ። |
+| ጠባቂ ቲኬት | ጠባቂ ሰሌዳ | `sns governance freeze --selector <IH58> --reason <text> --until <ts>` የተፈረመ `GuardianFreezeTicketV1` ያመርታል። የሱቅ ቲኬት JSON በ `artifacts/sns/guardian/<id>.json` ስር። | ≤30ደቂቃ ACK፣ ≤2ሰአት አፈፃፀም። |
+| ምክር ቤት ማጽደቅ | አስተዳደር ምክር ቤት | እገዳዎችን ማጽደቅ ወይም አለመቀበል፣ የአሳዳጊ ትኬት የውሳኔ ሰነድ እና የሙግት ማስያዣ መፍጨት። | የሚቀጥለው የምክር ቤት ስብሰባ ወይም ያልተመሳሰለ ድምጽ። |
+| የግሌግሌ ፓነል | ተገዢነት + መጋቢ | በ`sns governance dispute ballot` በኩል የቀረቡ ባለ 7-ጁሮር ፓነልን (በየፍተሻ ካርታ) በተጠለፉ የድምጽ መስጫ ወረቀቶች ሰብስብ። ስም-አልባ የድምፅ ደረሰኞችን ከክስተት ጥቅል ጋር ያያይዙ። | ማስያዣ ካስገባ በኋላ ≤7 ቀናትን ይወስኑ። |
+| ይግባኝ | ጠባቂ + ምክር ቤት | ይግባኝ ማስያዣውን በእጥፍ እና የዳኝነት ሂደቱን ይድገሙት; መዝገብ Norito አንጸባራቂ `DisputeAppealV1` እና የዋና ትኬት ማጣቀሻ። | ≤10 ቀናት። |
+| መፍታት እና ማረም | ሬጅስትራር + መፍትሄ ሰጪ ops | `sns governance unfreeze --selector <IH58> --ticket <id>` ያስፈጽም፣ የመዝጋቢ ሁኔታን ያዘምኑ እና የGAR/መፍትሄ ልዩነቶችን ያሰራጩ። | ከፍርዱ በኋላ ወዲያውኑ። |
 
-| Phase | Owner | Action & Evidence | SLA |
-|-------|-------|-------------------|-----|
-| Soft freeze request | Steward / support | File ticket `SNS-DF-<id>` with payment proofs, dispute bond reference, and affected selector(s). | ≤4 h from intake. |
-| Guardian ticket | Guardian board | `sns governance freeze --selector <IH58> --reason <text> --until <ts>` produces signed `GuardianFreezeTicketV1`. Store ticket JSON under `artifacts/sns/guardian/<id>.json`. | ≤30 min ACK, ≤2 h execution. |
-| Council ratification | Governance council | Approve or reject freezes, document decision link to guardian ticket and dispute bond digest. | Next council session or asynchronous vote. |
-| Arbitration panel | Compliance + steward | Convene 7-juror panel (per roadmap) with hashed ballots submitted via `sns governance dispute ballot`. Attach anonymised vote receipts to incident packet. | Verdict ≤7 days after bond deposit. |
-| Appeal | Guardian + council | Appeals double the bond and repeat the juror process; record Norito manifest `DisputeAppealV1` and reference primary ticket. | ≤10 days. |
-| Unfreeze & remediation | Registrar + resolver ops | Execute `sns governance unfreeze --selector <IH58> --ticket <id>`, update registrar status, and propagate GAR/resolver diffs. | Immediately after verdict. |
-
-Emergency canons (guardian-triggered freezes ≤72 h) follow the same flow but
-require retroactive council review and a transparency note under
+የአደጋ ጊዜ ቀኖናዎች (በአሳዳጊ የሚቀሰቀሱ በረዶዎች ≤72 ሰ) ተመሳሳይ ፍሰት ይከተላሉ ነገር ግን
+ወደ ኋላ የተመለሰ የምክር ቤት ግምገማ እና ግልጽነት ማስታወሻ ይጠይቃል
 `docs/source/sns/regulatory/`.
 
-### 4.5 Resolver & Gateway Propagation
+### 4.5 ፈታሽ እና ጌትዌይ ስርጭት
 
-1. **Event hook:** Every registry event emits to the resolver event stream
-   (`tools/soradns-resolver` SSE). Resolver ops subscribe and record diffs via
-   the transparency tailer (`scripts/telemetry/run_soradns_transparency_tail.sh`).
-2. **GAR template update:** Gateways must update GAR templates referenced by
-   `canonical_gateway_suffix()` and re-sign the `host_pattern` list. Store diffs
-   in `artifacts/sns/gar/<date>.patch`.
-3. **Zonefile publication:** Use the zonefile skeleton described in
-   `roadmap.md` (name, ttl, cid, proof) and push it to Torii/SoraFS. Archive the
-   Norito JSON under `artifacts/sns/zonefiles/<name>/<version>.json`.
-4. **Transparency check:** Run `promtool test rules dashboards/alerts/tests/soradns_transparency_rules.test.yml`
-   to ensure alerts remain green. Attach the Prometheus text output to the
-   weekly transparency report.
-5. **Gateway audit:** Record `Sora-*` header samples (cache policy, CSP, GAR
-   digest) and attach them to the governance log so operators can prove that the
-   gateway served the new name with the intended guardrails.
+1. **የክስተት መንጠቆ፡** እያንዳንዱ የመመዝገቢያ ክስተት ወደ ፈታኙ ክስተት ዥረት ይለቃል
+   (`tools/soradns-resolver` SSE)። ፈታኝ ኦፕስ ይመዝገቡ እና ልዩነቶችን በ በኩል ይመዝግቡ
+   የግልጽነት ቸርቻሪው (I18NI000001118X)።
+2. ** GAR አብነት ዝማኔ:** ጌትዌይስ በ የተጠቀሰውን GAR አብነቶች ማዘመን አለባቸው
+   `canonical_gateway_suffix()` እና የ `host_pattern` ዝርዝርን እንደገና ይፈርሙ። የማከማቻ ልዩነት
+   በ `artifacts/sns/gar/<date>.patch`.
+3. ** የዞን ፋይል ህትመት፡** በ ውስጥ የተገለፀውን የዞን ፋይል አጽም ይጠቀሙ
+   `roadmap.md` (ስም, ttl, cid, proof) እና ወደ Torii/SoraFS ይግፉት። በማህደር ያስቀምጡ
+   Norito JSON በ `artifacts/sns/zonefiles/<name>/<version>.json` ስር።
+4. ** ግልጽነት ማረጋገጥ: ** `promtool test rules dashboards/alerts/tests/soradns_transparency_rules.test.yml` ን ያሂዱ
+   ማንቂያዎች አረንጓዴ ሆነው መቆየታቸውን ለማረጋገጥ። የ I18NT0000000X የጽሑፍ ውጤቱን ከ
+   ሳምንታዊ ግልጽነት ሪፖርት.
+5. **የጌትዌይ ኦዲት፡** የ `Sora-*` ራስጌ ናሙናዎችን ይመዝግቡ (የመሸጎጫ ፖሊሲ፣ CSP፣ GAR)
+   ዲጀስት) እና ኦፕሬተሮች ያንን ማረጋገጥ እንዲችሉ ከአስተዳደር መዝገብ ጋር አያይዟቸው
+   ጌትዌይ አዲሱን ስም በታቀደው የጥበቃ መስመሮች አገልግሏል።
 
-## 5. Telemetry & Reporting
+## 5. ቴሌሜትሪ እና ሪፖርት ማድረግ
 
-| Signal | Source | Description / Action |
-|--------|--------|----------------------|
-| `sns_registrar_status_total{result,suffix}` | Torii registrar handlers | Success/error counter for registrations, renewals, freezes, transfers; alerts when `result="error"` spikes per suffix. |
-| `torii_request_duration_seconds{route="/v1/sns/*"}` | Torii metrics | Latency SLOs for API handlers; feed dashboards built from `torii_norito_rpc_observability.json`. |
-| `soradns_bundle_proof_age_seconds` & `soradns_bundle_cid_drift_total` | Resolver transparency tailer | Detect stale proofs or GAR drift; guardrails defined in `dashboards/alerts/soradns_transparency_rules.yml`. |
-| `sns_governance_activation_total` | Governance CLI | Counter incremented whenever a charter/addendum activates; used to reconcile council decisions vs. published addenda. |
-| `guardian_freeze_active` gauge | Guardian CLI | Tracks soft/hard freeze windows per selector; page SRE if value stays `1` beyond declared SLA. |
-| KPI annex dashboards | Finance / Docs | Monthly rollups published alongside regulatory memos; the portal embeds them via [SNS KPI dashboard](./kpi-dashboard.md) so stewards and regulators can access the same Grafana view. |
+| ሲግናል | ምንጭ | መግለጫ / ድርጊት |
+|--------|--------|------------|
+| `sns_registrar_status_total{result,suffix}` | Torii ሬጅስትራር ተቆጣጣሪዎች | ለምዝገባዎች ፣ እድሳት ፣ ማገድ ፣ ማስተላለፎች የስኬት / የስህተት ቆጣሪ; ማንቂያዎች `result="error"` ስፒሎች በቅጥያ |
+| `torii_request_duration_seconds{route="/v1/sns/*"}` | Torii መለኪያዎች | የቆይታ ጊዜ SLOs ለኤፒአይ ተቆጣጣሪዎች; ከ`torii_norito_rpc_observability.json` የተገነቡ የምግብ ዳሽቦርዶች። |
+| `soradns_bundle_proof_age_seconds` & `soradns_bundle_cid_drift_total` | የመፍታት ግልጽነት ቸርቻሪ | የቆዩ ማረጋገጫዎችን ወይም የ GAR ተንሳፋፊን ያግኙ; በ `dashboards/alerts/soradns_transparency_rules.yml` ውስጥ የተገለጹ የጥበቃ መንገዶች። |
+| `sns_governance_activation_total` | አስተዳደር CLI | ቻርተር/መደመር በነቃ ቁጥር ቆጣሪ ይጨምራል። የምክር ቤቱን ውሳኔዎች ከታተመ addda ጋር ለማስታረቅ ያገለግል ነበር። |
+| `guardian_freeze_active` መለኪያ | ጠባቂ CLI | በአንድ መራጭ ለስላሳ/ጠንካራ ቀዝቃዛ መስኮቶችን ይከታተላል; ገጽ SRE እሴቱ ከቆየ `1` SLA ከተገለጸው በላይ። |
+| KPI አባሪ ዳሽቦርዶች | ፋይናንስ / ሰነዶች | ከቁጥጥር ማስታወሻዎች ጋር የታተሙ ወርሃዊ ጥቅል; ፖርታሉ በ[SNS KPI ዳሽቦርድ](./kpi-dashboard.md) በኩል ያስገባቸዋል ስለዚህ መጋቢዎች እና ተቆጣጣሪዎች ተመሳሳይ የI18NT0000003X እይታ መድረስ ይችላሉ። |
 
-## 6. Evidence & Audit Requirements
+## 6. ማስረጃዎች እና የኦዲት መስፈርቶች
 
-| Action | Evidence to archive | Storage |
-|--------|--------------------|---------|
-| Charter / policy change | Signed Norito manifest, CLI transcript, KPI diff, steward acknowledgement. | `artifacts/sns/governance/<proposal-id>/` + `docs/source/sns/governance_addenda/`. |
-| Registration / renewal | `RegisterNameRequestV1` payload, `RevenueAccrualEventV1`, payment proof. | `artifacts/sns/payments/<tx>.json`, registrar API logs. |
-| Auction | Commit/reveal manifests, randomness seed, winner calculation spreadsheet. | `artifacts/sns/auctions/<name>/`. |
-| Freeze / unfreeze | Guardian ticket, council vote hash, incident log URL, customer comms template. | `artifacts/sns/guardian/<ticket>/`, `incident/<date>-sns-*.md`. |
-| Resolver propagation | Zonefile/GAR diff, tailer JSONL excerpt, Prometheus snapshot. | `artifacts/sns/resolver/<date>/` + transparency reports. |
-| Regulatory intake | Intake memo, deadline tracker, steward acknowledgement, KPI change summary. | `docs/source/sns/regulatory/<jurisdiction>/<cycle>.md`. |
+| ድርጊት | ማስረጃ ለማህደር | ማከማቻ |
+|--------|---------|-----|
+| ቻርተር / የፖሊሲ ለውጥ | የተፈረመ Norito አንጸባራቂ፣ CLI ግልባጭ፣ KPI ልዩነት፣ የመጋቢ እውቅና። | `artifacts/sns/governance/<proposal-id>/` + `docs/source/sns/governance_addenda/`. |
+| ምዝገባ / እድሳት | `RegisterNameRequestV1` ክፍያ ፣ I18NI0000139X ፣ የክፍያ ማረጋገጫ። | `artifacts/sns/payments/<tx>.json`፣ የመዝጋቢ ኤፒአይ ምዝግብ ማስታወሻዎች። |
+| ጨረታ | ቁርጠኝነት/መግለጥ መገለጫዎች፣ የዘፈቀደ ዘር፣ የአሸናፊዎች ስሌት የተመን ሉህ። | `artifacts/sns/auctions/<name>/`. |
+| እሰር / ፈታ | የጠባቂ ትኬት፣ የምክር ቤት ድምጽ ሃሽ፣ የክስተቶች መዝገብ URL፣ የደንበኛ comms አብነት። | `artifacts/sns/guardian/<ticket>/`፣ `incident/<date>-sns-*.md`። |
+| የመፍትሄ አፈላላጊ ስርጭት | Zonefile/GAR diff፣tailer JSONL ተቀንጭቦ፣I18NT0000001X ቅጽበታዊ ፎቶ። | `artifacts/sns/resolver/<date>/` + ግልጽነት ሪፖርቶች. |
+| የቁጥጥር ቅበላ | የመግቢያ ማስታወሻ፣ የግዜ ገደብ መከታተያ፣ የመጋቢ እውቅና፣ የKPI ለውጥ ማጠቃለያ። | `docs/source/sns/regulatory/<jurisdiction>/<cycle>.md`. |
 
-## 7. Phase Gate Checklist
+## 7. የደረጃ በር ማረጋገጫ ዝርዝር
 
-| Phase | Exit criteria | Evidence bundle |
-|-------|---------------|-----------------|
-| N0 — Closed beta | SN-1/SN-2 registry schema, manual registrar CLI, guardianship drill complete. | Charter motion + steward ACK, registrar dry-run logs, resolver transparency report, drill entry in `ops/drill-log.md`. |
-| N1 — Public launch | Auctions + fixed-price tiers live for `.sora`/`.nexus`, self-service registrar, resolver auto-sync, billing dashboards. | Pricing sheet diff, registrar CI results, payment/KPI annex, transparency tailer output, incident rehearsal notes. |
-| N2 — Expansion | `.dao`, reseller APIs, dispute portal, steward scorecards, analytics dashboards. | Portal screenshots, dispute SLA metrics, steward scorecard exports, updated governance charter referencing reseller policies. |
+| ደረጃ | መውጫ መስፈርት | ማስረጃ ጥቅል |
+|------------------|------------------|
+| N0 - ተዘግቷል ቤታ | SN-1/SN-2 የመመዝገቢያ እቅድ፣ በእጅ ሬጅስትራር CLI፣ የአሳዳጊነት ቁፋሮ ተጠናቋል። | የቻርተር እንቅስቃሴ + ስቲዋርድ ACK፣ የሬጅስትራር ደረቅ አሂድ ምዝግብ ማስታወሻዎች፣ የመፍትሔው ግልጽነት ሪፖርት፣ መሰርሰሪያ በ`ops/drill-log.md`። |
+| N1 - የህዝብ ማስጀመር | ጨረታዎች + ቋሚ የዋጋ እርከኖች ለ`.sora`/`.nexus`፣የራስ አገልግሎት ሬጅስትራር፣ፈታሽ ራስ-ማመሳሰል፣የክፍያ ዳሽቦርዶች ይኖራሉ። | የዋጋ አወጣጥ ሉህ ልዩነት፣ የመዝጋቢ CI ውጤቶች፣ የክፍያ/KPI አባሪ፣ ግልጽነት ቸርቻሪ ውፅዓት፣ የአደጋ ልምምድ ማስታወሻዎች። |
+| N2 - መስፋፋት | `.dao`፣ ሻጭ ኤፒአይዎች፣ የሙግት ፖርታል፣ የመጋቢ የውጤት ካርዶች፣ የትንታኔ ዳሽቦርዶች። | የፖርታል ቅጽበታዊ ገጽ እይታዎች፣ የክርክር SLA መለኪያዎች፣ መጋቢ የውጤት ካርድ ወደ ውጭ መላክ፣ የዘመነ የአስተዳደር ቻርተር የማጣቀሻ ሻጭ ፖሊሲዎች። |
 
-Phase exits require recorded tabletop drills (registration happy path, freeze,
-resolver outage) with artefacts attached to `ops/drill-log.md`.
+የደረጃ መውጫዎች የተቀዳ የጠረጴዛ ልምምዶች ያስፈልጋሉ (ምዝገባ ደስተኛ መንገድ ፣ በረዶ ፣
+የመፍታት መቋረጥ) ከ `ops/drill-log.md` ጋር ከተያያዙ ቅርሶች ጋር።
 
-## 8. Incident Response & Escalation
+## 8. የአደጋ ምላሽ እና መጨመር
 
-| Trigger | Severity | Immediate owner | Mandatory actions |
-|---------|----------|-----------------|-------------------|
-| Resolver/GAR drift or stale proofs | Sev 1 | Resolver SRE + guardian board | Page resolver on-call, capture tailer output, decide whether to freeze affected names, post status update every 30 min. |
-| Registrar outage, billing failure, or widespread API errors | Sev 1 | Registrar duty manager | Halt new auctions, switch to manual CLI, notify stewards/treasury, attach Torii logs to incident doc. |
-| Single-name dispute, payment mismatch, or customer escalation | Sev 2 | Steward + support lead | Collect payment proofs, determine if soft freeze needed, respond to requester within SLA, log outcome in dispute tracker. |
-| Compliance audit finding | Sev 2 | Compliance liaison | Draft remediation plan, file memo under `docs/source/sns/regulatory/`, schedule follow-up council session. |
-| Drill or rehearsal | Sev 3 | Program PM | Execute scripted scenario from `ops/drill-log.md`, archive artefacts, label gaps as roadmap tasks. |
+| ቀስቅሴ | ከባድነት | የወዲያው ባለቤት | አስገዳጅ ድርጊቶች |
+|--------|-------|
+| መፍትሄ ሰጪ/GAR ተንሳፋፊ ወይም ያረጁ ማረጋገጫዎች | ሴቭ1 | መፍትሄ ሰጪ SRE + አሳዳጊ ቦርድ | በጥሪ ላይ ገጽ ፈላጊ፣ የሸቀጣሸቀጥ ምርትን ይቅረጹ፣ የተጎዱ ስሞችን ለማሰር ይወስኑ፣ በየ 30 ደቂቃው የሁኔታ ዝመናን ይለጥፉ። |
+| የመዝጋቢ መቋረጥ፣ የሂሳብ አከፋፈል አለመሳካት፣ ወይም ሰፊ የኤፒአይ ስህተቶች | ሴቭ1 | ሬጅስትራር ተረኛ | አዳዲስ ጨረታዎችን ያቁሙ፣ ወደ ማኑዋል CLI ይቀይሩ፣ መጋቢዎችን/ግምጃ ቤቶችን ያሳውቁ፣ የTorii ምዝግብ ማስታወሻዎችን ከአደጋ ሰነድ ጋር አያይዙ። |
+| የነጠላ ስም ሙግት፣ የክፍያ አለመመጣጠን ወይም የደንበኛ መጨመር | Sev2 | መጋቢ + የድጋፍ መሪ | የክፍያ ማረጋገጫዎችን ይሰብስቡ፣ ለስላሳ ማቀዝቀዝ እንደሚያስፈልግ ይወስኑ፣ በ SLA ውስጥ ለጠያቂው ምላሽ ይስጡ፣ በክርክር መከታተያ ውስጥ ውጤቱን ይመዝግቡ። |
+| ተገዢነት ኦዲት ማግኘት | Sev2 | ተገዢነት ግንኙነት | ረቂቅ የማሻሻያ ዕቅድ፣ የፋይል ማስታወሻ በ`docs/source/sns/regulatory/`፣ የክትትል ምክር ቤት ስብሰባ መርሐግብር። |
+| ቁፋሮ ወይም ልምምድ | Sev3 | ፕሮግራም PM | ከ`ops/drill-log.md` ፣የማህደር ቅርሶች ፣ክፍተቶችን እንደ የመንገድ ካርታ ስራዎች ሰይም ስክሪፕት የተደረገ ሁኔታን ያስፈጽም። |
 
-All incidents must create `incident/YYYY-MM-DD-sns-<slug>.md` with ownership
-tables, command logs, and references to the evidence produced throughout this
-playbook.
+ሁሉም ክስተቶች I18NI0000153X በባለቤትነት መፍጠር አለባቸው
+ሠንጠረዦች፣ የትዕዛዝ ምዝግብ ማስታወሻዎች እና በዚህ ጊዜ ውስጥ ለተገኙት ማስረጃዎች ማጣቀሻዎች
+የመጫወቻ መጽሐፍ.
 
-## 9. References
+## 9. ማጣቀሻዎች
 
 - [`registry-schema.md`](./registry-schema.md)
 - [`registrar-api.md`](./registrar-api.md)
@@ -229,8 +229,8 @@ playbook.
 - [`docs/source/soradns/deterministic_hosts.md`](../../../source/soradns/deterministic_hosts.md)
 - [`docs/source/reports/soradns_transparency.md`](../../../source/reports/soradns_transparency.md)
 - `ops/drill-log.md`
-- `roadmap.md` (SNS, DG, ADDR sections)
+- `roadmap.md` (SNS፣ DG፣ ADDR ክፍሎች)
 
-Keep this playbook updated whenever charter wording, CLI surfaces, or telemetry
-contracts change; roadmap entries referencing `docs/source/sns/governance_playbook.md`
-should always match the latest revision.
+ይህንን የመጫወቻ መጽሐፍ በማንኛውም ጊዜ ቻርተር የቃላት አወጣጥ፣ CLI ወለል ወይም ቴሌሜትሪ እንዲዘመን ያድርጉት
+ኮንትራቶች ይለወጣሉ; `docs/source/sns/governance_playbook.md` የሚያመለክቱ የመንገድ ካርታ ግቤቶች
+ሁልጊዜ የቅርብ ክለሳ ጋር መመሳሰል አለበት.

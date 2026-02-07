@@ -4,54 +4,54 @@ direction: ltr
 source: docs/portal/docs/sorafs/reports/capacity-marketplace-validation.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: Валидация маркетплейса емкости SoraFS
-tags: [SF-2c, acceptance, checklist]
-summary: Чеклист приемки, покрывающий онбординг providers, потоки споров и сверку казначейства, которые закрывают готовность маркетплейса емкости SoraFS к GA.
+título: Валидация маркетплейса емкости SoraFS
+tags: [SF-2c, aceitação, lista de verificação]
+resumo: Чеклист приемки, покрывающий онбординг fornecedores, потоки споров и сверку казначейства, которые закрывают готовность маркетплейса емкости SoraFS к GA.
 ---
 
-# Чеклист валидации маркетплейса емкости SoraFS
+# Verifique a validação do mercado de compras SoraFS
 
-**Окно проверки:** 2026-03-18 -> 2026-03-24  
-**Владельцы программы:** Storage Team (`@storage-wg`), Governance Council (`@council`), Treasury Guild (`@treasury`)  
-**Область:** Пайплайны онбординга providers, потоки рассмотрения споров и процессы сверки казначейства, необходимые для GA SF-2c.
+**Provérbios:** 18/03/2026 -> 24/03/2026  
+**Programas adicionais:** Equipe de armazenamento (`@storage-wg`), Conselho de governança (`@council`), Guilda do Tesouro (`@treasury`)  
+**Exibição:** Provedores de serviços on-line de pacotes, parceiros de negócios e serviços de promoção de negócios, não para GA SF-2c.
 
-Чеклист ниже должен быть проверен до включения маркетплейса для внешних операторов. Каждая строка ссылается на детерминированные доказательства (tests, fixtures или документацию), которые аудиторы могут воспроизвести.
+Verifique se a nova opção foi testada para o mercado de trabalho para seus operadores. Каждая строка ссылается на детерминированные доказательства (testes, acessórios ou documentação), которые аудиторы могут воспроизвести.
 
-## Чеклист приемки
+## Verifique as informações
 
-### Онбординг providers
+### Provedores de negociação
 
-| Проверка | Валидация | Доказательство |
+| Prova | Validação | Documentação |
 |-------|------------|----------|
-| Registry принимает канонические декларации емкости | Интеграционный тест выполняет `/v1/sorafs/capacity/declare` через app API, проверяя обработку подписей, захват metadata и передачу в registry ноды. | `crates/iroha_torii/src/routing.rs:7654` |
-| Smart contract отклоняет несовпадающие payloads | Unit-тест гарантирует, что IDs providers и поля committed GiB совпадают с подписанной декларацией перед сохранением. | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3445` |
-| CLI выпускает канонические artefacts онбординга | CLI harness пишет детерминированные Norito/JSON/Base64 выходы и валидирует round-trips, чтобы операторы могли готовить декларации offline. | `crates/sorafs_car/tests/capacity_cli.rs:17` |
-| Руководство оператора описывает workflow приема и guardrails управления | Документация перечисляет схему декларации, defaults policy и шаги ревью для council. | `../storage-capacity-marketplace.md` |
+| Registro принимает канонические декларации емкости | O teste de integração usa `/v1/sorafs/capacity/declare` para configurar a API do aplicativo, testar a configuração do arquivo, salvar metadados e transferir para o registro nós. | `crates/iroha_torii/src/routing.rs:7654` |
+| Contrato inteligente отклоняет несовпадающие cargas úteis | A unidade de teste é garantida, quais provedores de IDs e cada GiB comprometido são fornecidos com uma declaração de declaração de segurança. | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3445` |
+| CLI выпускает канонические artefatos onбординга | CLI chicote пишет детерминированные Norito/JSON/Base64 usa e valida viagens de ida e volta, operadores de operação podem ser usados декларации offline. | `crates/sorafs_car/tests/capacity_cli.rs:17` |
+| Operador de operação de gerenciamento de fluxo de trabalho, estruturas e guarda-corpos | Документация перечисляет схему декларации, política de padrões e шаги ревью para o conselho. | `../storage-capacity-marketplace.md` |
 
 ### Разрешение споров
 
-| Проверка | Валидация | Доказательство |
+| Prova | Validação | Documentar |
 |-------|------------|----------|
-| Записи споров сохраняются с каноническим digest payload | Unit-тест регистрирует спор, декодирует сохраненный payload и подтверждает статус pending для гарантии детерминизма ledger. | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:1835` |
-| Генератор споров CLI соответствует канонической схеме | CLI тест покрывает Base64/Norito выходы и JSON-сводки для `CapacityDisputeV1`, гарантируя детерминированный hash evidence bundles. | `crates/sorafs_car/tests/capacity_cli.rs:455` |
-| Replay-тест доказывает детерминизм споров/пенализаций | Telemetry proof-failure, воспроизведенная дважды, дает идентичные snapshots ledger, credit и dispute, чтобы slashes были детерминированны между peers. | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3430` |
-| Runbook документирует поток эскалации и ревокации | Операционное руководство фиксирует workflow council, требования к доказательствам и процедуры rollback. | `../dispute-revocation-runbook.md` |
+| Записи споров сохраняются каноническим digest payload | O recurso de registro de unidade de unidade, decompõe a carga útil e fornece o status pendente para a determinação da garantia do razão. | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:1835` |
+| Gerador de conteúdo CLI suporta esquema canônico | O teste CLI usa Base64/Norito e arquivos JSON para `CapacityDisputeV1`, garantindo a determinação de pacotes de evidências de hash. | `crates/sorafs_car/tests/capacity_cli.rs:455` |
+| Teste de repetição para determinar a determinação do jogo/repetição | Prova de falha de telemetria, воспроизведенная дважды, дает идентичные instantâneos razão, crédito e disputa, чтобы barras были детерминированны между pares. | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3430` |
+| Documentação do Runbook com escalas e revogações | Операционное руководство фиксирует conselho de fluxo de trabalho, требования к доказательствам e процедуры rollback. | `../dispute-revocation-runbook.md` |
 
-### Сверка казначейства
-
-| Проверка | Валидация | Доказательство |
+### Сверка казначейства| Prova | Validação | Documentação |
 |-------|------------|----------|
-| Accrual ledger совпадает с 30-дневной проекцией soak | Soak тест охватывает пять providers за 30 окон settlement, сравнивая записи ledger с ожидаемой референсной выплатой. | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3000` |
-| Сверка экспорта ledger записывается каждую ночь | `capacity_reconcile.py` сравнивает ожидания fee ledger с выполненными XOR export, публикует метрики Prometheus и gate-ит одобрение казначейства через Alertmanager. | `scripts/telemetry/capacity_reconcile.py:1`,`docs/source/sorafs/runbooks/capacity_reconciliation.md:1`,`dashboards/alerts/sorafs_capacity_rules.yml:100` |
-| Billing dashboards показывают пенализации и telemetry accrual | Импорт Grafana строит accrual GiB-hour, счетчики strikes и bonded collateral для on-call видимости. | `dashboards/grafana/sorafs_capacity_penalties.json:1` |
-| Опубликованный отчет архивирует методологию soak и команды replay | Отчет описывает объем soak, команды выполнения и observability hooks для аудиторов. | `./sf2c-capacity-soak.md` |
+| Livro razão de acumulação совпадает с 30-дневной проекцией imersão | Mergulhe o teste de provedores de serviços para liquidação de 30 minutos, registrando o registro com referência de referência. | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3000` |
+| Livro-razão de transporte de mercadorias | `capacity_reconcile.py` armazena o razão de taxas de exportação com exportação XOR, métricas públicas Prometheus e gate-it одобрение казначейства через Alertmanager. | `scripts/telemetry/capacity_reconcile.py:1`,`docs/source/sorafs/runbooks/capacity_reconciliation.md:1`,`dashboards/alerts/sorafs_capacity_rules.yml:100` |
+| Painéis de faturamento показывают пенализации e acumulação de telemetria | Importe Grafana acumulação de GiB-hora, greves pecuniárias e garantias vinculadas para vídeos de plantão. | `dashboards/grafana/sorafs_capacity_penalties.json:1` |
+| Опубликованный отчет архивирует методологию imersão e comandos replay | Selecione a opção de imersão, comandos de segurança e ganchos de observabilidade para auditores. | `./sf2c-capacity-soak.md` |
 
-## Примечания по выполнению
+## Recomendações para você
 
-Перезапустите набор проверок перед sign-off:
+Faça o teste antes da assinatura:
 
 ```bash
 cargo test -p iroha_torii --features app_api -- capacity_declaration_handler_accepts_request
@@ -63,20 +63,20 @@ cargo test -p sorafs_car --features cli --test capacity_cli
 python3 scripts/telemetry/capacity_reconcile.py --snapshot <state.json> --ledger <ledger.ndjson> --warn-only
 ```
 
-Операторы должны заново сгенерировать payloads запросов онбординга/споров через `sorafs_manifest_stub capacity {declaration,dispute}` и архивировать полученные JSON/Norito bytes вместе с governance ticket.
+Operadores de dados podem gerar cargas úteis para gerar on-line/gerar cargas úteis `sorafs_manifest_stub capacity {declaration,dispute}` e arranjar Os bytes JSON/Norito são usados no ticket de governança.
 
-## Артефакты sign-off
+## Assinatura de artefactos
 
-| Артефакт | Path | blake2b-256 |
-|----------|------|-------------|
-| Пакет одобрения онбординга providers | `docs/examples/sorafs_capacity_marketplace_validation/2026-03-24_onboarding_signoff.md` | `8f41a745d8d94710fe81c07839651520429d4abea5729bc00f8f45bbb11daa4c` |
-| Пакет одобрения разрешения споров | `docs/examples/sorafs_capacity_marketplace_validation/2026-03-24_dispute_signoff.md` | `c3ac3999ef52857170fedb83cddbff7733ef5699f8b38aea2e65ae507a6229f7` |
-| Пакет одобрения сверки казначейства | `docs/examples/sorafs_capacity_marketplace_validation/2026-03-24_treasury_signoff.md` | `0511aeed1f5607c329428cd49c94d1af51292c85134c10c3330c172b0140e8c6` |
+| Artefato | Caminho | blake2b-256 |
+|----------|------|------------|
+| fornecedores de serviços de distribuição de pacotes | `docs/examples/sorafs_capacity_marketplace_validation/2026-03-24_onboarding_signoff.md` | `8f41a745d8d94710fe81c07839651520429d4abea5729bc00f8f45bbb11daa4c` |
+| Pacotes de distribuição de esporos | `docs/examples/sorafs_capacity_marketplace_validation/2026-03-24_dispute_signoff.md` | `c3ac3999ef52857170fedb83cddbff7733ef5699f8b38aea2e65ae507a6229f7` |
+| Pacotes de entrega de pacotes | `docs/examples/sorafs_capacity_marketplace_validation/2026-03-24_treasury_signoff.md` | `0511aeed1f5607c329428cd49c94d1af51292c85134c10c3330c172b0140e8c6` |
 
-Храните подписанные копии этих артефактов вместе с release bundle и укажите ссылки в реестре изменений управления.
+Faça uma cópia do arquivo do artefacto no pacote de lançamento e use os arquivos na configuração da configuração.
 
 ## Подписи
 
-- Storage Team Lead — @storage-tl (2026-03-24)  
-- Governance Council Secretary — @council-sec (2026-03-24)  
-- Treasury Operations Lead — @treasury-ops (2026-03-24)
+- Líder da equipe de armazenamento - @storage-tl (24/03/2026)  
+- Secretário do Conselho de Governança — @council-sec (2026-03-24)  
+- Líder de Operações de Tesouraria — @treasury-ops (24/03/2026)

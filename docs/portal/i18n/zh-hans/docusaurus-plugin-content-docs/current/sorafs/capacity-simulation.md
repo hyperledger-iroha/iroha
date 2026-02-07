@@ -8,41 +8,43 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraFS Capacity Simulation Runbook
 sidebar_label: Capacity Simulation Runbook
 description: Exercising the SF-2c capacity marketplace simulation toolkit with reproducible fixtures, Prometheus exports, and Grafana dashboards.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
+:::注意规范来源
 :::
 
-This runbook explains how to run the SF-2c capacity marketplace simulation kit and visualise the resulting metrics. It validates quota negotiation, failover handling, and slashing remediation end-to-end using the deterministic fixtures in `docs/examples/sorafs_capacity_simulation/`. Capacity payloads still use `sorafs_manifest_stub capacity`; use `iroha app sorafs toolkit pack` for manifest/CAR packaging flows.
+本运行手册介绍了如何运行 SF-2c 容量市场模拟套件并可视化结果指标。它使用 `docs/examples/sorafs_capacity_simulation/` 中的确定性装置来验证配额协商、故障转移处理和端到端削减修复。容量有效负载仍使用`sorafs_manifest_stub capacity`；将 `iroha app sorafs toolkit pack` 用于清单/CAR 包装流程。
 
-## 1. Generate CLI artefacts
+## 1. 生成 CLI 工件
 
 ```bash
 cd $REPO_ROOT/docs/examples/sorafs_capacity_simulation
 ./run_cli.sh ./artifacts
 ```
 
-`run_cli.sh` wraps `sorafs_manifest_stub capacity` to emit Norito payloads, base64 blobs, Torii request bodies, and JSON summaries for:
+`run_cli.sh` 包装 `sorafs_manifest_stub capacity` 以发出 Norito 有效负载、base64 blob、Torii 请求正文以及 JSON 摘要：
 
-- Three provider declarations participating in the quota negotiation scenario.
-- A replication order allocating the staged manifest across those providers.
-- Telemetry snapshots for the pre-outage baseline, outage interval, and failover recovery.
-- A dispute payload requesting slashing after the simulated outage.
+- 参与配额谈判场景的三个提供商声明。
+- 在这些提供者之间分配暂存清单的复制顺序。
+- 断电前基线、断电间隔和故障转移恢复的遥测快照。
+- 模拟中断后请求削减的争议有效负载。
 
-All artefacts land under `./artifacts` (override by passing a different directory as the first argument). Inspect the `_summary.json` files for human-readable context.
+所有工件都位于 `./artifacts` 下（通过传递不同的目录作为第一个参数来覆盖）。检查 `_summary.json` 文件以获取人类可读的上下文。
 
-## 2. Aggregate results & emit metrics
+## 2. 聚合结果并发出指标
 
 ```bash
 ./analyze.py --artifacts ./artifacts
 ```
 
-The analyzer produces:
+分析仪产生：
 
-- `capacity_simulation_report.json` - aggregated allocations, failover deltas, and dispute metadata.
-- `capacity_simulation.prom` - Prometheus textfile metrics (`sorafs_simulation_*`) suitable for the node-exporter textfile collector or a standalone scrape job.
+- `capacity_simulation_report.json` - 聚合分配、故障转移增量和争议元数据。
+- `capacity_simulation.prom` - Prometheus 文本文件指标 (`sorafs_simulation_*`) 适用于节点导出器文本文件收集器或独立的抓取作业。
 
-Example Prometheus scrape configuration:
+Prometheus 抓取配置示例：
 
 ```yaml
 scrape_configs:
@@ -57,22 +59,22 @@ scrape_configs:
       format: ["prometheus"]
 ```
 
-Point the textfile collector at `capacity_simulation.prom` (when using node-exporter copy it into the directory passed via `--collector.textfile.directory`).
+将文本文件收集器指向 `capacity_simulation.prom`（当使用节点导出器时，将其复制到通过 `--collector.textfile.directory` 传递的目录中）。
 
-## 3. Import the Grafana dashboard
+## 3.导入Grafana仪表板
 
-1. In Grafana, import `dashboards/grafana/sorafs_capacity_simulation.json`.
-2. Bind the `Prometheus` datasource variable to the scrape target configured above.
-3. Verify the panels:
-   - **Quota Allocation (GiB)** shows committed/assigned balances for each provider.
-   - **Failover Trigger** flips to *Failover Active* when the outage metrics stream in.
-   - **Uptime Drop During Outage** charts the percentage loss for provider `alpha`.
-   - **Requested Slash Percentage** visualises the remediation ratio extracted from the dispute fixture.
+1. 在Grafana中，导入`dashboards/grafana/sorafs_capacity_simulation.json`。
+2. 将 `Prometheus` 数据源变量绑定到上面配置的抓取目标。
+3. 验证面板：
+   - **配额分配 (GiB)** 显示每个提供商的承诺/分配余额。
+   - 当中断指标流入时，**故障转移触发器**翻转为*故障转移活动*。
+   - **中断期间的正常运行时间下降**绘制了提供商 `alpha` 的损失百分比。
+   - **请求的削减百分比** 直观地显示从争议装置中提取的补救比率。
 
-## 4. Expected checks
+## 4. 预期检查
 
-- `sorafs_simulation_quota_total_gib{scope="assigned"}` equals `600` while the committed total remains >=600.
-- `sorafs_simulation_failover_triggered` reports `1` and the replacement provider metric highlights `beta`.
-- `sorafs_simulation_slash_requested` reports `0.15` (15% slash) for the `alpha` provider identifier.
+- `sorafs_simulation_quota_total_gib{scope="assigned"}` 等于 `600`，而承诺总数仍 >=600。
+- `sorafs_simulation_failover_triggered` 报告 `1`，替换提供商指标突出显示 `beta`。
+- `sorafs_simulation_slash_requested` 报告 `alpha` 提供程序标识符的 `0.15`（15% 斜线）。
 
-Run `cargo test -p sorafs_car --features cli --test capacity_simulation_toolkit` to confirm the fixtures are still accepted by the CLI schema.
+运行 `cargo test -p sorafs_car --features cli --test capacity_simulation_toolkit` 以确认 CLI 架构仍接受这些装置。

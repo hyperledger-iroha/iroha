@@ -11,75 +11,76 @@ id: developer-deployment
 title: SoraFS Deployment Notes
 sidebar_label: Deployment Notes
 description: Checklist for promoting the SoraFS pipeline from CI to production.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
+::: Canonical Source ကို သတိပြုပါ။
 :::
 
-# Deployment Notes
+# ဖြန့်ကျက်မှတ်စုများ
 
-The SoraFS packaging workflow hardens determinism, so moving from CI to
-production mainly requires operational guardrails. Use this checklist when
-rolling the tooling out to real gateways and storage providers.
+SoraFS ထုပ်ပိုးမှုလုပ်ငန်းအသွားအလာသည် ဆုံးဖြတ်ချက်ခိုင်မာစေသောကြောင့် CI မှပြောင်းသွားသည်
+ထုတ်လုပ်မှုသည် အဓိကအားဖြင့် လည်ပတ်မှုဆိုင်ရာ အစောင့်အကြပ်များ လိုအပ်သည်။ ဤစစ်ဆေးရန်စာရင်းကို အသုံးပြုပါ။
+ကိရိယာတန်ဆာပလာကို စစ်မှန်သော တံခါးပေါက်များနှင့် သိုလှောင်မှု ပံ့ပိုးပေးသူများထံ ဖြန့်ချီခြင်း။
 
-## Pre-flight
+## လေယာဉ်အကြို
 
-- **Registry alignment** — confirm chunker profiles and manifests reference the
-  same `namespace.name@semver` tuple (`docs/source/sorafs/chunker_registry.md`).
-- **Admission policy** — review the signed provider adverts and alias proofs
-  needed for `manifest submit` (`docs/source/sorafs/provider_admission_policy.md`).
-- **Pin registry runbook** — keep `docs/source/sorafs/runbooks/pin_registry_ops.md`
-  handy for recovery scenarios (alias rotation, replication failures).
+- **Registry alignment** — chunker profiles ကို အတည်ပြုပြီး manifests များကို ကိုးကားပါ။
+  တူညီသော `namespace.name@semver` tuple (`docs/source/sorafs/chunker_registry.md`)။
+- **ဝင်ခွင့်မူဝါဒ** — လက်မှတ်ရေးထိုးထားသော ပံ့ပိုးပေးသူ ကြော်ငြာများနှင့် နာမည်တူအထောက်အထားများကို ပြန်လည်သုံးသပ်ပါ။
+  `manifest submit` (`docs/source/sorafs/provider_admission_policy.md`) အတွက် လိုအပ်ပါသည်။
+- **Pin registry runbook** — `docs/source/sorafs/runbooks/pin_registry_ops.md` ကိုထားပါ။
+  ပြန်လည်ရယူခြင်းအခြေအနေများ (အမည်များလှည့်ခြင်း၊ ကူးယူခြင်း မအောင်မြင်မှုများ) အတွက် အဆင်ပြေသည်။
 
-## Environment configuration
+## ပတ်ဝန်းကျင်ဖွဲ့စည်းမှု
 
-- Gateways must enable the proof streaming endpoint (`POST /v1/sorafs/proof/stream`)
-  so the CLI can emit telemetry summaries.
-- Configure `sorafs_alias_cache` policy using the defaults in
-  `iroha_config` or the CLI helper (`sorafs_cli manifest submit --alias-*`).
-- Provide stream tokens (or Torii credentials) via a secure secret manager.
-- Enable telemetry exporters (`torii_sorafs_proof_stream_*`,
-  `torii_sorafs_chunk_range_*`) and ship them to your Prometheus/OTel stack.
+- Gateways သည် အထောက်အထား streaming endpoint (`POST /v1/sorafs/proof/stream`) ကို ဖွင့်ထားရမည်
+  ထို့ကြောင့် CLI သည် telemetry အနှစ်ချုပ်များကို ထုတ်လွှတ်နိုင်သည်။
+- ပုံသေများတွင် `sorafs_alias_cache` မူဝါဒကို ပြင်ဆင်ပါ။
+  `iroha_config` သို့မဟုတ် CLI အကူအညီပေးသူ (`sorafs_cli manifest submit --alias-*`)။
+- လုံခြုံသောလျှို့ဝှက်မန်နေဂျာမှတစ်ဆင့် တိုက်ရိုက်ထုတ်လွှင့်မှုတိုကင်များ (သို့မဟုတ် Torii အထောက်အထားများ) ပေးပါ။
+- တယ်လီမီတာတင်ပို့သူများကို ဖွင့်ပါ (`torii_sorafs_proof_stream_*`၊
+  `torii_sorafs_chunk_range_*`) နှင့် သင်၏ Prometheus/OTel stack သို့ ပို့ဆောင်ပါ။
 
-## Rollout strategy
+## မဟာဗျူဟာ ရေးဆွဲခြင်း။
 
-1. **Blue/green manifests**
-   - Use `manifest submit --summary-out` to archive responses for each rollout.
-   - Keep an eye on `torii_sorafs_gateway_refusals_total` to catch capability
-     mismatches early.
-2. **Proof validation**
-   - Treat failures in `sorafs_cli proof stream` as deployment blockers; latency
-     spikes often indicate provider throttling or misconfigured tiers.
-   - `proof verify` should be part of the post-pin smoke test to ensure the CAR
-     hosted by providers still matches the manifest digest.
-3. **Telemetry dashboards**
-   - Import `docs/examples/sorafs_proof_streaming_dashboard.json` into Grafana.
-   - Layer additional panels for pin registry health
-     (`docs/source/sorafs/runbooks/pin_registry_ops.md`) and chunk range stats.
-4. **Multi-source enablement**
-   - Follow the staged rollout steps in
-     `docs/source/sorafs/runbooks/multi_source_rollout.md` when turning on the
-     orchestrator, and archive the scoreboard/telemetry artefacts for audits.
+1. **အပြာ/အစိမ်း ဖော်ပြချက်များ**
+   - စတင်ဖြန့်ချိမှုတစ်ခုစီအတွက် တုံ့ပြန်ချက်များကို သိမ်းဆည်းရန် `manifest submit --summary-out` ကို အသုံးပြုပါ။
+   - စွမ်းရည်ကိုဖမ်းစားရန် `torii_sorafs_gateway_refusals_total` ကိုစောင့်ကြည့်ပါ။
+     စောစောစီးစီး မတိုက်ဆိုင်ပါ။
+2. ** သက်သေအထောက်အထား **
+   - `sorafs_cli proof stream` တွင် မအောင်မြင်မှုများကို ဖြန့်ကျက်ပိတ်ဆို့သူများအဖြစ် ဆက်ဆံပါ။ စောင့်နေချိန်
+     spikes များသည် ဝန်ဆောင်မှုပေးသူကို ပိတ်ဆို့ခြင်း သို့မဟုတ် မှားယွင်းသတ်မှတ်ထားသော အဆင့်များကို ညွှန်ပြလေ့ရှိသည်။
+   - CAR ကိုသေချာစေရန် `proof verify` သည် post-pin မီးခိုးစမ်းသပ်မှု၏တစ်စိတ်တစ်ပိုင်းဖြစ်သင့်သည်
+     ဝန်ဆောင်မှုပေးသူများမှ စီစဉ်ပေးထားသည့် မန်နီးဖက်စ် အချေအတင်နှင့် ကိုက်ညီနေသေးသည်။
+3. **တယ်လီမီတာ ဒက်ရှ်ဘုတ်များ**
+   - `docs/examples/sorafs_proof_streaming_dashboard.json` ကို Grafana သို့ တင်သွင်းပါ။
+   - pin registry ကျန်းမာရေးအတွက် ထပ်လောင်းအကန့်များ အလွှာ
+     (`docs/source/sorafs/runbooks/pin_registry_ops.md`) နှင့် အတုံးအကွာအဝေး ကိန်းဂဏန်းများ။
+4. **ရင်းမြစ်ပေါင်းစုံဖွင့်ခြင်း**
+   - အဆင့်မြှင့်တင်မှု အဆင့်များကို လိုက်နာပါ။
+     `docs/source/sorafs/runbooks/multi_source_rollout.md` ကိုဖွင့်သောအခါ
+     သံစုံတီးဝိုင်း၊ နှင့် စာရင်းစစ်များအတွက် အမှတ်စာရင်းဘုတ်/ကြေးနန်းဆိုင်ရာ အနုပညာပစ္စည်းများကို သိမ်းဆည်းပါ။
 
-## Incident handling
+## အဖြစ်အပျက်ကို ကိုင်တွယ်ဖြေရှင်းခြင်း။
 
-- Follow the escalation paths in `docs/source/sorafs/runbooks/`:
-  - `sorafs_gateway_operator_playbook.md` for gateway outages and stream-token
-    exhaustion.
-  - `dispute_revocation_runbook.md` when replication disputes occur.
-  - `sorafs_node_ops.md` for node-level maintenance.
-  - `multi_source_rollout.md` for orchestrator overrides, peer blacklisting, and
-    staged rollouts.
-- Record proof failures and latency anomalies in GovernanceLog via the existing
-  PoR tracker APIs so governance can assess provider performance.
+- `docs/source/sorafs/runbooks/` ရှိ တိုးမြင့်လာမှုလမ်းကြောင်းများကို လိုက်နာပါ-
+  - ဂိတ်ဝေးပြတ်တောက်မှုနှင့် stream-token အတွက် `sorafs_gateway_operator_playbook.md`
+    ပင်ပန်းနွမ်းနယ်ခြင်း။
+  ကူးယူမှုဆိုင်ရာ အငြင်းပွားမှုများ ဖြစ်ပေါ်သည့်အခါ - `dispute_revocation_runbook.md`။
+  - node အဆင့်ထိန်းသိမ်းမှုအတွက် `sorafs_node_ops.md`။
+  - သံစုံတီးဝိုင်းကို အစားထိုးခြင်း၊ သက်တူရွယ်တူများကို အမည်ပျက်စာရင်းသွင်းခြင်းအတွက် `multi_source_rollout.md` နှင့်
+    အဆင့်လိုက် ဖြန့်ချိမှုများ။
+- ရှိရင်းစွဲမှတစ်ဆင့် GovernanceLog ရှိ အထောက်အထားပျက်ကွက်မှုများနှင့် latency ကွဲလွဲချက်များကို မှတ်တမ်းတင်ပါ။
+  PoR tracker APIs များကို အုပ်ချုပ်မှုမှ ပံ့ပိုးပေးသူ၏ စွမ်းဆောင်ရည်ကို အကဲဖြတ်နိုင်စေရန်။
 
-## Next steps
+## နောက်တစ်ဆင့်
 
-- Integrate orchestrator automation (`sorafs_car::multi_fetch`) once the
-  multi-source fetch orchestrator (SF-6b) lands.
-- Track PDP/PoTR upgrades under SF-13/SF-14; the CLI and docs will evolve to
-  surface deadlines and tier selection once those proofs stabilize.
+- သံစုံတီးဝိုင်းအော်တိုစနစ် (`sorafs_car::multi_fetch`) ကို တစ်ကြိမ် ပေါင်းစပ်ပါ။
+  multi-source fetch orchestrator (SF-6b) မြေများ။
+- SF-13/SF-14 အောက်တွင် PDP/PoTR အဆင့်မြှင့်တင်မှုများကို ခြေရာခံပါ။ CLI နှင့် docs သည် ပြောင်းလဲလာလိမ့်မည်။
+  ထိုအထောက်အထားများ တည်ငြိမ်သွားသည်နှင့် မျက်နှာပြင် သတ်မှတ်ရက်များနှင့် အဆင့်ရွေးချယ်မှု။
 
-By combining these deployment notes with the quickstart and CI recipes, teams
-can move from local experiments to production-grade SoraFS pipelines with a
-repeatable, observable process.
+ဤအသုံးပြုမှုမှတ်စုများကို အမြန်စတင်ခြင်းနှင့် CI ချက်ပြုတ်နည်းများဖြင့် ပေါင်းစပ်ခြင်းဖြင့်၊ အဖွဲ့များ
+ဒေသတွင်း စမ်းသပ်မှုများမှ ထုတ်လုပ်မှုအဆင့် SoraFS ပိုက်လိုင်းများဆီသို့ ရွှေ့နိုင်သည်။
+ထပ်ခါတလဲလဲ၊ စောင့်ကြည့်နိုင်သော လုပ်ငန်းစဉ်။

@@ -7,32 +7,33 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 42b600496381995ae510fc080cc66c9f00da757f367d2e43f6d08ddab8567528
 source_last_modified: "2025-12-29T17:59:32.492134+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-## Maintainers
+## བདག་འཛིན་པ།
 
-Maintainers of the Hyperledger Iroha project are supposed to help contributors by explaining them project details, such as architecture, process, and existing issues.
+I18NT000000000X I18NT000000001X ལས་འགུལ་གྱི་བདག་འཛིན་འཐབ་མི་ཚུ་གིས་ བཟོ་རིག་དང་བྱ་རིམ་ དེ་ལས་ ད་ལྟོ་ཡོད་པའི་གནད་དོན་ཚུ་བཟུམ་གྱི་ ལས་འགུལ་གྱི་ཁ་གསལ་ཚུ་ འགྲེལ་བཤད་རྐྱབ་སྟེ་ ཕན་འདེབས་འབད་མི་ཚུ་ལུ་ གྲོགས་རམ་འབད་དགོཔ་ཨིན།
 
-This is the list of maintainers, including their email addresses for direct communication:
+འདི་ཡང་ ཐད་ཀར་བརྒྱུད་འབྲེལ་གྱི་དོན་ལུ་ ཁོང་རའི་གློག་འཕྲིན་ཁ་བྱང་ཚུ་རྩིས་ཏེ་ རྒྱུན་སྐྱོང་འབད་མི་ཚུ་གི་ཐོ་ཡིག་ཨིན།
 
-| Name                  | GitHub Id                                            | email                           | Area of expertise/Role                                                        |
-|-----------------------|------------------------------------------------------|---------------------------------|-------------------------------------------------------------------------------|
-| Makoto Takemiya       | [@takemiyamakoto](https://github.com/takemiyamakoto) | takemiya@soramitsu.co.jp        | Product Owner                                                                 |
-| Dmitri Venger         | [@dmitrivenger](https://github.com/dmitrivenger)     | venger@soramitsu.co.jp          | Project Manager                                                               |
-| Bogdan Mingela        | [@Mingela](https://github.com/Mingela)               | mingela@soramitsu.co.jp         | Product Manager                                                               |
-| Marin Veršić          | [@mversic](https://github.com/mversic)               | versic@soramitsu.co.jp          | Tech lead; Development: Rust, Java/Kotlin                                     |
-| Sam H. Smith          | [@SamHSmith](https://github.com/SamHSmith)           | smith@soramitsu.co.jp           | Development: Rust, C, Python                                                  |
-| Dmitry Balashov       | [@0x009922](https://github.com/0x009922)             | dbalashov@soramitsu.co.jp       | Development: Rust, TypeScript, JavaScript                                     |
-| Shunkichi Sato        | [@s8sato](https://github.com/s8sato)                 | s.sato@soramitsu.co.jp          | Development: Rust                                                             |
-| Andrey Kostiuchenko   | [@arndey](https://github.com/arndey)                 | kostiuchenko@soramitsu.co.jp    | Development: Java/Kotlin                                                      |
-| Vasily Zyabkin        | [@BAStos525](https://github.com/BAStos525)           | zyabkin@soramitsu.co.jp         | DevOps                                                                        |
-| Insaf Safin           | [@safinsaf](https://github.com/safinsaf)             | safin@soramitsu.co.jp           | DevOps                                                                        |
-| Ekaterina Mekhnetsova | [@outoftardis](https://github.com/outoftardis)       | mekhnetsova@soramitsu.co.jp     | Documentation                                                                 |
-| Alexandra Zorina      | [@a-zorina](https://github.com/a-zorina)             | zorina@soramitsu.co.jp          | Documentation                                                                 |
-| William Richter       | [@WRRicht3r](https://github.com/WRRicht3r)           | richter@soramitsu.co.jp         | Documentation                                                                 |
-| Mykhailo Lohachov     | [@mikuyako](https://github.com/aoyako)               | lohachov@soramitsu.co.jp        | Development: Rust                                                             |
-| Alexander Strokov     | [@astrokov7](https://github.com/astrokov7)           | strokov@soramitsu.co.jp         | QA; Python                                                                    |
-| Michael Timofeev      | [@timofeevmd](https://github.com/timofeevmd)         | timofeev@soramitsu.co.jp        | QA                                                                            |
-| Nikita Strygin        | [@DCNick3](https://github.com/DCNick3)               | moslike6@gmail.com              | Development: Rust                                                             |
-| Bogdan Yamkovoy       | [@yamkovoy](https://github.com/yamkovoy)             | yamkovoy@soramitsu.co.jp        | Documentation                                                                 |
-| Dmitry Murzin         | [@dima74](https://github.com/dima74)                 | murzin@soramitsu.co.jp          | Development: Rust                                                             |
+| མིང | གི་ཊི་ཧབ་ཨའི་ཌི་ | གློག་འཕྲིན་ | མཁས་རིག་གི་མངའ་ཁོངས།/འགན་འཁྲི། |
+| | ----------------------------------------------------------------------- |
+| མཀོ་ཏོ་ ཀ་མི་ཡ། | [Itacemiyamakoto](I18NU0000002X) | ཏྲ་མི་ཡ་@སོ་ར་མི་ཙུ་.ཀོ.jp | ཐོན་རྫས་བདག་པོ། |
+| ཌི་མི་ཊི་ཝེན་གར་ | [@dmitriver](I18NU0000003X) | venger@soramitsu.co.jp | ལས་འགུལ་འཛིན་སྐྱོང་པ། |
+| བོ་གྷན་མིན་ཇེ་ལ། | [@mingela](I18NU0000004X) | མི་ཇེ་ལ@སོ་ར་མི་ཙུ་.ཀོ.jp | ཐོན་སྐྱེད་འཛིན་སྐྱོང་པ། |
+| མར་རིན་ཝར་ཤི་ཨེཆ | [@mversic](I18NU0000005X) | versic@soramitsu.co.jp | Tech led; གོང་འཕེལ། རསཊ་ ཇ་བ་/ཀོཊ་ལིན་ |
+| སམ་ཨེཆ་ཨིསི་མིཏ་ | [@SamHSmith](I18NU0000006X) | smith@སོ་ར་མི་ཙུ་.ཀོ.jp | གོང་འཕེལ: རསཊ་, སི་, པའི་ཐོན་ |
+| ཌི་མི་ཊི་རི་བཱ་ལ་ཤོབ་ | [@0x009922](I https://github.com/0x009922) | dbalashov@སོ་ར་མི་ཙུ་.ཀོ.jp | གོང་འཕེལ། རསཊ་ ཊའིཔ་སི་ཀིརིཔཊ་ ཇ་བ་སི་ཀིརིཔཊ་ |
+| ཤུན་ཀི་ཆི་ས་ཊོ་ | [@s8sato](I18NU0000008X) | s.sato@སོ་ར་མི་ཙུ་.ཀོ.jp | གོང་འཕེལ།: Rust |
+| ཨེན་ཌི་རི་ཀོསི་ཊུ་ཅེན་ཀོ་ | [@arndey](I18NU0000009X) | ཀོསྟི་ཆིན་ཀོ@སོ་ར་མི་ཙུ་.ཀོ.jp | གོང་འཕེལ: ཇ་བ་/ཀོཊ་ལིན་ |
+| Vasily Zyabkin | [@BAStos525](https://github.com/BAStos525) | zyabkin@soramitsu.co.jp | ཌི་ཝི་ཨོཔསི་ |
+| ཨིན་ཕི་སཕིན་ | [@safinsaf](https://github.com/safinsaf) | sainf@soramitsu.co.jp | ཌི་ཝི་ཨོཔསི་ |
+| ཨེ་ཀ་ཊེ་རི་ན་ མེ་ཁ་ནེ་སོ་ཝ་ | [I18NU0000012X) | mekhnetsova@སོ་ར་མི་ཙུ་.ཀོ.jp | ཡིག་ཆ |
+| Alexandra Zorina | [@a-zorina](I18NU0000013X) | zorina@soramitsu.co.jp | ཡིག་ཆ |
+| ཝི་ལི་ཡམ་རིཆ་ཊར་ | [@WRRicht3r](https://github.com/WRRicht3r) | wrid@soramitsu.co.jp | ཡིག་ཆ |
+| མའི་ཁ་ཨི་ལོ་ ལོ་ཧ་ཆོབ་ | [@mikuyako](I18NU0000015X) | lohachov@soramitsu.co.jp | གོང་འཕེལ།: Rust |
+| ཨེ་ལེག་ཟེན་ཌར་སི་ཊོ་ཀོབ་ | [@astrokov7](I18NU0000016X) | strokov@soramitsu.co.jp | QA; པའི་ཐོན་ |
+| མའི་ཀཱལ་ཏི་མོ་ཕིབ། | [@timofeevmd](I18NU0000017X) | ཊི་མོ་ཕིབ་@སོ་ར་མི་ཙུ་.co.jp | QA |
+| ནི་ཀི་ཊ་ སི་ཊི་གིན་ | [@DCNick3](I18NU0000018X) | མོས་བཟུམ།@gmail.com | གོང་འཕེལ།: Rust |
+| བོག་དན་ ཡམ་ཀོ་ཝོ་ | [@yamkovoy](I18NU0000019X) | ཡམ་ཀོ་ཝོ་@སོ་ར་མི་ཙུ་.ཀོ.jp | ཡིག་ཆ |
+| ཌི་མི་ཊི་མར་ཟིན། | [@dima74](I18NU0000020X) | མུར་ཟིན་@སོ་ར་མི་ཙུ་.ཀོ.jp | གོང་འཕེལ།: Rust |

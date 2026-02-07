@@ -6,72 +6,73 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: c7ab0877a6f43402d6ec13a44c4a7c2b68e4a49e6103bb50d7469d9e71aaa953
 source_last_modified: "2026-01-03T18:07:57.001158+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# MOCHI Packaging Guide
+# Guía de embalaje de MOCHI
 
-This guide explains how to build the MOCHI desktop supervisor bundle, inspect
-the generated artefacts, and tune the runtime overrides that ship with the
-bundle. It complements the quickstart by focusing on reproducible packaging
-and CI usage.
+Esta guía explica cómo crear el paquete de supervisor de escritorio MOCHI, inspeccionar
+los artefactos generados y ajustar las anulaciones de tiempo de ejecución que se incluyen con el
+paquete. Complementa el inicio rápido centrándose en envases reproducibles.
+y uso de CI.
 
-## Prerequisites
+## Requisitos previos
 
-- Rust toolchain (edition 2024 / Rust 1.82+) with workspace dependencies
-  already built.
-- `irohad`, `iroha_cli`, and `kagami` compiled for the desired target. The
-  bundler reuses binaries from `target/<profile>/`.
-- Sufficient disk space for the bundle output under `target/` or a custom
-  destination.
+- Cadena de herramientas de Rust (edición 2024 / Rust 1.82+) con dependencias del espacio de trabajo
+  ya construido.
+- `irohad`, `iroha_cli` e `kagami` compilados para el objetivo deseado. el
+  El paquete reutiliza archivos binarios de `target/<profile>/`.
+- Espacio en disco suficiente para la salida del paquete en `target/` o un personalizado
+  destino.
 
-Build the dependencies once before running the bundler:
+Cree las dependencias una vez antes de ejecutar el paquete:
 
 ```bash
 cargo build -p irohad -p iroha_cli -p iroha_kagami
 ```
 
-## Building the bundle
+## Construyendo el paquete
 
-Invoke the dedicated `xtask` command from the repository root:
+Invoque el comando dedicado `xtask` desde la raíz del repositorio:
 
 ```bash
 cargo xtask mochi-bundle
 ```
 
-By default this produces a release bundle under `target/mochi-bundle/` with a
-filename derived from the host OS and architecture (for example,
-`mochi-macos-aarch64-release.tar.gz`). Use the following flags to customise
-the build:
+De forma predeterminada, esto produce un paquete de versión bajo `target/mochi-bundle/` con un
+nombre de archivo derivado del sistema operativo y la arquitectura del host (por ejemplo,
+`mochi-macos-aarch64-release.tar.gz`). Utilice las siguientes banderas para personalizar
+la construcción:
 
-- `--profile <name>` – choose a Cargo profile (`release`, `debug`, or a
-  custom profile).
-- `--no-archive` – keep the expanded directory without creating a `.tar.gz`
-  archive (useful for local testing).
-- `--out <path>` – write bundles to a custom directory instead of
+- `--profile <name>`: elija un perfil de carga (`release`, `debug` o un
+  perfil personalizado).
+- `--no-archive` – mantiene el directorio expandido sin crear un `.tar.gz`
+  archivo (útil para pruebas locales).
+- `--out <path>` – escribe paquetes en un directorio personalizado en lugar de
   `target/mochi-bundle/`.
-- `--kagami <path>` – supply a prebuilt `kagami` executable to include in the
-  archive. When omitted, the bundler reuses (or builds) the binary from the
-  selected profile.
-- `--matrix <path>` – append bundle metadata to a JSON matrix file (created if
-  missing) so CI pipelines can record every host/profile artefact produced in a
-  run. Entries include the bundle directory, manifest path and SHA-256, optional
-  archive location, and the latest smoke-test result.
-- `--smoke` – execute the packaged `mochi --help` as a lightweight smoke gate
-  after bundling; failures surface missing dependencies before publishing an
-  artefact.
-- `--stage <path>` – copy the finished bundle (and archive when produced) into
-  a staging directory so multi-platform builds can deposit artefacts in one
-  location without extra scripting.
+- `--kagami <path>`: proporcione un ejecutable `kagami` prediseñado para incluirlo en el
+  archivo. Cuando se omite, el paquete reutiliza (o construye) el binario a partir del
+  perfil seleccionado.
+- `--matrix <path>`: agrega metadatos del paquete a un archivo de matriz JSON (creado si
+  falta) para que las canalizaciones de CI puedan registrar cada artefacto de host/perfil producido en un
+  correr. Las entradas incluyen el directorio del paquete, la ruta del manifiesto y SHA-256, opcional
+  ubicación del archivo y el último resultado de la prueba de humo.
+- `--smoke`: ejecute el `mochi --help` empaquetado como una puerta de humo liviana
+  después de agrupar; Las fallas muestran dependencias faltantes antes de publicar un
+  artefacto.
+- `--stage <path>`: copie el paquete terminado (y archívelo cuando se produzca) en
+  un directorio provisional para que las compilaciones multiplataforma puedan depositar artefactos en uno
+  ubicación sin secuencias de comandos adicionales.
 
-The command copies `mochi-ui-egui`, `kagami`, `LICENSE`, the sample
-configuration, and `mochi/BUNDLE_README.md` into the bundle. A deterministic
-`manifest.json` is generated alongside the binaries so CI jobs can track file
-hashes and sizes.
+El comando copia `mochi-ui-egui`, `kagami`, `LICENSE`, el ejemplo
+configuración e `mochi/BUNDLE_README.md` en el paquete. Un determinista
+`manifest.json` se genera junto con los binarios para que los trabajos de CI puedan rastrear el archivo
+hashes y tamaños.
 
-## Bundle layout and verification
+## Diseño y verificación del paquete
 
-An expanded bundle follows the layout documented in `BUNDLE_README.md`:
+Un paquete ampliado sigue el diseño documentado en `BUNDLE_README.md`:
 
 ```
 bin/mochi
@@ -82,56 +83,54 @@ manifest.json
 LICENSE
 ```
 
-The `manifest.json` file lists every artefact with its SHA-256 hash. Verify
-the bundle after copying it to another system:
+El archivo `manifest.json` enumera cada artefacto con su hash SHA-256. verificar
+el paquete después de copiarlo a otro sistema:
 
 ```bash
 jq -r '.files[] | "\(.sha256)  \(.path)"' manifest.json | sha256sum --check
 ```
 
-CI pipelines can cache the expanded directory, sign the archive, or publish
-the manifest alongside release notes. The manifest includes the generator
-profile, target triple, and creation timestamp to aid provenance tracking.
+Las canalizaciones de CI pueden almacenar en caché el directorio expandido, firmar el archivo o publicar
+el manifiesto junto con las notas de la versión. El manifiesto incluye el generador.
+perfil, triple objetivo y marca de tiempo de creación para facilitar el seguimiento de procedencia.
 
-## Runtime overrides
+## Anulaciones de tiempo de ejecución
 
-MOCHI discovers helper binaries and runtime locations through CLI flags or
-environment variables:
-
-- `--data-root` / `MOCHI_DATA_ROOT` – override the workspace used for peer
-  configs, storage, and logs.
-- `--profile` – switch between topology presets (`single-peer`,
+MOCHI descubre binarios auxiliares y ubicaciones de tiempo de ejecución a través de indicadores CLI o
+variables de entorno:- `--data-root` / `MOCHI_DATA_ROOT`: anula el espacio de trabajo utilizado para el par
+  configuraciones, almacenamiento y registros.
+- `--profile` – cambiar entre ajustes preestablecidos de topología (`single-peer`,
   `four-peer-bft`).
-- `--torii-start`, `--p2p-start` – change the base ports used when allocating
-  services.
-- `--irohad` / `MOCHI_IROHAD` – point at a specific `irohad` binary.
-- `--kagami` / `MOCHI_KAGAMI` – override the bundled `kagami`.
-- `--iroha-cli` / `MOCHI_IROHA_CLI` – override the optional CLI helper.
-- `--restart-mode <never|on-failure>` – disable automatic restarts or force the
-  exponential backoff policy.
-- `--restart-max <attempts>` – override the number of restart attempts when
-  running in `on-failure` mode.
-- `--restart-backoff-ms <millis>` – set the base backoff for automatic restarts.
-- `MOCHI_CONFIG` – provide a custom `config/local.toml` path.
+- `--torii-start`, `--p2p-start`: cambie los puertos base utilizados al asignar
+  servicios.
+- `--irohad` / `MOCHI_IROHAD`: apunta a un binario `irohad` específico.
+- `--kagami` / `MOCHI_KAGAMI`: anula el `kagami` incluido.
+- `--iroha-cli` / `MOCHI_IROHA_CLI`: anula el asistente CLI opcional.
+- `--restart-mode <never|on-failure>` – deshabilita los reinicios automáticos o fuerza el
+  política de retroceso exponencial.
+- `--restart-max <attempts>`: anula el número de intentos de reinicio cuando
+  ejecutándose en modo `on-failure`.
+- `--restart-backoff-ms <millis>`: establece el retroceso de la base para reinicios automáticos.
+- `MOCHI_CONFIG`: proporciona una ruta `config/local.toml` personalizada.
 
-The CLI help (`mochi --help`) prints the full flag list. Environment overrides
-take effect on launch and can be combined with the Settings dialog inside the
-UI.
+La ayuda de CLI (`mochi --help`) imprime la lista de indicadores completa. Anulaciones de entorno
+surtirá efecto al iniciar y se puede combinar con el cuadro de diálogo Configuración dentro del
+Interfaz de usuario.
 
-## CI usage hints
+## Consejos de uso de CI
 
-- Run `cargo xtask mochi-bundle --no-archive` to generate a directory that can
-  be zipped with platform-specific tooling (ZIP for Windows, tarballs for
+- Ejecute `cargo xtask mochi-bundle --no-archive` para generar un directorio que pueda
+  comprimirse con herramientas específicas de la plataforma (ZIP para Windows, archivos comprimidos para
   Unix).
-- Capture bundle metadata with `cargo xtask mochi-bundle --matrix dist/matrix.json`
-  so release jobs can publish a single JSON index listing every host/profile
-  artefact produced in the pipeline.
-- Use `cargo xtask mochi-bundle --stage /mnt/staging/mochi` (or similar) on each
-  build agent to upload the bundle and archive into a shared directory that the
-  publishing job can consume.
-- Publish both the archive and `manifest.json` so operators can verify bundle
-  integrity.
-- Store the generated directory as a build artefact to seed smoke tests that
-  exercise the supervisor with deterministically packaged binaries.
-- Record bundle hashes in release notes or in the `status.md` log for future
-  provenance checks.
+- Captura de metadatos del paquete con `cargo xtask mochi-bundle --matrix dist/matrix.json`
+  para que los trabajos de lanzamiento puedan publicar un único índice JSON que enumere cada host/perfil
+  artefacto producido en la tubería.
+- Utilice `cargo xtask mochi-bundle --stage /mnt/staging/mochi` (o similar) en cada
+  crear un agente para cargar el paquete y archivarlo en un directorio compartido que el
+  el trabajo de publicación puede consumir.
+- Publicar tanto el archivo como `manifest.json` para que los operadores puedan verificar el paquete.
+  integridad.
+- Almacenar el directorio generado como un artefacto de compilación para generar pruebas de humo que
+  Ejercer el supervisor con binarios empaquetados deterministamente.
+- Registre los hashes del paquete en las notas de la versión o en el registro `status.md` para el futuro.
+  controles de procedencia.

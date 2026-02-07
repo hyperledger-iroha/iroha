@@ -6,123 +6,120 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 473b2b49d32c32d2b884b670ba35e9aa3d0606cfd451d441a7ca927c1160311d
 source_last_modified: "2026-01-03T18:07:59.262670+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Android Device Lab Failover Drill Runbook (AND6/AND7)
+# Android Device Lab フェイルオーバー ドリル ランブック (AND6/AND7)
 
-This runbook captures the procedure, evidence requirements, and contact matrix
-used when exercising the **device-lab contingency plan** referenced in
-`roadmap.md` (§“Regulatory artefact approvals & lab contingency”). It complements
-the reservation workflow (`device_lab_reservation.md`) and the incident log
-(`device_lab_contingency.md`) so compliance reviewers, legal counsel, and SRE
-have a single source of truth for how we validate failover readiness.
+このランブックには、手順、証拠要件、連絡先マトリックスが記載されています
+で参照されている **デバイスラボ緊急時対応計画** を実行するときに使用されます。
+`roadmap.md` (§「規制上のアーティファクトの承認とラボの緊急事態」)。補完する
+予約ワークフロー (`device_lab_reservation.md`) とインシデント ログ
+(`device_lab_contingency.md`) コンプライアンス審査担当者、法律顧問、SRE
+フェイルオーバーの準備が整っているかどうかを検証する方法について、唯一の信頼できる情報源があります。
 
-## Purpose & Cadence
+## 目的と頻度
 
-- Demonstrate that the Android StrongBox + general device pools can fail over
-  to the fallback Pixel lanes, shared pool, Firebase Test Lab burst queue, and
-  external StrongBox retainer without missing AND6/AND7 SLAs.
-- Produce an evidence bundle that legal can attach to ETSI/FISC submissions
-  ahead of the Feb compliance review.
-- Run at least once per quarter, plus any time the lab hardware roster changes
-  (new devices, retirement, or maintenance longer than 24 h).
+- Android StrongBox + 一般的なデバイス プールがフェイルオーバーできることを実証します。
+  フォールバック Pixel レーン、共有プール、Firebase Test Lab バースト キュー、および
+  AND6/AND7 SLA を欠落させることなく、外部 StrongBox リテーナーを装着できます。
+- 法務担当者が ETSI/FISC 提出物に添付できる証拠バンドルを作成します。
+  2月のコンプライアンスレビューに先立って。
+- 四半期に少なくとも 1 回、およびラボ ハードウェアの名簿が変更されるたびに実行します
+  (新しいデバイス、廃止、または 24 時間を超えるメンテナンス)。
 
-| Drill ID | Date | Scenario | Evidence Bundle | Status |
-|----------|------|----------|-----------------|--------|
-| DR-2026-02-Q1 | 2026-02-20 | Simulated Pixel 8 Pro lane outage + attestation backlog with AND7 telemetry rehearsal | `artifacts/android/device_lab_contingency/20260220-failover-drill/` | ✅ Completed — bundle hashes recorded in `docs/source/compliance/android/evidence_log.csv`. |
-| DR-2026-05-Q2 | 2026-05-22 (scheduled) | StrongBox maintenance overlap + Nexus rehearsal | `artifacts/android/device_lab_contingency/20260522-failover-drill/` *(pending)* — `_android-device-lab` ticket **AND6-DR-202605** holds the reservations; bundle will be populated post-drill. | 🗓 Scheduled — calendar block added to “Android Device Lab – Reservations” per AND6 cadence. |
+|ドリルID |日付 |シナリオ |証拠バンドル |ステータス |
+|----------|------|----------|------|----------|
+| DR-2026-02-Q1 | 2026-02-20 | AND7 テレメトリ リハーサルによる Pixel8Pro レーン停止 + 認証バックログのシミュレート | `artifacts/android/device_lab_contingency/20260220-failover-drill/` | ✅ 完了 — `docs/source/compliance/android/evidence_log.csv` に記録されたバンドル ハッシュ。 |
+| DR-2026-05-Q2 | 2026-05-22 (予定) | StrongBox メンテナンス重複 + Nexus リハーサル | `artifacts/android/device_lab_contingency/20260522-failover-drill/` *(保留中)* — `_android-device-lab` チケット **AND6-DR-202605** は予約を保持します。バンドルはドリル後に設定されます。 | 🗓 スケジュール済み — AND6 リズムごとにカレンダー ブロックが「Android Device Lab – 予約」に追加されます。 |
 
-## Procedure
+## 手順
 
-### 1. Pre-drill preparation
+### 1. ドリル前の準備
 
-1. Confirm baseline capacity in `docs/source/sdk/android/android_strongbox_capture_status.md`.
-2. Export the reservation calendar for the target ISO week via
-   `python3 scripts/android_device_lab_export.py --week <ISO week>`.
-3. File `_android-device-lab` ticket
-   `AND6-DR-<YYYYMM>` with scope (“failover drill”), planned slots, and affected
-   workloads (attestation, CI smoke, telemetry chaos).
-4. Update the contingency log template in `device_lab_contingency.md` with a
-   placeholder row for the drill date.
+1. `docs/source/sdk/android/android_strongbox_capture_status.md` でベースライン容量を確認します。
+2. 対象の ISO 週の予約カレンダーをエクスポートします。
+   `python3 scripts/android_device_lab_export.py --week <ISO week>`。
+3. ファイル `_android-device-lab` チケット
+   `AND6-DR-<YYYYMM>` スコープ (「フェイルオーバー ドリル」)、計画されたスロット、および影響を受ける
+   ワークロード (構成証明、CI スモーク、テレメトリの混乱)。
+4. `device_lab_contingency.md` の緊急時ログ テンプレートを更新します。
+   訓練日のプレースホルダー行。
 
-### 2. Simulate failure conditions
+### 2. 故障状態をシミュレートする
 
-1. Disable or depool the primary lane (`pixel8pro-strongbox-a`) inside the lab
-   scheduler and tag the reservation entry as “drill”.
-2. Trigger a mock outage alert in PagerDuty (`AND6-device-lab` service) and
-   capture the notification export for the evidence bundle.
-3. Annotate the Buildkite jobs that normally consume the lane
-   (`android-strongbox-attestation`, `android-ci-e2e`) with the drill ID.
+1. ラボ内のプライマリ レーン (`pixel8pro-strongbox-a`) を無効にするかプール解除します。
+   スケジューラを作成し、予約エントリに「ドリル」というタグを付けます。
+2. PagerDuty (`AND6-device-lab` サービス) で模擬停止アラートをトリガーし、
+   証拠バンドルの通知エクスポートをキャプチャします。
+3. 通常レーンを消費する Buildkite ジョブに注釈を付ける
+   (`android-strongbox-attestation`、`android-ci-e2e`) をドリル ID に置き換えます。
 
-### 3. Failover execution
+### 3. フェイルオーバーの実行1. フォールバック Pixel7 レーンをプライマリ CI ターゲットにプロモートし、
+   それに対して計画されたワークロード。
+2. `firebase-burst` レーン経由で Firebase Test Lab バースト スイートをトリガーします。
+   小売店のウォレットのスモークテストが行われる一方、StrongBox の対象範囲は共有領域に移行します。
+   レーン。 CLI 呼び出し (またはコンソール エクスポート) を監査用のチケットにキャプチャします。
+   パリティ。
+3. 外部の StrongBox ラボ リテイナーを使用して、短い認証スイープを実行します。
+   以下で説明するように、連絡の確認をログに記録します。
+4. すべての Buildkite 実行 ID、Firebase ジョブ URL、およびリテイナーのトランスクリプトを記録します。
+   `_android-device-lab` チケットと証拠バンドルのマニフェスト。
 
-1. Promote the fallback Pixel 7 lane to primary CI target and schedule the
-   planned workloads against it.
-2. Trigger the Firebase Test Lab burst suite via the `firebase-burst` lane for
-   the retail-wallet smoke tests while StrongBox coverage moves to the shared
-   lane. Capture the CLI invocation (or console export) in the ticket for audit
-   parity.
-3. Engage the external StrongBox lab retainer for a short attestation sweep;
-   log contact acknowledgement as described below.
-4. Record all Buildkite run IDs, Firebase job URLs, and retainer transcripts in
-   the `_android-device-lab` ticket and the evidence bundle manifest.
+### 4. 検証とロールバック
 
-### 4. Validation & rollback
+1. アテステーション/CI ランタイムをベースラインと比較します。フラグデルタ>10%
+   ハードウェアラボのリーダー。
+2. プライマリ レーンを復元し、キャパシティ スナップショットと準備状況を更新します。
+   検証に合格した後の行列。
+3. トリガー、アクション、および
+   そしてフォローアップ。
+4. `docs/source/compliance/android/evidence_log.csv` を次のように更新します。
+   バンドル パス、SHA-256 マニフェスト、Buildkite 実行 ID、PagerDuty エクスポート ハッシュ、および
+   査読者のサインオフ。
 
-1. Compare attestation/CI runtimes against baseline; flag deltas >10 % to the
-   Hardware Lab Lead.
-2. Restore the primary lane and update the capacity snapshot plus the readiness
-   matrix once validation passes.
-3. Append the final row to `device_lab_contingency.md` with trigger, actions,
-   and follow-ups.
-4. Update `docs/source/compliance/android/evidence_log.csv` with:
-   bundle path, SHA-256 manifest, Buildkite run IDs, PagerDuty export hash, and
-   reviewer sign-off.
+## 証拠バンドルのレイアウト
 
-## Evidence Bundle Layout
+|ファイル |説明 |
+|------|---------------|
+| `README.md` |概要 (ドリル ID、スコープ、所有者、タイムライン)。 |
+| `bundle-manifest.json` |バンドル内のすべてのファイルの SHA-256 マップ。 |
+| `calendar-export.{ics,json}` |エクスポート スクリプトからの ISO 週間予約カレンダー。 |
+| `pagerduty/incident_<id>.json` |アラートと確認のタイムラインを示す PagerDuty インシデントのエクスポート。 |
+| `buildkite/<job>.txt` | Buildkite は、影響を受けるジョブの URL とログを実行します。 |
+| `firebase/burst_report.json` | Firebase Test Lab のバースト実行の概要。 |
+| `retainer/acknowledgement.eml` |外部の StrongBox ラボからの確認。 |
+| `photos/` |ハードウェアが再ケーブル接続されている場合は、ラボ トポロジのオプションの写真/スクリーンショット。 |
 
-| File | Description |
-|------|-------------|
-| `README.md` | Summary (drill ID, scope, owners, timeline). |
-| `bundle-manifest.json` | SHA-256 map for every file in the bundle. |
-| `calendar-export.{ics,json}` | ISO-week reservation calendar from the export script. |
-| `pagerduty/incident_<id>.json` | PagerDuty incident export showing alert + acknowledgement timeline. |
-| `buildkite/<job>.txt` | Buildkite run URLs & logs for affected jobs. |
-| `firebase/burst_report.json` | Firebase Test Lab burst execution summary. |
-| `retainer/acknowledgement.eml` | Confirmation from the external StrongBox lab. |
-| `photos/` | Optional photos/screenshots of lab topology if hardware was re-cabled. |
+バンドルを次の場所に保管します
+`artifacts/android/device_lab_contingency/<YYYYMMDD>-failover-drill/` と記録
+証拠ログ内のマニフェスト チェックサムと AND6 準拠チェックリスト。
 
-Store the bundle at
-`artifacts/android/device_lab_contingency/<YYYYMMDD>-failover-drill/` and record
-the manifest checksum inside the evidence log plus the AND6 compliance checklist.
+## 連絡先とエスカレーション マトリックス
 
-## Contact & Escalation Matrix
+|役割 |主な連絡先 |チャンネル |メモ |
+|------|------|-----------|------|
+|ハードウェア ラボ リーダー |プリヤ・ラマナタン | `@android-lab` スラック · +81-3-5550-1234 |オンサイトのアクションとカレンダーの更新を管理します。 |
+|デバイス ラボ運用 |マテオ・クルーズ | `_android-device-lab` キュー |予約チケット + バンドルのアップロードを調整します。 |
+|リリースエンジニアリング |アレクセイ・モロゾフ |リリース英語 Slack · `release-eng@iroha.org` | Buildkite の証拠を検証し、ハッシュを公開します。 |
+|外部ストロングボックスラボ |サクラ楽器 NOC | `noc@sakura.example` · +81-3-5550-9876 |リテーナーコンタクト。 6 時間以内に空き状況を確認してください。 |
+| Firebase バースト コーディネーター |テッサ・ライト | `@android-ci` スラック |フォールバックが必要な場合に Firebase Test Lab の自動化をトリガーします。 |
 
-| Role | Primary Contact | Channel(s) | Notes |
-|------|-----------------|------------|-------|
-| Hardware Lab Lead | Priya Ramanathan | `@android-lab` Slack · +81-3-5550-1234 | Owns on-site actions and calendar updates. |
-| Device Lab Ops | Mateo Cruz | `_android-device-lab` queue | Coordinates reservation tickets + bundle uploads. |
-| Release Engineering | Alexei Morozov | Release Eng Slack · `release-eng@iroha.org` | Validates Buildkite evidence + publishes hashes. |
-| External StrongBox Lab | Sakura Instruments NOC | `noc@sakura.example` · +81-3-5550-9876 | Retainer contact; confirm availability within 6 h. |
-| Firebase Burst Coordinator | Tessa Wright | `@android-ci` Slack | Triggers Firebase Test Lab automation when fallback is needed. |
+ドリルによって障害となる問題が明らかになった場合は、次の順序でエスカレーションします。
+1. ハードウェアラボリーダー
+2. Android 基盤 TL
+3. プログラムリード / リリースエンジニアリング
+4. コンプライアンス責任者 + 法律顧問 (訓練により規制リスクが明らかになった場合)
 
-Escalate in the following order if a drill uncovers blocking issues:
-1. Hardware Lab Lead
-2. Android Foundations TL
-3. Program Lead / Release Engineering
-4. Compliance Lead + Legal Counsel (if drill reveals regulatory risk)
-
-## Reporting & Follow-Ups
-
-- Link this runbook alongside the reservation procedure whenever referencing
-  failover readiness in `roadmap.md`, `status.md`, and governance packets.
-- Email the quarterly drill recap to Compliance + Legal with the evidence bundle
-  hash table and attach the `_android-device-lab` ticket export.
-- Mirror key metrics (time-to-failover, workloads restored, outstanding actions)
-  inside `status.md` and the AND7 hot-list tracker so reviewers can trace the
-  dependency to a concrete rehearsal.
+## 報告とフォローアップ- 参照する場合は常に、このランブックを予約手順と並べてリンクします。
+  `roadmap.md`、`status.md`、およびガバナンス パケットのフェールオーバー準備状況。
+- 四半期ごとの訓練の要約を証拠バンドルとともにコンプライアンス + 法務部門に電子メールで送信します
+  ハッシュ テーブルを作成し、`_android-device-lab` チケット エクスポートを添付します。
+- ミラーの主要なメトリクス (フェールオーバーまでの時間、復元されたワークロード、未処理のアクション)
+  `status.md` と AND7 ホットリスト トラッカー内にあるため、レビュー担当者は
+  具体的なリハーサルへの依存。

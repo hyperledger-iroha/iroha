@@ -4,39 +4,41 @@ direction: ltr
 source: docs/portal/docs/norito/ledger-walkthrough.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: لیجر واک تھرو
-description: `iroha` CLI کے ساتھ deterministic register -> mint -> transfer فلو دوبارہ بنائیں اور نتیجے میں لیجر اسٹیٹ کی تصدیق کریں۔
-slug: /norito/ledger-walkthrough
+タイトル: ٌجر واک تھرو
+説明: `iroha` CLI کے ساتھ 確定的レジスタ -> ミント -> 転送 فلو دوبارہ بنائیں اور نتیجے میں لیجر اسٹیٹ کی تصدیقありがとう
+スラッグ: /norito/ledger-walkthrough
 ---
 
-یہ walkthrough [Norito quickstart](./quickstart.md) کی تکمیل کرتا ہے اور دکھاتا ہے کہ `iroha` CLI کے ساتھ لیجر اسٹیٹ کو کیسے بدلیں اور چیک کریں۔ آپ ایک نئی asset definition رجسٹر کریں گے، ڈیفالٹ آپریٹر اکاؤنٹ میں units mint کریں گے، بیلنس کا کچھ حصہ دوسرے اکاؤنٹ کو ٹرانسفر کریں گے، اور نتیجے میں آنے والی transactions اور holdings کی تصدیق کریں گے۔ ہر قدم Rust/Python/JavaScript SDK quickstarts میں کورڈ فلو کی عکاسی کرتا ہے تاکہ آپ CLI اور SDK کے درمیان parity کی تصدیق کر سکیں۔
+یہ ウォークスルー [Norito クイックスタート](./quickstart.md) ٩ی تکمیل کرتا ہے اور دکھاتا ہے کہ `iroha` CLI کے ساتھ لیجر اسٹیٹ کو کیسے بدلیں اور چیک کریں۔資産定義 جسٹر کریں گے، ڈیفالٹ آپریٹر اکاؤنٹ میں 単位ミント کریں گے، بیلنس کا資本金 資本金 資本金 資本金 取引金 保有株数 資本金ありがとうございますRust/Python/JavaScript SDK クイックスタート فلو کی عکاسی کرتا ہے تاکہ آپ CLI اور SDK کے درمیان parity کی تصدیقありがとうございます
 
 ## پیشگی تقاضے
 
-- [quickstart](./quickstart.md) فالو کریں تاکہ سنگل-پیئر نیٹ ورک کو
-  `docker compose -f defaults/docker-compose.single.yml up --build` کے ذریعے بوٹ کیا جا سکے۔
-- یقینی بنائیں کہ `iroha` (CLI) build یا download ہے اور آپ `defaults/client.toml` سے peer تک پہنچ سکتے ہیں۔
-- اختیاری مددگار: `jq` (JSON responses کی formatting) اور POSIX shell تاکہ نیچے دیے گئے environment-variable snippets استعمال ہو سکیں۔
+- [クイックスタート](./quickstart.md) فالو کریں تاکہ سنگل-پیئر نیٹ ورک کو
+  `docker compose -f defaults/docker-compose.single.yml up --build` ذریعے بوٹ کیا جا سکے۔
+- یقینی بنائیں کہ `iroha` (CLI) ビルド یا ダウンロード ہے اور آپ `defaults/client.toml` سے ピア تک پہنچ سکتے ہیں۔
+- 処理: `jq` (JSON 応答の書式設定) POSIX シェルの処理 環境変数のスニペットの処理
 
-اس گائیڈ میں `$ADMIN_ACCOUNT` اور `$RECEIVER_ACCOUNT` کو ان account IDs سے بدلیں جو آپ استعمال کرنا چاہتے ہیں۔ defaults bundle پہلے ہی demo keys سے اخذ کیے گئے دو accounts شامل کرتا ہے:
+アカウント `$ADMIN_ACCOUNT` `$RECEIVER_ACCOUNT` アカウント ID アカウント ID アカウント ID アカウント ID アカウント ID アカウント ID アカウント ID アカウント ID アカウント ID アカウント ID アカウント ID アカウント ID アカウント ID アカウント ID アカウント IDやあデフォルトバンドル پہلے ہی デモキー سے اخذ کیے گئے دو アカウント شامل کرتا ہے:
 
 ```sh
 export ADMIN_ACCOUNT="ih58..."
 export RECEIVER_ACCOUNT="ih58..."
 ```
 
-پہلے چند accounts لسٹ کر کے ویلیوز کی تصدیق کریں:
+アカウントの数:
 
 ```sh
 iroha --config defaults/client.toml account list all --limit 5 --table
 ```
 
-## 1. genesis اسٹیٹ کا معائنہ
+## 1. ジェネシス اسٹیٹ کا معائنہ
 
-CLI جس لیجر کو ٹارگٹ کر رہا ہے اسے ایکسپلور کریں:
+CLI の操作:
 
 ```sh
 # genesis میں رجسٹرڈ domains
@@ -51,22 +53,22 @@ iroha --config defaults/client.toml account list filter \
 iroha --config defaults/client.toml asset definition list all --table
 ```
 
-یہ کمانڈز Norito-backed responses پر انحصار کرتی ہیں، لہذا filtering اور pagination deterministic ہیں اور وہی ہیں جو SDKs حاصل کرتے ہیں۔
+Norito でバックアップされた応答 フィルタリング ページネーション決定論的 SDK حاصل کرتے ہیں۔
 
-## 2. asset definition رجسٹر کریں
+## 2. 資産の定義
 
-`wonderland` ڈومین کے اندر `coffee` نام کا ایک نیا، لامحدود mintable asset بنائیں:
+`wonderland` 価額 `coffee` 価額 鋳造可能資産:
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
   --id coffee#wonderland
 ```
 
-CLI submitted transaction hash (مثلاً `0x5f…`) پرنٹ کرتا ہے۔ اسے محفوظ کریں تاکہ بعد میں status کو query کیا جا سکے۔
+CLI が送信したトランザクション ハッシュ (مثلاً `0x5f…`) پرنٹ کرتا ہے۔ステータス クエリ ステータス クエリ ステータス ステータス
 
-## 3. آپریٹر اکاؤنٹ میں units mint کریں
+## 3. 単位ミント کریں
 
-asset quantities `(asset definition, account)` کے جوڑے کے تحت رہتی ہیں۔ `$ADMIN_ACCOUNT` میں `coffee#wonderland` کی 250 units mint کریں:
+資産数量 `(asset definition, account)` جوڑے کے تحت رہتی ہیں۔ `$ADMIN_ACCOUNT` 価 `coffee#wonderland` 250 単位ミント:
 
 ```sh
 iroha --config defaults/client.toml asset mint \
@@ -74,13 +76,13 @@ iroha --config defaults/client.toml asset mint \
   --quantity 250
 ```
 
-CLI output سے transaction hash (`$MINT_HASH`) محفوظ کریں۔ بیلنس دوبارہ چیک کرنے کے لئے چلائیں:
+CLI 出力「トランザクション ハッシュ (`$MINT_HASH`)」名前:
 
 ```sh
 iroha --config defaults/client.toml asset list all --limit 5 --table
 ```
 
-یا صرف نئے asset کو ٹارگٹ کرنے کے لئے:
+資産の価値:
 
 ```sh
 iroha --config defaults/client.toml asset list filter \
@@ -90,7 +92,7 @@ iroha --config defaults/client.toml asset list filter \
 
 ## 4. بیلنس کا کچھ حصہ دوسرے اکاؤنٹ کو ٹرانسفر کریں
 
-آپریٹر اکاؤنٹ سے `$RECEIVER_ACCOUNT` کو 50 units منتقل کریں:
+`$RECEIVER_ACCOUNT` 50 ユニットの数:
 
 ```sh
 iroha --config defaults/client.toml asset transfer \
@@ -99,7 +101,7 @@ iroha --config defaults/client.toml asset transfer \
   --quantity 50
 ```
 
-transaction hash کو `$TRANSFER_HASH` کے طور پر محفوظ کریں۔ دونوں اکاؤنٹس پر holdings query کریں تاکہ نئی balances کی تصدیق ہو:
+トランザクション ハッシュ کو `$TRANSFER_HASH` کے طور پر محفوظ کریں۔保有株のクエリ、残高、および残高のクエリ:
 
 ```sh
 iroha --config defaults/client.toml asset list filter \
@@ -109,28 +111,28 @@ iroha --config defaults/client.toml asset list filter \
   "{\"id\":\"coffee#wonderland##${RECEIVER_ACCOUNT}\"}" --limit 1 | jq .
 ```
 
-## 5. لیجر ایویڈنس کی تصدیق
+## 5. और देखें
 
-محفوظ hashes استعمال کریں تاکہ دونوں transactions کے commit ہونے کی تصدیق ہو:
+ハッシュ値の計算とトランザクションのコミット値の計算:
 
 ```sh
 iroha --config defaults/client.toml transaction get --hash $MINT_HASH | jq .
 iroha --config defaults/client.toml transaction get --hash $TRANSFER_HASH | jq .
 ```
 
-آپ حالیہ blocks بھی stream کر سکتے ہیں تاکہ دیکھا جا سکے کہ transfer کس block میں شامل ہوا:
+ブロック ストリーム ブロック ブロック ブロック ブロック ブロック ブロック ブロック ブロック ブロック ブロック ブロック ブロック ブロック ブロック ブロック ブロック ブロック
 
 ```sh
 # جدید ترین block سے stream کریں اور ~5 seconds بعد رک جائیں
 iroha --config defaults/client.toml blocks 0 --timeout 5s --table
 ```
 
-اوپر کی ہر کمانڈ وہی Norito payloads استعمال کرتی ہے جو SDKs استعمال کرتے ہیں۔ اگر آپ اس فلو کو کوڈ کے ذریعے دہرائیں (نیچے SDK quickstarts دیکھیں)، تو hashes اور balances اس وقت تک align رہیں گے جب تک آپ اسی نیٹ ورک اور defaults کو ٹارگٹ کرتے ہیں۔
+Norito ペイロードと SDK の数ハッシュ バランス 整列 ハッシュ バランス 整列رہیں گے جب تک آپ اسی نیٹ ورک اور デフォルト کو ٹارگٹ کرتے ہیں۔
 
-## SDK parity لنکس
+## SDK パリティ
 
-- [Rust SDK quickstart](../sdks/rust) — Rust سے instructions رجسٹر کرنا، transactions submit کرنا، اور status poll کرنا دکھاتا ہے۔
-- [Python SDK quickstart](../sdks/python) — Norito-backed JSON helpers کے ساتھ وہی register/mint operations دکھاتا ہے۔
-- [JavaScript SDK quickstart](../sdks/javascript) — Torii requests، governance helpers، اور typed query wrappers کو کور کرتا ہے۔
+- [Rust SDK クイックスタート](../sdks/rust) — Rust の手順、トランザクションの送信、ステータス ポーリング、ステータス ポーリング
+- [Python SDK クイックスタート](../sdks/python) — Norito でサポートされる JSON ヘルパー - 登録/ミント操作の登録/ミント操作
+- [JavaScript SDK クイックスタート](../sdks/javascript) - Torii リクエスト、ガバナンス ヘルパー、型付きクエリ ラッパー
 
-پہلے CLI walkthrough چلائیں، پھر اپنے پسندیدہ SDK کے ساتھ وہی منظرنامہ دہرائیں تاکہ دونوں سطحیں transaction hashes، balances، اور query outputs پر متفق ہوں۔
+CLI ウォークスルー پائیں، پھر اپنے پسندیدہ SDK کے ساتھ وہی منظرنامہ دہرائیں تاکہ دونوںトランザクション ハッシュ、残高、クエリ出力の詳細

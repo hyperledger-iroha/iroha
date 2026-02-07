@@ -7,124 +7,122 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 5a2e92d81f17dbd015894a9b61f6acc40d4116a06aefe476a9f8d0ba4d6d3955
 source_last_modified: "2026-01-30T18:06:03.184151+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# IVM Gas Model
+#IVM Gas Model
 
-This document defines the canonical gas schedule for the Iroha Virtual Machine
-(IVM) and explains how the schedule is hashed and applied. The source of truth
-for costs is `crates/ivm/src/gas.rs`; the schedule table below is a rendered
-view of that canonical mapping.
+ဤစာတမ်းသည် Iroha Virtual Machine အတွက် canonical gas အချိန်ဇယားကို သတ်မှတ်သည်
+(IVM) နှင့် အချိန်ဇယားကို မည်ကဲ့သို့ ဟက်ကာ အသုံးချပုံကို ရှင်းပြသည်။ အမှန်တရား၏အရင်းအမြစ်
+ကုန်ကျစရိတ်မှာ `crates/ivm/src/gas.rs` ဖြစ်သည်။ အောက်ဖော်ပြပါ အချိန်ဇယားကို တင်ဆက်ထားပါသည်။
+ထို canonical မြေပုံ၏အမြင်။
 
-## Scope
+## နယ်ပယ်
 
-- Applies to IVM bytecode execution (Executable::Ivm).
-- Native ISI gas metering is defined separately in `crates/iroha_core/src/gas.rs`.
-- ISO 20022 opcodes are reserved in ABI v1 and do not carry gas entries yet.
+- IVM bytecode လုပ်ဆောင်ချက် (Executable::Ivm) နှင့် သက်ဆိုင်သည်။
+- Native ISI ဓာတ်ငွေ့တိုင်းတာခြင်းကို `crates/iroha_core/src/gas.rs` တွင် သီးခြားသတ်မှတ်ထားသည်။
+- ISO 20022 opcode များကို ABI v1 တွင် သိမ်းဆည်းထားပြီး ဓာတ်ငွေ့ထည့်သွင်းမှုများ မပြုလုပ်ရသေးပါ။
 
-## Determinism and schedule hash
+## အဆုံးအဖြတ်နှင့် အချိန်ဇယား ကန့်သတ်ချက်
 
-The gas schedule is deterministic and derived from opcode → cost pairs. The
-canonical digest is computed over the ordered opcode list with each entry
-serialized as:
+ဓာတ်ငွေ့အချိန်ဇယားသည် အဆုံးအဖြတ်ဖြစ်ပြီး opcode → ကုန်ကျစရိတ်အတွဲများမှ ဆင်းသက်လာသည်။ ဟိ
+ထည့်သွင်းမှုတစ်ခုစီဖြင့် အမိန့်ထုတ်ထားသော opcode စာရင်းတွင် canonical digest ကို တွက်ချက်ထားသည်။
+အဖြစ် အမှတ်စဉ်:
 
 - opcode byte (u8)
-- cost (u64, little-endian)
+- ကုန်ကျစရိတ် (u64၊ အသေးအဖွဲ)
 
-The hash is exposed by:
+hash ကို ဖော်ပြသည်-
 
-- `ivm::gas::schedule_hash()` (canonical schedule hash)
+- `ivm::gas::schedule_hash()` (canonical အချိန်ဇယား hash)
 - `ivm::limits::schedule_hash()` (host-facing alias)
 
-Use this digest to verify that all peers share the same schedule when wiring
-config or telemetry checks.
+ဝိုင်ယာကြိုးသွယ်ရာတွင် ရွယ်တူအားလုံးသည် တူညီသောအချိန်ဇယားကို မျှဝေကြောင်း အတည်ပြုရန် ဤအကျဉ်းချုပ်ကို အသုံးပြုပါ။
+config သို့မဟုတ် telemetry စစ်ဆေးမှုများ။
 
-## Vector scaling and HTM retries
+## Vector အတိုင်းအတာနှင့် HTM ပြန်စမ်းခြင်း။
 
-- Vector ops (`VADD*`, `VAND`, `VXOR`, `VOR`, `VROT32`) scale with the logical
-  vector length set by `SETVL`. The base costs in the table are scaled by
-  `min(vector_len, VECTOR_BASE_LANES) / VECTOR_BASE_LANES` (baseline = 2 lanes).
-- HTM retries multiply the cost by `(retries + 1)`; most consensus paths do not
-  incur retries.
+- Vector ops (`VADD*`, `VAND`, `VXOR`, `VOR`, `VROT32`) ယုတ္တိဗေဒစကေးဖြင့်
+  vector length `SETVL` ဖြင့် သတ်မှတ်သည်။ ဇယားရှိ အခြေခံကုန်ကျစရိတ်များကို တိုင်းတာသည်။
+  `min(vector_len, VECTOR_BASE_LANES) / VECTOR_BASE_LANES` (အခြေခံလိုင်း = 2 လမ်းသွား)။
+- HTM သည် ကုန်ကျစရိတ်ကို `(retries + 1)` ဖြင့် မြှောက်သည်။ အများသဘောတူတဲ့ လမ်းကြောင်းတွေ မပါဘူး။
+  ထပ်မံကြိုးစားမှုများ ရှိလာပါသည်။
 
-## Canonical opcode gas table
+## Canonical opcode ဓာတ်ငွေ့စားပွဲ
 
-The table below lists the base costs used by `ivm::gas::cost_of`. Vector scaling
-and HTM retries are applied on top of these base values as noted above.
-
-| Category | Opcode | Mnemonic | Base gas |
+အောက်ပါဇယားတွင် `ivm::gas::cost_of` အသုံးပြုသော အခြေခံကုန်ကျစရိတ်များကို ဖော်ပြထားပါသည်။ ကွက်လပ်ချဲ့ခြင်း။
+အထက်တွင်ဖော်ပြထားသည့်အတိုင်း ဤအခြေခံတန်ဖိုးများ၏ထိပ်တွင် HTM ပြန်စမ်းခြင်းကိုအသုံးပြုပါသည်။| အမျိုးအစား | Opcode | Mnemonic | အခြေခံဓာတ်ငွေ့ |
 |---|---:|---|---:|
-| arithmetic | 0x01 | `ADD` | 1 |
-| arithmetic | 0x02 | `SUB` | 1 |
-| arithmetic | 0x03 | `AND` | 1 |
-| arithmetic | 0x04 | `OR` | 1 |
-| arithmetic | 0x05 | `XOR` | 1 |
-| arithmetic | 0x06 | `SLL` | 1 |
-| arithmetic | 0x07 | `SRL` | 1 |
-| arithmetic | 0x08 | `SRA` | 1 |
-| arithmetic | 0x0D | `NEG` | 1 |
-| arithmetic | 0x0C | `NOT` | 1 |
-| arithmetic | 0x20 | `ADDI` | 1 |
-| arithmetic | 0x21 | `ANDI` | 1 |
-| arithmetic | 0x22 | `ORI` | 1 |
-| arithmetic | 0x23 | `XORI` | 1 |
-| arithmetic | 0x10 | `MUL` | 3 |
-| arithmetic | 0x11 | `MULH` | 3 |
-| arithmetic | 0x12 | `MULHU` | 3 |
-| arithmetic | 0x13 | `MULHSU` | 3 |
-| arithmetic | 0x14 | `DIV` | 10 |
-| arithmetic | 0x15 | `DIVU` | 10 |
-| arithmetic | 0x16 | `REM` | 10 |
-| arithmetic | 0x17 | `REMU` | 10 |
-| arithmetic | 0x18 | `ROTL` | 2 |
-| arithmetic | 0x19 | `ROTR` | 2 |
-| arithmetic | 0x25 | `ROTL_IMM` | 2 |
-| arithmetic | 0x26 | `ROTR_IMM` | 2 |
-| arithmetic | 0x1A | `POPCNT` | 6 |
-| arithmetic | 0x1B | `CLZ` | 6 |
-| arithmetic | 0x1C | `CTZ` | 6 |
-| arithmetic | 0x1D | `ISQRT` | 6 |
-| arithmetic | 0x1E | `MIN` | 1 |
-| arithmetic | 0x1F | `MAX` | 1 |
-| arithmetic | 0x27 | `ABS` | 1 |
-| arithmetic | 0x28 | `DIV_CEIL` | 12 |
-| arithmetic | 0x29 | `GCD` | 12 |
-| arithmetic | 0x2A | `MEAN` | 2 |
-| arithmetic | 0x09 | `SLT` | 2 |
-| arithmetic | 0x0A | `SLTU` | 2 |
-| arithmetic | 0x0E | `SEQ` | 2 |
-| arithmetic | 0x0F | `SNE` | 2 |
-| arithmetic | 0x0B | `CMOV` | 3 |
-| arithmetic | 0x24 | `CMOVI` | 3 |
-| memory | 0x30 | `LOAD64` | 3 |
-| memory | 0x31 | `STORE64` | 3 |
-| memory | 0x32 | `LOAD128` | 5 |
-| memory | 0x33 | `STORE128` | 5 |
-| control | 0x40 | `BEQ` | 1 |
-| control | 0x41 | `BNE` | 1 |
-| control | 0x42 | `BLT` | 1 |
-| control | 0x43 | `BGE` | 1 |
-| control | 0x44 | `BLTU` | 1 |
-| control | 0x45 | `BGEU` | 1 |
-| control | 0x46 | `JAL` | 2 |
-| control | 0x48 | `JALR` | 2 |
-| control | 0x47 | `JR` | 2 |
-| control | 0x4A | `JMP` | 2 |
-| control | 0x4B | `JALS` | 2 |
-| control | 0x49 | `HALT` | 0 |
-| system | 0x60 | `SCALL` | 5 |
-| system | 0x61 | `GETGAS` | 0 |
+| ဂဏန်းသင်္ချာ | 0x01 | `ADD` | ၁ |
+| ဂဏန်းသင်္ချာ | က0x02| `SUB` | ၁ |
+| ဂဏန်းသင်္ချာ | က0x03| `AND` | ၁ |
+| ဂဏန်းသင်္ချာ | 0x04 | `OR` | ၁ |
+| ဂဏန်းသင်္ချာ | 0x05 | `XOR` | ၁ |
+| ဂဏန်းသင်္ချာ | 0x06 | `SLL` | ၁ |
+| ဂဏန်းသင်္ချာ | 0x07 | `SRL` | ၁ |
+| ဂဏန်းသင်္ချာ | 0x08 | `SRA` | ၁ |
+| ဂဏန်းသင်္ချာ | 0x0D | `NEG` | ၁ |
+| ဂဏန်းသင်္ချာ | 0x0C | `NOT` | ၁ |
+| ဂဏန်းသင်္ချာ | 0x20 | `ADDI` | ၁ |
+| ဂဏန်းသင်္ချာ | 0x21 | `ANDI` | ၁ |
+| ဂဏန်းသင်္ချာ | 0x22 | `ORI` | ၁ |
+| ဂဏန်းသင်္ချာ | 0x23 | `XORI` | ၁ |
+| ဂဏန်းသင်္ချာ | 0x10 | `MUL` | 3 |
+| ဂဏန်းသင်္ချာ | 0x11 | `MULH` | 3 |
+| ဂဏန်းသင်္ချာ | 0x12 | `MULHU` | 3 |
+| ဂဏန်းသင်္ချာ | 0x13 | `MULHSU` | 3 |
+| ဂဏန်းသင်္ချာ | 0x14 | `DIV` | 10 |
+| ဂဏန်းသင်္ချာ | 0x15 | `DIVU` | 10 |
+| ဂဏန်းသင်္ချာ | 0x16 | `REM` | 10 |
+| ဂဏန်းသင်္ချာ | 0x17 | `REMU` | 10 |
+| ဂဏန်းသင်္ချာ | 0x18 | `ROTL` | 2 |
+| ဂဏန်းသင်္ချာ | 0x19 | `ROTR` | 2 |
+| ဂဏန်းသင်္ချာ | 0x25 | `ROTL_IMM` | 2 |
+| ဂဏန်းသင်္ချာ | 0x26 | `ROTR_IMM` | 2 |
+| ဂဏန်းသင်္ချာ | 0x1A | `POPCNT` | 6 |
+| ဂဏန်းသင်္ချာ | 0x1B | `CLZ` | 6 |
+| ဂဏန်းသင်္ချာ | 0x1C | `CTZ` | 6 |
+| ဂဏန်းသင်္ချာ | 0x1D | `ISQRT` | 6 |
+| ဂဏန်းသင်္ချာ | 0x1E | `MIN` | ၁ |
+| ဂဏန်းသင်္ချာ | 0x1F | `MAX` | ၁ |
+| ဂဏန်းသင်္ချာ | 0x27 | `ABS` | ၁ |
+| ဂဏန်းသင်္ချာ | 0x28 | `DIV_CEIL` | 12 |
+| ဂဏန်းသင်္ချာ | 0x29 | `GCD` | 12 |
+| ဂဏန်းသင်္ချာ | 0x2A | `MEAN` | 2 |
+| ဂဏန်းသင်္ချာ | 0x09 | `SLT` | 2 |
+| ဂဏန်းသင်္ချာ | 0x0A | `SLTU` | 2 |
+| ဂဏန်းသင်္ချာ | 0x0E | `SEQ` | 2 |
+| ဂဏန်းသင်္ချာ | 0x0F | `SNE` | 2 |
+| ဂဏန်းသင်္ချာ | 0x0B | `CMOV` | 3 |
+| ဂဏန်းသင်္ချာ | 0x24 | `CMOVI` | 3 |
+| မှတ်ဉာဏ် | 0x30 | `LOAD64` | 3 |
+| မှတ်ဉာဏ် | 0x31 | `STORE64` | 3 |
+| မှတ်ဉာဏ် | 0x32 | `LOAD128` | 5 |
+| မှတ်ဉာဏ် | 0x33 | `STORE128` | 5 |
+| ထိန်းချုပ်မှု | 0x40 | `BEQ` | ၁ |
+| ထိန်းချုပ်မှု | 0x41 | `BNE` | ၁ |
+| ထိန်းချုပ်မှု | 0x42 | `BLT` | ၁ |
+| ထိန်းချုပ်မှု | 0x43 | `BGE` | ၁ |
+| ထိန်းချုပ် | 0x44 | `BLTU` | ၁ |
+| ထိန်းချုပ် | 0x45 | `BGEU` | ၁ |
+| ထိန်းချုပ် | 0x46 | `JAL` | 2 |
+| ထိန်းချုပ်မှု | 0x48 | `JALR` | 2 |
+| ထိန်းချုပ်မှု | 0x47 | `JR` | 2 |
+| ထိန်းချုပ်မှု | 0x4A | `JMP` | 2 |
+| ထိန်းချုပ်မှု | 0x4B | `JALS` | 2 |
+| ထိန်းချုပ် | 0x49 | `HALT` | 0 |
+| စနစ် | 0x60 | `SCALL` | 5 |
+| စနစ် | 0x61 | `GETGAS` | 0 |
 | crypto | 0x70 | `VADD32` | 2 |
 | crypto | 0x71 | `VADD64` | 2 |
-| crypto | 0x72 | `VAND` | 1 |
-| crypto | 0x73 | `VXOR` | 1 |
-| crypto | 0x74 | `VOR` | 1 |
-| crypto | 0x75 | `VROT32` | 1 |
-| crypto | 0x76 | `SETVL` | 1 |
+| crypto | 0x72 | `VAND` | ၁ |
+| crypto | 0x73 | `VXOR` | ၁ |
+| crypto | 0x74 | `VOR` | ၁ |
+| crypto | 0x75 | `VROT32` | ၁ |
+| crypto | 0x76 | `SETVL` | ၁ |
 | crypto | 0x77 | `PARBEGIN` | 0 |
 | crypto | 0x78 | `PAREND` | 0 |
-| crypto | 0x80 | `SHA256BLOCK` | 50 |
-| crypto | 0x81 | `SHA3BLOCK` | 50 |
+| crypto | 0x80 | `SHA256BLOCK` | 50 || crypto | 0x81 | `SHA3BLOCK` | 50 |
 | crypto | 0x82 | `POSEIDON2` | 10 |
 | crypto | 0x83 | `POSEIDON6` | 10 |
 | crypto | 0x84 | `PUBKGEN` | 50 |
@@ -134,16 +132,15 @@ and HTM retries are applied on top of these base values as noted above.
 | crypto | 0x8E | `PAIRING` | 500 |
 | crypto | 0x88 | `AESENC` | 30 |
 | crypto | 0x89 | `AESDEC` | 30 |
-| crypto | 0x8A | `BLAKE2S` | 40 |
+| crypto | 0x8A | `BLAKE2S` | ၄၀ |
 | crypto | 0x8B | `ED25519VERIFY` | 1000 |
 | crypto | 0x8F | `ED25519BATCHVERIFY` | 500 |
 | crypto | 0x8C | `ECDSAVERIFY` | 1500 |
 | crypto | 0x8D | `DILITHIUMVERIFY` | 5000 |
-| zk | 0xA0 | `ASSERT` | 1 |
-| zk | 0xA1 | `ASSERT_EQ` | 1 |
-| zk | 0xA2 | `FADD` | 1 |
-| zk | 0xA3 | `FSUB` | 1 |
+| zk | 0xA0 | `ASSERT` | ၁ |
+| zk | 0xA1 | `ASSERT_EQ` | ၁ |
+| zk | 0xA2 | `FADD` | ၁ |
+| zk | 0xA3 | `FSUB` | ၁ |
 | zk | 0xA4 | `FMUL` | 3 |
 | zk | 0xA5 | `FINV` | 5 |
-| zk | 0xA6 | `ASSERT_RANGE` | 1 |
-
+| zk | 0xA6 | `ASSERT_RANGE` | ၁ |

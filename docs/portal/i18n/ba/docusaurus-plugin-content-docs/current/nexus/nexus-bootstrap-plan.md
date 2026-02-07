@@ -7,95 +7,97 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Sora Nexus bootstrap & observability
 description: Operational plan for bringing the core Nexus validator cluster online before layering SoraFS and SoraNet services.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
-This page mirrors `docs/source/soranexus_bootstrap_plan.md`. Keep both copies aligned until localized versions land in the portal.
-:::
+:::иҫкәртергә канонлы сығанаҡ
+Был биттә I18NI000000025X көҙгөһө. Ике күсермәһен дә локалләшкән версиялар порталға төшкәнсе тура килтерегеҙ.
+::: 1990 й.
 
-# Sora Nexus Bootstrap & Observability Plan
+# Сора I18NT00000000006X Bootstrap & Күҙәтеүсәнлек планы
 
-## Objectives
-- Stand up the base Sora Nexus validator/observer network with governance keys, Torii APIs, and consensus monitoring.
-- Validate core services (Torii, consensus, persistence) before enabling SoraFS/SoraNet piggyback deployments.
-- Establish CI/CD workflows and observability dashboards/alerts to ensure network health.
+## Маҡсаттар
+- База Sora I18NT000000007X валитатор/күҙәтеүсе селтәре менән идара итеү асҡыстары, I18NT000000013X API-лар, һәм консенсус мониторингы.
+- Төп хеҙмәттәр (I18NT000000014X, консенсус, ныҡышмалылыҡ) SoraFS/SoraNet пиггибек таратыуҙы индереү алдынан.
+- CI/CD эш ағымы һәм күҙәтеү приборҙар таҡтаһы/иҫкәртмәләрен булдырыу өсөн селтәр һаулығын тәьмин итеү.
 
-## Prerequisites
-- Governance key material (council multisig, committee keys) available in HSM or Vault.
-- Baseline infrastructure (Kubernetes clusters or bare-metal nodes) in primary/secondary regions.
-- Updated bootstrap configuration (`configs/nexus/bootstrap/*.toml`) reflecting latest consensus parameters.
+## Алдан шарттар
+- Идара итеү төп материал (совет мультисиг, комитет асҡыстары) HSM йәки Vault.
+- Башланғыс инфраструктура (Кубернет кластерҙары йәки яланғас металл төйөндәре) беренсел/икенсел төбәктәрҙә.
+- Яңыртылған bootstrap конфигурацияһы (`configs/nexus/bootstrap/*.toml`) һуңғы консенсус параметрҙарын сағылдыра.
 
-## Network Environments
-- Operate two Nexus environments with distinct network prefixes:
-- **Sora Nexus (mainnet)** – production network prefix `nexus`, hosting canonical governance and SoraFS/SoraNet piggyback services (chain ID `0x02F1` / UUID `00000000-0000-0000-0000-000000000753`).
-- **Sora Testus (testnet)** – staging network prefix `testus`, mirroring mainnet configuration for integration testing and pre-release validation (chain UUID `809574f5-fee7-5e69-bfcf-52451e42d50f`).
-- Maintain separate genesis files, governance keys, and infrastructure footprints for each environment. Testus acts as the proving ground for all SoraFS/SoraNet rollouts before promotion to Nexus.
-- CI/CD pipelines should deploy to Testus first, execute automated smoke tests, and require manual promotion to Nexus once checks pass.
-- Reference configuration bundles live under `configs/soranexus/nexus/` (mainnet) and `configs/soranexus/testus/` (testnet), each containing sample `config.toml`, `genesis.json`, and Torii admission directories.
+## Селтәр мөхите
+- Ике I18NT000000008X мөхиттәре айырым селтәр префикстары менән эшләй:
+- **Сора I18NT0000000009X (mainnet)** – етештереү селтәре `nexus` prefix, канон идара итеү һәм I18NT0000000003X/SoraNet пиггибек хеҙмәттәре (сылбыща ID ID ID ID ID ID `00000000-0000-0000-0000-000000000753` X).
+- **Сора Тест (тестнет)** – I18NI0000000030X, интеграция һынау һәм сығарыу алдынан раҫлау өсөн төп селтәр конфигурацияһын көҙгөләү селтәре стадияһында (сылбыр UUID I18NI00000000031X).
+- Һәр мөхит өсөн айырым генез файлдарын, идара итеү асҡыстарын һәм инфраструктура эҙҙәрен һаҡлағыҙ. Тесус I18NT000000004X/SoraNet роллуттары өсөн I18NT00000000010X-ҡа күтәрелгәнгә тиклем иҫбатлаусы нигеҙ булып сығыш яһай.
+- CI/CD торбалары тәүҙә Testus-ҡа таратыу, автоматлаштырылған төтөн һынауҙарын башҡарырға тейеш, һәм ҡул менән I18NT000000011X чек үткәндән һуң ҡул менән пропагандалауҙы талап итә.
+- Һылтанма конфигурацияһы өйөмдәре йәшәй I18NI0000000032X (mainnet) һәм I18NI000000033X (тестнет), һәр береһе `config.toml` өлгөһө, I18NI0000000035X, һәм I18NT0000000015X ҡабул итеү кафедралары.
 
-## Step 1 – Configuration Review
-1. Audit existing documentation:
-   - `docs/source/nexus/architecture.md` (consensus, Torii layout).
-   - `docs/source/nexus/deployment_checklist.md` (infra requirements).
-   - `docs/source/nexus/governance_keys.md` (key custody procedures).
-2. Validate genesis files (`configs/nexus/genesis/*.json`) align with current validator roster and staking weights.
-3. Confirm network parameters:
-   - Consensus committee size & quorum.
-   - Block interval / finality thresholds.
-   - Torii service ports and TLS certificates.
+## 1-се аҙым – Конфигурацияны тикшерергә
+1. Аудит булған документация:
+   - I18NI000000036X (консенсус, I18NT0000000016X планировкаһы).
+   - `docs/source/nexus/deployment_checklist.md` (инфра талаптары).
+   - `docs/source/nexus/governance_keys.md` (асҡыс опека процедуралары).
+2. Генез файлдарын раҫлау (I18NI000000039X) ағымдағы валидатор исемлеге һәм ставкалар ауырлыҡтары менән тура килә.
+3. Селтәр параметрҙарын раҫлау:
+   - Консенсус комитеты күләме & кворум.
+   - Блок интервал / финал сиктәре.
+   - I18NT000000017X хеҙмәтләндереүҙең порттары һәм TLS сертификаттары.
 
-## Step 2 – Bootstrap Cluster Deployment
-1. Provision validator nodes:
-   - Deploy `irohad` instances (validators) with persistent volumes.
-   - Ensure network firewall rules allow consensus & Torii traffic between nodes.
-2. Start Torii services (REST/WebSocket) on each validator with TLS.
-3. Deploy observer nodes (read-only) for extra resilience.
-4. Run bootstrap scripts (`scripts/nexus_bootstrap.sh`) to distribute genesis, start consensus, and register nodes.
-5. Execute smoke tests:
-   - Submit test transactions via Torii (`iroha_cli tx submit`).
-   - Verify block production/finality through telemetry.
-   - Check ledger replication across validators/observers.
+## 2-се аҙым – Загрузка кластеры таратыу
+1. Президент валитатор төйөндәре:
+   - I18NI000000040X осраҡтарында (вивалдаторҙар) ныҡышмалы күләмдәре булған.
+   - Селтәр брандмауэр ҡағиҙәләрен тәьмин итеү мөмкинлеге бирә консенсус & I18NT00000000018X төйөндәр араһында трафик.
+2. Башланғыс I18NT0000000019X хеҙмәттәре (REST/WebSocket) һәр валидатор менән TLS.
+3. Өҫтәмә ныҡлыҡ өсөн күҙәтеүсе төйөндәре (уҡыу ғына).
+.
+5. Төтөн анализдарын башҡарығыҙ:
+   - Torii (I18NI000000042X X) аша һынау операцияларын тапшырҙы.
+   - Телеметрия аша блок етештереү/фильм тикшерергә.
+   - Тикшерергә баш китабы репликацияһы буйынса валидаторҙар/күҙәтеүселәр.
 
-## Step 3 – Governance & Key Management
-1. Load council multisig configuration; confirm governance proposals can be submitted and ratified.
-2. Securely store consensus/committee keys; configure automatic backups with access logging.
-3. Set up emergency key rotation procedures (`docs/source/nexus/key_rotation.md`) and verify runbook.
+## 3-сө аҙым – Идара итеү & Төп идара итеү
+1. Йөк советы мультисиг конфигурацияһы; раҫлау идара итеү тәҡдимдәрен тапшырырға һәм ратификацияларға мөмкин.
+2. Хәүефһеҙ һаҡлау консенсус/комитет асҡыстары; автоматик резерв көйҙәрен настроить менән инеү журналы.
+3. Ғәҙәттән тыш хәлдәр асҡысы әйләнеш процедураларын ҡуйырға (`docs/source/nexus/key_rotation.md`) һәм runbook-ты раҫлау.
 
-## Step 4 – CI/CD Integration
-1. Configure pipelines:
-   - Build & publish validator/Torii images (GitHub Actions or GitLab CI).
-   - Automated configuration validation (lint genesis, verify signatures).
-   - Deployment pipelines (Helm/Kustomize) for staging & production clusters.
-2. Implement smoke tests in CI (spin up ephemeral cluster, run canonical transaction suite).
-3. Add rollback scripts for failed deployments and document runbooks.
+## 4-се аҙым – CI/CD Интеграция
+1. Торбаларҙы конфигурациялау:
+   - Төҙөү & баҫтырыу валидатор/I18NT000000021X һүрәттәр (GitHub ғәмәлдәре йәки GitLab CI).
+   - Автоматлаштырылған конфигурация раҫлау (линт генезы, ҡултамғаларҙы раҫлау).
+   - Йөкмәтке торбалары (Хелм/Кстомиз) өсөн сәхнәләштереү & етештереү кластерҙары.
+2. CI-ла төтөн һынауҙарын тормошҡа ашырыу (эфемер кластерҙы әйләндереп, канонлы транзакция пакетын эшләтә).
+3. Өҫтәү өсөн кире скрипттар өсөн уңышһыҙ таратыу һәм документ runbooks.
 
-## Step 5 – Observability & Alerts
-1. Deploy monitoring stack (Prometheus + Grafana + Alertmanager) per region.
-2. Collect core metrics:
-  - `nexus_consensus_height`, `nexus_finality_lag`, `torii_request_duration_seconds`, `validator_peer_count`.
-   - Logs via Loki/ELK for Torii & consensus services.
-3. Dashboards:
-   - Consensus health (block height, finality, peer status).
-   - Torii API latency/error rates.
-   - Governance transactions & proposal statuses.
-4. Alerts:
-   - Block production stall (>2 block intervals).
-   - Peer count drop below quorum.
-   - Torii error rate spikes.
-   - Governance proposal queue backlog.
+## 5-се аҙым – Күҙәтеүсәнлек һәм иҫкәртмәләр
+1. Бер төбәккә (I18NT0000000000000000000000000001литт + иҫкәртмәнсе) таратыу мониторингы стекаһы.
+2. Ядро метрикаларын йыйыу:
+  - `nexus_consensus_height`, `nexus_finality_lag`, `torii_request_duration_seconds`, I18NI000000047X.
+   - I18NT000000022Х һәм консенсус хеҙмәттәре өсөн Loki/ELK аша журналдар.
+3. Приборҙар таҡталары:
+   - Консенсус һаулыҡ (белк, финал, тиҫтерҙәр статусы).
+   - Torii API латентлығы/хаталар ставкалары.
+   - Идара итеү операциялары & тәҡдим статусы.
+4. Иҫкәртмәләр:
+   - Блок етештереү стойкаһы (>2 блок арауыҡтары).
+   - тиҫтерҙәр һаны кворумдан түбән төшә.
+   - I18NT000000024X хаталар шпицтары.
+   - Идара итеү тәҡдиме сираты артта ҡалыу.
 
-## Step 6 – Validation & Handoff
-1. Run end-to-end validation:
-   - Submit governance proposal (e.g., parameter change).
-   - Process it through council approval to ensure governance pipeline works.
-   - Run ledger state diff to ensure consistency.
-2. Document runbook for on-call (incident response, failover, scaling).
-3. Communicate readiness to SoraFS/SoraNet teams; confirm piggyback deployments can point to Nexus nodes.
+## 6
+1. Аҙағын аҙағына тиклем раҫлау:
+   - идара итеү тәҡдимен тапшырыу (мәҫәлән, параметрҙы үҙгәртеү).
+   - Уны совет раҫлауы аша эшкәртергә идара итеү торбаһы эшен тәьмин итеү.
+   - Эҙмә-эҙлеклелекте тәьмин итеү өсөн баш кейеме дәүләте диффы йүгерергә.
+2. Документ runbook өсөн шылтыратыу (инцидент яуап, авария, масштаблау).
+3. I18NT000000005X/SoraNet командаларына әҙерлек менән аралашыу; раҫлау piggyback таратыу күрһәтә ала I18NT00000000012X төйөндәре.
 
-## Implementation Checklist
-- [ ] Genesis/configuration audit completed.
-- [ ] Validator & observer nodes deployed with healthy consensus.
-- [ ] Governance keys loaded, proposal tested.
-- [ ] CI/CD pipelines running (build + deploy + smoke tests).
-- [ ] Observability dashboards live with alerting.
-- [ ] Handoff documentation delivered to downstream teams.
+## тормошҡа ашырыу тикшерелгән исемлек
+- [ ] Башланмыш/конфигурация аудиты тамамланды.
+- [ ] Валидатор & күҙәтеүсе төйөндәре менән урынлаштырылған сәләмәт консенсус.
+- [ ] Идара итеү төймәләре тейәлгән, тәҡдим һынау.
+- [ ] CI/CD торбалары эшләй (төҙөү + таратыу + төтөн һынауҙары).
+- [ ] Күҙәтеүсәнлек приборҙар таҡталары иҫкәртмә менән йәшәй.
+- [ ] Хандофф документацияһы аҫҡы командаларға тапшырылған.

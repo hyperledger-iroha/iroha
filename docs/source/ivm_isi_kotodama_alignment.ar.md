@@ -6,165 +6,158 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 3f40329b9968530dea38745b49f7fee4d55aeb461e515e6f97b5b5986cb27e3f
 source_last_modified: "2026-01-21T10:20:35.513444+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# IVM ⇄ ISI ⇄ Data Model ⇄ Kotodama — Alignment Review
+# IVM ⇄ ISI ⇄ نموذج البيانات ⇄ Kotodama - مراجعة المحاذاة
 
-This document audits how the Iroha Virtual Machine (IVM) instruction set and syscall surface map to the Iroha Special Instructions (ISI) and `iroha_data_model`, and how Kotodama compiles into that stack. It identifies current gaps and proposes concrete improvements so the four layers fit together deterministically and ergonomically.
+يقوم هذا المستند بمراجعة كيفية تعيين مجموعة تعليمات Iroha Virtual Machine (IVM) ورسم خريطة سطح syscall إلى Iroha Special Instructions (ISI) و`iroha_data_model`، وكيفية تجميع Kotodama في تلك الحزمة. فهو يحدد الفجوات الحالية ويقترح تحسينات ملموسة بحيث تتلاءم الطبقات الأربع معًا بشكل حتمي ومريح.
 
-Note on bytecode target: Kotodama smart contracts compile to Iroha Virtual Machine (IVM) bytecode (`.to`). They do not target “risc5”/RISC‑V as a standalone architecture. Any RISC‑V‑like encodings referenced here are part of IVM’s mixed instruction format and remain an implementation detail.
+ملاحظة حول هدف الرمز الثانوي: يتم تجميع العقود الذكية Kotodama إلى الرمز الثانوي Iroha Virtual Machine (IVM) (`.to`). وهي لا تستهدف "risc5"/RISC-V كبنية مستقلة. تعتبر أي ترميزات تشبه RISC-V المشار إليها هنا جزءًا من تنسيق التعليمات المختلطة الخاص بـ IVM وتظل بمثابة تفاصيل التنفيذ.
 
-## Scope and Sources
-- IVM: `crates/ivm/src/{instruction.rs,ivm.rs,syscalls.rs,host.rs,mock_wsv.rs}` and `crates/ivm/docs/*`.
-- ISI/Data Model: `crates/iroha_data_model/src/isi/*`, `crates/iroha_core/src/smartcontracts/isi/*`, and docs `docs/source/data_model_and_isi_spec.md`.
-- Kotodama: `crates/kotodama_lang/src/*`, docs in `crates/ivm/docs/*`.
-- Core integration: `crates/iroha_core/src/{state.rs,executor.rs,smartcontracts/ivm/cache.rs}`.
+## النطاق والمصادر
+- IVM: `crates/ivm/src/{instruction.rs,ivm.rs,syscalls.rs,host.rs,mock_wsv.rs}` و`crates/ivm/docs/*`.
+- ISI/نموذج البيانات: `crates/iroha_data_model/src/isi/*`، و`crates/iroha_core/src/smartcontracts/isi/*`، والمستندات `docs/source/data_model_and_isi_spec.md`.
+- Kotodama: `crates/kotodama_lang/src/*`، المستندات في `crates/ivm/docs/*`.
+- التكامل الأساسي: `crates/iroha_core/src/{state.rs,executor.rs,smartcontracts/ivm/cache.rs}`.
 
-Terminology
-- “ISI” refers to built‑in instruction types that mutate world state via the executor (e.g., RegisterAccount, Mint, Transfer).
-- “Syscall” refers to IVM `SCALL` with an 8‑bit number that delegates to the host for ledger operations.
+المصطلحات
+- يشير "ISI" إلى أنواع التعليمات المضمنة التي تعمل على تغيير الحالة العالمية عبر المنفذ (على سبيل المثال، RegisterAccount، Mint، Transfer).
+- يشير "Syscall" إلى IVM `SCALL` برقم 8 بت يفوض إلى المضيف لعمليات دفتر الأستاذ.
 
 ---
 
-## Current Mapping (As Implemented)
+## التعيين الحالي (كما تم تنفيذه)
 
-### IVM Instructions
-- Arithmetic, memory, control flow, crypto, vector, and ZK helpers are defined in `instruction.rs` and implemented in `ivm.rs`. These are self‑contained and deterministic; acceleration paths (SIMD/Metal/CUDA) have CPU fallbacks.
-- System/host boundary is via `SCALL` (opcode 0x60). Numbers are listed in `syscalls.rs` and include world operations (register/unregister domain/account/asset, mint/burn/transfer, role/permission ops, triggers) plus helpers (`GET_PRIVATE_INPUT`, `COMMIT_OUTPUT`, `GET_MERKLE_PATH`, etc.).
+### تعليمات IVM
+- تم تعريف العناصر المساعدة الحسابية والذاكرة وتدفق التحكم والتشفير والمتجه وZK في `instruction.rs` وتم تنفيذها في `ivm.rs`. وهي مكتفية بذاتها وحتمية؛ تحتوي مسارات التسريع (SIMD/Metal/CUDA) على احتياطيات لوحدة المعالجة المركزية.
+- حدود النظام/المضيف عبر `SCALL` (رمز التشغيل 0x60). تم إدراج الأرقام في `syscalls.rs` وتتضمن العمليات العالمية (تسجيل/إلغاء تسجيل المجال/الحساب/الأصل، النعناع/النسخ/النقل، عمليات الدور/الأذونات، المشغلات) بالإضافة إلى المساعدين (`GET_PRIVATE_INPUT`، `COMMIT_OUTPUT`، `GET_MERKLE_PATH`، وما إلى ذلك).
 
-### Host Layer
-- Trait `IVMHost::syscall(number, &mut IVM)` lives in `host.rs`.
-- DefaultHost implements only non‑ledger helpers (alloc, heap growth, inputs/outputs, ZK proof helpers, feature discovery) — it does NOT perform world state mutations.
-- A demo `WsvHost` exists in `mock_wsv.rs` that maps a subset of asset operations (Transfer/Mint/Burn) to a tiny in‑memory WSV using `AccountId`/`AssetDefinitionId` via ad‑hoc integer→ID maps in registers x10..x13.
+### طبقة المضيف
+- السمة `IVMHost::syscall(number, &mut IVM)` تعيش في `host.rs`.
+- يقوم DefaultHost بتنفيذ مساعدات غير دفتر الأستاذ فقط (التخصيص، ونمو الكومة، والمدخلات/المخرجات، ومساعدات إثبات ZK، واكتشاف الميزات) - ولا يقوم بإجراء طفرات الحالة العالمية.
+- يوجد عرض توضيحي `WsvHost` في `mock_wsv.rs` يقوم بتعيين مجموعة فرعية من عمليات الأصول (نقل/سك/نسخ) إلى WSV صغير في الذاكرة باستخدام `AccountId`/`AssetDefinitionId` عبر عدد صحيح مخصص → خرائط المعرف في السجلات x10..x13.
 
-### ISI and Data Model
-- Built‑in ISI types and semantics are implemented in `iroha_core::smartcontracts::isi::*` and documented in `docs/source/data_model_and_isi_spec.md`.
-- `InstructionBox` uses a registry with stable “wire IDs” and Norito encoding; native execution dispatch is the current code path in core.
-
-### Core Integration of IVM
-- `State::execute_trigger(..)` clones the cached `IVM`, attaches a `CoreHost::with_accounts_and_args`, and then calls `load_program` + `run`.
-- `CoreHost` implements `IVMHost`: stateful syscalls are decoded via the pointer‑ABI TLV layout, mapped to built-in ISI (`InstructionBox`), and queued. Once the VM returns, the host hands those ISI to the regular executor so permissions, invariants, events, and telemetry remain identical to native execution. Helper syscalls that do not touch WSV still delegate to `DefaultHost`.
-- `executor.rs` continues to run built-in ISI natively; migrating the validator executor itself to IVM remains future work.
+### ISI ونموذج البيانات
+- تم تنفيذ أنواع ودلالات ISI المضمنة في `iroha_core::smartcontracts::isi::*` وتم توثيقها في `docs/source/data_model_and_isi_spec.md`.
+- يستخدم `InstructionBox` سجلاً به "معرفات سلكية" مستقرة وترميز Norito؛ إرسال التنفيذ الأصلي هو مسار التعليمات البرمجية الحالي في النواة.### التكامل الأساسي لـ IVM
+- يقوم `State::execute_trigger(..)` باستنساخ `IVM` المخزن مؤقتًا، وإرفاق `CoreHost::with_accounts_and_args`، ثم يستدعي `load_program` + `run`.
+- يقوم `CoreHost` بتنفيذ `IVMHost`: يتم فك تشفير مكالمات النظام ذات الحالة عبر تخطيط المؤشر-ABI TLV، وتعيينها إلى ISI (`InstructionBox`) المدمج، ووضعها في قائمة الانتظار. بمجرد عودة الجهاز الافتراضي، يقوم المضيف بتسليم ISI إلى المنفذ العادي بحيث تظل الأذونات والثوابت والأحداث والقياس عن بعد مطابقة للتنفيذ الأصلي. لا تزال مكالمات النظام المساعدة التي لا تلمس WSV تفوض إلى `DefaultHost`.
+- يستمر `executor.rs` في تشغيل ISI المدمج أصلاً؛ يظل ترحيل منفذ أداة التحقق من الصحة نفسه إلى IVM عملاً مستقبليًا.
 
 ### Kotodama → IVM
-- Frontend pieces exist (lexer/parser/minimal semantics/IR/regalloc).
-- Codegen (`kotodama::compiler`) emits a subset of IVM ops and uses `SCALL` for asset operations:
+- توجد قطع الواجهة الأمامية (lexer/parser/minimal semantics/IR/regalloc).
+- يُصدر Codegen (`kotodama::compiler`) مجموعة فرعية من IVM ops ويستخدم `SCALL` لعمليات الأصول:
   - `MintAsset` → set x10=account, x11=asset, x12=&NoritoBytes(Numeric); `SCALL SYSCALL_MINT_ASSET`.
-  - `BurnAsset`/`TransferAsset` similar (amount passed as NoritoBytes(Numeric) pointer).
-- Demos `koto_*_demo.rs` show using `WsvHost` with integer indices mapped to IDs for quick testing.
+  - `BurnAsset`/`TransferAsset` مماثل (تم تمرير المبلغ كمؤشر NoritoBytes (رقمي)).
+- تظهر العروض التوضيحية `koto_*_demo.rs` باستخدام `WsvHost` مع مؤشرات الأعداد الصحيحة المعينة للمعرفات لإجراء اختبار سريع.
 
 ---
 
-## Gaps and Mismatches
+## الفجوات وعدم التطابق
 
-1) Core host coverage and parity
-- Status: `CoreHost` now exists in core and translates many ledger syscalls into ISI that execute via the standard path. Coverage is still incomplete (e.g., some roles/permission/trigger syscalls are stubs), and parity tests are required to guarantee the enqueued ISI produce the same state/events as native execution.
+1) تغطية المضيف الأساسية والتكافؤ
+- الحالة: `CoreHost` موجود الآن في المركز ويترجم العديد من طلبات نظام دفتر الأستاذ إلى ISI التي يتم تنفيذها عبر المسار القياسي. لا تزال التغطية غير مكتملة (على سبيل المثال، بعض الأدوار/الأذونات/عمليات التشغيل هي بذرة)، واختبارات التكافؤ مطلوبة لضمان إنتاج ISI المدرج في قائمة الانتظار نفس الحالة/الأحداث مثل التنفيذ الأصلي.
 
-2) Syscall surface vs. ISI/Data Model naming and coverage
-- NFTs: syscalls now expose canonical `SYSCALL_NFT_*` names aligned with `iroha_data_model::nft`.
-- Roles/Permissions/Triggers: syscall list exists, but no reference implementation or mapping table tying each call to a concrete ISI in core.
-- Parameters/semantics: some syscalls do not specify parameter encoding (typed IDs vs. pointers) or gas semantics; ISI semantics are well‑defined.
+2) سطح Syscall مقابل تسمية وتغطية نموذج ISI/Data
+- NFTs: تعرض مكالمات النظام الآن أسماء `SYSCALL_NFT_*` الأساسية المتوافقة مع `iroha_data_model::nft`.
+- الأدوار/الأذونات/المشغلات: توجد قائمة syscall، ولكن لا يوجد تنفيذ مرجعي أو جدول تعيين يربط كل مكالمة بـ ISI ملموس في القلب.
+- المعلمات/الدلالات: لا تحدد بعض طلبات النظام ترميز المعلمات (المعرفات المكتوبة مقابل المؤشرات) أو دلالات الغاز؛ دلالات ISI محددة جيدًا.
 
-3) ABI for passing typed data across the VM/host boundary
-- Pointer‑ABI TLVs are now decoded in `CoreHost` (`decode_tlv_typed`), giving a deterministic path for IDs, metadata, and JSON payloads. Work remains to ensure every syscall documents the expected pointer types and that Kotodama emits the correct TLVs (including error handling when the policy rejects a type).
+3) ABI لتمرير البيانات المكتوبة عبر حدود الجهاز الظاهري/المضيف
+- يتم الآن فك تشفير Pointer‑ABI TLVs في `CoreHost` (`decode_tlv_typed`)، مما يوفر مسارًا محددًا للمعرفات وبيانات التعريف وحمولات JSON. يبقى العمل للتأكد من أن كل syscall يوثق أنواع المؤشر المتوقعة وأن Kotodama يصدر TLVs الصحيحة (بما في ذلك معالجة الأخطاء عندما ترفض السياسة نوعًا ما).
 
-4) Gas and error mapping consistency
-- IVM opcodes charge per‑op gas; CoreHost now returns extra gas for ISI syscalls using the native gas schedule (including batch transfers and the vendor ISI bridge), and ZK verify syscalls reuse the confidential gas schedule. DefaultHost still keeps minimal costs for test coverage.
-- Error surfaces differ: IVM returns `VMError::{OutOfGas,PermissionDenied,...}`; ISI returns `InstructionExecutionError` categories (`Find`, `Repetition`, `InvariantViolation`, `Math`, `Type`, `Mintability`, `InvalidParameter`).
+4) اتساق رسم خرائط الغاز والخطأ
+- رموز التشغيل IVM يتم شحنها لكل غاز تشغيلي؛ يقوم CoreHost الآن بإرجاع الغاز الإضافي لمكالمات نظام ISI باستخدام جدول الغاز الأصلي (بما في ذلك عمليات نقل الدُفعات وجسر ISI للمورد)، وتتحقق ZK من مكالمات النظام من إعادة استخدام جدول الغاز السري. لا يزال DefaultHost يحتفظ بأقل التكاليف لتغطية الاختبار.
+- تختلف أسطح الأخطاء: يُرجع IVM `VMError::{OutOfGas,PermissionDenied,...}`؛ تقوم ISI بإرجاع فئات `InstructionExecutionError` (`Find`، `Repetition`، `InvariantViolation`، `Math`، `Type`، `Mintability`، `InvalidParameter`).5) الحتمية عبر مسارات التسارع
+- يحتوي IVM Vector/CUDA/Metal على احتياطيات لوحدة المعالجة المركزية، ولكن تظل بعض العمليات محفوظة (`SETVL`، PARBEGIN/PAREND) وليست جزءًا من النواة الحتمية حتى الآن.
+- تختلف أشجار Merkle بين IVM والعقدة (`ivm::merkle_tree` مقابل `iroha_crypto::MerkleTree`) - يظهر عنصر التوحيد بالفعل في `roadmap.md`.
 
-5) Determinism across acceleration paths
-- IVM vector/CUDA/Metal have CPU fallbacks, but some ops remain reserved (`SETVL`, PARBEGIN/PAREND) and are not part of the deterministic core yet.
-- Merkle trees differ between IVM and node (`ivm::merkle_tree` vs `iroha_crypto::MerkleTree`) — a unification item already appears in `roadmap.md`.
-
-6) Kotodama language surface vs. intended ledger semantics
-- Compiler emits a small subset; most language features (state/structs, triggers, permissions, typed params/returns) are not wired to the host/ISI model yet.
-- No capability/effect typing to ensure that syscalls are legal for the authority.
+6) سطح اللغة Kotodama مقابل دلالات دفتر الأستاذ المقصود
+- يصدر المترجم مجموعة فرعية صغيرة؛ معظم ميزات اللغة (الحالة/البنيات، المشغلات، الأذونات، المعلمات/الإرجاعات المكتوبة) لم يتم توصيلها بنموذج المضيف/ISI حتى الآن.
+- لا توجد إمكانية/تأثير في الكتابة للتأكد من أن مكالمات النظام قانونية بالنسبة للسلطة.
 
 ---
 
-## Recommendations (Concrete Steps)
+## التوصيات (خطوات ملموسة)
 
-### A. Implement a production IVM host in core
-- Add `iroha_core::smartcontracts::ivm::host` module implementing `ivm::host::IVMHost`.
-- For each syscall in `ivm::syscalls`:
-  - Decode arguments via a canonical ABI (see B.), construct the corresponding built‑in ISI or call the same core logic directly, execute it against `StateTransaction`, and map errors deterministically back to an IVM return code.
-  - Charge gas deterministically using a per‑syscall table defined in core (and exposed to IVM via `SYSCALL_GET_PARAMETER` if needed in the future). Initially, return fixed extra gas from the host for each call.
-- Thread `authority: &AccountId` and `&mut StateTransaction` into the host so permission checks and events are identical to native ISI.
-- Update `State::execute_trigger(ExecutableRef::Ivm)` to attach this host before `vm.run()` and return the same `ExecutionStep` semantics as ISI (events are already emitted in core; consistent behavior should be validated).
+### أ. تنفيذ مضيف إنتاج IVM في المركز
+- إضافة وحدة `iroha_core::smartcontracts::ivm::host` التي تنفذ `ivm::host::IVMHost`.
+- لكل اتصال نظام في `ivm::syscalls`:
+  - فك تشفير الوسائط عبر ABI المتعارف عليه (انظر ب.)، وقم بإنشاء ISI المدمج المقابل أو استدعاء نفس المنطق الأساسي مباشرة، وتنفيذه مقابل `StateTransaction`، وتعيين الأخطاء بشكل حاسم مرة أخرى إلى رمز الإرجاع IVM.
+  - شحن الغاز بشكل حتمي باستخدام جدول لكل نظام محدد في المركز (ويتعرض لـ IVM عبر `SYSCALL_GET_PARAMETER` إذا لزم الأمر في المستقبل). في البداية، قم بإرجاع الغاز الإضافي الثابت من المضيف لكل مكالمة.
+- أدخل `authority: &AccountId` و`&mut StateTransaction` في المضيف بحيث تتطابق عمليات التحقق من الأذونات والأحداث مع ISI الأصلي.
+- قم بتحديث `State::execute_trigger(ExecutableRef::Ivm)` لإرفاق هذا المضيف قبل `vm.run()` وإرجاع نفس دلالات `ExecutionStep` مثل ISI (تم إصدار الأحداث بالفعل في المركز؛ يجب التحقق من صحة السلوك المتسق).
 
-### B. Define a deterministic VM/host ABI for typed values
-- Use Norito on the VM side for structured arguments:
-  - Pass pointers (in x10..x13, etc.) to VM memory regions containing Norito‑encoded values for types like `AccountId`, `AssetDefinitionId`, `Numeric`, `Metadata`.
-  - Host reads bytes via `IVM` memory helpers and decodes with Norito (`iroha_data_model` already derives `Encode/Decode`).
-- Add minimal helpers in Kotodama codegen to serialize literal IDs into code/constant pools or to prepare call frames in memory.
-- Amounts are `Numeric` and are passed as NoritoBytes pointers; other complex types also pass by pointer.
-- Document this in `crates/ivm/docs/calling_convention.md` and add examples.
+### ب. تحديد VM/host ABI الحتمي للقيم المكتوبة
+- استخدم Norito على جانب VM للوسائط المنظمة:
+  - قم بتمرير المؤشرات (في x10..x13، وما إلى ذلك) إلى مناطق ذاكرة VM التي تحتوي على قيم مشفرة Norito لأنواع مثل `AccountId`، و`AssetDefinitionId`، و`Numeric`، و`Metadata`.
+  - يقرأ المضيف وحدات البايت عبر مساعدات الذاكرة `IVM` ويفك تشفيرها باستخدام Norito (`iroha_data_model` يشتق بالفعل `Encode/Decode`).
+- أضف الحد الأدنى من المساعدين في برنامج الترميز Kotodama لتسلسل المعرفات الحرفية في مجموعات التعليمات البرمجية/الثابتة أو لإعداد إطارات الاتصال في الذاكرة.
+- المبالغ هي `Numeric` ويتم تمريرها كمؤشرات NoritoBytes؛ تمر الأنواع المعقدة الأخرى أيضًا بالمؤشر.
+- قم بتوثيق ذلك في `crates/ivm/docs/calling_convention.md` وأضف أمثلة.### ج. محاذاة تسمية النظام والتغطية مع ISI/Data Model
+- إعادة تسمية مكالمات النظام المتعلقة بـ NFT من أجل الوضوح: الأسماء الأساسية تتبع الآن النمط `SYSCALL_NFT_*` (`SYSCALL_NFT_MINT_ASSET`، `SYSCALL_NFT_SET_METADATA`، وما إلى ذلك).
+- نشر جدول التعيين (مستند + تعليقات التعليمات البرمجية) من كل استدعاء النظام إلى دلالات ISI الأساسية، بما في ذلك:
+  - المعلمات (السجلات مقابل المؤشرات)، والشروط المسبقة المتوقعة، والأحداث، وتعيينات الأخطاء.
+  - رسوم الغاز.
+- تأكد من وجود استدعاء نظام لكل ISI مدمج يجب أن يكون قابلاً للاستدعاء من Kotodama (المجالات والحسابات والأصول والأدوار/الأذونات والمشغلات والمعلمات). إذا كان يجب أن يظل ISI مميزًا، فقم بتوثيقه وتنفيذه من خلال عمليات التحقق من الأذونات في المضيف.
 
-### C. Align syscall naming and coverage with ISI/Data Model
-- Rename NFT‑related syscalls for clarity: canonical names now follow the `SYSCALL_NFT_*` pattern (`SYSCALL_NFT_MINT_ASSET`, `SYSCALL_NFT_SET_METADATA`, etc.).
-- Publish a mapping table (doc + code comments) from each syscall to core ISI semantics, including:
-  - Parameters (registers vs. pointers), expected preconditions, events, and error mappings.
-  - Gas charges.
-- Ensure there is a syscall for each built‑in ISI that should be invocable from Kotodama (domains, accounts, assets, roles/permissions, triggers, parameters). If an ISI must remain privileged, document it and enforce via permission checks in the host.
+### د. توحيد الأخطاء والغازات
+- أضف طبقة ترجمة في المضيف: قم بتعيين `InstructionExecutionError::{Find,Repetition,InvariantViolation,Math,Type,Mintability,InvalidParameter}` إلى رموز `VMError` محددة أو اصطلاح نتائج موسع (على سبيل المثال، قم بتعيين `x10=0/1` واستخدم `VMError::HostRejected { code }` المحددة جيدًا).
+- إدخال جدول الغاز في قلب مكالمات النظام؛ قم بنسخها في مستندات IVM؛ ضمان أن تكون التكاليف قابلة للتنبؤ بحجم المدخلات ومستقلة عن النظام الأساسي.
 
-### D. Unify errors and gas
-- Add a translation layer in the host: map `InstructionExecutionError::{Find,Repetition,InvariantViolation,Math,Type,Mintability,InvalidParameter}` to specific `VMError` codes or an extended result convention (e.g., set `x10=0/1` and use a well‑defined `VMError::HostRejected { code }`).
-- Introduce a gas table in core for syscalls; mirror it in IVM docs; ensure costs are input‑size predictable and platform‑independent.
+### هـ. الحتمية والأوليات المشتركة
+- أكمل توحيد شجرة Merkle (انظر خريطة الطريق) وقم بإزالة/الاسم المستعار `ivm::merkle_tree` إلى `iroha_crypto` بأوراق وبراهين متطابقة.
+- احتفظ بـ `SETVL`/PARBEGIN/PAREND` محجوزًا حتى يتم تطبيق عمليات التحقق من الحتمية الشاملة وإستراتيجية الجدولة الحتمية؛ وثيقة أن IVM يتجاهل هذه التلميحات اليوم.
+- التأكد من أن مسارات التسريع تنتج مخرجات متطابقة لكل بايت؛ عندما لا يكون ذلك ممكنًا، يمكنك حماية الميزات من خلال اختبار يضمن التكافؤ الاحتياطي لوحدة المعالجة المركزية.
 
-### E. Determinism and shared primitives
-- Complete Merkle tree unification (see roadmap) and remove/alias `ivm::merkle_tree` to `iroha_crypto` with identical leaves and proofs.
-- Keep `SETVL`/PARBEGIN/PAREND` reserved until end‑to‑end determinism checks and a deterministic scheduler strategy are in place; document that IVM ignores these hints today.
-- Ensure acceleration paths produce byte‑for‑byte identical outputs; where not feasible, guard behind features with a test ensuring CPU fallback equivalence.
+### F.Kotodama أسلاك المترجم
+- توسيع الكودجين إلى ABI (B.) الأساسي للمعرفات والمعلمات المعقدة؛ توقف عن استخدام الخرائط التجريبية لعدد صحيح → ID.
+- أضف تعيينات مدمجة مباشرة إلى مكالمات نظام ISI خارج الأصول (المجالات/الحسابات/الأدوار/الأذونات/المشغلات) بأسماء واضحة.
+- إضافة اختبارات قدرة وقت الترجمة والتعليقات التوضيحية الاختيارية `permission(...)`؛ الرجوع إلى أخطاء مضيف وقت التشغيل عندما لا يكون الإثبات الثابت ممكنًا.
+- أضف اختبارات الوحدة في `crates/ivm/tests/kotodama.rs` التي تقوم بتجميع وتشغيل العقود الصغيرة من البداية إلى النهاية باستخدام مضيف اختبار يقوم بفك تشفير وسيطات Norito وتحويل WSV مؤقت.
 
-### F. Kotodama compiler wiring
-- Extend codegen to the canonical ABI (B.) for IDs and complex parameters; stop using integer→ID demo maps.
-- Add builtins mapping directly to ISI syscalls beyond assets (domains/accounts/roles/permissions/triggers) with clear names.
-- Add compile‑time capability checks and optional `permission(...)` annotations; fallback to runtime host errors when static proof is not possible.
-- Add unit tests in `crates/ivm/tests/kotodama.rs` that compile and run small contracts end‑to‑end using a test host that decodes Norito arguments and mutates a temporary WSV.
-
-### G. Documentation and developer ergonomics
-- Update `docs/source/data_model_and_isi_spec.md` with the syscall mapping table and ABI notes.
-- Add a new doc “IVM Host Integration Guide” in `crates/ivm/docs/` describing how to implement an `IVMHost` over real `StateTransaction`.
-- Clarify in `README.md` and crate docs that Kotodama targets IVM `.to` bytecode and that syscalls are the bridge into world state.
+### ز. التوثيق وبيئة العمل للمطورين
+- قم بتحديث `docs/source/data_model_and_isi_spec.md` باستخدام جدول تعيين syscall وملاحظات ABI.
+- أضف مستندًا جديدًا "IVM Host Integration Guide" في `crates/ivm/docs/` يصف كيفية تنفيذ `IVMHost` على `StateTransaction` الحقيقي.
+- وضح في `README.md` ومستندات الصندوق أن Kotodama يستهدف الرمز الثانوي IVM `.to` وأن مكالمات النظام هي الجسر إلى الحالة العالمية.
 
 ---
 
-## Suggested Mapping Table (Initial Draft)
+## جدول التعيين المقترح (المسودة الأولية)
 
-Representative subset — finalize and expand during host implementation.
+مجموعة فرعية تمثيلية - يتم الانتهاء منها وتوسيعها أثناء تنفيذ المضيف.- SYSCALL_REGISTER_DOMAIN(المعرف: ptr DomainId) → تسجيل ISI
+- SYSCALL_REGISTER_ACCOUNT(المعرف: ptr AccountId) → تسجيل ISI
+- SYSCALL_REGISTER_ASSET(المعرف: ptr AssetDefinitionId، mintable: u8) → تسجيل ISI
+- SYSCALL_MINT_ASSET(الحساب: ptr AccountId، الأصل: ptr AssetDefinitionId، المبلغ: ptr NoritoBytes(Numeric)) → ISI Mint
+- SYSCALL_BURN_ASSET(الحساب: ptr AccountId، الأصل: ptr AssetDefinitionId، المبلغ: ptr NoritoBytes(Numeric)) → ISI Burn
+- SYSCALL_TRANSFER_ASSET(من: ptr AccountId، إلى: ptr AccountId، الأصل: ptr AssetDefinitionId، المبلغ: ptr NoritoBytes(Numeric)) → ISI Transfer
+- SYSCALL_TRANSFER_V1_BATCH_BEGIN() / SYSCALL_TRANSFER_V1_BATCH_END() → ISI TransferAssetBatch (فتح/إغلاق النطاق؛ يتم تخفيض الإدخالات الفردية عبر `transfer_asset`)
+- SYSCALL_TRANSFER_V1_BATCH_APPLY(&NoritoBytes) → إرسال دفعة مشفرة مسبقًا عندما تقوم العقود بالفعل بتسلسل الإدخالات خارج السلسلة
+- SYSCALL_NFT_MINT_ASSET(المعرف: ptr NftId، المالك: ptr AccountId) → تسجيل ISI
+- SYSCALL_NFT_TRANSFER_ASSET(من: ptr AccountId، إلى: ptr AccountId، المعرف: ptr NftId) → ISI Transfer
+- SYSCALL_NFT_SET_METADATA(المعرف: ptr NftId، المحتوى: بيانات التعريف ptr) → ISI SetKeyValue
+- SYSCALL_NFT_BURN_ASSET(المعرف: ptr NftId) → إلغاء تسجيل ISI
+- SYSCALL_CREATE_ROLE(المعرف: ptr معرف الدور، الدور: دور ptr) → تسجيل ISI
+- SYSCALL_GRANT_ROLE(الحساب: معرف حساب ptr، الدور: معرف دور ptr) → ISI Grant
+- SYSCALL_REVOKE_ROLE (الحساب: معرف حساب ptr، الدور: معرف دور ptr) → إبطال ISI
+- SYSCALL_SET_PARAMETER(المعلمة: معلمة ptr) → ISI SetParameter
 
-- SYSCALL_REGISTER_DOMAIN(id: ptr DomainId) → ISI Register<Domain>
-- SYSCALL_REGISTER_ACCOUNT(id: ptr AccountId) → ISI Register<Account>
-- SYSCALL_REGISTER_ASSET(id: ptr AssetDefinitionId, mintable: u8) → ISI Register<AssetDefinition>
-- SYSCALL_MINT_ASSET(account: ptr AccountId, asset: ptr AssetDefinitionId, amount: ptr NoritoBytes(Numeric)) → ISI Mint<Numeric, Asset>
-- SYSCALL_BURN_ASSET(account: ptr AccountId, asset: ptr AssetDefinitionId, amount: ptr NoritoBytes(Numeric)) → ISI Burn<Numeric, Asset>
-- SYSCALL_TRANSFER_ASSET(from: ptr AccountId, to: ptr AccountId, asset: ptr AssetDefinitionId, amount: ptr NoritoBytes(Numeric)) → ISI Transfer<Asset>
-- SYSCALL_TRANSFER_V1_BATCH_BEGIN() / SYSCALL_TRANSFER_V1_BATCH_END() → ISI TransferAssetBatch (open/close the scope; individual entries are lowered via `transfer_asset`)
-- SYSCALL_TRANSFER_V1_BATCH_APPLY(&NoritoBytes<TransferAssetBatch>) → Submit a pre-encoded batch when contracts already serialized the entries off-chain
-- SYSCALL_NFT_MINT_ASSET(id: ptr NftId, owner: ptr AccountId) → ISI Register<Nft>
-- SYSCALL_NFT_TRANSFER_ASSET(from: ptr AccountId, to: ptr AccountId, id: ptr NftId) → ISI Transfer<Nft>
-- SYSCALL_NFT_SET_METADATA(id: ptr NftId, content: ptr Metadata) → ISI SetKeyValue<Nft>
-- SYSCALL_NFT_BURN_ASSET(id: ptr NftId) → ISI Unregister<Nft>
-- SYSCALL_CREATE_ROLE(id: ptr RoleId, role: ptr Role) → ISI Register<Role>
-- SYSCALL_GRANT_ROLE(account: ptr AccountId, role: ptr RoleId) → ISI Grant<Role>
-- SYSCALL_REVOKE_ROLE(account: ptr AccountId, role: ptr RoleId) → ISI Revoke<Role>
-- SYSCALL_SET_PARAMETER(param: ptr Parameter) → ISI SetParameter
-
-Notes
-- “ptr T” means a pointer in a register to Norito‑encoded bytes for T, stored in VM memory; the host decodes it into the corresponding `iroha_data_model` type.
-- Return convention: success sets `x10=1`; failure sets `x10=0` and may raise `VMError::HostRejected` for fatal errors.
+ملاحظات
+- "ptr T" يعني مؤشر في سجل للبايتات المشفرة Norito لـ T، المخزنة في ذاكرة VM؛ يقوم المضيف بفك تشفيرها إلى النوع `iroha_data_model` المقابل.
+- اتفاقية الإرجاع: مجموعات النجاح `x10=1`؛ يؤدي الفشل إلى تعيين `x10=0` وقد يؤدي إلى رفع `VMError::HostRejected` للأخطاء الفادحة.
 
 ---
 
-## Risks and Rollout Plan
-- Start by wiring host for a narrow set (Assets + Accounts) and add focused tests.
-- Keep native ISI execution as the authoritative path while host semantics mature; run both paths under a “shadow mode” in tests to assert identical end effects and events.
-- Once parity is validated, enable IVM host for IVM triggers in production; later consider routing regular transactions through IVM as well.
+## المخاطر وخطة الطرح
+- ابدأ بتوصيل الأسلاك إلى المضيف لمجموعة ضيقة (الأصول + الحسابات) وأضف اختبارات مركزة.
+- حافظ على تنفيذ ISI الأصلي باعتباره المسار المعتمد بينما تنضج دلالات المضيف؛ قم بتشغيل كلا المسارين ضمن "وضع الظل" في الاختبارات لتأكيد التأثيرات والأحداث النهائية المتطابقة.
+- بمجرد التحقق من صحة التكافؤ، قم بتمكين مضيف IVM لمشغلات IVM في الإنتاج؛ فكر لاحقًا في توجيه المعاملات المنتظمة من خلال IVM أيضًا.
 
 ---
 
-## Outstanding Work
-- Finalise the Kotodama helpers that pass Norito‑encoded pointers (`crates/ivm/src/kotodama_std.rs`) and surface them through the compiler CLI.
-- Publish the syscall gas table (including helper syscalls) and keep CoreHost enforcement/tests aligned with it.
-- ✅ Added round-trip Norito fixtures covering the pointer-argument ABI; see `crates/iroha_data_model/tests/norito_pointer_abi_roundtrip.rs` for manifest and NFT pointer coverage kept in CI.
+## عمل متميز
+- قم بوضع اللمسات النهائية على مساعدات Kotodama التي تمرر المؤشرات المشفرة بـ Norito (`crates/ivm/src/kotodama_std.rs`) وقم بإبرازها من خلال واجهة سطر الأوامر للمترجم.
+- قم بنشر جدول الغاز syscall (بما في ذلك syscalls المساعد) وحافظ على توافق/اختبارات/إنفاذ CoreHost معه.
+- ✅ تمت إضافة تركيبات Norito ذهابًا وإيابًا والتي تغطي وسيطة المؤشر ABI؛ راجع `crates/iroha_data_model/tests/norito_pointer_abi_roundtrip.rs` للاطلاع على تغطية البيان ومؤشر NFT المحفوظة في CI.

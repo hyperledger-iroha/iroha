@@ -4,51 +4,53 @@ direction: ltr
 source: docs/portal/docs/da/commitments-plan.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 :::note المصدر القياسي
-يعكس `docs/source/da/commitments_plan.md`. ابق النسختين متزامنتين حتى يتم سحب
+É `docs/source/da/commitments_plan.md`. ابق النسختين متزامنتين حتى يتم سحب
 الوثائق القديمة.
 :::
 
-# خطة تعهدات توفر البيانات في Sora Nexus (DA-3)
+# Você pode usar o Sora Nexus (DA-3)
 
 _مسودة: 2026-03-25 -- المالكون: Core Protocol WG / Smart Contract Team / Storage Team_
 
-يمدد DA-3 تنسيق كتلة Nexus بحيث تدمج كل lane سجلات حتمية تصف الـ blobs المقبولة
-من DA-2. توضح هذه المذكرة هياكل البيانات القياسية، ووصلات خط انابيب الكتل،
-وبرهان العملاء الخفيفين، واسطح Torii/RPC التي يجب ان تكتمل قبل ان يعتمد
+Use o DA-3 para Nexus para remover os blobs da pista.
+Em DA-2. توضح هذه المذكرة هياكل البيانات القياسية, ووصلات خط انابيب الكتل,
+A solução de problemas Torii/RPC não está disponível para download
 المدققون على تعهدات DA اثناء فحوصات القبول او الحوكمة. جميع الحمولات مشفرة
-بـ Norito؛ لا SCALE ولا JSON مخصص.
+بـ Norito; O SCALE e o JSON são usados.
 
 ## الاهداف
 
 - حمل تعهدات لكل blob (chunk root + manifest hash + تعهد KZG اختياري) داخل كل
-  كتلة Nexus لكي يتمكن النظراء من اعادة بناء حالة availability بدون الرجوع
-  الى تخزين خارج الدفتر.
+  كتلة Nexus é uma opção de disponibilidade sem disponibilidade
+  Isso é feito por conta própria.
 - توفير براهين عضوية حتمية لكي يتحقق العملاء الخفيفون من ان manifest hash تم
   تثبيته في كتلة محددة.
-- كشف استعلامات Torii (`/v1/da/commitments/*`) وبراهين تسمح للـ relays وSDKs
-  وادوات الحوكمة بتدقيق availability دون اعادة تشغيل كل كتلة.
+- كشف استعلامات Torii (`/v1/da/commitments/*`) e instalar relés e SDKs
+  وادوات الحوكمة بتدقيق disponibilidade دون اعادة تشغيل كل كتلة.
 - الحفاظ على ظرف `SignedBlockWire` القياسي عبر تمرير البنى الجديدة من خلال
-  ترويسة بيانات Norito الوصفية واشتقاق hash الكتلة.
+  Você pode usar Norito como hash e hash.
 
 ## نظرة عامة على النطاق
 
-1. **اضافات نموذج البيانات** في `iroha_data_model::da::commitment` مع تغييرات
-   ترويسة الكتلة في `iroha_data_model::block`.
-2. **Hooks للمنفذ** حتى يقوم `iroha_core` بابتلاع receipts الخاصة بـ DA
-   الصادرة من Torii (`crates/iroha_core/src/queue.rs` و
+1. **اضافات نموذج البيانات** em `iroha_data_model::da::commitment` de acordo com as instruções
+   Resolva o problema em `iroha_data_model::block`.
+2. **Hooks للمنفذ** حتى يقوم `iroha_core` بابتلاع recibos الخاصة بـ DA
+   Nome do produto Torii (`crates/iroha_core/src/queue.rs` e
    `crates/iroha_core/src/block.rs`).
-3. **Persisting/indexes** حتى يتمكن WSV من اجابة استعلامات التعهدات بسرعة
+3. **Persistência/índices** حتى يتمكن WSV من اجابة استعلامات التعهدات بسرعة
    (`iroha_core/src/wsv/mod.rs`).
-4. **اضافات RPC في Torii** لنقاط list/query/prove تحت `/v1/da/commitments`.
-5. **اختبارات تكامل + fixtures** للتحقق من wire layout وتدفق proof في
+4. **Recurso RPC em Torii** para listar/consultar/provar em `/v1/da/commitments`.
+5. **Configurações + acessórios** para layout de fio e prova de
    `integration_tests/tests/da/commitments.rs`.
 
 ## 1. اضافات نموذج البيانات
 
-### 1.1 `DaCommitmentRecord`
+###1.1`DaCommitmentRecord`
 
 ```rust
 /// Canonical record stored on-chain and inside SignedBlockWire.
@@ -69,14 +71,14 @@ pub struct DaCommitmentRecord {
 ```
 
 - `KzgCommitment` يعيد استخدام النقطة ذات 48 بايت الموجودة في
-  `iroha_crypto::kzg`. عند غيابها نعود الى براهين Merkle فقط.
-- `proof_scheme` مشتق من كتالوج lanes؛ lanes من نوع Merkle ترفض حمولات KZG،
-  بينما lanes `kzg_bls12_381` تتطلب تعهدات KZG غير صفرية. Torii حاليا ينتج
+  `iroha_crypto::kzg`. Não há nada melhor do que Merkle.
+- `proof_scheme` مشتق من كتالوج pistas; pistas de Merkle ترفض حمولات KZG,
+  As pistas `kzg_bls12_381` devem ser instaladas no KZG. Torii Torii
   تعهدات Merkle فقط ويرفض lanes المهيئة على KZG.
 - `KzgCommitment` يعيد استخدام النقطة ذات 48 بايت الموجودة في
-  `iroha_crypto::kzg`. عند غيابها في lanes Merkle نعود الى براهين Merkle فقط.
+  `iroha_crypto::kzg`. Ele está em Lanes Merkle e não em Merkle.
 - `proof_digest` يمهد لتكامل DA-5 PDP/PoTR لكي يسرد السجل نفسه جدول اخذ
-  العينات المستخدم للحفاظ على blobs.
+  Você pode criar blobs.
 
 ### 1.2 توسيع ترويسة الكتلة
 
@@ -92,107 +94,105 @@ pub struct DaCommitmentBundle {
 }
 ```
 
-يدخل hash الخاص بالحزمة في hash الكتلة وفي بيانات `SignedBlockWire`. عندما لا
+Use hash para usar no hash `SignedBlockWire`. عندما لا
 
-ملاحظة تنفيذية: `BlockPayload` و`BlockBuilder` الشفاف يعرضان الان
-setters/getters لـ `da_commitments` (راجع `BlockBuilder::set_da_commitments`
-و`SignedBlock::set_da_commitments`) لكي تتمكن hosts من ارفاق حزمة مسبقة
-الانشاء قبل ختم الكتلة. جميع الدوال المساعدة تترك الحقل `None` حتى يمر Torii
-حزم حقيقية.
+Nome de usuário: `BlockPayload` e `BlockBuilder` de acordo com o código-fonte
+setters/getters para `da_commitments` (راجع `BlockBuilder::set_da_commitments`
+و`SignedBlock::set_da_commitments`) para que os hosts sejam configurados com segurança
+Isso é o que acontece. Você pode usar o `None` para obter o Torii
+É isso.
 
-### 1.3 ترميز wire
+### Fio de 1,3 fios
 
-- `SignedBlockWire::canonical_wire()` يضيف ترويسة Norito لـ
-  `DaCommitmentBundle` مباشرة بعد قائمة المعاملات الحالية. بايت الاصدار هو
+- `SignedBlockWire::canonical_wire()` يضيف ترويسة Norito para
+  `DaCommitmentBundle` pode ser usado para remover o problema. بايت الاصدار هو
   `0x01`.
-- `SignedBlockWire::decode_wire()` يرفض الحزم ذات `version` غير معروفة، بما
-  يتوافق مع سياسة Norito الموضحة في `norito.md`.
+- `SignedBlockWire::decode_wire()` يرفض الحزم ذات `version` غير معروفة, بما
+  Você pode usar Norito como `norito.md`.
 - تحديثات اشتقاق hash موجودة فقط في `block::Hasher`; العملاء الخفيفون الذين
-  يفككون wire format الحالي يحصلون تلقائيا على الحقل الجديد لان ترويسة Norito
-  تعلن وجوده.
+  Formato de fio sem fio Norito
+  É isso.
 
 ## 2. تدفق انتاج الكتل
 
-1. تنهي عملية ingest الخاصة بـ Torii DA ايصال `DaIngestReceipt` وتقوم بنشره
-   على الطابور الداخلي (`iroha_core::gossiper::QueueMessage::DaReceipt`).
-2. يجمع `PendingBlocks` كل receipts التي تطابق `lane_id` للكتلة قيد البناء،
-   مع ازالة التكرار حسب `(lane_id, client_blob_id, manifest_hash)`.
-3. قبل الختم مباشرة، يقوم builder بفرز التعهدات حسب `(lane_id, epoch, sequence)`
-   للحفاظ على hash حتمي، ويقوم بترميز الحزمة باستخدام Norito، ويحدث
+1. Você deve ingerir o código Torii e `DaIngestReceipt` e usar o `DaIngestReceipt`
+   Verifique o código de barras (`iroha_core::gossiper::QueueMessage::DaReceipt`).
+2. Use `PendingBlocks` para recibos do `lane_id` para obter o valor do recibo.
+   A solução é `(lane_id, client_blob_id, manifest_hash)`.
+3. قبل الختم مباشرة, يقوم builder بفرز التعهدات حسب `(lane_id, epoch, sequence)`
+   للحفاظ على hash حتمي, ويقوم بترميز الحزمة باستخدام Norito, ويحدث
    `da_commitments_hash`.
-4. يتم تخزين الحزمة كاملة في WSV وتصدر مع الكتلة داخل `SignedBlockWire`.
+4. Verifique a configuração do WSV e use o `SignedBlockWire`.
 
-اذا فشل انشاء الكتلة تبقى receipts في الطابور ليتم التقاطها في المحاولة
-التالية؛ ويسجل builder اخر `sequence` تم تضمينه لكل lane لتجنب هجمات replay.
+Você pode obter recibos no final do mês.
+التالية؛ O construtor do construtor `sequence` permite que a lane seja reproduzida.
 
-## 3. سطح RPC والاستعلام
+## 3. Como configurar o RPC
 
-Torii يوفر ثلاثة endpoints:
+Torii para os endpoints:
 
-| المسار | الطريقة | الحمولة | ملاحظات |
-|--------|---------|---------|---------|
-| `/v1/da/commitments` | `POST` | `DaCommitmentQuery` (فلترة بنطاق lane/epoch/sequence، مع pagination) | يعيد `DaCommitmentPage` بعدد الاجمالي والتعهدات و hash الكتلة. |
-| `/v1/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (lane + manifest hash او tuple `(epoch, sequence)`). | يعيد `DaCommitmentProof` (record + مسار Merkle + hash الكتلة). |
-| `/v1/da/commitments/verify` | `POST` | `DaCommitmentProof` | مساعد stateless يعيد حساب hash الكتلة ويتحقق من الاشتمال؛ يستخدمه SDKs التي لا يمكنها الربط مباشرة مع `iroha_crypto`. |
-
-كل الحمولات تعيش تحت `iroha_data_model::da::commitment`. يقوم Torii بتركيب
-handlers بجانب endpoints ingest الحالية لDA لاعادة استخدام سياسات token/mTLS.
+| المسار | الطريقة | الحمولة | Produtos |
+|----|---------|---------|---------|
+| `/v1/da/commitments` | `POST` | `DaCommitmentQuery` (período de faixa/época/sequência, sem paginação) | Use `DaCommitmentPage` para obter informações de valor e hash. |
+| `/v1/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (pista + hash de manifesto e tupla `(epoch, sequence)`). | يعيد `DaCommitmentProof` (registro + مسار Merkle + hash الكتلة). |
+| `/v1/da/commitments/verify` | `POST` | `DaCommitmentProof` | مساعد stateless يعيد حساب hash الكتلة ويتحقق من الاشتمال؛ Use SDKs para obter informações sobre `iroha_crypto`. |O código de segurança é `iroha_data_model::da::commitment`. Torii Torii
+manipuladores de endpoints ingerem o token/mTLS.
 
 ## 4. براهين الاشتمال والعملاء الخفيفون
 
 - يبني منتج الكتل شجرة Merkle ثنائية فوق قائمة `DaCommitmentRecord`
-  المسلسلة. الجذر يغذي `da_commitments_hash`.
-- يحزم `DaCommitmentProof` السجل المستهدف مع متجه من `(sibling_hash, position)`
-  لكي يعيد المدققون بناء الجذر. تتضمن البراهين ايضا hash الكتلة والترويسة
-  الموقعة حتى يتمكن العملاء الخفيفون من التحقق من finality.
-- تساعد اوامر CLI (`iroha_cli app da prove-commitment`) على تنفيذ دورة طلب/تحقق
-  البراهين وتعرض مخارج Norito/hex للمشغلين.
+  المسلسلة. O código é `da_commitments_hash`.
+- Use `DaCommitmentProof` para obter informações sobre `(sibling_hash, position)`
+  Não há nada que você possa fazer. تتضمن البراهين ايضا hash الكتلة والترويسة
+  الموقعة حتى يتمكن العملاء الخفيفون com finalidade definitiva.
+- Altere a CLI (`iroha_cli app da prove-commitment`) para obter uma interface de usuário/serviço
+  O código-fonte é Norito/hex.
 
 ## 5. التخزين والفهرسة
 
-يخزن WSV التعهدات في column family مخصصة بمفتاح `manifest_hash`. تغطي
-الفهارس الثانوية `(lane_id, epoch)` و`(lane_id, sequence)` كي تتجنب الاستعلامات
-مسح الحزم كاملة. يتتبع كل سجل ارتفاع الكتلة التي ختمته، مما يسمح للعقد في
+A família de colunas do WSV é definida como `manifest_hash`. تغطي
+O código `(lane_id, epoch)` e `(lane_id, sequence)` está disponível para download
+مسح الحزم كاملة. يتتبع كل سجل ارتفاع الكتلة التي ختمته, مما يسمح للعقد في
 مرحلة catch-up باعادة بناء الفهرس بسرعة من سجل الكتل.
 
 ## 6. القياس والرصد
 
-- `torii_da_commitments_total` يزيد عند ختم كتلة تحتوي على سجل واحد على الاقل.
-- `torii_da_commitment_queue_depth` يتتبع receipts المنتظرة للتجميع (لكل lane).
-- لوحة Grafana `dashboards/grafana/da_commitments.json` تعرض ادراج الكتل وعمق
-  الطابور وthroughput البراهين حتى تتمكن بوابات اصدار DA-3 من تدقيق السلوك.
+- `torii_da_commitments_total` não pode ser usado para evitar problemas.
+- `torii_da_commitment_queue_depth` يتتبع recibos da rua.
+- A chave Grafana `dashboards/grafana/da_commitments.json` está instalada
+  A taxa de transferência e a taxa de transferência do DA-3 são importantes para o DA-3.
 
 ## 7. استراتيجية الاختبارات
 
-1. **اختبارات وحدات** لترميز/فك ترميز `DaCommitmentBundle` وتحديثات اشتقاق hash
-   الكتلة.
+1. **اختبارات وحدات** لترميز/فك ترميز `DaCommitmentBundle` e وتحديثات اشتقاق hash
+   sim.
 2. **Fixtures golden** تحت `fixtures/da/commitments/` تلتقط bytes الحزمة
-   القياسية وبراهين Merkle.
-3. **اختبارات تكامل** تشغل مدققين اثنين، وتبتلع blobs تجريبية، وتتحقق من ان
+   O escritor e Merkle.
+3. **اختبارات تكامل** تشغل مدققين اثنين, e blobs تجريبية, وتتحقق من ان
    كلا العقدتين تتفقان على محتوى الحزمة واستجابات الاستعلام/البرهان.
-4. **اختبارات عملاء خفيفين** في `integration_tests/tests/da/commitments.rs`
-   (Rust) تستدعي `/prove` وتتحقق من البرهان دون التحدث الى Torii.
+4. **Efetue o download do arquivo** em `integration_tests/tests/da/commitments.rs`
+   (Rust) `/prove` é usado para substituir Torii.
 5. **Smoke CLI** عبر `scripts/da/check_commitments.sh` لابقاء ادوات المشغلين
    قابلة لاعادة الانتاج.
 
 ## 8. خطة الاطلاق
 
 | المرحلة | الوصف | معيار الخروج |
-|---------|-------|--------------|
-| P0 - دمج نموذج البيانات | دمج `DaCommitmentRecord` وتحديثات ترويسة الكتلة وكودكات Norito. | `cargo test -p iroha_data_model` ينجح مع fixtures جديدة. |
-| P1 - توصيل Core/WSV | تمرير منطق الطابور + block builder، وحفظ الفهارس، وكشف handlers RPC. | `cargo test -p iroha_core` و `integration_tests/tests/da/commitments.rs` ينجحان مع اثباتات bundle proof. |
-| P2 - ادوات المشغلين | شحن helpers للـ CLI ولوحة Grafana وتحديثات توثيق تحقق proof. | `iroha_cli app da prove-commitment` يعمل على devnet؛ اللوحة تعرض بيانات حية. |
-| P3 - بوابة الحوكمة | تفعيل مدقق الكتل الذي يفرض تعهدات DA على lanes المحددة في `iroha_config::nexus`. | تحديث status وroadmap يشيران الى اكتمال DA-3. |
+|--------|-------|-------------|
+| P0 - دمج نموذج البيانات | Use `DaCommitmentRecord` e instale o Norito. | `cargo test -p iroha_data_model` ينجح مع fixtures جديدة. |
+| P1 - Core/WSV | Ele usa o construtor de bloco +, o construtor de blocos e os manipuladores RPC. | `cargo test -p iroha_core` e `integration_tests/tests/da/commitments.rs` são uma prova de pacote. |
+| P2 - ادوات المشغلين | Esses ajudantes são CLI e Grafana e fornecem provas. | `iroha_cli app da prove-commitment` é compatível com devnet; Você pode fazer isso sem problemas. |
+| P3 - بوابة الحوكمة | Verifique se a faixa de rodagem está localizada em `iroha_config::nexus`. | تحديث status e roteiro يشيران الى اكتمال DA-3. |
 
 ## اسئلة مفتوحة
 
-1. **KZG vs Merkle defaults** - هل يجب تخطي تعهدات KZG للـ blobs الصغيرة لتقليل
-   حجم الكتلة؟ الاقتراح: جعل `kzg_commitment` اختياريا وتفعيله عبر
+1. **Padrões KZG vs Merkle** - هل يجب تخطي تعهدات KZG للـ blobs الصغيرة لتقليل
+   حجم الكتلة؟ Nome do produto: `kzg_commitment` sem fio e sem fio
    `iroha_config::da.enable_kzg`.
-2. **Sequence gaps** - هل نسمح بفجوات الترتيب؟ الخطة الحالية ترفض الفجوات الا
-   اذا فعلت الحوكمة `allow_sequence_skips` لاعادة تشغيل طارئة.
-3. **Light-client cache** - طلب فريق SDK تخزين SQLite خفيف للبراهين؛ متابعة
-   لاحقة تحت DA-8.
+2. **Lacunas de sequência** - هل نسمح بفجوات الترتيب؟ الخطة الحالية ترفض الفجوات الا
+   Use o `allow_sequence_skips` para evitar danos.
+3. **Cache de cliente leve** - طلب فريق SDK تخزين SQLite خفيف للبراهين؛ متابعة
+   É compatível com DA-8.
 
-الاجابة على هذه الاسئلة في PRs التنفيذ تنقل DA-3 من مسودة (هذه الوثيقة) الى
-قيد العمل بمجرد بدء التنفيذ البرمجي.
+O objetivo do PRs é o DA-3 de acordo com o modelo (هذه الوثيقة)
+Isso significa que você não pode fazer isso.

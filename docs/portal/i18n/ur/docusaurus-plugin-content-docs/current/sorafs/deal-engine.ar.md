@@ -4,72 +4,74 @@ direction: rtl
 source: docs/portal/docs/sorafs/deal-engine.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: deal-engine
-title: محرك الصفقات في SoraFS
-sidebar_label: محرك الصفقات
-description: نظرة عامة على محرك الصفقات SF-8 وتكامل Torii وسطح التليمترية.
+ID: ڈیل انجن
+عنوان: SoraFS میں ٹرانزیکشن انجن
+سائڈبار_لیبل: ڈیلز انجن
+تفصیل: SF-8 ٹرانزیکشن انجن ، Torii انضمام ، اور ٹیلی میٹری ڈیک کا جائزہ۔
 ---
 
-:::note المصدر المعتمد
-تعكس هذه الصفحة `docs/source/sorafs/deal_engine.md`. احرص على إبقاء الموقعين متوافقين ما دامت الوثائق القديمة نشطة.
+::: منظور شدہ ماخذ کو نوٹ کریں
+یہ صفحہ `docs/source/sorafs/deal_engine.md` کی عکاسی کرتا ہے۔ اس بات کو یقینی بنائیں کہ جب تک پرانی دستاویزات فعال ہوں تب تک دونوں سائٹوں کو ہم آہنگ رکھیں۔
 :::
 
-# محرك الصفقات في SoraFS
+# SoraFS میں ٹرانزیکشن انجن
 
-يعرف مسار خارطة الطريق SF-8 محرك الصفقات في SoraFS، موفراً
-محاسبة حتمية لاتفاقات التخزين والاسترجاع بين
-العملاء والمزوّدين. تُوصَف الاتفاقات عبر حمولات Norito
-المعرّفة في `crates/sorafs_manifest/src/deal.rs`، وتشمل شروط الصفقة،
-قفل السندات، المدفوعات المصغرة الاحتمالية، وسجلات التسوية.
+SF-8 روڈ میپ کا راستہ SoraFS میں ٹرانزیکشن انجن کی وضاحت کرتا ہے ، فراہم کرتا ہے
+اسٹوریج اور بازیافت کے معاہدوں کا تعی .ن اکاؤنٹنگ
+صارفین اور سپلائرز۔ معاہدوں کو Norito پے لوڈ کے ذریعے بیان کیا گیا ہے
+`crates/sorafs_manifest/src/deal.rs` پر بیان کردہ ، لین دین کی شرائط میں شامل ہیں ،
+بانڈ لاکنگ ، امکانی مائکروپیمنٹس ، اور تصفیہ ریکارڈ۔
 
-ينشئ العامل المضمن في SoraFS (`sorafs_node::NodeHandle`) الآن
-مثيلاً من `DealEngine` لكل عملية عقدة. يقوم المحرك بما يلي:
+SoraFS (`sorafs_node::NodeHandle`) پر ایمبیڈڈ ایجنٹ اب تخلیق کرتا ہے
+ہر نوڈ عمل کے لئے `DealEngine` کی ایک مثال۔ انجن مندرجہ ذیل کام کرتا ہے:
 
-- يتحقق من الصفقات ويسجلها باستخدام `DealTermsV1`؛
-- يراكم رسومًا مقومة بـ XOR عند الإبلاغ عن استخدام النسخ المتماثل؛
-- يقيّم نوافذ المدفوعات المصغرة الاحتمالية باستخدام أخذ عينات حتمية
-  قائمة على BLAKE3؛ و
-- ينتج لقطات ledger وحمولات تسوية مناسبة للنشر الحوكمـي.
+- `DealTermsV1` کا استعمال کرتے ہوئے تجارت کی تصدیق اور ریکارڈز ؛
+- نقل کے استعمال کی اطلاع دیتے وقت XOR-SENANIMINATED فیسوں کو جمع کرتا ہے۔
+- تعی .ن کے نمونے لینے کا استعمال کرتے ہوئے امکانی مائکروپیمنٹ ونڈوز کا اندازہ کرتا ہے
+  بلیک 3 پر مبنی ؛ اور
+- سرکاری اشاعت کے لئے موزوں لیجر اسنیپ شاٹس اور مفاہمت کے پے لوڈ تیار کرتا ہے۔
 
-تغطي الاختبارات الوحدوية التحقق، واختيار المدفوعات المصغرة، وتدفقات التسوية ليتمكن
-المشغّلون من ممارسة واجهات API بثقة. تبعث التسويات الآن حمولات حوكمة `DealSettlementV1`،
-وترتبط مباشرةً بخط نشر SF-12، كما تُحدّث سلسلة OpenTelemetry `sorafs.node.deal_*`
-(`deal_settlements_total`, `deal_expected_charge_nano`, `deal_client_debit_nano`,
-`deal_outstanding_nano`, `deal_bond_slash_nano`, `deal_publish_total`) من أجل لوحات Torii
-وتطبيق SLOs. وتركّز العناصر اللاحقة على أتمتة slashing التي يبدأها المدققون
-وتنسيق دلالات الإلغاء مع سياسة الحوكمة.
+یونٹ کی جانچ پڑتال کی تصدیق ، مائکروپیمنٹس کا انتخاب ، اور قابل عمل ہونے کے لئے تصفیہ بہاؤ
+آپریٹر اعتماد کے ساتھ APIs کی مشق کرسکتے ہیں۔ سمجھوتہ اب `DealSettlementV1` گورننس پے لوڈ کا اخراج کرتے ہیں ،
+یہ براہ راست SF-12 تعیناتی لائن سے لنک کرتا ہے اور اوپن لیمٹری سیریز `sorafs.node.deal_*` کو اپ ڈیٹ کرتا ہے
+(`deal_settlements_total` ، `deal_expected_charge_nano` ، `deal_client_debit_nano` ،
+`deal_outstanding_nano` ، `deal_bond_slash_nano` ، `deal_publish_total`) Torii بورڈز کے لئے
+اور ایس ایل او ایس لگائیں۔ اس کے بعد کے عناصر آڈیٹر سے شروع کردہ سلیشنگ کو خودکار کرنے پر توجہ دیتے ہیں
+گورننس پالیسی کے ساتھ منسوخی کے مضمرات کو مربوط کرنا۔
 
-تغذي تليمترية الاستخدام أيضًا مجموعة المقاييس `sorafs.node.micropayment_*`:
-`micropayment_charge_nano`, `micropayment_credit_generated_nano`,
-`micropayment_credit_applied_nano`, `micropayment_credit_carry_nano`,
-`micropayment_outstanding_nano`, وعدّادات التذاكر
-(`micropayment_tickets_processed_total`, `micropayment_tickets_won_total`,
-`micropayment_tickets_duplicate_total`). تكشف هذه الإجماليات عن تدفق اليانصيب
-الاحتمالي لتمكين المشغّلين من ربط مكاسب المدفوعات المصغرة وترحيل الرصيد
-بنتائج التسوية.
+ٹیلی میٹری گیج کلسٹر `sorafs.node.micropayment_*` میں بھی کھلاتی ہے:
+`micropayment_charge_nano` ، `micropayment_credit_generated_nano` ،
+`micropayment_credit_applied_nano` ، `micropayment_credit_carry_nano` ،
+`micropayment_outstanding_nano` ، اور ٹکٹ کاؤنٹر
+(`micropayment_tickets_processed_total` ، `micropayment_tickets_won_total` ،
+`micropayment_tickets_duplicate_total`)۔ یہ کل لاٹری کے بہاؤ کو ظاہر کرتے ہیں
+آپریٹرز کو مائکروپیمنٹ جیت اور بیلنس کیری اوور سے جوڑنے کے قابل بنانے کا امکان
+تصفیہ کے نتائج۔
 
-## تكامل Torii
+## انضمام Torii
 
-تعرض Torii نقاط نهاية مخصصة كي يتمكن المزوّدون من الإبلاغ عن الاستخدام وتحريك
-دورة حياة الصفقة بدون wiring مخصص:
+Torii اپنی مرضی کے مطابق اختتامی نکات کو بے نقاب کرتا ہے تاکہ فراہم کنندہ استعمال اور ٹرگر کی اطلاع دے سکے
+اپنی مرضی کے مطابق وائرنگ کے بغیر زندگی گزاریں:
 
-- `POST /v1/sorafs/deal/usage` يقبل تليمترية `DealUsageReport` ويعيد
-  نتائج محاسبة حتمية (`UsageOutcome`).
-- `POST /v1/sorafs/deal/settle` ينهى النافذة الحالية، ويبث
-  `DealSettlementRecord` الناتج إلى جانب `DealSettlementV1` مشفّرًا بـ base64
-  وجاهزًا للنشر في DAG الحوكمة.
-- يغذي `/v1/events/sse` في Torii الآن سجلات `SorafsGatewayEvent::DealUsage`
-  التي تلخص كل إرسال استخدام (epoch، ساعات GiB المقاسة، عدّادات التذاكر،
-  الرسوم الحتمية)، وسجلات `SorafsGatewayEvent::DealSettlement`
-  التي تتضمن لقطة ledger المعتمدة للتسوية مع digest/الحجم/base64 من BLAKE3
-  للقطعة الحوكمية على القرص، وتنبيهات `SorafsGatewayEvent::ProofHealth`
-  عندما تتجاوز عتبات PDP/PoTR (المزوّد، النافذة، حالة strike/cooldown، مبلغ العقوبة).
-  يمكن للمستهلكين التصفية حسب المزوّد للتفاعل مع تليمترية جديدة أو تسويات أو تنبيهات
-  صحة البراهين دون polling.
+- `POST /v1/sorafs/deal/usage` `DealUsageReport` ٹیلی میٹری کو قبول کرتا ہے اور واپسی کرتا ہے
+  ڈٹرمینسٹک اکاؤنٹنگ کے نتائج (`UsageOutcome`)۔
+- `POST /v1/sorafs/deal/settle` موجودہ ونڈو ، اور نشریات کو ختم کرتا ہے
+  `DealSettlementV1` کے ساتھ ساتھ `DealSettlementRecord` بیس 64 انکوڈڈ ہیں۔
+  اور ڈی اے جی گورننس میں تعیناتی کے لئے تیار ہے۔
+- `/v1/events/sse` Torii میں اب فیڈز میں `SorafsGatewayEvent::DealUsage` میں رجسٹر ہوتا ہے
+  جو ہر ٹرانسمیشن کے استعمال کا خلاصہ کرتا ہے (عہد ، پیمائش شدہ GIB اوقات ، ٹکٹ کاؤنٹرز ،
+  عین مطابق الزامات) ، اور `SorafsGatewayEvent::DealSettlement` رجسٹر
+  جس میں ایک لیجر اسنیپ شاٹ شامل ہے جو بلیک 3 سے ڈائجسٹ/سائز/بیس 64 کے ساتھ معمول پر لانے کے لئے تعاون یافتہ ہے
+  ڈسک پر گورننس کے ٹکڑے کے لئے ، `SorafsGatewayEvent::ProofHealth` کو الرٹ کرتا ہے
+  جب آپ PDP/POTR حد سے تجاوز کرتے ہیں (فراہم کنندہ ، ونڈو ، ہڑتال/کوولڈاؤن کی حیثیت ، جرمانہ کی رقم)۔
+  نئے ٹیلی میٹکس ، ایڈجسٹمنٹ ، یا انتباہات پر ردعمل ظاہر کرنے کے لئے صارفین فراہم کنندہ کے ذریعہ فلٹر کرسکتے ہیں
+  پولنگ کے بغیر توثیق کے ثبوت۔
 
-يشارك كلا نقطتي النهاية في إطار حصص SoraFS عبر نافذة
-`torii.sorafs.quota.deal_telemetry` الجديدة، ما يسمح للمشغّلين بضبط معدل الإرسال
-المسموح لكل نشر.
+دونوں اختتامی مقامات SoraFS کراس ونڈو کوٹہ ونڈو کا اشتراک کرتے ہیں
+نیا `torii.sorafs.quota.deal_telemetry` ، آپریٹرز کو ٹرانسمیشن کی شرح کو ایڈجسٹ کرنے کی اجازت دیتا ہے
+ہر پوسٹ کے لئے اجازت دی گئی۔

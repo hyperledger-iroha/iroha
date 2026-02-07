@@ -8,29 +8,31 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraFS Repair Automation & Auditor API
 sidebar_label: Repair Automation
 description: Governance policy, escalation lifecycle, and API expectations for SoraFS repair automation.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
-Mirrors `docs/source/sorafs_repair_plan.md`. Keep both versions in sync until the Sphinx set is retired.
+:::обратите внимание на канонический источник
+Зеркала `docs/source/sorafs_repair_plan.md`. Синхронизируйте обе версии до тех пор, пока набор Sphinx не будет удален.
 :::
 
-## Governance Decision Lifecycle
-1. Escalated repairs create a slash proposal draft and open the dispute window.
-2. Governance voters submit approve/reject votes during the dispute window.
-3. At `escalated_at_unix + dispute_window_secs` the decision is computed deterministically: minimum voters, approvals exceed rejections, and the approval ratio meets the quorum threshold.
-4. Approved decisions open an appeal window; appeals recorded before `approved_at_unix + appeal_window_secs` mark the decision as appealed.
-5. Penalty caps apply to all proposals; submissions above the cap are rejected.
+## Жизненный цикл управленческого решения
+1. При расширенном ремонте создается черновой вариант предложения и открывается окно спора.
+2. Избиратели органов управления подают голоса за одобрение/отклонение во время окна спора.
+3. При `escalated_at_unix + dispute_window_secs` решение вычисляется детерминированно: минимальное количество избирателей, одобрения превышают отклонения, а коэффициент одобрения соответствует порогу кворума.
+4. Утвержденные решения открывают окно для апелляции; апелляции, зарегистрированные до `approved_at_unix + appeal_window_secs`, отмечают решение как обжалованное.
+5. Максимальные штрафные санкции применяются ко всем предложениям; материалы, превышающие лимит, отклоняются.
 
-## Governance Escalation Policy
-The escalation policy is sourced from `governance.sorafs_repair_escalation` in `iroha_config` and is enforced for every repair slash proposal.
+## Политика эскалации управления
+Политика эскалации берется из `governance.sorafs_repair_escalation` в `iroha_config` и применяется для каждого предложения по ремонту.
 
-| Setting | Default | Meaning |
+| Настройка | По умолчанию | Значение |
 |---------|---------|---------|
-| `quorum_bps` | 6667 | Minimum approval ratio (basis points) among counted votes. |
-| `minimum_voters` | 3 | Minimum number of distinct voters required to resolve a decision. |
-| `dispute_window_secs` | 86400 | Time after escalation before votes are finalized (seconds). |
-| `appeal_window_secs` | 604800 | Time after approval during which appeals are accepted (seconds). |
-| `max_penalty_nano` | 1,000,000,000 | Maximum slash penalty allowed for repair escalations (nano-XOR). |
+| `quorum_bps` | 6667 | Минимальный коэффициент одобрения (базисные баллы) среди подсчитанных голосов. |
+| `minimum_voters` | 3 | Минимальное количество отдельных избирателей, необходимое для принятия решения. |
+| `dispute_window_secs` | 86400 | Время после эскалации до завершения голосования (в секундах). |
+| `appeal_window_secs` | 604800 | Время после одобрения, в течение которого принимаются апелляции (секунды). |
+| `max_penalty_nano` | 1 000 000 000 | Максимальный штраф за косую черту, разрешенный для эскалации ремонта (nano-XOR). |
 
-- Scheduler-generated proposals are capped at `max_penalty_nano`; auditor submissions above the cap are rejected.
-- Vote records are stored in `repair_state.to` with deterministic ordering (`voter_id` sorting) so all nodes derive the same decision timestamp and outcome.
+- Предложения, созданные планировщиком, ограничены `max_penalty_nano`; Представления аудитора, превышающие этот предел, отклоняются.
+- Записи о голосовании хранятся в `repair_state.to` с детерминированным порядком (сортировка `voter_id`), поэтому все узлы получают одинаковую временную метку решения и результат.

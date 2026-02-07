@@ -4,18 +4,20 @@ direction: rtl
 source: docs/portal/docs/sorafs/reports/sf2c-capacity-soak.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 # تقرير اختبار soak لتراكم سعة SF-2c
 
-التاريخ: 2026-03-21
+תאריך: 2026-03-21
 
-## النطاق
+## אלנקה
 
 يسجل هذا التقرير اختبارات soak الحتمية لتراكم سعة SoraFS والمدفوعات المطلوبة ضمن مسار خطة SF-2c.
 
 - **اختبار soak متعدد المزوّدين لمدة 30 يوما:** يتم عبر
-  `capacity_fee_ledger_30_day_soak_deterministic` في
+  `capacity_fee_ledger_30_day_soak_deterministic` ב
   `crates/iroha_core/src/smartcontracts/isi/sorafs.rs`.
   يقوم harness بإنشاء خمسة مزودين، ويمتد عبر 30 نافذة تسوية، ويتحقق من أن إجماليات
   ledger تطابق إسقاطا مرجعيا محسوبا بشكل مستقل. يخرج الاختبار digest من Blake3
@@ -25,7 +27,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
   (نفس الملف). يؤكد الاختبار أن عتبات strikes وcooldowns وslashing للضمان وعدّادات
   ledger تبقى حتمية.
 
-## التنفيذ
+## אליין
 
 شغّل تحقق soak محليا باستخدام:
 

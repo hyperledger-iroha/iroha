@@ -7,42 +7,43 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 7d04af2ad3ae5cc6a9254236f5627850aab7c6517308e9f3a09650cbc1490168
 source_last_modified: "2026-01-05T18:22:23.401292+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Connect Session Preview Runbook (IOS7 / JS4)
+# የግንኙነት ክፍለ ጊዜ ቅድመ እይታ Runbook (IOS7 / JS4)
 
-This runbook documents the end-to-end procedure for staging, validating, and
-tearing down Connect preview sessions as required by roadmap milestones **IOS7**
-and **JS4** (`roadmap.md:1340`, `roadmap.md:1656`). Follow these steps whenever
-you demo the Connect strawman (`docs/source/connect_architecture_strawman.md`),
-exercise the queue/telemetry hooks promised in the SDK roadmaps, or collect
-evidence for `status.md`.
+ይህ Runbook የማዘጋጀት፣ የማረጋገጥ እና የማረጋገጥ ሂደትን ከጫፍ እስከ ጫፍ መዝግቧል
+በRoadmap ችካሎች በሚፈለገው መሰረት የግንኙነት ቅድመ እይታ ክፍለ ጊዜዎችን ማፍረስ **IOS7**
+እና ** JS4** (`roadmap.md:1340`፣ `roadmap.md:1656`)። እነዚህን እርምጃዎች በማንኛውም ጊዜ ይከተሉ
+የ Connect strawman (`docs/source/connect_architecture_strawman.md`) አሳይ
+በኤስዲኬ የመንገድ ካርታዎች ውስጥ ቃል የተገባውን የወረፋ/የቴሌሜትሪ መንጠቆዎችን ይለማመዱ ወይም ይሰብስቡ
+ማስረጃ ለ `status.md`.
 
-## 1. Preflight Checklist
+## 1. የቅድመ በረራ ማረጋገጫ ዝርዝር
 
-| Item | Details | References |
-|------|---------|------------|
-| Torii endpoint + Connect policy | Confirm the Torii base URL, `chain_id`, and Connect policy (`ToriiClient.getConnectStatus()` / `getConnectAppPolicy()`). Capture the JSON snapshot in the runbook ticket. | `javascript/iroha_js/src/toriiClient.js`, `docs/source/sdk/js/quickstart.md#connect-sessions--queueing` |
-| Fixture + bridge versions | Note the Norito fixture hash and bridge build you will use (Swift requires `NoritoBridge.xcframework`, JS requires `@iroha/iroha-js` ≥ the version that shipped `bootstrapConnectPreviewSession`). | `docs/source/sdk/swift/reproducibility_checklist.md`, `javascript/iroha_js/CHANGELOG.md` |
-| Telemetry dashboards | Ensure the dashboards that chart `connect.queue_depth`, `connect.queue_overflow_total`, `connect.resume_latency_ms`, `swift.connect.session_event`, etc., are reachable (Grafana `Android/Swift Connect` board + exported Prometheus snapshots). | `docs/source/connect_architecture_strawman.md`, `docs/source/sdk/swift/telemetry_redaction.md`, `docs/source/sdk/js/quickstart.md` |
-| Evidence folders | Pick a destination such as `docs/source/status/swift_weekly_digest.md` (weekly digest) and `docs/source/sdk/swift/connect_risk_tracker.md` (risk tracker). Store logs, metrics screenshots, and acknowledgements under `docs/source/sdk/swift/readiness/archive/<date>/connect/`. | `docs/source/status/swift_weekly_digest.md`, `docs/source/sdk/swift/connect_risk_tracker.md` |
+| ንጥል | ዝርዝሮች | ዋቢዎች |
+|-------|---------|-----------|
+| Torii የመጨረሻ ነጥብ + የግንኙነት ፖሊሲ | የTorii መሰረት URLን፣ `chain_id` እና የግንኙነት ፖሊሲን (`ToriiClient.getConnectStatus()` / `getConnectAppPolicy()`) ያረጋግጡ። የJSON ቅጽበታዊ ገጽ እይታን በ runbook ቲኬት ያንሱ። | `javascript/iroha_js/src/toriiClient.js`, `docs/source/sdk/js/quickstart.md#connect-sessions--queueing` |
+| ቋሚ + ድልድይ ስሪቶች | የምትጠቀመውን የNorito ቋሚ ሃሽ እና የድልድይ ግንባታ (Swift `NoritoBridge.xcframework` ይፈልጋል፣ JS `@iroha/iroha-js` ይፈልጋል `bootstrapConnectPreviewSession` የላከው ስሪት)። | `docs/source/sdk/swift/reproducibility_checklist.md`, `javascript/iroha_js/CHANGELOG.md` |
+| ቴሌሜትሪ ዳሽቦርዶች | `connect.queue_depth`፣ `connect.queue_overflow_total`፣ `connect.resume_latency_ms`፣ `swift.connect.session_event`፣ ወዘተ የሚይዙት ዳሽቦርዶች ሊደረስባቸው የሚችሉ መሆናቸውን ያረጋግጡ (Grafana Grafana Prometheus ቅጽበተ-ፎቶዎች)። | `docs/source/connect_architecture_strawman.md`፣ `docs/source/sdk/swift/telemetry_redaction.md`፣ `docs/source/sdk/js/quickstart.md` |
+| የማስረጃ ማህደሮች | እንደ `docs/source/status/swift_weekly_digest.md` (ሳምንት መፍጨት) እና `docs/source/sdk/swift/connect_risk_tracker.md` (የአደጋ መከታተያ) ያሉ መድረሻን ይምረጡ። የማከማቻ ምዝግብ ማስታወሻዎች፣ ሜትሪክስ ቅጽበታዊ ገጽ እይታዎች እና ምስጋናዎች በ`docs/source/sdk/swift/readiness/archive/<date>/connect/` ስር። | `docs/source/status/swift_weekly_digest.md`, `docs/source/sdk/swift/connect_risk_tracker.md` |
 
-## 2. Bootstrap the Preview Session
+## 2. የቅድመ እይታ ክፍለ ጊዜን ማስነሳት
 
-1. **Validate policy + quotas.** Call:
+1. ** ፖሊሲ + ኮታዎችን ያረጋግጡ።** ይደውሉ፡-
    ```js
    const status = await torii.getConnectStatus();
    console.log(status.policy.queue_max, status.policy.offline_timeout_ms);
    ```
-   Fail the run if `queue_max` or TTL differs from the config you planned to
-   test.
-2. **Generate deterministic SID/URIs.** The `@iroha/iroha-js`
-   `bootstrapConnectPreviewSession` helper ties SID/URI generation to Torii
-   session registration; use it even when Swift will drive the WebSocket layer.
+   `queue_max` ወይም TTL ካቀዱት ውቅረት የሚለይ ከሆነ ሩጫውን ያጥፉ።
+   ፈተና
+2. ** የሚወስን SID/URS ይፍጠሩ።** `@iroha/iroha-js`
+   `bootstrapConnectPreviewSession` አጋዥ የSID/URI ትውልድን ከTorii ጋር ያገናኛል
+   የክፍለ ጊዜ ምዝገባ; ስዊፍት የዌብሶኬት ንብርብርን በሚያሽከረክርበት ጊዜም ይጠቀሙበት።
    ```js
    import {
      ToriiClient,
@@ -58,16 +59,14 @@ evidence for `status.md`.
    });
    console.log("sid", preview.sidBase64Url, "ws url", preview.webSocketUrl);
    ```
-   - Set `register: false` to dry-run QR/deep-link scenarios.
-   - Persist the returned `sidBase64Url`, deeplink URLs, and `tokens` blob in the
-     evidence folder; the governance review expects these artefacts.
-3. **Distribute secrets.** Share the deeplink URI with the wallet operator
-   (swift dApp sample, Android wallet, or QA harness). Never paste raw tokens
-   into chat; use the encrypted vault documented in the enablement packet.
+   - `register: false` ወደ ደረቅ-አሂድ QR/ጥልቅ-አገናኝ ሁኔታዎች አቀናብር።
+   - የተመለሰውን `sidBase64Url`፣ ጥልቅ አገናኝ URLs እና `tokens` ብሎብ በ
+     ማስረጃ አቃፊ; የአስተዳደር ግምገማው እነዚህን ቅርሶች ይጠብቃል።
+3. ** ሚስጥሮችን ያሰራጩ።** የጥልቅ አገናኝ URIን ከዋሌት ኦፕሬተር ጋር ያካፍሉ።
+   (የፈጣን dApp ናሙና፣ አንድሮይድ ቦርሳ ወይም የQA መታጠቂያ)። ጥሬ ማስመሰያዎችን በጭራሽ አይለጥፉ
+   ወደ ውይይት; በማንቃት ፓኬት ውስጥ የተመሰጠረውን ካዝና ይጠቀሙ።
 
-## 3. Drive the Session
-
-1. **Open the WebSocket.** Swift clients typically use:
+## 3. ክፍለ ጊዜን መንዳት1. **የዌብሶኬትን ክፈት።** የስዊፍት ደንበኞች በተለምዶ፡-
    ```swift
    let connectURL = URL(string: preview.webSocketUrl)!
    let client = ConnectClient(url: connectURL)
@@ -79,77 +78,75 @@ evidence for `status.md`.
    })
    try client.open()
    ```
-   Reference `docs/connect_swift_integration.md` for additional setup (bridge
-   imports, concurrency adapters).
-2. **Approve + sign flows.** DApps call `ConnectSession.requestSignature(...)`,
-   while wallets respond via `approveSession` / `reject`. Each approval must log
-   the hashed alias + permissions to match the Connect governance charter.
-3. **Exercise queue + resume paths.** Toggle network connectivity or suspend the
-   wallet to ensure the bounded queue and replay hooks log entries. JS/Android
-   SDKs emit `ConnectQueueError.overflow(limit)` /
-   `.expired(ttlMs)` when they drop frames; Swift should observe the same once
-   IOS7 queue scaffolding lands (`docs/source/connect_architecture_strawman.md`).
-   After you record at least one reconnect, run
+   ማጣቀሻ `docs/connect_swift_integration.md` ለተጨማሪ ማዋቀር (ድልድይ
+   አስመጪዎች, ኮንኩሬተር አስማሚዎች).
+2. ** አጽድቅ + የምልክት ፍሰቶችን።** DApps `ConnectSession.requestSignature(...)` ይደውሉ፣
+   የኪስ ቦርሳዎች በ `approveSession` / `reject` በኩል ምላሽ ሲሰጡ. እያንዳንዱ ማጽደቅ መግባት አለበት።
+   ከግንኙነት አስተዳደር ቻርተር ጋር ለማዛመድ የ hashed alias + ፍቃዶች።
+3. **የአካል ብቃት እንቅስቃሴ ወረፋ + ከቆመበት ቀጥል ዱካዎች።** የአውታረ መረብ ግንኙነትን ቀይር ወይም አቁም
+   የኪስ ቦርሳ የታሰረውን ወረፋ እና የድጋሚ ማጫወቻ መንጠቆዎች ምዝግብ ማስታወሻ ግቤቶችን ለማረጋገጥ። JS/አንድሮይድ
+   ኤስዲኬዎች `ConnectQueueError.overflow(limit)` / ይለቃሉ
+   ክፈፎች ሲጥሉ `.expired(ttlMs)`; ስዊፍት አንድ ጊዜ ተመሳሳይ ነገር ማክበር አለበት
+   IOS7 ወረፋ ስካፎልዲንግ መሬቶች (`docs/source/connect_architecture_strawman.md`)።
+   ቢያንስ አንድ ዳግም ግንኙነት ከቀረጹ በኋላ ያሂዱ
    ```bash
    iroha connect queue inspect --sid "$SID" --root ~/.iroha/connect --metrics
    ```
-   (or pass the export directory returned by `ConnectSessionDiagnostics`) and
-   attach the rendered table/JSON to the runbook ticket. The CLI reads the same
-   `state.json` / `metrics.ndjson` pair that `ConnectQueueStateTracker` produces,
-   so governance reviewers can trace drill evidence without bespoke tooling.
+   (ወይም በ `ConnectSessionDiagnostics` የተመለሰውን ወደ ውጭ መላኪያ ማውጫ ያስተላልፉ) እና
+   የተሰራውን ሰንጠረዥ/JSON ከ runbook ቲኬት ጋር ያያይዙ። CLI እንዲሁ ያነባል።
+   `state.json` / `metrics.ndjson` ጥንድ `ConnectQueueStateTracker` የሚያመርተው፣
+   ስለዚህ የአስተዳደር ገምጋሚዎች ያለ ምንም መሳሪያ መሳሪያ የመሰርሰሪያ ማስረጃን መፈለግ ይችላሉ።
 
-## 4. Telemetry & Observability
+## 4. ቴሌሜትሪ እና ታዛቢነት
 
-- **Metrics to capture:**
-  - `connect.queue_depth{direction}` gauge (should stay below policy cap).
-  - `connect.queue_dropped_total{reason="overflow|ttl"}` counter (non-zero only
-    during fault-injection).
-  - `connect.resume_latency_ms` histogram (record the p95 after forcing a
-    reconnect).
+- ** ለመቅረጽ መለኪያዎች: ***
+  - `connect.queue_depth{direction}` መለኪያ (ከፖሊሲ ካፕ በታች መቆየት አለበት)።
+  - `connect.queue_dropped_total{reason="overflow|ttl"}` ቆጣሪ (ዜሮ ያልሆነ ብቻ
+    በስህተት-መርፌ ወቅት).
+  - `connect.resume_latency_ms` ሂስቶግራም (ከተገደዱ በኋላ p95 ን ይቅዱ
+    እንደገና መገናኘት).
   - `connect.replay_success_total` / `connect.replay_error_total`.
-  - Swift-specific `swift.connect.session_event` and
-    `swift.connect.frame_latency` exports (`docs/source/sdk/swift/telemetry_redaction.md`).
-- **Dashboards:** Update the Connect board bookmarks with annotation markers.
-  Attach screenshots (or JSON exports) to the evidence folder alongside the raw
-  OTLP/Prometheus snapshots pulled via the telemetry exporter CLI.
-- **Alerting:** If any Sev 1/2 thresholds trigger (per `docs/source/android_support_playbook.md` §5),
-  page the SDK Program Lead and document the PagerDuty incident ID in the runbook
-  ticket before continuing.
+  - ስዊፍት-ተኮር `swift.connect.session_event` እና
+    `swift.connect.frame_latency` ወደ ውጭ መላክ (`docs/source/sdk/swift/telemetry_redaction.md`)።
+- ** ዳሽቦርዶች: *** የማገናኛ ሰሌዳ ዕልባቶችን ከማብራሪያ ምልክቶች ጋር ያዘምኑ።
+  ቅጽበታዊ ገጽ እይታዎችን (ወይም JSON ወደ ውጭ የሚላኩ) ከጥሬው ጋር ከማስረጃ ማህደር ጋር ያያይዙ
+  OTLP/Prometheus ቅጽበታዊ ገጽ እይታዎች በቴሌሜትሪ ላኪው CLI በኩል ተስበው።
+- ** ማንቂያ:** ማንኛውም Sev1/2 ገደቦች ቀስቅሴ ከሆነ (በ `docs/source/android_support_playbook.md` §5)።
+  የኤስዲኬ ፕሮግራም ይመሩ እና የፔጀርዱቲ ክስተት መታወቂያውን በ runbook ውስጥ ይመዝግቡ
+  ትኬት ከመቀጠልዎ በፊት.
 
-## 5. Cleanup & Rollback
+## 5. ማፅዳት እና መመለሻ
 
-1. **Delete staged sessions.** Always delete preview sessions so queue depth
-   alarms remain meaningful:
+1. **የታቀዱ ክፍለ-ጊዜዎችን ሰርዝ።** ሁልጊዜም የቅድመ እይታ ክፍለ ጊዜዎችን ሰርዝ ስለዚህ ጥልቀት ወረፋ
+   ማንቂያዎች ጠቃሚ ሆነው ይቆያሉ
    ```js
    await client.deleteConnectSession(preview.sidBase64Url);
    ```
-   For Swift-only test runs, call the same endpoint through the Rust/CLI helper.
-2. **Purge journals.** Remove any persisted queue journals
-   (`ApplicationSupport/ConnectQueue/<sid>.to`, IndexedDB stores, etc.) so the
-   next run starts clean. Record the file hash before deletion if you need to
-   debug a replay issue.
-3. **File incident notes.** Summarise the run in:
-   - `docs/source/status/swift_weekly_digest.md` (deltas block),
-   - `docs/source/sdk/swift/connect_risk_tracker.md` (clear or downgrade CR-2
-     once telemetry is in place),
-   - the JS SDK changelog or recipe if new behaviour was validated.
-4. **Escalate failures:**
-   - Queue overflow without injected faults ⇒ file a bug against the SDK whose
-     policy diverged from Torii.
-   - Resume errors ⇒ attach `connect.queue_depth` + `connect.resume_latency_ms`
-     snapshots to the incident report.
-   - Governance mismatches (tokens reused, TTL exceeded) ⇒ raise with the SDK
-     Program Lead and annotate `roadmap.md` during the next revision.
+   ለSwift-only test runs፣ በ Rust/CLI አጋዥ በኩል ተመሳሳዩን የመጨረሻ ነጥብ ይደውሉ።
+2. ** መጽሔቶችን አጽዳ።** ማንኛቸውም የቆዩ የወረፋ መጽሔቶችን ያስወግዱ
+   (`ApplicationSupport/ConnectQueue/<sid>.to`, IndexedDB መደብሮች, ወዘተ) ስለዚህ የ
+   የሚቀጥለው ሩጫ ንጹህ ይጀምራል። ካስፈለገዎት ከመሰረዝዎ በፊት የፋይሉን ሃሽ ይቅዱ
+   የመልሶ ማጫወት ችግርን ማረም.
+3. **የአደጋ ማስታወሻዎችን ፋይል ያድርጉ።** በሚከተሉት ውስጥ ያለውን ሩጫ ያጠቃልሉት፡-
+   - `docs/source/status/swift_weekly_digest.md` (ዴልታ ብሎክ) ፣
+   - `docs/source/sdk/swift/connect_risk_tracker.md` (CR-2 ያጽዱ ወይም ይቀንሱ
+     ቴሌሜትሪ አንዴ ከገባ)
+   - አዲስ ባህሪ ከተረጋገጠ የJS SDK ለውጥ ሎግ ወይም የምግብ አሰራር።
+4. ** ብልሽቶች መጨመር: **
+   - ያለ ጥፋቶች ወረፋ ሞልቷል ⇒ የማንኛውን ኤስዲኬ ስህተት ይመዝግቡ
+     ፖሊሲ ከTorii ተለያይቷል።
+   - ስህተቶችን ከቆመበት ቀጥል ⇒ `connect.queue_depth` + `connect.resume_latency_ms` ማያያዝ
+     ወደ ክስተቱ ዘገባ ቅጽበታዊ እይታዎች።
+   - የአስተዳደር አለመመጣጠን (ቶከኖች እንደገና ጥቅም ላይ ውለዋል፣ ቲቲኤል አልፏል) ⇒ ከኤስዲኬ ጋር ያሳድጉ
+     በሚቀጥለው ክለሳ ወቅት `roadmap.md` መርሀ ግብር ምራ እና አብራራ።
 
-## 6. Evidence Checklist
+## 6. የማስረጃ ዝርዝር| Artefact | አካባቢ |
+|-------------|
+| SID/Deplink/Tokens JSON | `docs/source/sdk/swift/readiness/archive/<date>/connect/session.json` |
+| ዳሽቦርድ ወደ ውጭ መላክ (`connect.queue_depth`, ወዘተ) | `.../metrics/` ንዑስ አቃፊ |
+| PagerDuty / ክስተት መታወቂያዎች | `.../notes.md` |
+| የጽዳት ማረጋገጫ (Torii ሰርዝ፣ ጆርናል መጥረግ) | `.../cleanup.log` |
 
-| Artefact | Location |
-|----------|----------|
-| SID/deeplink/tokens JSON | `docs/source/sdk/swift/readiness/archive/<date>/connect/session.json` |
-| Dashboard exports (`connect.queue_depth`, etc.) | `.../metrics/` subfolder |
-| PagerDuty / incident IDs | `.../notes.md` |
-| Cleanup confirmation (Torii delete, journal wipe) | `.../cleanup.log` |
-
-Completing this checklist satisfies the “docs/runbooks updated” exit criterion
-for IOS7/JS4 and gives governance reviewers a deterministic trail for every
-Connect preview session.
+ይህን የማረጋገጫ ዝርዝር ማጠናቀቅ የ"ሰነዶች/ runbooks የዘመነ" የመውጫ መስፈርትን ያሟላል።
+ለ IOS7/JS4 እና የአስተዳደር ገምጋሚዎች ለእያንዳንዱ የሚወስን ዱካ ይሰጣቸዋል
+የቅድመ እይታ ክፍለ ጊዜን ያገናኙ።

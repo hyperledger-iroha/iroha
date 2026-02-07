@@ -11,49 +11,50 @@ id: chunker-registry
 title: SoraFS Chunker Profile Registry
 sidebar_label: Chunker Registry
 description: Profile IDs, parameters, and negotiation plan for the SoraFS chunker registry.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
+:::Qeyd Kanonik Mənbə
 :::
 
-## SoraFS Chunker Profile Registry (SF-2a)
+## SoraFS Chunker Profil Reyestri (SF-2a)
 
-The SoraFS stack negotiates chunking behaviour via a small, namespaced registry.
-Each profile assigns deterministic CDC parameters, semver metadata, and the
-expected digest/multicodec used in manifests and CAR archives.
+SoraFS yığını kiçik, ad boşluqlu reyestr vasitəsilə parçalanma davranışını müzakirə edir.
+Hər bir profil deterministik CDC parametrlərini, semver metadatasını və
+manifestlərdə və CAR arxivlərində istifadə edilən gözlənilən həzm/multikodec.
 
-Profile authors should consult
+Profil müəllifləri məsləhətləşməlidir
 [`docs/source/sorafs/chunker_profile_authoring.md`](./chunker-profile-authoring.md)
-for the required metadata, validation checklist, and proposal template before
-submitting new entries. Once governance has approved a change, follow the
-[registry rollout checklist](./chunker-registry-rollout-checklist.md) and the
-[staging manifest playbook](./staging-manifest-playbook) to promote
-the fixtures through staging and production.
+əvvəl tələb olunan metadata, doğrulama yoxlama siyahısı və təklif şablonu üçün
+yeni yazıların təqdim edilməsi. İdarəetmə dəyişikliyi təsdiqlədikdən sonra aşağıdakılara əməl edin
+[reyestr təqdim edilməsinə nəzarət siyahısı](./chunker-registry-rollout-checklist.md) və
+[təşkil etmək üçün manifest oyun kitabı](./staging-manifest-playbook).
+quruluş və istehsal vasitəsilə qurğular.
 
-### Profiles
+### Profillər
 
-| Namespace | Name | SemVer | Profile ID | Min (bytes) | Target (bytes) | Max (bytes) | Break mask | Multihash | Aliases | Notes |
-|-----------|------|--------|------------|-------------|----------------|-------------|------------|-----------|---------|-------|
-| `sorafs`  | `sf1` | `1.0.0` | `1` | 65 536 | 262 144 | 524 288 | `0x0000ffff` | `0x1f` (BLAKE3-256) | `["sorafs.sf1@1.0.0"]` | Canonical profile used in SF-1 fixtures |
+| Ad sahəsi | Adı | SemVer | Profil ID | Min (bayt) | Hədəf (bayt) | Maks (bayt) | Break maskası | Multihash | Təxəllüs | Qeydlər |
+|----------|------|--------|------------|-------------|----------------|-------------|------------|-----------|---------|-------|
+| `sorafs` | `sf1` | `1.0.0` | `1` | 65536 | 262144 | 524288 | `0x0000ffff` | `0x1f` (BLAKE3-256) | `["sorafs.sf1@1.0.0"]` | SF-1 qurğularında istifadə olunan kanonik profil |
 
-The registry lives in code as `sorafs_manifest::chunker_registry` (governed by [`chunker_registry_charter.md`](./chunker-registry-charter.md)). Each entry
-is expressed as a `ChunkerProfileDescriptor` with:
+Reyestr `sorafs_manifest::chunker_registry` ([`chunker_registry_charter.md`](./chunker-registry-charter.md) tərəfindən idarə olunur) kimi kodda yaşayır. Hər bir giriş
+`ChunkerProfileDescriptor` ilə ifadə edilir:
 
-* `namespace` – logical grouping of related profiles (e.g., `sorafs`).
-* `name` – human-readable profile label (`sf1`, `sf1-fast`, …).
-* `semver` – semantic version string for the parameter set.
-* `profile` – the actual `ChunkProfile` (min/target/max/mask).
-* `multihash_code` – the multihash used when producing chunk digests (`0x1f`
-  for the SoraFS default).
+* `namespace` – əlaqəli profillərin məntiqi qruplaşdırılması (məsələn, `sorafs`).
+* `name` – insan tərəfindən oxuna bilən profil etiketi (`sf1`, `sf1-fast`, …).
+* `semver` – parametr dəsti üçün semantik versiya sətri.
+* `profile` – faktiki `ChunkProfile` (min/hədəf/maks/maska).
+* `multihash_code` – yığın həzmləri (`0x1f`) istehsal edərkən istifadə olunan multihash
+  SoraFS defolt üçün).
 
-The manifest serializes profiles via `ChunkingProfileV1`. The structure records
-the registry metadata (namespace, name, semver) alongside the raw CDC
-parameters and the alias list shown above. Consumers should first attempt a
-registry lookup by `profile_id` and fall back to the inline parameters when
-unknown IDs appear. Registry charter rules require the canonical handle
-(`namespace.name@semver`) to be the first entry in `profile_aliases`.
+Manifest profilləri `ChunkingProfileV1` vasitəsilə seriallaşdırır. Struktur qeyd edir
+xam CDC ilə yanaşı reyestr metadatası (ad sahəsi, ad, semver)
+parametrlər və yuxarıda göstərilən ləqəb siyahısı. İstehlakçılar əvvəlcə cəhd etməlidirlər
+`profile_id` tərəfindən reyestrdə axtarış edin və daxili parametrlərə qayıdın
+naməlum identifikatorlar görünür. Reyestr nizamnamə qaydaları kanonik tutacaq tələb edir
+(`namespace.name@semver`) `profile_aliases`-də ilk giriş olacaq.
 
-To inspect the registry from tooling, run the helper CLI:
+Reyestrini alətlərdən yoxlamaq üçün CLI köməkçisini işə salın:
 
 ```
 $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
@@ -81,7 +82,7 @@ To inspect a specific PoR witness, provide chunk/segment/leaf indices and
 optionally persist the proof to disk:
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
+$ yük qaçışı -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
     --por-proof=0:0:0 --por-proof-out=leaf.proof.json
 ```
 
@@ -94,7 +95,7 @@ registered aliases) that can be pasted into `chunker_registry_data.rs` when
 promoting a new default profile:
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
+$ yük qaçışı -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
     --promote-profile=sorafs.sf1@1.0.0
 ```
 
@@ -107,7 +108,7 @@ To validate an existing proof against a payload, pass the path via
 matches the computed root):
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
+$ yük qaçışı -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
     --por-proof-verify=leaf.proof.json
 ```
 
@@ -116,10 +117,10 @@ output path. The CLI guarantees deterministic ordering (`splitmix64` seeded)
 and will transparently truncate when the request exceeds the available leaves:
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
+$ yük qaçışı -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
     --por-sample=8 --por-sample-seed=0xfeedface --por-sample-out=por.samples.json
 
-The manifest stub mirrors the same data, which is convenient when scripting `--chunker-profile-id` selection in pipelines. Both chunk store CLIs also accept the canonical handle form (`--profile=sorafs.sf1@1.0.0`) so build scripts can avoid hard-coding numeric IDs:
+Manifest stub eyni məlumatları əks etdirir, bu da boru kəmərlərində `--chunker-profile-id` seçimini skript edərkən əlverişlidir. Hər iki yığın mağazası CLI-ləri həm də kanonik tutacaq formasını (`--profile=sorafs.sf1@1.0.0`) qəbul edir, beləliklə qurmaq skriptləri sərt kodlaşdırılan rəqəmli ID-lərdən qaça bilər:
 
 ```
 $ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- --list-chunker-profiles
@@ -139,12 +140,12 @@ $ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- --list-chunker-prof
 ]
 ```
 
-The `handle` field (`namespace.name@semver`) matches what the CLIs accept via
-`--profile=…`, making it safe to copy directly into automation.
+`handle` sahəsi (`namespace.name@semver`) CLI-lərin qəbul etdiyinə uyğun gəlir
+`--profile=…`, birbaşa avtomatlaşdırmaya kopyalamağı təhlükəsiz edir.
 
-### Negotiating Chunkers
+### Danışıqlar
 
-Gateways and clients advertise supported profiles via provider adverts:
+Şlüzlər və müştərilər provayder reklamları vasitəsilə dəstəklənən profilləri reklam edirlər:
 
 ```
 ProviderAdvertBodyV1 {
@@ -154,30 +155,30 @@ ProviderAdvertBodyV1 {
 }
 ```
 
-Multi-source chunk scheduling is announced via the `range` capability. The
-CLI accepts it with `--capability=range[:streams]`, where the optional numeric
-suffix encodes the provider's preferred range-fetch concurrency (for example,
-`--capability=range:64` advertises a 64-stream budget). When omitted, consumers
-fall back to the general `max_streams` hint published elsewhere in the advert.
+Çox mənbəli yığın planlaşdırması `range` qabiliyyəti vasitəsilə elan edilir. The
+CLI onu `--capability=range[:streams]` ilə qəbul edir, burada isteğe bağlı rəqəmli
+şəkilçi provayderin üstünlük verdiyi diapazon-gəlmə paralelliyini kodlayır (məsələn,
+`--capability=range:64` 64 axın büdcəsini reklam edir). Buraxıldıqda, istehlakçılar
+reklamın başqa yerində dərc olunmuş ümumi `max_streams` göstərişinə qayıdın.
 
-When requesting CAR data, clients should send an `Accept-Chunker` header listing
-supported `(namespace, name, semver)` tuples in preference order:
+CAR məlumatlarını tələb edərkən, müştərilər `Accept-Chunker` başlıq siyahısını göndərməlidirlər
+üstünlük sırasına görə dəstəklənən `(namespace, name, semver)` dəstləri:
 
 ```
 Accept-Chunker: sorafs.sf1;version=1.0.0
 ```
 
-Gateways select a mutually supported profile (defaulting to `sorafs.sf1@1.0.0`)
-and reflect the decision via the `Content-Chunker` response header. Manifests
-embed the chosen profile so downstream nodes can validate the chunk layout
-without relying on HTTP negotiation.
+Şlüzlər qarşılıqlı dəstəklənən profili seçir (defolt olaraq `sorafs.sf1@1.0.0`)
+və `Content-Chunker` cavab başlığı vasitəsilə qərarı əks etdirin. Təzahür edir
+seçilmiş profili daxil edin ki, aşağı axın qovşaqları yığın düzümünü təsdiq edə bilsin
+HTTP danışıqlarına etibar etmədən.
 
-### Conformance
+### Uyğunluq
 
-* The `sorafs.sf1@1.0.0` profile maps to the public fixtures in
-  `fixtures/sorafs_chunker` and the corpora registered under
-  `fuzz/sorafs_chunker`. End-to-end parity is exercised in Rust, Go, and Node
-  via the provided tests.
-* `chunker_registry::lookup_by_profile` asserts that the descriptor parameters
-  match `ChunkProfile::DEFAULT` to guard accidental divergence.
-* Manifests produced by `iroha app sorafs toolkit pack` and `sorafs_manifest_stub` include the registry metadata.
+* `sorafs.sf1@1.0.0` profili ictimai qurğulara xəritə verir
+  `fixtures/sorafs_chunker` və altında qeydiyyatdan keçmiş korporasiya
+  `fuzz/sorafs_chunker`. Rust, Go və Node proqramlarında uçdan-uca paritet həyata keçirilir
+  təqdim olunan testlər vasitəsilə.
+* `chunker_registry::lookup_by_profile` təsdiq edir ki, deskriptor parametrləri
+  təsadüfi divergensiyanı qorumaq üçün `ChunkProfile::DEFAULT` uyğunlaşdırın.
+* `iroha app sorafs toolkit pack` və `sorafs_manifest_stub` tərəfindən hazırlanmış manifestlərə reyestr metadata daxildir.

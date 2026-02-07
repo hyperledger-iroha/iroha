@@ -4,28 +4,30 @@ direction: ltr
 source: docs/portal/docs/norito/examples/call-transfer-asset.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-slug: /norito/examples/call-transfer-asset
-title: استدعاء نقل المضيف من Kotodama
-description: يوضح كيف يمكن لنقطة دخول Kotodama استدعاء تعليمة المضيف `transfer_asset` مع التحقق المضمن من بيانات التعريف.
-source: crates/ivm/docs/examples/08_call_transfer_asset.ko
+пул: /norito/examples/call-transfer-asset
+Название: استدعاء نقل المضيف من Kotodama
+описание: يوضح كيف يمكن لنقطة دخول Kotodama استدعاء تعليمة المضيف `transfer_asset` مع Это произошло в результате событий в Сан-Франциско.
+источник: crates/ivm/docs/examples/08_call_transfer_asset.ko
 ---
 
-يوضح كيف يمكن لنقطة دخول Kotodama استدعاء تعليمة المضيف `transfer_asset` مع التحقق المضمن من بيانات التعريف.
+Он был отправлен в США Kotodama, чтобы установить `transfer_asset`. Это произошло в результате событий в Сан-Франциско.
 
 ## جولة دفتر الأستاذ
 
-- موّل سلطة العقد (مثلا `ih58...`) بالأصل الذي ستنقله وامنح السلطة دور `CanTransfer` أو إذنا مكافئا.
-- استدعِ نقطة الدخول `call_transfer_asset` لنقل 5 وحدات من حساب العقد إلى `ih58...`، بما يعكس طريقة تغليف الأتمتة على السلسلة لنداءات المضيف.
-- تحقق من الأرصدة عبر `FindAccountAssets` أو `iroha_cli ledger assets list --account ih58...` وافحص الأحداث لتأكيد أن حارس بيانات التعريف سجل سياق النقل.
+- Добавлено сообщение (`ih58...`) Да, это правда.
+- Установите флажок `call_transfer_asset` в течение 5 дней с момента запуска `ih58...`, Он сказал, что хочет, чтобы он сделал это.
+- تحقق من الأرصدة عبر `FindAccountAssets` أو `iroha_cli ledger assets list --account ih58...` وافحص الأحداث لتأكيد حارس Дэнни Сейл Сейлл.
 
-## أدلة SDK ذات صلة
+## Использование SDK
 
-- [البدء السريع لـ Rust SDK](/sdks/rust)
-- [البدء السريع لـ Python SDK](/sdks/python)
-- [البدء السريع لـ JavaScript SDK](/sdks/javascript)
+- [Загрузка в Rust SDK](/sdks/rust)
+- [Просмотр Python SDK](/sdks/python)
+- [Загрузка JavaScript SDK](/sdks/javascript)
 
 [نزّل مصدر Kotodama](/norito-snippets/call-transfer-asset.ko)
 

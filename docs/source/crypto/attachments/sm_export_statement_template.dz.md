@@ -7,50 +7,50 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 6742d2b87b8fbbc1493c5ae2704147b0f8d5d23af78004c2c9a112fe881efb11
 source_last_modified: "2025-12-29T18:16:35.937402+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% SM2/SM3/SM4 Export-Control Statement Template
-% Hyperledger Iroha Compliance Working Group
-% 2026-05-06
+% SM2/SM3/SM4 ཕྱིར་འདྲེན་-ཚད་འཛིན་གསལ་བསྒྲགས།
+% Hyperledger Iroha བསྟར་སྤྱོད་ལས་བྱེད་སྡེ་ཚན།
+% ༢༠༢༦-༠༥-༠༦
 
-# Usage
+# ལག་ལེན།
 
-Embed this statement in release notes, manifests, or legal correspondence when
-distributing SM-enabled artefacts. Update the placeholders to match the release,
-jurisdiction, and applicable license exceptions. Retain a signed copy with the
-release checklist.
+གསལ་བསྒྲགས་འདི་ གསར་བཏོན་དྲན་ཐོ་དང་ གསལ་སྟོན་ ཡང་ན་ ཁྲིམས་དོན་ཡིག་འབྲེལ་ནང་ བཙུགས་དགོ།
+ཨེསི་ཨེམ་ལྕོགས་ཅན་བཟོ་ཡོད་པའི་ཅ་རྙིང་ཚུ་བཀྲམ་སྤེལ་འབད་ནི། གསར་བཏོན་འདི་དང་མཐུན་སྒྲིག་འབད་ནིའི་དོན་ལུ་ ས་གནས་འཛིན་མི་ཚུ་ དུས་མཐུན་བཟོ།
+དབང་ཚད་དང་ ལག་ལེན་འཐབ་བཏུབ་པའི་ཆོག་ཐམ་གྱི་དམིགས་བསལ་ཚུ། དང་གཅིག་ཁར་མིང་རྟགས་བཀོད་ཡོད་པའི་འདྲ་བཤུས་ཅིག་བཞག་ནི།
+བརྟག་ཞིབ་ཐོ་ཡིག་ བཏོན་གཏང་།
 
-# Statement
+# ངག་བརྗོད
 
-> **Product:** Hyperledger Iroha {{ RELEASE_VERSION }} (`{{ ARTEFACT_ID }}`)
+> **ཐོན་སྐྱེད་:** Hyperledger Iroha {{ RELEASE_VERSION }} (`{{ ARTEFACT_ID }}`)
 >
-> **Algorithms Included:** SM2 digital signature, SM3 hashing, SM4 symmetric
-> encryption (GCM/CCM)
+> **ཨཱལ་གོ་རི་དམ་ཚུ་ ཚུད་ཡོདཔ་:** ཨེསི་ཨེམ་༢ ཌི་ཇི་ཊཱལ་མིང་རྟགས་, ཨེསི་ཨེམ་༣ ཧ་ཤིང་, ཨེསི་ཨེམ་༤ འདྲ་མཉམ།
+>གསང་བཟོ (GCM/CCM)
 >
-> **Export Classification:** United States EAR Category 5, Part 2 (5D002.c.1);
-> European Union Regulation 2021/821 Annex 1, 5D002.
+> **ཕྱིར་འདྲེན་དབྱེ་ཁག:** ཡུ་ནའི་ཊེཊ་ཨི་སི་ཊེཊ་ཨི་ཨར་དབྱེ་ཁག་ ༥ པ་ ཆ་ཤས་ ༢ (༥ཌི་༠༠༢.སི་.༡);
+> ཡུ་རོ་པིན་མཉམ་འབྲེལ་སྒྲིག་གཞི་ ༢༠༢༡/༨༢༡ ཟུར་ཐོ་ ༡, ༥D༠༠༢.
 >
-> **License Exception(s):** {{ LICENSE_EXCEPTION }} (e.g., ENC §740.17(b)(2),
-> TSU §740.13 for source distribution).
+> **ཆོག་ཐམ་ཁྱད་འཕགས་(s):** { LICENSE_EXCEPTION }} (དཔེར་ན་ ENC §740.17(b)(2).
+> འབྱུང་ཁུངས་བགོ་བཀྲམ་གྱི་དོན་ལུ་ TSU §740.13)།
 >
-> **Distribution Scope:** {{ DISTRIBUTION_SCOPE }} (e.g., “Global, excluding
-> embargoed territories listed in 15 CFR 746”).
+S
+> ༡༥ སི་ཨེཕ་ཨར་ ༧༤༦ ནང་ཐོ་བཀོད་འབད་ཡོད་པའི་ བཀག་ཆ་འབད་ཡོད་པའི་མངའ་ཁོངས་ཚུ་)།
 >
-> **Operator Obligations:** Recipients must comply with applicable export,
-> import, and usage regulations. Deployments within the People’s Republic of
-> China require product and usage filings with the State Cryptography
-> Administration and adherence to mainland data residency requirements.
+> ** Operator འགན་ཁུར་:** ཐོབ་མི་ཚུ་གིས་ འཇུག་སྤྱོད་འབད་བཏུབ་པའི་ཕྱིར་འདྲེན་ལུ་ གནས་དགོཔ་ཨིན།
+> ནང་འདྲེན་དང་ལག་ལེན་གྱི་སྒྲིག་གཞི། མི་སེར་སྤྱི་མཐུན་རྒྱལ་ཁབ་ཀྱི་ནང་འཁོད་ལུ་ བཀྲམ་སྤེལ་ཚུ།
+> རྒྱ་ནག་ལུ་ཐོན་སྐྱེད་དང་ མངའ་སྡེ་གི་དཔེ་རིས་དང་གཅིག་ཁར་ ཡིག་ཆ་ཚུ་ལག་ལེན་འཐབ་དགོཔ་ཨིན།
+> ས་ཆ་ངོ་མའི་གནས་སྡུད་སྡོད་གནས་ཀྱི་དགོས་མཁོ་ཚུ་ལུ་ བདག་སྐྱོང་དང་ བསྟར་སྤྱོད་འབད་ནི།
 >
-> **Contact:** {{ LEGAL_CONTACT_NAME }} — {{ LEGAL_CONTACT_EMAIL }} /
-> {{ LEGAL_CONTACT_PHONE }}
+> **འབྲེལ་བ་འཐབ་མི་:** { LEGAL_CONTACT_NAME } — { LEGAL_CONTACT_EMAIL }}
+> { ལེ་གཱལ་_CONTACT_FHONE }}
 >
-> This statement accompanies the cryptography compliance checklist and filing
-> templates provided in `docs/source/crypto/sm_compliance_brief.md`. Retain this
-> document and associated filings for a minimum of three years.
+> གསལ་བསྒྲགས་འདི་ གསང་ཡིག་བསྟུན་པའི་ བལྟ་རྟོག་ཐོ་ཡིག་དང་ ཡིག་ཆ་ཕུལ་མི་ མཉམ་དུ་འགྱོཝ་ཨིན།
+> `docs/source/crypto/sm_compliance_brief.md` ནང་བྱིན་ཡོད། འདི་བཞག་པ།
+> ཡིག་ཆ་དང་ འབྲེལ་ཡོད་ཡིག་ཆ་ཚུ་ ཉུང་མཐའ་ལོ་ངོ་གསུམ་གྱི་དོན་ལུ་ཨིན།
 
-# Signature
+# ས༌ཡིག
 
-- Authorised representative: ________________________
-- Title: ________________________
-- Date: ________________________
-
+- དབང་ཚད་ཡོད་པའི་ངོ་ཚབ་: __________________________
+- མིང: ________________________
+- སྤྱི་ཚེས: ________________________

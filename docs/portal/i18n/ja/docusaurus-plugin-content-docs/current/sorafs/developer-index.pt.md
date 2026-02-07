@@ -4,20 +4,22 @@ direction: ltr
 source: docs/portal/docs/sorafs/developer-index.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: developer-index
-title: Guias para desenvolvedores de SoraFS
-description: Pagina inicial para a documentacao de desenvolvedores de SoraFS, exemplos e referencias de automacao.
-sidebar_label: Visao geral de desenvolvedores
+ID: 開発者インデックス
+title: SoraFS のデセンヴォルベドアのギア
+説明: SoraFS のドキュメントの最初のページ、自動参照の例。
+サイドバーラベル: ヴィサオ・ジェラル・デ・デセンボルベドア
 ---
 
-:::note Fonte canonica
-Esta pagina espelha `docs/source/sorafs/developer/index.md`. Mantenha ambas as copias sincronizadas.
+:::note フォンテ カノニカ
+エスタ・ページナ・エスペルハ`docs/source/sorafs/developer/index.md`。マンテンハ・アンバスはコピア・シンクロニザダスとして。
 :::
 
-# Guias para desenvolvedores de SoraFS
+# SoraFS のデセンボルベドアのギア
 
 ```{toctree}
 :caption: Primeiros passos

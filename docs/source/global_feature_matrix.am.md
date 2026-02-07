@@ -7,111 +7,104 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 6a406b7656a87bb1469444db1cc2d2d5922f16660b53cc7eaef5b838199127e8
 source_last_modified: "2026-01-23T23:46:10.135119+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Global Feature Matrix
+# ዓለም አቀፍ ባህሪ ማትሪክስ
 
-Legend: `◉` fully implemented · `○` mostly implemented · `▲` partially implemented · `△` implementation just started · `✖︎` not started
+አፈ ታሪክ፡ `◉` ሙሉ በሙሉ የተተገበረ · `○` በአብዛኛው የተተገበረ · `▲` በከፊል የተተገበረ
 
-## Consensus & Networking
+## ስምምነት እና አውታረ መረብ
 
-| Feature | Status | Notes | Evidence |
-|---------|--------|-------|----------|
-| Multi-collector K/r support & first-commit-certificate-wins | ◉ | Deterministic collector selection, redundant fan-out, on-chain K/r parameters, and first-valid-commit-certificate acceptance shipped with tests. | status.md:255; status.md:314 |
-| Pacemaker backoff, RTT floor, deterministic jitter | ◉ | Configurable timers with jitter band wired through config, telemetry, and docs. | status.md:251 |
-| NEW_VIEW gating & highest QC tracking | ◉ | Control flow carries NEW_VIEW/Evidence, the highest QC adopts monotonically, handshake guards computed fingerprint. | status.md:210 |
-| availability evidence tracking (advisory) | ◉ | Availability evidence emitted and tracked; commit does not gate on availability in v1. | status.md:latest |
-| Reliable Broadcast (DA payload transport) | ◉ | RBC message flow (Init/Chunk/Ready/Deliver) is enabled when `da_enabled=true` as a transport/recovery path; availability evidence is tracked (advisory) while commit proceeds independently. | status.md:latest |
-| Commit QC state-root binding | ◉ | Commit QCs carry `parent_state_root`/`post_state_root`; there is no separate execution-QC gate. | status.md:latest |
-| Evidence propagation & audit endpoints | ◉ | ControlFlow::Evidence, Torii evidence endpoints, and negative tests landed. | status.md:176; status.md:760-761 |
-| RBC telemetry, readiness/delivered metrics | ◉ | `/v1/sumeragi/rbc*` endpoints and telemetry counters/histogram available for operators. | status.md:283-284; status.md:772 |
-| Consensus parameter advert & topology verification | ◉ | Nodes broadcast `(collectors_k, redundant_send_r)` and validate equality across peers. | status.md:255 |
-| Permissioned PRF-based rotation | ◉ | Permissioned leader/collector selection uses PRF seed + height/view over the canonical roster; prev-hash rotation remains a legacy helper. | status.md:latest |
+| ባህሪ | ሁኔታ | ማስታወሻ | ማስረጃ |
+|--------|--------|--------|------|
+| ባለብዙ ሰብሳቢ የኪ/ር ድጋፍ እና የመጀመሪያ ቃል-ሰርተፍኬት-ያሸንፋል | ◉ | ቆራጥ ሰብሳቢ ምርጫ፣ ተደጋጋሚ ደጋፊ መውጣት፣ በሰንሰለት ላይ የK/r መለኪያዎች እና ከሙከራዎች ጋር የተላከ የመጀመሪያ-የሚሰራ-የተረጋገጠ የምስክር ወረቀት መቀበል። | ሁኔታ.md:255; ሁኔታ.md:314 |
+| Pacemaker backoff, RTT ወለል, deterministic jitter | ◉ | ሊዋቀሩ የሚችሉ የሰዓት ቆጣሪዎች በማዋቀር፣ በቴሌሜትሪ እና በሰነዶች በኩል በገመድ የጂተር ባንድ። | ሁኔታ.md:251 |
+| NEW_VIEW ጌቲንግ እና ከፍተኛ QC ክትትል | ◉ | የቁጥጥር ፍሰት NEW_VIEW/ማስረጃን ይይዛል፣ ከፍተኛው QC በብቸኝነት ይቀበላል፣ የእጅ መጨባበጥ ጠባቂዎች የተሰላ የጣት አሻራ። | ሁኔታ.md:210 |
+| ተገኝነት ማስረጃ ክትትል (ምክር) | ◉ | የተገኘ እና የሚከታተል ማስረጃዎች; ቁርጠኝነት በቁ 1 ውስጥ ባለው ተገኝነት ላይ በር አይሰጥም። | status.md: የቅርብ |
+| አስተማማኝ ብሮድካስት (DA ክፍያ ጭነት ትራንስፖርት) | ◉ | `da_enabled=true` እንደ ማጓጓዣ/የመልሶ ማግኛ መንገድ ሲሄድ RBC የመልእክት ፍሰት (ኢኒት/ቸንክ/ዝግጁ/አዳራሹ) ነቅቷል። በተናጥል ገቢዎችን በሚፈጽሙበት ጊዜ የተገኝነት ማስረጃ ክትትል ይደረግበታል (ምክር)። | status.md: የቅርብ |
+| QC ግዛት-ሥር ማሰርን መፈጸም | ◉ | QCs ተሸካሚ `parent_state_root`/`post_state_root`; የተለየ የማስፈጸሚያ-QC በር የለም። | status.md: የቅርብ |
+| የማስረጃ ስርጭት እና የኦዲት የመጨረሻ ነጥቦች | ◉ | የቁጥጥር ፍሰት:: ማስረጃ፣ Torii የማስረጃ የመጨረሻ ነጥቦች እና አሉታዊ ሙከራዎች አርፈዋል። | ሁኔታ.md:176; ሁኔታ.md:760-761 |
+| RBC ቴሌሜትሪ፣ ዝግጁነት/የሚላኩ መለኪያዎች | ◉ | `/v1/sumeragi/rbc*` የመጨረሻ ነጥቦች እና የቴሌሜትሪ ቆጣሪዎች/ሂስቶግራም ኦፕሬተሮች ይገኛሉ። | ሁኔታ.md:283-284; ሁኔታ.md:772 |
+| የጋራ ስምምነት መለኪያ ማስታወቂያ እና ቶፖሎጂ ማረጋገጫ | ◉ | አንጓዎች `(collectors_k, redundant_send_r)` ያሰራጫሉ እና በእኩዮች መካከል እኩልነትን ያረጋግጣሉ። | ሁኔታ.md:255 |
+| የተፈቀደ PRF ላይ የተመሠረተ ማሽከርከር | ◉ | የተፈቀደው መሪ / ሰብሳቢ ምርጫ የ PRF ዘርን + ቁመት / እይታ በካኖኒካዊ ዝርዝር ላይ ይጠቀማል; prev-hash መዞር እንደ ውርስ ረዳት ሆኖ ይቆያል። | status.md: የቅርብ |
 
-## Pipeline, Kura & State
+## የቧንቧ መስመር፣ ኩራ እና ግዛት| ባህሪ | ሁኔታ | ማስታወሻ | ማስረጃ |
+|--------|--------|--------|------|
+| የኳራንቲን ሌይን ካፕ እና ቴሌሜትሪ | ◉ | የማዋቀር ቁልፎች፣ የሚወስን የትርፍ ፍሰት አያያዝ እና የቴሌሜትሪ ቆጣሪዎች ተተግብረዋል። | ሁኔታ.md:263 |
+| የቧንቧ ሰራተኛ ገንዳ እንቡጥ | ◉ | `[pipeline].workers` በስቴት ኢንቲት ውስጥ ከኤንቪ የመተንተን ሙከራዎች ጋር ተጣብቋል። | ሁኔታ.md:264 |
+| ቅጽበታዊ መጠይቅ መስመር (የተከማቸ/ጊዜያዊ ጠቋሚዎች) | ◉ | የተከማቸ የጠቋሚ ሁነታ በTorii ውህደት እና የሰራተኛ ገንዳዎችን ማገድ። | ሁኔታ.md:265; ሁኔታ.md:371; ሁኔታ.md:501 |
+| የማይንቀሳቀስ DAG የጣት አሻራ መልሶ ማግኛ የጎን መኪናዎች | ◉ | በኩራ ውስጥ የተከማቹ የጎን መኪናዎች፣ ጅምር ላይ የተረጋገጠ፣ አለመዛመድ ላይ የወጡ ማስጠንቀቂያዎች። | ሁኔታ.md:106; ሁኔታ.md:349 |
+| የኩራ ብሎክ መደብር ሃሽ ዲኮዲንግ ማጠንከሪያ | ◉ | Hash read ወደ ጥሬ 32-ባይት አያያዝ ከNorito-ገለልተኛ የማዞሪያ ጉዞ ሙከራዎች ጋር ተቀይሯል። | ሁኔታ.md:608; ሁኔታ.md:668 |
+| Norito የሚለምደዉ ቴሌሜትሪ ለኮዴኮች | ◉ | AoS vs NCB ምርጫ መለኪያዎች ወደ Norito ታክለዋል። | ሁኔታ.md:156 |
+| ቅጽበታዊ የ WSV መጠይቆች በ Torii | ◉ | Torii ቅጽበታዊ መጠይቅ መስመር የሰራተኛ ገንዳ ፣ ቆራጥ ትርጉምን ይጠቀማል። | ሁኔታ.md:501 |
+| የጥሪ ማስፈጸሚያ ሰንሰለት አስነሳ | ◉ | ውሂቡ ከጥሪ አፈጻጸም በኋላ ወዲያውኑ ሰንሰለት ያስነሳል። | ሁኔታ.md:668 |
 
-| Feature | Status | Notes | Evidence |
-|---------|--------|-------|----------|
-| Quarantine lane caps & telemetry | ◉ | Config knobs, deterministic overflow handling, and telemetry counters implemented. | status.md:263 |
-| Pipeline worker pool knob | ◉ | `[pipeline].workers` threaded through state init with env parsing tests. | status.md:264 |
-| Snapshot query lane (stored/ephemeral cursors) | ◉ | Stored cursor mode with Torii integration and blocking worker pools. | status.md:265; status.md:371; status.md:501 |
-| Static DAG fingerprint recovery sidecars | ◉ | Sidecars stored in Kura, validated on startup, warnings emitted on mismatches. | status.md:106; status.md:349 |
-| Kura block store hash decoding hardening | ◉ | Hash reads switched to raw 32-byte handling with Norito-independent roundtrip tests. | status.md:608; status.md:668 |
-| Norito adaptive telemetry for codecs | ◉ | AoS vs NCB selection metrics added to Norito. | status.md:156 |
-| Snapshot WSV queries via Torii | ◉ | Torii snapshot query lane uses blocking worker pool, deterministic semantics. | status.md:501 |
-| Trigger by-call execution chaining | ◉ | Data triggers chain immediately after by-call execution with deterministic order. | status.md:668 |
+## Norito ተከታታይነት እና መገልገያ
 
-## Norito Serialization & Tooling
+| ባህሪ | ሁኔታ | ማስታወሻ | ማስረጃ |
+|--------|--------|--------|------|
+| Norito JSON ፍልሰት (የስራ ቦታ) | ◉ | ሰርዴ ከምርት ተወግዷል; ኢንቬንቶሪ + የጥበቃ መስመሮች የስራ ቦታውን Norito-ብቻ ያቆያሉ። | ሁኔታ.md:112; ሁኔታ.md:124 |
+| Serde መካድ-ዝርዝር & CI guardrails | ◉ | የስራ ፍሰቶችን/ስክሪፕቶችን ጠብቅ አዲስ የቀጥታ ሰርዴ በስራ ቦታ ላይ መጠቀምን ይከለክላል። | ሁኔታ.md:218 |
+| Norito codec goldens & AoS/NCB ሙከራዎች | ◉ | AoS/NCB ወርቃማዎች፣ የመቁረጥ ሙከራዎች እና የሰነድ ማመሳሰል ታክለዋል። | ሁኔታ.md:140-147; ሁኔታ.md:149-150; ሁኔታ.md:332; ሁኔታ.md:666 |
+| Norito ባህሪ ማትሪክስ መሳሪያ | ◉ | `scripts/run_norito_feature_matrix.sh` የታችኛው የጭስ ሙከራዎችን ይደግፋል; CI የታሸጉ-ሴክ/መዋቅራዊ ጥንብሮችን ይሸፍናል። | ሁኔታ.md:146; ሁኔታ.md:152 |
+| Norito የቋንቋ ማሰሪያዎች (Python/Java) | ◉ | Python እና Java Norito ኮዴኮች በማመሳሰል ስክሪፕቶች ተጠብቀዋል። | ሁኔታ.md:74; ሁኔታ.md:81 |
+| Norito ደረጃ-1 የሲምዲ መዋቅራዊ ክላሲፋየሮች | ◉ | NEON/AVX2 ደረጃ-1 ክላሲፋየሮች በመስቀል-ቀስት ወርቃማዎች እና በዘፈቀደ የኮርፖራ ሙከራዎች። | ሁኔታ.md:241 |
 
-| Feature | Status | Notes | Evidence |
-|---------|--------|-------|----------|
-| Norito JSON migration (workspace) | ◉ | Serde removed from production; inventory + guardrails keep the workspace Norito-only. | status.md:112; status.md:124 |
-| Serde deny-list & CI guardrails | ◉ | Guard workflows/scripts prevent new direct Serde usage across workspace. | status.md:218 |
-| Norito codec goldens & AoS/NCB tests | ◉ | AoS/NCB goldens, truncation tests, and doc sync added. | status.md:140-147; status.md:149-150; status.md:332; status.md:666 |
-| Norito feature matrix tooling | ◉ | `scripts/run_norito_feature_matrix.sh` supports downstream smoke tests; CI covers packed-seq/struct combos. | status.md:146; status.md:152 |
-| Norito language bindings (Python/Java) | ◉ | Python and Java Norito codecs maintained with sync scripts. | status.md:74; status.md:81 |
-| Norito Stage-1 SIMD structural classifiers | ◉ | NEON/AVX2 stage-1 classifiers with cross-arch goldens and randomized corpora tests. | status.md:241 |
+## የአስተዳደር እና የአሂድ ጊዜ ማሻሻያዎች| ባህሪ | ሁኔታ | ማስታወሻ | ማስረጃ |
+|--------|--------|--------|------|
+| የአሂድ ጊዜ ማሻሻያ መግቢያ (ABI gating) | ◉ | ገቢር የ ABI ስብስብ ወደ መግቢያ ላይ ከተዋቀሩ ስህተቶች እና ሙከራዎች ጋር ተፈጻሚ ነው። | ሁኔታ.md:196 |
+| የተጠበቀ የስም ቦታ ጌቲንግን አሰማርቷል | ▲ | የሜታዳታ መስፈርቶችን እና የገመድ ሽቦዎችን ያሰማሩ; ፖሊሲ/UX አሁንም እየተሻሻለ ነው። | ሁኔታ.md:171 |
+| Torii አስተዳደር የመጨረሻ ነጥቦች ማንበብ | ◉ | `/v1/gov/*` አንብብ ኤ ፒ አይዎችን ከራውተር ሙከራዎች ጋር። | ሁኔታ.md:212 |
+| የማረጋገጫ ቁልፍ የመመዝገቢያ የሕይወት ዑደት እና ክስተቶች | ◉ | የቪኬ መመዝገቢያ/ዝማኔ/መቋረጥ፣ክስተቶች፣ CLI ማጣሪያዎች እና ማቆያ ትርጉሞች ተተግብረዋል። | ሁኔታ.md:236-239; ሁኔታ.md:595; ሁኔታ.md:603 |
 
-## Governance & Runtime Upgrades
+## ዜሮ-እውቀት መሠረተ ልማት
 
-| Feature | Status | Notes | Evidence |
-|---------|--------|-------|----------|
-| Runtime upgrade admission (ABI gating) | ◉ | Active ABI set enforced at admission with structured errors and tests. | status.md:196 |
-| Protected namespace deploy gating | ▲ | Deploy metadata requirements and gating wired; policy/UX still evolving. | status.md:171 |
-| Torii governance read endpoints | ◉ | `/v1/gov/*` read APIs routed with router tests. | status.md:212 |
-| Verifying-key registry lifecycle & events | ◉ | VK register/update/deprecate, events, CLI filters, and retention semantics implemented. | status.md:236-239; status.md:595; status.md:603 |
+| ባህሪ | ሁኔታ | ማስታወሻ | ማስረጃ |
+|--------|--------|--------|------|
+| የአባሪ ማከማቻ APIs | ◉ | `POST/GET/LIST/DELETE` አባሪ የመጨረሻ ነጥቦች ከመወሰኛ መታወቂያዎች እና ሙከራዎች ጋር። | ሁኔታ.md:231 |
+| ዳራ prover ሠራተኛ & ሪፖርት TTL | ▲ | ባህሪ ባንዲራ በስተጀርባ Prover ግትር; TTL GC እና የማዋቀር ቁልፎች በገመድ; ሙሉ የቧንቧ መስመር በመጠባበቅ ላይ. | ሁኔታ.md:212; ሁኔታ.md:233 |
+| ኤንቨሎፕ ሃሽ ማሰሪያ በCoreHost | ◉ | በCoreHost በኩል የታሰሩ እና በኦዲት ጥራዞች መጋለጥን ያረጋግጡ። | ሁኔታ.md:250 |
+| የተከለለ ስርወ ታሪክ gating | ◉ | የስር ቅጽበተ-ፎቶዎች ከታሰረ ታሪክ እና ባዶ ስር ውቅረት ጋር ወደ CoreHost ገብተዋል። | ሁኔታ.md:303 |
+| ZK የድምጽ መስጫ አፈጻጸም እና የአስተዳደር መቆለፊያዎች | ○ | Nullifier መነጨ፣ ዝማኔዎች መቆለፍ፣ የማረጋገጫ መቀያየሪያዎች ተተግብረዋል፤ ሙሉ ማረጋገጫ የህይወት ኡደት አሁንም እየበሰለ ነው። | ሁኔታ.md:126-128; ሁኔታ.md:194-195 |
+| የማረጋገጫ ዓባሪ ቅድመ-አረጋግጥ & ተቀናሽ | ◉ | የኋላ-መለያ ንጽህና፣ መቀነስ እና የማስረጃ መዛግብት ቅድመ-አፈጻጸም ቀጥለዋል። | ሁኔታ.md:348; ሁኔታ.md:602 |
+| ZK Torii ማረጋገጫ ማምጣት የመጨረሻ ነጥብ | ◉ | `/v1/zk/proof/{backend}/{hash}` የማስረጃ መዝገቦችን (ሁኔታ፣ ቁመት፣ vk_ref/ቁርጠኝነት) ያጋልጣል። | ሁኔታ.md:94 |
 
-## Zero-Knowledge Infrastructure
+## IVM እና Kotodama ውህደት| ባህሪ | ሁኔታ | ማስታወሻ | ማስረጃ |
+|--------|--------|--------|------|
+| CoreHost syscall→ISI ድልድይ | ○ | ጠቋሚ TLV መፍታት እና syscall ወረፋ ተግባራዊ; የሽፋን ክፍተቶች / የፓሪቲ ፈተናዎች ታቅደዋል. | ሁኔታ.md:299-307; ሁኔታ.md:477-486 |
+| የጠቋሚ ገንቢዎች እና ጎራ ገንቢዎች | ◉ | Kotodama የተገነቡ የተገነቡ Norito TLVs እና SCALLs፣ከIR/e2e ሙከራዎች እና ሰነዶች ጋር ይለቀቃሉ። | ሁኔታ.md:299-301 |
+| ጠቋሚ-ABI ጥብቅ ማረጋገጫ እና ሰነድ ማመሳሰል | ◉ | በአስተናጋጅ/IVM ወርቃማ ሙከራዎች እና በተፈጠሩ ሰነዶች ላይ የTLV ፖሊሲ ተፈጻሚ ነው። | ሁኔታ.md:227; ሁኔታ.md:317; ሁኔታ.md:344; ሁኔታ.md:366; ሁኔታ.md:527 |
+| ZK syscall gating በ CoreHost | ◉ | በፔር-ኦፕ ወረፋዎች የተረጋገጡ ኤንቨሎፖች በር እና የሃሽ ማዛመድን ISI ከመፈጸሙ በፊት ያስገድዳል። | crates/iroha_core/src/smartcontracts/ivm/host.rs:213; crates/iroha_core/src/smartcontracts/ivm/host.rs:279 |
+| Kotodama ጠቋሚ-ABI ሰነዶች እና ሰዋሰው | ◉ | ሰዋሰው/ሰነዶች ከቀጥታ ገንቢዎች እና SCALL ካርታዎች ጋር ተመሳስለዋል። | ሁኔታ.md:299-301 |
+| ISO 20022 ሼማ የሚመራ ሞተር እና Torii ድልድይ | ◉ | ቀኖናዊ ISO 20022 መርሃግብሮች የተከተቱ፣ የሚወስን የኤክስኤምኤል ትንተና እና `/v1/iso20022/status/{MsgId}` ኤፒአይ ተጋልጧል። | ሁኔታ.md:65-70 |
 
-| Feature | Status | Notes | Evidence |
-|---------|--------|-------|----------|
-| Attachment storage APIs | ◉ | `POST/GET/LIST/DELETE` attachment endpoints with deterministic ids and tests. | status.md:231 |
-| Background prover worker & report TTL | ▲ | Prover stub behind feature flag; TTL GC and config knobs wired; full pipeline pending. | status.md:212; status.md:233 |
-| Envelope hash binding in CoreHost | ◉ | Verify envelope hashes bound through CoreHost and exposed via audit pulses. | status.md:250 |
-| Shielded root history gating | ◉ | Root snapshots threaded into CoreHost with bounded history and empty-root config. | status.md:303 |
-| ZK ballot execution & governance locks | ○ | Nullifier derivation, lock updates, verification toggles implemented; full proof lifecycle still maturing. | status.md:126-128; status.md:194-195 |
-| Proof attachment pre-verify & dedup | ◉ | Backend-tag sanity, deduplication, and proof records persisted pre-execution. | status.md:348; status.md:602 |
-| ZK Torii proof fetch endpoint | ◉ | `/v1/zk/proof/{backend}/{hash}` exposes proof records (status, height, vk_ref/commitment). | status.md:94 |
+## የሃርድዌር ማጣደፍ
 
-## IVM & Kotodama Integration
+| ባህሪ | ሁኔታ | ማስታወሻ | ማስረጃ |
+|--------|--------|--------|------|
+| የሲምዲ ጅራት/የማዛመድ እኩልነት ፈተናዎች | ◉ | የዘፈቀደ የተመጣጣኝነት ሙከራዎች የሲምዲ ቬክተር ኦፕስ የዘፈቀደ አሰላለፍ ከስካላር ፍቺዎች ጋር መመሳሰልን ያረጋግጣሉ። | ሁኔታ.md:243 |
+| ሜታል/CUDA ውድቀት እና ራስን መፈተሽ | ◉ | የጂፒዩ ጀርባዎች ወርቃማ የራስ ሙከራዎችን ያካሂዳሉ እና አለመመጣጠን ላይ ወደ scalar/SIMD ይመለሳሉ። የፓርቲ ስብስቦች SHA-256/Keccak/AES ይሸፍናሉ። | ሁኔታ.md:244-246 |
 
-| Feature | Status | Notes | Evidence |
-|---------|--------|-------|----------|
-| CoreHost syscall→ISI bridge | ○ | Pointer TLV decoding and syscall queueing operational; coverage gaps/parity tests planned. | status.md:299-307; status.md:477-486 |
-| Pointer constructors & domain builtins | ◉ | Kotodama builtins emit typed Norito TLVs and SCALLs, with IR/e2e tests and docs. | status.md:299-301 |
-| Pointer-ABI strict validation & doc sync | ◉ | TLV policy enforced across host/IVM with golden tests and generated docs. | status.md:227; status.md:317; status.md:344; status.md:366; status.md:527 |
-| ZK syscall gating via CoreHost | ◉ | Per-op queues gate verified envelopes and enforce hash matching before ISI execution. | crates/iroha_core/src/smartcontracts/ivm/host.rs:213; crates/iroha_core/src/smartcontracts/ivm/host.rs:279 |
-| Kotodama pointer-ABI docs & grammar | ◉ | Grammar/docs synced with live constructors and SCALL mappings. | status.md:299-301 |
-| ISO 20022 schema-driven engine & Torii bridge | ◉ | Canonical ISO 20022 schemas embedded, deterministic XML parsing, and `/v1/iso20022/status/{MsgId}` API exposed. | status.md:65-70 |
+## የአውታረ መረብ ጊዜ እና የጋራ መግባባት ሁነታዎች
 
-## Hardware Acceleration
+| ባህሪ | ሁኔታ | ማስታወሻ | ማስረጃ |
+|--------|--------|--------|------|
+| የአውታረ መረብ ጊዜ አገልግሎት (NTS) | ✖︎ | ንድፍ በ `new_pipeline.md` ውስጥ አለ; ትግበራ በሁኔታ ዝመናዎች ውስጥ ገና ክትትል አልተደረገም። | አዲስ_ቧንቧ.md |
+| የተሰየመ የፖኤስ ስምምነት ሁነታ | ✖︎ | Nexus የንድፍ ሰነዶች የተዘጉ እና የ NPoS ሁነታዎች; ዋና ትግበራ በመጠባበቅ ላይ. | new_pipeline.md; nexus.md |
 
-| Feature | Status | Notes | Evidence |
-|---------|--------|-------|----------|
-| SIMD tail/misalignment parity tests | ◉ | Randomized parity tests ensure SIMD vector ops match scalar semantics for arbitrary alignment. | status.md:243 |
-| Metal/CUDA fallback & self-tests | ◉ | GPU backends run golden self-tests and fall back to scalar/SIMD on mismatch; parity suites cover SHA-256/Keccak/AES. | status.md:244-246 |
+## Nexus Ledger Roadmap| ባህሪ | ሁኔታ | ማስታወሻ | ማስረጃ |
+|--------|--------|--------|------|
+| የጠፈር ማውጫ ውል ስካፎልድ | ✖︎ | የአለምአቀፍ ምዝገባ ውል ለ DS መግለጫዎች/መንግስት እስካሁን አልተተገበረም። | nexus.md |
+| የውሂብ ክፍተት አንጸባራቂ ቅርጸት እና የህይወት ዑደት | ✖︎ | Norito አንጸባራቂ ንድፍ፣ እትም እና የአስተዳደር ፍሰት በፍኖተ ካርታው ላይ ይቆያሉ። | nexus.md |
+| DS አስተዳደር እና አረጋጋጭ ሽክርክር | ✖︎ | በሰንሰለት ላይ ያሉ ሂደቶች ለ DS አባልነት/ማሽከርከር አሁንም በንድፍ ደረጃ ላይ። | nexus.md |
+| ክሮስ-ዲኤስ መልህቅ እና Nexus የማገጃ ቅንብር | ✖︎ | የቅንብር ንብርብር እና ቃል ኪዳኖች ተዘርዝረዋል ነገር ግን ያልተተገበሩ። | nexus.md |
+| ኩራ/ WSV መደምሰስ-ኮድ ማከማቻ | ✖︎ | ለሕዝብ/የግል ዲኤስ/ዲኤስ/ኢሬዘር ኮድ የተደረገ የብሎብ/የቅጽበተ-ፎቶ ማከማቻ ገና አልተገነባም። | nexus.md |
+| ZK/ብሩህ ማረጋገጫ ፖሊሲ በ DS | ✖︎ | የፐር-DS ማረጋገጫ መስፈርቶች እና ማስፈጸሚያ በኮድ ውስጥ ክትትል አልተደረገም። | nexus.md |
+| ክፍያ/ኮታ በዳታ ቦታ ማግለል | ✖︎ | DS-ተኮር ኮታዎች እና የክፍያ ፖሊሲ ዘዴዎች የወደፊት ሥራ ሆነው ይቆያሉ። | nexus.md |
 
-## Network Time & Consensus Modes
+## ትርምስ እና ስህተት መርፌ
 
-| Feature | Status | Notes | Evidence |
-|---------|--------|-------|----------|
-| Network Time Service (NTS) | ✖︎ | Design exists in `new_pipeline.md`; implementation not yet tracked in status updates. | new_pipeline.md |
-| Nominated PoS consensus mode | ✖︎ | Nexus design documents closed-set and NPoS modes; core implementation pending. | new_pipeline.md; nexus.md |
-
-## Nexus Ledger Roadmap
-
-| Feature | Status | Notes | Evidence |
-|---------|--------|-------|----------|
-| Space Directory contract scaffold | ✖︎ | Global registry contract for DS manifests/governance not implemented yet. | nexus.md |
-| Data Space manifest format & lifecycle | ✖︎ | Norito manifest schema, versioning, and governance flow remain on the roadmap. | nexus.md |
-| DS governance & validator rotation | ✖︎ | On-chain procedures for DS membership/rotation still in design phase. | nexus.md |
-| Cross-DS anchoring & Nexus block composition | ✖︎ | Composition layer and anchoring commitments outlined but unimplemented. | nexus.md |
-| Kura/WSV erasure-coded storage | ✖︎ | Erasure-coded blob/snapshot storage for public/private DS not yet built. | nexus.md |
-| ZK/optimistic proof policy per DS | ✖︎ | Per-DS proof requirements and enforcement not tracked in code. | nexus.md |
-| Fee/quota isolation per Data Space | ✖︎ | DS-specific quotas and fee policy mechanisms remain future work. | nexus.md |
-
-## Chaos & Fault Injection
-
-| Feature | Status | Notes | Evidence |
-|---------|--------|-------|----------|
-| Izanami chaosnet orchestration | ○ | Izanami workload now drives asset-definition, metadata, NFT, and trigger-repetition recipes with unit coverage for the new paths. | crates/izanami/src/instructions.rs; crates/izanami/src/instructions.rs#tests |
+| ባህሪ | ሁኔታ | ማስታወሻ | ማስረጃ |
+|--------|--------|--------|------|
+| Izanami chaosnet ኦርኬስትራ | ○ | Izanami የስራ ጫና አሁን የንብረትን ትርጉም፣ሜታዳታ፣ኤንኤፍቲ እና ቀስቅሴ-ድግግሞሽ የምግብ አዘገጃጀት መመሪያዎችን ከአዲሶቹ መንገዶች ሽፋን ጋር ያንቀሳቅሳል። | crates/izanami/src/instructions.rs; crates/izanami/src/instructions.rs#ፈተናዎች |

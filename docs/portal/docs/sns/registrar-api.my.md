@@ -11,33 +11,34 @@ id: registrar-api
 title: Sora Name Service Registrar API & Governance Hooks
 sidebar_label: Registrar API
 description: Torii REST/gRPC surfaces, Norito DTOs, and governance artifacts for SNS registrations (SN-2b).
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
-This page mirrors `docs/source/sns/registrar_api.md` and now serves as the
-canonical portal copy. The source file remains for translation workflows.
+::: Canonical Source ကို သတိပြုပါ။
+ဤစာမျက်နှာသည် `docs/source/sns/registrar_api.md` ကို ရောင်ပြန်ဟပ်ပြီး ယခုအခါ စာမျက်နှာအဖြစ် ဆောင်ရွက်လျက်ရှိသည်။
+canonical portal ကော်ပီ။ ဘာသာပြန်လုပ်ငန်းအသွားအလာအတွက် အရင်းအမြစ်ဖိုင်သည် ကျန်ရှိနေပါသည်။
 :::
 
-# SNS Registrar API & Governance Hooks (SN-2b)
+# SNS Registrar API နှင့် Governance Hooks (SN-2b)
 
-**Status:** Drafted 2026-03-24 -- under Nexus Core review  
-**Roadmap link:** SN-2b “Registrar API & governance hooks”  
-**Prerequisites:** Schema definitions in [`registry-schema.md`](./registry-schema.md)
+**အခြေအနေ-** ရေးဆွဲထားသော 2026-03-24 -- Nexus Core ပြန်လည်သုံးသပ်မှုအောက်တွင်  
+**လမ်းပြမြေပုံလင့်ခ်-** SN-2b “မှတ်ပုံတင်အရာရှိ API နှင့် အုပ်ချုပ်မှုချိတ်များ”  
+**ကြိုတင်လိုအပ်ချက်များ-** [`registry-schema.md`](./registry-schema.md)
 
-This note specifies the Torii endpoints, gRPC services, request/response DTOs, and governance artifacts required to operate the Sora Name Service (SNS) registrar. It is the authoritative contract for SDKs, wallets, and automation that need to register, renew, or manage SNS names.
+ဤမှတ်စုသည် Torii အဆုံးမှတ်များ၊ gRPC ဝန်ဆောင်မှုများ၊ တောင်းဆိုမှု/တုံ့ပြန်မှု DTOs နှင့် Sora အမည်ဝန်ဆောင်မှု (SNS) မှတ်ပုံတင်အရာရှိကို လုပ်ဆောင်ရန် လိုအပ်သော အုပ်ချုပ်မှုဆိုင်ရာပစ္စည်းများကို သတ်မှတ်ပေးပါသည်။ ၎င်းသည် SNS အမည်များကို စာရင်းသွင်းရန်၊ သက်တမ်းတိုးရန် သို့မဟုတ် စီမံခန့်ခွဲရန် လိုအပ်သော SDKs၊ ပိုက်ဆံအိတ်များနှင့် အလိုအလျောက်စနစ်အတွက် တရားဝင်စာချုပ်ဖြစ်သည်။
 
 ## 1. Transport & Authentication
 
-| Requirement | Detail |
+| လိုအပ်ချက် | Detail |
 |-------------|--------|
-| Protocols | REST under `/v1/sns/*` and gRPC service `sns.v1.Registrar`. Both accept Norito-JSON (`application/json`) and Norito-RPC binary (`application/x-norito`). |
-| Auth | `Authorization: Bearer` tokens or mTLS certificates issued per suffix steward. Governance-sensitive endpoints (freeze/unfreeze, reserved assignments) require `scope=sns.admin`. |
-| Rate limits | Registrars share the `torii.preauth_scheme_limits` buckets with JSON callers plus per-suffix burst caps: `sns.register`, `sns.renew`, `sns.controller`, `sns.freeze`. |
-| Telemetry | Torii exposes `torii_request_duration_seconds{scheme}` / `torii_request_failures_total{scheme,code}` for the registrar handlers (filter on `scheme="norito_rpc"`); the API also increments `sns_registrar_status_total{result, suffix_id}`. |
+| ပရိုတိုကောများ | `/v1/sns/*` နှင့် gRPC ဝန်ဆောင်မှု `sns.v1.Registrar` အောက်တွင် အနားယူပါ။ Norito-JSON (`application/json`) နှင့် Norito-RPC binary (`application/x-norito`) ကို လက်ခံပါသည်။ |
+| အထောက်အထား | `Authorization: Bearer` တိုကင်များ သို့မဟုတ် mTLS လက်မှတ်များကို နောက်ဆက်တွဲ ဘဏ္ဍာစိုးအလိုက် ထုတ်ပေးသည်။ အုပ်ချုပ်မှု-အထိခိုက်မခံသော အဆုံးမှတ်များ (အေးခဲ/ပိတ်၊ သိမ်းဆည်းထားသော တာဝန်များ) `scope=sns.admin` လိုအပ်သည်။ |
+| ကန့်သတ်ချက်များ | မှတ်ပုံတင်သူများသည် `torii.preauth_scheme_limits` ပုံးများကို JSON ခေါ်ဆိုသူများ နှင့် နောက်ဆက်တွဲ ဆက်တိုက် ဆက်တိုက်ထုပ်ပိုးထားသည်- `sns.register`၊ `sns.renew`၊ `sns.controller`၊ `sns.freeze`။ |
+| Telemetry | Torii သည် မှတ်ပုံတင်အရာရှိကိုင်တွယ်သူများအတွက် `torii_request_duration_seconds{scheme}` / `torii_request_failures_total{scheme,code}` ကိုဖော်ထုတ်သည် (`scheme="norito_rpc"`) API သည် `sns_registrar_status_total{result, suffix_id}` ကိုလည်း တိုးပေးသည်။ |
 
-## 2. DTO Overview
+## 2. DTO ခြုံငုံသုံးသပ်ချက်
 
-Fields reference the canonical structs defined in [`registry-schema.md`](./registry-schema.md). All payloads embed `NameSelectorV1` + `SuffixId` to avoid ambiguous routing.
+အကွက်များသည် [`registry-schema.md`](./registry-schema.md) တွင် သတ်မှတ်ထားသော canonical structs များကို ရည်ညွှန်းသည်။ မရေရာသောလမ်းကြောင်းကိုရှောင်ရှားရန် payload များအားလုံးသည် `NameSelectorV1` + `SuffixId` ကိုထည့်သွင်းထားသည်။
 
 ```text
 Struct RegisterNameRequestV1 {
@@ -105,27 +106,27 @@ Struct ReservedAssignmentRequestV1 {
 }
 ```
 
-## 3. REST Endpoints
+## 3. REST အဆုံးမှတ်များ
 
-| Endpoint | Method | Payload | Description |
+| အဆုံးမှတ် | နည်းလမ်း | ဝန်ဆောင်ခ | ဖော်ပြချက် |
 |----------|--------|---------|-------------|
-| `/v1/sns/registrations` | POST | `RegisterNameRequestV1` | Register or reopen a name. Resolves pricing tier, validates payment/governance proofs, emits registry events. |
-| `/v1/sns/registrations/{selector}/renew` | POST | `RenewNameRequestV1` | Extend term. Enforces grace/redemption windows from policy. |
-| `/v1/sns/registrations/{selector}/transfer` | POST | `TransferNameRequestV1` | Transfer ownership once governance approvals attach. |
-| `/v1/sns/registrations/{selector}/controllers` | PUT | `UpdateControllersRequestV1` | Replace controller set; validates signed account addresses. |
-| `/v1/sns/registrations/{selector}/freeze` | POST | `FreezeNameRequestV1` | Guardian/council freeze. Requires guardian ticket and reference to governance docket. |
-| `/v1/sns/registrations/{selector}/freeze` | DELETE | `GovernanceHookV1` | Unfreeze after remediation; ensures council override recorded. |
-| `/v1/sns/reserved/{selector}` | POST | `ReservedAssignmentRequestV1` | Steward/council assignment of reserved names. |
-| `/v1/sns/policies/{suffix_id}` | GET | — | Fetch current `SuffixPolicyV1` (cacheable). |
-| `/v1/sns/registrations/{selector}` | GET | — | Returns current `NameRecordV1` + effective state (Active, Grace, etc.). |
+| `/v1/sns/registrations` | POST | `RegisterNameRequestV1` | အမည်စာရင်းသွင်းပါ သို့မဟုတ် ပြန်လည်ဖွင့်ပါ။ စျေးနှုန်းအဆင့်ကို ဖြေရှင်းပါ၊ ငွေပေးချေမှု/အုပ်ချုပ်မှုဆိုင်ရာ အထောက်အထားများကို အတည်ပြုပေးသည်၊ မှတ်ပုံတင်ခြင်းဆိုင်ရာ ဖြစ်ရပ်များကို ထုတ်လွှတ်ပါသည်။ |
+| `/v1/sns/registrations/{selector}/renew` | POST | `RenewNameRequestV1` | သက်တမ်းတိုး။ မူဝါဒမှ ကျေးဇူးတော်/ရွေးနှုတ်မှု ပြတင်းပေါက်များကို တွန်းအားပေးသည်။ |
+| `/v1/sns/registrations/{selector}/transfer` | POST | `TransferNameRequestV1` | အုပ်ချုပ်မှုအတည်ပြုချက်များ ပူးတွဲပါရှိပြီး ပိုင်ဆိုင်မှုလွှဲပြောင်းပါ။ |
+| `/v1/sns/registrations/{selector}/controllers` | PUT | `UpdateControllersRequestV1` | ထိန်းချုပ်ကိရိယာအစုံကို အစားထိုးပါ။ လက်မှတ်ထိုးထားသော အကောင့်လိပ်စာများကို အတည်ပြုသည်။ |
+| `/v1/sns/registrations/{selector}/freeze` | POST | `FreezeNameRequestV1` | အုပ်ထိန်းသူ/ကောင်စီကို ခေတ္တရပ်ဆိုင်းထားသည်။ အုပ်ထိန်းသူလက်မှတ်နှင့် အုပ်ချုပ်မှုဆိုင်ရာစာရွက်စာတမ်းများကို ကိုးကားရန် လိုအပ်သည်။ |
+| `/v1/sns/registrations/{selector}/freeze` | ဖျက်ရန် | `GovernanceHookV1` | ပြုပြင်ပြီးနောက် အေးခဲမှုကို ပြန်ဖြုတ်ပါ။ မှတ်တမ်းတင်ထားသော ကောင်စီကို ထပ်လောင်းသေချာစေပါသည်။ |
+| `/v1/sns/reserved/{selector}` | POST | `ReservedAssignmentRequestV1` | ဘဏ္ဍာစိုး/ကောင်စီ၏ သီးသန့်အမည်များကို တာဝန်ပေးသည်။ |
+| `/v1/sns/policies/{suffix_id}` | GET | — | လက်ရှိ `SuffixPolicyV1` (cacheable) ကို ရယူပါ။ |
+| `/v1/sns/registrations/{selector}` | GET | — | လက်ရှိ `NameRecordV1` + ထိရောက်မှုအခြေအနေ (တက်ကြွ၊ ကျေးဇူးတော်၊ စသည်) ကို ပြန်ပေးသည်။ |
 
-**Selector encoding:** the `{selector}` path segment accepts IH58 (preferred), compressed (`sora`, second-best), or canonical hex per ADDR-5; Torii normalises it via `NameSelectorV1`.
+**ရွေးချယ်မှုကုဒ်နံပါတ်-** `{selector}` လမ်းကြောင်းအပိုင်းသည် IH58 (နှစ်သက်ရာ)၊ ချုံ့ထားသော (`sora`၊ ဒုတိယအကောင်းဆုံး) သို့မဟုတ် canonical hex အလိုက် ADDR-5၊ Torii သည် `NameSelectorV1` မှတစ်ဆင့် ပုံမှန်ဖြစ်စေသည်။
 
-**Error model:** all endpoints return Norito JSON with `code`, `message`, `details`. Codes include `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing`.
+**အမှားပုံစံ-** အဆုံးမှတ်များအားလုံးသည် Norito JSON `code`၊ `message`၊ `details` ဖြင့် ပြန်ပေးသည်။ ကုဒ်များတွင် `sns_err_reserved`၊ `sns_err_payment_mismatch`၊ `sns_err_policy_violation`၊ `sns_err_governance_missing` ပါဝင်သည်။
 
-### 3.1 CLI helpers (N0 manual registrar requirement)
+### 3.1 CLI အကူအညီပေးသူများ (N0 လက်စွဲ မှတ်ပုံတင်အရာရှိ လိုအပ်ချက်)
 
-Closed-beta stewards can now exercise the registrar via the CLI without hand-crafting JSON:
+Closed-beta ဘဏ္ဍာစိုးများသည် ယခုလက်ဖြင့်ပြုလုပ်ခြင်းမရှိဘဲ JSON ကို CLI မှတစ်ဆင့် မှတ်ပုံတင်အရာရှိအား ကျင့်သုံးနိုင်ပါပြီ-
 
 ```bash
 iroha sns register \
@@ -138,19 +139,19 @@ iroha sns register \
   --payment-signature '"steward-signature"'
 ```
 
-- `--owner` defaults to the CLI config account; repeat `--controller` to attach additional controller accounts (default `[owner]`).
-- Inline payment flags map directly to `PaymentProofV1`; pass `--payment-json PATH` when you already have a structured receipt. Metadata (`--metadata-json`) and governance hooks (`--governance-json`) follow the same pattern.
+- `--owner` သည် CLI config အကောင့်သို့ ပုံသေများဖြစ်သည်။ နောက်ထပ် ထိန်းချုပ်ကိရိယာအကောင့်များ ပူးတွဲပါရန် `--controller` ကို ထပ်လုပ်ပါ (မူလ `[owner]`)။
+- Inline ငွေပေးချေမှုအလံများကို `PaymentProofV1` သို့ တိုက်ရိုက်မြေပုံပြပါ။ သင့်တွင် ဖွဲ့စည်းတည်ဆောက်ထားသော ပြေစာတစ်ခုရှိသောအခါ `--payment-json PATH` ကို ကျော်ဖြတ်ပါ။ မက်တာဒေတာ (`--metadata-json`) နှင့် အုပ်ချုပ်မှုချိတ်များ (`--governance-json`) သည် တူညီသောပုံစံအတိုင်း လုပ်ဆောင်သည်။
 
-Read-only helpers round out rehearsals:
+အစမ်းလေ့ကျင့်မှုများကို ဖတ်ရန်သာ ကူညီပေးသူများ-
 
 ```bash
 iroha sns registration --selector makoto.sora
 iroha sns policy --suffix-id 1
 ```
 
-See `crates/iroha_cli/src/commands/sns.rs` for the implementation; the commands reuse the Norito DTOs described in this document so CLI output matches Torii responses byte-for-byte.
+အကောင်အထည်ဖော်မှုအတွက် `crates/iroha_cli/src/commands/sns.rs` ကိုကြည့်ပါ။ ညွှန်ကြားချက်များသည် ဤစာရွက်စာတမ်းတွင်ဖော်ပြထားသော Norito DTOs ကို ပြန်လည်အသုံးပြုသောကြောင့် CLI ရလဒ်သည် Torii တုံ့ပြန်မှုများ byte-for-byte နှင့် ကိုက်ညီပါသည်။
 
-Additional helpers cover renewals, transfers, and guardian actions:
+အပိုအကူအညီပေးသူများသည် သက်တမ်းတိုးခြင်း၊ လွှဲပြောင်းခြင်းနှင့် အုပ်ထိန်းခြင်းဆိုင်ရာ လုပ်ဆောင်ချက်များကို အကျုံးဝင်သည်-
 
 ```bash
 # Renew an expiring name
@@ -180,9 +181,9 @@ iroha sns unfreeze \
   --governance-json /path/to/unfreeze_hook.json
 ```
 
-`--governance-json` must contain a valid `GovernanceHookV1` record (proposal id, vote hashes, steward/guardian signatures). Each command simply mirrors the corresponding `/v1/sns/registrations/{selector}/…` endpoint so beta operators can rehearse the exact Torii surfaces SDKs will call.
+`--governance-json` တွင် မှန်ကန်သော `GovernanceHookV1` မှတ်တမ်း (အဆိုပြုချက် ID၊ မဲနှိုက်ချက်များ၊ ဘဏ္ဍာစိုး/အုပ်ထိန်းသူလက်မှတ်များ) ပါဝင်ရပါမည်။ ညွှန်ကြားချက်တစ်ခုစီသည် သက်ဆိုင်ရာ `/v1/sns/registrations/{selector}/…` အဆုံးမှတ်ကို ထင်ဟပ်နေစေသောကြောင့် beta အော်ပရေတာများသည် SDKs ခေါ်ဆိုမည့် Torii မျက်နှာပြင်များကို အတိအကျ ပြန်လည်လေ့ကျင့်နိုင်ပါသည်။
 
-## 4. gRPC Service
+## 4. gRPC ဝန်ဆောင်မှု
 
 ```text
 service Registrar {
@@ -198,83 +199,83 @@ service Registrar {
 }
 ```
 
-Wire-format: compile-time Norito schema hash recorded under
-`fixtures/norito_rpc/schema_hashes.json` (rows `RegisterNameRequestV1`,
-`RegisterNameResponseV1`, `NameRecordV1`, etc.).
+Wire-format- compile-time Norito အောက်တွင် မှတ်တမ်းတင်ထားသော schema hash
+`fixtures/norito_rpc/schema_hashes.json` (အတန်း `RegisterNameRequestV1`၊
+`RegisterNameResponseV1`၊ `NameRecordV1` စသဖြင့်)။
 
-## 5. Governance Hooks & Evidence
+## 5. အုပ်ချုပ်ရေးဆိုင်ရာချိတ်များနှင့် အထောက်အထားများ
 
-Every mutating call must attach evidence suitable for replay:
+ခေါ်ဆိုမှုတိုင်းတွင် ပြန်လည်ပြသရန်အတွက် သင့်လျော်သော အထောက်အထားများ ပူးတွဲပါရှိရမည်-
 
-| Action | Required governance data |
-|--------|-------------------------|
-| Standard register/renew | Payment proof referencing a settlement instruction; no council vote needed unless tier requires steward approval. |
-| Premium tier register / reserved assignment | `GovernanceHookV1` referencing proposal id + steward acknowledgement. |
-| Transfer | Council vote hash + DAO signal hash; guardian clearance when transfer triggered by dispute resolution. |
-| Freeze/Unfreeze | Guardian ticket signature plus council override (unfreeze). |
+| အက် | လိုအပ်သော အုပ်ချုပ်မှုဒေတာ |
+|--------|--------------------------------|
+| ပုံမှန်စာရင်းသွင်း/သက်တမ်းတိုး | အခြေချမှုညွှန်ကြားချက်ကို ကိုးကားသော ငွေပေးချေမှုအထောက်အထား၊ ဘဏ္ဍာစိုး၏အတည်ပြုချက်မလိုအပ်ပါက ကောင်စီမဲပေးစရာမလိုပါ။ |
+| ပရီမီယံအဆင့် မှတ်ပုံတင်ခြင်း / လက်ဝယ်ရှိတာဝန် | `GovernanceHookV1` အဆိုပြုချက်ကို ကိုးကားခြင်း ID + ဘဏ္ဍာစိုး အသိအမှတ်ပြုခြင်း။ |
+| လွှဲပြောင်း | ကောင်စီမဲ hash + DAO အချက်ပြ hash; အငြင်းပွားမှုဖြေရှင်းခြင်းမှအစပြုသောအခါလွှဲပြောင်းသည့်အခါအုပ်ထိန်းသူရှင်းလင်းရေး။ |
+| အေးခဲ/အအေးခံခြင်း | အုပ်ထိန်းသူလက်မှတ် လက်မှတ် နှင့် ကောင်စီကို ထပ်ရေးပါ (အအေးခံခြင်းမှ ရပ်စဲပါ)။ |
 
-Torii verifies proofs by checking:
+Torii သည် စစ်ဆေးခြင်းဖြင့် အထောက်အထားများကို စစ်ဆေးသည်-
 
-1. Proposal id exists in governance ledger (`/v1/governance/proposals/{id}`) and status is `Approved`.
-2. Hashes match the recorded vote artifacts.
-3. Steward/guardian signatures reference the expected public keys from `SuffixPolicyV1`.
+1. အဆိုပြုချက် id သည် အုပ်ချုပ်မှုစာရင်းဇယား (`/v1/governance/proposals/{id}`) တွင်ရှိပြီး အဆင့်အတန်းမှာ `Approved` ဖြစ်သည်။
+2. Hashes သည် မှတ်တမ်းတင်ထားသော ဆန္ဒမဲများနှင့် ကိုက်ညီပါသည်။
+3. ဘဏ္ဍာစိုး/အုပ်ထိန်းသူ လက်မှတ်များသည် `SuffixPolicyV1` မှ မျှော်လင့်ထားသော အများသူငှာသော့များကို ရည်ညွှန်းပါသည်။
 
-Failed checks return `sns_err_governance_missing`.
+မအောင်မြင်သောစစ်ဆေးမှုများ `sns_err_governance_missing` ကို ပြန်ပေးသည်။
 
-## 6. Workflow Examples
+## 6. အလုပ်အသွားအလာနမူနာများ
 
-### 6.1 Standard Registration
+### 6.1 စံသတ်မှတ်ချက် မှတ်ပုံတင်ခြင်း။
 
-1. Client queries `/v1/sns/policies/{suffix_id}` to fetch pricing, grace, and available tiers.
-2. Client builds `RegisterNameRequestV1`:
-   - `selector` derived from the preferred IH58 or second-best compressed (`sora`) label.
-   - `term_years` within policy bounds.
-   - `payment` referencing the treasury/steward splitter transfer.
-3. Torii validates:
-   - Label normalisation + reserved list.
-   - Term/gross price vs `PriceTierV1`.
-   - Payment proof amount >= computed price + fees.
-4. On success Torii:
-   - Persists `NameRecordV1`.
-   - Emits `RegistryEventV1::NameRegistered`.
-   - Emits `RevenueAccrualEventV1`.
-   - Returns the new record + events.
+1. စျေးနှုန်း၊ ကျေးဇူးတော်နှင့် ရနိုင်သောအဆင့်များကို ရယူရန် ဖောက်သည် `/v1/sns/policies/{suffix_id}` ကို မေးမြန်းပါသည်။
+2. သုံးစွဲသူသည် `RegisterNameRequestV1` ကို တည်ဆောက်သည်-
+   - `selector` ကို နှစ်သက်သော IH58 သို့မဟုတ် ဒုတိယအကောင်းဆုံး ဖိသိပ်မှု (`sora`) တံဆိပ်မှ ဆင်းသက်လာသည်။
+   - `term_years` မူဝါဒဘောင်အတွင်း။
+   - `payment` သည် ဘဏ္ဍာတိုက်/ဘဏ္ဍာစုခွဲခွဲလွှဲပြောင်းခြင်းကို ရည်ညွှန်းသည်။
+3. Torii အတည်ပြုသည်-
+   - အညွှန်းပုံမှန်ပြုလုပ်ခြင်း + သီးသန့်စာရင်း။
+   - သက်တမ်း/စုစုပေါင်းစျေးနှုန်း `PriceTierV1`။
+   - ငွေပေးချေမှု အထောက်အထား ပမာဏ >= တွက်ချက်ထားသော ဈေးနှုန်း + အခကြေးငွေ။
+4. အောင်မြင်မှုအပေါ် Torii-
+   - `NameRecordV1` ဆက်ရှိနေသည်
+   - `RegistryEventV1::NameRegistered` ကို ထုတ်လွှတ်သည်။
+   - `RevenueAccrualEventV1` ကို ထုတ်လွှတ်သည်။
+   - မှတ်တမ်းအသစ် + ဖြစ်ရပ်များကို ပြန်ပေးသည်။
 
-### 6.2 Renewal During Grace
+### 6.2 ကျေးဇူးတော်ကာလအတွင်း သက်တမ်းတိုးခြင်း။
 
-Grace renewals include the standard request plus penalty detection:
+ကျေးဇူးတော် သက်တမ်းတိုးခြင်းများတွင် စံတောင်းဆိုချက်နှင့် ပြစ်ဒဏ်ရှာဖွေခြင်း ပါဝင်သည်။
 
-- Torii checks `now` vs `grace_expires_at` and adds surcharge tables from `SuffixPolicyV1`.
-- Payment proof must cover surcharge. Failure => `sns_err_payment_mismatch`.
-- `RegistryEventV1::NameRenewed` records the new `expires_at`.
+- Torii သည် `now` နှင့် `grace_expires_at` ကို စစ်ဆေးပြီး `SuffixPolicyV1` မှ အပိုကြေးဇယားများကို ပေါင်းထည့်သည်။
+- ငွေပေးချေမှု အထောက်အထားတွင် အပိုကြေး အကျုံးဝင်ရပါမည်။ ပျက်ကွက် => `sns_err_payment_mismatch`။
+- `RegistryEventV1::NameRenewed` သည် `expires_at` အသစ်ကို မှတ်တမ်းတင်သည်။
 
 ### 6.3 Guardian Freeze & Council Override
 
-1. Guardian submits `FreezeNameRequestV1` with ticket referencing incident id.
-2. Torii moves record to `NameStatus::Frozen`, emits `NameFrozen`.
-3. After remediation, council issues override; operator sends DELETE `/v1/sns/registrations/{selector}/freeze` with `GovernanceHookV1`.
-4. Torii validates override, emits `NameUnfrozen`.
+1. Guardian သည် လက်မှတ်ကိုးကားသည့်အဖြစ်အပျက် ID ဖြင့် `FreezeNameRequestV1` ကို တင်ပြသည်။
+2. Torii သည် မှတ်တမ်းကို `NameStatus::Frozen` သို့ ရွှေ့ပြီး `NameFrozen` ကို ထုတ်လွှတ်သည်။
+3. ပြန်လည်ပြင်ဆင်ပြီးနောက်၊ အော်ပရေတာသည် `/v1/sns/registrations/{selector}/freeze` ဖြင့် DELETE `GovernanceHookV1` ပေးပို့သည်။
+4. Torii သည် override ကို အတည်ပြုပြီး `NameUnfrozen` ကို ထုတ်လွှတ်သည်။
 
-## 7. Validation & Error Codes
+## 7. Validation & Error Codes များ
 
-| Code | Description | HTTP |
-|------|-------------|------|
-| `sns_err_reserved` | Label is reserved or blocked. | 409 |
-| `sns_err_policy_violation` | Term, tier, or controller set violates policy. | 422 |
-| `sns_err_payment_mismatch` | Payment proof value or asset mismatch. | 402 |
-| `sns_err_governance_missing` | Required governance artifacts absent/invalid. | 403 |
-| `sns_err_state_conflict` | Operation not allowed in current lifecycle state. | 409 |
+| ကုတ် | ဖော်ပြချက် | HTTP |
+|--------|----------------|------|
+| `sns_err_reserved` | အညွှန်းကို သီးသန့် သို့မဟုတ် ပိတ်ဆို့ထားသည်။ | 409 |
+| `sns_err_policy_violation` | သက်တမ်း၊ အဆင့် သို့မဟုတ် ထိန်းချုပ်သူ သတ်မှတ်မှုသည် မူဝါဒကို ချိုးဖောက်သည်။ | 422 |
+| `sns_err_payment_mismatch` | ငွေပေးချေမှုအထောက်အထားတန်ဖိုး သို့မဟုတ် ပိုင်ဆိုင်မှုမတူညီပါ။ | ၄၀၂ |
+| `sns_err_governance_missing` | လိုအပ်သော အုပ်ချုပ်မှုဆိုင်ရာ ပစ္စည်းများ ပျက်ကွက်/မမှန်ပါ။ | ၄၀၃ |
+| `sns_err_state_conflict` | လက်ရှိဘဝစက်ဝန်းအခြေအနေတွင် လုပ်ဆောင်မှုကို ခွင့်မပြုပါ။ | 409 |
 
-All codes surface via `X-Iroha-Error-Code` and structured Norito JSON/NRPC envelopes.
+ကုဒ်များအားလုံးသည် `X-Iroha-Error-Code` နှင့် ဖွဲ့စည်းထားသော Norito JSON/NRPC စာအိတ်များမှတစ်ဆင့် ပေါ်လာသည်။
 
-## 8. Implementation Notes
+## 8. အကောင်အထည်ဖော်ရေးမှတ်စုများ
 
-- Torii stores pending auctions under `NameRecordV1.auction` and rejects direct registration attempts while `PendingAuction`.
-- Payment proofs reuse Norito ledger receipts; treasury services provide helper APIs (`/v1/finance/sns/payments`).
-- SDKs should wrap these endpoints with strongly typed helpers so wallets can present clear error reasons (`ERR_SNS_RESERVED`, etc.).
+- Torii သည် `NameRecordV1.auction` အောက်တွင် ဆိုင်းငံ့လေလံပွဲများကို သိမ်းဆည်းထားပြီး `PendingAuction` တွင် တိုက်ရိုက်မှတ်ပုံတင်ရန် ကြိုးပမ်းမှုများကို ငြင်းပယ်သည်။
+- ငွေပေးချေမှုအထောက်အထားများ Norito လယ်ဂျာဖြတ်ပိုင်းဖြတ်ပိုင်းများကို ပြန်သုံးပါ။ ဘဏ္ဍာတိုက်ဝန်ဆောင်မှုများသည် အထောက်အကူ APIs (`/v1/finance/sns/payments`) ကို ပံ့ပိုးပေးပါသည်။
+- SDK များသည် ဤအဆုံးမှတ်များကို ပြင်းပြင်းထန်ထန် ရိုက်နှိပ်ထားသော အကူအညီများဖြင့် ချုပ်ထားသင့်ပြီး ပိုက်ဆံအိတ်များသည် ရှင်းလင်းပြတ်သားသော အမှားအယွင်း အကြောင်းရင်းများ (`ERR_SNS_RESERVED`၊ စသည်ဖြင့်) ကို တင်ပြနိုင်မည်ဖြစ်သည်။
 
-## 9. Next Steps
+## 9. နောက်အဆင့်များ
 
-- Wire the Torii handlers to the actual registry contract once SN-3 auctions land.
-- Publish SDK-specific guides (Rust/JS/Swift) referencing this API.
-- Extend [`sns_suffix_governance_charter.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns_suffix_governance_charter.md) with cross-links to the governance hook evidence fields.
+- Torii ကို SN-3 လေလံတင်ပြီးသည်နှင့် အမှန်တကယ် မှတ်ပုံတင်စာချုပ်သို့ လွှဲပြောင်းပါ။
+- ဤ API ကိုရည်ညွှန်းသော SDK သီးသန့်လမ်းညွှန်များ (Rust/JS/Swift) ကို ထုတ်ဝေပါ။
+- အုပ်ချုပ်မှုချိတ်ဆက်မှု အထောက်အထားအကွက်များသို့ အပြန်အလှန်လင့်ခ်များဖြင့် [`sns_suffix_governance_charter.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns_suffix_governance_charter.md) ကို တိုးချဲ့ပါ။

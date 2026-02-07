@@ -7,13 +7,12 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 62b33abe349096aec7afa0ab825e7921036250b36b9706c01f0b3aea02ddcb63
 source_last_modified: "2026-01-21T19:17:13.239548+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Generated IVM Syscall Table
+# Үүсгэсэн IVM Syscall Хүснэгт
 
-This file is generated from `crates/ivm_abi/src/syscalls.rs`. Edit the source to change syscall numbers; then re-run this script.
-
-| Name | Value (hex) | Note |
+Энэ файлыг `crates/ivm_abi/src/syscalls.rs`-ээс үүсгэсэн. Системийн дуудлагын дугаарыг өөрчлөхийн тулд эх сурвалжийг засах; дараа нь энэ скриптийг дахин ажиллуул.| Нэр | Утга (hex) | Тайлбар |
 |------|-------------|------|
 | SYSCALL_DEBUG_PRINT | 0x0 |  |
 | SYSCALL_EXIT | 0X01 |  |
@@ -27,18 +26,18 @@ This file is generated from `crates/ivm_abi/src/syscalls.rs`. Edit the source to
 | SYSCALL_REGISTER_PEER | 0X15 |  |
 | SYSCALL_UNREGISTER_PEER | 0X16 |  |
 | SYSCALL_REGISTER_ACCOUNT | 0X13 |  |
-| SYSCALL_UNREGISTER_ACCOUNT | 0X14 |  |
-| SYSCALL_ADD_SIGNATORY | 0X17 |  |
-| SYSCALL_REMOVE_SIGNATORY | 0X18 |  |
-| SYSCALL_SET_ACCOUNT_QUORUM | 0X19 |  |
-| SYSCALL_SET_ACCOUNT_DETAIL | 0X1A |  |
+| SYSCALL_UNREGISTER_COUNT | 0X14 |  |
+| SYSCALL_НЭМЭГДСЭН_ГЭРЭГЧ | 0X17 |  |
+| ГАРЫН ҮСЭГЧИЙГ_АРИЛЦУУЛАХ | 0X18 |  |
+| SYSCALL_SET_COUNT_QUORUM | 0X19 |  |
+| SYSCALL_SET_COUNT_DETAIL | 0X1A |  |
 | SYSCALL_REGISTER_ASSET | 0X20 |  |
 | SYSCALL_UNREGISTER_ASSET | 0X21 |  |
 | SYSCALL_MINT_ASSET | 0X22 |  |
 | SYSCALL_BURN_ASSET | 0X23 |  |
 | SYSCALL_TRANSFER_ASSET | 0X24 |  |
-| SYSCALL_TRANSFER_V1 |  | alias of SYSCALL_TRANSFER_ASSET |
-| SYSCALL_TRANSFER_V1_BATCH_BEGIN | 0X29 |  |
+| SYSCALL_TRANSFER_V1 |  | SYSCALL_TRANSFER_ASSET-н бусад нэр |
+| SYSCALL_TRANSFER_V1_BAATCH_BEGIN | 0X29 |  |
 | SYSCALL_TRANSFER_V1_BATCH_END | 0X2A |  |
 | SYSCALL_TRANSFER_V1_BATCH_APPLY | 0X2B |  |
 | SYSCALL_NFT_MINT_ASSET | 0X25 |  |
@@ -68,7 +67,7 @@ This file is generated from `crates/ivm_abi/src/syscalls.rs`. Edit the source to
 | SYSCALL_BUILD_PATH_KEY_NORITO | 0X56 |  |
 | SYSCALL_JSON_ENCODE | 0X57 |  |
 | SYSCALL_JSON_DECODE | 0X58 |  |
-| SYSCALL_SCHEMA_ENCODE | 0X59 |  |
+| SYSCALL_SCHEMA_CODE | 0X59 |  |
 | SYSCALL_SCHEMA_DECODE | 0X5A |  |
 | SYSCALL_SCHEMA_INFO | 0X5B |  |
 | SYSCALL_NAME_DECODE | 0X5C |  |
@@ -77,29 +76,28 @@ This file is generated from `crates/ivm_abi/src/syscalls.rs`. Edit the source to
 | SYSCALL_TLV_EQ | 0X5F |  |
 | SYSCALL_CREATE_ROLE | 0X30 |  |
 | SYSCALL_DELETE_ROLE | 0X31 |  |
-| SYSCALL_GRANT_ROLE | 0X32 |  |
-| SYSCALL_REVOKE_ROLE | 0X33 |  |
-| SYSCALL_GRANT_PERMISSION | 0X34 |  |
-| SYSCALL_REVOKE_PERMISSION | 0X35 |  |
+| SYSCALL_GANT_ROLE | 0X32 |  |
+| SYSCALL_ROLE_ROLE | 0X33 |  |
+| SYSCALL_GRANT_PRISSION | 0X34 |  |
+| ЗӨВШӨӨРӨЛИЙГ_ХҮЧИН_ХҮГЭЭХ | 0X35 |  |
 | SYSCALL_CREATE_TRIGGER | 0X40 |  |
 | SYSCALL_REMOVE_TRIGGER | 0X41 |  |
 | SYSCALL_SET_TRIGGER_ENABLED | 0X42 |  |
-| SYSCALL_DEACTIVATE_CONTRACT_INSTANCE | 0X43 |  |
+| SYSCALL_ИДЭВХИЙН_ГЭРЭЭГ_ТОГТЛОЛТ | 0X43 |  |
 | SYSCALL_REMOVE_SMART_CONTRACT_BYTES | 0X44 |  |
 | SYSCALL_REGISTER_SMART_CONTRACT_CODE | 0X45 |  |
 | SYSCALL_REGISTER_SMART_CONTRACT_BYTES | 0X46 |  |
-| SYSCALL_ACTIVATE_CONTRACT_INSTANCE | 0X47 |  |
-| SYSCALL_GET_ACCOUNT_BALANCE | 0XF9 |  |
-| SYSCALL_USE_NULLIFIER | 0XFB |  |
-| SYSCALL_VERIFY_SIGNATURE | 0XFC |  |
-| SYSCALL_GET_PRIVATE_INPUT | 0XFD |  |
-| SYSCALL_COMMIT_OUTPUT | 0XFE |  |
+| SYSCALL_ИДЭВХИЙН_ГЭРЭЭНИЙ_ТОХИОЛДОЛ | 0X47 |  |
+| SYSCALL_GET_COUNT_BALANCE | 0XF9 |  |
+| SYSCALL_USE_ULLIFIER | 0XFB |  |
+| SYSCALL_Баталгаажуулах_Гарын үсэг | 0XFC |  |
+| SYSCALL_GET_PRIVATE_INPUT | 0XFD |  || SYSCALL_COMMIT_OUTPUT | 0XFE |  |
 | SYSCALL_ZK_VERIFY_TRANSFER | 0X60 |  |
 | SYSCALL_ZK_VERIFY_UNSHIELD | 0X61 |  |
-| SYSCALL_ZK_VOTE_VERIFY_BALLOT | 0X62 |  |
-| SYSCALL_ZK_VOTE_VERIFY_TALLY | 0X63 |  |
+| SYSCALL_ZK_САНАЛ ӨГӨХ_БАТАЛГАА_САНАЛЫН ХУГАЦАА | 0X62 |  |
+| SYSCALL_ZK_САНАЛ ӨГӨХ_БАТАЛГАА_ТОЛГОЙ | 0X63 |  |
 | SYSCALL_ZK_ROOTS_GET | 0X64 |  |
-| SYSCALL_ZK_VOTE_GET_TALLY | 0X65 |  |
+| SYSCALL_ZK_САНАЛ АВААРАЙ | 0X65 |  |
 | SYSCALL_ZK_VERIFY_BATCH | 0X68 |  |
 | SYSCALL_VRF_VERIFY | 0X66 |  |
 | SYSCALL_VRF_VERIFY_BATCH | 0X67 |  |
@@ -112,21 +110,21 @@ This file is generated from `crates/ivm_abi/src/syscalls.rs`. Edit the source to
 | SYSCALL_SM3_HASH | 0X90 |  |
 | SYSCALL_SM2_VERIFY | 0X91 |  |
 | SYSCALL_SM4_GCM_SEAL | 0X92 |  |
-| SYSCALL_SM4_GCM_OPEN | 0X93 |  |
+| SYSCALL_SM4_GCM_НЭЭЛТТЭЙ | 0X93 |  |
 | SYSCALL_SM4_CCM_SEAL | 0X94 |  |
-| SYSCALL_SM4_CCM_OPEN | 0X95 |  |
+| SYSCALL_SM4_CCM_НЭЭЛТТЭЙ | 0X95 |  |
 | SYSCALL_INPUT_PUBLISH_TLV | 0XE0 |  |
 | SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION | 0XA0 |  |
 | SYSCALL_SMARTCONTRACT_EXECUTE_QUERY | 0XA1 |  |
-| SYSCALL_CREATE_NFTS_FOR_ALL_USERS | 0XA2 |  |
-| SYSCALL_SET_SMARTCONTRACT_EXECUTION_DEPTH | 0XA3 |  |
+| SYSCALL_CREATE_NFTS_FOR_БҮХ_ХЭРЭГЛЭГЧИД | 0XA2 |  |
+| SYSCALL_SET_SMARTCONTRACT_ГҮЙЦЭТГЭХ_ГҮН | 0XA3 |  |
 | SYSCALL_GET_AUTHORITY | 0XA4 |  |
 | SYSCALL_SUBSCRIPTION_BILL | 0XA5 |  |
-| SYSCALL_SUBSCRIPTION_RECORD_USAGE | 0XA6 |  |
+| SYSCALL_SUBSCRIPTION_RECORD_ХЭРЭГЛЭЭ | 0XA6 |  |
 | SYSCALL_AXT_BEGIN | 0XB0 |  |
 | SYSCALL_AXT_TOUCH | 0XB1 |  |
 | SYSCALL_AXT_COMMIT | 0XB2 |  |
 | SYSCALL_VERIFY_DS_PROOF | 0XB3 |  |
-| SYSCALL_USE_ASSET_HANDLE | 0XB4 |  |
+| SYSCALL_USE_ASSET HANDLE | 0XB4 |  |
 
-Note: Aliases resolve to the value of their target constant at compile time.
+Тэмдэглэл: Алиасууд эмхэтгэх үед зорилтот тогтмолынхаа утгыг шийддэг.

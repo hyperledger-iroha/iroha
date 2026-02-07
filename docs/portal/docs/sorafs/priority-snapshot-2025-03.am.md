@@ -10,29 +10,30 @@ translation_last_reviewed: 2026-02-07
 id: priority-snapshot-2025-03
 title: Priority Snapshot — March 2025 (Beta)
 description: Mirror of the 2025-03 Nexus steering snapshot; pending ACKs before public rollout.
+translator: machine-google-reviewed
 ---
 
-> Canonical source: `docs/source/sorafs/priority_snapshot_2025-03.md`
+> ቀኖናዊ ምንጭ: `docs/source/sorafs/priority_snapshot_2025-03.md`
 >
-> Status: **Beta / awaiting steering ACKs** (Networking, Storage, Docs leads).
+> ሁኔታ: ** ቤታ / መሪውን ACKs በመጠባበቅ ላይ (አውታረ መረብ, ማከማቻ, ሰነዶች ይመራል).
 
-## Overview
+## አጠቃላይ እይታ
 
-The March snapshot keeps the docs/content-network initiatives aligned with the
-SoraFS delivery tracks (SF‑3, SF‑6b, SF‑9). Once all leads acknowledge the
-snapshot in the Nexus steering channel, remove the “Beta” note above.
+የማርች ቅጽበታዊ ገጽ እይታ ሰነዶች/የይዘት-ኔትዎርክ ተነሳሽነቶች ከ
+SoraFS የመላኪያ ትራኮች (SF-3፣ SF-6b፣ SF-9)። ሁሉም መሪዎች እውቅና አንዴ
+በI18NT0000002X ስቲሪንግ ቻናል ውስጥ ያለው ቅጽበታዊ ገጽ እይታ፣ ከላይ ያለውን የ"ቤታ" ማስታወሻ ያስወግዱ።
 
-### Focus threads
+### የትኩረት ክሮች
 
-1. **Circulate priority snapshot** — collect acknowledgements and log them in the
-   2025-03-05 council minutes.
-2. **Gateway/DNS kickoff close-out** — rehearse the new facilitation kit (Section 6
-   in the runbook) before the 2025-03-03 workshop.
-3. **Operator runbook migration** — portal `Runbook Index` is live; expose the beta
-   preview URL after reviewer onboarding sign-off.
-4. **SoraFS delivery threads** — align SF‑3/6b/9 remaining work with the plan/roadmap:
-   - `sorafs-node` PoR ingestion worker + status endpoint.
-   - CLI/SDK binding polish across Rust/JS/Swift orchestrator integrations.
-   - PoR coordinator runtime wiring and GovernanceLog events.
+1. **የቅድሚያ ቅጽበታዊ ገጽ እይታን ያሰራጩ *** - ምስጋናዎችን ይሰብስቡ እና በ ውስጥ ያስገቡ
+   2025-03-05 የምክር ቤት ደቂቃዎች.
+2. **ጌትዌይ/ዲ ኤን ኤስ መክፈቻ በቅርብ ርቀት *** - አዲሱን የአመቻች ኪት ይለማመዱ (ክፍል6)
+   በ runbook) ከ2025-03-03 አውደ ጥናት በፊት።
+3. ** ከዋኝ runbook ፍልሰት *** - ፖርታል I18NI0000004X የቀጥታ ነው; ቤታውን ያጋልጡ
+   የዩአርኤል ቅድመ ዕይታ ከገምጋሚ በመሳፈር ላይ መውጣት።
+4. **I18NT0000001X የመላኪያ ክሮች** — SF‑3/6b/9 የቀረውን ስራ ከእቅድ/የፍኖተ ካርታ ጋር አሰልፍ፡
+   - `sorafs-node` PoR ማስገቢያ ሰራተኛ + የሁኔታ የመጨረሻ ነጥብ።
+   - CLI/SDK ማሰሪያ ፖሊሽ በ Rust/JS/Swift ኦርኬስትራ ውህደቶች ላይ።
+   - የPoR አስተባባሪ የአሂድ ጊዜ ሽቦ እና የአስተዳደር ሎግ ዝግጅቶች።
 
-See the source file for the full table, distribution checklist, and log entries.
+ለሙሉ ሰንጠረዥ፣ የስርጭት ማረጋገጫ ዝርዝር እና የምዝግብ ማስታወሻዎች ምንጩን ፋይል ይመልከቱ።

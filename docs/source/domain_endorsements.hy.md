@@ -7,37 +7,38 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 7c337150e6de1efa9f9480ba8126ecd5ada4ed8ee7ee8b70a95fd7f6348f9016
 source_last_modified: "2025-12-29T18:16:35.952418+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Domain Endorsements
+# Դոմենի հաստատումներ
 
-Domain endorsements let operators gate domain creation and reuse under a committee‑signed statement. The endorsement payload is a Norito object recorded on chain so clients can audit who attested to which domain and when.
+Դոմենների հաստատումները թույլ են տալիս օպերատորներին մուտք գործել տիրույթի ստեղծում և վերօգտագործում հանձնաժողովի կողմից ստորագրված հայտարարության ներքո: Հաստատման օգտակար բեռը Norito օբյեկտ է, որը գրանցված է շղթայում, որպեսզի հաճախորդները կարողանան ստուգել, ​​թե ով է հաստատել, թե որ տիրույթը և երբ:
 
-## Payload shape
+## Օգտակար բեռի ձև
 
 - `version`: `DOMAIN_ENDORSEMENT_VERSION_V1`
-- `domain_id`: canonical domain identifier
-- `committee_id`: human‑readable committee label
+- `domain_id`՝ կանոնական տիրույթի նույնացուցիչ
+- `committee_id`՝ մարդու կողմից ընթեռնելի հանձնաժողովի պիտակ
 - `statement_hash`: `Hash::new(domain_id.to_string().as_bytes())`
-- `issued_at_height` / `expires_at_height`: block heights bounding validity
-- `scope`: optional dataspace plus an optional `[block_start, block_end]` window (inclusive) that **must** cover the accepting block height
-- `signatures`: signatures over `body_hash()` (endorsement with `signatures = []`)
-- `metadata`: optional Norito metadata (proposal ids, audit links, etc.)
+- `issued_at_height` / `expires_at_height`. բլոկի բարձրությունների սահմանման վավերականություն
+- `scope`. կամընտիր տվյալների տարածություն գումարած կամընտիր `[block_start, block_end]` պատուհան (ներառյալ), որը **պետք է** ծածկի ընդունող բլոկի բարձրությունը
+- `signatures`. ստորագրություններ `body_hash()`-ի վրա (հաստատում `signatures = []`-ով)
+- `metadata`. կամընտիր Norito մետատվյալներ (առաջարկի ID-ներ, աուդիտի հղումներ և այլն)
 
-## Enforcement
+## Հարկադիր
 
-- Endorsements are required when Nexus is enabled and `nexus.endorsement.quorum > 0`, or when a per‑domain policy marks the domain as required.
-- Validation enforces domain/statement hash binding, version, block window, dataspace membership, expiry/age, and committee quorum. Signers must have live consensus keys with the `Endorsement` role. Replays are rejected by `body_hash`.
-- Endorsements attached to domain registration use metadata key `endorsement`. The same validation path is used by the `SubmitDomainEndorsement` instruction, which records endorsements for auditing without registering a new domain.
+- Հաստատումները պահանջվում են, երբ Nexus-ը միացված է, իսկ `nexus.endorsement.quorum > 0`, կամ երբ յուրաքանչյուր տիրույթի քաղաքականությունը նշում է տիրույթը, ինչպես պահանջվում է:
+- Վավերացումը պարտադրում է տիրույթի/հայտարարության հեշի պարտադիր կապը, տարբերակը, արգելափակման պատուհանը, տվյալների տարածության անդամակցությունը, ժամկետի ավարտը/տարիքը և հանձնաժողովի քվորումը: Ստորագրողները պետք է ունենան ուղիղ համաձայնության բանալիներ `Endorsement` դերի հետ: Կրկնությունները մերժվում են `body_hash`-ի կողմից:
+- Դոմենի գրանցմանը կցված հաստատումներն օգտագործում են `endorsement` մետատվյալների բանալին: Նույն վավերացման ուղին օգտագործվում է `SubmitDomainEndorsement` հրահանգով, որը գրանցում է հաստատումներ աուդիտի համար՝ առանց նոր տիրույթ գրանցելու:
 
-## Committees and policies
+## Հանձնաժողովներ և քաղաքականություն
 
-- Committees can be registered on‑chain (`RegisterDomainCommittee`) or derived from config defaults (`nexus.endorsement.committee_keys` + `nexus.endorsement.quorum`, id = `default`).
-- Per‑domain policies are configured via `SetDomainEndorsementPolicy` (committee id, `max_endorsement_age`, `required` flag). When absent, Nexus defaults are used.
+- Հանձնաժողովները կարող են գրանցվել շղթայի վրա (`RegisterDomainCommittee`) կամ ստացվել կազմաձևման լռելյայններից (`nexus.endorsement.committee_keys` + `nexus.endorsement.quorum`, id = `default`):
+- Յուրաքանչյուր տիրույթի քաղաքականությունը կազմաձևվում է `SetDomainEndorsementPolicy`-ի միջոցով (կոմիտեի ID, `max_endorsement_age`, `required` դրոշակ): Երբ բացակայում է, օգտագործվում են Nexus կանխադրվածները:
 
-## CLI helpers
+## CLI օգնականներ
 
-- Build/sign an endorsement (outputs Norito JSON to stdout):
+- Ստեղծեք/ստորագրեք հաստատում (արտադրում է Norito JSON դեպի stdout):
 
   ```
   iroha endorsement prepare \
@@ -50,18 +51,18 @@ Domain endorsements let operators gate domain creation and reuse under a committ
     --signer-key <PRIVATE_KEY> --signer-key <PRIVATE_KEY>
   ```
 
-- Submit an endorsement:
+- Ներկայացրեք հաստատում.
 
   ```
   iroha endorsement submit --file endorsement.json
   # or: cat endorsement.json | iroha endorsement submit
   ```
 
-- Manage governance:
+- Կառավարեք կառավարումը.
   - `iroha endorsement register-committee --committee-id jdga --quorum 2 --member <PK> --member <PK> [--metadata path]`
   - `iroha endorsement set-policy --domain wonderland --committee-id jdga --max-endorsement-age 1000 --required`
   - `iroha endorsement policy --domain wonderland`
   - `iroha endorsement committee --committee-id jdga`
   - `iroha endorsement list --domain wonderland`
 
-Validation failures return stable error strings (quorum mismatch, stale/expired endorsement, scope mismatch, unknown dataspace, missing committee).
+Վավերացման ձախողումները վերադարձնում են սխալի կայուն տողեր (քվորումի անհամապատասխանություն, հնացած/ժամկետանց հաստատում, շրջանակի անհամապատասխանություն, տվյալների անհայտ տարածք, բացակայող հանձնաժողով):

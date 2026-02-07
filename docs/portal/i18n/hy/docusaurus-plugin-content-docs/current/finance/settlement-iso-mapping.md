@@ -8,135 +8,135 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Settlement ↔ ISO 20022 Field Mapping
 sidebar_label: Settlement ↔ ISO 20022
 description: Canonical mapping between Iroha settlement flows and the ISO 20022 bridge.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
+:::note Կանոնական աղբյուր
 :::
 
-## Settlement ↔ ISO 20022 Field Mapping
+## կարգավորում ↔ ISO 20022 Դաշտային քարտեզագրում
 
-This note captures the canonical mapping between Iroha settlement instructions
-(`DvpIsi`, `PvpIsi`, repo collateral flows) and the ISO 20022 messages exercised
-by the bridge. It reflects the message scaffolding implemented in
-`crates/ivm/src/iso20022.rs` and serves as a reference when producing or
-validating Norito payloads.
+Այս նշումը նկարագրում է Iroha կարգավորման հրահանգների կանոնական քարտեզագրումը
+(`DvpIsi`, `PvpIsi`, ռեպո գրավի հոսքեր) և իրականացված ISO 20022 հաղորդագրությունները
+կամրջի մոտ։ Այն արտացոլում է հաղորդագրության փայտամածը, որն իրականացվում է
+`crates/ivm/src/iso20022.rs` և ծառայում է որպես հղում, երբ արտադրում է կամ
+վավերացնելով Norito ծանրաբեռնվածությունը:
 
-### Reference Data Policy (Identifiers and Validation)
+### Հղման տվյալների քաղաքականություն (նույնացուցիչներ և վավերացում)
 
-This policy packages the identifier preferences, validation rules, and reference-data
-obligations that the Norito ↔ ISO 20022 bridge must enforce before emitting messages.
+Այս քաղաքականությունը փաթեթավորում է նույնացուցիչի նախապատվությունները, վավերացման կանոնները և հղումային տվյալները
+պարտավորություններ, որոնք Norito ↔ ISO 20022 կամուրջը պետք է կատարի նախքան հաղորդագրություններ ուղարկելը:
 
-**Anchor points inside the ISO message:**
-- **Instrument identifiers** → `delivery_leg.asset_definition_id` ↔ `SctiesLeg/FinInstrmId`
-  (or the equivalent instrument field).
-- **Parties / agents** → `DlvrgSttlmPties/Pty` and `RcvgSttlmPties/Pty` for `sese.*`,
-  or the agent structures in `pacs.009`.
-- **Accounts** → `…/Acct` elements for safekeeping/cash accounts; mirror the on-ledger
-  `AccountId` in `SupplementaryData`.
-- **Proprietary identifiers** → `…/OthrId` with `Tp/Prtry` and mirrored in
-  `SupplementaryData`. Never replace regulated identifiers with proprietary ones.
+**Խարիսխ կետերը ISO հաղորդագրության ներսում.**
+- **Գործիքների նույնացուցիչներ** → `delivery_leg.asset_definition_id` ↔ `SctiesLeg/FinInstrmId`
+  (կամ գործիքի համարժեք դաշտ):
+- **Կողմեր / գործակալներ** → `DlvrgSttlmPties/Pty` և `RcvgSttlmPties/Pty` `sese.*`-ի համար,
+  կամ գործակալի կառուցվածքները `pacs.009`-ում:
+- **Հաշիվներ** → `…/Acct` տարրեր պահպանման/կանխիկ հաշիվների համար; հայելային մատյան
+  `AccountId` `SupplementaryData`-ում:
+- **Գույքային նույնացուցիչներ** → `…/OthrId` `Tp/Prtry`-ով և արտացոլված
+  `SupplementaryData`. Երբեք մի փոխարինեք կարգավորվող նույնացուցիչները սեփականությամբ:
 
-#### Identifier preference by message family
+#### Նույնացուցիչի նախապատվությունը ըստ հաղորդագրությունների ընտանիքի
 
-##### `sese.023` / `.024` / `.025` (securities settlement)
+##### `sese.023` / `.024` / `.025` (արժեթղթերի հաշվարկ)
 
-- **Instrument (`FinInstrmId`)**
-  - Preferred: **ISIN** under `…/ISIN`. It is the canonical identifier for CSDs / T2S.[^anna]
-  - Fallbacks:
-    - **CUSIP** or other NSIN under `…/OthrId/Id` with `Tp/Cd` set from the ISO external
-      code list (e.g., `CUSP`); include the issuer in `Issr` when mandated.[^iso_mdr]
-    - **Norito asset ID** as proprietary: `…/OthrId/Id`, `Tp/Prtry="NORITO_ASSET_ID"`, and
-      record the same value in `SupplementaryData`.
-  - Optional descriptors: **CFI** (`ClssfctnTp`) and **FISN** where supported to ease
-    reconciliation.[^iso_cfi][^iso_fisn]
-- **Parties (`DlvrgSttlmPties`, `RcvgSttlmPties`)**
-  - Preferred: **BIC** (`AnyBIC/BICFI`, ISO 9362).[^swift_bic]
-  - Fallback: **LEI** where the version of the message exposes a dedicated LEI field; if
-    absent, carry proprietary IDs with clear `Prtry` labels and include BIC in metadata.[^iso_cr]
-- **Place of settlement / venue** → **MIC** for the venue and **BIC** for the CSD.[^iso_mic]
+- **Գործիք (`FinInstrmId`)**
+  - Նախընտրելի՝ **ISIN** `…/ISIN`-ի ներքո: Դա CSD/T2S-ի կանոնական նույնացուցիչն է:[^anna]
+  - Հետադարձ կապ.
+    - **CUSIP** կամ այլ NSIN `…/OthrId/Id`-ի ներքո՝ `Tp/Cd`-ով սահմանված ISO արտաքինից
+      կոդերի ցանկ (օրինակ՝ `CUSP`); թողարկողին ներառել `Issr`-ում, երբ լիազորված է։[^iso_mdr]
+    - **Norito ակտիվի ID** որպես սեփականություն՝ `…/OthrId/Id`, `Tp/Prtry="NORITO_ASSET_ID"` և
+      գրանցեք նույն արժեքը `SupplementaryData`-ում:
+  - Ընտրովի նկարագրիչներ՝ **CFI** (`ClssfctnTp`) և **FISN**, որտեղ աջակցվում է հեշտացնելու համար
+    հաշտեցում։[^iso_cfi][^iso_fisn]
+- **Կուսակցություններ (`DlvrgSttlmPties`, `RcvgSttlmPties`)**
+  - Նախընտրելի՝ **BIC** (`AnyBIC/BICFI`, ISO 9362):[^swift_bic]
+  - Հետադարձ. **LEI** որտեղ հաղորդագրության տարբերակը բացահայտում է հատուկ LEI դաշտ; եթե
+    բացակայում է, կրում է սեփական ID-ներ՝ հստակ `Prtry` պիտակներով և ներառում BIC-ը մետատվյալներում:[^iso_cr]
+- **Բնակավայրի / վայրի** → **MIC** վայրի համար և **BIC** CSD-ի համար:[^iso_mic]
 
-##### `colr.010` / `.011` / `.012` and `colr.007` (collateral management)
+##### `colr.010` / `.011` / `.012` և `colr.007` (գրավի կառավարում)
 
-- Follow the same instrument rules as `sese.*` (ISIN preferred).
-- Parties use **BIC** by default; **LEI** is acceptable where the schema exposes it.[^swift_bic]
-- Cash amounts must use **ISO 4217** currency codes with correct minor units.[^iso_4217]
+- Հետևեք գործիքի նույն կանոններին, ինչ `sese.*` (նախընտրելի է ISIN):
+- Կողմերը լռելյայն օգտագործում են **BIC**; **LEI** ընդունելի է, որտեղ սխեման բացահայտում է այն։[^swift_bic]
+- Կանխիկի գումարները պետք է օգտագործեն **ISO 4217** արժույթի կոդերը՝ ճիշտ փոքր միավորներով:[^iso_4217]
 
-##### `pacs.009` / `camt.054` (PvP funding and statements)
+##### `pacs.009` / `camt.054` (PvP ֆինանսավորում և քաղվածքներ)
 
-- **Agents (`InstgAgt`, `InstdAgt`, debtor/creditor agents)** → **BIC** with optional
-  LEI where allowed.[^swift_bic]
-- **Accounts**
-  - Interbank: identify by **BIC** and internal account references.
-  - Customer-facing statements (`camt.054`): include **IBAN** when present and validate it
-    (length, country rules, mod-97 checksum).[^swift_iban]
-- **Currency** → **ISO 4217** 3-letter code, respect minor-unit rounding.[^iso_4217]
-- **Torii ingestion** → Submit PvP funding legs via `POST /v1/iso20022/pacs009`; the bridge
-  requires `Purp=SECU` and now enforces BIC crosswalks when reference data is configured.
+- **Գործակալներ (`InstgAgt`, `InstdAgt`, պարտապաններ/պարտատեր գործակալներ)** → **BIC** ընտրովի
+  LEI որտեղ թույլատրվում է։[^swift_bic]
+- ** Հաշիվներ **
+  - Միջբանկային. նույնականացնել **BIC**-ով և ներքին հաշվի հղումներով:
+  - Հաճախորդների առնչությամբ հայտարարություններ (`camt.054`). ներառել **IBAN** երբ առկա է և վավերացնել այն
+    (երկարություն, երկրի կանոններ, mod-97 checksum):[^swift_iban]
+- **Արժույթ** → **ISO 4217** 3 տառանոց կոդը, հարգեք փոքր միավորի կլորացումը։[^iso_4217]
+- **Torii կլանում** → Ներկայացրեք PvP ֆինանսավորման ոտքերը `POST /v1/iso20022/pacs009`-ի միջոցով; կամուրջը
+  պահանջում է `Purp=SECU` և այժմ կիրառում է BIC հետիոտնային անցումներ, երբ տեղեկատու տվյալները կազմաձևված են:
 
-#### Validation rules (apply before emission)
+#### Վավերացման կանոններ (կիրառել մինչև արտանետումը)
 
-| Identifier | Validation rule | Notes |
+| Նույնացուցիչ | Վավերացման կանոն | Ծանոթագրություններ |
 |------------|-----------------|-------|
-| **ISIN** | Regex `^[A-Z]{2}[A-Z0-9]{9}[0-9]$` and Luhn (mod-10) check digit per ISO 6166 Annex C | Reject before bridge emission; prefer upstream enrichment.[^anna_luhn] |
-| **CUSIP** | Regex `^[A-Z0-9]{9}$` and modulus-10 with 2 weighting (characters map to digits) | Only when ISIN is unavailable; map via ANNA/CUSIP crosswalk once sourced.[^cusip] |
-| **LEI** | Regex `^[A-Z0-9]{18}[0-9]{2}$` and mod-97 check digit (ISO 17442) | Validate against GLEIF daily delta files before acceptance.[^gleif] |
-| **BIC** | Regex `^[A-Z]{4}[A-Z]{2}[A-Z0-9]{2}([A-Z0-9]{3})?$` | Optional branch code (last three chars). Confirm active status in RA files.[^swift_bic] |
-| **MIC** | Maintain from ISO 10383 RA file; ensure venues are active (no `!` termination flag) | Flag decommissioned MICs before emission.[^iso_mic] |
-| **IBAN** | Country-specific length, uppercase alphanumeric, mod-97 = 1 | Use registry maintained by SWIFT; reject structurally invalid IBANs.[^swift_iban] |
-| **Proprietary account/party IDs** | `Max35Text` (UTF-8, ≤35 characters) with trimmed whitespace | Applies to `GenericAccountIdentification1.Id` and `PartyIdentification135.Othr/Id` fields. Reject entries exceeding 35 characters so bridge payloads conform to ISO schemas. |
-| **Proxy account identifiers** | Non-empty `Max2048Text` under `…/Prxy/Id` with optional type codes in `…/Prxy/Tp/{Cd,Prtry}` | Stored alongside the primary IBAN; validation still requires IBANs while accepting proxy handles (with optional type codes) to mirror PvP rails. |
-| **CFI** | Six-character code, uppercase letters using ISO 10962 taxonomy | Optional enrichment; ensure characters match instrument class.[^iso_cfi] |
-| **FISN** | Up to 35 characters, uppercase alphanumeric plus limited punctuation | Optional; truncate/normalise per ISO 18774 guidance.[^iso_fisn] |
-| **Currency** | ISO 4217 3-letter code, scale determined by minor units | Amounts must round to permitted decimals; enforce on Norito side.[^iso_4217] |
+| **ISIN** | Regex `^[A-Z]{2}[A-Z0-9]{9}[0-9]$` և Luhn (mod-10) ստուգիչ նիշ ըստ ISO 6166 հավելվածի C | Մերժել մինչև կամրջի արտանետումը; նախընտրում են հոսանքին հակառակ հարստացումը։[^anna_luhn] |
+| **CUSIP** | Regex `^[A-Z0-9]{9}$` և մոդուլ-10 2 կշռով (նիշերի քարտեզը թվանշաններով) | Միայն այն դեպքում, երբ ISIN-ն անհասանելի է. քարտեզ ANNA/CUSIP հետիոտնային անցումի միջոցով մեկ անգամ սկզբնավորվելով։[^cusip] |
+| **LEI** | Regex `^[A-Z0-9]{18}[0-9]{2}$` և mod-97 ստուգիչ նիշ (ISO 17442) | Վավերացրե՛ք GLEIF-ի ամենօրյա դելտա ֆայլերի հետ մինչև ընդունումը։[^gleif] |
+| **BIC** | Ռեգեքս `^[A-Z]{4}[A-Z]{2}[A-Z0-9]{2}([A-Z0-9]{3})?$` | Մասնաճյուղի կամընտիր կոդը (վերջին երեք նիշերը): Հաստատեք ակտիվ կարգավիճակը ՀՀ ֆայլերում։[^swift_bic] |
+| **MIC** | Պահպանել ISO 10383 RA ֆայլից; ապահովել վայրերի ակտիվությունը (ոչ `!` դադարեցման դրոշակ) | Նշեք շահագործումից հանված MIC-ները մինչև արտանետումը։[^iso_mic] |
+| **IBAN** | Երկրին հատուկ երկարություն, մեծատառ այբբենական թվեր, mod-97 = 1 | Օգտագործեք SWIFT-ի կողմից պահպանվող ռեեստրը; մերժել կառուցվածքային առումով անվավեր IBAN-ները։[^swift_iban] |
+| **Գույքային հաշվի/կուսակցության ID-ներ** | `Max35Text` (UTF-8, ≤35 նիշ) կտրված բացատով | Կիրառվում է `GenericAccountIdentification1.Id` և `PartyIdentification135.Othr/Id` դաշտերին: Մերժեք 35 նիշը գերազանցող գրառումները, որպեսզի կամրջի օգտակար բեռները համապատասխանեն ISO սխեմաներին: |
+| **Վստահված անձի հաշվի նույնացուցիչներ** | Ոչ դատարկ `Max2048Text` `…/Prxy/Id` տակ՝ կամընտիր տիպի կոդերով `…/Prxy/Tp/{Cd,Prtry}`-ում | Պահպանվում է առաջնային IBAN-ի կողքին; վավերացումը դեռևս պահանջում է IBAN-ներ՝ միաժամանակ ընդունելով վստահված անձի բռնակներ (ընտրովի տիպի կոդերով)՝ PvP ռելսերը արտացոլելու համար: |
+| **CFI** | Վեց նիշանոց ծածկագիր, մեծատառեր՝ օգտագործելով ISO 10962 դասակարգումը | Ընտրովի հարստացում; ապահովել, որ նիշերը համապատասխանեն գործիքների դասին։[^iso_cfi] |
+| **FISN** | Մինչև 35 նիշ, մեծատառ այբբենական և սահմանափակ կետադրական նշաններ | Ընտրովի; կրճատել/նորմալացնել ISO 18774 ուղեցույցի համաձայն։[^iso_fisn] |
+| **Արժույթ ** | ISO 4217 3 տառանոց կոդը, սանդղակը որոշվում է փոքր միավորներով | Գումարները պետք է կլորացվեն մինչև թույլատրելի տասնորդականները. ուժի մեջ դնել Norito կողմում։[^iso_4217] |
 
-#### Crosswalk and data maintenance obligations
+#### Հետիոտնային անցում և տվյալների պահպանման պարտավորություններ
 
-- Maintain **ISIN ↔ Norito asset ID** and **CUSIP ↔ ISIN** crosswalks. Update nightly from
-  ANNA/DSB feeds and version control the snapshots used by CI.[^anna_crosswalk]
-- Refresh **BIC ↔ LEI** mappings from the GLEIF public relationship files so the bridge can
-  emit both when required.[^bic_lei]
-- Store **MIC definitions** alongside the bridge metadata so venue validation is
-  deterministic even when RA files change mid-day.[^iso_mic]
-- Record data provenance (timestamp + source) in bridge metadata for audit. Persist the
-  snapshot identifier alongside emitted instructions.
-- Configure `iso_bridge.reference_data.cache_dir` to persist a copy of each loaded dataset
-  alongside provenance metadata (version, source, timestamp, checksum). This allows auditors
-  and operators to diff historical feeds even after upstream snapshots rotate.
-- ISO crosswalk snapshots are ingested by `iroha_core::iso_bridge::reference_data` using
-  the `iso_bridge.reference_data` configuration block (paths + refresh interval). Gauges
-  `iso_reference_status`, `iso_reference_age_seconds`, `iso_reference_records`, and
-  `iso_reference_refresh_interval_secs` expose runtime health for alerting. The Torii
-  bridge rejects `pacs.008` submissions whose agent BICs are absent from the configured
-  crosswalk, surfacing deterministic `InvalidIdentifier` errors when a counterparty is
-  unknown.【crates/iroha_torii/src/iso20022_bridge.rs#L1078】
-- IBAN and ISO 4217 bindings are enforced at the same layer: pacs.008/pacs.009 flows now
-  emit `InvalidIdentifier` errors when debtor/creditor IBANs lack configured aliases or when
-  the settlement currency is missing from `currency_assets`, preventing malformed bridge
-  instructions from reaching the ledger. IBAN validation also applies country-specific
-  lengths and numeric check digits before the ISO 7064 mod‑97 pass so structurally invalid
-  values are rejected early.【crates/iroha_torii/src/iso20022_bridge.rs#L775】【crates/iroha_torii/src/iso20022_bridge.rs#L827】【crates/ivm/src/iso20022.rs#L1255】
-- The CLI settlement helpers inherit the same guard rails: pass
-  `--iso-reference-crosswalk <path>` alongside `--delivery-instrument-id` to have the DvP
-  preview validate instrument IDs before emitting the `sese.023` XML snapshot.【crates/iroha_cli/src/main.rs#L3752】
-- `cargo xtask iso-bridge-lint` (and the CI wrapper `ci/check_iso_reference_data.sh`) lint
-  crosswalk snapshots and fixtures. The command accepts `--isin`, `--bic-lei`, `--mic`, and
-  `--fixtures` flags and falls back to the sample datasets in `fixtures/iso_bridge/` when run
-  without arguments.【xtask/src/main.rs#L146】【ci/check_iso_reference_data.sh#L1】
-- The IVM helper now ingests real ISO 20022 XML envelopes (head.001 + `DataPDU` + `Document`)
-  and validates the Business Application Header via the `head.001` schema so `BizMsgIdr`,
-  `MsgDefIdr`, `CreDt`, and BIC/ClrSysMmbId agents are preserved deterministically; XMLDSig/XAdES
-  blocks remain intentionally skipped. 
+- Պահպանեք **ISIN ↔ Norito ակտիվի ID** և **CUSIP ↔ ISIN** հետիոտնային անցումներ: Թարմացրեք ամեն գիշեր սկսած
+  ANNA/DSB հոսքերը և տարբերակները վերահսկում են CI-ի կողմից օգտագործվող նկարները:[^anna_crosswalk]
+- Թարմացրեք **BIC ↔ LEI ** քարտեզագրումները GLEIF հանրային հարաբերությունների ֆայլերից, որպեսզի կամուրջը կարողանա
+  անհրաժեշտության դեպքում թողարկեք երկուսն էլ։[^bic_lei]
+- Պահպանեք **MIC սահմանումները** կամրջի մետատվյալների կողքին, որպեսզի տեղի վավերացվի
+  որոշիչ նույնիսկ այն դեպքում, երբ ՀՀ ֆայլերը փոխվում են կեսօր:[^iso_mic]
+- Գրանցեք տվյալների ծագումը (ժամանականիշ + աղբյուր) կամուրջի մետատվյալներում աուդիտի համար: Համառեք
+  snapshot-ի նույնացուցիչը թողարկված հրահանգների հետ մեկտեղ:
+- Կարգավորեք `iso_bridge.reference_data.cache_dir`, որպեսզի պահպանվի յուրաքանչյուր բեռնված տվյալների կրկնօրինակը
+  ծագման մետատվյալների հետ մեկտեղ (տարբերակ, աղբյուր, ժամադրոշմ, ստուգիչ գումար): Սա թույլ է տալիս աուդիտորներին
+  և օպերատորները՝ տարբերելու պատմական լրահոսերը նույնիսկ վերին հոսանքով նկարահանումների պտտումից հետո:
+- ISO-ի հետիոտնային խաչմերուկի նկարները կլանվում են `iroha_core::iso_bridge::reference_data`-ի կողմից՝ օգտագործելով
+  `iso_bridge.reference_data` կոնֆիգուրացիայի բլոկը (ուղիներ + թարմացման ընդմիջում): Չափիչներ
+  `iso_reference_status`, `iso_reference_age_seconds`, `iso_reference_records` և
+  `iso_reference_refresh_interval_secs` ցուցադրում է աշխատաժամանակի առողջությունը զգուշացման համար: Torii
+  կամուրջը մերժում է `pacs.008` ներկայացումները, որոնց գործակալի BIC-ները բացակայում են կազմաձևվածից
+  հետիոտնային անցում, վերհանելով `InvalidIdentifier` դետերմինիստական սխալները, երբ կոնտրագենտը
+  անհայտ:【crates/iroha_torii/src/iso20022_bridge.rs#L1078】
+- IBAN-ի և ISO 4217-ի կապակցումները կիրառվում են նույն շերտում. pacs.008/pacs.009-ը հոսում է հիմա
+  թողարկել `InvalidIdentifier` սխալներ, երբ պարտապանի/պարտատիրոջ IBAN-ներում բացակայում են կազմաձևված անունները կամ երբ
+  հաշվարկային արժույթը բացակայում է `currency_assets`-ից՝ կանխելով սխալ ձևավորված կամուրջը
+  ցուցումներ գրանցամատյան հասնելու համար: IBAN վավերացումը կիրառվում է նաև երկրի համար
+  երկարությունները և թվային ստուգիչ թվերը մինչև ISO 7064 mod‑97-ն այնքան կառուցվածքային առումով անվավեր է
+  արժեքները վաղաժամ են մերժվում:【crates/iroha_torii/src/iso20022_bridge.rs#L775】【crates/iroha_torii/src/iso20022_bridge.rs#L827】【crates/ivm/src/iso20022_bridge.rs#L775
+- CLI-ի կարգավորման օգնականները ժառանգում են նույն պահակային ռելսերը՝ անցում
+  `--iso-reference-crosswalk <path>` `--delivery-instrument-id`-ի կողքին DvP ունենալու համար
+  նախադիտեք վավերացրեք գործիքների ID-ները՝ նախքան `sese.023` XML ակնարկը հրապարակելը:【crates/iroha_cli/src/main.rs#L3752】
+- `cargo xtask iso-bridge-lint` (և CI փաթաթան `ci/check_iso_reference_data.sh`) թաղանթ
+  հետիոտնային խաչմերուկի նկարներ և հարմարանքներ: Հրամանը ընդունում է `--isin`, `--bic-lei`, `--mic` և
+  `--fixtures`-ը դրոշակում է և աշխատում է `fixtures/iso_bridge/`-ի նմուշային տվյալների հավաքածուներին
+  առանց արգումենտների։【xtask/src/main.rs#L146】【ci/check_iso_reference_data.sh#L1】
+- IVM օգնականն այժմ ընդունում է իրական ISO 20022 XML ծրարներ (գլուխ.001 + `DataPDU` + `Document`)
+  և հաստատում է Բիզնես հավելվածի վերնագիրը `head.001` սխեմայի միջոցով, ուստի `BizMsgIdr`,
+  `MsgDefIdr`, `CreDt` և BIC/ClrSysMmbId գործակալները պահպանվում են դետերմինիստորեն. XMLDSig/XAdES
+  բլոկները մնում են միտումնավոր բաց թողնված: 
 
-#### Regulatory and market-structure considerations
-
-- **T+1 settlement**: US/Canada equity markets moved to T+1 in 2024; adjust Norito
-  scheduling and SLA alerts accordingly.[^sec_t1][^csa_t1]
-- **CSDR penalties**: Settlement discipline rules enforce cash penalties; ensure Norito
-  metadata captures penalty references for reconciliation.[^csdr]
-- **Same-day settlement pilots**: India’s regulator is phasing in T0/T+0 settlement; keep
-  bridge calendars updated as pilots expand.[^india_t0]
-- **Collateral buy-ins / holds**: Monitor ESMA updates on buy-in timelines and optional holds
-  so conditional delivery (`HldInd`) aligns with the latest guidance.[^csdr]
+#### Կարգավորող և շուկայական կառուցվածքի նկատառումներ- **T+1 հաշվարկ**. ԱՄՆ/Կանադայի բաժնետոմսերի շուկաները 2024 թվականին տեղափոխվեցին T+1; հարմարեցնել Norito
+  պլանավորում և համապատասխանաբար SLA ծանուցումներ։[^sec_t1][^csa_t1]
+- **CSDR տույժեր**. հաշվարկների կարգապահության կանոնները կիրառում են դրամական տույժեր. ապահովել Norito
+  մետատվյալները ներառում են տույժերի հղումներ հաշտեցման համար:[^csdr]
+- **Նույն օրվա բնակավայրերի օդաչուներ**. Հնդկաստանի կարգավորիչը փուլ առ փուլ տեղափոխում է T0/T+0 բնակավայրը. պահել
+  կամուրջների օրացույցները թարմացվել են, քանի որ օդաչուները ընդլայնվում են:[^india_t0]
+- **Գրավային գնումներ / պահումներ**. վերահսկեք ESMA-ի թարմացումները գնումների ժամանակացույցերի և կամընտիր պահումների վերաբերյալ
+  այնպես որ պայմանական առաքումը (`HldInd`) համապատասխանում է վերջին ուղեցույցին։[^csdr]
 
 [^anna]: ANNA ISIN Guidelines, December 2023. https://anna-web.org/wp-content/uploads/2024/01/ISIN-Guidelines-Version-22-Dec-2023.pdf
 [^iso_mdr]: ISO 20022 external code list (CUSIP `CUSP`) and MDR Part 2. https://www.iso20022.org/milestone/22048/download
@@ -157,220 +157,218 @@ obligations that the Norito ↔ ISO 20022 bridge must enforce before emitting m
 [^csdr]: ESMA CSDR settlement discipline / penalty mechanism updates. https://www.esma.europa.eu/sites/default/files/2024-11/ESMA74-2119945925-2059_Final_Report_on_Technical_Advice_on_CSDR_Penalty_Mechanism.pdf
 [^india_t0]: SEBI circular on same-day settlement pilot. https://www.reuters.com/sustainability/boards-policy-regulation/india-markets-regulator-extends-deadline-same-day-settlement-plan-brokers-2025-04-29/
 
-### Delivery-versus-Payment → `sese.023`
+### Առաքում՝ ընդդեմ վճարման → `sese.023`
 
-| DvP field                                              | ISO 20022 path                          | Notes |
-|--------------------------------------------------------|----------------------------------------|-------|
-| `settlement_id`                                        | `TxId`                                 | Stable lifecycle identifier |
-| `delivery_leg.asset_definition_id` (security)          | `SctiesLeg/FinInstrmId`                | Canonical identifier (ISIN, CUSIP, …) |
-| `delivery_leg.quantity`                                | `SctiesLeg/Qty`                        | Decimal string; honours asset precision |
-| `payment_leg.asset_definition_id` (currency)           | `CashLeg/Ccy`                          | ISO currency code |
-| `payment_leg.quantity`                                 | `CashLeg/Amt`                          | Decimal string; rounded per Numeric spec |
-| `delivery_leg.from` (seller / delivering party)        | `DlvrgSttlmPties/Pty/Bic`              | BIC of delivering participant *(account canonical ID is currently exported in metadata)* |
-| `delivery_leg.from` account identifier                 | `DlvrgSttlmPties/Acct`                 | Free-form; Norito metadata carries exact account ID |
-| `delivery_leg.to` (buyer / receiving party)            | `RcvgSttlmPties/Pty/Bic`               | BIC of receiving participant |
-| `delivery_leg.to` account identifier                   | `RcvgSttlmPties/Acct`                  | Free-form; matches receiving account ID |
-| `plan.order`                                           | `Plan/ExecutionOrder`                  | Enum: `DELIVERY_THEN_PAYMENT` or `PAYMENT_THEN_DELIVERY` |
-| `plan.atomicity`                                       | `Plan/Atomicity`                       | Enum: `ALL_OR_NOTHING`, `COMMIT_FIRST_LEG`, `COMMIT_SECOND_LEG` |
-| **Message purpose**                                    | `SttlmTpAndAddtlParams/SctiesMvmntTp`  | `DELI` (deliver) or `RECE` (receive); mirrors which leg the submitting party executes. |
-|                                                        | `SttlmTpAndAddtlParams/Pmt`            | `APMT` (against payment) or `FREE` (free-of-payment). |
-| `delivery_leg.metadata`, `payment_leg.metadata`        | `SctiesLeg/Metadata`, `CashLeg/Metadata` | Optional Norito JSON encoded as UTF‑8 |
+| DvP դաշտ | ISO 20022 ուղի | Ծանոթագրություններ |
+|---------------------------------------------------- |
+| `settlement_id` | `TxId` | Կայուն կյանքի ցիկլի նույնացուցիչ |
+| `delivery_leg.asset_definition_id` (անվտանգություն) | `SctiesLeg/FinInstrmId` | Կանոնական նույնացուցիչ (ISIN, CUSIP, …) |
+| `delivery_leg.quantity` | `SctiesLeg/Qty` | Տասնորդական տող; հարգում է ակտիվների ճշգրտությունը |
+| `payment_leg.asset_definition_id` (արժույթ) | `CashLeg/Ccy` | ISO արժույթի կոդը |
+| `payment_leg.quantity` | `CashLeg/Amt` | Տասնորդական տող; կլորացված ըստ թվային սպեկտրի |
+| `delivery_leg.from` (վաճառող / առաքող կողմ) | `DlvrgSttlmPties/Pty/Bic` | Առաքող մասնակցի BIC *(հաշվի կանոնական ID-ն ներկայումս արտահանվում է մետատվյալներով)* |
+| `delivery_leg.from` հաշվի նույնացուցիչ | `DlvrgSttlmPties/Acct` | Ազատ ձև; Norito մետատվյալները կրում են հաշվի ճշգրիտ ID |
+| `delivery_leg.to` (գնորդ/ստացող կողմ) | `RcvgSttlmPties/Pty/Bic` | Ընդունող մասնակցի BIC |
+| `delivery_leg.to` հաշվի նույնացուցիչ | `RcvgSttlmPties/Acct` | Ազատ ձև; համընկնում է ստացող հաշվի ID |
+| `plan.order` | `Plan/ExecutionOrder` | Enum՝ `DELIVERY_THEN_PAYMENT` կամ `PAYMENT_THEN_DELIVERY` |
+| `plan.atomicity` | `Plan/Atomicity` | Թվային թիվը՝ `ALL_OR_NOTHING`, `COMMIT_FIRST_LEG`, `COMMIT_SECOND_LEG` |
+| **Հաղորդագրության նպատակը** | `SttlmTpAndAddtlParams/SctiesMvmntTp` | `DELI` (առաքում) կամ `RECE` (ստացում); հայելիներ, որոնց ոտքը կատարում է ներկայացնող կողմը: |
+|                                                        | `SttlmTpAndAddtlParams/Pmt` | `APMT` (վճարման դիմաց) կամ `FREE` (անվճար): |
+| `delivery_leg.metadata`, `payment_leg.metadata` | `SctiesLeg/Metadata`, `CashLeg/Metadata` | Լրացուցիչ Norito JSON կոդավորված որպես UTF‑8 |
 
-> **Settlement qualifiers** – the bridge mirrors market practice by copying settlement condition codes (`SttlmTxCond`), partial settlement indicators (`PrtlSttlmInd`), and other optional qualifiers from Norito metadata into `sese.023/025` when present. Enforce the enumerations published in the ISO external code lists so the destination CSD recognises the values.
+> **Հաշվարկային որակավորումներ** – կամուրջը արտացոլում է շուկայական պրակտիկան՝ պատճենելով հաշվարկային պայմանների ծածկագրերը (`SttlmTxCond`), մասնակի հաշվարկային ցուցիչները (`PrtlSttlmInd`) և այլ կամընտիր որակավորումներ Norito մետատվյալներից I1018NI000-ում, երբ առկա է: Կիրառեք ISO արտաքին ծածկագրերի ցուցակներում հրապարակված թվարկումները, որպեսզի նպատակակետ CSD-ն ճանաչի արժեքները:
 
-### Payment-versus-Payment Funding → `pacs.009`
+### Վճարում ընդդեմ վճարման ֆինանսավորման → `pacs.009`
 
-The cash-for-cash legs that fund a PvP instruction are issued as FI-to-FI credit
-transfers. The bridge annotates these payments so downstream systems recognise
-they finance a securities settlement.
+Կանխիկի դիմաց դրամական միջոցները, որոնք ֆինանսավորում են PvP հրահանգը, տրվում են որպես FI-to-FI վարկ
+փոխանցումներ. Կամուրջը նշում է այս վճարումները, որպեսզի ներքևի համակարգերը ճանաչեն
+նրանք ֆինանսավորում են արժեթղթերի մարումը:
 
-| PvP funding field                              | ISO 20022 path                                      | Notes |
-|------------------------------------------------|-----------------------------------------------------|-------|
-| `primary_leg.quantity` / {amount, currency}    | `IntrBkSttlmAmt` + `IntrBkSttlmCcy`                 | Amount/currency debited from the initiator. |
-| Counterparty agent identifiers                 | `InstgAgt`, `InstdAgt`                              | BIC/LEI of sending and receiving agents. |
-| Settlement purpose                             | `CdtTrfTxInf/PmtTpInf/CtgyPurp/Cd`                  | Set to `SECU` for securities-related PvP funding. |
-| Norito metadata (account ids, FX data)         | `CdtTrfTxInf/SplmtryData`                           | Carries full AccountId, FX timestamps, execution plan hints. |
-| Instruction identifier / lifecycle linking     | `CdtTrfTxInf/PmtId/InstrId`, `CdtTrfTxInf/RmtInf`   | Matches the Norito `settlement_id` so the cash leg reconciles with the securities side. |
+| PvP ֆինանսավորման դաշտ | ISO 20022 ուղի | Ծանոթագրություններ |
+|---------------------------------------------------------------------------------------------------|
+| `primary_leg.quantity` / {գումար, արժույթ} | `IntrBkSttlmAmt` + `IntrBkSttlmCcy` | Նախաձեռնողից գանձված գումար/արժույթ: |
+| Կողմնակից գործակալի նույնացուցիչներ | `InstgAgt`, `InstdAgt` | Գործակալներ ուղարկելու և ընդունող BIC/LEI: |
+| Հաշվարկի նպատակը | `CdtTrfTxInf/PmtTpInf/CtgyPurp/Cd` | Արժեթղթերի հետ կապված PvP ֆինանսավորման համար դրեք `SECU`: |
+| Norito մետատվյալներ (հաշվի ID, արտարժույթի տվյալներ) | `CdtTrfTxInf/SplmtryData` | Իրականացնում է ամբողջական AccountId, FX ժամադրոշմներ, կատարման պլանի ակնարկներ: |
+| Հրահանգի նույնացուցիչ / կյանքի ցիկլի կապող | `CdtTrfTxInf/PmtId/InstrId`, `CdtTrfTxInf/RmtInf` | Համապատասխանում է Norito `settlement_id`-ին, որպեսզի կանխիկի ոտքը համադրվի արժեթղթերի կողմի հետ: |
 
-The JavaScript SDK’s ISO bridge aligns with this requirement by defaulting the
-`pacs.009` category purpose to `SECU`; callers may override it with another
-valid ISO code when emitting non-securities credit transfers, but invalid
-values are rejected up front.
+JavaScript SDK-ի ISO կամուրջը համընկնում է այս պահանջի հետ՝ կանխադրելով
+`pacs.009` կատեգորիայի նպատակը մինչև `SECU`; զանգահարողները կարող են փոխարինել այն մեկ ուրիշով
+վավեր ISO կոդը ոչ արժեթղթերի վարկային փոխանցումներ ուղարկելիս, բայց անվավեր
+արժեքները նախապես մերժվում են:
 
-If an infrastructure requires an explicit securities confirmation, the bridge
-continues to emit `sese.025`, but that confirmation reflects the securities leg
-status (e.g., `ConfSts = ACCP`) rather than the PvP “purpose”.
+Եթե ենթակառուցվածքը պահանջում է արժեթղթերի հստակ հաստատում, ապա կամուրջը
+շարունակում է արտանետել `sese.025`, սակայն այդ հաստատումն արտացոլում է արժեթղթերի ոտքը
+կարգավիճակը (օրինակ՝ `ConfSts = ACCP`), այլ ոչ թե PvP «նպատակը»:
 
-### Payment-versus-Payment Confirmation → `sese.025`
+### Վճարման դիմաց վճարման հաստատում → `sese.025`
 
-| PvP field                                     | ISO 20022 path            | Notes |
-|-----------------------------------------------|---------------------------|-------|
-| `settlement_id`                               | `TxId`                    | Stable lifecycle identifier |
-| `primary_leg.asset_definition_id`             | `SttlmCcy`                | Currency code for the primary leg |
-| `primary_leg.quantity`                        | `SttlmAmt`                | Amount delivered by initiator |
-| `counter_leg.asset_definition_id`             | `AddtlInf` (JSON payload) | Counter currency code embedded in supplemental info |
-| `counter_leg.quantity`                        | `SttlmQty`                | Counter amount |
-| `plan.order`                                  | `Plan/ExecutionOrder`     | Same enum set as DvP |
-| `plan.atomicity`                              | `Plan/Atomicity`          | Same enum set as DvP |
-| `plan.atomicity` status (`ConfSts`)           | `ConfSts`                 | `ACCP` when matched; bridge emits failure codes on rejection |
-| Counterparty identifiers                      | `AddtlInf` JSON           | Current bridge serialises full AccountId/BIC tuples in metadata |
+| PvP դաշտ | ISO 20022 ուղի | Ծանոթագրություններ |
+|--------------------------------------------------------------------------|-------|
+| `settlement_id` | `TxId` | Կայուն կյանքի ցիկլի նույնացուցիչ |
+| `primary_leg.asset_definition_id` | `SttlmCcy` | Արտարժույթի կոդը հիմնական ոտքի |
+| `primary_leg.quantity` | `SttlmAmt` | Նախաձեռնողի կողմից առաքված գումարը |
+| `counter_leg.asset_definition_id` | `AddtlInf` (JSON ծանրաբեռնվածություն) | Արժույթի հաշվիչի կոդը ներառված է լրացուցիչ տեղեկատվության մեջ |
+| `counter_leg.quantity` | `SttlmQty` | Հաշվիչ գումար |
+| `plan.order` | `Plan/ExecutionOrder` | Նույն թիվը սահմանված է որպես DvP |
+| `plan.atomicity` | `Plan/Atomicity` | Նույն թիվը սահմանված է որպես DvP |
+| `plan.atomicity` կարգավիճակ (`ConfSts`) | `ConfSts` | `ACCP`, երբ համընկնում է; կամուրջը թողարկում է ձախողման կոդերը մերժման դեպքում |
+| Կողմնակիցների նույնացուցիչներ | `AddtlInf` JSON | Ընթացիկ կամուրջը մետատվյալներում սերիականացնում է AccountId/BIC ամբողջական կրկնօրինակները |
 
-### Repo Collateral Substitution → `colr.007`
+### Repo գրավի փոխարինում → `colr.007`
 
-| Repo field / context                            | ISO 20022 path                     | Notes |
-|-------------------------------------------------|-----------------------------------|-------|
-| `agreement_id` (`RepoIsi` / `ReverseRepoIsi`)   | `OblgtnId`                        | Repo contract identifier |
-| Collateral substitution Tx identifier           | `TxId`                            | Generated per substitution |
-| Original collateral quantity                    | `Substitution/OriginalAmt`        | Matches pledged collateral before substitution |
-| Original collateral currency                    | `Substitution/OriginalCcy`        | Currency code |
-| Substitute collateral quantity                  | `Substitution/SubstituteAmt`      | Replacement amount |
-| Substitute collateral currency                  | `Substitution/SubstituteCcy`      | Currency code |
-| Effective date (governance margin schedule)     | `Substitution/EffectiveDt`        | ISO date (YYYY-MM-DD) |
-| Haircut classification                          | `Substitution/Type`               | Currently `FULL` or `PARTIAL` based on governance policy |
-| Governance reason / hair-cut note               | `Substitution/ReasonCd`           | Optional, carries governance rationale |
+| Ռեպո դաշտ / համատեքստ | ISO 20022 ուղի | Ծանոթագրություններ |
+|------------------------------------------------------------------------------------|----------|
+| `agreement_id` (`RepoIsi` / `ReverseRepoIsi`) | `OblgtnId` | Ռեպո պայմանագրի նույնացուցիչ |
+| Գրավի փոխարինում Tx նույնացուցիչ | `TxId` | Ստեղծված մեկ փոխարինման |
+| Բնօրինակ գրավի քանակ | `Substitution/OriginalAmt` | Փոխարինումից առաջ գրավ դրված խաղերը |
+| Օրիգինալ գրավի արժույթ | `Substitution/OriginalCcy` | Արժույթի կոդը |
+| Փոխարինող գրավի քանակ | `Substitution/SubstituteAmt` | Փոխարինման գումարը |
+| Փոխարինող գրավի արժույթ | `Substitution/SubstituteCcy` | Արժույթի կոդը |
+| Ուժի մեջ մտնելու ամսաթիվ (կառավարման մարժայի ժամանակացույց) | `Substitution/EffectiveDt` | ISO ամսաթիվ (ՏՏՏՏ-ԱՄ-ՕՕ) |
+| Սանրվածքի դասակարգում | `Substitution/Type` | Ներկայումս `FULL` կամ `PARTIAL` հիմնված կառավարման քաղաքականության |
+| Կառավարման պատճառ / սանրվածքի նշում | `Substitution/ReasonCd` | Ընտրովի, իրականացնում է կառավարման հիմնավորում |
 
-### Funding and Statements
+### Ֆինանսավորում և հայտարարություններ
 
-| Iroha context                    | ISO 20022 message | Mapping location |
-|----------------------------------|-------------------|------------------|
-| Repo cash leg ignition / unwind  | `pacs.009`        | `IntrBkSttlmAmt`, `IntrBkSttlmCcy`, `IntrBkSttlmDt`, `InstgAgt`, `InstdAgt` populated from DvP/PvP legs |
-| Post-settlement statements       | `camt.054`        | Payment leg movements recorded under `Ntfctn/Ntry[*]`; bridge injects ledger/account metadata in `SplmtryData` |
+| Iroha համատեքստ | ISO 20022 հաղորդագրություն | Քարտեզագրման վայրը |
+|----------------------------------------------------------------------------------|
+| Repo cash leg ignition / unwind | `pacs.009` | `IntrBkSttlmAmt`, `IntrBkSttlmCcy`, `IntrBkSttlmDt`, `InstgAgt`, `InstdAgt` բնակեցված DvP/PvP ոտքերից |
+| Հետհաշվարկային քաղվածքներ | `camt.054` | `Ntfctn/Ntry[*]`-ով գրանցված վճարման ոտքերի շարժումները; կամուրջը ներարկում է մատյան/հաշվի մետատվյալներ `SplmtryData`-ում |
 
-### Usage Notes
-
-* All amounts are serialised using the Norito numeric helpers (`NumericSpec`)
-  to ensure scale conformance across asset definitions.
-* `TxId` values are `Max35Text` — enforce UTF‑8 length ≤ 35 characters before
-  exporting to ISO 20022 messages.
-* BICs must be 8 or 11 uppercase alphanumeric characters (ISO 9362); reject
-  Norito metadata that fails this check before emitting payments or settlement
-  confirmations.
-* Account identifiers (AccountId / ChainId) are exported into supplementary
-  metadata so receiving participants can reconcile against their local ledgers.
-* `SupplementaryData` must be canonical JSON (UTF‑8, sorted keys, JSON-native
-  escaping). SDK helpers enforce this so signatures, telemetry hashes, and ISO
-  payload archives remain deterministic across rebuilds.
-* Currency amounts follow ISO 4217 fraction digits (for example JPY has 0
-  decimals, USD has 2); the bridge clamps Norito numeric precision accordingly.
-* The CLI settlement helpers (`iroha app settlement ... --atomicity ...`) now emit
-  Norito instructions whose execution plans map 1:1 to `Plan/ExecutionOrder` and
-  `Plan/Atomicity` above.
-* The ISO helper (`ivm::iso20022`) validates the fields listed above and rejects
-  messages where DvP/PvP legs violate Numeric specs or counterparty reciprocity.
+### Օգտագործման նշումներ* Բոլոր գումարները սերիականացված են՝ օգտագործելով Norito թվային օգնականները (`NumericSpec`)
+  ապահովել սանդղակի համապատասխանությունը ակտիվների սահմանումներին:
+* `TxId` արժեքներն են `Max35Text` — նախքան կիրառեք UTF‑8 երկարությունը ≤35 նիշ
+  արտահանում դեպի ISO 20022 հաղորդագրություններ:
+* BIC-ները պետք է կազմեն 8 կամ 11 մեծատառ այբբենական թվային նիշ (ISO9362); մերժել
+  Norito մետատվյալներ, որոնք ձախողվում են այս ստուգումը նախքան վճարումները կամ վճարումները ուղարկելը
+  հաստատումներ։
+* Հաշվի նույնացուցիչները (AccountId / ChainId) արտահանվում են լրացուցիչ
+  մետատվյալներ, որպեսզի ստացող մասնակիցները կարողանան հաշտվել իրենց տեղական մատյանների հետ:
+* `SupplementaryData`-ը պետք է լինի կանոնական JSON (UTF‑8, տեսակավորված ստեղներ, JSON բնիկ
+  փախչելով): SDK-ի օգնականները պարտադրում են դա, այնպես որ ստորագրությունները, հեռաչափության հեշերը և ISO-ն
+  բեռնվածության արխիվները մնում են որոշիչ վերակառուցման ընթացքում:
+* Արժույթի գումարները հետևում են ISO4217 կոտորակի թվանշաններին (օրինակ, JPY-ն ունի 0
+  տասնորդականները, ԱՄՆ դոլարը ունի 2); կամուրջը համապատասխանաբար սեղմում է Norito թվային ճշգրտությունը:
+* CLI կարգավորման օգնականները (`iroha app settlement ... --atomicity ...`) այժմ արտանետում են
+  Norito հրահանգներ, որոնց կատարման պլանները քարտեզագրում են 1:1-ից մինչև `Plan/ExecutionOrder` և
+  `Plan/Atomicity` վերևում:
+* ISO օգնականը (`ivm::iso20022`) վավերացնում է վերը թվարկված դաշտերը և մերժում
+  հաղորդագրություններ, որտեղ DvP/PvP ոտքերը խախտում են թվային բնութագրերը կամ կոնտրագենտի փոխադարձությունը:
 
 ### SDK Builder Helpers
 
-- The JavaScript SDK now exposes `buildPacs008Message` /
-  `buildPacs009Message` (see `javascript/iroha_js/src/isoBridge.js`) so client
-  automation can convert structured settlement metadata (BIC/LEI, IBANs,
-  purpose codes, supplementary Norito fields) into deterministic pacs XML
-  without reimplementing the mapping rules from this guide.
-- Both helpers require an explicit `creationDateTime` (ISO‑8601 with timezone)
-  so operators must thread a deterministic timestamp from their workflow instead
-  of letting the SDK default to wall-clock time.
-- `recipes/iso_bridge_builder.mjs` demonstrates how to wire those helpers into
-  a CLI that merges environment variables or JSON config files, prints the
-  generated XML, and optionally submits it to Torii (`ISO_SUBMIT=1`), reusing
-  the same wait cadence as the ISO bridge recipe.
+- JavaScript SDK-ն այժմ բացահայտում է `buildPacs008Message` /
+  `buildPacs009Message` (տես `javascript/iroha_js/src/isoBridge.js`), ուստի հաճախորդ
+  ավտոմատացումը կարող է փոխակերպել կառուցվածքային հաշվարկների մետատվյալները (BIC/LEI, IBAN,
+  նպատակային կոդեր, լրացուցիչ Norito դաշտեր) XML դետերմինիստական փաթեթների մեջ
+  առանց սույն ուղեցույցի քարտեզագրման կանոնների վերակիրառման:
+- Երկու օգնականներն էլ պահանջում են հստակ `creationDateTime` (ISO‑8601 ժամային գոտիով)
+  այնպես որ օպերատորները պետք է փոխարենը իրենց աշխատանքային հոսքից դետերմինիստական ժամանակի դրոշմ անցնեն
+  SDK-ին լռելյայն թողնելով պատի ժամացույցի ժամանակը:
+- `recipes/iso_bridge_builder.mjs`-ը ցույց է տալիս, թե ինչպես միացնել այդ օգնականները
+  CLI, որը միավորում է միջավայրի փոփոխականները կամ JSON կազմաձևման ֆայլերը, տպում է
+  ստեղծվել է XML, և կամայականորեն այն ներկայացնում է Torii (`ISO_SUBMIT=1`)՝ կրկին օգտագործելով
+  նույն սպասման արագությունը, ինչ ISO կամուրջի բաղադրատոմսը:
 
 
-### References
+### Հղումներ
 
-- LuxCSD / Clearstream ISO 20022 settlement examples showing `SttlmTpAndAddtlParams/SctiesMvmntTp` (`DELI`/`RECE`) and `Pmt` (`APMT`/`FREE`).<sup>[1](https://www.luxcsd.com/resource/blob/3434074/6f8add4708407a4701055be4dd04846b/c23005-eis-examples-cbf-data.pdf)</sup>
-- Clearstream DCP specifications covering settlement qualifiers (`SttlmTxCond`, `PrtlSttlmInd`).<sup>[2](https://www.clearstream.com/clearstream-en/res-library/market-coverage/instruction-specifications-swift-iso-20022-dcp-mode-ceu-spain-2357008)</sup>
-- SWIFT PMPG guidance recommending `pacs.009` with `CtgyPurp/Cd = SECU` for securities-related PvP funding.<sup>[3](https://www.swift.com/swift-resource/251897/download)</sup>
-- ISO 20022 message definition reports for identifier length constraints (BIC, Max35Text).<sup>[4](https://www.iso20022.org/sites/default/files/2020-12/ISO20022_MDRPart2_ChangeOrVerifyAccountIdentification_2020_2021_v1_ForSEGReview.pdf)</sup>
-- ANNA DSB guidance on ISIN format and checksum rules.<sup>[5](https://www.anna-dsb.com/isin/)</sup>
+- LuxCSD / Clearstream ISO 20022 հաշվարկման օրինակներ, որոնք ցույց են տալիս `SttlmTpAndAddtlParams/SctiesMvmntTp` (`DELI`/`RECE`) և `Pmt` (`APMT`/`FREE`).<sup>[1](https://www.luxcsd.com/resource/blob/3434074/6f8add4708407a4701055be4dd04846b/c23005-eis-examples-cbf-data.pdf)</sup>
+- Clearstream DCP բնութագրերը, որոնք ընդգրկում են հաշվարկային որակավորումները (`SttlmTxCond`, `PrtlSttlmInd`):<sup>[2](https://www.clearstream.com/clearstream-en/res-library/market-coverage/instruction-specifications-swift-iso-20022-dcp-mode-ceu-spain-2357008)</sup>
+- SWIFT PMPG ուղեցույց, որն առաջարկում է `pacs.009` `CtgyPurp/Cd = SECU`-ով արժեթղթերի հետ կապված PvP ֆինանսավորման համար:<sup>[3](https://www.swift.com/swift-resource/251897/download)</sup>
+- ISO 20022 հաղորդագրության սահմանման հաշվետվություններ նույնացուցիչի երկարության սահմանափակումների համար (BIC, Max35Text):<sup>[4](https://www.iso20022.org/sites/default/files/2020-12/ISO20022_MDRPart2_ChangeOrVerifyAccountIdentification_2020_2021_v1_ForSEGReview.pdf)</sup>
+- ANNA DSB ուղեցույց ISIN ձևաչափի և ստուգիչ գումարի կանոնների վերաբերյալ:<sup>[5](https://www.anna-dsb.com/isin/)</sup>
 
-### Usage Tips
+### Օգտագործման խորհուրդներ
 
-- Always paste the relevant Norito snippet or CLI command so LLM can inspect
-  exact field names and Numeric scales.
-- Request citations (`provide clause references`) to keep a paper trail for
-  compliance and auditor review.
-- Capture the answer summary in `docs/source/finance/settlement_iso_mapping.md`
-  (or linked appendices) so future engineers do not need to repeat the query.
+- Միշտ տեղադրեք համապատասխան Norito հատվածը կամ CLI հրամանը, որպեսզի LLM-ն կարողանա ստուգել
+  դաշտերի ճշգրիտ անվանումները և թվային սանդղակները:
+- Խնդրեք մեջբերումներ (`provide clause references`)՝ թղթի հետք պահելու համար
+  համապատասխանությունը և աուդիտորի վերանայումը:
+- Գրեք պատասխանի ամփոփագիրը `docs/source/finance/settlement_iso_mapping.md`-ում
+  (կամ կապակցված հավելվածներ), այնպես որ ապագա ինժեներները կարիք չունեն կրկնելու հարցումը:
 
-## Event Ordering Playbooks (ISO 20022 ↔ Norito Bridge)
+## Իրադարձությունների պատվիրման գրքույկներ (ISO 20022 ↔ Norito Bridge)
 
-### Scenario A — Collateral Substitution (Repo / Pledge)
+### Սցենար Ա — Գրավի փոխարինում (Ռեպո / Գրավ)
 
-**Participants:** collateral giver/taker (and/or agents), custodian(s), CSD/T2S  
-**Timing:** per market cut-offs and T2S day/night cycles; orchestrate the two legs so they complete within the same settlement window.
+** Մասնակիցներ. ** գրավ տվող/վերցնող (և/կամ գործակալներ), պահառու(ներ), CSD/T2S  
+**Ժամանակը՝ ** շուկայական կտրվածքի և T2S օր/գիշերային ցիկլերի համար; կազմակերպել երկու ոտքերը, որպեսզի դրանք ավարտվեն նույն կարգավորման պատուհանում:
 
-#### Message choreography
-1. `colr.010` Collateral Substitution Request → collateral giver/taker or agent.  
-2. `colr.011` Collateral Substitution Response → accept/reject (optional rejection reason).  
-3. `colr.012` Collateral Substitution Confirmation → confirms substitution agreement.  
-4. `sese.023` instructions (two legs):  
-   - Return original collateral (`SctiesMvmntTp=DELI`, `Pmt=FREE`, `SctiesTxTp=COLO`).  
-   - Deliver substitute collateral (`SctiesMvmntTp=RECE`, `Pmt=FREE`, `SctiesTxTp=COLI`).  
-   Link the pair (see below).  
-5. `sese.024` status advices (accepted, matched, pending, failing, rejected).  
-6. `sese.025` confirmations once booked.  
-7. Optional cash delta (fees/haircut) → `pacs.009` FI-to-FI Credit Transfer with `CtgyPurp/Cd = SECU`; status via `pacs.002`, returns via `pacs.004`.
+#### Հաղորդագրություն խորեոգրաֆիա
+1. `colr.010` Գրավի փոխարինման հարցում → գրավ տվող/վերցնող կամ գործակալ:  
+2. `colr.011` Գրավի փոխարինման պատասխան → ընդունել/մերժել (մերժման կամընտիր պատճառ):  
+3. `colr.012` Գրավի փոխարինման հաստատում → հաստատում է փոխարինման պայմանագիրը:  
+4. `sese.023` հրահանգներ (երկու ոտք).  
+   - Վերադարձրեք բնօրինակ գրավը (`SctiesMvmntTp=DELI`, `Pmt=FREE`, `SctiesTxTp=COLO`):  
+   - Տրամադրել փոխարինող գրավ (`SctiesMvmntTp=RECE`, `Pmt=FREE`, `SctiesTxTp=COLI`):  
+   Կապեք զույգը (տես ստորև):  
+5. `sese.024` կարգավիճակի վերաբերյալ խորհրդատվություն (ընդունված, համապատասխանեցված, սպասվող, ձախողված, մերժված):  
+6. `sese.025` հաստատումներ մեկ անգամ ամրագրվելուց:  
+7. Լրացուցիչ կանխիկ դելտա (վճարներ/սանրվածք) → `pacs.009` FI-to-FI վարկային փոխանցում `CtgyPurp/Cd = SECU`-ով; կարգավիճակը `pacs.002`-ի միջոցով, վերադառնում է `pacs.004`-ի միջոցով:
 
-#### Required acknowledgements / statuses
-- Transport level: gateways may emit `admi.007` or rejects before business processing.  
-- Settlement lifecycle: `sese.024` (processing statuses + reason codes), `sese.025` (final).  
-- Cash side: `pacs.002` (`PDNG`, `ACSC`, `RJCT` etc.), `pacs.004` for returns.
+#### Պահանջվող հաստատումներ / կարգավիճակներ
+- Տրանսպորտի մակարդակ. դարպասները կարող են արտանետել `admi.007` կամ մերժվել մինչև բիզնեսի մշակումը:  
+- Հաշվարկների կյանքի ցիկլը՝ `sese.024` (մշակման կարգավիճակներ + պատճառի ծածկագրեր), `sese.025` (վերջնական):  
+- Կանխիկի կողմ՝ `pacs.002` (`PDNG`, `ACSC`, `RJCT` և այլն), `pacs.004` վերադարձի համար:
 
-#### Conditionality / unwind fields
-- `SctiesSttlmTxInstr/Lnkgs` (`WITH`/`BEFO`/`AFTE`) to chain the two instructions.  
-- `SttlmParams/HldInd` to hold until criteria met; release via `sese.030` (`sese.031` status).  
-- `SttlmParams/PrtlSttlmInd` to control partial settlement (`NPAR`, `PART`, `PARC`, `PARQ`).  
-- `SttlmParams/SttlmTxCond/Cd` for market-specific conditions (`NOMC`, etc.).  
-- Optional T2S Conditional Securities Delivery (CoSD) rules when supported.
+#### Պայմանականություն / արձակել դաշտերը
+- `SctiesSttlmTxInstr/Lnkgs` (`WITH`/`BEFO`/`AFTE`) երկու հրահանգները շղթայելու համար:  
+- `SttlmParams/HldInd` պահել մինչև չափանիշների բավարարումը; թողարկում `sese.030`-ի միջոցով (`sese.031` կարգավիճակ):  
+- `SttlmParams/PrtlSttlmInd` մասնակի կարգավորումը վերահսկելու համար (`NPAR`, `PART`, `PARC`, `PARQ`):  
+- `SttlmParams/SttlmTxCond/Cd` շուկայական հատուկ պայմանների համար (`NOMC` և այլն):  
+- կամընտիր T2S Պայմանական Արժեթղթերի Առաքման (CoSD) կանոններ, երբ աջակցվում է:
 
-#### References
-- SWIFT collateral management MDR (`colr.010/011/012`).  
-- CSD/T2S usage guides (e.g., DNB, ECB Insights) for linking and statuses.  
-- SMPG settlement practice, Clearstream DCP manuals, ASX ISO workshops.
+#### Հղումներ
+- SWIFT գրավի կառավարում MDR (`colr.010/011/012`):  
+- CSD/T2S օգտագործման ուղեցույցներ (օրինակ՝ DNB, ECB Insights) կապելու և կարգավիճակների համար:  
+- SMPG հաշվարկային պրակտիկա, Clearstream DCP ձեռնարկներ, ASX ISO սեմինարներ:
 
-### Scenario B — FX Window Breach (PvP Funding Failure)
+### Սցենար Բ — FX պատուհանի խախտում (PvP ֆինանսավորման ձախողում)
 
-**Participants:** counterparties and cash agents, securities custodian, CSD/T2S  
-**Timing:** FX PvP windows (CLS/bilateral) and CSD cut-offs; keep securities legs on hold pending cash confirmation.
+**Մասնակիցներ.** կոնտրագենտներ և դրամական գործակալներ, արժեթղթերի պահառու, CSD/T2S  
+**Ժամկետ.** FX PvP պատուհանների (CLS/երկկողմանի) և CSD-ի անջատումներ; պահեք արժեթղթերի ոտքերը՝ սպասելով կանխիկի հաստատմանը:
 
-#### Message choreography
-1. `pacs.009` FI-to-FI Credit Transfer per currency with `CtgyPurp/Cd = SECU`; status via `pacs.002`; recall/cancel via `camt.056`/`camt.029`; if already settled, `pacs.004` return.  
-2. `sese.023` DvP instruction(s) with `HldInd=true` so the securities leg waits for cash confirmation.  
-3. Lifecycle `sese.024` notices (accepted/matched/pending).  
-4. If both `pacs.009` legs reach `ACSC` before the window expires → release with `sese.030` → `sese.031` (mod status) → `sese.025` (confirmation).  
-5. If the FX window is breached → cancel/recall cash (`camt.056/029` or `pacs.004`) and cancel securities (`sese.020` + `sese.027`, or `sese.026` reversal if already confirmed per market rule).
+#### Հաղորդագրություն խորեոգրաֆիա
+1. `pacs.009` FI-to-FI վարկային փոխանցում մեկ արժույթով `CtgyPurp/Cd = SECU`-ով; կարգավիճակը `pacs.002`-ի միջոցով; հետ կանչել/չեղարկել `camt.056`/`camt.029`-ի միջոցով; եթե արդեն կարգավորված է, `pacs.004` վերադարձ:  
+2. `sese.023` DvP հրահանգ(ներ) `HldInd=true`-ով, որպեսզի արժեթղթերի ոտքը սպասի կանխիկի հաստատմանը:  
+3. Կյանքի ցիկլի `sese.024` ծանուցումներ (ընդունված/համապատասխանեցված/սպասող):  
+4. Եթե `pacs.009` երկու ոտքերը հասնում են `ACSC`-ին մինչև պատուհանի ժամկետի ավարտը → թողարկեք `sese.030` → `sese.031` (mod կարգավիճակ) → `sese.025` (հաստատում):  
+5. Եթե արտարժույթի պատուհանը խախտվում է, → չեղարկեք/հետ կանչեք կանխիկ գումարը (`camt.056/029` կամ `pacs.004`) և չեղարկեք արժեթղթերը (`sese.020` + `sese.027`, կամ `sese.027`, կամ I18NI000003103-ի համար արդեն հաստատված կանոնը):
 
-#### Required acknowledgements / statuses
-- Cash: `pacs.002` (`PDNG`, `ACSC`, `RJCT`), `pacs.004` for returns.  
-- Securities: `sese.024` (pending/failing reasons like `NORE`, `ADEA`), `sese.025`.  
-- Transport: `admi.007` / gateway rejects before business processing.
+#### Պահանջվող հաստատումներ / կարգավիճակներ
+- Կանխիկ՝ `pacs.002` (`PDNG`, `ACSC`, `RJCT`), `pacs.004` վերադարձի համար:  
+- Արժեթղթեր՝ `sese.024` (սպասող/անհաջող պատճառներ, ինչպիսիք են `NORE`, `ADEA`), `sese.025`:  
+- Տրանսպորտ. `admi.007` / դարպասը մերժվում է բիզնեսի մշակումից առաջ:
 
-#### Conditionality / unwind fields
-- `SttlmParams/HldInd` + `sese.030` release/cancel on success/failure.  
-- `Lnkgs` to tie securities instructions to the cash leg.  
-- T2S CoSD rule if using conditional delivery.  
-- `PrtlSttlmInd` to prevent unintended partials.  
-- On `pacs.009`, `CtgyPurp/Cd = SECU` flags securities-related funding.
+#### Պայմանականություն / արձակել դաշտերը
+- `SttlmParams/HldInd` + `sese.030` թողարկում/չեղարկում հաջողության/ձախողման դեպքում:  
+- `Lnkgs` արժեթղթերի ցուցումները կանխիկի ոտքին կապելու համար:  
+- T2S CoSD կանոն, եթե օգտագործում եք պայմանական առաքում:  
+- `PrtlSttlmInd`՝ չնախատեսված մասնակիությունը կանխելու համար:  
+- `pacs.009`-ում, `CtgyPurp/Cd = SECU`-ում նշվում է արժեթղթերի հետ կապված ֆինանսավորումը:
 
-#### References
-- PMPG / CBPR+ guidance for payments in securities processes.  
-- SMPG settlement practices, T2S insights on linking/holds.  
-- Clearstream DCP manuals, ECMS documentation for maintenance messages.
+#### Հղումներ
+- PMPG / CBPR+ ուղեցույց արժեթղթերի գործընթացներում վճարումների համար:  
+- SMPG կարգավորման պրակտիկա, T2S պատկերացումներ կապելու/պահումների վերաբերյալ:  
+- Clearstream DCP ձեռնարկներ, ECMS փաստաթղթեր տեխնիկական սպասարկման հաղորդագրությունների համար:
 
-### pacs.004 return mapping notes
+### pacs.004 վերադարձնել քարտեզագրման նշումները
 
-- return fixtures now normalise `ChrgBr` (`DEBT`/`CRED`/`SHAR`/`SLEV`) and proprietary return reasons exposed as `TxInf[*]/RtrdRsn/Prtry`, so bridge consumers can replay fee attribution and operator codes without re-parsing the XML envelope.
-- AppHdr signature blocks inside `DataPDU` envelopes remain ignored on ingest; audits should rely on channel provenance rather than embedded XMLDSIG fields.
+- վերադարձի հարմարանքները այժմ նորմալացվում են `ChrgBr` (`DEBT`/`CRED`/`SHAR`/`SLEV`) և սեփականության վերադարձի պատճառները, որոնք բացահայտված են որպես I18NI000000, սպառողների վերադարձի պատճառները, որոնք բացահայտված են որպես I18NI000000: կոդերը՝ առանց XML ծրարը նորից վերլուծելու:
+- AppHdr ստորագրության բլոկները `DataPDU` ծրարների ներսում մնում են անտեսված ներթափանցելիս; աուդիտները պետք է հիմնվեն ալիքի ծագման վրա, այլ ոչ թե ներկառուցված XMLDSIG դաշտերի վրա:
 
-### Operational checklist for the bridge
-- Enforce the choreography above (collateral: `colr.010/011/012 → sese.023/024/025`; FX breach: `pacs.009 (+pacs.002) → sese.023 held → release/cancel`).  
-- Treat `sese.024`/`sese.025` statuses and `pacs.002` outcomes as gating signals; `ACSC` triggers release, `RJCT` forces unwind.  
-- Encode conditional delivery via `HldInd`, `Lnkgs`, `PrtlSttlmInd`, `SttlmTxCond`, and optional CoSD rules.  
-- Use `SupplementaryData` to correlate external IDs (e.g., UETR for the `pacs.009`) when required.  
-- Parameterise hold/unwind timing by market calendar/cut-offs; issue `sese.030`/`camt.056` before cancellation deadlines, fallback to returns when necessary.
+### Կամուրջի գործառնական ստուգաթերթ
+- Կիրառեք վերը նշված խորեոգրաֆիան (գրավը՝ `colr.010/011/012 → sese.023/024/025`; FX խախտում՝ `pacs.009 (+pacs.002) → sese.023 held → release/cancel`):  
+- Վերաբերվեք `sese.024`/`sese.025` կարգավիճակներին և `pacs.002`-ի արդյունքներին որպես մուտքի ազդանշաններ; `ACSC`-ը գործարկում է արձակումը, `RJCT`-ը ստիպում է լիցքաթափվել:  
+- Կոդավորեք պայմանական առաքումը `HldInd`, `Lnkgs`, `PrtlSttlmInd`, `SttlmTxCond` և կամընտիր CoSD կանոնների միջոցով:  
+- Անհրաժեշտության դեպքում օգտագործեք `SupplementaryData` արտաքին ID-ները (օրինակ՝ UETR `pacs.009`-ի համար) փոխկապակցելու համար:  
+- Պարամետրիզացրեք պահման/հանգուցալուծման ժամանակը ըստ շուկայական օրացույցի/հատումների; թողարկել `sese.030`/`camt.056` մինչև չեղարկման վերջնաժամկետները, անհրաժեշտության դեպքում վերադարձ՝ վերադարձ:
 
-### Sample ISO 20022 Payloads (Annotated)
+### Նմուշ ISO 20022 օգտակար բեռներ (Ծանոթագրված)
 
-#### Collateral substitution pair (`sese.023`) with instruction linkage
+#### Գրավի փոխարինման զույգ (`sese.023`) հրահանգների կապակցմամբ
 
 ```xml
 <sese:Document xmlns:sese="urn:iso:std:iso:20022:tech:xsd:sese.023.001.11">
@@ -413,9 +411,9 @@ status (e.g., `ConfSts = ACCP`) rather than the PvP “purpose”.
 </sese:Document>
 ```
 
-Submit the linked instruction `SUBST-2025-04-001-B` (FoP receive of substitute collateral) with `SctiesMvmntTp=RECE`, `Pmt=FREE`, and the `WITH` linkage pointing back to `SUBST-2025-04-001-A`. Release both legs with a matching `sese.030` once the substitution is approved.
+Ներկայացրե՛ք կապակցված `SUBST-2025-04-001-B` հրահանգը (FoP ստանալ փոխարինող գրավ)՝ `SctiesMvmntTp=RECE`, `Pmt=FREE` և `WITH` կապով, որը մատնացույց է անում դեպի `SUBST-2025-04-001-A`: Փոխարինումը հաստատվելուց հետո բաց թողեք երկու ոտքերը համապատասխան `sese.030`-ով:
 
-#### Securities leg on hold pending FX confirmation (`sese.023` + `sese.030`)
+#### Արժեթղթերի ոտքը սպասում է արտարժույթի հաստատման (`sese.023` + `sese.030`)
 
 ```xml
 <sese:Document xmlns:sese="urn:iso:std:iso:20022:tech:xsd:sese.023.001.11">
@@ -442,9 +440,7 @@ Submit the linked instruction `SUBST-2025-04-001-B` (FoP receive of substitute c
     <!-- Remaining settlement details omitted for brevity -->
   </sese:SctiesSttlmTxInstr>
 </sese:Document>
-```
-
-Release once both `pacs.009` legs reach `ACSC`:
+```Թողարկեք, երբ երկու `pacs.009` ոտքերը հասնեն `ACSC`:
 
 ```xml
 <sese:Document xmlns:sese="urn:iso:std:iso:20022:tech:xsd:sese.030.001.04">
@@ -459,9 +455,9 @@ Release once both `pacs.009` legs reach `ACSC`:
 </sese:Document>
 ```
 
-`sese.031` confirms the hold release, followed by `sese.025` once the securities leg is booked.
+`sese.031`-ը հաստատում է պահման թողարկումը, որին հաջորդում է `sese.025`, երբ արժեթղթերի ոտքը ամրագրվի:
 
-#### PvP funding leg (`pacs.009` with securities purpose)
+#### PvP ֆինանսավորման փուլ (`pacs.009` արժեթղթերի նպատակով)
 
 ```xml
 <pacs:Document xmlns:pacs="urn:iso:std:iso:20022:tech:xsd:pacs.009.001.08">
@@ -504,4 +500,4 @@ Release once both `pacs.009` legs reach `ACSC`:
 </pacs:Document>
 ```
 
-`pacs.002` tracks the payment status (`ACSC` = confirmed, `RJCT` = reject). If the window is breached, recall via `camt.056`/`camt.029` or send `pacs.004` to return settled funds.
+`pacs.002`-ը հետևում է վճարման կարգավիճակին (`ACSC` = հաստատված, `RJCT` = մերժում): Եթե ​​պատուհանը խախտված է, հետ կանչեք `camt.056`/`camt.029` կամ ուղարկեք `pacs.004`՝ վճարված միջոցները վերադարձնելու համար:

@@ -4,52 +4,54 @@ direction: ltr
 source: docs/portal/docs/sorafs/manifest-pipeline.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 # تجزئة SoraFS → مسار المانيفست
 
-يمثل هذا المرفق لدليل البدء السريع مساراً من البداية للنهاية يحوّل البايتات الخام إلى
-مانيفستات Norito مناسبة لـ Pin Registry في SoraFS. المحتوى مقتبس من
-[`docs/source/sorafs/manifest_pipeline.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/manifest_pipeline.md);
-راجِع ذلك المستند للمواصفة المعتمدة وسجل التغييرات.
+В 1980-х годах в Лос-Анджелесе было объявлено о том, что в 1990-х годах он был рожден в Лос-Анджелесе. الخام إلى
+Введите Norito. Откройте реестр контактов SoraFS. المحتوى مقتبس من
+[`docs/source/sorafs/manifest_pipeline.md`] (https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/manifest_pipeline.md);
+Он сделал это для того, чтобы сделать это.
 
 ## 1. تجزئة حتمية
 
-يستخدم SoraFS ملف تعريف SF-1 (`sorafs.sf1@1.0.0`): hash متدحرج مستوحى من FastCDC مع حد أدنى
-لحجم chunk يبلغ 64 KiB، وهدف 256 KiB، وحد أقصى 512 KiB، وقناع كسر `0x0000ffff`. الملف
-مسجل في `sorafs_manifest::chunker_registry`.
+Код SoraFS для SF-1 (`sorafs.sf1@1.0.0`): хеш-код создается в FastCDC в режиме FastCDC.
+Размер фрагмента: 64 КиБ, 256 КиБ, размер 512 КиБ, код `0x0000ffff`. الملف
+Код для `sorafs_manifest::chunker_registry`.
 
 ### مساعدات Rust
 
-- `sorafs_car::CarBuildPlan::single_file` – يُنتج إزاحات chunks وأطوالها وملخصات BLAKE3 أثناء
-  تجهيز بيانات CAR الوصفية.
-- `sorafs_car::ChunkStore` – يمرر payloads بشكل streaming، ويحفظ بيانات chunks الوصفية، ويشتق
-  شجرة أخذ عينات Proof-of-Retrievability (PoR) بحجم 64 KiB / 4 KiB.
-- `sorafs_chunker::chunk_bytes_with_digests` – مساعد مكتبة يقف خلف كلا الـ CLI.
+- `sorafs_car::CarBuildPlan::single_file` – добавление кусков для BLAKE3 أثناء
+  Купите автомобиль в автомобиле.
+- `sorafs_car::ChunkStore` – блокировка полезных данных и потоковая передача, а также фрагменты фрагментов
+  Доказательство возможности восстановления (PoR) Размер: 64 КиБ / 4 КиБ.
+- `sorafs_chunker::chunk_bytes_with_digests` – используется для работы с CLI.
 
-### أدوات CLI
+### Управление CLI
 
 ```bash
 cargo run -p sorafs_chunker --bin sorafs-chunk-dump -- ./payload.bin \
   > chunk-plan.json
 ```
 
-يحتوي JSON على الإزاحات المرتبة والأطوال وملخصات chunks. احتفظ بالخطة عند بناء المانيفستات
-أو مواصفات fetch الخاصة بالأوركسترايتور.
+Используйте JSON для создания и редактирования фрагментов. احتفظ بالخطة عند بناء المانيفستات
+Тогда он принесет вам сказку.
 
 ### شواهد PoR
 
-تُتيح `ChunkStore` الخيارين `--por-proof=<chunk>:<segment>:<leaf>` و`--por-sample=<count>` حتى
-يتمكن المدققون من طلب مجموعات شواهد حتمية. قرن هذه الأعلام مع `--por-proof-out` أو
-`--por-sample-out` لتسجيل JSON.
+تُتيح `ChunkStore` `--por-proof=<chunk>:<segment>:<leaf>` و`--por-sample=<count>` حتى
+Он был убит в 2017 году в Скарлетт-Джонсе. قرن هذه الأعلام مع `--por-proof-out` أو
+`--por-sample-out` — файл JSON.
 
 ## 2. تغليف مانيفست
 
-تجمع `ManifestBuilder` بيانات chunks الوصفية مع مرفقات الحوكمة:
+Для `ManifestBuilder` можно использовать фрагменты данных для проверки:
 
 - CID الجذر (dag-cbor) وتعهدات CAR.
-- إثباتات alias ومطالبات قدرات المزوّدين.
-- توقيعات المجلس وبيانات وصفية اختيارية (مثل معرفات build).
+- Тэхен, псевдоним Найтли قدرات المزوّدين.
+- Сделано в Нижнем Новгороде (сборка в стиле хай-тек).
 
 ```bash
 cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
@@ -60,52 +62,50 @@ cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
   --json-out=payload.report.json
 ```
 
-مخرجات مهمة:
+Сообщение:
 
-- `payload.manifest` – بايتات مانيفست مشفرة بـ Norito.
-- `payload.report.json` – ملخص قابل للقراءة للبشر/الأتمتة يتضمن `chunk_fetch_specs` و
-  `payload_digest_hex` وملخصات CAR وبيانات alias الوصفية.
-- `payload.manifest_signatures.json` – ظرف يحتوي على ملخص BLAKE3 للمانيفست، وملخص SHA3 لخطة
-  chunks، وتوقيعات Ed25519 مرتبة.
+- `payload.manifest` – Вы можете установить Norito.
+- `payload.report.json` – установите флажок `chunk_fetch_specs` و
+  `payload_digest_hex` назвал CAR псевдонимом الوصفية.
+- `payload.manifest_signatures.json` – используется для подключения BLAKE3 и SHA3 لخطة.
+  куски, см. Ed25519.
 
-استخدم `--manifest-signatures-in` للتحقق من الأظرف القادمة من موقّعين خارجيين قبل إعادة
-كتابتها، واستخدم `--chunker-profile-id` أو `--chunker-profile=<handle>` لتثبيت اختيار السجل.
+استخدم `--manifest-signatures-in` للتحقق من الأظرف القادمة موقّعين خارجيين قبل إعادة
+Установите `--chunker-profile-id` и `--chunker-profile=<handle>` для проверки.
 
-## 3. النشر والتثبيت (pin)
+## 3. Значок кнопки (булавка)
 
-1. **تقديم الحوكمة** – قدّم ملخص المانيفست وظرف التوقيعات إلى المجلس حتى يمكن قبول الـ pin.
-   يجب على المدققين الخارجيين حفظ ملخص SHA3 لخطة chunks بجانب ملخص المانيفست.
-2. **تثبيت payloads** – ارفع أرشيف CAR (وفهرس CAR الاختياري) المشار إليه في المانيفست إلى
-   Pin Registry. تأكد من أن المانيفست وCAR يشتركان في CID جذر واحد.
-3. **تسجيل التليمترية** – احتفظ بتقرير JSON وشواهد PoR وأي مقاييس fetch ضمن artefacts الإصدار.
-   تغذي هذه السجلات لوحات معلومات المشغلين وتساعد على إعادة إنتاج المشكلات دون تنزيل
-   payloads كبيرة.
+1. **Убийство ** – Убийство британского министра иностранных дел в Вашингтоне Значок يمكن قبول الـ.
+   Для этого необходимо использовать SHA3 с фрагментами данных.
+2. **Полезная нагрузка** – ارفع أرشيف CAR (وفهرس CAR الاختياري)
+   Реестр контактов. Он был совершен в полиции и в CAR в отделе уголовного розыска США.
+3. **Обработка изображений** – получение данных в формате JSON для PoR и поиск артефактов الإصدار.
+   Он был выбран в качестве посредника в создании нового образа жизни. Дэн Сонделл
+   полезные нагрузки.
 
-## 4. محاكاة fetch متعددة المزوّدين
+## 4. Получить сообщение об ошибке
 
-`cargo run -p sorafs_car --bin sorafs_fetch -- --plan=payload.report.json \
+`пробег груза -p sorafs_car --bin sorafs_fetch -- --plan=payload.report.json \
   --provider=alpha=providers/alpha.bin --provider=beta=providers/beta.bin#4@3 \
-  --output=payload.bin --json-out=fetch_report.json`
+  --output=payload.bin --json-out=fetch_report.json`- `#<concurrency>` находится в зоне действия (`#4` أعلاه).
+- `@<weight>` يضبط انحياز الجدولة؛ Сделай это в 1.
+- `--max-peers=<n>` был создан в 2017 году в 1997 году. Он родился в Вашингтоне.
+- `--expect-payload-digest` و`--expect-payload-len` находится в зоне действия.
+- `--provider-advert=name=advert.to` был создан в 2017 году в Колумбии.
+- `--retry-budget=<n>` загружает фрагмент фрагмента (просмотр: 3) CI в CI
+  Он был отправлен в Сан-Франциско.
 
-- `#<concurrency>` يزيد التوازي لكل مزوّد (`#4` أعلاه).
-- `@<weight>` يضبط انحياز الجدولة؛ القيمة الافتراضية هي 1.
-- `--max-peers=<n>` يحد عدد المزوّدين المجدولين للتشغيل عندما يعيد الاكتشاف مرشحين أكثر من المطلوب.
-- `--expect-payload-digest` و`--expect-payload-len` يحميان من الفساد الصامت.
-- `--provider-advert=name=advert.to` يتحقق من قدرات المزوّد قبل استخدامه في المحاكاة.
-- `--retry-budget=<n>` يستبدل عدد المحاولات لكل chunk (الافتراضي: 3) حتى يتمكن CI من كشف
-  التراجعات أسرع عند اختبار سيناريوهات الفشل.
+Запись `fetch_report.json` (`chunk_retry_total` и `provider_failure_rate`)
+Утверждения должны быть предоставлены CI в качестве доказательства.
 
-يعرض `fetch_report.json` مقاييس مجمّعة (`chunk_retry_total` و`provider_failure_rate` وغيرها)
-مناسبة لassertions الخاصة بـ CI وقابلية الملاحظة.
+## 5. Лучший выбор
 
-## 5. تحديثات السجل والحوكمة
+Ниже приводится пример с чанкером:
 
-عند اقتراح ملفات تعريف chunker جديدة:
-
-1. أنشئ الوصف في `sorafs_manifest::chunker_registry_data`.
-2. حدّث `docs/source/sorafs/chunker_registry.md` والمواثيق ذات الصلة.
-3. أعد توليد fixtures (`export_vectors`) والتقط المانيفستات الموقّعة.
+1. Установите флажок `sorafs_manifest::chunker_registry_data`.
+2. Установите `docs/source/sorafs/chunker_registry.md` на место.
+3. Установите светильники (`export_vectors`) и установите их.
 4. قدّم تقرير الامتثال للميثاق مع توقيعات الحوكمة.
 
-ينبغي أن تفضّل الأتمتة handles القياسية (`namespace.name@semver`) وألا تعود إلى IDs رقمية
-إلا عند الحاجة إلى التوافق الرجعي.
+С помощью этого приложения обрабатываются идентификаторы (`namespace.name@semver`) и идентификаторы идентификаторов.
+Он сказал, что это не так.

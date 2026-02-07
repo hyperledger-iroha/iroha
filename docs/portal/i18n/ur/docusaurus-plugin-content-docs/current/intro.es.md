@@ -4,28 +4,30 @@ direction: rtl
 source: docs/portal/docs/intro.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Bienvenido al portal de desarrolladores de SORA Nexus
+# SORA Nexus ڈویلپر پورٹل میں خوش آمدید
 
-El portal de desarrolladores de SORA Nexus agrupa documentacion interactiva, tutoriales de SDK y referencias de API para operadores de Nexus y contribuyentes de Hyperledger Iroha. Complementa el sitio principal de docs al mostrar guias practicas y especificaciones generadas directamente desde este repositorio. La pagina de inicio ahora incluye puntos de entrada tematicos de Norito/SoraFS, snapshots OpenAPI firmados y una referencia dedicada de Norito Streaming para que los contribuyentes encuentren el contrato del plano de control de streaming sin tener que buscar en la especificacion raiz.
+SORA Nexus ڈویلپر پورٹل Nexus آپریٹرز اور Hyperledger Iroha CONTRIBUTORS کے لئے انٹرایکٹو دستاویزات ، SDK سبق ​​، اور API حوالہ جات کو ایک ساتھ لاتا ہے۔ یہ اس ذخیرے سے براہ راست تیار کردہ ہدایت نامہ اور وضاحتیں کس طرح ظاہر کرکے مرکزی دستاویزات سائٹ کی تکمیل کرتا ہے۔ ہوم پیج میں اب Norito/SoraFS تیمادار انٹری پوائنٹس شامل ہیں ، OpenAPI اسنیپ شاٹس ، اور ایک سرشار Norito اسٹریمنگ ریفرنس کے لئے ایک سرشار Norito اسٹریمنگ ریفرنس کو جڑ کی تصریح میں کھودنے کے بغیر اسٹریمنگ کنٹرول طیارے کا معاہدہ تلاش کرنے کے لئے شامل ہے۔
 
-## Lo que puedes hacer aqui
+## آپ یہاں کیا کرسکتے ہیں
 
-- **Aprender Norito** - comienza con la descripcion general y la guia de inicio rapido para entender el modelo de serializacion y las herramientas de bytecode.
-- **Poner en marcha los SDKs** - sigue los quickstarts de JavaScript y Rust hoy; las guias de Python, Swift y Android se sumaran conforme se migren las recetas.
-- **Explorar referencias de API** - la pagina OpenAPI de Torii renderiza la especificacion REST mas reciente, y las tablas de configuracion enlazan a las fuentes canonicas en Markdown.
-- **Preparar despliegues** - los runbooks operativos (telemetria, settlement, Nexus overlays) se estan migrando desde `docs/source/` y llegaran a este sitio conforme avance la migracion.
+- ** سیکھیں Norito ** - سیریلائزیشن ماڈل اور بائیک کوڈ ٹولز کو سمجھنے کے لئے جائزہ اور کوئیک اسٹارٹ گائیڈ سے شروع ہوتا ہے۔
+- ** ایس ڈی کے حاصل کریں اور چلائیں ** - آج جاوا اسکرپٹ اور مورچا کوئیک اسٹارٹ کی پیروی کریں۔ ترکیبیں ہجرت کے بعد ازگر ، سوئفٹ اور اینڈروئیڈ گائیڈز کو شامل کیا جائے گا۔
+۔
+- ** تعیناتیوں کو تیار کریں ** - آپریشنل رن بوکس (ٹیلی میٹری ، تصفیہ ، Nexus اوورلیز) کو `docs/source/` سے ہجرت کی جارہی ہے اور جب منتقلی کی ترقی ہوتی ہے تو اس سائٹ پر پہنچیں گے۔
 
-## Estado actual
+## موجودہ حیثیت
 
--  Landing de Docusaurus v3 con tema, tipografia renovada, hero/tarjetas con gradientes y tiles de recursos que incluyen el resumen de Norito Streaming.
--  Plugin OpenAPI de Torii conectado a `npm run sync-openapi`, con verificaciones de snapshots firmados y guardas CSP aplicadas por `buildSecurityHeaders`.
--  La cobertura de preview y probe corre en CI (`docs-portal-preview.yml` + `scripts/portal-probe.mjs`), y ahora bloquea el doc de streaming, los quickstarts de SoraFS y las checklists de referencia antes de publicar artefactos.
--  Los quickstarts de Norito, SoraFS y SDKs, junto con secciones de referencia, ya estan en la barra lateral; nuevas importaciones desde `docs/source/` (streaming, orchestration, runbooks) llegan aqui conforme se redactan.
+- Docusaurus V3 کی لینڈنگ کے ساتھ تھیم ، تجدید نوع ٹائپ ، ہیرو/کارڈز کے ساتھ ہیرو/کارڈز اور وسائل کے اوزار جن میں Norito اسٹریمنگ کا خلاصہ شامل ہے۔
+- پلگ ان Torii سے `npm run sync-openapi` سے منسلک ، `npm run sync-openapi` سے منسلک `buildSecurityHeaders` کے ذریعہ لاگو ہوتا ہے۔
+- پیش نظارہ اور تحقیقات کی کوریج CI (`docs-portal-preview.yml` + `scripts/portal-probe.mjs`) پر چلتی ہے ، اور اب اسٹریمنگ ڈی او سی ، SoraFS کوئیک اسٹارٹ ، اور نمونے کی اشاعت سے پہلے حوالہ چیک لسٹس کو روکتا ہے۔
+- Norito ، SoraFS اور SDKs کے ساتھ ، حوالہ حصوں کے ساتھ ، پہلے ہی سائڈبار میں موجود ہیں۔ `docs/source/` (اسٹریمنگ ، آرکیسٹریشن ، رن بکس) سے نئی درآمدات یہاں لکھی گئی ہیں۔
 
-## Como participar
+## حصہ لینے کا طریقہ
 
-- Consulta `docs/portal/README.md` para comandos de desarrollo local (`npm install`, `npm run start`, `npm run build`).
-- Las tareas de migracion de contenido se rastrean junto a los items `DOCS-*` del roadmap. Se agradecen contribuciones: porta secciones desde `docs/source/` y agrega la pagina a la barra lateral.
-- Si agregas un artefacto generado (specs, tablas de configuracion), documenta el comando de build para que futuros contribuyentes puedan refrescarlo facilmente.
+- مقامی ترقیاتی کمانڈز (`npm install` ، `npm run start` ، `npm run build`) کے لئے `docs/portal/README.md` دیکھیں۔
+- روڈ میپ کے آئٹمز `DOCS-*` کے ساتھ مشمولات کی منتقلی کے کاموں کا سراغ لگایا جاتا ہے۔ شراکت کی تعریف کی جاتی ہے: `docs/source/` سے پورٹ سیکشن اور صفحہ کو سائڈبار میں شامل کریں۔
+اگر آپ تیار کردہ نمونے (چشمی ، کنفیگریشن ٹیبلز) شامل کرتے ہیں تو ، بلڈ کمانڈ کو دستاویز کریں تاکہ مستقبل میں معاونین آسانی سے اسے تازہ دم کرسکیں۔

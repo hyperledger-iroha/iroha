@@ -4,165 +4,157 @@ direction: rtl
 source: docs/portal/docs/sorafs/observability-plan.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: observability-plan
-title: Plan de observabilidad y SLO de SoraFS
-sidebar_label: Observabilidad y SLOs
-description: Esquema de telemetría, dashboards y política de presupuesto de error para gateways SoraFS, nodos y el orquestador multifuente.
+ID: مشاہدہ کرنے والا منصوبہ
+عنوان: SoraFS مشاہدہ کی منصوبہ بندی اور SLO
+سائڈبار_لیبل: مشاہدہ اور سلو
+تفصیل: ٹیلی میٹری اسکیما ، ڈیش بورڈز ، اور SoraFS گیٹ ویز ، نوڈس ، اور ملٹی سورس آرکیسٹریٹر کے لئے غلطی کے بجٹ کی پالیسی۔
 ---
 
-:::note Fuente canónica
-Esta página refleja el plan mantenido en `docs/source/sorafs_observability_plan.md`. Mantén ambas copias sincronizadas hasta que el conjunto de documentación Sphinx se migre por completo.
+::: نوٹ کینونیکل ماخذ
+یہ صفحہ `docs/source/sorafs_observability_plan.md` پر برقرار رکھے گئے منصوبے کی عکاسی کرتا ہے۔ دونوں کاپیاں مطابقت پذیری میں رکھیں جب تک کہ اسفینکس دستاویزات کا سیٹ مکمل طور پر ہجرت نہ ہوجائے۔
 :::
 
-## Objetivos
-- Definir métricas y eventos estructurados para gateways, nodos y el orquestador multifuente.
-- Proveer dashboards de Grafana, umbrales de alerta y hooks de validación.
-- Establecer objetivos SLO junto con políticas de presupuesto de error y drills de caos.
+## مقاصد
+- گیٹ ویز ، نوڈس اور ملٹی سورس آرکسٹریٹر کے لئے میٹرکس اور ساختی واقعات کی وضاحت کریں۔
+- Grafana ڈیش بورڈز ، الرٹ دہلیز اور توثیق کے ہکس فراہم کریں۔
+- غلطی کے بجٹ کی پالیسیاں اور افراتفری کی مشقوں کے ساتھ ایس ایل او مقاصد قائم کریں۔
 
-## Catálogo de métricas
+## میٹرکس کیٹلاگ
 
-### Superficies del gateway
+### گیٹ وے سطحیں
 
-| Métrica | Tipo | Etiquetas | Notas |
-|--------|------|-----------|-------|
-| `sorafs_gateway_active` | Gauge (UpDownCounter) | `endpoint`, `method`, `variant`, `chunker`, `profile` | Emitido vía `SorafsGatewayOtel`; rastrea operaciones HTTP en vuelo por combinación de endpoint/método. |
-| `sorafs_gateway_responses_total` | Counter | `endpoint`, `method`, `variant`, `chunker`, `profile`, `result`, `status`, `error_code` | Cada solicitud completada del gateway incrementa una vez; `result` ∈ {`success`,`error`,`dropped`}. |
-| `sorafs_gateway_ttfb_ms_bucket` | Histogram | `endpoint`, `method`, `variant`, `chunker`, `profile`, `result`, `status`, `error_code` | Latencia de time-to-first-byte para respuestas del gateway; exportada como Prometheus `_bucket/_sum/_count`. |
-| `sorafs_gateway_proof_verifications_total` | Counter | `profile_version`, `result`, `error_code` | Resultados de verificación de pruebas capturados en el momento de la solicitud (`result` ∈ {`success`,`failure`}). |
-| `sorafs_gateway_proof_duration_ms_bucket` | Histogram | `profile_version`, `result`, `error_code` | Distribución de latencia de verificación para recibos PoR. |
-| `telemetry::sorafs.gateway.request` | Evento estructurado | `endpoint`, `method`, `variant`, `result`, `status`, `error_code`, `duration_ms` | Log estructurado emitido al completar cada solicitud para correlación en Loki/Tempo. |
-| `torii_sorafs_chunk_range_requests_total`, `torii_sorafs_gateway_refusals_total` | Counter | Conjuntos de etiquetas heredados | Métricas Prometheus retenidas para dashboards históricos; emitidas junto con la nueva serie OTLP. |
+| میٹرک | قسم | ٹیگز | نوٹ |
+| -------- | ------ | ----------- | ------- |
+| `sorafs_gateway_active` | گیج (اپ ڈیٹون کاؤنٹر) | `endpoint` ، `method` ، `variant` ، `chunker` ، `profile` | `SorafsGatewayOtel` کے ذریعے جاری کیا گیا ؛ اختتامی نقطہ/طریقہ کے امتزاج کے ذریعہ پرواز میں HTTP آپریشنز کو ٹریک کرتا ہے۔ |
+| `sorafs_gateway_responses_total` | کاؤنٹر | `endpoint` ، `method` ، `variant` ، `chunker` ، `profile` ، `result` ، `status` ، `error_code` | ہر ایک مکمل گیٹ وے کی درخواست میں ایک بار اضافہ ؛ `result` ∈ {`success` ، `error` ، `dropped`}۔ |
+| `sorafs_gateway_ttfb_ms_bucket` | ہسٹوگرام | `endpoint` ، `method` ، `variant` ، `chunker` ، `profile` ، `result` ، `status` ، `error_code` | گیٹ وے کے ردعمل کے لئے وقت سے پہلے بائٹ لیٹینسی ؛ Prometheus `_bucket/_sum/_count` کے بطور برآمد ہوا۔ |
+| `sorafs_gateway_proof_verifications_total` | کاؤنٹر | `profile_version` ، `result` ، `error_code` | ٹیسٹ کی توثیق کے نتائج درخواست کے وقت پکڑے گئے (`result` ∈ {`success` ، `failure`})۔ |
+| `sorafs_gateway_proof_duration_ms_bucket` | ہسٹوگرام | `profile_version` ، `result` ، `error_code` | پور کی رسیدوں کے لئے توثیق میں تاخیر کی تقسیم۔ |
+| `telemetry::sorafs.gateway.request` | ساختہ واقعہ | `endpoint` ، `method` ، `variant` ، `result` ، `status` ، `error_code` ، `duration_ms` | لوکی/ٹیمپو میں ارتباط کے لئے ہر درخواست کو مکمل کرنے پر سٹرکچرڈ لاگ جاری کیا گیا۔ |
+| `torii_sorafs_chunk_range_requests_total` ، `torii_sorafs_gateway_refusals_total` | کاؤنٹر | میراثی لیبل سیٹ | Prometheus میٹرکس کو تاریخی ڈیش بورڈز کے لئے برقرار رکھا گیا ہے۔ نئی OTLP سیریز کے ساتھ مل کر جاری کیا گیا۔ |
 
-Los eventos `telemetry::sorafs.gateway.request` reflejan los contadores OTEL con payloads estructurados, exponiendo `endpoint`, `method`, `variant`, `status`, `error_code` y `duration_ms` para correlación en Loki/Tempo, mientras que los dashboards consumen la serie OTLP para el seguimiento de SLO.
+واقعات `telemetry::sorafs.gateway.request` ساختی پے لوڈ کے ساتھ اوٹیل کاؤنٹرز کی عکاسی کرتے ہیں ، `endpoint` ، `method` ، `variant` ، `status` ، `error_code` اور Prometheus کے لئے `variant` ، `variant` ، `variant` ایس ایل او ٹریکنگ کے لئے او ٹی ایل پی سیریز کا استعمال کریں۔
 
-### Telemetría de salud de pruebas
+### صحت ٹیلی میٹری کی جانچ کرنا| میٹرک | قسم | ٹیگز | نوٹ |
+| -------- | ------ | ----------- | ------- |
+| `torii_sorafs_proof_health_alerts_total` | کاؤنٹر | `provider_id` ، `trigger` ، `penalty` | اس میں ہر بار `RecordCapacityTelemetry` ایک `SorafsProofHealthAlert` جاری کیا جاتا ہے۔ `trigger` PDP/POTR/دونوں ناکامیوں کو ممتاز کرتا ہے ، جبکہ `penalty` نے گرفتاری کی ہے کہ آیا کولیٹرل کو واقعی تراش لیا گیا تھا یا کولڈاؤن کے ذریعہ حذف کیا گیا تھا۔ |
+| `torii_sorafs_proof_health_pdp_failures` ، `torii_sorafs_proof_health_potr_breaches` | گیج | `provider_id` | ٹیموں کے لئے مجرمانہ ٹیلی میٹری ونڈو کے اندر حالیہ پی ڈی پی/پی او آر آر گنتی کی اطلاع دی گئی ہے تاکہ اس بات کا اندازہ کیا جاسکے کہ فراہم کنندگان نے پالیسی سے کتنا تجاوز کیا ہے۔ |
+| `torii_sorafs_proof_health_penalty_nano` | گیج | `provider_id` | آخری انتباہ میں نینو زور کی رقم کاٹ دی گئی (جب صفر نے درخواست کو ہٹا دیا)۔ |
+| `torii_sorafs_proof_health_cooldown` | گیج | `provider_id` | بولین گیج (`1` = Couldown کے ذریعہ دبے ہوئے انتباہ) ظاہر کرنے کے لئے جب ٹریکنگ الرٹس عارضی طور پر خاموش ہوجاتے ہیں۔ |
+| `torii_sorafs_proof_health_window_end_epoch` | گیج | `provider_id` | آپریٹرز کو Norito نمونے سے وابستہ کرنے کے لئے الرٹ سے منسلک ٹیلی میٹری ونڈو کے لئے ریکارڈ شدہ عہد۔ |
 
-| Métrica | Tipo | Etiquetas | Notas |
-|--------|------|-----------|-------|
-| `torii_sorafs_proof_health_alerts_total` | Counter | `provider_id`, `trigger`, `penalty` | Se incrementa cada vez que `RecordCapacityTelemetry` emite un `SorafsProofHealthAlert`. `trigger` distingue fallos PDP/PoTR/Ambos, mientras que `penalty` captura si el colateral se recortó realmente o se suprimió por cooldown. |
-| `torii_sorafs_proof_health_pdp_failures`, `torii_sorafs_proof_health_potr_breaches` | Gauge | `provider_id` | Recuentos más recientes de PDP/PoTR reportados dentro de la ventana de telemetría infractora para que los equipos cuantifiquen cuánto se excedieron los proveedores de la política. |
-| `torii_sorafs_proof_health_penalty_nano` | Gauge | `provider_id` | Monto Nano-XOR recortado en la última alerta (cero cuando el cooldown suprimió la aplicación). |
-| `torii_sorafs_proof_health_cooldown` | Gauge | `provider_id` | Gauge booleano (`1` = alerta suprimida por cooldown) para mostrar cuándo las alertas de seguimiento están temporalmente silenciadas. |
-| `torii_sorafs_proof_health_window_end_epoch` | Gauge | `provider_id` | Época registrada para la ventana de telemetría vinculada a la alerta para que los operadores correlacionen con artefactos Norito. |
+یہ فیڈ اب تائیکائی ناظرین ڈیش بورڈ کی ٹیسٹ ہیلتھ قطار کو کھانا کھاتے ہیں
+(`dashboards/grafana/taikai_viewer.json`) ، سی ڈی این آپریٹرز کو حقیقی وقت کی مرئیت دیتے ہوئے
+الرٹ والیومز ، PDP/POTR ٹرگرز کا مرکب ، جرمانے اور کولڈاؤن کی حیثیت
+فراہم کنندہ
 
-Estos feeds ahora alimentan la fila de salud de pruebas del dashboard Taikai viewer
-(`dashboards/grafana/taikai_viewer.json`), dando a los operadores CDN visibilidad en tiempo real
-de volúmenes de alertas, mezcla de disparadores PDP/PoTR, penalizaciones y estado de cooldown por
-proveedor.
+اب وہی میٹرکس دو تائیکائی ناظرین کے انتباہ کے قواعد کی حمایت کرتی ہے۔
+`SorafsProofHealthPenalty` جب متحرک ہے
+`torii_sorafs_proof_health_alerts_total{penalty="penalty_applied"}` بذریعہ بڑھتا ہے
+آخری 15 منٹ ، جبکہ `SorafsProofHealthCooldown` ایک انتباہ پھینک دیتا ہے اگر a
+فراہم کنندہ پانچ منٹ تک کولڈاؤن میں رہتا ہے۔ دونوں انتباہات میں رہتے ہیں
+`dashboards/alerts/taikai_viewer_rules.yml` SREs کے لئے فوری سیاق و سباق حاصل کرنے کے لئے
+جب POR/POTR ایپلی کیشن شدت اختیار کرتا ہے۔
 
-Las mismas métricas ahora respaldan dos reglas de alerta del Taikai viewer:
-`SorafsProofHealthPenalty` se dispara cuando
-`torii_sorafs_proof_health_alerts_total{penalty="penalty_applied"}` aumenta en
-los últimos 15 minutos, mientras que `SorafsProofHealthCooldown` lanza una advertencia si un
-proveedor permanece en cooldown durante cinco minutos. Ambas alertas viven en
-`dashboards/alerts/taikai_viewer_rules.yml` para que los SREs reciban contexto inmediato
-cuando la aplicación PoR/PoTR se intensifica.
+### آرکسٹریٹر سطحیں| میٹرک / واقعہ | قسم | ٹیگز | پروڈیوسر | نوٹ |
+| ------------------- | ------ | ----------- | ----------- | ------- |
+| `sorafs_orchestrator_active_fetches` | گیج | `manifest_id` ، `region` | `FetchMetricsCtx` | فی الحال پرواز میں سیشنز۔ |
+| `sorafs_orchestrator_fetch_duration_ms` | ہسٹوگرام | `manifest_id` ، `region` | `FetchMetricsCtx` | ملی سیکنڈ میں دورانیہ ہسٹگرام ؛ 1 ایم ایس سے 30 سیکنڈ تک بالٹیاں۔ |
+| `sorafs_orchestrator_fetch_failures_total` | کاؤنٹر | `manifest_id` ، `region` ، `reason` | `FetchMetricsCtx` | وجوہات: `no_providers` ، `no_healthy_providers` ، `no_compatible_providers` ، `exhausted_retries` ، `observer_failed` ، `internal_invariant`۔ |
+| `sorafs_orchestrator_retries_total` | کاؤنٹر | `manifest_id` ، `provider_id` ، `reason` | `FetchMetricsCtx` | دوبارہ کوشش کرنے والے وجوہات (`retry` ، `digest_mismatch` ، `length_mismatch` ، `provider_error`) میں فرق کرتا ہے۔ |
+| `sorafs_orchestrator_provider_failures_total` | کاؤنٹر | `manifest_id` ، `provider_id` ، `reason` | `FetchMetricsCtx` | سیشن کی سطح پر غیر فعال اور حادثے کی گنتی پر قبضہ کرتا ہے۔ |
+| `sorafs_orchestrator_chunk_latency_ms` | ہسٹوگرام | `manifest_id` ، `provider_id` | `FetchMetricsCtx` | ان پٹ/ایس ایل او تجزیہ کے لئے فی حصہ (ایم ایس) کے مطابق لیٹینسی ڈسٹری بیوشن کو بازیافت کریں۔ |
+| `sorafs_orchestrator_bytes_total` | کاؤنٹر | `manifest_id` ، `provider_id` | `FetchMetricsCtx` | منشور/فراہم کنندہ کے ذریعہ فراہم کردہ بائٹس ؛ `rate()` کے ذریعے تھروپپٹ کو پروم کیو ایل میں اخذ کرتا ہے۔ |
+| `sorafs_orchestrator_stalls_total` | کاؤنٹر | `manifest_id` ، `provider_id` | `FetchMetricsCtx` | `ScoreboardConfig::latency_cap_ms` سے تجاوز کرنے والے حصوں کا شمار کریں۔ |
+| `telemetry::sorafs.fetch.lifecycle` | ساختہ واقعہ | `manifest` ، `region` ، `job_id` ، `event` ، `status` ، `chunk_count` ، SoraFS ، `provider_candidates` ، `provider_candidates` ، `provider_candidates` ، `provider_candidates` ، `provider_candidates` | `FetchTelemetryCtx` | پے لوڈ JSON Norito کے ساتھ ملازمت کے زندگی کے چکر (اسٹارٹ/تکمیل) کی عکاسی کرتا ہے۔ |
+| `telemetry::sorafs.fetch.retry` | ساختہ واقعہ | `manifest` ، `region` ، `job_id` ، `provider` ، `reason` ، `attempts` | `FetchTelemetryCtx` | ہر فراہم کنندہ کی دوبارہ کوشش جاری ؛ `attempts` میں اضافہ کی کوششیں (≥ 1)۔ |
+| `telemetry::sorafs.fetch.provider_failure` | ساختہ واقعہ | `manifest` ، `region` ، `job_id` ، `provider` ، `reason` ، `failures` | `FetchTelemetryCtx` | یہ شائع ہوتا ہے جب کوئی فراہم کنندہ ناکامی کی دہلیز کو عبور کرتا ہے۔ |
+| `telemetry::sorafs.fetch.error` | ساختہ واقعہ | `manifest` ، `region` ، `job_id` ، `reason` ، `provider?` ، `provider_reason?` ، `duration_ms` | `FetchTelemetryCtx` | ٹرمینل کی ناکامی لاگ ، لوکی/اسپلنک میں ادخال کے لئے دوستانہ۔ |
+| `telemetry::sorafs.fetch.stall` | ساختہ واقعہ | `manifest` ، `region` ، `job_id` ، `provider` ، `latency_ms` ، `bytes` | `FetchTelemetryCtx` | خارج ہونے پر خارج ہونے کی وجہ سے تشکیل شدہ حد سے زیادہ (اسٹال کاؤنٹرز کی عکاسی ہوتی ہے)۔ |
 
-### Superficies del orquestador
+### نوڈ/نقل کی سطحیں| میٹرک | قسم | ٹیگز | نوٹ |
+| -------- | ------ | ----------- | ------- |
+| `sorafs_node_capacity_utilisation_pct` | ہسٹوگرام | `provider_id` | اسٹوریج کے استعمال کی فیصد کا اوٹیل ہسٹگرام (`_bucket/_sum/_count` کے بطور برآمد)۔ |
+| `sorafs_node_por_success_total` | کاؤنٹر | `provider_id` | کامیاب پور نمونوں کا مونوٹونک کاؤنٹر ، جو شیڈولر اسنیپ شاٹس سے اخذ کیا گیا ہے۔ |
+| `sorafs_node_por_failure_total` | کاؤنٹر | `provider_id` | ناکام پور نمونوں کا مونوٹونک کاؤنٹر۔ |
+| `torii_sorafs_storage_bytes_*` ، `torii_sorafs_storage_por_*` | گیج | `provider` | استعمال شدہ بائٹس کے لئے موجودہ Prometheus گیجز ، قطار کی گہرائی ، ان فلائٹ پور گنتی کے لئے۔ |
+| `torii_sorafs_capacity_*` ، `torii_sorafs_uptime_bps` ، `torii_sorafs_por_bps` | گیج | `provider` | سپلائر کی گنجائش/کامیاب اپ ٹائم ڈیٹا صلاحیت ڈیش بورڈ پر ظاہر ہوتا ہے۔ |
+| `torii_sorafs_por_ingest_backlog` ، `torii_sorafs_por_ingest_failures_total` | گیج | `provider` ، `manifest` | بیک بلاگ کی گہرائی کے علاوہ جمع ہونے والے کریش کاؤنٹرز ہر بار برآمد کیے جاتے ہیں `/v1/sorafs/por/ingestion/{manifest}` سے استفسار کیا جاتا ہے ، جس سے "پور اسٹالز" پینل/الرٹ کھلایا جاتا ہے۔ |
 
-| Métrica / Evento | Tipo | Etiquetas | Productor | Notas |
-|-----------------|------|-----------|-----------|-------|
-| `sorafs_orchestrator_active_fetches` | Gauge | `manifest_id`, `region` | `FetchMetricsCtx` | Sesiones actualmente en vuelo. |
-| `sorafs_orchestrator_fetch_duration_ms` | Histogram | `manifest_id`, `region` | `FetchMetricsCtx` | Histograma de duración en milisegundos; buckets de 1 ms a 30 s. |
-| `sorafs_orchestrator_fetch_failures_total` | Counter | `manifest_id`, `region`, `reason` | `FetchMetricsCtx` | Razones: `no_providers`, `no_healthy_providers`, `no_compatible_providers`, `exhausted_retries`, `observer_failed`, `internal_invariant`. |
-| `sorafs_orchestrator_retries_total` | Counter | `manifest_id`, `provider_id`, `reason` | `FetchMetricsCtx` | Distingue causas de reintento (`retry`, `digest_mismatch`, `length_mismatch`, `provider_error`). |
-| `sorafs_orchestrator_provider_failures_total` | Counter | `manifest_id`, `provider_id`, `reason` | `FetchMetricsCtx` | Captura deshabilitación y conteos de fallos a nivel de sesión. |
-| `sorafs_orchestrator_chunk_latency_ms` | Histogram | `manifest_id`, `provider_id` | `FetchMetricsCtx` | Distribución de latencia de fetch por chunk (ms) para análisis de throughput/SLO. |
-| `sorafs_orchestrator_bytes_total` | Counter | `manifest_id`, `provider_id` | `FetchMetricsCtx` | Bytes entregados por manifest/proveedor; deriva el throughput vía `rate()` en PromQL. |
-| `sorafs_orchestrator_stalls_total` | Counter | `manifest_id`, `provider_id` | `FetchMetricsCtx` | Cuenta chunks que exceden `ScoreboardConfig::latency_cap_ms`. |
-| `telemetry::sorafs.fetch.lifecycle` | Evento estructurado | `manifest`, `region`, `job_id`, `event`, `status`, `chunk_count`, `total_bytes`, `provider_candidates`, `retry_budget`, `global_parallel_limit` | `FetchTelemetryCtx` | Refleja el ciclo de vida del job (inicio/completado) con payload JSON Norito. |
-| `telemetry::sorafs.fetch.retry` | Evento estructurado | `manifest`, `region`, `job_id`, `provider`, `reason`, `attempts` | `FetchTelemetryCtx` | Emitido por racha de reintentos por proveedor; `attempts` cuenta reintentos incrementales (≥ 1). |
-| `telemetry::sorafs.fetch.provider_failure` | Evento estructurado | `manifest`, `region`, `job_id`, `provider`, `reason`, `failures` | `FetchTelemetryCtx` | Se publica cuando un proveedor cruza el umbral de fallos. |
-| `telemetry::sorafs.fetch.error` | Evento estructurado | `manifest`, `region`, `job_id`, `reason`, `provider?`, `provider_reason?`, `duration_ms` | `FetchTelemetryCtx` | Registro de fallo terminal, amigable para ingestión en Loki/Splunk. |
-| `telemetry::sorafs.fetch.stall` | Evento estructurado | `manifest`, `region`, `job_id`, `provider`, `latency_ms`, `bytes` | `FetchTelemetryCtx` | Se emite cuando la latencia de chunk supera el límite configurado (refleja contadores de stall). |
+### بروقت بازیافت (POTR) اور chunk SLA کا ثبوت
 
-### Superficies de nodo / replicación
+| میٹرک | قسم | ٹیگز | پروڈیوسر | نوٹ |
+| -------- | ------ | ----------- | ----------- | ------- |
+| `sorafs_potr_deadline_ms` | ہسٹوگرام | `tier` ، `provider` | پوٹ کوآرڈینیٹر | ملی سیکنڈ میں ڈیڈ لائن سلیک (مثبت = میٹ)۔ |
+| `sorafs_potr_failures_total` | کاؤنٹر | `tier` ، `provider` ، `reason` | پوٹ کوآرڈینیٹر | وجوہات: `expired` ، `missing_proof` ، `corrupt_proof`۔ |
+| `sorafs_chunk_sla_violation_total` | کاؤنٹر | `provider` ، `manifest_id` ، `reason` | SLA مانیٹر | جب کام کی ترسیل ایس ایل او (تاخیر ، کامیابی کی شرح) کی خلاف ورزی کرتی ہے تو متحرک۔ |
+| `sorafs_chunk_sla_violation_active` | گیج | `provider` ، `manifest_id` | SLA مانیٹر | بولین گیج (0/1) فعال ڈیفالٹ ونڈو کے دوران ٹوگل ہوا۔ |
 
-| Métrica | Tipo | Etiquetas | Notas |
-|--------|------|-----------|-------|
-| `sorafs_node_capacity_utilisation_pct` | Histogram | `provider_id` | Histograma OTEL del porcentaje de utilización de almacenamiento (exportado como `_bucket/_sum/_count`). |
-| `sorafs_node_por_success_total` | Counter | `provider_id` | Contador monotónico de muestras PoR exitosas, derivado de snapshots del scheduler. |
-| `sorafs_node_por_failure_total` | Counter | `provider_id` | Contador monotónico de muestras PoR fallidas. |
-| `torii_sorafs_storage_bytes_*`, `torii_sorafs_storage_por_*` | Gauge | `provider` | Gauges Prometheus existentes para bytes usados, profundidad de cola, conteos PoR en vuelo. |
-| `torii_sorafs_capacity_*`, `torii_sorafs_uptime_bps`, `torii_sorafs_por_bps` | Gauge | `provider` | Datos de capacidad/uptime exitoso del proveedor expuestos en el dashboard de capacidad. |
-| `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | Gauge | `provider`, `manifest` | Profundidad del backlog más los contadores acumulados de fallos exportados cada vez que se consulta `/v1/sorafs/por/ingestion/{manifest}`, alimentando el panel/alerta "PoR Stalls". |
+## ایس ایل او مقاصد
 
-### Prueba de recuperación oportuna (PoTR) y SLA de chunks
+- بے اعتماد گیٹ وے کی دستیابی: ** 99.9 ٪ ** (HTTP جوابات 2xx/304)۔
+- TTFB P95 بے اعتماد: گرم ٹائر ≤ 120 ایم ایس ، گرم ٹائر ≤ 300 ایم ایس۔
+- کامیابی کی شرح کی جانچ: .5 99.5 ٪ فی دن۔
+- آرکیسٹریٹر کامیابی (حصہ کی تکمیل): ≥ 99 ٪۔
 
-| Métrica | Tipo | Etiquetas | Productor | Notas |
-|--------|------|-----------|-----------|-------|
-| `sorafs_potr_deadline_ms` | Histogram | `tier`, `provider` | Coordinador PoTR | Holgura del deadline en milisegundos (positivo = cumplido). |
-| `sorafs_potr_failures_total` | Counter | `tier`, `provider`, `reason` | Coordinador PoTR | Razones: `expired`, `missing_proof`, `corrupt_proof`. |
-| `sorafs_chunk_sla_violation_total` | Counter | `provider`, `manifest_id`, `reason` | Monitor de SLA | Se dispara cuando la entrega de chunks incumple el SLO (latencia, tasa de éxito). |
-| `sorafs_chunk_sla_violation_active` | Gauge | `provider`, `manifest_id` | Monitor de SLA | Gauge booleano (0/1) alternado durante la ventana de incumplimiento activa. |
+## ڈیش بورڈز اور الرٹس
 
-## Objetivos SLO
+1.
+2.
+3.
 
-- Disponibilidad trustless del gateway: **99.9%** (respuestas HTTP 2xx/304).
-- TTFB P95 trustless: hot tier ≤ 120 ms, warm tier ≤ 300 ms.
-- Tasa de éxito de pruebas: ≥ 99.5% por día.
-- Éxito del orquestador (finalización de chunks): ≥ 99%.
+الرٹ پیکیجز:- `dashboards/alerts/sorafs_gateway_rules.yml` - گیٹ وے کی دستیابی ، TTFB ، چوٹی ٹیسٹ کی ناکامی۔
+- `dashboards/alerts/sorafs_fetch_rules.yml` - آرکسٹریٹر کی ناکامی/دوبارہ کوششیں/اسٹال ؛ `scripts/telemetry/test_sorafs_fetch_alerts.sh` ، `dashboards/alerts/tests/sorafs_fetch_rules.test.yml` ، `dashboards/alerts/tests/soranet_privacy_rules.test.yml` اور `dashboards/alerts/tests/soranet_policy_rules.test.yml` کے ذریعے توثیق شدہ۔
+- `dashboards/alerts/soranet_privacy_rules.yml` - رازداری کے انحطاط کے سپائکس ، دبانے والے الارم ، بیکار کلکٹر کا پتہ لگانے ، اور غیر فعال کلکٹر الرٹس (`soranet_privacy_last_poll_unixtime` ، `soranet_privacy_collector_enabled`)۔
+- `dashboards/alerts/soranet_policy_rules.yml` - `sorafs_orchestrator_brownouts_total` سے منسلک گمنامی براؤن آؤٹ الارمز۔
+- `dashboards/alerts/taikai_viewer_rules.yml` - تائیکائی ناظرین کا بہاؤ/انجشن/سی ای کے لیگ الارمز کے علاوہ نیا ٹیسٹ ہیلتھ جرمانہ/کوولڈون الرٹس SoraFS `torii_sorafs_proof_health_*` کے ذریعہ طاقت سے۔
 
-## Dashboards y alertas
+## ٹریس حکمت عملی
 
-1. **Observabilidad del gateway** (`dashboards/grafana/sorafs_gateway_observability.json`) — rastrea disponibilidad trustless, TTFB P95, desglose de rechazos y fallos PoR/PoTR vía las métricas OTEL.
-2. **Salud del orquestador** (`dashboards/grafana/sorafs_fetch_observability.json`) — cubre carga multifuente, reintentos, fallos de proveedores y ráfagas de stalls.
-3. **Métricas de privacidad de SoraNet** (`dashboards/grafana/soranet_privacy_metrics.json`) — grafica buckets de relay anonimizados, ventanas de supresión y salud de collectors vía `soranet_privacy_last_poll_unixtime`, `soranet_privacy_collector_enabled` y `soranet_privacy_poll_errors_total{provider}`.
+-اوپن لیمٹری کو اختتام سے آخر میں اپنائیں:
+  - گیٹ ویز جاری کرتے ہیں OTLP (HTTP) درخواست کی IDs ، ظاہر ہضموں ، اور ٹوکن ہیشوں کے ساتھ تشریح کی گئی۔
+  - آرکیسٹریٹر `tracing` + `opentelemetry` کا استعمال بازیافت کی کوششوں کے دوران برآمد کرنے کے لئے استعمال کرتا ہے۔
+  - ایمبیڈڈ SoraFS نوڈس برآمدی اسپینز برائے پور چیلنجز اور اسٹوریج آپریشنز۔ تمام اجزاء `x-sorafs-trace` کے ذریعے پھیلائے گئے مشترکہ ٹریس ID کا اشتراک کرتے ہیں۔
+- `SorafsFetchOtel` آرکسٹریٹر میٹرکس کو OTLP ہسٹوگرام سے جوڑتا ہے جبکہ `telemetry::sorafs.fetch.*` واقعات لاگ سینٹرک بیک اینڈ کے لئے ہلکا پھلکا JSON پے لوڈ فراہم کرتے ہیں۔
+- جمع کرنے والے: Prometheus/LOKI/TEMPO (ترجیحی ٹیمپو) کے ساتھ ساتھ OTEL جمع کرنے والے چلاتے ہیں۔ جیگر API برآمد کنندگان اختیاری ہیں۔
+- اعلی کارڈنلٹی آپریشنز کا نمونہ لیا جانا چاہئے (کامیابی کے راستوں کے لئے 10 ٪ ، ناکامیوں کے لئے 100 ٪)۔
 
-Paquetes de alertas:
+## TLS ٹیلی میٹری کوآرڈینیشن (SF-5B)
 
-- `dashboards/alerts/sorafs_gateway_rules.yml` — disponibilidad del gateway, TTFB, picos de fallos de pruebas.
-- `dashboards/alerts/sorafs_fetch_rules.yml` — fallos/reintentos/stalls del orquestador; validado vía `scripts/telemetry/test_sorafs_fetch_alerts.sh`, `dashboards/alerts/tests/sorafs_fetch_rules.test.yml`, `dashboards/alerts/tests/soranet_privacy_rules.test.yml` y `dashboards/alerts/tests/soranet_policy_rules.test.yml`.
-- `dashboards/alerts/soranet_privacy_rules.yml` — picos de degradación de privacidad, alarmas de supresión, detección de collector inactivo y alertas de collector deshabilitado (`soranet_privacy_last_poll_unixtime`, `soranet_privacy_collector_enabled`).
-- `dashboards/alerts/soranet_policy_rules.yml` — alarmas de brownout de anonimato conectadas a `sorafs_orchestrator_brownouts_total`.
-- `dashboards/alerts/taikai_viewer_rules.yml` — alarmas de deriva/ingest/CEK lag del Taikai viewer más las nuevas alertas de penalización/cooldown de salud de pruebas SoraFS impulsadas por `torii_sorafs_proof_health_*`.
+- میٹرکس سیدھ:
+  - TLS آٹومیشن `sorafs_gateway_tls_cert_expiry_seconds` ، `sorafs_gateway_tls_renewal_total{result}` اور `sorafs_gateway_tls_ech_enabled` بھیجتا ہے۔
+  - TLS/سرٹیفکیٹ پینل کے تحت گیٹ وے جائزہ ڈیش بورڈ میں ان گیجز کو شامل کریں۔
+- لنکنگ الرٹس:
+  - جب ٹی ایل ایس کی میعاد ختم ہونے والے انتباہات کو متحرک کیا جاتا ہے (≤ 14 دن باقی) ، تو اعتماد کے بغیر دستیابی ایس ایل او سے وابستہ ہوں۔
+  - غیر فعال کرنا ایک ثانوی انتباہ جاری کرتا ہے جو TLS اور دستیابی کے پینل دونوں کا حوالہ دیتا ہے۔
+- پائپ لائن: TLS آٹومیشن ملازمت گیٹ وے میٹرکس کی طرح اسی Prometheus اسٹیک میں برآمد کرتی ہے۔ SF-5B کے ساتھ کوآرڈینیشن کٹوتی کے آلے کو یقینی بناتا ہے۔
 
-## Estrategia de trazas
+## میٹرک نام اور لیبلنگ کنونشنز- میٹرک کے نام موجودہ سابقہ ​​`torii_sorafs_*` یا `sorafs_*` کی پیروی کرتے ہیں Torii اور گیٹ وے کے ذریعہ استعمال کیا جاتا ہے۔
+- لیبل سیٹ معیاری ہیں:
+  - `result` → HTTP نتیجہ (`success` ، `refused` ، `failed`)۔
+  - `reason` → مسترد/غلطی کا کوڈ (`unsupported_chunker` ، `timeout` ، وغیرہ)۔
+  - `provider` → ہیکس انکوڈڈ سپلائر شناخت کنندہ۔
+  - `manifest` → منشور کینونیکل ڈائجسٹ (جب اعلی کارڈنلٹی ہو تو تراشے ہوئے)۔
+  - `tier` → اعلامیہ درجے کے لیبل (`hot` ، `warm` ، `archive`)۔
+- ٹیلی میٹری کے اخراج پوائنٹس:
+  - گیٹ وے میٹرکس `torii_sorafs_*` کے تحت رہتے ہیں اور `crates/iroha_core/src/telemetry.rs` سے کنونشنوں کو دوبارہ استعمال کرتے ہیں۔
+  - آرکیسٹریٹر میٹرکس `sorafs_orchestrator_*` اور واقعات `telemetry::sorafs.fetch.*` (لائف سائیکل ، دوبارہ کوشش ، فراہم کنندہ کی ناکامی ، غلطی ، اسٹال) مینی فیسٹ ڈائجسٹ ، جاب ID ، خطے اور فراہم کنندہ شناخت کنندگان کے ساتھ ٹیگ کردہ خارج کرتا ہے۔
+  - نوڈس `torii_sorafs_storage_*` ، `torii_sorafs_capacity_*` اور `torii_sorafs_por_*` کو بے نقاب کرتے ہیں۔
+- مشترکہ نام دستاویز Prometheus میں میٹرکس کیٹلاگ کو رجسٹر کرنے کے مشاہدے کے ساتھ کوآرڈینیٹ ، بشمول لیبل کارڈنلٹی کی توقعات (وینڈر/اوپری حدود کو ظاہر کرتا ہے)۔
 
-- Adopta OpenTelemetry de extremo a extremo:
-  - Los gateways emiten spans OTLP (HTTP) anotados con IDs de solicitud, digests de manifest y hashes de token.
-  - El orquestador usa `tracing` + `opentelemetry` para exportar spans de intentos de fetch.
-  - Los nodos SoraFS embebidos exportan spans para desafíos PoR y operaciones de almacenamiento. Todos los componentes comparten un trace ID común propagado vía `x-sorafs-trace`.
-- `SorafsFetchOtel` conecta las métricas del orquestador a histogramas OTLP mientras que los eventos `telemetry::sorafs.fetch.*` proporcionan payloads JSON ligeros para backends centrados en logs.
-- Collectors: ejecuta collectors OTEL junto con Prometheus/Loki/Tempo (Tempo preferido). Los exportadores API Jaeger siguen siendo opcionales.
-- Las operaciones de alta cardinalidad deben muestrearse (10% para rutas de éxito, 100% para fallos).
+## ڈیٹا پائپ لائن
 
-## Coordinación de telemetría TLS (SF-5b)
+- جمع کرنے والے ہر جزو کے ساتھ دکھائے جاتے ہیں ، Prometheus (میٹرکس) اور لوکی/ٹیمپو (لاگ/ٹریسز) میں OTLP برآمد کرتے ہیں۔
+- اختیاری ای بی پی ایف (ٹیٹراگون) گیٹ ویز/نوڈس کے لئے کم سطح کا ٹریسنگ کو افزودہ کرتا ہے۔
+- Torii اور ایمبیڈڈ نوڈس کے لئے `iroha_telemetry::metrics::{install_sorafs_gateway_otlp_exporter, install_sorafs_node_otlp_exporter}` استعمال کریں۔ آرکسٹریٹر `install_sorafs_fetch_otlp_exporter` پر کال کرنا جاری رکھے ہوئے ہے۔
 
-- Alineación de métricas:
-  - La automatización TLS envía `sorafs_gateway_tls_cert_expiry_seconds`, `sorafs_gateway_tls_renewal_total{result}` y `sorafs_gateway_tls_ech_enabled`.
-  - Incluye estos gauges en el dashboard Gateway Overview bajo el panel TLS/Certificates.
-- Vinculación de alertas:
-  - Cuando se disparen alertas de expiración TLS (≤ 14 días restantes) correlaciona con el SLO de disponibilidad trustless.
-  - La deshabilitación de ECH emite una alerta secundaria que referencia tanto los paneles TLS como de disponibilidad.
-- Pipeline: el job de automatización TLS exporta al mismo stack Prometheus que las métricas del gateway; la coordinación con SF-5b asegura instrumentación deduplicada.
+## توثیق ہکس
 
-## Convenciones de nombres y etiquetas de métricas
-
-- Los nombres de métricas siguen los prefijos existentes `torii_sorafs_*` o `sorafs_*` usados por Torii y el gateway.
-- Los conjuntos de etiquetas están estandarizados:
-  - `result` → resultado HTTP (`success`, `refused`, `failed`).
-  - `reason` → código de rechazo/error (`unsupported_chunker`, `timeout`, etc.).
-  - `provider` → identificador de proveedor codificado en hex.
-  - `manifest` → digest canónico de manifest (recortado cuando hay alta cardinalidad).
-  - `tier` → etiquetas declarativas de tier (`hot`, `warm`, `archive`).
-- Puntos de emisión de telemetría:
-  - Las métricas del gateway viven bajo `torii_sorafs_*` y reutilizan convenciones de `crates/iroha_core/src/telemetry.rs`.
-  - El orquestador emite métricas `sorafs_orchestrator_*` y eventos `telemetry::sorafs.fetch.*` (lifecycle, retry, provider failure, error, stall) etiquetados con digest de manifest, job ID, región e identificadores de proveedor.
-  - Los nodos exponen `torii_sorafs_storage_*`, `torii_sorafs_capacity_*` y `torii_sorafs_por_*`.
-- Coordina con Observability para registrar el catálogo de métricas en el documento compartido de nombres Prometheus, incluyendo expectativas de cardinalidad de etiquetas (límites superiores de proveedor/manifests).
-
-## Pipeline de datos
-
-- Los collectors se despliegan junto a cada componente, exportando OTLP a Prometheus (métricas) y Loki/Tempo (logs/trazas).
-- eBPF opcional (Tetragon) enriquece el trazado de bajo nivel para gateways/nodos.
-- Usa `iroha_telemetry::metrics::{install_sorafs_gateway_otlp_exporter, install_sorafs_node_otlp_exporter}` para Torii y nodos embebidos; el orquestador continúa llamando a `install_sorafs_fetch_otlp_exporter`.
-
-## Hooks de validación
-
-- Ejecuta `scripts/telemetry/test_sorafs_fetch_alerts.sh` durante CI para asegurar que las reglas de alerta de Prometheus permanezcan en sintonía con métricas de stalls y checks de supresión de privacidad.
-- Mantén los dashboards de Grafana bajo control de versiones (`dashboards/grafana/`) y actualiza capturas/links cuando cambien los paneles.
-- Los drills de caos registran resultados vía `scripts/telemetry/log_sorafs_drill.sh`; la validación usa `scripts/telemetry/validate_drill_log.sh` (consulta el [Playbook de operaciones](operations-playbook.md)).
+- CI کے دوران `scripts/telemetry/test_sorafs_fetch_alerts.sh` چلائیں Prometheus الرٹ کے قواعد اسٹال میٹرکس اور رازداری کے دبانے کی جانچ پڑتال کے مطابق رہیں۔
+- Grafana ڈیش بورڈز کو ورژن کنٹرول (`dashboards/grafana/`) کے تحت رکھیں اور جب پینل تبدیل ہوتے ہیں تو اسکرین شاٹس/لنکس کو اپ ڈیٹ کریں۔
+- افراتفری کی مشق `scripts/telemetry/log_sorafs_drill.sh` کے ذریعے ریکارڈ کے نتائج ؛ توثیق `scripts/telemetry/validate_drill_log.sh` (دیکھیں [آپریشنز پلے بوک] (operations-playbook.md))۔

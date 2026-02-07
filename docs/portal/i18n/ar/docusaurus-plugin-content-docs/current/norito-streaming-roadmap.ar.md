@@ -4,13 +4,15 @@ direction: rtl
 source: docs/portal/docs/norito-streaming-roadmap.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: خارطة طريق Norito Streaming
+العنوان: بخارة طريق Norito Streaming
 ---
 
-يلخص سجل الاعمال التالي بنود العمل القريبة التي يتابعها Streaming Working Group لتسليم الصوت/الفيديو في Norito. يتم تحديث القيم مع `status.md` وتشارك هنا لمستخدمي البوابة الذين يفضلون عرضا ملائما للالات.
+يلخص سجل الأعمال التالي بنود العمل القريب الذي يتابعها Streaming Working Group لتسليم الصوت/الفيديو في Norito. يتم تحديث القيم مع `status.md` وتشارك هنا مستخدمي البوابة الذين يفضلون عرضها بالكامل للمكالمات.
 
 ```json
 [

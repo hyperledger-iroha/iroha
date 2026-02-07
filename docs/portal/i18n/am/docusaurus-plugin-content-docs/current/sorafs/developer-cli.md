@@ -8,20 +8,22 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraFS CLI Cookbook
 sidebar_label: CLI Cookbook
 description: Task-focused walkthrough of the consolidated `sorafs_cli` surface.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
-:::
+::: ማስታወሻ ቀኖናዊ ምንጭ
+::
 
-The consolidated `sorafs_cli` surface (provided by the `sorafs_car` crate with
-the `cli` feature enabled) exposes every step required to prepare SoraFS
-artifacts. Use this cookbook to jump directly to common workflows; pair it with
-the manifest pipeline and orchestrator runbooks for operational context.
+የተጠናከረው I18NI0000013X ወለል (በI18NI0000014X ሣጥን የቀረበ
+የ `cli` ባህሪ ነቅቷል) SoraFS ለማዘጋጀት የሚያስፈልገውን እያንዳንዱን እርምጃ ያጋልጣል
+ቅርሶች. ወደ የተለመዱ የስራ ሂደቶች በቀጥታ ለመዝለል ይህን የምግብ አዘገጃጀት መመሪያ ይጠቀሙ; ጋር አጣምሩት
+አንጸባራቂው የቧንቧ መስመር እና ኦርኬስትራ runbooks ለአሰራር አውድ።
 
-## Package payloads
+## ጥቅል ጭነት
 
-Use `car pack` to produce deterministic CAR archives and chunk plans. The
-command automatically selects the SF-1 chunker unless a handle is provided.
+ቆራጥ የሆኑ የCAR ማህደሮችን እና ቸንክ እቅዶችን ለማምረት `car pack` ይጠቀሙ። የ
+እጀታ ካልተሰጠ በቀር ትዕዛዝ የ SF-1 chunkerን በራስ-ሰር ይመርጣል።
 
 ```bash
 sorafs_cli car pack \
@@ -31,13 +33,13 @@ sorafs_cli car pack \
   --summary-out artifacts/video.car.json
 ```
 
-- Default chunker handle: `sorafs.sf1@1.0.0`.
-- Directory inputs are walked in lexicographic order so checksums stay stable
-  across platforms.
-- The JSON summary includes payload digests, per-chunk metadata, and the root
-  CID recognised by the registry and orchestrator.
+- ነባሪ chunker እጀታ: `sorafs.sf1@1.0.0`.
+- የማውጫ ግብዓቶች የሚራመዱት በቃላት ቅደም ተከተል ነው ስለዚህ ቼኮች ተረጋግተው ይቆያሉ።
+  በመድረኮች ላይ.
+- የJSON ማጠቃለያ የደመወዝ ጭነት መጨመሪያዎችን፣ በቸንክ ዲበዳታ እና ሥሩን ያካትታል
+  CID በመዝገብ ቤት እና ኦርኬስትራ የታወቀ።
 
-## Construct manifests
+## የግንባታ መግለጫዎች
 
 ```bash
 sorafs_cli manifest build \
@@ -49,15 +51,15 @@ sorafs_cli manifest build \
   --manifest-json-out artifacts/video.manifest.json
 ```
 
-- `--pin-*` options map directly to `PinPolicy` fields in
+- `--pin-*` አማራጮች ካርታ በቀጥታ ወደ I18NI0000019X መስኮች ውስጥ
   `sorafs_manifest::ManifestBuilder`.
-- Provide `--chunk-plan` when you want the CLI to recompute the SHA3 chunk
-  digest before submission; otherwise it reuses the digest embedded in the
-  summary.
-- The JSON output mirrors the Norito payload for straightforward diffs during
-  reviews.
+- CLI የSHA3 ቻንክን እንደገና እንዲያሰላስል ሲፈልጉ `--chunk-plan` ያቅርቡ
+  ከማቅረቡ በፊት መፈጨት; አለበለዚያ በ ውስጥ የተካተተውን መፍጨት እንደገና ይጠቀማል
+  ማጠቃለያ
+- የJSON ውፅዓት የ Norito ክፍያን በቀጥታ ለሚፈጠሩ ልዩነቶች ያንጸባርቃል
+  ግምገማዎች.
 
-## Sign manifests without long-lived keys
+## ምልክት ያለ ረጅም ዕድሜ ቁልፎች ይገለጻል።
 
 ```bash
 sorafs_cli manifest sign \
@@ -67,13 +69,13 @@ sorafs_cli manifest sign \
   --identity-token-env SIGSTORE_ID_TOKEN
 ```
 
-- Accepts inline tokens, environment variables, or file-based sources.
-- Adds provenance metadata (`token_source`, `token_hash_hex`, chunk digest)
-  without persisting the raw JWT unless `--include-token=true`.
-- Works well in CI: combine with GitHub Actions OIDC by setting
+- የመስመር ላይ ቶከኖችን፣ የአካባቢ ተለዋዋጮችን ወይም በፋይል ላይ የተመሰረቱ ምንጮችን ይቀበላል።
+- የፕሮቬንሽን ሜታዳታ ይጨምራል (`token_source`፣ `token_hash_hex`፣ chunk diest)
+  `--include-token=true` ካልሆነ በስተቀር ጥሬውን JWT ሳይቀጥል.
+- በCI ውስጥ በደንብ ይሰራል፡ ከ GitHub Actions I18NT0000006X ጋር በማቀናበር ያጣምሩ
   `--identity-token-provider=github-actions`.
 
-## Submit manifests to Torii
+## ለTorii ይገለጣል
 
 ```bash
 sorafs_cli manifest submit \
@@ -88,13 +90,13 @@ sorafs_cli manifest submit \
   --summary-out artifacts/video.submit.json
 ```
 
-- Performs Norito decoding for alias proofs and verifies they match the
-  manifest digest before POSTing to Torii.
-- Recomputes the chunk SHA3 digest from the plan to prevent mismatch attacks.
-- Response summaries capture HTTP status, headers, and registry payloads for
-  later auditing.
+- ለተለዋጭ ስም ማረጋገጫዎች Norito መፍታትን ያከናውናል እና ከሚከተሉት ጋር የሚዛመዱ መሆናቸውን ያረጋግጣል ።
+  ወደ Torii ከመለጠፍ በፊት አንጸባራቂ መፍጨት።
+- የማይዛመዱ ጥቃቶችን ለመከላከል የ SHA3 ዲጀስትን ከእቅዱ እንደገና ያሰላል።
+- የምላሽ ማጠቃለያዎች የኤችቲቲፒ ሁኔታን፣ ራስጌዎችን እና የመመዝገቢያ ጭነቶችን ይይዛሉ
+  በኋላ ኦዲት ማድረግ.
 
-## Verify CAR contents and proofs
+## የ CAR ይዘቶችን እና ማረጋገጫዎችን ያረጋግጡ
 
 ```bash
 sorafs_cli proof verify \
@@ -103,11 +105,11 @@ sorafs_cli proof verify \
   --summary-out artifacts/video.verify.json
 ```
 
-- Rebuilds the PoR tree and compares payload digests with the manifest summary.
-- Captures counts and identifiers required when submitting replication proofs
-  to governance.
+- የPoR ዛፉን እንደገና ይገነባል እና የተጫኑትን ጨረሮች ከማንፀባረቂያው ማጠቃለያ ጋር ያወዳድራል።
+- የማባዛት ማረጋገጫዎችን በሚያስገቡበት ጊዜ የሚፈለጉትን ቆጠራዎች እና መለያዎችን ይይዛል
+  ወደ አስተዳደር.
 
-## Stream proof telemetry
+## የዥረት ማረጋገጫ ቴሌሜትሪ
 
 ```bash
 sorafs_cli proof stream \
@@ -120,24 +122,24 @@ sorafs_cli proof stream \
   --governance-evidence-dir artifacts/video.proof_stream_evidence
 ```
 
-- Emits NDJSON items for each streamed proof (disable replay with
-  `--emit-events=false`).
-- Aggregates success/failure counts, latency histograms, and sampled failures in
-  the summary JSON so dashboards can plot outcomes without scraping logs.
-- Exits non-zero when the gateway reports failures or local PoR verification
-  (via `--por-root-hex`) rejects proofs. Adjust the thresholds with
-  `--max-failures` and `--max-verification-failures` for rehearsal runs.
-- Supports PoR today; PDP and PoTR reuse the same envelope once SF-13/SF-14
-  land.
-- `--governance-evidence-dir` writes the rendered summary, metadata (timestamp,
-  CLI version, gateway URL, manifest digest), and a copy of the manifest into
-  the supplied directory so governance packets can archive the proof-stream
-  evidence without replaying the run.
+- ለእያንዳንዱ የዥረት ማረጋገጫ የNDJSON ንጥሎችን ያወጣል (እንደገና መጫወትን ያሰናክሉ።
+  `--emit-events=false`)።
+- የስኬት/የሽንፈት ቆጠራዎችን፣ የቆይታ ሂስቶግራምን እና የናሙና ውድቀቶችን ያጠቃልላል
+  የ JSON ማጠቃለያ ዳሽቦርዶች የምዝግብ ማስታወሻዎችን ሳይቧጠጡ ውጤቶችን ማቀድ ይችላሉ።
+- መግቢያው አለመሳካቱን ወይም የአካባቢ የPoR ማረጋገጫን ሲዘግብ ከዜሮ ውጭ ይወጣል
+  (በ`--por-root-hex` በኩል) ማረጋገጫዎችን ውድቅ ያደርጋል። ጣራዎቹን በ ጋር ያስተካክሉ
+  ለልምምድ ሩጫዎች `--max-failures` እና `--max-verification-failures`።
+- ዛሬ PoR ይደግፋል; ፒዲፒ እና ፖትአር SF-13/SF-14 አንድ ጊዜ ተመሳሳይ ፖስታ እንደገና ይጠቀማሉ
+  መሬት.
+- `--governance-evidence-dir` የተሰራውን ማጠቃለያ፣ ሜታዳታ (የጊዜ ማህተም፣
+  የCLI ስሪት፣ መግቢያ ዩአርኤል፣ አንጸባራቂ መፍጨት) እና የገለጻው ቅጂ ወደ ውስጥ
+  የአስተዳደር እሽጎች የማረጋገጫ ዥረቱን በማህደር እንዲቀመጡ የቀረበው ማውጫ
+  ሩጫውን እንደገና ሳይጫወት ማስረጃ.
 
-## Additional references
+## ተጨማሪ ማጣቀሻዎች
 
-- `docs/source/sorafs_cli.md` — exhaustive flag documentation.
-- `docs/source/sorafs_proof_streaming.md` — proof telemetry schema and Grafana
-  dashboard template.
-- `docs/source/sorafs/manifest_pipeline.md` — deep dive on chunking, manifest
-  composition, and CAR handling.
+- `docs/source/sorafs_cli.md` - የተሟላ ባንዲራ ሰነድ።
+- `docs/source/sorafs_proof_streaming.md` - ማረጋገጫ የቴሌሜትሪ ንድፍ እና Grafana
+  ዳሽቦርድ አብነት.
+- `docs/source/sorafs/manifest_pipeline.md` - በመቁረጥ ላይ ጥልቅ ጠልቆ ፣ አንጸባራቂ
+  ቅንብር, እና የ CAR አያያዝ.

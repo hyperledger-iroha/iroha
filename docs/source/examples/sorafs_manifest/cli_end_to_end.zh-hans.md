@@ -8,25 +8,26 @@ source_hash: a8209e602132efb6c29962bf09aea8cd74f972fa956ea8a7a1dbac08a7f6f00f
 source_last_modified: "2026-01-05T09:28:12.006380+00:00"
 translation_last_reviewed: 2026-02-07
 title: "SoraFS Manifest CLI End-to-End Example"
+translator: machine-google-reviewed
 ---
 
-# SoraFS Manifest CLI End-to-End Example
+# SoraFS 清单 CLI 端到端示例
 
-This example walks through publishing a documentation build to SoraFS using the
-`sorafs_manifest_stub` CLI together with the deterministic chunking fixtures
-described in the SoraFS Architecture RFC. The flow covers manifest generation,
-expectation checks, fetch-plan validation, and proof-of-retrieval rehearsal so
-teams can embed the same steps in CI.
+此示例演示如何使用以下命令将文档版本发布到 SoraFS
+`sorafs_manifest_stub` CLI 与确定性分块装置一起
+SoraFS 架构 RFC 中进行了描述。该流程涵盖了明显的生成，
+期望检查、获取计划验证和检索证明演练
+团队可以在 CI 中嵌入相同的步骤。
 
-## Prerequisites
+## 先决条件
 
-- Workspace cloned and toolchain ready (`cargo`, `rustc`).
-- Fixtures from `fixtures/sorafs_chunker` available so expectation values can be
-  derived (for production runs, pull the values from the migration ledger entry
-  associated with the artifact).
-- Sample payload directory to publish (this example uses `docs/book`).
+- 克隆工作区并准备好工具链（`cargo`、`rustc`）。
+- `fixtures/sorafs_chunker` 中的夹具可用，因此期望值可以
+  派生（对于生产运行，从迁移分类帐条目中提取值
+  与工件相关）。
+- 要发布的示例有效负载目录（本示例使用 `docs/book`）。
 
-## Step 1 — Generate manifest, CAR, signatures, and fetch plan
+## 步骤 1 — 生成清单、CAR、签名和获取计划
 
 ```bash
 cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
@@ -41,15 +42,15 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
   --chunker-profile=sorafs.sf1@1.0.0
 ```
 
-The command:
+命令：
 
-- Streams the payload through `ChunkProfile::DEFAULT`.
-- Emits a CARv2 archive plus chunk-fetch plan.
-- Builds a `ManifestV1` record, verifies manifest signatures (if provided), and
-  writes the envelope.
-- Enforces expectation flags so the run fails if bytes drift.
+- 通过 `ChunkProfile::DEFAULT` 传输有效负载。
+- 发出 CARv2 存档以及块获取计划。
+- 构建 `ManifestV1` 记录，验证清单签名（如果提供），以及
+  信封上写道。
+- 强制执行期望标志，因此如果字节漂移则运行失败。
 
-## Step 2 — Verify outputs with chunk store + PoR rehearsal
+## 步骤 2 — 使用块存储 + PoR 演练验证输出
 
 ```bash
 cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
@@ -59,11 +60,11 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
   --por-json-out target/sorafs/docs.por.json
 ```
 
-This replays the CAR through the deterministic chunk store, derives the
-Proof-of-Retrievability sampling tree, and emits a manifest report suitable for
-governance review.
+这通过确定性块存储重放 CAR，得出
+可检索性证明采样树，并发出适合的清单报告
+治理审查。
 
-## Step 3 — Simulate multi-provider retrieval
+## 步骤 3 — 模拟多提供商检索
 
 ```bash
 cargo run -p sorafs_car --bin sorafs_fetch -- \
@@ -73,21 +74,21 @@ cargo run -p sorafs_car --bin sorafs_fetch -- \
   --json-out=target/sorafs/docs.fetch_report.json
 ```
 
-For CI environments, provide separate payload paths per provider (e.g., mounted
-fixtures) to exercise range scheduling and failure handling.
+对于 CI 环境，为每个提供程序提供单独的有效负载路径（例如，安装
+固定装置）来练习范围调度和故障处理。
 
-## Step 4 — Record ledger entry
+## 步骤 4 — 记录账本条目
 
-Log the publication in `docs/source/sorafs/migration_ledger.md`, capturing:
+在 `docs/source/sorafs/migration_ledger.md` 中记录发布，捕获：
 
-- Manifest CID, CAR digest, and council signature hash.
-- Status (`Draft`, `Staging`, `Pinned`).
-- Links to CI runs or governance tickets.
+- 清单 CID、CAR 摘要和理事会签名哈希。
+- 状态（`Draft`、`Staging`、`Pinned`）。
+- CI 运行或治理票证的链接。
 
-## Step 5 — Pin via governance tooling (when registry is live)
+## 步骤 5 — 通过治理工具固定（当注册中心上线时）
 
-Once the Pin Registry is deployed (Milestone M2 in the migration roadmap),
-submit the manifest through the CLI:
+部署 Pin 注册表后（迁移路线图中的 Milestone M2），
+通过 CLI 提交清单：
 
 ```bash
 cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
@@ -102,11 +103,11 @@ cargo run -p sorafs_cli --bin sorafs_pin -- propose \
   --manifest-signatures target/sorafs/docs.manifest_signatures.json
 ```
 
-The proposal identifier and subsequent approval transaction hashes should be
-captured in the migration ledger entry for auditability.
+提案标识符和后续批准交易哈希值应该是
+在迁移分类帐条目中捕获以进行审计。
 
-## Cleanup
+## 清理
 
-Artifacts under `target/sorafs/` can be archived or uploaded to staging nodes.
-Keep the manifest, signatures, CAR, and fetch plan together so downstream
-operators and SDK teams can validate the deployment deterministically.
+`target/sorafs/` 下的工件可以存档或上传到暂存节点。
+将清单、签名、CAR 和获取计划放在一起，以便下游
+运营商和 SDK 团队可以确定性地验证部署。

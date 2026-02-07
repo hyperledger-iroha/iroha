@@ -8,39 +8,41 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: W2 community intake plan
 sidebar_label: W2 plan
 description: Intake, approvals, and evidence checklist for the community preview cohort.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-| Item | Details |
+| རྣམ་གྲངས་ | ཁ་གསལ་ |
 | --- | --- |
-| Wave | W2 — Community reviewers |
-| Target window | Q3 2025 week 1 (tentative) |
-| Artefact tag (planned) | `preview-2025-06-15` |
-| Tracker issue | `DOCS-SORA-Preview-W2` |
+| རླབས་ | W2 — མི་སྡེ་བསྐྱར་ཞིབ་པ་ |
+| དམིགས་གཏད་སྒོ་སྒྲིག་ | Q3 2025 བདུན་ཕྲག་ ༡ (Tentive) |
+| ཅ་རྙིང་ངོ་རྟགས། (འཆར་གཞི་བཟོ་ཡོདཔ་) | I18NI0000008X |
+| བརྟག་ཞིབ་ཀྱི་གནད་དོན་ | I18NI0000009X |
 
-## Objectives
+## དམིགས་ཡུལ།
 
-1. Define the community intake criteria and vetting workflow.
-2. Obtain governance approval for the proposed roster and acceptable-use addendum.
-3. Refresh the checksum-verified preview artefact and telemetry bundle for the new window.
-4. Stage the Try it proxy + dashboards ahead of invite dispatch.
+༡ མི་སྡེ་ནང་ ཁྱད་ཚད་དང་ ལཱ་གི་རྒྱུན་རིམ་ཚུ་ བརྟག་དཔྱད་འབད་ནི།
+༢ གྲོས་འཆར་ཕུལ་མི་ ཐོ་ཡིག་དང་ ངོས་ལེན་ཅན་གྱི་ལག་ལེན་ཁ་སྐོང་གི་དོན་ལུ་ གཞུང་སྐྱོང་གནང་བ་ཐོབ་ནི།
+༣ སྒོ་སྒྲིག་གསརཔ་གི་དོན་ལུ་ ཅེག་སམ་བདེན་དཔྱད་འབད་ཡོད་པའི་ སྔོན་ལྟ་དངོས་པོ་དང་ ཊེ་ལི་མི་ཊི་བཱན་ཌལ་ གསར་བསྐྲུན་འབད།
+༤ མགྲོན་བརྡ་གཏང་ནིའི་ཧེ་མ་ལས་ གདོང་ཁར་ཡོད་པའི་ ཌེཤ་བོརཌ་ཚུ་ ངོ་ཚབ་འབད་རྩོལ་བསྐྱེད།
 
-## Task breakdown
+## ལས་ཀའི་ཆད་པ།
 
-| ID | Task | Owner | Due | Status | Notes |
+| ID | ལས་ཀ་ | ཇོ་བདག་ | འདི་ | གནས་ཚད་ | དྲན་ཐོ། |
 | --- | --- | --- | --- | --- | --- |
-| W2-P1 | Draft community intake criteria (eligibility, max slots, CoC requirements) and circulate to governance | Docs/DevRel lead | 2025‑05‑15 | ✅ Completed | Intake policy merged into `DOCS-SORA-Preview-W2` and endorsed at the 2025‑05‑20 council meeting. |
-| W2-P2 | Update request template with community-specific questions (motivation, availability, localization needs) | Docs-core-01 | 2025‑05‑18 | ✅ Completed | `docs/examples/docs_preview_request_template.md` now includes the Community section, referenced in the intake form. |
-| W2-P3 | Secure governance approval for the intake plan (meeting vote + recorded minutes) | Governance liaison | 2025‑05‑22 | ✅ Completed | Vote passed unanimously on 2025‑05‑20; minutes + roll call linked in `DOCS-SORA-Preview-W2`. |
-| W2-P4 | Schedule Try it proxy staging + telemetry capture for the W2 window (`preview-2025-06-15`) | Docs/DevRel + Ops | 2025‑06‑05 | ✅ Completed | Change ticket `OPS-TRYIT-188` approved and executed 2025‑06‑09 02:00–04:00 UTC; Grafana screenshots archived with ticket. |
-| W2-P5 | Build/verify new preview artefact tag (`preview-2025-06-15`) and archive descriptor/checksum/probe logs | Portal TL | 2025‑06‑07 | ✅ Completed | `scripts/preview_wave_preflight.sh --tag preview-2025-06-15 ...` ran 2025‑06‑10; outputs stored under `artifacts/docs_preview/W2/preview-2025-06-15/`. |
-| W2-P6 | Assemble community invite roster (≤25 reviewers, staged batches) with governance-approved contact info | Community manager | 2025‑06‑10 | ✅ Completed | First cohort of 8 community reviewers approved; request IDs `DOCS-SORA-Preview-REQ-C01…C08` logged in the tracker. |
+| W2-P1 | ཟིན་བྲིས་ མི་སྡེ་བཟའ་སྤྱོད་ཀྱི་ཚད་གཞི་ (འོས་འབབ་དང་ མཐོ་ཤོས་ཀྱི་ ས་སྒོ་ CoC དགོས་མཁོ) དེ་ལས་ གཞུང་སྐྱོང་ལུ་ བརྒྱུད་སྤྲོད་འབད་ནི། | ཡིག་ཆ་/ཌི་ཝི་རེལ་ལིཌ་ | ༢༠༢༥‐༠༥‐༡༥ | ✅ མཇུག་བསྡུ་ | I18NI000000010X ནང་ལུ་ སྲིད་བྱུས་གཅིག་ཁར་བསྡོམས་ཞིནམ་ལས་ ༢༠༢༥‐༠༥‐༢༠ ཚོགས་སྡེའི་ཞལ་འཛོམས་ནང་ ངོས་ལེན་འབད་ཡོདཔ་ཨིན། |
+| W2-P2 | མི་སྡེ་དམིགས་བསལ་གྱི་དྲི་བ་ཚུ་དང་གཅིག་ཁར་ ཞུ་བ་ཊེམ་པེལེཊི་དུས་མཐུན་བཟོ་ནི་ (སེམས་ཤུགས་དང་ ཐོབ་ཚུགསཔ་ དེ་ལས་ ས་གནས་ཀྱི་དགོས་མཁོ་ཚུ་) | ཡིག་ཆ་-ཀོར་-༠༡ | ༢༠༢༥‐༠༥‐༡༨ | ✅ མཇུག་བསྡུ་ | I18NI000000011X གིས་ ད་ལྟོ་ མི་སྡེ་དབྱེ་ཚན་འདི་ ནང་འདྲེན་གྱི་འབྲི་ཤོག་ནང་ གཞི་བསྟུན་འབད་ཡོདཔ་ཨིན། |
+| W2-P3 | འཛུལ་ཞུགས་འཆར་གཞི་གི་དོན་ལུ་ གཞུང་སྐྱོང་ཉེན་སྲུང་གི་ བདེ་འཇགས་ (འཛོམས་འདུའི་ཚོགས་རྒྱན་ + ཐོ་བཀོད་འབད་ཡོད་པའི་སྐར་མ་) | གཞུང་སྐྱོང་འབྲེལ་གནས། | ༢༠༢༥‐༠༥‐༢༢ | ✅ མཇུག་བསྡུ་ | ཚོགས་རྒྱན་བཙུགས་མི་འདི་གིས་ ༢༠༢༥‐༠༥‐༢༠ ལུ་ མོས་མཐུན་ཐོག་ལས་ ཆ་འཇོག་འབད་ཡོདཔ་ཨིན། mest + བཤུད་འབོད་འབྲེལ་མཐུད་འབད་ཡོདཔ། `DOCS-SORA-Preview-W2` ནང་། |
+| W2-P4 | འཆར་གཞི། དེ་ པོརོ་སི་ གནས་རིམ་ + བརྒྱུད་འཕྲིན་ འཛིན་བཟུང་ ཌབ་ལུ་༢ སྒོ་སྒྲིག་ (`preview-2025-06-15`) | ཡིག་ཆ་/ཌི་ཝི་རེལ་ + Ops | ༢༠༢༥‐༠༦‐༠༥ | ✅ མཇུག་བསྡུ་ | བསྒྱུར་བཅོས་ཀྱི་ ཤོག་འཛིན་ `OPS-TRYIT-188` གིས་ ཆ་འཇོག་འབད་དེ་ ཆ་འཇོག་འབད་དེ་ ལག་ལེན་འཐབ་ཡོདཔ། Grafana གསལ་གཞི་ཚུ་ ཡིག་མཛོད་དང་གཅིག་ཁར་ ཡིག་མཛོད་བཟོ་ཡོདཔ་ཨིན། |
+| W2-P5 | སྔོན་ལྟའི་ཅ་མཛོད་ངོ་རྟགས་གསརཔ་བཟོ་བསྐྲུན་/བདེན་དཔྱད་འབད། (I18NI0000015X) དང་ཡིག་མཛོད་འགྲེལ་བཤད་/ཞིབ་དཔྱད་/འཚོལ་ཞིབ་དྲན་ཐོ་ཚུ་ | Portal TL | ༢༠༢༥‐༠༦‐༠༧ | ✅ མཇུག་བསྡུ་ | I18NI000000016X རན་ ༢༠༢༥‐༠༦‐༡༠; `artifacts/docs_preview/W2/preview-2025-06-15/` འོག་ལུ་གསོག་འཇོག་འབད་ཡོད་པའི་ཐོན་འབྲས་ཚུ། |
+| W2-P6 | མི་སྡེ་མགྲོན་བརྡ་ཐོ་ཡིག་ (≤25 བསྐྱར་ཞིབ་པ་ གོ་རིམ་ཅན་གྱི་བཀག་ཆ་) གཞུང་སྐྱོང་གིས་ ཆ་འཇོག་འབད་མི་ འབྲེལ་གཏུག་བརྡ་དོན་ | མི་སྡེ་འཛིན་སྐྱོང་པ། | ༢༠༢༥‐༠༦‐༡༠ | ✅ མཇུག་བསྡུ་ | མི་སྡེ་བསྐྱར་ཞིབ་པ་༨ ཀྱི་སྡེ་ཚན་དང་པ་ ཆ་འཇོག་འབད་ཡོདཔ། ཞུ་བ་ IDs ID `DOCS-SORA-Preview-REQ-C01…C08` ནང་བསྐྱོད་འབད་ཡོདཔ། |
 
-## Evidence checklist
+## བདེན་དཔང་ཞིབ་དཔྱད་ཐོ་ཡིག་།
 
-- [x] Governance approval record (meeting notes + vote link) attached to `DOCS-SORA-Preview-W2`.
-- [x] Updated request template committed under `docs/examples/`.
-- [x] `preview-2025-06-15` descriptor, checksum log, probe output, link report, and Try it proxy transcript stored under `artifacts/docs_preview/W2/`.
-- [x] Grafana screenshots (`docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals`) captured for the W2 preflight window.
-- [x] Invite roster table with reviewer IDs, request tickets, and approval timestamps populated before dispatch (see tracker W2 section).
+- [x] གཞུང་སྐྱོང་ཆ་འཇོག་དྲན་ཐོ་ (ཞལ་འཛོམས་དྲན་འཛིན་ + ཚོགས་རྒྱན་འབྲེལ་མཐུད་) `DOCS-SORA-Preview-W2` ལུ་མཉམ་སྦྲགས་འབད་ཡོདཔ།
+- [x] I18NI000000020X གི་འོག་ལུ་ཡོད་པའི་ ཞུ་བ་ཊེམ་པེལེཊི་དུས་མཐུན་བཟོ་ཡོདཔ།
+- [x] I18NI0000021X འགྲེལ་བཤད་དང་ ཅེག་སམ་དྲན་ཐོ་ འཚོལ་ཞིབ་ཨའུཊི་པུཊི་ འབྲེལ་ལམ་སྙན་ཞུ་ དེ་ལས་ `artifacts/docs_preview/W2/` འོག་ལུ་གསོག་འཇོག་འབད་ཡོད་པའི་ པོརོ་སི་ཡིག་བསྒྱུར་འདི་ ཚོད་བལྟ་འབད།
+- [x] I18NT0000001X གསལ་གཞི་པར་རིས་ཚུ་ (`docs.preview.integrity`, I18NI000000024X, I18NI0000000025X) འདི་ W2 སྔོན་སྒྲིག་སྒོ་སྒྲིག་གི་དོན་ལུ་ བཟུང་ཡོདཔ་ཨིན།
+- [x] བསྐྱར་ཞིབ་པ་ཨའི་ཌི་ཚུ་དང་ ཞུ་བ་གི་ཤོག་འཛིན་ དེ་ལས་ ཆ་འཇོག་དུས་ཚོད་ཚུ་ བཏང་པའི་ཧེ་མ་ མི་རློབས་བཙུགས་ཡོད་པའི་ ཐོ་ཡིག་ཐིག་ཁྲམ་ཚུ་ མགྲོན་བརྡ་འབད། (རྗེས་སོར་ W2 དབྱེ་ཚན་ནང་བལྟ།)
 
-Keep this plan updated; the tracker references it so the DOCS-SORA roadmap can see exactly what remains before W2 invitations go out.
+འཆར་གཞི་འདི་དུས་མཐུན་བཟོ་དགོ། བརྟག་ཞིབ་པ་འདི་གིས་ འདི་ལུ་གཞི་བསྟུན་འབདཝ་ཨིནམ་ལས་ DOCS-I1NT00000007X གི་ལམ་སྟོན་འདི་གིས་ W2 མགྲོན་བརྡ་མ་འབད་བའི་ཧེ་མ་ ལྷག་ལུས་ཚུ་ ག་ཅི་ཨིན་ན་ ཏན་ཏན་སྦེ་མཐོང་ཚུགས།

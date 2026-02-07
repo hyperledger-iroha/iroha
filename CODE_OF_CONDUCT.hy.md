@@ -7,51 +7,52 @@ generator: scripts/sync_docs_i18n.py
 source_hash: ece3b82ce3096e15d3cc4524fbb6033ab3fa5119da561a1aec40306564ba0193
 source_last_modified: "2025-12-29T18:16:34.771616+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Contributor Covenant Code of Conduct
+# Contributor Covenant Վարքագծի կանոններ
 
-## Our Pledge
+## Մեր գրավականը
 
-In the interest of fostering an open and welcoming environment, we as contributors and maintainers pledge to making participation in our project and our community a harassment-free experience for everyone, regardless of age, body size, disability, ethnicity, gender identity and expression, level of experience, nationality, personal appearance, race, religion, or sexual identity and orientation.
+Բաց և հյուրընկալ միջավայր ստեղծելու շահերից ելնելով, մենք՝ որպես ներդրողներ և պահպանողներ, խոստանում ենք մեր ծրագրին և մեր համայնքին մասնակցությունը դարձնել ոտնձգություններից զերծ փորձ բոլորի համար՝ անկախ տարիքից, մարմնի չափսից, հաշմանդամությունից, էթնիկ պատկանելությունից, սեռային ինքնությունից և արտահայտչությունից, փորձի մակարդակից, ազգությունից, անձնական արտաքինից, ռասայից, կրոնից կամ սեռական ինքնությունից և կողմնորոշումից:
 
-## Our Standards
+## Մեր ստանդարտները
 
-Examples of behavior that contributes to creating a positive environment include:
+Դրական միջավայր ստեղծելուն նպաստող վարքագծի օրինակները ներառում են.
 
-* Using welcoming and inclusive language
-* Being respectful of differing viewpoints and experiences
-* Gracefully accepting constructive criticism
-* Focusing on what is best for the community
-* Showing empathy towards other community members
+* Ողջույնի և ներառական լեզվի օգտագործումը
+* Տարբեր տեսակետների և փորձառությունների նկատմամբ հարգալից վերաբերմունք
+* Նրբորեն ընդունել կառուցողական քննադատությունը
+* Կենտրոնանալով համայնքի համար լավագույնի վրա
+* Համայնքի այլ անդամների հանդեպ կարեկցանքի դրսևորում
 
-Examples of unacceptable behavior by participants include:
+Մասնակիցների կողմից անընդունելի վարքագծի օրինակները ներառում են.
 
-* The use of sexualized language or imagery and unwelcome sexual attention or advances
-* Trolling, insulting/derogatory comments, and personal or political attacks
-* Public or private harassment
-* Publishing others' private information, such as a physical or electronic address, without explicit permission
-* Other conduct which could reasonably be considered inappropriate in a professional setting
+* Սեռական լեզվի կամ պատկերների օգտագործումը և անցանկալի սեռական ուշադրությունը կամ առաջընթացը
+* Թրոլինգ, վիրավորական/նվաստացնող մեկնաբանություններ և անձնական կամ քաղաքական հարձակումներ
+* Հասարակական կամ մասնավոր ոտնձգություն
+* Հրապարակել ուրիշների անձնական տվյալները, ինչպիսիք են ֆիզիկական կամ էլեկտրոնային հասցեն, առանց հստակ թույլտվության
+* Այլ վարքագիծ, որը ողջամտորեն կարող է անպատշաճ համարվել մասնագիտական միջավայրում
 
-## Our Responsibilities
+## Մեր պարտականությունները
 
-Project maintainers are responsible for clarifying the standards of acceptable behavior and are expected to take appropriate and fair corrective action in response to any instances of unacceptable behavior.
+Ծրագրի ղեկավարները պատասխանատու են ընդունելի վարքագծի չափորոշիչների հստակեցման համար և ակնկալվում է, որ կձեռնարկեն համապատասխան և արդար ուղղիչ գործողություններ՝ ի պատասխան անընդունելի վարքագծի ցանկացած դեպքի:
 
-Project maintainers have the right and responsibility to remove, edit, or reject comments, commits, code, wiki edits, issues, and other contributions that are not aligned to this Code of Conduct, or to ban temporarily or permanently any contributor for other behaviors that they deem inappropriate, threatening, offensive, or harmful.
+Նախագծի սպասարկողներն իրավունք և պատասխանատվություն ունեն հեռացնելու, խմբագրելու կամ մերժելու մեկնաբանությունները, պարտավորությունները, ծածկագիրը, վիքի խմբագրումները, խնդիրները և այլ ներդրումներ, որոնք չեն համապատասխանում սույն Վարքագծի կանոնագրքին, կամ ժամանակավորապես կամ ընդմիշտ արգելել ցանկացած մասնակցի այլ վարքագծի համար, որը նրանք համարում են անպատշաճ, սպառնացող, վիրավորական կամ վնասակար:
 
-## Scope
+## Շրջանակ
 
-This Code of Conduct applies both within project spaces and in public spaces when an individual is representing the project or its community. Examples of representing a project or community include using an official project e-mail address, posting via an official social media account, or acting as an appointed representative at an online or offline event. Representation of a project may be further defined and clarified by project maintainers.
+Սույն Վարքականոնը կիրառվում է ինչպես ծրագրի տարածքներում, այնպես էլ հանրային տարածքներում, երբ անհատը ներկայացնում է նախագիծը կամ նրա համայնքը: Նախագիծը կամ համայնքը ներկայացնելու օրինակները ներառում են ծրագրի պաշտոնական էլ. փոստի հասցեի օգտագործումը, սոցիալական մեդիայի պաշտոնական հաշվի միջոցով հրապարակումը կամ որպես նշանակված ներկայացուցիչ հանդես գալը առցանց կամ անցանց միջոցառման ժամանակ: Ծրագրի ներկայացումը կարող է լրացուցիչ սահմանվել և պարզաբանվել ծրագրի սպասարկողների կողմից:
 
-## Enforcement
+## Հարկադիր
 
-Instances of abusive, harassing, or otherwise unacceptable behavior may be reported by contacting the project team [here](./CONTRIBUTING.md#contact). All complaints will be reviewed and investigated and will result in a response that is deemed necessary and appropriate to the circumstances. The project team is obligated to maintain confidentiality with regard to the reporter of an incident. Further details of specific enforcement policies may be posted separately.
+Վիրավորական, անհանգստացնող կամ այլ կերպ անընդունելի վարքագծի դեպքերը կարող են հաղորդվել՝ կապվելով ծրագրի թիմի հետ [այստեղ] (./CONTRIBUTING.md#contact): Բոլոր բողոքները կուսումնասիրվեն և կուսումնասիրվեն և կհանգեցնեն պատասխանի, որը կհամարվի անհրաժեշտ և համապատասխան հանգամանքներին: Ծրագրի թիմը պարտավոր է գաղտնիություն պահպանել միջադեպի մասին զեկուցողի նկատմամբ: Հատուկ կիրարկման քաղաքականության լրացուցիչ մանրամասները կարող են տեղադրվել առանձին:
 
-Project maintainers who do not follow or enforce the Code of Conduct in good faith may face temporary or permanent repercussions as determined by other members of the project's leadership.
+Ծրագրի պահպանողները, ովքեր բարեխղճորեն չեն հետևում կամ չեն կիրառում Վարքագծի կանոնները, կարող են բախվել ժամանակավոր կամ մշտական ​​հետևանքների, ինչպես որոշվում է ծրագրի ղեկավարության այլ անդամների կողմից:
 
-## Attribution
+## Վերագրում
 
-This Code of Conduct is adapted from the [Contributor Covenant][homepage], version 1.4, available at [http://contributor-covenant.org/version/1/4][version]
+Այս Վարքականոնը մշակված է [Contributor Covenant][homepage], տարբերակ 1.4, հասանելի է [http://contributor-covenant.org/version/1/4][տարբերակ]
 
 [homepage]: http://contributor-covenant.org
 [version]: http://contributor-covenant.org/version/1/4/

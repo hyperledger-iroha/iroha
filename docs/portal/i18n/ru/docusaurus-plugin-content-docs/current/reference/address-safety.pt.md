@@ -4,43 +4,43 @@ direction: ltr
 source: docs/portal/docs/reference/address-safety.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: Seguranca e acessibilidade de enderecos
-description: Requisitos de UX para apresentar e compartilhar enderecos Iroha com seguranca (ADDR-6c).
+Название: Seguranca e acessibilidade de enderecos
+описание: Реквизиты UX для представления и сравнения окон Iroha с обеспечением безопасности (ADDR-6c).
 ---
 
-Esta pagina captura o entregavel de documentacao ADDR-6c. Aplique estas restricoes a wallets, explorers, ferramentas de SDK e qualquer superficie do portal que renderize ou aceite enderecos voltados para pessoas. O modelo de dados canonico vive em `docs/account_structure.md`; a checklist abaixo explica como expor esses formatos sem comprometer seguranca ou acessibilidade.
+Эта страница захватывает или отправляет документацию ADDR-6c. Это приложение ограничивает доступ к кошелькам, проводникам, компонентам SDK и к тому, что делает портал более удобным для рендеринга или создания напряжения для людей. Каноническая модель для жизни в `docs/account_structure.md`; контрольный список будет объяснен как экспортные форматы, которые должны быть проверены или обеспечены.
 
 ## Fluxos seguros de compartilhamento
 
-- Por padrao, toda acao de copiar/compartilhar deve usar o endereco IH58. Exiba o dominio resolvido como contexto de apoio para manter a string com checksum em destaque.
-- Ofereca um atalho de "Compartilhar" que inclua o endereco em texto puro e um QR code derivados do mesmo payload. Permita que a pessoa usuaria inspecione ambos antes de confirmar.
-- Quando o espaco exigir truncagem (cards pequenos, notificacoes), mantenha o prefixo legivel inicial, use reticencias e preserve os ultimos 4-6 caracteres para que a ancora do checksum sobreviva. Disponibilize um gesto de toque/atalho de teclado para copiar a string completa sem truncagem.
-- Evite desincronizacao com o clipboard exibindo um toast de confirmacao que mostre exatamente a string IH58 copiada. Quando houver telemetria, conte tentativas de copy versus acoes de share para detectar regressoes de UX rapidamente.
+- Для начала, сейчас будет произведено копирование/сравнение, которое нужно использовать или сделать IH58. Exiba или dominio resolved como contexto de apoio, чтобы указать строку с контрольной суммой в конце.
+- Предлагается общий раздел «Compartilhar», включающий или отображающий чистый текст и производные от QR-кода для основной полезной нагрузки. Разрешите пройти проверку перед подтверждением.
+- Когда вы используете дополнительные карты (карточки, уведомления), указывайте или вводите начальный префикс, используйте reticencias и сохраняйте последние 4–6 символов, чтобы сохранить контрольную сумму. Используйте этот жест/всё тело для копирования полной строки без обрезки.
+- Отмените синхронизацию с помощью буфера обмена или выведите всплывающее сообщение о подтверждении того, что наиболее скопирована строка IH58. Когда появляется телеметрия, сравнивайте пробные копии и действия, которые помогут обнаружить быстрый регресс UX.
 
-## Salvaguardas para IME e entrada
+## Спасение для IME и входа
 
-- Rejeite entrada non-ASCII em campos de endereco. Quando surgirem artefatos de IME (full width, Kana, marcas de tom), mostre um aviso inline explicando como trocar o teclado para entrada latina antes de tentar novamente.
-- Forneca uma area de paste em texto puro que remova marcas combinatorias e substitua espacos em branco por espacos ASCII antes da validacao. Isso evita perda de progresso quando o usuario desativa o IME no meio do fluxo.
-- Fortaleca a validacao contra zero-width joiners, variation selectors e outros code points Unicode furtivos. Registre a categoria de code point rejeitada para que suites de fuzzing possam incorporar a telemetria.
+- Не допускайте ввода символов, отличных от ASCII, на территории. Когда вы выполняете артефатос IME (полная ширина, кана, метки тома), обратите внимание на встроенные пояснения как троакар или покрытие для входа в латина перед новым тентарем.
+- Для вставки текста необходимо удалить комбинаторные метки и заменить испанские дома на открытии для испанских ASCII перед проверкой. Isso evita perda de Progresso Quando or Desativa or IME no meio do fluxo.
+- Поддержка и проверка соединений нулевой ширины, селекторов вариантов и дополнительных кодовых точек Unicode, скрытых. Зарегистрируйте категорию кодовой точки, используемую для того, чтобы наборы фаззинговых устройств включали телеметрию.
 
-## Expectativas para tecnologias assistivas
+## Ожидания для вспомогательных технологий
 
-- Anote cada bloco de endereco com `aria-label` ou `aria-describedby` que detalhe o prefixo legivel e agrupe o payload em blocos de 4-8 caracteres ("ih dash b three two ..."). Isso impede que leitores de tela produzam um fluxo ininteligivel de caracteres.
-- Anuncie eventos de copy/share bem-sucedidos por meio de uma live region "polite". Inclua o destino (clipboard, share sheet, QR) para que a pessoa usuaria saiba que a acao foi concluida sem mover o foco.
-- Forneca texto `alt` descritivo para pre-visualizacoes de QR (por exemplo, "Endereco IH58 para `<account>` na chain `0x1234`"). Coloque ao lado do canvas do QR um botao "Copiar endereco em texto" para pessoas com baixa visao.
+- Обратите внимание на каждый блок-блок с кодом `aria-label` или `aria-describedby`, который содержит подробную информацию о префиксе legivel e agrupe или полезной нагрузке в блоках из 4-8 символов («ih тире b три два ...»). Это мешает тому, что производители продуктов создают поток неразумных персонажей.
+- Объявление о событиях копирования/поделения будет успешным для моего живого региона «вежливо». Включите место назначения (буфер обмена, общий лист, QR), чтобы пользователь мог найти способ сделать вывод, который можно было сделать или сфокусировать.
+- Текст `alt` с описанием для предварительной визуализации QR (например, «Endereco IH58 для `<account>` в цепочке `0x1234`»). Нанесите на холст QR-код с надписью «Copiar endereco em texto», чтобы люди могли получить визу.
 
-## Enderecos comprimidos somente Sora
+## Enderecos comprimidos somente Sora- Стробирование: скрыть строку `sora...` для явного подтверждения. Подтверждаем, что этот формат работает в цепях Sora Nexus.
+- Поворот: теперь исправление включает в себя значок «Somente Sora» и всплывающую подсказку, поясняющую, что выходит за пределы exigem или формата IH58.
+- Защита: если активная дискриминация цепи для alocacao Nexus, отмена или отказ от компрометации и перенаправление или использование напряжения для IH58.
+- Телеметрия: регистрируйте количество запросов или форматируйте их, запрашивайте и копируйте для того, чтобы в сборнике происшествий были обнаружены изображения аварийных событий.
 
-- Gating: oculte a string comprimida `sora...` atras de uma confirmacao explicita. A confirmacao deve deixar claro que esse formato so funciona em chains Sora Nexus.
-- Rotulagem: toda ocorrencia deve incluir um badge visivel "Somente Sora" e um tooltip explicando por que outras redes exigem o formato IH58.
-- Protecoes: se o discriminante de chain ativo nao for a alocacao Nexus, recuse gerar o endereco comprimido e redirecione o usuario de volta para IH58.
-- Telemetria: registre quantas vezes o formato comprimido e solicitado e copiado para que o playbook de incidentes consiga detectar picos de compartilhamento acidental.
+## Квалификационные ворота
 
-## Gates de qualidade
-
-- Estenda testes de UI automatizados (ou suites de acessibilidade no storybook) para garantir que os componentes de endereco exponham a metadata ARIA necessaria e que mensagens de rejeicao de IME aparecam.
-- Inclua cenarios de QA manual para entrada via IME (kana, pinyin), passagem com leitor de tela (VoiceOver/NVDA) e copia via QR em temas de alto contraste antes de lancar.
-- Torne esses checks visiveis nas checklists de release, juntamente com os testes de paridade IH58, para que regressoes continuem bloqueadas ate serem corrigidas.
+- Автоматизированные тесты пользовательского интерфейса (или наборы дополнительных возможностей без сборника рассказов) для гарантии того, что компоненты визуального оформления отображают необходимые метаданные ARIA и сообщения об обновлении IME.
+- Включены сценарии руководства по обеспечению качества для ввода через IME (кана, пиньинь), перехода с помощью текстового сообщения (VoiceOver/NVDA) и копирования через QR в темах высокого контраста перед ланкаром.
+- Проводятся визуальные проверки в контрольных списках освобождения, одновременно с тестами по освобождению IH58, чтобы регресс продолжал блокироваться и подвергаться серьезным исправлениям.

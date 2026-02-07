@@ -8,25 +8,26 @@ source_hash: d4493e69ce57c4f691f368fb13c1bbe96e2c73991dfb39045753b5652d2f10a9
 source_last_modified: "2026-01-28T17:11:30.702818+00:00"
 translation_last_reviewed: 2026-02-07
 title: Local → Global Address Toolkit
+translator: machine-google-reviewed
 ---
 
-This page mirrors [`docs/source/sns/local_to_global_toolkit.md`](../../../source/sns/local_to_global_toolkit.md)
-from the mono-repo. It packages the CLI helpers and runbooks required by roadmap item **ADDR-5c**.
+ཤོག་ངོས་འདི་ [`docs/source/sns/local_to_global_toolkit.md`](../../../source/sns/local_to_global_toolkit.md)
+མོ་ནོ་-རི་པོ་ལས་ཨིན། འདི་གིས་ སི་ཨེལ་ཨའི་གྲོགས་རམ་དང་ རའུན་དེབ་ཚུ་ ལམ་གྱི་སབ་ཁྲ་ **ADDR-5c** ཐུམ་སྒྲིལ་འབདཝ་ཨིན།
 
-## Overview
+## སྤྱི་མཐོང་།
 
-- `scripts/address_local_toolkit.sh` wraps the `iroha` CLI to produce:
-  - `audit.json` — structured output from `iroha tools address audit --format json`.
-  - `normalized.txt` — converted preferred IH58 / second-best compressed (`sora`) literals for every Local-domain selector.
-- Pair the script with the address ingest dashboard (`dashboards/grafana/address_ingest.json`)
-  and Alertmanager rules (`dashboards/alerts/address_ingest_rules.yml`) to prove the Local-8 /
-  Local-12 cutover is safe. Watch the Local-8 and Local-12 collision panels plus the
-  `AddressLocal8Resurgence`, `AddressLocal12Collision`, and `AddressInvalidRatioSlo` alerts before
-  promoting manifest changes.
-- Reference the [Address Display Guidelines](address-display-guidelines.md) and the
-  [Address Manifest runbook](../../../source/runbooks/address_manifest_ops.md) for UX and incident-response context.
+- I18NI000000006X གིས་ བཟོ་སྐྲུན་འབད་ནིའི་དོན་ལུ་ I18NI000000007X CLI གིས་ བཀབ་ཡོདཔ་ཨིན།
+  - `audit.json` — `iroha tools address audit --format json` ལས་ གཞི་བཀོད་འབད་ཡོད་པའི་ཐོན་འབྲས་.
+  - I18NI00000000010X — གཞི་བསྒྱུར་འབད་ཡོད་པའི་ IH58 / གཉིས་པ་ བསྡམ་བཞག་ཡོད་པའི་ (I18NI000000011X) གི་ གནས་ཁོངས་-མངའ་ཁོངས་སེལ་འཐུ་འབད་མི་རེ་རེ་གི་དོན་ལུ་ཨིན།
+- ཁ་བྱང་བཀུག་མི་ ཌེཤ་བོརཌི་ (I18NI0000012X) དང་གཅིག་ཁར་ ཡིག་ཚུགས་འདི་ ཆ་སྒྲིག་འབད།
+  དང་ དྲན་སྐུལ་འཕྲུལ་ཆས་ལམ་ལུགས་ (`dashboards/alerts/address_ingest_rules.yml`) གིས་ ས་གནས་-༨ / བདེན་དཔང་འབད་ནིའི་དོན་ལུ་ བདེན་ཁུངས་བཀལ་ནི།
+  ས་གནས་-༡༢ གི་བཏོག་བཏོགཔ་འདི་ ཉེན་སྲུང་ཡོདཔ་ཨིན། ས་གནས་-༨ དང་ ཉེ་གནས་-༡༢ ཁ་ཐུག་རྐྱབ་མི་ པེ་ནཱལ་ཚུ་ མཉམ་བསྡོམས་ བལྟ།
+  `AddressLocal8Resurgence`, `AddressLocal12Collision`, དང་ I18NI000000016X
+  གསལ་སྟོན་གསལ་སྟོན་འགྱུར་བ་འགྱོཝ་ཨིན།
+- [ཁ་བྱང་བཀྲམ་སྟོན་ལམ་སྟོན་](I18NU0000003X) དང་།
+  [ཁ་བྱང་ངོ་མའི་རན་དེབ་](../../../source/runbooks/address_manifest_ops.md) ཡུ་ཨེགསི་དང་བྱུང་རྐྱེན་གྱི་ལན་འདེབས་སྐབས་དོན་ནང་།
 
-## Usage
+## ལག་ལེན།
 
 ```bash
 scripts/address_local_toolkit.sh \
@@ -36,24 +37,24 @@ scripts/address_local_toolkit.sh \
   --format ih58
 ```
 
-Options:
+གདམ་ཁ་ཚུ།
 
-- `--format compressed` for `sora…` output instead of IH58.
-- `--no-append-domain` to emit bare literals.
-- `--audit-only` to skip the conversion step.
-- `--allow-errors` to keep scanning when malformed rows appear (matches the CLI behaviour).
+- IH58 གི་ཚབ་ལུ་ `sora…` ཐོན་འབྲས་ཀྱི་དོན་ལུ་ I18NI000000017X གི་དོན་ལུ་ཨིན།
+- `--no-append-domain` ཡིག་གཟུགས་མེད་པའི་རིགས་ཚུ་བཏོན་ནིའི་དོན་ལུ་ཨིན།
+- གཞི་བསྒྱུར་གྱི་གོ་རིམ་འདི་ གོམ་འགྱོ་ནིའི་དོན་ལུ་ `--audit-only` ཨིན།
+- ནོར་འཁྲུལ་ཅན་གྱི་གྱལ་ཚུ་འཐོན་པའི་སྐབས་ པར་ལེན་བཞག་ནི་ལུ་ `--allow-errors` (CLI སྤྱོད་ལམ་དང་མཐུན་སྒྲིག་)།
 
-The script writes the artefact paths at the end of the run. Attach both files to
-your change-management ticket alongside the Grafana screenshot that proves zero
-Local-8 detections and zero Local-12 collisions for ≥30 days.
+ཡིག་ཆ་འདི་གིས་ རྒྱུག་པའི་མཇུག་ལུ་ ཅ་རྙིང་འགྲུལ་ལམ་ཚུ་བྲིཝ་ཨིན། ཡིག་སྣོད་ཚུ་གཉིས་ཆ་རང་ལུ་མཉམ་སྦྲགས་འབད།
+ཁྱོད་ཀྱི་བསྒྱུར་བཅོས་འཛིན་སྐྱོང་གི་ཤོག་བྱང་ GrafanaX གསལ་གཞི་དང་མཉམ་དུ་ཀླད་ཀོར་བདེན་དཔང་འབད་བའི་བདེན་དཔང་འབདཝ་ཨིན།
+ས་གནས་-༨ བརྟག་དཔྱད་དང་ ཀླད་ཀོར་གྱི་ས་གནས་-༡༢ ཁ་ཐུག་རྐྱབ་མི་ཚུ་ ≥30dys གི་དོན་ལུ་ཨིན།
 
-## CI integration
+## CI མཉམ་བསྡོམས།
 
-1. Run the script in a dedicated job and upload its outputs.
-2. Block merges when `audit.json` reports Local selectors (`domain.kind = local12`).
-   at its default `true` value (only override to `false` on dev/test clusters when
-   diagnosing regressions) and add
-   `iroha tools address normalize --fail-on-warning --only-local` to CI so regression
-   attempts fail before hitting production.
+༡ ཡིག་ཆ་འདི་ བརྩོན་ཤུགས་ཅན་གྱི་ལཱ་ནང་ གཡོག་བཀོལ་ཞིནམ་ལས་ དེ་གི་ཐོན་འབྲས་ཚུ་ སྐྱེལ་བཙུགས་འབད།
+2. I18NI000000022X གིས་ ཉེ་གནས་འདེམས་སྒྲུག་ཚུ་སྙན་ཞུ་འབད་བའི་སྐབས་ བཀག་ཆ་འབདཝ་ཨིན། (`domain.kind = local12`)
+   དེ་གི་སྔོན་སྒྲིག་ `true` གནས་གོང་ (Dev/test clusters ལུ་ `false` ལུ་རྐྱངམ་ཅིག་ བཀག་ཆ་འབདཝ་ཨིན།
+   རི་གེ་རེ་ཤཱན་རྟགས་དཔྱད་འབད་ནི) དང་བསྡོམས་པ།
+   I18NI000000026X ལུ་ CI དེ་ ཕྱིར་ལོག་
+   བཟོ་བསྐྲུན་མ་འབད་བའི་ཧེ་མ་ དཔའ་བཅམ་མི་ཚུ་ འཐུས་ཤོར་བྱུང་ཡོདཔ།
 
-See the source document for more details, sample evidence checklists, and the release-note snippet you can reuse when announcing the cutover to customers.
+ཁ་གསལ་གྱི་དོན་ལུ་ འབྱུང་ཁུངས་ཡིག་ཆ་འདི་བལྟ། དཔེ་ཚད་སྒྲུབ་བྱེད་ཐོ་ཡིག་དང་ གསར་བཏོན་དྲན་འཛིན་ པར་ལེན་ཚུ་ ཁྱོད་ཀྱིས་ ཚོང་མགྲོན་པ་ཚུ་ལུ་ བཏོག་བཏོགཔ་ཨིན་པའི་གསལ་བསྒྲགས་འབད་བའི་སྐབས་ ལོག་སྟེ་ལག་ལེན་འཐབ་བཏུབ།

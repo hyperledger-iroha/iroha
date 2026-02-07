@@ -7,19 +7,20 @@ generator: scripts/sync_docs_i18n.py
 source_hash: d5dd8e1b666be34bb9101898d355fe5e3c6efc32500c238c72a6ef9228c157f0
 source_last_modified: "2026-01-22T16:26:46.568155+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Repo Settlement Runbook
+# Repo གཞིས་ཆགས་རུན་དེབ།
 
-This guide documents the deterministic flow for repo and reverse-repo agreements in Iroha.
-It covers CLI orchestration, SDK helpers, and the expected governance knobs so operators can
-initiate, margin, and unwind agreements without writing raw Norito payloads. For governance
-checklists, evidence capture, and fraud/rollback procedures see
-[`repo_ops.md`](./repo_ops.md), which satisfies roadmap item F1.
+ལམ་སྟོན་འདི་གིས་ Iroha ནང་ repo དང་ ཕྱི་འགྱུར་ Repo གན་ཡིག་ཚུ་གི་དོན་ལུ་ གཏན་འབེབས་ཀྱི་རྒྱུན་རིམ་འདི་ ཡིག་ཐོག་ལུ་བཀོད་དེ་ཡོདཔ་ཨིན།
+འདི་གིས་ CLI གི་སྡེ་ཚན་དང་ SDK གྲོགས་རམ་པ་ དེ་ལས་ རེ་བ་བསྐྱེད་མི་ གཞུང་སྐྱོང་གི་ མཛུབ་མོ་ཚུ་ ཁྱབ་ཚུགསཔ་ཨིན།
+Norito གི་དངུལ་ཕོགས་ཚུ་ མ་བྲིས་པར་ མཐའ་མཚམས་ དེ་ལས་ གན་ཡིག་ཚུ་ འགོ་བཙུགསཔ་ཨིན། གཞུང་སྐྱོང་གི་དོན་ལུ་
+བརྟག་ཞིབ་ཐོ་ཡིག་དང་ སྒྲུབ་བྱེད་འཛིན་བཟུང་ དེ་ལས་ གཡོ་སྒྱུ་/རྒྱབ་ལོག་བྱ་རིམ་ཚུ་ མཐོངམ་ཨིན།
+[`repo_ops.md`](./repo_ops.md) གིས་ ལམ་གྱི་ས་ཁྲ་དངོས་པོ་ F1 བསྒྲུབ་ཐུབ།
 
-## CLI commands
+## CLI བཀའ་བཀོད།
 
-The `iroha app repo` command groups repo-specific helpers:
+`iroha app repo` བརྡ་བཀོད་སྡེ་ཚན་ repoདམིགས་བསལ་གྱི་གྲོགས་རམ་པ་ཚུ།
 
 ```bash
 # Stage an initiation instruction without submitting
@@ -57,17 +58,17 @@ iroha --config client.toml repo margin --agreement-id daily_repo
 iroha --config client.toml repo margin-call --agreement-id daily_repo
 ```
 
-* `repo initiate` and `repo unwind` respect `--input/--output` so the generated `InstructionBox`
-  payloads can be piped into other CLI flows or submitted immediately.
-* Pass `--custodian <account>` to route collateral to a tri-party custodian. When omitted, the
-  counterparty receives the pledge directly (bilateral repo).
+* `repo initiate` དང་ `repo unwind` གིས་ `--input/--output` དེ་ལུ་བརྟེན་ གསར་བཏོན་འབད་མི་ `InstructionBox`
+  པེ་ལོཌི་ཚུ་ གཞན་མི་སི་ཨེལ་ཨའི་ རྒྱུན་འགྲུལ་ནང་ ཡང་ན་ དེ་འཕྲོ་ལས་ བཙུགས་ཚུགས།
+* `--custodian <account>` འདི་ ཚོགས་པའི་བདག་འཛིན་པ་ལུ་ བརྟན་བཞུགས་འབད་ནི་གི་དོན་ལུ་ བརྡ་སྟོན། བཤུབ་པའི་སྐབས་ལུ།
+  མཉམ་འབྲེལ་གྱི་ཁས་བླངས་འདི་ ཐད་ཀར་དུ་ཐོབ་ཨིན།
 * `repo margin` queries the ledger via `FindRepoAgreements` and reports the next expected margin
-  timestamp (in milliseconds) alongside whether a margin callback is currently due.
-* `repo margin-call` appends a `RepoMarginCallIsi` instruction, recording the margin checkpoint and
-  emitting events for all participants. Calls are rejected if the cadence has not elapsed or if the
-  instruction is submitted by a non-participant.
+  times tamp (མི་ལི་སྐར་ཆ་ནང་) ད་ལྟོ་མཐའ་མཚམས་འབོད་བརྡ་ཅིག་དགོཔ་ཨིན་ན་མེན་ན་ དེ་དང་གཅིག་ཁར་ཨིན།
+* `repo margin-call` གིས་ `RepoMarginCallIsi` གི་བཀོད་རྒྱ་ཅིག་ ཟུར་ཐོ་ཞིབ་དཔྱད་ས་ཚིགས་ཐོ་བཀོད་འབད་ཡོདཔ།
+  བཅའ་མར་གཏོགས་མི་ཆ་མཉམ་གྱི་དོན་ལུ་ ལས་རིམ་ཚུ་བཏོན་ནི། གལ་སྲིད་ གྱངས་ཁ་འདི་ མ་འགྱོ་བ་ཅིན་ ཡང་ན་ འདི་ མ་འགྱོ་བ་ཅིན་ ཁ་པར་ཚུ་ ངོས་ལེན་འབདཝ་ཨིན།
+  བཀོད་རྒྱ་འདི་ བཅའ་མར་གཏོགས་མི་མེན་མི་ཅིག་གིས་ བཙུགསཔ་ཨིན།
 
-## Python SDK helpers
+## པའི་ཐོན་ཨེས་ཌི་ཀེ་རོགས་སྐྱོར་པ།
 
 ```python
 from iroha_python import (
@@ -111,13 +112,13 @@ record = RepoAgreementRecord.from_payload(agreements[0])
 next_margin = record.next_margin_check_after(at_timestamp_ms=now_ms)
 ```
 
-* Both helpers normalise numeric quantities and metadata fields before invoking the PyO3 bindings.
-* `RepoAgreementRecord` mirrors the runtime schedule calculation so off-ledger automation can
-  determine when callbacks are due without recomputing the cadence manually.
+* གྲོགས་རམ་པ་གཉིས་ཆ་ར་གིས་ PyO3 བཱའིན་ཌིང་ཚུ་ འབོད་བརྡ་མ་འབད་བའི་ཧེ་མ་ ཨང་གྲངས་ཀྱི་འབོར་ཚད་དང་ མེ་ཊ་ཌེ་ཊ་ས་སྒོ་ཚུ་ སྤྱིར་བཏང་བཟོཝ་ཨིན།
+* `RepoAgreementRecord` རན་ཊའིམ་ལས་རིམ་རྩིས་སྟོན་འདི་ མེར་རི་བཟོཝ་ཨིན་ དེ་འབདཝ་ལས་ མཉམ་གྲངས་ཀྱི་ རང་བཞིན་གྱིས་ རང་བཞིན་གྱིས་ འབད་ཚུགས།
+  ལག་ཐོག་ལས་ གདམ་ཁའི་ གདངས་འདི་ ལོག་རྩིས་མ་རྐྱབ་པར་ ལོག་འབོད་བརྡ་ཚུ་ ག་དུས་ཨིན་ན་ གཏན་འབེབས་བཟོ།
 
-## DvP / PvP settlements
+## DvP / PvP གཞིས་ཆགས་ཚུ།
 
-The `iroha app settlement` command stages delivery-versus-payment and payment-versus-payment instructions:
+`iroha app settlement` བརྡ་བཀོད་གནས་རིམ་གྱི་ སྐྱེལ་འདྲེན་གྱི་ མཐུན་རྐྱེན་ཚུ་ སྤྲོད་ནི་དང་ དངུལ་སྤྲོད་ཀྱི་ མཐུན་རྐྱེན་སྤྲོད་ནིའི་ བཀོད་རྒྱ་ཚུ།
 
 ```bash
 # Delivery leg first, then payment
@@ -153,20 +154,20 @@ iroha --config client.toml --output \
   --iso-xml-out trade_pvp.xml
 ```
 
-* Leg quantities accept integral or decimal values and are validated against the asset precision.
-* `--atomicity` accepts `all-or-nothing`, `commit-first-leg`, or `commit-second-leg`. Use these modes
-  with `--order` to express which leg remains committed if subsequent processing fails (`commit-first-leg`
-  keeps the first leg applied; `commit-second-leg` retains the second).
-* CLI invocations emit empty instruction metadata today; use the Python helpers when settlement-level
-  metadata needs to be attached.
-* See [`settlement_iso_mapping.md`](./settlement_iso_mapping.md) for the ISO 20022 field mapping that
-  backs these instructions (`sese.023`, `sese.025`, `colr.007`, `pacs.009`, `camt.054`).
-* Pass `--iso-xml-out <path>` to have the CLI emit a canonical XML preview alongside the Norito
-  instruction; the file follows the mapping above (`sese.023` for DvP, `sese.025` for PvP`). Pair the
-  flag with `--iso-reference-crosswalk <path>` so the CLI verifies `--delivery-instrument-id` against the
-  same snapshot Torii uses during runtime admission.
+* ལེག་འབོར་ཚད་ཚུ་གིས་ ཆ་ཤས་གཙོ་བོ་ཡང་ན་ བཅུ་ཚག་གནས་གོང་ཚུ་ངོས་ལེན་འབདཝ་ཨིནམ་དང་ འདི་ཚུ་ རྒྱུ་དངོས་གཏན་གཏན་ལུ་ བདེན་དཔྱད་འབདཝ་ཨིན།
+* `--atomicity` གིས་ `all-or-nothing`, `commit-first-leg`, ཡང་ན་ `commit-second-leg`, ཡང་ན་ `commit-second-leg`. ཐབས་ལམ་འདི་ཚུ་ལག་ལེན་འཐབ།
+  18NI000000029X དང་མཉམ་དུ། དེ་རྗེས་ཀྱི་ལས་སྦྱོར་འཐུས་ཤོར་བྱུང་ན། (`commit-first-leg` (`commit-first-leg`)
+  རྐངམ་དང་པམ་འདི་འཇུག་སྤྱོད་འབད་བཞགཔ་ཨིན། `commit-second-leg` གིས་ གཉིས་པ་འདི་བཞག་ཡོདཔ་ཨིན།)
+* CLI འབོད་བརྡ་ཚུ་གིས་ ད་རིས་ བཀོད་རྒྱ་སྟོང་པའི་མེ་ཊ་ཌེ་ཊ་ བཏོནམ་ཨིན། གཞིས་ཆགས་གནས་རིམ་གྱི་སྐབས་ལུ་ པའི་ཐོན་གྲོགས་རམ་པ་ཚུ་ལག་ལེན་འཐབ།
+  མེ་ཊ་ཌེ་ཊ་ མཉམ་སྦྲགས་འབད་དགོ།
+* [`settlement_iso_mapping.md`](ISO 20022 ས་ཁྲ་བཟོ་བའི་དོན་ལུ་ [`settlement_iso_mapping.md`](./settlement_iso_mapping.md) ལུ་བལྟ།
+  ཕྱིར་ལོག་འདི་ (`sese.023`, `sese.025`, `colr.007`, `pacs.009`, `camt.054`,
+* `--iso-xml-out <path>` འདི་ Norito གི་མཉམ་དུ་ ཀེ་ནོ་ནིག་ཨེགསི་ཨེམ་ཨེལ་སྔོན་ལྟ་ཅིག་ བཏོན་གཏང་ནི་ལུ་ བརྒལ་དགོ།
+  བཀོད་རྒྱ་; ཡིག་སྣོད་འདི་གིས་ གོང་ལུ་སབ་ཁྲ་བཟོ་ནི་ (`sese.023`, DvP, `sese.025` གི་དོན་ལུ་ PvP` གི་དོན་ལུ་ཨིན།) ཆ་སྒྲིག་འབད།
+  `--iso-reference-crosswalk <path>` དང་ཅིག་ཁར་ སི་ཨེལ་ཨའི་གིས་ `--delivery-instrument-id` བདེན་དཔྱད་འབདཝ་ཨིན།
+  འདྲ་པར་ Torii གིས་ རན་དུས་ཚོད་ནང་འཛུལ་བའི་སྐབས་ ལག་ལེན་འཐབ་ཨིན།
 
-Python helpers mirror the CLI surface:
+པའི་ཐོན་རོགས་རམ་འབད་མི་ཚུ་གིས་ སི་ཨེལ་ཨའི་ ཁ་ཐོག་ལུ་ མེ་ལོང་:
 
 ```python
 from iroha_python import (
@@ -211,21 +212,19 @@ draft.settlement_pvp(
 )
 ```
 
-## Determinism & Governance Expectations
+## གཏན་འཁེལ་དང་གཞུང་སྐྱོང་གི་རེ་བ།
 
-Repo instructions rely exclusively on Norito-encoded numeric types and the shared
-`RepoGovernance::with_defaults` logic. Keep the following invariants in mind:
-
-* Quantities are serialised with deterministic `NumericSpec` values: cash legs use
-  `fractional(2)` (two decimal places), collateral legs use `integer()`. Do not submit
-  values with greater precision—runtime guards will reject them and peers would diverge.
-* Tri-party repos persist the custodian account id in `RepoAgreement`. Lifecycle and margin events
-  emit a `RepoAccountRole::Custodian` payload so custodians can subscribe and reconcile inventory.
-* Haircuts are clamped to 10 000 bps (100 %) and margin frequencies are whole seconds. Provide
-  governance parameters in those canonical units to stay aligned with runtime expectations.
-* Timestamps are always unix milliseconds. All helpers forward them unchanged to the Norito
-  payload so peers derive identical schedules.
-* Initiation and unwind instructions reuse the same agreement identifier. The runtime rejects
-  duplicate IDs and unwinds for unknown agreements; CLI/SDK helpers surface those errors early.
-* `repo margin`/`RepoAgreementRecord::next_margin_check_after` return the canonical cadence. Always
-  consult this snapshot before triggering callbacks to avoid replaying stale schedules.
+རེ་པོ་བཀོད་རྒྱ་ཚུ་ Norito-encoded ཨང་གྲངས་ཀྱི་དབྱེ་བ་དང་ བརྗེ་སོར་འབད་མི་ལུ་རྐྱངམ་ཅིག་ བརྟེན་དོ་ཡོདཔ་ཨིན།
+`RepoGovernance::with_defaults` ཚད་མ་ནི། འོག་གི་འགྱུར་ལྡོག་མེད་པའི་སེམས་ལུ་བཞག་ནི།* འབོར་ཚད་ཚུ་ གཏན་འབེབས་ `NumericSpec` གནས་གོང་ཚུ་: དངུལ་གྱི་རྐངམ་ལག་ལེན་འཐབ་ནི།
+  `fractional(2)` (ཚག་གཉིས་) གིས་ བརྟན་བཞུགས་རྐངམ་ཚུ་གིས་ `integer()` ལག་ལེན་འཐབ་ཨིན། ཕུལ་མ་བཏུབ།
+  གནས་གོང་ཚུ་ གཏན་གཏན་སྦེ་ གཏན་གཏན་སྦེ་—རན་ཊའིམ་ ཉེན་སྲུངཔ་ཚུ་གིས་ ཁོང་ཚུ་ ངོས་ལེན་མ་འབད་བར་ མཉམ་རོགས་ཀྱིས་ ཁ་སྟོར་འགྱོ་འོང་།
+* Tri-party repos གིས་ `RepoAgreement` ནང་ བདག་འཛིན་རྩིས་ཐོ་ id འདི་ གནས་ཏེ་ཡོདཔ་ཨིན། མི་ཚེ་འཁོར་བ་དང་མཐའ་མཚམས་ཀྱི་བྱུང་རིམ།
+  `RepoAccountRole::Custodian` གིས་ བདག་དབང་འབད་མི་ཚུ་གིས་ ཐོ་བཀོད་ཚུ་ མཐུད་དེ་ ཐོ་བཀོད་འབད་ཚུགས།
+* སྐྲ་གཅོད་ཚུ་ ༡༠༠༠༠བི་པི་ཨེསི་ (༡༠༠%) དང་ མཐའ་མཚམས་བསྐྱར་འབྱུང་ཚུ་ སྐར་ཆ་ཆ་མཉམ་ཨིན། བྱིན་ནི
+  རན་དུས་ཚོད་ཀྱི་རེ་བ་དང་འཁྲིལ་ཏེ་སྡོད་ནིའི་དོན་ལུ་ ཁྲིམས་ལུགས་ཆ་ཚན་ཚུ་ནང་ གཞུང་སྐྱོང་ཚད་གཞི་ཚུ།
+* དུས་ཚོད་མཚོན་རྟགས་ཚུ་ དུས་རྒྱུན་དུ་ ཡུ་ནིགསི་ མི་ལི་སྐར་ཆ་ཨིན། གྲོགས་རམ་པ་ཆ་མཉམ་གྱིས་ཁོང་ཚུ་ Norito ལུ་བསྒྱུར་བཅོས་མ་འབད།
+  པེ་ལོཌ་འབདཝ་ལས་ མཉམ་རོགས་ཀྱིས་ གོ་རིམ་འདྲ་མཚུངས་ཚུ་ ཐོབ་ཨིན།
+* འགོ་བཙུགས་དང་ བསླབ་སྟོན་ཚུ་གིས་ ཆིངས་ཡིག་ངོས་འཛིན་འབད་མི་ ཅོག་འཐདཔ་འདི་ ལོག་ལག་ལེན་འཐབ། རན་དུས་ཚོད་བཀག་ཆ་འབདཝ་ཨིན།
+  མ་ཤེས་པའི་གན་ཡིག་ཚུ་གི་དོན་ལུ་ ངོ་རྟགས་དང་ གོང་འཁོད་ཚུ། CLI/SDK གྲོགས་རམ་འབད་མི་ཚུ་གིས་ འཛོལ་བ་དེ་ཚུ་ ཧེ་མ་ལས་ ཁ་ཐོག་ལུ་ཐོན་དོ་ཡོདཔ་ཨིན།
+* `repo margin`/`RepoAgreementRecord::next_margin_check_after` གིས་ ཀེ་ནོ་ནིག་གི་ཚད་འདི་སླར་ལོག་འབད། ཨ་རྟག་ར
+  ལས་རིམ་ཚུ་ ལོག་རྩེད་ནི་ལས་ བཀག་ཐབས་ལུ་ ལོག་འབོད་བརྡ་ཚུ་ མ་འབྱུང་པའི་ཧེ་མ་ པར་འདི་ བལྟ།

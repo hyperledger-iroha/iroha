@@ -6,49 +6,48 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 3065571b34a226a5871c4fb68063f9419e48074b20096de215f440bdf54a4e59
 source_last_modified: "2026-01-03T18:07:57.085103+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-//! Procedure for scheduling the Cargo.lock refresh required by the SM spike.
+//! נוהל לתזמון רענון ה-Cargo.lock הנדרש על ידי ספייק ה-SM.
 
-# SM Feature `Cargo.lock` Refresh Plan
+# תכונת SM `Cargo.lock` תוכנית רענון
 
-The `sm` feature spike for `iroha_crypto` originally could not complete `cargo check` while `--locked` was enforced. This note records the coordination steps for a sanctioned `Cargo.lock` update and tracks the current status of that need.
+ספייק התכונה `sm` עבור `iroha_crypto` במקור לא יכול היה להשלים את `cargo check` בזמן ש-`--locked` נאכף. הערה זו מתעדת את שלבי התיאום עבור עדכון `Cargo.lock` המאושר ועוקבת אחר המצב הנוכחי של צורך זה.
 
-> **2026-02-12 update:** Recent validation shows the optional `sm` feature now builds with the existing lockfile (`cargo check -p iroha_crypto --features sm --locked` succeeds in 7.9 s cold/0.23 s warm). The dependency set already contains `base64ct`, `ghash`, `opaque-debug`, `pem-rfc7468`, `pkcs8`, `polyval`, `primeorder`, `sm2`, `sm3`, `sm4`, and `sm4-gcm`, so no immediate lock refresh is required. Keep the procedure below on standby for future dependency bumps or new optional crates.
+> **עדכון 2026-02-12:** אימות אחרון מראה שהתכונה האופציונלית `sm` נבנית כעת עם קובץ הנעילה הקיים (`cargo check -p iroha_crypto --features sm --locked` מצליח ב-7.9 שניות קר/0.23 שניות חם). ערכת התלות כבר מכילה `base64ct`, `ghash`, `opaque-debug`, `pem-rfc7468`, `pkcs8`, `polyval`, I018NI0140X, `Cargo.lock` `sm2`, `sm3`, `sm4` ו-`sm4-gcm`, כך שלא נדרש רענון מיידי של המנעול. שמור את הנוהל שלהלן במצב המתנה עבור בליטות תלות עתידיות או ארגזים אופציונליים חדשים.
 
-## Why the refresh is needed
-- Earlier iterations of the spike required adding optional crates that were missing from the lockfile. Current lock snapshots already include the RustCrypto stack (`sm2`, `sm3`, `sm4`, supporting codecs, and AES helpers).
-- Repository policy still blocks opportunistic lockfile edits; if a future dependency upgrade is necessary, the procedure below remains applicable.
-- Retain this plan so the team can execute a controlled refresh when new SM-related dependencies are introduced or existing ones need version bumps.
+## מדוע יש צורך ברענון
+- איטרציות מוקדמות יותר של הספייק דרשו הוספת ארגזים אופציונליים שהיו חסרים בקובץ הנעילה. תמונות נעילה נוכחיות כבר כוללות את מחסנית RustCrypto (`sm2`, `sm3`, `sm4`, רכיבי קודקים תומכים ועוזרים AES).
+- מדיניות המאגר עדיין חוסמת עריכות אופורטוניסטיות של קבצי נעילה; אם יש צורך בשדרוג תלות עתידי, ההליך שלהלן יישאר תקף.
+- שמור את התוכנית הזו כדי שהצוות יוכל לבצע רענון מבוקר כאשר מוצגות תלות חדשות הקשורות ל-SM או קיימות זקוקות למגבלות גרסה.
 
-## Proposed coordination steps
-1. **Raise request in Crypto WG + Release Eng sync (owner: @crypto-wg lead).**
-   - Reference `docs/source/crypto/sm_program.md` and note the optional nature of the feature.
-   - Confirm there are no concurrent lockfile change windows (e.g., dependency freezes).
-2. **Prepare patch with lock diff (owner: @release-eng).**
-   - Execute `scripts/sm_lock_refresh.sh` (after approval) to update only the required crates.
-   - Capture `cargo tree -p iroha_crypto --features sm` output (script emits `target/sm_dep_tree.txt`).
-3. **Security review (owner: @security-reviews).**
-   - Verify new crates/versions match the audit register and licensing expectations.
-   - Record hashes in supply-chain tracker.
-4. **Merge window execution.**
-   - Submit PR containing only the lockfile delta, dependency tree snapshot (attached as artifact), and updated audit notes.
-   - Ensure CI runs with `cargo check -p iroha_crypto --features sm` before merge.
-5. **Follow-up tasks.**
-   - Update `docs/source/crypto/sm_program.md` action item checklist.
-   - Notify SDK team that the feature can be compiled locally with `--features sm`.
-
-## Timeline & owners
-| Step | Target | Owner | Status |
+## שלבי תיאום מוצעים
+1. **העלה בקשה בסנכרון Crypto WG + Release Eng (בעלים: @crypto-wg lead).**
+   - עיין ב-`docs/source/crypto/sm_program.md` ושימו לב לאופי האופציונלי של התכונה.
+   - אשר שאין חלונות לשינוי קבצי נעילה במקביל (למשל, הקפאת תלות).
+2. **הכן תיקון עם הפרש נעילה (בעלים: @release-eng).**
+   - בצע את `scripts/sm_lock_refresh.sh` (לאחר אישור) כדי לעדכן רק את הארגזים הנדרשים.
+   - לכידת פלט `cargo tree -p iroha_crypto --features sm` (סקריפט פולט `target/sm_dep_tree.txt`).
+3. **בדיקת אבטחה (בעלים: @security-reviews).**
+   - ודא ארגזים/גרסאות חדשות תואמות את ציפיות הביקורת והרישוי.
+   - הקלט hashes במעקב אחר שרשרת האספקה.
+4. **מיזוג ביצוע חלון.**
+   - שלח PR המכיל רק את הדלתא של קובץ הנעילה, תמונת מצב של עץ התלות (מצורף כחפץ), והערות ביקורת מעודכנות.
+   - ודא ש-CI פועל עם `cargo check -p iroha_crypto --features sm` לפני המיזוג.
+5. **משימות מעקב.**
+   - עדכן את רשימת הבדיקה של `docs/source/crypto/sm_program.md`.
+   - הודע לצוות SDK שניתן להרכיב את התכונה באופן מקומי עם `--features sm`.## ציר זמן ובעלים
+| שלב | יעד | בעלים | סטטוס |
 |------|--------|-------|--------|
-| Request agenda slot in next Crypto WG call | 2025-01-22 | Crypto WG lead | ✅ Completed (review concluded spike can proceed without refresh) |
-| Draft selective `cargo update` command + sanity diff | 2025-01-24 | Release Engineering | ⚪ On standby (reactivate if new crates appear) |
-| Security review of new crates | 2025-01-27 | Security Reviews | ⚪ On standby (reuse audit checklist when refresh resumes) |
-| Merge lockfile update PR | 2025-01-29 | Release Engineering | ⚪ On standby |
-| Update SM program doc checklist | After merge | Crypto WG lead | ✅ Addressed via `docs/source/crypto/sm_program.md` entry (2026-02-12) |
+| בקש משבצת סדר יום בשיחת Crypto WG הבאה | 22-01-2025 | Crypto WG lead | ✅ הושלם (הסקירה הסתיימה שפייק יכול להמשיך ללא רענון) |
+| טיוטת פקודת `cargo update` סלקטיבית + הבדל שפיות | 24-01-2025 | הנדסת שחרור | ⚪ בהמתנה (הפעל מחדש אם מופיעים ארגזים חדשים) |
+| סקירת אבטחה של ארגזים חדשים | 2025-01-27 | ביקורות אבטחה | ⚪ בהמתנה (שימוש חוזר ברשימת ביקורת כאשר הרענון מתחדש) |
+| מיזוג עדכון קבצי נעילה | 2025-01-29 | הנדסת שחרור | ⚪ בהמתנה |
+| עדכון רשימת המסמכים של תוכנית SM | לאחר מיזוג | Crypto WG lead | ✅ כתובה דרך ערך `docs/source/crypto/sm_program.md` (2026-02-12) |
 
-## Notes
-- Keep any future refresh restricted to the SM-related crates listed above (and supporting helpers like `rfc6979`), avoiding workspace-wide `cargo update`.
-- If any transitive dependencies introduce MSRV drift, surface it before merge.
-- Once merged, enable an ephemeral CI job to monitor build times for the `sm` feature.
+## הערות
+- שמור על כל רענון עתידי מוגבל לארגזים הקשורים ל-SM המפורטים לעיל (ולמסייעים תומכים כמו `rfc6979`), הימנעות מ-`cargo update` בכל סביבת העבודה.
+- אם תלויות טרנזיטיביות כלשהן מציגות סחיפה של MSRV, הציפו אותה לפני המיזוג.
+- לאחר המיזוג, אפשר משימת CI ארעית כדי לנטר את זמני הבנייה של התכונה `sm`.

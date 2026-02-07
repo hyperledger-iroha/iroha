@@ -6,27 +6,28 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 035600f179f4dd225778fae57c927b2a6c9a0f1c45ca949e3536b99283c2dde3
 source_last_modified: "2026-01-28T17:58:57+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Rust SDK Quickstart
+# Rust SDK クイックスタート
 
-The Rust client API lives in the `iroha` crate, which exposes a `client::Client`
-type for talking to Torii. Use it when you need to submit transactions,
-subscribe to events, or query state from a Rust application.
+Rust クライアント API は `iroha` クレートに存在し、`client::Client` を公開します。
+Torii と通信するためのタイプ。トランザクションを送信する必要がある場合に使用します。
+イベントをサブスクライブしたり、Rust アプリケーションから状態をクエリしたりできます。
 
-## 1. Add the crate
+## 1. クレートを追加します
 
 ```toml title="Cargo.toml"
 [dependencies]
 iroha = { path = "../../crates/iroha", features = ["client"] }
 ```
 
-The workspace example unlocks the client module via the `client` feature. If you
-consume the published crate, replace the `path` attribute with the current
-version string.
+ワークスペースの例では、`client` 機能を介してクライアント モジュールのロックを解除します。もしあなたが
+公開されたクレートを消費し、`path` 属性を現在の属性に置き換えます。
+バージョン文字列。
 
-## 2. Configure the client
+## 2. クライアントを構成する
 
 ```rust title="src/main.rs"
 use iroha::client::{Client, ClientConfiguration};
@@ -45,10 +46,10 @@ fn main() -> eyre::Result<()> {
 }
 ```
 
-`ClientConfiguration` mirrors the CLI configuration file: it includes Torii and
-telemetry URLs, authentication material, timeouts, and batching preferences.
+`ClientConfiguration` は CLI 設定ファイルをミラーリングします。これには Torii と
+テレメトリ URL、認証マテリアル、タイムアウト、バッチ設定。
 
-## 3. Submit a transaction
+## 3. トランザクションを送信する
 
 ```rust
 use iroha::client::{Client, ClientConfiguration};
@@ -88,11 +89,11 @@ fn submit_example() -> eyre::Result<()> {
 }
 ```
 
-Under the hood the client uses Norito to encode the transaction payload before
-posting it to Torii. If submission succeeds, the returned hash can be used to
-track status via `client.poll_transaction_status(hash)`.
+内部では、クライアントは Norito を使用してトランザクション ペイロードをエンコードします。
+Torii に投稿します。送信が成功した場合、返されたハッシュは次の目的で使用できます。
+`client.poll_transaction_status(hash)` 経由でステータスを追跡します。
 
-## 4. Submit DA blobs
+## 4. DA BLOB を送信する
 
 ```rust
 use iroha::client::{Client, ClientConfiguration};
@@ -115,11 +116,11 @@ fn submit_da_blob() -> eyre::Result<()> {
 }
 ```
 
-When you need to inspect or persist the Norito payload without sending it to
-Torii, call `client.build_da_ingest_request(...)` to obtain the signed request
-and render it as JSON/bytes, mirroring `iroha app da submit --no-submit`.
+Norito ペイロードを送信せずに検査または永続化する必要がある場合
+Torii、`client.build_da_ingest_request(...)` を呼び出して署名付きリクエストを取得します
+それを JSON/バイトとしてレンダリングし、`iroha app da submit --no-submit` をミラーリングします。
 
-## 5. Query data
+## 5. データのクエリ
 
 ```rust
 use iroha::client::{Client, ClientConfiguration};
@@ -135,11 +136,11 @@ fn list_domains() -> eyre::Result<()> {
 }
 ```
 
-Queries follow the request/response pattern: construct a query type from
-`iroha_data_model::query`, send it via `client.request`, and iterate over the
-results. Responses use Norito-backed JSON, so the wire format is deterministic.
+クエリはリクエスト/レスポンス パターンに従います。クエリ タイプを次から構築します。
+`iroha_data_model::query`、`client.request` 経由で送信し、
+結果。応答には Norito ベースの JSON が使用されるため、ワイヤ形式は確定的です。
 
-## 6. Explorer QR snapshots
+## 6. エクスプローラーの QR スナップショット
 
 ```rust
 use iroha::client::{
@@ -160,15 +161,15 @@ fn download_qr() -> eyre::Result<()> {
 }
 ```
 
-`ExplorerAccountQrSnapshot` mirrors the `/v1/explorer/accounts/{id}/qr` JSON
-surface: it includes the canonical account id, the literal rendered with the
-requested format, network prefix/error-correction metadata, QR dimensions, and
-the inline SVG payload that wallets/explorers can embed directly. Omit
-`ExplorerAccountQrOptions` to default to the preferred IH58 output or set
-`address_format: Some(AddressFormat::Compressed)` to retrieve the second-best
-`sora…` variant used by ADDR-6b.
+`ExplorerAccountQrSnapshot` は `/v1/explorer/accounts/{id}/qr` JSON をミラーリングします。
+表面: 正規のアカウント ID、つまり、
+要求された形式、ネットワーク プレフィックス/エラー修正メタデータ、QR 寸法、および
+ウォレット/エクスプローラーが直接埋め込むことができるインライン SVG ペイロード。省略
+`ExplorerAccountQrOptions` をデフォルトで優先 IH58 出力に設定するか、設定します
+`address_format: Some(AddressFormat::Compressed)` で 2 番目に良いものを取得します
+ADDR-6b で使用される `sora…` バリアント。
 
-## 7. Subscribe to events
+## 7. イベントを購読する
 
 ```rust
 use iroha::client::{Client, ClientConfiguration};
@@ -188,29 +189,29 @@ async fn listen_for_blocks() -> eyre::Result<()> {
 }
 ```
 
-The client exposes async streams for Torii’s SSE endpoints, including pipeline
-events, data events, and telemetry feeds.
+クライアントは、パイプラインを含む Torii の SSE エンドポイントの非同期ストリームを公開します
+イベント、データ イベント、テレメトリ フィード。
 
-## More examples
+## その他の例
 
-- End-to-end flows live under `tests/` in `crates/iroha`. Search for integration
-  tests such as `transaction_submission.rs` for richer scenarios.
-- The CLI (`iroha_cli`) uses the same client module; browse
-  `crates/iroha_cli/src/` to see how authentication, batching, and retries are
-  handled in production tooling.
-- Keep Norito in mind: the client never falls back to `serde_json`. When you
-  extend the SDK, rely on `norito::json` helpers for JSON endpoints and
-  `norito::codec` for binary payloads.
+- エンドツーエンド フローは、`crates/iroha` の `tests/` の下に存在します。統合の検索
+  より豊富なシナリオのための `transaction_submission.rs` などのテスト。
+- CLI (`iroha_cli`) は同じクライアント モジュールを使用します。閲覧する
+  `crates/iroha_cli/src/`: 認証、バッチ処理、および再試行がどのように行われるかを確認します。
+  生産ツールで処理されます。
+- Norito に留意してください。クライアントが `serde_json` にフォールバックすることはありません。あなたが
+  SDK を拡張し、JSON エンドポイントの `norito::json` ヘルパーに依存し、
+  バイナリペイロードの場合は `norito::codec`。
 
-## Related Norito examples
+## 関連する Norito の例
 
-- [Hajimari entrypoint skeleton](../norito/examples/hajimari-entrypoint) — compile, run, and deploy
-  the minimal Kotodama scaffold that mirrors the setup phase in this quickstart.
-- [Register domain and mint assets](../norito/examples/register-and-mint) — aligns with the
-  `Register` + `Mint` flow shown above so you can replay the same operations from a contract.
-- [Transfer asset between accounts](../norito/examples/transfer-asset) — demonstrates the
-  `transfer_asset` syscall with the same account IDs the SDK quickstarts use.
+- [始まりのエントリポイント スケルトン](../norito/examples/hajimari-entrypoint) — コンパイル、実行、デプロイ
+  このクイックスタートのセットアップ フェーズを反映する最小限の Kotodama スキャフォールド。
+- [ドメインとミント資産の登録](../norito/examples/register-and-mint) —
+  上記の `Register` + `Mint` フローにより、コントラクトから同じ操作を再現できます。
+- [アカウント間での資産の転送](../norito/examples/transfer-asset) — を示します。
+  SDK クイックスタートが使用するのと同じアカウント ID を持つ `transfer_asset` syscall。
 
-With these building blocks you can integrate Torii into Rust services or CLIs.
-Refer to the generated documentation and data-model crates for the full set of
-instructions, queries, and events.
+これらのビルディング ブロックを使用すると、Torii を Rust サービスまたは CLI に統合できます。
+完全なセットについては、生成されたドキュメントとデータ モデル クレートを参照してください。
+指示、クエリ、イベント。

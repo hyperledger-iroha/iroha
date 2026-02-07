@@ -7,99 +7,96 @@ generator: scripts/sync_docs_i18n.py
 source_hash: ac9b1fa221c6de46c139ee3a3c280957adad4910b49015fbb746259a4af22659
 source_last_modified: "2026-01-30T12:29:10.190473+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Kotodama Language Grammar and Semantics
+# Kotodama 語言語法和語義
 
-This document specifies the Kotodama language syntax (lexing, grammar), typing rules, deterministic semantics, and how programs lower to IVM bytecode (.to) with Norito pointer-ABI conventions. Kotodama sources use the .ko extension. The compiler emits IVM bytecode (.to) and can optionally return a manifest.
+本文檔指定了 Kotodama 語言語法（詞法分析、語法）、鍵入規則、確定性語義，以及程序如何使用 Norito 指針 ABI 約定降低為 IVM 字節碼 (.to)。 Kotodama 源使用 .ko 擴展名。編譯器發出 IVM 字節碼 (.to)，並且可以選擇返回清單。
 
-Contents
-- Overview and Goals
-- Lexical Structure
-- Types and Literals
-- Declarations and Modules
-- Contract Container and Metadata
-- Functions and Parameters
-- Statements
-- Expressions
-- Builtins and Pointer-ABI Constructors
-- Collections and Maps
-- Deterministic Iteration and Bounds
-- Errors and Diagnostics
-- Codegen Mapping to IVM
-- ABI, Header, and Manifest
-- Roadmap
+內容
+- 概述和目標
+- 詞彙結構
+- 類型和文字
+- 聲明和模塊
+- 合約容器和元數據
+- 功能及參數
+- 聲明
+- 表達式
+- 內置函數和指針 ABI 構造函數
+- 收藏品和地圖
+- 確定性迭代和界限
+- 錯誤和診斷
+- Codegen 映射到 IVM
+- ABI、標頭和清單
+- 路線圖
 
-## Overview and Goals
+## 概述和目標
 
-- Deterministic: Programs must produce identical results across hardware; no floating point or nondeterministic sources. All host interactions happen through syscalls with Norito-encoded arguments.
-- Portable: Targets Iroha Virtual Machine (IVM) bytecode, not a physical ISA. RISC‑V–like encodings visible in the repository are implementation details of IVM decoding and must not change observable behavior.
-- Auditable: Small, explicit semantics; clear mapping of syntax to IVM opcodes and to host syscalls.
-- Boundedness: Loops over unbounded data must carry explicit bounds. Map iteration has strict rules to guarantee determinism.
+- 確定性：程序必須在硬件上產生相同的結果；沒有浮點或不確定源。所有主機交互都是通過帶有 Norito 編碼參數的系統調用進行的。
+- 可移植：目標為 Iroha 虛擬機 (IVM) 字節碼，而不是物理 ISA。存儲庫中可見的類似 RISC-V 的編碼是 IVM 解碼的實現細節，並且不得改變可觀察到的行為。
+- 可審計：小而明確的語義；語法到 IVM 操作碼和主機系統調用的清晰映射。
+- 有界性：無界數據上的循環必須帶有顯式邊界。地圖迭代有嚴格的規則來保證確定性。
 
-## Lexical Structure
+## 詞彙結構
 
-Whitespace and comments
-- Whitespace separates tokens and is otherwise insignificant.
-- Line comments start with `//` and run to end-of-line.
-- Block comments `/* ... */` do not nest.
+空白和註釋
+- 空格分隔標記，否則無關緊要。
+- 行註釋以 `//` 開始，一直到行尾。
+- 塊註釋 `/* ... */` 不嵌套。
 
-Identifiers
-- Start: `[A-Za-z_]` then continue `[A-Za-z0-9_]*`.
-- Case-sensitive; `_` is a valid identifier but discouraged.
+標識符
+- 開始：`[A-Za-z_]`，然後繼續 `[A-Za-z0-9_]*`。
+- 區分大小寫; `_` 是一個有效的標識符，但不鼓勵使用。
 
-Keywords (reserved)
-- `seiyaku`, `hajimari`, `kotoage`, `kaizen`, `state`, `struct`, `fn`, `let`, `const`, `return`, `if`, `else`, `while`, `for`, `in`, `break`, `continue`, `true`, `false`, `permission`, `kotoba`.
+關鍵詞（保留）
+- `seiyaku`、`hajimari`、`kotoage`、`kaizen`、`state`、`struct`、`fn`、`let`、 `const`、`return`、`if`、`else`、`while`、`for`、`in`、`break`、 `continue`、`true`、`false`、`permission`、`kotoba`。
 
-Operators and punctuation
-- Arithmetic: `+ - * / %`
-- Bitwise: `& | ^ ~`, shifts `<< >>`
-- Compare: `== != < <= > >=`
-- Logical: `&& || !`
-- Assign: `= += -= *= /= %= &= |= ^= <<= >>=`
-- Misc: `: , ; . :: ->`
-- Brackets: `() [] {}`
+運算符和標點符號
+- 算術：`+ - * / %`
+- 按位：`& | ^ ~`，移位 `<< >>`
+- 比較：`== != < <= > >=`
+- 邏輯：`&& || !`
+- 分配：`= += -= *= /= %= &= |= ^= <<= >>=`
+- 其他：`: , ; . :: ->`
+- 支架：`() [] {}`文字
+- 整數：十進制 (`123`)、十六進制 (`0x2A`)、二進制 (`0b1010`)。所有整數在運行時都是有符號的 64 位；不帶後綴的文字通過推理輸入或默認輸入為 `int`。
+- 字符串：帶轉義的雙引號（`\n`、`\r`、`\t`、`\0`、`\xNN`、`\u{...}`、`\"`、 `\\`); UTF-8。原始字符串 `r"..."` 或 `r#"..."#` 禁用轉義並允許換行。
+- 字節：帶轉義的 `b"..."`，或原始 `br"..."` / `rb"..."`；產生 `bytes` 文字。
+- 布爾值：`true`、`false`。
 
-Literals
-- Integer: decimal (`123`), hex (`0x2A`), binary (`0b1010`). All integers are signed 64-bit at runtime; literals without suffix are typed via inference or as `int` by default.
-- String: double-quoted with escapes (`\n`, `\r`, `\t`, `\0`, `\xNN`, `\u{...}`, `\"`, `\\`); UTF‑8. Raw strings `r"..."` or `r#"..."#` disable escapes and allow newlines.
-- Bytes: `b"..."` with escapes, or raw `br"..."` / `rb"..."`; yields a `bytes` literal.
-- Boolean: `true`, `false`.
+## 類型和文字
 
-## Types and Literals
+標量類型
+- `int`：64位二進制補碼；算術對 add/sub/mul 進行模 2^64 換行；除法在 IVM 中定義了有符號/無符號變體；編譯器根據語義選擇適當的操作。
+- `fixed_u128`、`Amount`、`Balance`：由 Norito `Numeric` 支持的數字別名（有符號十進制，最多 512 位尾數和小數位數）。 Kotodama 將這些別名視為非負數；檢查算術，保留別名，並捕獲溢出或除以零。從 `int` 創建的值使用小數位 0；與 `int` 之間的轉換在運行時進行範圍檢查（非負、整數、適合 i64）。
+- `bool`：邏輯真值；降低至 `0`/`1`。
+- `string`：不可變的 UTF-8 字符串；傳遞給系統調用時表示為 Norito TLV；虛擬機內操作使用字節片和長度。
+- `bytes`：原始 Norito 有效負載；為散列/加密/證明輸入和持久覆蓋的指針 ABI `Blob` 類型別名。
 
-Scalar types
-- `int`: 64-bit two’s-complement; arithmetic wraps modulo 2^64 for add/sub/mul; division has defined signed/unsigned variants in IVM; the compiler chooses the appropriate op for semantics.
-- `fixed_u128`, `Amount`, `Balance`: numeric aliases backed by Norito `Numeric` (signed decimal with up to 512-bit mantissa and scale). Kotodama treats these aliases as non-negative quantities; arithmetic is checked, preserves the alias, and traps on overflow or division by zero. Values created from `int` use scale 0; conversions to/from `int` are range-checked at runtime (non-negative, integral, fits in i64).
-- `bool`: logical truth value; lowered to `0`/`1`.
-- `string`: immutable UTF‑8 string; represented as Norito TLV when passed to syscalls; in-VM operations use byte slices and length.
-- `bytes`: raw Norito payload; aliases the pointer-ABI `Blob` type for hashing/crypto/proof inputs and durable overlays.
+複合類型
+- `struct Name { field: Type, ... }` 用戶定義的產品類型。構造函數在表達式中使用調用語法 `Name(a, b, ...)`。支持字段訪問 `obj.field` 並在內部降低為元組樣式位置字段。鏈上持久狀態 ABI 採用 Norito 編碼；編譯器會發出反映結構順序的覆蓋層，並且最近的測試（`crates/iroha_core/tests/kotodama_struct_overlay.rs`）使佈局在各個版本中保持鎖定。
+- `Map<K, V>`：確定性關聯圖；語義限制迭代和迭代過程中的突變（見下文）。
+- `Tuple (T1, T2, ...)`：帶有位置字段的匿名產品類型；用於多次返回。
 
-Composite types
-- `struct Name { field: Type, ... }` user-defined product types. Constructors use call syntax `Name(a, b, ...)` in expressions. Field access `obj.field` is supported and lowers to tuple-style positional fields internally. Durable state ABI on-chain is Norito-encoded; the compiler emits overlays that mirror the struct order and recent tests (`crates/iroha_core/tests/kotodama_struct_overlay.rs`) keep the layout locked in across releases.
-- `Map<K, V>`: deterministic associative map; semantics restrict iteration and mutations during iteration (see below).
-- `Tuple (T1, T2, ...)`: anonymous product type with positional fields; used for multi-return.
+特殊指針 ABI 類型（面向主機）
+- `AccountId`、`AssetDefinitionId`、`Name`、`Json`、`NftId`、`Blob` 和類似的不是一流的運行時類型。它們是生成輸入區域（Norito TLV 信封）的類型化、不可變指針的構造函數，並且只能用作系統調用參數或在變量之間移動而無需突變。
 
-Special pointer-ABI types (host-facing)
-- `AccountId`, `AssetDefinitionId`, `Name`, `Json`, `NftId`, `Blob`, and similar are not first-class runtime types. They are constructors that yield typed, immutable pointers into the INPUT region (Norito TLV envelopes) and can only be used as syscall arguments or moved between variables without mutation.
+類型推斷
+- 本地 `let` 綁定從初始值設定項推斷類型。函數參數必須顯式鍵入。除非不明確，否則可以推斷返回類型。
 
-Type inference
-- Local `let` bindings infer type from initializer. Function parameters must be explicitly typed. Return types may be inferred unless ambiguous.
+## 聲明和模塊頂級項目
+- 合約：`seiyaku Name { ... }` 包含函數、狀態、結構和元數據。
+- 允許但不鼓勵每個文件有多個合同；一個主 `seiyaku` 用作清單中的默認條目。
+- `struct` 聲明定義合約內的用戶類型。
 
-## Declarations and Modules
+能見度
+- `kotoage fn` 表示公共入口點；可見性影響調度程序權限，而不是代碼生成。
+- 可選訪問提示：`#[access(read=..., write=...)]` 可以在 `fn`/`kotoage fn` 之前提供清單讀/寫密鑰。編譯器還會自動發出諮詢提示；不透明的主機調用會回退到保守的通配符密鑰 (`*`) 並顯示診斷，除非提供顯式訪問提示，因此調度程序可以選擇動態預傳遞以獲得更細粒度的密鑰。
 
-Top-level items
-- Contracts: `seiyaku Name { ... }` contain functions, state, structs, and metadata.
-- Multiple contracts per file are allowed but discouraged; one primary `seiyaku` is used as default entry in manifests.
-- `struct` declarations define user types within a contract.
+## 合約容器和元數據
 
-Visibility
-- `kotoage fn` denotes a public entrypoint; visibility affects dispatcher permissions, not codegen.
-- Optional access hints: `#[access(read=..., write=...)]` can precede `fn`/`kotoage fn` to supply manifest read/write keys. The compiler also emits advisory hints automatically; opaque host calls fall back to conservative wildcard keys (`*`) and surface a diagnostic unless explicit access hints are provided, so schedulers can opt into a dynamic prepass for finer-grained keys.
-
-## Contract Container and Metadata
-
-Syntax
+語法
 ```
 seiyaku Name {
   meta {
@@ -117,35 +114,33 @@ seiyaku Name {
 }
 ```
 
-Semantics
-- `meta { ... }` fields override compiler defaults for the emitted IVM header: `abi_version`, `vector_length` (0 means unset), `max_cycles` (0 means compiler default), `features` toggles header feature bits (ZK tracing, vector announce). The compiler treats `max_cycles: 0` as “use default” and emits the configured non‑zero default to satisfy admission requirements. Unsupported features are ignored with a warning. When `meta {}` is omitted, the compiler emits `abi_version = 1` and uses the option defaults for the remaining header fields.
-- `features: ["zk", "simd"]` (aliases: `"vector"`) explicitly requests the corresponding header bits. Unknown feature strings now produce a parser error instead of being ignored.
-- `state` declares durable contract variables. The compiler lowers accesses into `STATE_GET/STATE_SET/STATE_DEL` syscalls and the host stages them in a per-transaction overlay (checkpoint/restore rollback, flush-on-commit into WSV). Access hints are emitted for literal state paths; dynamic keys fall back to map-level conflict keys. For explicit host-backed reads/writes, use the `state_get/state_set/state_del` helpers and the `get_or_insert_default` map helpers; these route through Norito TLVs and keep names/field order stable.
-- State identifiers are reserved; shadowing a `state` name in parameters or `let` bindings is rejected (`E_STATE_SHADOWED`).
-- State map values are not first-class: use the state identifier directly for map operations and iteration. Binding or passing state maps to user-defined functions is rejected (`E_STATE_MAP_ALIAS`).
-- Durable state maps currently support `int` and pointer-ABI key types only; other key types are rejected at compile time.
-- Durable state fields must be `int`, `bool`, `Json`, `Blob`/`bytes`, or pointer-ABI types (including structs/tuples composed of these fields); `string` is not supported for durable state.
+語義學
+- `meta { ... }` 字段覆蓋已發出的 IVM 標頭的編譯器默認值：`abi_version`、`vector_length`（0 表示未設置）、`max_cycles`（0 表示編譯器默認值）、`features` 切換標頭功能位（ZK 跟踪、向量）宣布）。編譯器將 `max_cycles: 0` 視為“使用默認值”，並發出配置的非零默認值以滿足准入要求。不支持的功能將被忽略並發出警告。當省略 `meta {}` 時，編譯器將發出 `abi_version = 1` 並使用其餘標頭字段的選項默認值。
+- `features: ["zk", "simd"]`（別名：`"vector"`）顯式請求相應的標頭位。未知的特徵字符串現在會產生解析器錯誤而不是被忽略。
+- `state` 聲明持久合約變量。編譯器降低對 `STATE_GET/STATE_SET/STATE_DEL` 系統調用的訪問，主機將它們暫存在每個事務覆蓋中（檢查點/恢復回滾、提交時刷新到 WSV）。針對文字狀態路徑發出訪問提示；動態鍵回退到映射級衝突鍵。對於顯式主機支持的讀/寫，請使用 `state_get/state_set/state_del` 幫助程序和 `get_or_insert_default` 映射幫助程序；這些通過 Norito TLV 進行路由並保持名稱/字段順序穩定。
+- 保留狀態標識符；參數中隱藏 `state` 名稱或 `let` 綁定被拒絕 (`E_STATE_SHADOWED`)。
+- 狀態映射值不是一流的：直接使用狀態標識符進行映射操作和迭代。將狀態映射綁定或傳遞給用戶定義的函數被拒絕 (`E_STATE_MAP_ALIAS`)。
+- 持久狀態映射當前僅支持 `int` 和指針 ABI 密鑰類型；其他鍵類型在編譯時被拒絕。
+- 持久狀態字段必須是 `int`、`bool`、`Json`、`Blob`/`bytes` 或指針 ABI 類型（包括由這些字段組成的結構體/元組）； `string` 不支持持久狀態。
 
-### Kotoba localization
-Syntax
+### 言葉本地化
+語法
 ```
 kotoba {
   "E_UNBOUNDED_ITERATION": { en: "Loop over map lacks a bound." }
 }
-```
+```語義學
+- `kotoba` 條目將轉換錶附加到合同清單（`kotoba` 字段）。
+- 消息 ID 和語言標籤接受標識符或字符串文字；條目必須非空。
+- 重複的 `msg_id` + 語言標記對在編譯時被拒絕。
 
-Semantics
-- `kotoba` entries attach translation tables to the contract manifest (`kotoba` field).
-- Message IDs and language tags accept identifiers or string literals; entries must be non-empty.
-- Duplicate `msg_id` + language tag pairs are rejected at compile time.
+## 觸發聲明
 
-## Trigger Declarations
+觸發器聲明將調度元數據附加到入口點清單並自動註冊
+當合同實例被激活時（停用時被刪除）。它們在一個內部被解析
+`seiyaku` 塊。
 
-Trigger declarations attach scheduling metadata to entrypoint manifests and are auto-registered
-when a contract instance is activated (removed on deactivation). They are parsed inside a
-`seiyaku` block.
-
-Syntax
+語法
 ```
 register_trigger wake {
   call run;
@@ -156,71 +151,69 @@ register_trigger wake {
 }
 ```
 
-Notes
-- `call` must reference a public `kotoage fn` entrypoint in the same contract; an optional
-  `namespace::entrypoint` is recorded in the manifest but cross-contract callbacks are rejected
-  by the runtime for now (local callbacks only).
-- Supported filters: `time pre_commit` and `time schedule(start_ms, period_ms?)`, plus
-  `execute trigger <name>` for by-call triggers, `data any`, and pipeline filters
-  (`pipeline transaction`, `pipeline block`, `pipeline merge`, `pipeline witness`).
-- `authority` optionally overrides the trigger authority (AccountId string literal). If omitted,
-  the runtime uses the contract-activation authority.
-- Metadata values must be JSON literals (`string`, `number`, `bool`, `null`) or `json!(...)`.
-- Runtime-injected trigger metadata keys: `contract_namespace`, `contract_id`,
-  `contract_entrypoint`, `contract_code_hash`, `contract_trigger_id`.
+註釋
+- `call` 必須引用同一合約中的公共 `kotoage fn` 入口點；一個可選的
+  清單中記錄了 `namespace::entrypoint` 但跨合約回調被拒絕
+  目前由運行時（僅限本地回調）。
+- 支持的過濾器：`time pre_commit` 和 `time schedule(start_ms, period_ms?)`，以及
+  `execute trigger <name>` 用於按調用觸發器、`data any` 和管道過濾器
+  （`pipeline transaction`、`pipeline block`、`pipeline merge`、`pipeline witness`）。
+- `authority` 可選擇覆蓋觸發權限（AccountId 字符串文字）。如果省略，
+  運行時使用合約激活權限。
+- 元數據值必須是 JSON 文本（`string`、`number`、`bool`、`null`）或 `json!(...)`。
+- 運行時注入的觸發器元數據鍵：`contract_namespace`、`contract_id`、
+  `contract_entrypoint`、`contract_code_hash`、`contract_trigger_id`。
 
-## Functions and Parameters
+## 函數和參數
 
-Syntax
-- Declaration: `fn name(param1: Type, param2: Type, ...) -> Ret { ... }`
-- Public: `kotoage fn name(...) { ... }`
-- Initializer: `hajimari() { ... }` (invoked on deploy by the runtime, not by the VM itself).
-- Upgrade hook: `kaizen(args...) permission(Role) { ... }`.
+語法
+- 聲明：`fn name(param1: Type, param2: Type, ...) -> Ret { ... }`
+- 公共：`kotoage fn name(...) { ... }`
+- 初始化程序：`hajimari() { ... }`（在部署時由運行時調用，而不是由虛擬機本身調用）。
+- 升級掛鉤：`kaizen(args...) permission(Role) { ... }`。
 
-Parameters and returns
-- Arguments are passed in registers `r10..r22` as values or INPUT pointers (Norito TLV) per ABI; additional args spill to stack.
-- Functions return zero or one scalar or tuple. Primary return value is in `r10` for scalar; tuples are materialized in stack/OUTPUT by convention.
+參數和返回值
+- 根據 ABI，參數作為值或 INPUT 指針 (Norito TLV) 在寄存器 `r10..r22` 中傳遞；額外的參數溢出到堆棧。
+- 函數返回零或一個標量或元組。標量的主要返回值位於 `r10` 中；按照慣例，元組在堆棧/輸出中具體化。
 
-## Statements
+## 聲明- 變量綁定：`let x = expr;`、`let mut x = expr;`（可變性是編譯時檢查；僅允許本地變量運行時突變）。
+- 賦值：`x = expr;` 和復合形式 `x += 1;` 等。目標必須是變量或映射索引；元組/結構字段是不可變的。
+- 數字別名（`fixed_u128`、`Amount`、`Balance`）是不同的 `Numeric` 支持類型；算術保留別名，混合別名需要通過 `int` 綁定進行轉換。在運行時檢查與 `int` 之間的轉換（非負、整數、範圍限制）。
+- 控制：`if (cond) { ... } else { ... }`、`while (cond) { ... }`、C 型 `for (init; cond; step) { ... }`。
+  - `for` 初始化器和步驟必須是簡單的 `let name = expr` 或表達式語句；複雜的解構被拒絕（`E0005`、`E0006`）。
+  - `for` 範圍：來自 init 子句的綁定在循環中及其之後可見；在主體或步驟中創建的綁定不會逃脫循環。
+- `int`、`bool`、`string`、指針 ABI 標量（例如 `AccountId`、 `Name`、`Blob`/`bytes`、`Json`)；元組、結構體和映射不具有可比性。
+- 地圖循環：`for (k, v) in map { ... }`（確定性；見下文）。
+- 流量：`return expr;`、`break;`、`continue;`。
+- 調用：`name(args...);` 或 `call name(args...);`（兩者都接受；編譯器規範化為調用語句）。
+- 斷言：`assert(cond);`、`assert_eq(a, b);` 映射到非 ZK 構建中的 IVM `ASSERT*` 或 ZK 模式中的 ZK 約束。
 
-- Variable bindings: `let x = expr;`, `let mut x = expr;` (mutability is a compile-time check; runtime mutation is allowed for locals only).
-- Assignment: `x = expr;` and compound forms `x += 1;` etc. Targets must be variables or map indices; tuple/struct fields are immutable.
-- Numeric aliases (`fixed_u128`, `Amount`, `Balance`) are distinct `Numeric`-backed types; arithmetic preserves the alias and mixing aliases requires converting through an `int` binding. Conversions to/from `int` are checked at runtime (non-negative, integral, range-limited).
-- Control: `if (cond) { ... } else { ... }`, `while (cond) { ... }`, C-style `for (init; cond; step) { ... }`.
-  - `for` initializers and steps must be simple `let name = expr` or expression statements; complex destructuring is rejected (`E0005`, `E0006`).
-  - `for` scoping: bindings from the init clause are visible in the loop and after it; bindings created in the body or step do not escape the loop.
-- Equality (`==`, `!=`) is supported for `int`, `bool`, `string`, pointer-ABI scalars (e.g., `AccountId`, `Name`, `Blob`/`bytes`, `Json`); tuples, structs, and maps are not comparable.
-- Map loop: `for (k, v) in map { ... }` (deterministic; see below).
-- Flow: `return expr;`, `break;`, `continue;`.
-- Call: `name(args...);` or `call name(args...);` (both accepted; compiler normalizes to call statements).
-- Assertions: `assert(cond);`, `assert_eq(a, b);` map to IVM `ASSERT*` in non-ZK builds or ZK constraints in ZK mode.
+## 表達式
 
-## Expressions
+優先級（高→低）
+1. 會員/索引：`a.b`、`a[b]`
+2. 一元：`! ~ -`
+3.乘法：`* / %`
+4.添加劑：`+ -`
+5.班次：`<< >>`
+6. 關係：`< <= > >=`
+7. 平等：`== !=`
+8. 按位與/異或/或：`& ^ |`
+9. 邏輯與/或：`&& ||`
+10.三元：`cond ? a : b`
 
-Precedence (high → low)
-1. Member/index: `a.b`, `a[b]`
-2. Unary: `! ~ -`
-3. Multiplicative: `* / %`
-4. Additive: `+ -`
-5. Shifts: `<< >>`
-6. Relational: `< <= > >=`
-7. Equality: `== !=`
-8. Bitwise AND/XOR/OR: `& ^ |`
-9. Logical AND/OR: `&& ||`
-10. Ternary: `cond ? a : b`
+調用和元組
+- 調用使用位置參數：`f(a, b, c)`。
+- 元組文字：`(a, b, c)` 和解構：`let (x, y) = pair;`。
+- 元組解構需要具有匹配數量的元組/結構類型；不匹配會被拒絕。
 
-Calls and tuples
-- Calls use positional arguments: `f(a, b, c)`.
-- Tuple literal: `(a, b, c)` and destructure: `let (x, y) = pair;`.
-- Tuple destructuring requires tuple/struct types with matching arity; mismatches are rejected.
+字符串和字節
+- 字符串為 UTF-8；源代碼中接受原始字符串和字節文字形式。
+- 字節文字 (`b"..."`、`br"..."`、`rb"..."`) 低於 `bytes` (Blob) 指針；當系統調用需要 NoritoBytes TLV 有效負載時，用 `norito_bytes(...)` 包裝。
 
-Strings and bytes
-- Strings are UTF‑8; raw string and byte literal forms are accepted in source.
-- Byte literals (`b"..."`, `br"..."`, `rb"..."`) lower to `bytes` (Blob) pointers; wrap with `norito_bytes(...)` when a syscall expects NoritoBytes TLV payloads.
+## 內置函數和指針 ABI 構造函數
 
-## Builtins and Pointer-ABI Constructors
-
-Pointer constructors (emit Norito TLV into INPUT and return a typed pointer)
+指針構造函數（將 Norito TLV 發出到 INPUT 並返回類型化指針）
 - `account_id(string) -> AccountId*`
 - `asset_definition(string) -> AssetDefinitionId*`
 - `asset_id(string) -> AssetId*`
@@ -233,28 +226,26 @@ Pointer constructors (emit Norito TLV into INPUT and return a typed pointer)
 - `dataspace_id(string|0xhex) -> DataSpaceId*`
 - `axt_descriptor(string|0xhex) -> AxtDescriptor*`
 - `asset_handle(string|0xhex) -> AssetHandle*`
-- `proof_blob(string|0xhex) -> ProofBlob*`
-
-Prelude macros provide shorter aliases and inline validation for these constructors:
+- `proof_blob(string|0xhex) -> ProofBlob*`Prelude 宏為這些構造函數提供更短的別名和內聯驗證：
 - `account!("ih58...")`, `account_id!("ih58...")`
-- `asset_definition!("rose#wonderland")`, `asset_id!("rose#wonderland")`
+- `asset_definition!("rose#wonderland")`、`asset_id!("rose#wonderland")`
 - `domain!("wonderland")`, `domain_id!("wonderland")`
 - `name!("example")`
-- `json!("{\"hello\":\"world\"}")` or structured literals such as `json!{ hello: "world" }`
-- `nft_id!("dragon$demo")`, `blob!("bytes")`, `norito_bytes!("...")`
+- `json!("{\"hello\":\"world\"}")` 或結構化文字，例如 `json!{ hello: "world" }`
+- `nft_id!("dragon$demo")`、`blob!("bytes")`、`norito_bytes!("...")`
 
-The macros expand to the constructors above and reject invalid literals at compile time.
+這些宏擴展為上面的構造函數，並在編譯時拒絕無效的文字。
 
-Implementation status
-- Implemented: constructors above accept string literal arguments and lower to typed Norito TLV envelopes placed in the INPUT region. They return immutable typed pointers usable as syscall arguments. Non-literal string expressions are rejected; use `Blob`/`bytes` for dynamic inputs. `blob`/`norito_bytes` also accept `bytes`-typed values at runtime without macro shims.
-- Extended forms:
-  - `json(Blob[NoritoBytes]) -> Json*` via `JSON_DECODE` syscall.
-  - `name(Blob[NoritoBytes]) -> Name*` via `NAME_DECODE` syscall.
-  - Pointer decode from Blob/NoritoBytes: any pointer constructor (including AXT types) accepts a `Blob`/`NoritoBytes` payload and lowers to `POINTER_FROM_NORITO` with the expected type id.
-  - Pass-through for pointer forms: `name(Name) -> Name*`, `blob(Blob) -> Blob*`, `norito_bytes(Blob) -> Blob*`.
-  - Method sugar is supported: `s.name()`, `s.json()`, `b.blob()`, `b.norito_bytes()`.
+實施情況
+- 已實現：上面的構造函數接受字符串文字參數，下面的構造函數接受放置在 INPUT 區域中的類型化 Norito TLV 信封。它們返回可用作系統調用參數的不可變類型指針。非文字字符串表達式被拒絕；使用 `Blob`/`bytes` 進行動態輸入。 `blob`/`norito_bytes` 在運行時也接受 `bytes` 類型的值，無需宏填充程序。
+- 擴展形式：
+  - `json(Blob[NoritoBytes]) -> Json*` 通過 `JSON_DECODE` 系統調用。
+  - `name(Blob[NoritoBytes]) -> Name*` 通過 `NAME_DECODE` 系統調用。
+  - 來自 Blob/NoritoBytes 的指針解碼：任何指針構造函數（包括 AXT 類型）接受 `Blob`/`NoritoBytes` 有效負載，並降低為具有預期類型 id 的 `POINTER_FROM_NORITO`。
+  - 指針形式的傳遞：`name(Name) -> Name*`、`blob(Blob) -> Blob*`、`norito_bytes(Blob) -> Blob*`。
+  - 支持方法糖：`s.name()`、`s.json()`、`b.blob()`、`b.norito_bytes()`。
 
-Host/syscall builtins (map to SCALL; exact numbers in ivm.md)
+主機/系統調用內置函數（映射到 SCALL；精確數字在 ivm.md 中）
 - `mint_asset(AccountId*, AssetDefinitionId*, numeric)`
 - `burn_asset(AccountId*, AssetDefinitionId*, numeric)`
 - `transfer_asset(AccountId*, AccountId*, AssetDefinitionId*, numeric)`
@@ -280,116 +271,110 @@ Host/syscall builtins (map to SCALL; exact numbers in ivm.md)
 - `axt_commit()`
 - `contains(Map<K,V>, K) -> bool`
 
-Utility builtins
-- `info(string|int)`: emits a structured event/message via OUTPUT.
-- `hash(blob) -> Blob*`: returns a Norito-encoded hash as Blob.
-- `build_submit_ballot_inline(election_id, ciphertext, nullifier32, backend, proof, vk) -> Blob*` and `build_unshield_inline(asset, to, amount, inputs32, backend, proof, vk) -> Blob*`: inline ISI builders; all arguments must be compile-time literals (string literals or pointer constructors from literals). `nullifier32` and `inputs32` must be exactly 32 bytes (raw string or `0x` hex), and `amount` must be non-negative.
+內置實用程序
+- `info(string|int)`：通過 OUTPUT 發出結構化事件/消息。
+- `hash(blob) -> Blob*`：將 Norito 編碼的哈希值返回為 Blob。
+- `build_submit_ballot_inline(election_id, ciphertext, nullifier32, backend, proof, vk) -> Blob*` 和 `build_unshield_inline(asset, to, amount, inputs32, backend, proof, vk) -> Blob*`：內聯 ISI 構建器；所有參數必須是編譯時文字（字符串文字或文字的指針構造函數）。 `nullifier32` 和 `inputs32` 必須恰好為 32 個字節（原始字符串或 `0x` 十六進制），並且 `amount` 必須為非負數。
 - `schema_info(Name*) -> Json* { "id": "<hex>", "version": N }`
-- `encode_schema(Name*, Json*) -> Blob`: encodes JSON using the host schema registry (DefaultRegistry supports `QueryRequest` and `QueryResponse` in addition to Order/Trade samples).
-- `decode_schema(Name*, Blob|bytes) -> Json*`: decodes Norito bytes using the host schema registry.
-- `pointer_to_norito(ptr) -> NoritoBytes*`: wraps an existing pointer-ABI TLV as NoritoBytes for storage or transport.
-- `isqrt(int) -> int`: integer square root (`floor(sqrt(x))`) implemented as an IVM opcode.
-- `min(int, int) -> int`, `max(int, int) -> int`, `abs(int) -> int`, `div_ceil(int, int) -> int`, `gcd(int, int) -> int`, `mean(int, int) -> int` — fused arithmetic helpers backed by native IVM opcodes (ceil division traps on divide-by-zero).
+- `encode_schema(Name*, Json*) -> Blob`：使用主機架構註冊表對 JSON 進行編碼（除了訂單/交易示例之外，DefaultRegistry 還支持 `QueryRequest` 和 `QueryResponse`）。
+- `decode_schema(Name*, Blob|bytes) -> Json*`：使用主機架構註冊表解碼 Norito 字節。
+- `pointer_to_norito(ptr) -> NoritoBytes*`：將現有指針 ABI TLV 包裝為 NoritoBytes 以進行存儲或傳輸。
+- `isqrt(int) -> int`：作為 IVM 操作碼實現的整數平方根 (`floor(sqrt(x))`)。
+- `min(int, int) -> int`、`max(int, int) -> int`、`abs(int) -> int`、`div_ceil(int, int) -> int`、`gcd(int, int) -> int`、`mean(int, int) -> int` — 由本機 IVM 操作碼支持的融合算術助手（ceil 除法陷阱除以零）。註釋
+- 內置是薄墊片；編譯器將它們降低為寄存器移動和 `SCALL`。
+- 指針構造函數是純的：VM 確保 INPUT 中的 Norito TLV 在調用期間不可變。
+ - 具有指針 ABI 字段的結構（例如，`DomainId`、`AccountId`）可用於按人體工程學對系統調用參數進行分組。編譯器將 `obj.field` 映射到正確的寄存器/值，無需額外分配。
 
-Notes
-- Builtins are thin shims; the compiler lowers them to register moves and a `SCALL`.
-- Pointer constructors are pure: the VM ensures the Norito TLV in INPUT is immutable for the call duration.
- - Structs with pointer-ABI fields (e.g., `DomainId`, `AccountId`) can be used to group syscall arguments ergonomically. The compiler maps `obj.field` to the correct register/value without extra allocations.
+## 收藏和地圖
 
-## Collections and Maps
+類型：`Map<K, V>`
+- 內存中映射（通過 `Map::new()` 堆分配或作為參數傳遞）存儲單個鍵/值對；鍵和值必須是字大小的類型：`int`、`bool`、`string`、`Blob`、`bytes`、`Json` 或指針類型（例如，`AccountId`、 `Name`）。
+- 持久狀態映射 (`state Map<...>`) 使用 Norito 編碼的鍵/值。支持的按鍵：`int` 或指針類型。支持的值：`int`、`bool`、`Json`、`Blob`/`bytes` 或指針類型。
+- `Map::new()` 分配並清零初始化單個內存條目（鍵/值 = 0）；對於非 `Map<int,int>` 映射，提供顯式類型註釋或返回類型。
+- 狀態地圖不是一流的值：您無法重新分配它們（例如，`M = Map::new()`）；通過索引更新條目 (`M[key] = value`)。
+- 操作：
+  - 索引：`map[key]` 獲取/設置值（通過主機系統調用執行設置；請參閱運行時 API 映射）。
+  - 存在：`contains(map, key) -> bool`（降低的助手；可能是內部系統調用）。
+  - 迭代：`for (k, v) in map { ... }`，具有確定性順序和變異規則。
 
-Type: `Map<K, V>`
-- In-memory maps (heap-allocated via `Map::new()` or passed as parameters) store a single key/value pair; keys and values must be word-sized types: `int`, `bool`, `string`, `Blob`, `bytes`, `Json`, or pointer types (e.g., `AccountId`, `Name`).
-- Durable state maps (`state Map<...>`) use Norito-encoded keys/values. Supported keys: `int` or pointer types. Supported values: `int`, `bool`, `Json`, `Blob`/`bytes`, or pointer types.
-- `Map::new()` allocates and zero-initializes the single in-memory entry (key/value = 0); for non-`Map<int,int>` maps, provide an explicit type annotation or return type.
-- State maps are not first-class values: you cannot reassign them (e.g., `M = Map::new()`); update entries via indexing (`M[key] = value`).
-- Operations:
-  - Indexing: `map[key]` get/set value (set performed via host syscall; see runtime API mapping).
-  - Existence: `contains(map, key) -> bool` (lowered helper; may be an intrinsic syscall).
-  - Iteration: `for (k, v) in map { ... }` with deterministic order and mutation rules.
+確定性迭代規則
+- 迭代集是循環入口處鍵的快照。
+- 順序是 Norito 編碼密鑰的嚴格字節字典順序升序。
+- 循環期間對迭代映射的結構修改（插入/刪除/清除）會導致確定性 `E_ITER_MUTATION` 陷阱。
+- 需要有界性：地圖上聲明的最大值 (`@max_len`)、顯式屬性 `#[bounded(n)]` 或使用 `.take(n)`/`.range(..)` 的顯式邊界；否則編譯器會發出 `E_UNBOUNDED_ITERATION`。
 
-Deterministic iteration rules
-- The iteration set is the snapshot of keys at loop entry.
-- Order is strictly ascending byte-lexicographic order of Norito-encoded keys.
-- Structural modifications (insert/remove/clear) to the iterated map during the loop cause a deterministic `E_ITER_MUTATION` trap.
-- Boundedness is required: either a declared max (`@max_len`) on the map, an explicit attribute `#[bounded(n)]`, or an explicit bound using `.take(n)`/`.range(..)`; otherwise the compiler emits `E_UNBOUNDED_ITERATION`.
+界限助手
+- `#[bounded(n)]`：地圖表達式上的可選屬性，例如`for (k, v) in my_map #[bounded(2)] { ... }`。
+- `.take(n)`：從頭開始迭代第一個 `n` 條目。
+- `.range(start, end)`：迭代半開區間 `[start, end)` 中的條目。語義相當於 `start` 和 `n = end - start`。關於動態邊界的註釋
+- 文字邊界：完全支持 `n`、`start` 和 `end` 作為整數文字，並編譯為固定的迭代次數。
+- 非文字邊界：當在 `ivm` 包中啟用 `kotodama_dynamic_bounds` 功能時，編譯器接受動態 `n`、`start` 和 `end` 表達式，並插入運行時斷言以確保安全（非負、 `end >= start`）。降低會通過 `if (i < n)` 檢查發出最多 K 個受保護的迭代，以避免額外的主體執行（默認 K=2）。您可以通過 `CompilerOptions { dynamic_iter_cap, .. }` 以編程方式調整 K。
+- 在編譯前運行 `koto_lint` 檢查 Kotodama lint 警告；主編譯器總是在解析和類型檢查後繼續進行降低。
+- 錯誤代碼記錄在 [Kotodama 編譯器錯誤代碼](./kotodama_error_codes.md) 中；使用 `koto_compile --explain <code>` 進行快速解釋。
 
-Bounds helpers
-- `#[bounded(n)]`: optional attribute on the map expression, e.g. `for (k, v) in my_map #[bounded(2)] { ... }`.
-- `.take(n)`: iterate the first `n` entries from the start.
-- `.range(start, end)`: iterate entries in the half-open interval `[start, end)`. Semantics are equivalent to `start` and `n = end - start`.
+## 錯誤和診斷
 
-Notes on dynamic bounds
-- Literal bounds: `n`, `start`, and `end` as integer literals are fully supported and compile to a fixed number of iterations.
-- Non-literal bounds: when the `kotodama_dynamic_bounds` feature is enabled in the `ivm` crate, the compiler accepts dynamic `n`, `start`, and `end` expressions and inserts runtime assertions for safety (non-negative, `end >= start`). Lowering emits up to K guarded iterations with `if (i < n)` checks to avoid extra body executions (default K=2). You can tune K programmatically via `CompilerOptions { dynamic_iter_cap, .. }`.
-- Run `koto_lint` to inspect Kotodama lint warnings prior to compilation; the main compiler always proceeds with lowering after parsing and type-checking.
-- Error codes are documented in [Kotodama Compiler Error Codes](./kotodama_error_codes.md); use `koto_compile --explain <code>` for quick explanations.
+編譯時診斷（示例）
+- `E_UNBOUNDED_ITERATION`：地圖循環缺少界限。
+- `E_MUT_DURING_ITER`：循環體中迭代映射的結構突變。
+- `E_STATE_SHADOWED`：本地綁定不能隱藏 `state` 聲明。
+- `E_BREAK_OUTSIDE_LOOP`：`break` 在循環外部使用。
+- `E_CONTINUE_OUTSIDE_LOOP`：`continue` 在循環外部使用。
+- `E0005`：for 循環初始值設定項比支持的更複雜。
+- `E0006`：for 循環步驟子句比支持的更複雜。
+- `E_BAD_POINTER_USE`：在需要第一類類型的情況下使用指針 ABI 構造函數結果。
+- `E_UNRESOLVED_NAME`、`E_TYPE_MISMATCH`、`E_ARITY_MISMATCH`、`E_DUP_SYMBOL`。
+- 工具：`koto_compile` 在發出字節碼之前運行 lint pass；使用 `--no-lint` 跳過或使用 `--deny-lint-warnings` 使 lint 輸出的構建失敗。
 
-## Errors and Diagnostics
+運行時 VM 錯誤（已選擇；完整列表位於 ivm.md 中）
+- `E_NORITO_INVALID`、`E_OOB`、`E_UNALIGNED`、`E_SCALL_UNKNOWN`、`E_ASSERT`、`E_ASSERT_EQ`、`E_ITER_MUTATION`。
 
-Compile-time diagnostics (examples)
-- `E_UNBOUNDED_ITERATION`: loop over map lacks a bound.
-- `E_MUT_DURING_ITER`: structural mutation of iterated map in loop body.
-- `E_STATE_SHADOWED`: local bindings cannot shadow `state` declarations.
-- `E_BREAK_OUTSIDE_LOOP`: `break` used outside a loop.
-- `E_CONTINUE_OUTSIDE_LOOP`: `continue` used outside a loop.
-- `E0005`: for-loop initializer is more complex than supported.
-- `E0006`: for-loop step clause is more complex than supported.
-- `E_BAD_POINTER_USE`: using a pointer-ABI constructor result where a first-class type is required.
-- `E_UNRESOLVED_NAME`, `E_TYPE_MISMATCH`, `E_ARITY_MISMATCH`, `E_DUP_SYMBOL`.
-- Tooling: `koto_compile` runs the lint pass before emitting bytecode; use `--no-lint` to skip or `--deny-lint-warnings` to fail the build on lint output.
+錯誤信息
+- 診斷攜帶穩定的 `msg_id`，映射到 `kotoba {}` 轉換錶（如果可用）中的條目。
 
-Runtime VM errors (selected; full list in ivm.md)
-- `E_NORITO_INVALID`, `E_OOB`, `E_UNALIGNED`, `E_SCALL_UNKNOWN`, `E_ASSERT`, `E_ASSERT_EQ`, `E_ITER_MUTATION`.
+## Codegen 映射到 IVM
 
-Error messages
-- Diagnostics carry stable `msg_id`s that map to entries in `kotoba {}` translation tables when available.
+管道
+1. Lexer/Parser 生成 AST。
+2. 語義分析解析名稱、檢查類型並填充符號表。
+3. IR 降低為簡單的類似 SSA 的形式。
+4. IVM GPR 的寄存器分配（根據調用約定，args/ret 為 `r10+`）；溢出到堆棧。
+5. 字節碼發射：允許混合 IVM 原生編碼和 RV 兼容編碼；使用 `abi_version`、特徵、向量長度和 `max_cycles` 發出的元數據標頭。映射亮點
+- 算術和邏輯映射到 IVM ALU 操作。
+- 分支和控制映射到條件分支和跳轉；編譯器在有利可圖的情況下使用壓縮形式。
+- 本地內存溢出到VM堆棧；強制對齊。
+- 內置寄存器移動和 `SCALL` 的 8 位數字。
+- 指針構造函數將 Norito TLV 放入 INPUT 區域並生成它們的地址。
+- 斷言映射到 `ASSERT`/`ASSERT_EQ`，它捕獲非 ZK 執行並在 ZK 構建中發出約束。
 
-## Codegen Mapping to IVM
+決定論約束
+- 無FP；沒有不確定的系統調用。
+- SIMD/GPU加速對字節碼不可見，並且必須位相同；編譯器不會發出特定於硬件的操作。
 
-Pipeline
-1. Lexer/Parser produce AST.
-2. Semantic analysis resolves names, checks types, and populates symbol tables.
-3. IR lowering to a simple SSA-like form.
-4. Register allocation to IVM GPRs (`r10+` for args/ret per calling convention); spills to stack.
-5. Bytecode emission: mix of IVM-native and RV-compat encodings as allowed; metadata header emitted with `abi_version`, features, vector length, and `max_cycles`.
+## ABI、標頭和清單
 
-Mapping highlights
-- Arithmetic and logic map to IVM ALU ops.
-- Branching and control map to conditional branches and jumps; the compiler uses compressed forms where profitable.
-- Memory for locals spills to the VM stack; alignment is enforced.
-- Builtins lower to register moves and `SCALL` with 8-bit number.
-- Pointer constructors place Norito TLVs into the INPUT region and produce their addresses.
-- Assertions map to `ASSERT`/`ASSERT_EQ` which trap in non-ZK execution and emit constraints in ZK builds.
+IVM 編譯器設置的頭字段
+- `version`：IVM 字節碼格式版本（主要.次要）。
+- `abi_version`：系統調用表和指針 ABI 架構版本。
+- `feature_bits`：功能標誌（例如，`ZK`、`VECTOR`）。
+- `vector_len`：邏輯向量長度（0 → 未設置）。
+- `max_cycles`：准入限制和 ZK 填充提示。
 
-Determinism constraints
-- No FP; no nondeterministic syscalls.
-- SIMD/GPU acceleration is invisible to bytecode and must be bit-identical; compiler does not emit hardware-specific ops.
+清單（可選 sidecar）
+- `code_hash`、`abi_hash`、`meta {}` 塊的元數據、編譯器版本以及可重現性的構建提示。
 
-## ABI, Header, and Manifest
+## 路線圖
 
-IVM header fields set by the compiler
-- `version`: IVM bytecode format version (major.minor).
-- `abi_version`: syscall table and pointer-ABI schema version.
-- `feature_bits`: feature flags (e.g., `ZK`, `VECTOR`).
-- `vector_len`: logical vector length (0 → unset).
-- `max_cycles`: admission bound and ZK padding hint.
+- **KD-231（2026 年 4 月）：** 添加迭代邊界的編譯時範圍分析，以便循環向調度程序公開有界訪問集。
+- **KD-235（2026 年 5 月）：** 引入與 `string` 不同的一流 `bytes` 標量，以實現指針構造函數和 ABI 清晰度。
+- **KD-242（2026 年 6 月）：** 使用確定性回退擴展功能標誌後面的內置操作碼集（哈希/簽名驗證）。
+- **KD-247 (Jun2026)：** 穩定錯誤 `msg_id` 並維護 `kotoba {}` 表中的映射以進行本地化診斷。
+### 清單排放
 
-Manifest (optional sidecar)
-- `code_hash`, `abi_hash`, metadata from `meta {}` block, compiler version, and build hints for reproducibility.
-
-## Roadmap
-
-- **KD-231 (Apr 2026):** add compile-time range analysis for iteration bounds so loops expose bounded access sets to the scheduler.
-- **KD-235 (May 2026):** introduce a first-class `bytes` scalar distinct from `string` for pointer constructors and ABI clarity.
-- **KD-242 (Jun 2026):** expand the builtin opcode set (hash / signature verification) behind feature flags with deterministic fallbacks.
-- **KD-247 (Jun 2026):** stabilize error `msg_id`s and maintain the mapping in `kotoba {}` tables for localized diagnostics.
-### Manifest Emission
-
-- The Kotodama compiler API can return a `ContractManifest` alongside the compiled `.to` via `ivm::kotodama::compiler::Compiler::compile_source_with_manifest`.
-- Fields:
-  - `code_hash`: hash of the code bytes (excluding the IVM header and literals) computed by the compiler to bind the artifact.
-  - `abi_hash`: stable digest of the allowed syscall surface for the program's `abi_version` (see `ivm.md` and `ivm::syscalls::compute_abi_hash`).
-- Optional `compiler_fingerprint` and `features_bitmap` are reserved for toolchains.
-- `entrypoints`: ordered list of exported entrypoints (public, `hajimari`, `kaizen`) including their required `permission(...)` strings and the compiler’s best-effort read/write key hints so admission logic and schedulers can reason about expected WSV access.
-- The manifest is intended for admission-time checks and for registries; see `docs/source/new_pipeline.md` for lifecycle.
+- Kotodama 編譯器 API 可以通過 `ivm::kotodama::compiler::Compiler::compile_source_with_manifest` 返回 `ContractManifest` 以及已編譯的 `.to`。
+- 領域：
+  - `code_hash`：編譯器計算的用於綁定工件的代碼字節的哈希值（不包括 IVM 標頭和文字）。
+  - `abi_hash`：程序的 `abi_version` 允許的系統調用表面的穩定摘要（請參閱 `ivm.md` 和 `ivm::syscalls::compute_abi_hash`）。
+- 可選的 `compiler_fingerprint` 和 `features_bitmap` 保留用於工具鏈。
+- `entrypoints`：導出入口點的有序列表（公共、`hajimari`、`kaizen`），包括其所需的 `permission(...)` 字符串和編譯器的盡力讀/寫關鍵提示，以便准入邏輯和調度程序可以推斷預期的 WSV 訪問。
+- 清單用於入場時檢查和登記；有關生命週期，請參閱 `docs/source/new_pipeline.md`。

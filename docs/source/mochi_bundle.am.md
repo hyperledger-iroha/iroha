@@ -7,47 +7,48 @@ generator: scripts/sync_docs_i18n.py
 source_hash: f2dd292b7d15b449f3cec1b79343387a8c23beef3a163367bd5fa8ced8593aae
 source_last_modified: "2025-12-29T18:16:35.986892+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# MOCHI Bundle Tooling
+# MOCHI ጥቅል መሣሪያ
 
-MOCHI ships with a lightweight packaging workflow so developers can produce a
-portable desktop bundle without wiring bespoke CI scripts. The `xtask`
-subcommand handles compilation, layout, hashing, and (optionally) archive
-creation in one shot.
+MOCHI ቀላል ክብደት ባለው የማሸጊያ የስራ ፍሰት ስለሚልክ ገንቢዎች ሀ
+ተንቀሳቃሽ የዴስክቶፕ ቅርቅብ ያለ ሽቦ የ CI ስክሪፕቶች። `xtask`
+ንዑስ ትእዛዝ ማጠናቀርን፣ አቀማመጥን፣ hashingን እና (በአማራጭ) ማህደርን ይቆጣጠራል
+በአንድ ምት ውስጥ መፍጠር.
 
-## Generating a bundle
+## ጥቅል በማመንጨት ላይ
 
 ```bash
 cargo xtask mochi-bundle
 ```
 
-By default the command builds release binaries, assembles the bundle under
-`target/mochi-bundle/`, and emits a `mochi-<os>-<arch>-release.tar.gz` archive
-alongside a deterministic `manifest.json`. The manifest lists every file with
-its size and SHA-256 hash so CI pipelines can re-run verification or publish
-attestations. The helper ensures both the `mochi` desktop shell and the
-workspace `kagami` binary are present so genesis generation works out of the
-box.
+በነባሪ ትዕዛዙ የመልቀቂያ ሁለትዮሾችን ይገነባል ፣ ጥቅሉን ከስር ይሰበስባል
+`target/mochi-bundle/`፣ እና `mochi-<os>-<arch>-release.tar.gz` ማህደር ያወጣል
+ከመወሰኛ `manifest.json` ጋር። አንጸባራቂው እያንዳንዱን ፋይል ይዘረዝራል።
+መጠኑ እና SHA-256 hash ስለዚህ CI ቧንቧ መስመሮች ማረጋገጫን እንደገና ማካሄድ ወይም ማተም ይችላሉ።
+ማረጋገጫዎች. ረዳቱ ሁለቱንም `mochi` የዴስክቶፕ ሼል እና የ
+የስራ ቦታ `kagami` ሁለትዮሽ ይገኛሉ ስለዚህ የዘር ማመንጨት ከ
+ሳጥን.
 
-### Flags
+### ባንዲራዎች
 
-| Flag                | Description                                                                 |
-|---------------------|-----------------------------------------------------------------------------|
-| `--out <dir>`       | Override the output directory (defaults to `target/mochi-bundle`).         |
-| `--profile <name>`  | Build with a specific Cargo profile (e.g., `debug` for tests).              |
-| `--no-archive`      | Skip the `.tar.gz` archive, leaving only the prepared folder.               |
-| `--kagami <path>`   | Use an explicit `kagami` binary instead of building `iroha_kagami`.         |
-| `--matrix <path>`   | Append bundle metadata to a JSON matrix for CI provenance tracking.         |
-| `--smoke`           | Run `mochi --help` from the packaged bundle as a basic execution gate.      |
-| `--stage <dir>`     | Copy the finished bundle (and archive, when present) into a staging folder. |
+| ባንዲራ | መግለጫ |
+---------------------------------------------------------------------------------------|
+| `--out <dir>` | የውጤት ማውጫውን ይሽሩ (የ`target/mochi-bundle` ነባሪዎች)።         |
+| `--profile <name>` | በአንድ የተወሰነ የካርጎ መገለጫ ይገንቡ (ለምሳሌ፡ `debug` ለፈተናዎች)።              |
+| `--no-archive` | የተዘጋጀውን አቃፊ ብቻ በመተው የ`.tar.gz` ማህደርን ይዝለሉ።               |
+| `--kagami <path>` | `iroha_kagami` ከመገንባት ይልቅ ግልጽ የሆነ `kagami` ሁለትዮሽ ይጠቀሙ።         |
+| `--matrix <path>` | የጥቅል ዲበ ውሂብን ለCI provenance መከታተያ ወደ JSON ማትሪክስ ያክሉ።         |
+| `--smoke` | `mochi --help`ን ከጥቅል ጥቅል እንደ መሰረታዊ የማስፈጸሚያ በር ያሂዱ።      |
+| `--stage <dir>` | የተጠናቀቀውን ጥቅል (እና በማህደር ያስቀምጡ፣ ሲገኝ) ወደ ማዘጋጃ ማህደር ይቅዱ። |
 
-`--stage` is intended for CI pipelines where each build agent uploads its
-artefacts to a shared location. The helper recreates the bundle directory and
-copies the generated archive into the staging directory so publish jobs can
-collect platform-specific outputs without shell scripting.
+`--stage` እያንዳንዱ የግንባታ ወኪል ለሚሰቅልበት ለ CI ቧንቧዎች የታሰበ ነው።
+ቅርሶች ወደ የጋራ ቦታ። ረዳቱ የጥቅል ማውጫውን እና እንደገና ይፈጥራል
+ስራዎችን ማተም እንዲችሉ የተፈጠረውን ማህደር ወደ የዝግጅት ማውጫው ይገለበጣል
+ያለ ሼል ስክሪፕት በመድረክ ላይ የተወሰኑ ውጤቶችን ሰብስብ።
 
-The layout inside the bundle is intentionally simple:
+በጥቅሉ ውስጥ ያለው አቀማመጥ ሆን ተብሎ ቀላል ነው፡-
 
 ```
 bin/mochi              # egui desktop executable
@@ -58,11 +59,11 @@ LICENSE                # repository licence
 manifest.json          # generated file manifest with SHA-256 digests
 ```
 
-### Runtime overrides
+### የአሂድ ጊዜ ይሽራል።
 
-The packaged `mochi` executable accepts command-line overrides for the most
-common supervisor settings. Use these flags instead of editing
-`config/local.toml` when experimenting:
+የታሸገው `mochi` ፈጻሚው የትእዛዝ መስመር መሻሮችን በብዛት ይቀበላል
+የጋራ ተቆጣጣሪ ቅንብሮች. ከማርትዕ ይልቅ እነዚህን ባንዲራዎች ተጠቀም
+ሲሞክር `config/local.toml`፡
 
 ```
 ./bin/mochi --data-root ./data --profile four-peer-bft \
@@ -70,16 +71,16 @@ common supervisor settings. Use these flags instead of editing
     --irohad /path/to/irohad --kagami /path/to/kagami
 ```
 
-Any CLI value takes precedence over `config/local.toml` entries and environment
-variables.
+ማንኛውም የ CLI እሴት ከ `config/local.toml` ግቤቶች እና አከባቢዎች ቅድሚያ ይሰጣል
+ተለዋዋጮች.
 
-## Snapshot automation
+## ቅጽበታዊ አውቶማቲክ
 
-`manifest.json` records the generation timestamp, target triple, Cargo profile,
-and the complete file inventory. Pipelines can diff the manifest to detect when
-new artefacts appear, upload the JSON alongside release assets, or audit the
-hashes before promoting a bundle to operators.
+`manifest.json` የትውልዱን የጊዜ ማህተም፣ የታለመ ሶስት እጥፍ፣ የካርጎ ፕሮፋይል፣
+እና የተሟላ የፋይል ክምችት. የቧንቧ መስመሮች መቼ እንደሆነ ለመለየት አንጸባራቂውን ሊለያዩ ይችላሉ።
+አዲስ ቅርሶች ታዩ፣ JSON ከተለቀቁት ንብረቶች ጋር ይስቀሉ ወይም ኦዲት ያድርጉ
+ጥቅልን ወደ ኦፕሬተሮች ከማስተዋወቅዎ በፊት hashes።
 
-The helper is idempotent: re-running the command updates the manifest and
-overwrites the previous archive, keeping `target/mochi-bundle/` as the single
-source of truth for the latest bundle on the current machine.
+ረዳት አቅም ያለው ነው፡ ትዕዛዙን እንደገና ማስኬድ አንጸባራቂውን ያዘምናል።
+`target/mochi-bundle/` ነጠላ አድርጎ በመያዝ የቀደመውን ማህደር ይተካል።
+አሁን ባለው ማሽን ላይ ላለው የቅርብ ጊዜ ጥቅል የእውነት ምንጭ።

@@ -7,86 +7,88 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Sora Nexus data-space operator onboarding
 description: Mirror of `docs/source/sora_nexus_operator_onboarding.md`, tracking the end-to-end release checklist for Nexus operators.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
-This page mirrors `docs/source/sora_nexus_operator_onboarding.md`. Keep both copies aligned until the localized editions arrive in the portal.
+::: Каноник эх сурвалжийг анхаарна уу
+Энэ хуудас нь `docs/source/sora_nexus_operator_onboarding.md`-г тусгадаг. Орон нутгийн хэвлэлүүд портал дээр ирэх хүртэл хоёуланг нь зэрэгцүүлэн хадгална уу.
 :::
 
-# Sora Nexus Data-Space Operator Onboarding
+# Sora Nexus Data-Space Operator Inboarding
 
-This guide captures the end-to-end flow Sora Nexus data-space operators must follow once a release is announced. It complements the dual-track runbook (`docs/source/release_dual_track_runbook.md`) and the artefact selection note (`docs/source/release_artifact_selection.md`) by describing how to align downloaded bundles/images, manifests, and configuration templates with the global lane expectations before bringing a node online.
+Энэхүү гарын авлага нь Sora Nexus дата-сансрын операторуудын хувилбарыг зарласны дараа дагаж мөрдөх ёстой төгсгөл хоорондын урсгалыг тусгасан болно. Энэ нь зангилааг онлайн болгохоос өмнө татаж авсан багц/зураг, манифест болон тохиргооны загваруудыг дэлхийн эгнээний хүлээлттэй хэрхэн уялдуулах талаар тайлбарласнаар хос замтай runbook (`docs/source/release_dual_track_runbook.md`) болон олдвор сонгох тэмдэглэлийг (`docs/source/release_artifact_selection.md`) нөхөж өгдөг.
 
-## Audience & prerequisites
-- You have been approved by the Nexus Program and received your data-space assignment (lane index, data-space ID/alias, and routing policy requirements).
-- You can access the signed release artefacts published by Release Engineering (tarballs, images, manifests, signatures, public keys).
-- You have generated or received production key material for your validator/observer role (Ed25519 node identity; BLS consensus key + PoP for validators; plus any confidential feature toggles).
-- You can reach the existing Sora Nexus peers that will bootstrap your node.
+## Үзэгчид ба урьдчилсан нөхцөл
+- Та Nexus хөтөлбөрөөр батлагдаж, өгөгдлийн орон зайн даалгавраа хүлээн авлаа (замын индекс, өгөгдлийн орон зайн ID/алиа, чиглүүлэлтийн бодлогын шаардлага).
+- Та Release Engineering-ээс гаргасан гарын үсэгтэй хувилбарын олдворуудад (tarballs, зураг, манифест, гарын үсэг, нийтийн түлхүүр) хандах боломжтой.
+- Та баталгаажуулагч/ажиглагчийн дүрд (Ed25519 зангилааны таниулбар; BLS зөвшилцлийн түлхүүр + баталгаажуулагчдад зориулсан PoP; нэмэлт нууцлалыг асаах/унтраах боломжтой) үйлдвэрлэлийн түлхүүр материалыг үүсгэсэн эсвэл хүлээн авсан.
+- Та өөрийн зангилааг ачаалах одоо байгаа Sora Nexus-д хүрч болно.
 
-## Step 1 — Confirm the release profile
-1. Identify the network alias or chain ID you were given.
-2. Run `scripts/select_release_profile.py --network <alias>` (or `--chain-id <id>`) on a checkout of this repository. The helper consults `release/network_profiles.toml` and prints the profile to deploy. For Sora Nexus the response must be `iroha3`. For any other value, stop and contact Release Engineering.
-3. Note the version tag the release announcement referenced (e.g. `iroha3-v3.2.0`); you will use it to fetch artefacts and manifests.
+## Алхам 1 — Хувилбарын профайлыг баталгаажуулна уу
+1. Танд өгсөн сүлжээний нэр эсвэл сүлжээний ID-г тодорхойл.
+2. Энэ репозиторыг шалгахдаа `scripts/select_release_profile.py --network <alias>` (эсвэл `--chain-id <id>`) програмыг ажиллуул. Туслагч нь `release/network_profiles.toml`-тэй зөвлөлдөж, байршуулах профайлыг хэвлэдэг. Sora Nexus-ийн хувьд хариулт нь `iroha3` байх ёстой. Бусад үнэ цэнийн хувьд бол зогсоод Release Engineering-тэй холбогдоно уу.
+3. Заасан хувилбарын шошгыг анхаарна уу (жишээ нь, `iroha3-v3.2.0`); Та үүнийг олдвор, манифест авахын тулд ашиглах болно.
 
-## Step 2 — Retrieve and validate artefacts
-1. Download the `iroha3` bundle (`<profile>-<version>-<os>.tar.zst`) and its companion files (`.sha256`, optional `.sig/.pub`, `<profile>-<version>-manifest.json`, and `<profile>-<version>-image.json` if you deploy containers).
-2. Validate integrity before unpacking:
+## Алхам 2 — Олдворуудыг олж авах, баталгаажуулах
+1. `iroha3` багц (`<profile>-<version>-<os>.tar.zst`) болон түүний дагалдах файлуудыг (`.sha256`, нэмэлт `.sig/.pub`, `<profile>-<version>-manifest.json`, хэрэв танд байгаа бол I18NI010000) татаж авна уу.
+2. Савлахын өмнө бүрэн бүтэн байдлыг баталгаажуулна уу:
    ```bash
    sha256sum -c iroha3-<version>-linux.tar.zst.sha256
    openssl dgst -sha256 -verify iroha3-<version>-linux.tar.zst.pub \
        -signature iroha3-<version>-linux.tar.zst.sig \
        iroha3-<version>-linux.tar.zst
    ```
-   Replace `openssl` with the organisation-approved verifier if you use a hardware-backed KMS.
-3. Inspect `PROFILE.toml` inside the tarball and the JSON manifests to confirm:
+   Хэрэв та техник хангамжаар дэмжигдсэн KMS ашигладаг бол `openssl`-г байгууллагаас зөвшөөрсөн баталгаажуулагчаар солино уу.
+3. Tarball доторх `PROFILE.toml`-г шалгаад JSON-г баталгаажуулна:
    - `profile = "iroha3"`
-   - The `version`, `commit`, and `built_at` fields match the release announcement.
-   - The OS/architecture match your deployment target.
-4. If you use the container image, repeat the hash/signature verification for `<profile>-<version>-<os>-image.tar` and confirm the image ID recorded in `<profile>-<version>-image.json`.
+   - `version`, `commit`, `built_at` талбарууд нь хувилбарын зарлалтай таарч байна.
+   - Үйлдлийн систем/архитектур нь таны байршуулах зорилттой таарч байна.
+4. Хэрэв та контейнерийн дүрсийг ашигладаг бол `<profile>-<version>-<os>-image.tar`-ийн хэш/гарын үсэг баталгаажуулалтыг давтаж, `<profile>-<version>-image.json`-д бүртгэгдсэн зургийн ID-г баталгаажуулна уу.
 
-## Step 3 — Stage configuration from templates
-1. Extract the bundle and copy `config/` to the location where the node will read its configuration.
-2. Treat the files under `config/` as templates:
-   - Replace `public_key`/`private_key` with your production Ed25519 keys. Remove private keys from disk if the node will source them from an HSM; update the config to point at the HSM connector instead.
-   - Adjust `trusted_peers`, `network.address`, and `torii.address` so they reflect your reachable interfaces and the bootstrap peers you were assigned.
-   - Update `client.toml` with the operator-facing Torii endpoint (including TLS configuration if applicable) and the credentials you provision for operational tooling.
-3. Keep the chain ID provided in the bundle unless Governance explicitly instructs otherwise—the global lane expects a single canonical chain identifier.
-4. Plan to start the node with the Sora profile flag: `irohad --sora --config <path>`. The configuration loader will reject SoraFS or multi-lane settings when the flag is absent.
+## Алхам 3 — Загваруудаас үе шатны тохиргоо
+1. Багцыг задалж, `config/`-г зангилаа тохиргоогоо унших газар руу хуулна.
+2. `config/` доорх файлуудыг загвар болгон авч үзнэ:
+   - `public_key`/`private_key`-г өөрийн үйлдвэрлэлийн Ed25519 түлхүүрээр солино. Хэрэв зангилаа нь HSM-ээс эх үүсвэртэй бол хувийн түлхүүрүүдийг дискнээс хасах; оронд нь HSM холбогч руу чиглүүлэхийн тулд тохиргоог шинэчилнэ үү.
+   - `trusted_peers`, `network.address`, болон `torii.address`-г тохируулж, тэдгээр нь таны хүрч болох интерфэйсүүд болон танд оноогдсон ачаалах үе тэнгийнхнийг тусгах болно.
+   - `client.toml`-ийг оператор руу чиглэсэн Torii төгсгөлийн цэг (боломжтой бол TLS тохиргоог оруулаад) болон үйл ажиллагааны хэрэгсэлд зориулж өгсөн итгэмжлэлээр шинэчилнэ үү.
+3. Засаглал өөрөөр заагаагүй бол багцад өгсөн гинжин хэлхээний ID-г хадгална уу—дэлхийн эгнээнд нэг каноник гинжин танигч байх ёстой.
+4. Sora профайл туг бүхий зангилаа эхлүүлэхээр төлөвлөж байна: `irohad --sora --config <path>`. Тохиргооны дуудагч нь туг байхгүй үед SoraFS эсвэл олон эгнээний тохиргооноос татгалзах болно.
 
-## Step 4 — Align data-space metadata and routing
-1. Edit `config/config.toml` so the `[nexus]` section matches the data-space catalogue the Nexus Council provided:
-   - `lane_count` must equal the total lanes enabled in the current epoch.
-   - Every entry in `[[nexus.lane_catalog]]` and `[[nexus.dataspace_catalog]]` must contain a unique `index`/`id` and the agreed aliases. Do not delete the existing global entries; add your delegated aliases if the council assigned additional data-spaces.
-   - Ensure each dataspace entry includes `fault_tolerance (f)`; lane-relay committees are sized at `3f+1`.
-2. Update `[[nexus.routing_policy.rules]]` to capture the policy you were given. The default template routes governance instructions to lane `1` and contract deployments to lane `2`; append or modify rules so traffic destined for your data-space is forwarded to the correct lane and alias. Coordinate with Release Engineering before changing rule order.
-3. Review `[nexus.da]`, `[nexus.da.audit]`, and `[nexus.da.recovery]` thresholds. Operators are expected to keep the council-approved values; only adjust them if an updated policy was ratified.
-4. Record the final configuration in your operations tracker. The dual-track release runbook requires attaching the effective `config.toml` (with secrets redacted) to the onboarding ticket.
+## Алхам 4 - Өгөгдлийн орон зайн мета өгөгдөл болон чиглүүлэлтүүдийг тохируулах
+1. `config/config.toml`-г засварлахын тулд `[nexus]` хэсэг нь Nexus Зөвлөлийн өгсөн өгөгдлийн орон зайн каталогтой таарч байна:
+   - `lane_count` нь одоогийн эрин үед идэвхжүүлсэн нийт эгнээтэй тэнцүү байх ёстой.
+   - `[[nexus.lane_catalog]]` болон `[[nexus.dataspace_catalog]]` доторх бичилт бүр өвөрмөц `index`/`id` болон тохиролцсон өөр нэр агуулсан байх ёстой. Одоо байгаа глобал оруулгуудыг бүү устга; Хэрэв зөвлөлөөс нэмэлт өгөгдлийн орон зайг хуваарилсан бол төлөөлөгчийн нэрээ нэмнэ үү.
+   - Мэдээллийн орон зайд `fault_tolerance (f)` орсон эсэхийг шалгах; эгнээний буухиа хороодын хэмжээ `3f+1` байна.
+2. Танд өгсөн бодлогыг авахын тулд `[[nexus.routing_policy.rules]]`-г шинэчилнэ үү. Өгөгдмөл загвар нь удирдлагын зааварчилгааг `1` эгнээ рүү чиглүүлж, `2` эгнээ рүү гэрээгээр байршуулах; Дүрмүүдийг нэмж эсвэл өөрчил, ингэснээр таны өгөгдлийн орон зайд зориулагдсан урсгалыг зөв эгнээ болон бусад нэр рүү шилжүүлэх болно. Дүрмийн дарааллыг өөрчлөхөөс өмнө Release Engineering-тэй хамтран ажиллана уу.
+3. `[nexus.da]`, `[nexus.da.audit]`, `[nexus.da.recovery]` босго оноог шалгана уу. Операторууд зөвлөлөөс баталсан үнэ цэнийг хадгалах ёстой; шинэчилсэн бодлогыг соёрхон баталсан тохиолдолд л тэдгээрийг тохируулна.
+4. Үйл ажиллагааны хяналтын төхөөрөмждөө эцсийн тохиргоог бичнэ үү. Хос замтай хувилбарын дэвтэр нь үр дүнтэй `config.toml` (нууцыг засварласан) онгоцны тийзэнд хавсаргах шаардлагатай.
 
-## Step 5 — Pre-flight validation
-1. Run the built-in configuration validator before joining the network:
+## Алхам 5 - Нислэгийн өмнөх баталгаажуулалт
+1. Сүлжээнд холбогдохын өмнө суулгасан тохиргооны баталгаажуулагчийг ажиллуулна уу:
    ```bash
    ./bin/irohad --sora --config config/config.toml --trace-config
    ```
-   This prints the resolved configuration and fails early if catalogue/routing entries are inconsistent or if genesis and config disagree.
-2. If you deploy containers, run the same command inside the image after loading it with `docker load -i <profile>-<version>-<os>-image.tar` (remember to include `--sora`).
-3. Check logs for warnings about placeholder lane/data-space identifiers. If any appear, revisit Step 4—production deployments must not rely on the placeholder IDs that ship with the templates.
-4. Execute your local smoke procedure (e.g., submit a `FindNetworkStatus` query with `iroha_cli`, confirm telemetry endpoints expose `nexus_lane_state_total`, and verify streaming keys are rotated or imported as required).
+   Энэ нь шийдвэрлэсэн тохиргоог хэвлэх ба каталог/маршрутын оруулгууд хоорондоо зөрчилдсөн эсвэл генези болон тохиргоо нь таарахгүй байвал эрт амжилтгүй болно.
+2. Хэрэв та контейнер байрлуулах бол `docker load -i <profile>-<version>-<os>-image.tar`-ээр ачаалсны дараа зураг дотор ижил тушаалыг ажиллуулна уу (`--sora` оруулахаа санаарай).
+3. Бүртгүүлэгчийн эгнээ/өгөгдлийн орон зайн танигчийн талаарх анхааруулга байгаа эсэхийг бүртгэлээс шалгана уу. Хэрэв ямар нэгэн зүйл гарч ирвэл 4-р алхамыг дахин үзнэ үү—үйлдвэрлэлийн байршуулалт нь загвартай хамт ирдэг орлуулагчийн ID-д найдах ёсгүй.
+4. Орон нутгийнхаа утааны процедурыг гүйцэтгэнэ үү (жишээ нь, `FindNetworkStatus` асуулга `iroha_cli`-ээр илгээх, телеметрийн төгсгөлийн цэгүүд `nexus_lane_state_total` гарч байгааг баталгаажуулах, шаардлагатай бол урсгалын товчлууруудыг эргүүлэх эсвэл импортлохыг баталгаажуулах).
 
-## Step 6 — Cutover and hand-off
-1. Store the verified `manifest.json` and signature artifacts in the release ticket so auditors can reproduce your checks.
-2. Notify Nexus Operations that the node is ready to be introduced; include:
-   - Node identity (peer ID, hostnames, Torii endpoint).
-   - Effective lane/data-space catalogue and routing policy values.
-   - Hashes of the binaries/images you verified.
-3. Coordinate the final peer admission (gossip seeds and lane assignment) with `@nexus-core`. Do not join the network until you receive approval; Sora Nexus enforces deterministic lane occupancy and requires an updated admissions manifest.
-4. After the node is live, update your runbooks with any overrides you introduced and note the release tag so the next iteration can start from this baseline.
+## Алхам 6 - Таслах, шилжүүлэх
+1. Баталгаажсан `manifest.json` болон гарын үсгийн олдворуудыг гаргах тасалбарт хадгалаарай, ингэснээр аудиторууд таны чекийг хуулбарлах боломжтой.
+2. Зангилааг нэвтрүүлэхэд бэлэн болсныг Nexus Үйлдлүүдэд мэдэгдэх; Үүнд:
+   - Зангилааны таниулбар (үе тэнгийн ID, хостын нэр, Torii төгсгөлийн цэг).
+   - Үр дүнтэй эгнээ/өгөгдлийн орон зайн каталог, чиглүүлэлтийн бодлогын утгууд.
+   - Таны баталгаажуулсан хоёртын файл/зургийн хэшүүд.
+3. Үе тэнгийнхний эцсийн элсэлтийг (хов жив, эгнээний хуваарилалт) `@nexus-core`-тэй зохицуулах. Зөвшөөрөл авах хүртлээ сүлжээнд нэгдэж болохгүй; Sora Nexus нь тодорхой эгнээний хөдөлгөөнийг мөрддөг бөгөөд шинэчлэгдсэн элсэлтийн манифест шаарддаг.
+4. Зангилааг ажиллуулсны дараа runbook-уудаа өөрийн оруулсан ямар ч хүчингүй зүйлээр шинэчилж, хувилбарын шошгыг тэмдэглэж, дараагийн давталт энэ үндсэн шугамаас эхлэх боломжтой.
 
-## Reference checklist
-- [ ] Release profile validated as `iroha3`.
-- [ ] Bundle/image hashes and signatures verified.
-- [ ] Keys, peer addresses, and Torii endpoints updated to production values.
-- [ ] Nexus lane/dataspace catalogue and routing policy match council assignment.
-- [ ] Configuration validator (`irohad --sora --config … --trace-config`) passes without warnings.
-- [ ] Manifests/signatures archived in the onboarding ticket and Ops notified.
+## Лавлагааны хяналтын хуудас
+- [ ] `iroha3` гэж баталгаажуулсан хувилбарын профайл.
+- [ ] Багц/зургийн хэш болон гарын үсгийг баталгаажуулсан.
+- [ ] Түлхүүрүүд, үе тэнгийн хаягууд болон Torii төгсгөлийн цэгүүдийг үйлдвэрлэлийн утга болгон шинэчилсэн.
+- [ ] Nexus эгнээ/өгөгдлийн сансрын каталог болон чиглүүлэлтийн бодлогод тохирсон зөвлөлийн даалгавар.
+- [ ] Тохиргооны баталгаажуулагч (`irohad --sora --config … --trace-config`) анхааруулгагүйгээр дамждаг.
+- [ ] Онгоцны тасалбарт архивлагдсан манифестууд/гарын үсэг, үйл ажиллагааны талаар мэдэгдсэн.
 
-For broader context on Nexus migration phases and telemetry expectations, review [Nexus transition notes](./nexus-transition-notes).
+Nexus шилжилтийн үе шатууд болон телеметрийн хүлээлтүүдийн талаар илүү өргөн хүрээний хам сэдэвтэй байхын тулд [Nexus шилжилтийн тэмдэглэл](./nexus-transition-notes)-г шалгана уу.

@@ -4,36 +4,38 @@ direction: ltr
 source: docs/portal/docs/sorafs/pin-registry-validation-plan.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
 id: pin-registry-validation-plan
-title: Plano de validacao de manifests do Pin Registry
-sidebar_label: Validacao do Pin Registry
-description: Plano de validacao para o gating de ManifestV1 antes do rollout do Pin Registry SF-4.
+タイトル: Pin レジストリのマニフェストを検証する計画
+Sidebar_label: Validacao do Pin レジストリ
+説明: Pin Registry SF-4 をロールアウトする前に、ManifestV1 の検証を計画します。
 ---
 
-:::note Fonte canonica
-Esta pagina espelha `docs/source/sorafs/pin_registry_validation_plan.md`. Mantenha ambos os locais alinhados enquanto a documentacao herdada permanecer ativa.
+:::note フォンテ カノニカ
+エスタ・ページナ・エスペルハ`docs/source/sorafs/pin_registry_validation_plan.md`。 Mantenha ambos os locais alinhados enquanto a documentacao herdada permanecer ativa.
 :::
 
-# Plano de validacao de manifests do Pin Registry (Preparacao SF-4)
+# Pin レジストリをマニフェストで検証する計画 (Preparacao SF-4)
 
-Este plano descreve os passos necessarios para integrar a validacao de
-`sorafs_manifest::ManifestV1` no futuro contrato do Pin Registry para que o
-trabalho de SF-4 se baseie no tooling existente sem duplicar a logica de
-encode/decode.
+エステ プランは、必要なすべての機能を有効にします。
+`sorafs_manifest::ManifestV1` ピン レジストリ パラメータに将来のコントラトがありません
+SF-4 SE ベースのトラバルホには、論理的な重複したツールは存在しません
+エンコード/デコード。
 
-## Objetivos
+## オブジェクト
 
-1. Os caminhos de envio no host verificam a estrutura do manifest, o perfil de
-   chunking e os envelopes de governanca antes de aceitar propostas.
-2. Torii e os servicos de gateway reutilizam as mesmas rotinas de validacao para
-   garantir comportamento deterministico entre hosts.
-3. Os testes de integracao cobrem casos positivos/negativos para aceitacao de
-   manifests, enforcement de politica e telemetria de erros.
+1. ホストの検証が行われていない、または実行されていないことを確認する
+   政府の提案を行う前に、OS 封筒をチャンク化します。
+2. Torii ゲートウェイのサービスは、検証用のメスとして再利用されます
+   ホストの決定性を保証します。
+3. 安全性に関する陽性/陰性の精巣統合機能
+   マニフェスト、政治的執行およびエロティックなテレメトリ。
 
-## Arquitetura
+## アーキテトゥーラ
 
 ```mermaid
 flowchart LR
@@ -45,45 +47,43 @@ flowchart LR
     registry --> torii
 ```
 
-### Componentes
+### コンポーネント
 
-- `ManifestValidator` (novo modulo no crate `sorafs_manifest` ou `sorafs_pin`)
-  encapsula checks estruturais e gates de politica.
-- Torii expoe um endpoint gRPC `SubmitManifest` que chama
-  `ManifestValidator` antes de encaminhar ao contrato.
-- O caminho de fetch do gateway pode consumir opcionalmente o mesmo validador ao
-  cachear novos manifests vindos do registry.
+- `ManifestValidator` (ノボモジュロなしクレート `sorafs_manifest` または `sorafs_pin`)
+  カプセル化は構造と政治の門をチェックします。
+- Torii エンドポイント gRPC を公開 `SubmitManifest` クエリ チャマ
+  `ManifestValidator` アンテ・デ・エンカミンハール・アオ・コントラト。
+- ゲートウェイのフェッチを実行するために必要なオプションを取得し、有効なメッセージを送信します
+  cachear novos は、vindos do レジストリをマニフェストします。
 
-## Desdobramento de tarefas
+## デスドブラメント デ タレファス
 
-| Tarefa | Descricao | Responsavel | Status |
-|--------|-----------|-------------|--------|
-| Esqueleto de API V1 | Adicionar `validate_manifest(manifest: &ManifestV1, policy: &PinPolicyInputs) -> Result<(), ValidationError>` em `sorafs_manifest`. Incluir verificacao de digest BLAKE3 e lookup do chunker registry. | Core Infra | Concluido | Helpers compartilhados (`validate_chunker_handle`, `validate_pin_policy`, `validate_manifest`) agora vivem em `sorafs_manifest::validation`. |
-| Wiring de politica | Mapear a configuracao de politica do registry (`min_replicas`, janelas de expiracao, handles de chunker permitidos) para as entradas de validacao. | Governance / Core Infra | Pendente - rastreado em SORAFS-215 |
-| Integracao Torii | Chamar o validador no caminho de submissao Torii; retornar erros Norito estruturados em falhas. | Torii Team | Planejado - rastreado em SORAFS-216 |
-| Stub de contrato host | Garantir que o entrypoint do contrato rejeite manifests que falham no hash de validacao; expor contadores de metricas. | Smart Contract Team | Concluido | `RegisterPinManifest` agora invoca o validador compartilhado (`ensure_chunker_handle`/`ensure_pin_policy`) antes de mutar o estado e testes unitarios cobrem os casos de falha. |
-| Tests | Adicionar testes unitarios para o validador + casos trybuild para manifests invalidos; testes de integracao em `crates/iroha_core/tests/pin_registry.rs`. | QA Guild | Em progresso | Os testes unitarios do validador chegaram junto com rejeicoes on-chain; a suite completa de integracao segue pendente. |
-| Docs | Atualizar `docs/source/sorafs_architecture_rfc.md` e `migration_roadmap.md` quando o validador chegar; documentar uso da CLI em `docs/source/sorafs/manifest_pipeline.md`. | Docs Team | Pendente - rastreado em DOCS-489 |
+|タレファ |説明 |返信 |ステータス |
+|----------|----------|---------------|----------|
+| API V1 のエスケレート | `validate_manifest(manifest: &ManifestV1, policy: &PinPolicyInputs) -> Result<(), ValidationError>` と `sorafs_manifest` を追加します。 BLAKE3 ダイジェストの検証とチャンカー レジストリの検索が含まれます。 |コアインフラ |結論 |ヘルパーは、`validate_chunker_handle`、`validate_chunker_handle`、`validate_pin_policy`、`validate_manifest`) と `sorafs_manifest::validation` を比較します。 |
+|政治の配線 |レジストリ (`min_replicas`、期限切れ、チャンカー許可のハンドル) を有効なエントリとしてマップします。 |ガバナンス / コアインフラ |ペンダント - ラストレッド em SORAFS-215 |
+|インテグラカオ Torii | Chamar o validador no caminho de submissao Torii; Retornar erros Norito estruturados em falhas。 | Torii チーム | Planejado - ラストレッド em SORAFS-216 |
+|コントラートホストのスタブ |エントリポイントは、ハッシュ デ バリダカオのないファルハムを明示します。コンタドール デ メトリカスをエクスポートします。 |スマートコントラクトチーム |結論 | `RegisterPinManifest` は、検証と比較を行う前に (`ensure_chunker_handle`/`ensure_pin_policy`) テストを開始し、テストを行う必要があります。 |
+|テスト | Adicionar testes unitarios para o validador + casos trybuild para マニフェスト無効。精巣統合性`crates/iroha_core/tests/pin_registry.rs`。 | QAギルド | Em進行形 | Os testes unitarios は、オンチェーンで検証を行います。セグエペンデンテを完全に統合したスイート。 |
+|ドキュメント | Atualizar `docs/source/sorafs_architecture_rfc.md` と `migration_roadmap.md` Quando または validador chegar; CLI em `docs/source/sorafs/manifest_pipeline.md` のドキュメンタリーを使用します。 |ドキュメントチーム |ペンダント - ラストレド em DOCS-489 |
 
-## Dependencias
+## 依存関係
 
-- Finalizacao do esquema Norito do Pin Registry (ref: item SF-4 no roadmap).
-- Envelopes do chunker registry assinados pelo conselho (garante mapeamento deterministico do validador).
-- Decisoes de autenticacao do Torii para submissao de manifests.
+- Norito の Pin レジストリを終了します (参照: 項目 SF-4 ロードマップなし)。
+- エンベロープはチャンカー レジストリ assinados pelo conselho (garante Mapeamento deterministico do validador) を実行します。
+- マニフェストの提出に関する Torii の認証を決定します。
 
-## Riscos e mitigacoes
+## リスクとリスク
 
-| Risco | Impacto | Mitigacao |
-|-------|---------|-----------|
-| Interpretacao divergente de politica entre Torii e o contrato | Aceitacao nao deterministica. | Compartilhar crate de validacao + adicionar testes de integracao que comparem decisoes do host vs on-chain. |
-| Regressao de performance para manifests grandes | Submissoes mais lentas | Medir via cargo criterion; considerar cachear resultados de digest do manifest. |
-| Deriva de mensagens de erro | Confusao do operador | Definir codigos de erro Norito; documentar em `manifest_pipeline.md`. |
+|リスコ |インパクト |ミティガカオ |
+|----------|-----------|----------|
+| Torii e o contrato | 政治的解釈の相違 | Aceitacao nao deterministica。 |ホストとオンチェーンを比較して、検証結果と統合テストの比較を決定します。 |
+|盛大なパフォーマンスを実現するための回帰 |提出してください |地中海経由貨物基準。マニフェストのダイジェストのキャッシュ結果を考慮します。 |
+|デリーバ・デ・メンサーゲン・デ・エロ |コンフサオ・ド・オペラドール |コード Norito を定義します。ドキュメンタリー映画 `manifest_pipeline.md`。 |
 
-## Metas de cronograma
+## メタス デ クロノグラマ
 
-- Semana 1: entregar o esqueleto `ManifestValidator` + testes unitarios.
-- Semana 2: integrar o caminho de submissao no Torii e atualizar a CLI para expor erros de validacao.
-- Semana 3: implementar hooks do contrato, adicionar testes de integracao, atualizar docs.
-- Semana 4: rodar ensaio end-to-end com entrada no migration ledger e capturar aprovacao do conselho.
-
-Este plano sera referenciado no roadmap assim que o trabalho do validador comecar.
+- セマナ 1: entregar o esqueleto `ManifestValidator` + 精巣ユニタリオス。
+- セマナ 2: Torii を実行して、検証エラーをエクスポートするための CLI の統合。
+- Semana 3: フックの実装、コントラト、追加テスト、統合ドキュメント、およびドキュメント。
+- Semana 4: エンドツーエンドの通信は必要ありません。移行台帳やキャプチャーは必要ありません。エステプラノセラレファレンシアドは、バリダドールカムカーを行うためのロードマップはありません。

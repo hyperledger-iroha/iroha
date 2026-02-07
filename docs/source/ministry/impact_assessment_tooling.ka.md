@@ -7,39 +7,40 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 89be62d7bb2bb79fd994d207489d310ef4c997be53447fbee8ac1f7b758d3beb
 source_last_modified: "2025-12-29T18:16:35.978367+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Impact Assessment Tooling (MINFO‑4b)
+# ზემოქმედების შეფასების ინსტრუმენტი (MINFO‑4b)
 
-Roadmap reference: **MINFO‑4b — Impact assessment tooling.**  
-Owner: Governance Council / Analytics
+საგზაო რუქის მითითება: **MINFO‑4b — ზემოქმედების შეფასების ინსტრუმენტი.**  
+მფლობელი: მმართველობის საბჭო / ანალიტიკა
 
-This note documents the `cargo xtask ministry-agenda impact` command that now
-produces the automated hash-family diff required for referendum packets. The
-tool consumes validated Agenda Council proposals, the duplicate registry, and
-an optional denylist/policy snapshot so reviewers can see exactly which
-fingerprints are new, which collide with existing policy, and how many entries
-each hash family contributes.
+ეს ჩანაწერი ადასტურებს `cargo xtask ministry-agenda impact` ბრძანებას, რომელიც ახლა
+აწარმოებს ავტომატური ჰეშ-ოჯახის განსხვავებას, რომელიც საჭიროა რეფერენდუმის პაკეტებისთვის. The
+ინსტრუმენტი მოიხმარს დღის წესრიგის დადასტურებულ საბჭოს წინადადებებს, რეესტრის დუბლიკატს და
+არასავალდებულო უარმყოფელი/პოლიტიკის სურათი, რათა მიმომხილველებმა ნახონ ზუსტად რომელი
+თითის ანაბეჭდები ახალია, რომლებიც ეჯახება არსებულ პოლიტიკას და რამდენი ჩანაწერი
+თითოეული ჰაშის ოჯახი ხელს უწყობს.
 
-## Inputs
+## შეყვანა
 
-1. **Agenda proposals.** One or more files that follow
+1. ** დღის წესრიგის წინადადებები. ** ერთი ან მეტი ფაილი, რომელიც მოჰყვება
    [`docs/source/ministry/agenda_council_proposal.md`](agenda_council_proposal.md).
-   Pass them explicitly with `--proposal <path>` or point the command at a
-   directory via `--proposal-dir <dir>` and every `*.json` file under that path
-   is included.
-2. **Duplicate registry (optional).** A JSON file matching
-   `docs/examples/ministry/agenda_duplicate_registry.json`. Conflicts are
-   reported under `source = "duplicate_registry"`.
-3. **Policy snapshot (optional).** A lightweight manifest that lists every
-   fingerprint already enforced by GAR/Ministry policy. The loader expects the
-   schema shown below (see
+   გადასცეთ ისინი პირდაპირ `--proposal <path>`-ით ან მიუთითეთ ბრძანება a
+   დირექტორია `--proposal-dir <dir>` და ყველა `*.json` ფაილის მეშვეობით ამ გზაზე
+   შედის.
+2. ** რეესტრის დუბლიკატი (არასავალდებულო). ** JSON ფაილის შესატყვისი
+   `docs/examples/ministry/agenda_duplicate_registry.json`. კონფლიქტები არის
+   მოხსენებული `source = "duplicate_registry"` ქვეშ.
+3. **პოლიტიკის სნეპშოტი (სურვილისამებრ).** მსუბუქი მანიფესტი, რომელიც ჩამოთვლის ყველა
+   თითის ანაბეჭდი უკვე აღსრულებულია GAR/მინისტრის პოლიტიკით. მტვირთავი ელის
+   სქემა ნაჩვენებია ქვემოთ (იხ
    [`docs/examples/ministry/policy_snapshot_example.json`](../../examples/ministry/policy_snapshot_example.json)
-   for a complete sample):
+   სრული ნიმუშისთვის):
 
 ```json
 {
@@ -56,10 +57,10 @@ each hash family contributes.
 }
 ```
 
-Any entry whose `hash_family:hash_hex` fingerprint matches a proposal target is
-reported under `source = "policy_snapshot"` with the referenced `policy_id`.
+ნებისმიერი ჩანაწერი, რომლის `hash_family:hash_hex` თითის ანაბეჭდი ემთხვევა წინადადების მიზანს
+მოხსენებულია `source = "policy_snapshot"`-ით, მითითებულ `policy_id`-ით.
 
-## Usage
+## გამოყენება
 
 ```bash
 cargo xtask ministry-agenda impact \
@@ -69,8 +70,8 @@ cargo xtask ministry-agenda impact \
   --out artifacts/ministry/impact/AC-2026-001.json
 ```
 
-Additional proposals can be appended via repeated `--proposal` flags or by
-supplying a directory that contains an entire referendum batch:
+დამატებითი წინადადებები შეიძლება დაერთოს განმეორებითი `--proposal` დროშებით ან
+აწვდის დირექტორიას, რომელიც შეიცავს მთელ რეფერენდუმის ჯგუფს:
 
 ```bash
 cargo xtask ministry-agenda impact \
@@ -79,12 +80,12 @@ cargo xtask ministry-agenda impact \
   --out artifacts/ministry/impact/2026-03-31.json
 ```
 
-The command prints the generated JSON to stdout when `--out` is omitted.
+ბრძანება ბეჭდავს გენერირებულ JSON-ს stdout-ზე, როდესაც `--out` გამოტოვებულია.
 
-## Output
+## გამომავალი
 
-The report is a signed-off artefact (record it under the referendum packet’s
-`artifacts/ministry/impact/` directory) with the following structure:
+ანგარიში არის ხელმოწერილი არტეფაქტი (ჩაწერეთ იგი რეფერენდუმის პაკეტის ქვეშ
+`artifacts/ministry/impact/` დირექტორია) შემდეგი სტრუქტურით:
 
 ```json
 {
@@ -125,13 +126,13 @@ The report is a signed-off artefact (record it under the referendum packet’s
 }
 ```
 
-Attach this JSON to every referendum dossier alongside the neutral summary so
-panelists, jurors, and governance observers can see the exact blast radius of
-each proposal. The output is deterministic (sorted by hash family) and safe to
-include in CI/runbooks; if the duplicate registry or policy snapshot changes,
-rerun the command and attach the refreshed artefact before the vote opens.
+მიამაგრეთ ეს JSON ყველა რეფერენდუმის დოსიეს ნეიტრალურ შეჯამებასთან ერთად
+პანელისტებს, ნაფიც მსაჯულებს და მმართველობის დამკვირვებლებს შეუძლიათ დაინახონ აფეთქების ზუსტი რადიუსი
+თითოეული წინადადება. გამომავალი არის დეტერმინისტული (დახარისხებული ჰეშის ოჯახის მიხედვით) და უსაფრთხო
+CI/runbooks-ში ჩართვა; თუ რეესტრის დუბლიკატი ან პოლიტიკის სურათი იცვლება,
+გაიმეორეთ ბრძანება და მიამაგრეთ განახლებული არტეფაქტი კენჭისყრის დაწყებამდე.
 
-> **Next step:** feed the generated impact report into
-> [`cargo xtask ministry-panel packet`](referendum_packet.md) so the
-> `ReferendumPacketV1` dossier contains both the hash-family breakdown and the
-> detailed conflict list for the proposal under review.
+> **შემდეგი ნაბიჯი:** შეიტანეთ გენერირებული ზემოქმედების ანგარიში
+> [`cargo xtask ministry-panel packet`](referendum_packet.md) ასე რომ
+> `ReferendumPacketV1` დოსიე შეიცავს ჰეშ-ოჯახის დაყოფას და
+> განხილული წინადადების კონფლიქტების დეტალური სია.

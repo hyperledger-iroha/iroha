@@ -7,46 +7,48 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: GAR Operator Onboarding
 sidebar_label: GAR Operator Onboarding
 description: Checklist to activate SNNet-9 compliance policies with attestation digests and evidence capture.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-Use this brief to roll out the SNNet-9 compliance configuration with a repeatable,
-audit-friendly process. Pair it with the jurisdictional review so every operator
-uses the same digests and evidence layout.
+Бұл қысқаша SNNet-9 сәйкестік конфигурациясын қайталанатын параметрмен шығару үшін пайдаланыңыз,
+аудитке қолайлы процесс. Әрбір оператор үшін оны юрисдикциялық шолумен жұптаңыз
+бірдей дайджесттер мен дәлелдемелердің орналасуын пайдаланады.
 
-## Steps
+## қадамдар
 
-1. **Assemble config**
-   - Import `governance/compliance/soranet_opt_outs.json`.
-   - Merge your `operator_jurisdictions` with the attestation digests published
-     in the [jurisdictional review](gar-jurisdictional-review).
-2. **Validate**
+1. **Конфигурацияны құрастыру**
+   - `governance/compliance/soranet_opt_outs.json` импорттау.
+   - `operator_jurisdictions` нұсқасын жарияланған аттестаттау дайджесттерімен біріктіріңіз
+     [юрисдикциялық шолуда](gar-jurisdictional-review).
+2. **Тексеру**
    - `cargo test -p sorafs_orchestrator -- compliance_policy_parses_from_json`
    - `cargo test -p sorafs_orchestrator -- compliance_example_config_parses`
-   - Optional: `cargo xtask soranet-privacy-report --max-suppression-ratio 0.2 --ndjson <privacy-log.ndjson>`
-3. **Capture evidence**
-   - Store under `artifacts/soranet/compliance/<YYYYMMDD>/`:
-     - `config.json` (final compliance block)
-     - `attestations.json` (URIs + digests)
-     - validation logs
-     - references to signed PDFs/Norito envelopes
-4. **Activate**
-   - Tag the rollout (`gar-opt-out-<date>`), redeploy orchestrator/SDK configs,
-     and confirm `compliance_*` events emit in logs where expected.
-5. **Close out**
-   - File the evidence bundle with Governance Council.
-   - Log the activation window + approvers in the GAR logbook.
-   - Schedule the next-review dates from the jurisdictional review table.
+   - Қосымша: `cargo xtask soranet-privacy-report --max-suppression-ratio 0.2 --ndjson <privacy-log.ndjson>`
+3. **Дәлелдерді басып алу**
+   - `artifacts/soranet/compliance/<YYYYMMDD>/` астында сақтау:
+     - `config.json` (соңғы сәйкестік блогы)
+     - `attestations.json` (URI + дайджесттер)
+     - тексеру журналдары
+     - қол қойылған PDF файлдарына/Norito конверттеріне сілтемелер
+4. **Іске қосу**
+   - Шығарманы белгілеңіз (`gar-opt-out-<date>`), оркестр/SDK конфигурацияларын қайта орналастырыңыз,
+     және күтілетін жерде журналдарда шығарылатын `compliance_*` оқиғаларын растаңыз.
+5. **Жабу**
+   - Басқару кеңесіне дәлелдемелерді тапсырыңыз.
+   - GAR журналында белсендіру терезесін + бекітушілерді тіркеңіз.
+   - Юрисдикциялық тексеру кестесінен келесі тексеру күндерін жоспарлаңыз.
 
-## Quick checklist
+## Жылдам бақылау тізімі
 
-- [ ] `jurisdiction_opt_outs` matches the canonical catalogue.
-- [ ] Attestation digests copied exactly.
-- [ ] Validation commands run and archived.
-- [ ] Evidence bundle stored in `artifacts/soranet/compliance/<date>/`.
-- [ ] Rollout tag + GAR logbook updated.
-- [ ] Next-review reminders set.
+- [ ] `jurisdiction_opt_outs` канондық каталогқа сәйкес келеді.
+- [ ] Аттестаттау дайджесттері дәл көшірілген.
+- [ ] Тексеру пәрмендері іске қосылады және мұрағатталды.
+- [ ] `artifacts/soranet/compliance/<date>/` ішінде сақталған дәлелдер жинағы.
+- [ ] Шығарылым тегі + GAR журналы жаңартылды.
+- [ ] Келесі шолу туралы еске салғыштар орнатылды.
 
-## See also
+## Сондай-ақ қараңыз
 
-- [GAR Jurisdictional Review](gar-jurisdictional-review)
-- [GAR Compliance Playbook (source)](../../../source/soranet/gar_compliance_playbook.md)
+- [GAR юрисдикциялық шолуы](gar-jurisdictional-review)
+- [GAR Compliance Playbook (көзі)](../../../source/soranet/gar_compliance_playbook.md)

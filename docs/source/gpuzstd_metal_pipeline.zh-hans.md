@@ -7,115 +7,114 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 019b3aa25ae224c1595467ac809f2c53290813e91a78b78b94ca71c3dd950264
 source_last_modified: "2026-01-31T19:25:45.072449+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# GPU Zstd (Metal) Pipeline
+# GPU Zstd（金属）管道
 
-This document describes the deterministic GPU pipeline used by the Metal helper
-for zstd compression. It is a design and implementation guide for the
-`gpuzstd_metal` helper that emits standard zstd frames and deterministic bytes
-for a given sequence stream. Outputs must roundtrip with CPU decoders; byte-for-
-byte parity with the CPU compressor is not required because sequence generation
-differs.
+本文档描述了 Metal 助手使用的确定性 GPU 管道
+用于 zstd 压缩。它是一个设计和实施指南
+`gpuzstd_metal` 发出标准 zstd 帧和确定性字节的帮助程序
+对于给定的序列流。输出必须与 CPU 解码器往返；字节对
+不需要与 CPU 压缩器进行字节奇偶校验，因为序列生成
+不同。
 
-## Goals
+## 目标
 
-- Emit standard zstd frames that decode identically with CPU zstd; byte parity
-  with the CPU compressor is not required.
-- Deterministic outputs across hardware, drivers, and thread scheduling.
-- Explicit bounds checks and predictable buffer lifetimes.
+- 发出与 CPU zstd 相同解码的标准 zstd 帧；字节奇偶校验
+  不需要CPU压缩器。
+- 跨硬件、驱动程序和线程调度的确定性输出。
+- 显式边界检查和可预测的缓冲区寿命。
 
-## Current implementation note
+## 当前实施说明
 
-- Match finding and sequence generation run on GPU.
-- Frame assembly and entropy coding (Huffman/FSE) currently run on the host
-  using the in-crate encoder; GPU Huffman/FSE kernels are parity-tested but not
-  yet wired into the full frame path.
-- Decode uses the in-crate frame decoder with a CPU zstd fallback for unsupported frames;
-  full GPU block decode remains in progress.
+- 匹配查找和序列生成在 GPU 上运行。
+- 帧组装和熵编码（Huffman/FSE）当前在主机上运行
+  使用板条箱内的编码器； GPU Huffman/FSE 内核经过奇偶校验测试，但未经过奇偶校验测试
+  但已连接到全帧路径。
+- 解码使用板条箱内帧解码器，并针对不支持的帧提供 CPU zstd 回退；
+  完整的 GPU 块解码仍在进行中。
 
-## Encoding pipeline (high level)
+## 编码管道（高级）
 
-1. Input staging
-   - Copy the input into a device buffer.
-   - Partition into fixed-size chunks (for sequence generation) and blocks (for
-     zstd frame assembly).
-2. Match finding and sequence emission
-   - GPU kernels scan each chunk and emit sequences (literal length, match
-     length, offset).
-   - Sequence ordering is stable and deterministic.
-3. Literal preparation
-   - Collect literals referenced by sequences.
-   - Build literal histograms and select literal block mode (raw, RLE, or
-     Huffman) deterministically.
-4. Huffman tables (literals)
-   - Generate code lengths from the histogram.
-   - Build canonical tables with deterministic tie-breaking that matches CPU
-     zstd output.
-5. FSE tables (LL/ML/OF)
-   - Normalize frequency counts.
-   - Build FSE decoding/encoding tables deterministically.
-6. Bitstream writer
-   - Pack bits little-endian (LSB-first).
-   - Flush on byte boundaries; pad with zeros only.
-   - Mask values to declared bit widths and enforce capacity checks.
-7. Block and frame assembly
-   - Emit block headers (type, size, last-block flag).
-   - Serialize literals and sequences into compressed blocks.
-   - Emit standard zstd frame headers and optional checksums.
+1. 输入分级
+   - 将输入复制到设备缓冲区中。
+   - 划分为固定大小的块（用于序列生成）和块（用于
+     zstd 框架组件）。
+2. 匹配查找和序列发射
+   - GPU 内核扫描每个块并发出序列（文字长度、匹配
+     长度、偏移量）。
+   - 序列排序是稳定且确定的。
+3.文字准备
+   - 收集序列引用的文字。
+   - 构建文字直方图并选择文字块模式（原始、RLE 或
+     霍夫曼）确定性地。
+4. 霍夫曼表（文字）
+   - 从直方图生成代码长度。
+   - 构建具有与 CPU 匹配的确定性平局决胜的规范表
+     zstd 输出。
+5.FSE表（LL/ML/OF）
+   - 标准化频率计数。
+   - 确定性地构建 FSE 解码/编码表。
+6. 比特流写入器
+   - 打包位小尾数（LSB 优先）。
+   - 刷新字节边界；仅用零填充。
+   - 将值屏蔽为声明的位宽度并强制执行容量检查。
+7. 块体与框架的组装
+   - 发出块头（类型、大小、最后一个块标志）。
+   - 将文字和序列序列化为压缩块。
+   - 发出标准 zstd 帧头和可选校验和。
 
-## Decoding pipeline (high level)
+## 解码管道（高级）
 
-1. Frame parse
-   - Validate magic bytes, window settings, and frame header fields.
-2. Bitstream reader
-   - Read LSB-first bit sequences with strict bounds checks.
-3. Literal decode
-   - Decode literal blocks (raw, RLE, or Huffman) into the literal buffer.
-4. Sequence decode
-   - Decode LL/ML/OF values using FSE tables.
-   - Reconstruct matches using the sliding window.
-5. Output and checksum
-   - Write reconstructed bytes into the output buffer.
-   - Verify optional checksums when enabled.
+1. 帧解析
+   - 验证魔术字节、窗口设置和帧头字段。
+2. 比特流读取器
+   - 通过严格的边界检查读取 LSB 位序列。
+3. 文字解码
+   - 将文字块（原始、RLE 或 Huffman）解码到文字缓冲区中。
+4. 序列解码
+   - 使用 FSE 表解码 LL/ML/OF 值。
+   - 使用滑动窗口重建比赛。
+5. 输出和校验和
+   - 将重构的字节写入输出缓冲区。
+   - 启用时验证可选校验和。
 
-## Buffer lifetimes and ownership
+## 缓冲区的生命周期和所有权- 输入缓冲区：主机 -> 设备，只读。
+- 序列缓冲区：设备，由匹配查找产生并由熵消耗
+  编码；没有跨块重用。
+- 文字缓冲区：设备，为每个块生成并在块后释放
+  排放。
+- 输出缓冲区：设备，保存最终帧字节，直到主机复制它们
+  出来。
+- 暂存缓冲区：跨内核重用，但总是确定性地覆盖。
 
-- Input buffer: host -> device, read-only.
-- Sequence buffer: device, produced by match-finding and consumed by entropy
-  coding; no cross-block reuse.
-- Literal buffer: device, produced for each block and released after block
-  emission.
-- Output buffer: device, holds the final frame bytes until the host copies them
-  out.
-- Scratch buffers: reused across kernels, but always overwritten deterministically.
+## 内核职责
 
-## Kernel responsibilities
+- 匹配查找内核：查找匹配并发出序列（LL/ML/OF + 文字）。
+- 霍夫曼构建内核：导出代码长度和规范表。
+- FSE 构建内核：构建 LL/ML/OF 表和状态机。
+- 块编码内核：将文字和序列序列化为比特流。
+- 块解码内核：解析比特流并重建文字/序列。
 
-- Match finding kernels: find matches and emit sequences (LL/ML/OF + literals).
-- Huffman build kernels: derive code lengths and canonical tables.
-- FSE build kernels: build LL/ML/OF tables and state machines.
-- Block encode kernels: serialize literals and sequences into the bitstream.
-- Block decode kernels: parse bitstream and reconstruct literals/sequences.
+## 确定性和奇偶性约束
 
-## Determinism and parity constraints
+- 规范表构建必须使用与 CPU 相同的排序和平局规则
+  zstd。
+- 没有依赖于任何输出字节的线程调度的原子或缩减。
+- 比特流打包为小尾数，LSB 优先；带零的字节对齐垫。
+- 所有边界检查都是明确的；无效输入肯定会失败。
 
-- Canonical table builds must use the same ordering and tie-breaking as CPU
-  zstd.
-- No atomics or reductions that depend on thread scheduling for any output byte.
-- Bitstream packing is little-endian, LSB-first; byte alignment pads with zeros.
-- All bounds checks are explicit; invalid inputs fail deterministically.
+## 验证
 
-## Validation
+- 比特流写入器/读取器的 CPU 黄金向量。
+- 比较 GPU 和 CPU 输出的语料库奇偶校验测试。
+- 模糊覆盖畸形框架和边界条件。
 
-- CPU golden vectors for the bitstream writer/reader.
-- Corpus parity tests comparing GPU and CPU outputs.
-- Fuzz coverage for malformed frames and boundary conditions.
+## 基准测试
 
-## Benchmarking
-
-Run `cargo test -p gpuzstd_metal gpu_vs_cpu_benchmark -- --ignored --nocapture` to
-compare CPU vs GPU encode latency across payload sizes. The test skips on hosts
-without a Metal-capable device; capture the output alongside hardware details
-when adjusting the GPU offload thresholds. Norito enforces the same cutoff in
-`gpu_zstd::encode_all`, so direct callers match the heuristic gate.
+运行 `cargo test -p gpuzstd_metal gpu_vs_cpu_benchmark -- --ignored --nocapture` 到
+比较不同负载大小的 CPU 与 GPU 编码延迟。测试在主机上跳过
+没有支持 Metal 的设备；捕获输出以及硬件详细信息
+调整 GPU 卸载阈值时。 Norito 强制执行相同的截止
+`gpu_zstd::encode_all`，因此直接调用者与启发式门相匹配。

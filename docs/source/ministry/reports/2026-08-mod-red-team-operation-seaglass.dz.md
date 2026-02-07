@@ -9,67 +9,65 @@ source_last_modified: "2025-12-29T18:16:35.981105+00:00"
 translation_last_reviewed: 2026-02-07
 title: Red-Team Drill — Operation SeaGlass
 summary: Evidence and remediation log for the Operation SeaGlass moderation drill (gateway smuggling, governance replay, alert brownout).
+translator: machine-google-reviewed
 ---
 
-# Red-Team Drill — Operation SeaGlass
+# རེད་-སྡེ་ཚན་དྲིལ་ — ལས་ཁུངས།
 
-- **Drill ID:** `20260818-operation-seaglass`
-- **Date & window:** `2026-08-18 09:00Z – 11:00Z`
-- **Scenario class:** `smuggling`
-- **Operators:** `Miyu Sato, Liam O'Connor`
-- **Dashboards frozen from commit:** `364f9573b`
-- **Evidence bundle:** `artifacts/ministry/red-team/2026-08/operation-seaglass/`
-- **SoraFS CID (optional):** `not pinned (local bundle only)`
-- **Related roadmap items:** `MINFO-9`, plus linked follow-ups `MINFO-RT-17` / `MINFO-RT-18`.
+- **དྲོལ་ཨའི་ཌི་:** `20260818-operation-seaglass`
+- **ཚེས་གྲངས་དང་སྒོ་སྒྲིག་:** `2026-08-18 09:00Z – 11:00Z`
+- **གནས་རིམ།:** `smuggling`
+- **བཀོལ་སྤྱོད་པ་:** `Miyu Sato, Liam O'Connor`
+- **བཀོད་སྒྲིག་ཚུ་ ཁས་བླངས་ལས་ འཁྱེག་བཞག་ཡོདཔ།:** `364f9573b`
+- **གསལ་སྟོན་གྱི་བང་སྒྲིལ།:** `artifacts/ministry/red-team/2026-08/operation-seaglass/`
+- **SoraFS སི་ཨའི་ཌི་ (གདམ་ཁ་):** `not pinned (local bundle only)`
+- **འབྲེལ་ཡོད།:** `MINFO-9`, དང་འབྲེལ་མཐུད་རྗེས་འཇུག་ `MINFO-RT-17` / `MINFO-RT-18`.
 
-## 1. Objectives & Entry Conditions
+## 1. དམིགས་ཡུལ་དང་འཛུལ་ཞུགས་ཆ་རྐྱེན་།
 
-- **Primary objectives**
-  - Validate denylist TTL enforcement and gateway quarantine during a smuggling attempt while load-shedding alerts.
-  - Confirm governance replay detection and alert brownout handling in the moderation runbook.
-- **Prerequisites confirmed**
-  - `emergency_canon_policy.md` version `v2026-08-seaglass`.
-  - `dashboards/grafana/ministry_moderation_overview.json` digest `sha256:ef5210b5b08d219242119ec4ceb61cb68ee4e42ce2eea8a67991fbff95501cc8`.
-  - Override authority on-call: `Kenji Ito (GovOps pager)`.
+- **གཞི་རིམ་དམིགས་ཡུལ་**།
+  - བརྡ་བསྐུལ་འབད་མི་ ཊི་ཊི་ཨེལ་ བསྟར་སྤྱོད་དང་ འཛུལ་སྒོ་ཟུར་བཞག་ནད་འཛིན་ཚུ་ ལེན་པའི་སྐབས་ ནག་ཚོང་འཐབ་ནིའི་ དཔའ་བཅམ་པའི་སྐབས་ ཟུར་བཞག་ བདེན་དཔྱད་འབད།
+  - གཞུང་སྐྱོང་སླར་ལོག་ཤེས་རྟོགས་དང་ བར་མའི་རྒྱུག་དེབ་ནང་ ཉེན་བརྡའི་དབང་ཆ་ ངེས་གཏན་བཟོ།
+- **སྔོན་འགྲོའི་ཆ་རྐྱེན་བདེན་དཔང་འབད་ཡོདཔ།*
+  - `emergency_canon_policy.md` ཐོན་རིམ་ `v2026-08-seaglass`.
+  - `dashboards/grafana/ministry_moderation_overview.json` བཞུ་ནི་ `sha256:ef5210b5b08d219242119ec4ceb61cb68ee4e42ce2eea8a67991fbff95501cc8`.
+  - དབང་འཛིན་ལུ་བཀག་ཆ་འབད་ནི་: `Kenji Ito (GovOps pager)`.
 
-## 2. Execution Timeline
+## 2. བཀོལ་བའི་དུས་ཚོད།
 
-| Timestamp (UTC) | Actor | Action / Command | Result / Notes |
-|-----------------|-------|------------------|----------------|
-| 09:00:12 | Miyu Sato | Froze dashboards/alerts at `364f9573b` via `scripts/ministry/export_red_team_evidence.py --freeze-only` | Baseline captured and stored under `dashboards/` |
-| 09:07:44 | Liam O'Connor | Published denylist snapshot + GAR override to staging with `sorafs_cli ... gateway update-denylist --policy-tier emergency` | Snapshot accepted; override window recorded in Alertmanager |
-| 09:17:03 | Miyu Sato | Injected smuggling payload + governance replay using `moderation_payload_tool.py --scenario seaglass` | Alert fired after 3m12s; governance replay flagged |
-| 09:31:47 | Liam O'Connor | Ran evidence export and sealed manifest `seaglass_evidence_manifest.json` | Evidence bundle plus hashes stored under `manifests/` |
+| དུས་ཚོད་མཚོན་རྟགས་ (ཡུ་ཊི་སི) | འཁྲབ་རྩེདཔ་ | བྱ་བ་ / བརྡ་བཀོད་ | གྲུབ་འབྲས། / དྲན་ཐོ། |
+|------------------------------------------------------------------ |------------------------------------------------------------------------------------------------------------------------------------------------------------------------ ------------
+| 09:00:12 | མི་ཡུ་སཊོ་ | `364f9573b` ལུ་ `scripts/ministry/export_red_team_evidence.py --freeze-only` ལུ་ ཕོརོ་ཟི་གི་བརྡ་རྟགས་/ཉེན་བརྡ་ཚུ་ | གཞི་རིམ་གྱི་ བཟུང་ཞིནམ་ལས་ `dashboards/` གི་འོག་ལུ་ གསོག་འཇོག་འབད་ཡོདཔ། |
+| 09:07:44 | ལི་ཡམ་ཨོ་ཀོ་ནོར་ | དཔར་བསྐྲུན་འབད་ཡོད་པའི་ཐོ་ཡིག་མེད་པའི་པར་ཆས་ + GAR གིས་ `sorafs_cli ... gateway update-denylist --policy-tier emergency` དང་ཅིག་ཁར་ རྩེད་འགྲན་འབད་ནི་ལུ་ མཇུག་བསྡུ། | Snapshot ངོས་ལེན་འབད་ཡོདཔ། བཀག་འཛིན་སྒོ་སྒྲིག་འདི་ དྲན་འཛིན་འབད་མི་ནང་ ཐོ་བཀོད་འབད་ཡོདཔ། |
+| 09:17:03 | མི་ཡུ་སཊོ་ | ནག་ཚོང་འབད་མི་ པེ་ལོཌ་ + གཞུང་སྐྱོང་བསྐྱར་རྩེད་འདི་ `moderation_payload_tool.py --scenario seaglass` ལག་ལེན་འཐབ་སྟེ་ བསྐྱར་རྩེད་འབད་ནི། | 3m12s གི་ཤུལ་ལས་ དྲན་ཤེས་བཏོན་ཡོདཔ། གཞུང་སྐྱོང་བསྐྱར་སྒྲ་དར་ཁྱབ་ཡོདཔ། |
+| 09:31:47 | ལི་ཡམ་ཨོ་ཀོ་ནོར་ | རན་སྒྲུབ་བྱེད་ཕྱིར་གཏོང་དང་བསྡམ་པའི་མངོན་གསལ་ `seaglass_evidence_manifest.json` | `manifests/` གི་འོག་ལུ་ གསོག་འཇོག་འབད་ཡོད་པའི་ སྒྲུབ་བྱེད་ཀྱི་ བཱན་ཌལ་ དང་ ཧ་ཤེ་ཚུ་ |
 
-## 3. Observations & Metrics
+## 3. ལྟ་རྟོག དང་ཚད་གཞི།
 
-| Metric | Target | Observed | Pass/Fail | Notes |
-|--------|--------|----------|-----------|-------|
-| Alert response latency | <= 5 min | 3.2 min | ✅ | Alert runbook executed without paging churn |
-| Moderation detection rate | >= 0.98 | 0.992 | ✅ | Detected both smuggling and replay payloads |
-| Gateway anomaly detection | Alert fired | Alert fired + automatic quarantine | ✅ | Quarantine applied before retry budget exhausted |
+| མེ་ཊིག་ | དམིགས་ཚད་ | བལྟ་རྟོག་འབད་ཡོདཔ། | Pass/fail | དྲན་ཐོ། |
+|----------------------------------------------------------------------------------------------- |
+| ཉེན་བརྡ་ལན་འདེབས་ཀྱི་ འཕྲོ་མཐུད་ | = ༠.༩༨ | ༠.༩༩༢ | ✅ | ནག་ཚོང་དང་ བསྐྱར་རྩེད་གཉིས་ཆ་ར་ བརྟག་དཔྱད་འབད་ཡོདཔ།
+| སྒོ་སྒྲིག་མ་འདྲཝ་བརྟག་དཔྱད། | དྲན་སྐུལ་གྱི་བཀག་ཡོད། | དྲན་སྐུལ་ + རང་འགུལ་ཟུར་བཞག་ | ✅ | འཆར་དངུལ་ བརླག་སྟོར་ཞུགས་པའི་ཧེ་མར་ ལག་ལེན་འཐབ་ཡོད་པའི་ ཟུར་བཞག་། |
 
 - `Grafana export:` `artifacts/ministry/red-team/2026-08/operation-seaglass/dashboards/ministry_moderation_overview.json`
 - `Alert bundle:` `artifacts/ministry/red-team/2026-08/operation-seaglass/alerts/ministry_moderation_rules.yml`
 - `Norito manifests:` `artifacts/ministry/red-team/2026-08/operation-seaglass/manifests/seaglass_evidence_manifest.json`
 
-## 4. Findings & Remediation
+## 4. ཐོང་དོན་དང་བཅོལ་བ།
 
-| Severity | Finding | Owner | Target Date | Status / Link |
+| ཚབས་ཆེན། | འཚོལ་བ། | ཇོ་བདག་ | དམིགས་གཏད་ཚེས་གྲངས་ | གནས་ཚད་ / འབྲེལ་མཐུད། |
 |----------|---------|-------|-------------|---------------|
-| High | Governance replay alert fired, but SoraFS seal was delayed by 2m when the waitlist failover triggered | Governance Ops (Liam O'Connor) | 2026-09-05 | `MINFO-RT-17` open — add replay seal automation to the failover path |
-| Medium | Dashboard freeze not pinned to SoraFS; operators relied on local bundle | Observability (Miyu Sato) | 2026-08-25 | `MINFO-RT-18` open — pin `dashboards/*` to SoraFS with signed CID before next drill |
-| Low | CLI logbook omitted Norito manifest hash in first pass | Ministry Ops (Kenji Ito) | 2026-08-22 | Fixed during drill; template updated in logbook |
+| མཐོ་ཚད་ | གཞུང་སྐྱོང་བསྐྱར་བཟོ་ཉེན་བརྡ་འདི་ བཏོན་བཏང་ཡོདཔ་ཨིན་རུང་ SoraFS བསྡམ་བཞག་འདི་ བསྒུག་ཐོ་འདི་ འཐུས་ཤོར་བྱུང་བཅུག་པའི་སྐབས་ མི་ཊར་༢ གྱིས་ ཕྱི་སོངཔ་ཨིན། | གཞུང་སྐྱོང་ Ops (ལི་ཡམ་ཨོ་ཀོ་ནར་) | ༢༠༢༦-༠༩-༠༥ | `MINFO-RT-17` ཁ་ཕྱེ་— འཐུས་ཤོར་འགྲུལ་ལམ་ལུ་ བསྐྱར་རྩེད་རང་བཞིན་གྱིས་རང་བཞིན་འདི་ཁ་སྐོང་འབད། |
+| བར་མ། | SoraFS ལུ་ མ་བཙུགས་པའི་ ཌེཤ་བོརཌ་ གྱང་ཤུགས་འདི་; བཀོལ་སྤྱོད་པ་ཚུ་ ཉེ་གནས་བུནཌལ་ལུ་བློ་གཏད་བཞག་ཡོདཔ། | བལྟ་རྟོག་འབད་ཚུགསཔ་ (མི་ཡུ་སཊོ་) | ༢༠༢༦-༠༨-༢༥ | `MINFO-RT-18` ཁ་ཕྱེ་ — པིན་ `dashboards/*` ལུ་ SoraFS ལུ་ མིང་རྟགས་བཀོད་ཡོད་པའི་ CID འདི་ ཤུལ་མའི་སྦྱོང་བརྡར་གྱི་ཧེ་མ་ |
+| དམའ་བ་ | CLI དྲན་ཐོ་དེབ་འདི་ Norito གིས་ དང་པ་རང་ བརྒྱུད་འཕྲིན་ནང་ ཧེཤ་ གསལ་སྟོན་འབདཝ་ཨིན། ལྷན་ཁག་གིས་ (ཀེན་ཅི་ཨི་ཊོ) | ༢༠༢༦-༠༨-༢༢ | སྦྱོང་བརྡར་གྱི་སྐབས་ལུ་ གཏན་འཁེལ་བཟོ་ཡོདཔ། ཊེམ་པེལེཊི་དུས་མཐུན་བཟོ་ཡོདཔ།ཚད་འཇལ་གྱི་ གསལ་སྟོན་ཚུ་ ག་དེ་སྦེ་ གསལ་སྟོན་འབདཝ་ཨིན་ན་ ཐོ་ཡིག་མེད་པའི་སྲིད་བྱུས་ ཡང་ན་ ཨེསི་ཌི་ཀེ་/ ལག་ཆས་ཚུ་ བསྒྱུར་བཅོས་འབད་དགོཔ་ཨིན། གིཊི་ཧབ་/ཇི་ར་གི་གནད་དོན་ཚུ་དང་ དྲན་ཐོ་དང་དྲན་ཐོ་བཀག་ཆ་/བཀག་ཆ་མེད་པའི་གནས་སྟངས་ཚུ་ལུ་འབྲེལ་མཐུད་འབད།
 
-Document how calibration manifests, denylist policies, or SDK/tooling must change. Link to GitHub/Jira issues and note blocked/unblocked states.
+## 5. གཞུང་སྐྱོང་དང་ཆ་འཇོག།
 
-## 5. Governance & Approvals
+- **རྐྱེན་ངན་དམག་དཔོན་-ཨོཕ་:** `Miyu Sato @ 2026-08-18T11:22Z`
+- **གཞུང་སྐྱོང་ཚོགས་སྡེའི་བསྐྱར་ཞིབ་ཚེས་གྲངས་:** `GovOps-2026-08-22`
+- **རྗེས་སུ་འབྲང་བའི་ཐོ་ཡིག་:** `[x] status.md updated`, `[x] roadmap row updated`, `[x] transparency packet annotated`,
 
-- **Incident commander sign-off:** `Miyu Sato @ 2026-08-18T11:22Z`
-- **Governance council review date:** `GovOps-2026-08-22`
-- **Follow-up checklist:** `[x] status.md updated`, `[x] roadmap row updated`, `[x] transparency packet annotated`
-
-## 6. Attachments
+## 6. མཐུད་པ།
 
 - `[x] CLI logbook (logs/operation_seaglass.log)`
 - `[x] Dashboard JSON export`
@@ -77,8 +75,8 @@ Document how calibration manifests, denylist policies, or SDK/tooling must chang
 - `[x] SoraFS manifest / CAR`
 - `[ ] Override audit log`
 
-Mark each attachment with `[x]` once uploaded to the evidence bundle and SoraFS snapshot.
+མཉམ་སྦྲགས་རེ་རེ་བཞིན་ Grafana དང་ སྒྲུབ་བྱེད་བང་རིམ་དང་ SoraFS པར་ལེན་ལུ་ ཚར་གཅིག་ བཀལ་དགོ།
 
 ---
 
-_Last updated: 2026-08-18_
+_མཇུག་དུས་མཐུན་བཟོ་ཡོདཔ་: ༢༠༢༦-༠༨-༡༨_

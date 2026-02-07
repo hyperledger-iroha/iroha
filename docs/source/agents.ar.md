@@ -6,112 +6,111 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 7f35a28d00188a3e1f3db76b56e6b29c708dbb75afa3dd009d416b7cd4314754
 source_last_modified: "2026-01-03T18:08:01.361022+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Automation Agent Execution Guide
+# دليل تنفيذ وكيل الأتمتة
 
-This page summarizes the operational guardrails for any automation agent
-working inside the Hyperledger Iroha workspace. It mirrors the canonical
-`AGENTS.md` guidance and the roadmap references so build, documentation, and
-telemetry changes all look the same whether they were produced by a human or
-an automated contributor.
+تلخص هذه الصفحة حواجز الحماية التشغيلية لأي وكيل تشغيل آلي
+العمل داخل مساحة العمل Hyperledger Iroha. إنه يعكس الكنسي
+إرشادات `AGENTS.md` ومراجع خارطة الطريق لذلك قم ببناء وتوثيق و
+تبدو جميع تغييرات القياس عن بعد متشابهة سواء تم إنتاجها بواسطة إنسان أو
+مساهم آلي.
 
-Each task is expected to land deterministic code plus matching docs, tests,
-and operational evidence. Treat the sections below as a ready reference before
-touching `roadmap.md` items or replying to behaviour questions.
+من المتوقع أن تحصل كل مهمة على رمز حتمي بالإضافة إلى المستندات والاختبارات المطابقة
+والأدلة التشغيلية. تعامل مع الأقسام أدناه كمرجع جاهز من قبل
+لمس عناصر `roadmap.md` أو الرد على أسئلة السلوك.
 
-## Quickstart Commands
+## أوامر التشغيل السريع
 
-| Action | Command |
+| العمل | الأمر |
 |--------|---------|
-| Build the workspace | `cargo build --workspace` |
-| Run the full test suite | `cargo test --workspace` *(typically takes several hours)* |
-| Run clippy with deny-by-default warnings | `cargo clippy --workspace --all-targets -- -D warnings` |
-| Format Rust code | `cargo fmt --all` *(edition 2024)* |
-| Test a single crate | `cargo test -p <crate>` |
-| Run one test | `cargo test -p <crate> <test_name> -- --nocapture` |
-| Swift SDK tests | From `IrohaSwift/`, run `swift test` |
+| بناء مساحة العمل | `cargo build --workspace` |
+| قم بتشغيل مجموعة الاختبار الكاملة | `cargo test --workspace` *(يستغرق عادةً عدة ساعات)* |
+| قم بتشغيل Clippy مع تحذيرات الرفض الافتراضي | `cargo clippy --workspace --all-targets -- -D warnings` |
+| تنسيق رمز الصدأ | `cargo fmt --all` *(إصدار 2024)* |
+| اختبار صندوق واحد | `cargo test -p <crate>` |
+| قم بإجراء اختبار واحد | `cargo test -p <crate> <test_name> -- --nocapture` |
+| اختبارات سويفت SDK | من `IrohaSwift/`، قم بتشغيل `swift test` |
 
-## Workflow Fundamentals
+## أساسيات سير العمل
 
-- Read the relevant code paths before answering questions or changing logic.
-- Break large roadmap items into tractable commits; never reject work outright.
-- Stay inside the existing workspace membership, reuse internal crates, and do
-  **not** alter `Cargo.lock` unless explicitly instructed.
-- Use feature flags and capability toggles only where mandated by hardware
-  accelerators; keep deterministic fallbacks available on every platform.
-- Update documentation and Markdown references alongside any functional change
-  so docs always describe current behaviour.
-- Add at least one unit test for every new or modified function. Prefer inline
-  `#[cfg(test)]` modules or the crate’s `tests/` folder depending on scope.
-- After finishing work, update `status.md` with a short summary and reference
-  relevant files; keep `roadmap.md` focused on items that still need work.
+- اقرأ مسارات التعليمات البرمجية ذات الصلة قبل الإجابة على الأسئلة أو تغيير المنطق.
+- تقسيم عناصر خريطة الطريق الكبيرة إلى التزامات يمكن تتبعها؛ لا ترفض العمل مطلقًا.
+- ابق داخل عضوية مساحة العمل الحالية، وأعد استخدام الصناديق الداخلية، وقم بذلك
+  **لا** تغير `Cargo.lock` ما لم يتم طلب ذلك بشكل صريح.
+- استخدم إشارات الميزات وتبديل القدرات فقط عندما يتطلب ذلك الجهاز
+  المسرعات. احتفظ بالخيارات الاحتياطية الحتمية المتاحة على كل منصة.
+- تحديث الوثائق ومراجع تخفيض السعر إلى جانب أي تغيير وظيفي
+  لذلك تصف المستندات دائمًا السلوك الحالي.
+- إضافة اختبار وحدة واحد على الأقل لكل دالة جديدة أو معدلة. تفضل مضمنة
+  وحدات `#[cfg(test)]` أو المجلد `tests/` الخاص بالصندوق حسب النطاق.
+- بعد الانتهاء من العمل قم بتحديث `status.md` بملخص قصير ومرجع
+  الملفات ذات الصلة؛ اجعل `roadmap.md` يركز على العناصر التي لا تزال بحاجة إلى العمل.
 
-## Implementation Guardrails
+## تنفيذ الدرابزين
 
-### Serialization & Data Models
-- Use the Norito codec everywhere (binary via `norito::{Encode, Decode}`,
-  JSON via `norito::json::*`). Do not add direct serde/`serde_json` usage.
-- Norito payloads must advertise their layout (version byte or header flags),
-  and new formats require corresponding documentation updates (e.g.,
-  `norito.md`, `docs/source/da/*.md`).
-- Genesis data, manifests, and networking payloads should remain deterministic
-  so two peers with the same inputs produce identical hashes.
+### التسلسل ونماذج البيانات
+- استخدم برنامج الترميز Norito في كل مكان (ثنائي عبر `norito::{Encode, Decode}`،
+  JSON عبر `norito::json::*`). لا تقم بإضافة استخدام serde/`serde_json` المباشر.
+- يجب أن تعلن حمولات Norito عن تخطيطها (بايت الإصدار أو علامات الرأس)،
+  وتتطلب التنسيقات الجديدة تحديثات الوثائق المقابلة (على سبيل المثال،
+  `norito.md`، `docs/source/da/*.md`).
+- يجب أن تظل بيانات التكوين والبيانات وحمولات الشبكات حتمية
+  لذا فإن اثنين من أقرانهما لهما نفس المدخلات ينتجان تجزئات متطابقة.
 
-### Configuration & Runtime Behaviour
-- Prefer knobs living in `crates/iroha_config` over new environment variables.
-  Thread values explicitly through constructors or dependency injection.
-- Never gate IVM syscalls or opcode behaviour—ABI v1 ships everywhere.
-- When new config options are added, update defaults, docs, and any related
-  templates (`peer.template.toml`, `docs/source/configuration*.md`, etc.).
+### التكوين وسلوك وقت التشغيل
+- تفضل المقابض الموجودة في `crates/iroha_config` على متغيرات البيئة الجديدة.
+  قيم الخيط بشكل صريح من خلال المنشئات أو حقن التبعية.
+- لا تقم أبدًا ببوابة مكالمات النظام IVM أو سلوك كود التشغيل - يتم شحن ABI v1 في كل مكان.
+- عند إضافة خيارات تكوين جديدة، قم بتحديث الإعدادات الافتراضية والمستندات وأي شيء ذي صلة
+  القوالب (`peer.template.toml`، `docs/source/configuration*.md`، وما إلى ذلك).### أنواع ABI وSyscalls والمؤشر
+- التعامل مع سياسة ABI على أنها غير مشروطة. إضافة/إزالة مكالمات النظام أو أنواع المؤشر
+  يتطلب التحديث:
+  - `ivm::syscalls::abi_syscall_list` و`crates/ivm/tests/abi_syscall_list_golden.rs`
+  - `ivm::pointer_abi::PointerType` بالإضافة إلى الاختبارات الذهبية
+  - `crates/ivm/tests/abi_hash_versions.rs` عندما تتغير تجزئة ABI
+- يجب تعيين مكالمات النظام غير المعروفة إلى `VMError::UnknownSyscall`، ويجب أن تكون البيانات
+  الاحتفاظ بفحوصات المساواة الموقعة `abi_hash` في اختبارات القبول.
 
-### ABI, Syscalls, and Pointer Types
-- Treat ABI policy as unconditional. Adding/removing syscalls or pointer types
-  requires updating:
-  - `ivm::syscalls::abi_syscall_list` and `crates/ivm/tests/abi_syscall_list_golden.rs`
-  - `ivm::pointer_abi::PointerType` plus the golden tests
-  - `crates/ivm/tests/abi_hash_versions.rs` whenever the ABI hash changes
-- Unknown syscalls must map to `VMError::UnknownSyscall`, and manifests must
-  retain signed `abi_hash` equality checks in admission tests.
+### تسريع الأجهزة والحتمية
+- يجب أن يتم تسريع الأجهزة الأولية للتشفير الجديد أو الرياضيات الثقيلة
+  المسارات (METAL/NEON/SIMD/CUDA) مع الحفاظ على التراجعات الحتمية.
+- تجنب التخفيضات الموازية غير الحتمية؛ الأولوية هي مخرجات متطابقة على
+  كل نظير حتى عندما تختلف الأجهزة.
+- احتفظ بتركيبات Norito وFASTPQ قابلة للتكرار حتى تتمكن SRE من التدقيق على مستوى الأسطول
+  القياس عن بعد.
 
-### Hardware Acceleration & Determinism
-- New cryptographic primitives or heavy math must ship hardware-accelerated
-  paths (METAL/NEON/SIMD/CUDA) while maintaining deterministic fallbacks.
-- Avoid non-deterministic parallel reductions; priority is identical outputs on
-  every peer even when hardware differs.
-- Keep the Norito and FASTPQ fixtures reproducible so SRE can audit fleet-wide
-  telemetry.
+### التوثيق والأدلة
+- قم بعكس أي تغيير في المستند العام في البوابة الإلكترونية (`docs/portal/...`) عندما
+  قابل للتطبيق بحيث يظل موقع المستندات محدثًا بمصادر Markdown.
+- عند تقديم مسارات عمل جديدة، قم بإضافة دفاتر التشغيل أو ملاحظات الإدارة أو
+  قوائم مرجعية تشرح كيفية التدرب على الأدلة والتراجع عنها والتقاطها.
+- عند ترجمة المحتوى إلى اللغة الأكادية، قم بتقديم تجسيدات دلالية مكتوبة
+  بالكتابة المسمارية بدلاً من الترجمات الصوتية.
 
-### Documentation & Evidence
-- Mirror any public-facing doc change in the portal (`docs/portal/...`) when
-  applicable so the docs site stays current with the Markdown sources.
-- When new workflows are introduced, add runbooks, governance notes, or
-  checklists explaining how to rehearse, rollback, and capture evidence.
-- When translating content into Akkadian, provide semantic renderings written
-  in cuneiform rather than phonetic transliterations.
+### توقعات الاختبار والأدوات
+- تشغيل مجموعات الاختبار ذات الصلة محليًا (`cargo test`، `swift test`،
+  أدوات التكامل) وتوثيق الأوامر في قسم اختبار العلاقات العامة.
+- حافظ على مزامنة البرامج النصية لحراسة CI (`ci/*.sh`) ولوحات المعلومات مع القياس عن بعد الجديد.
+- بالنسبة لوحدات الماكرو proc، قم بإقران اختبارات الوحدة مع اختبارات `trybuild` UI لقفل التشخيص.
 
-### Testing & Tooling Expectations
-- Run the relevant test suites locally (`cargo test`, `swift test`,
-  integration harnesses) and document the commands in the PR testing section.
-- Keep CI guard scripts (`ci/*.sh`) and dashboards in sync with new telemetry.
-- For proc-macros, pair unit tests with `trybuild` UI tests to lock diagnostics.
+## قائمة مرجعية جاهزة للشحن
 
-## Ready-to-Ship Checklist
+1. يتم تجميع التعليمات البرمجية ولم ينتج عن `cargo fmt` أي اختلافات.
+2. تصف المستندات المحدثة (مساحة العمل Markdown بالإضافة إلى مرايا البوابة) الجديد
+   السلوك، أو علامات CLI الجديدة، أو مقابض التكوين.
+3. تغطي الاختبارات كل مسار تعليمات برمجية جديد وتفشل بشكل حتمي عند الانحدارات
+   تظهر.
+4. تشير القياسات عن بعد ولوحات المعلومات وتعريفات التنبيه إلى أي مقاييس أو
+   رموز الخطأ.
+5. يتضمن `status.md` ملخصًا قصيرًا يشير إلى الملفات ذات الصلة و
+   قسم خارطة الطريق.
 
-1. Code compiles and `cargo fmt` produced no diffs.
-2. Updated docs (workspace Markdown plus portal mirrors) describe the new
-   behaviour, new CLI flags, or config knobs.
-3. Tests cover every new code path and fail deterministically when regressions
-   appear.
-4. Telemetry, dashboards, and alert definitions reference any new metrics or
-   error codes.
-5. `status.md` includes a short summary referencing the relevant files and
-   roadmap section.
-
-Following this checklist keeps roadmap execution auditable and ensures every
-agent contributes evidence that other teams can trust.
+يؤدي اتباع قائمة المراجعة هذه إلى إبقاء تنفيذ خارطة الطريق قابلاً للتدقيق ويضمن كل ذلك
+يساهم الوكيل بالأدلة التي يمكن للفرق الأخرى الوثوق بها.

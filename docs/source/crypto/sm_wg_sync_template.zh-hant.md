@@ -7,39 +7,40 @@ generator: scripts/sync_docs_i18n.py
 source_hash: c5fe52a907606a67a09e0ff229adb94f91dda73d809d8a8344166862dc62def9
 source_last_modified: "2025-12-29T18:16:35.947414+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-//! Template for recording SM rollout decisions during Crypto WG syncs.
+//！用於在 Crypto WG 同步期間記錄 SM 推出決策的模板。
 
-# SM Rollout – WG Sync Notes (Template)
+# SM 推出 – WG 同步筆記（模板）
 
-- **Date:** 2025-__-__
-- **Participants:** Crypto WG core, Release Eng, Security Review, SDK leads
-- **Facilitator:** ___________________
+- **日期：** 2025-__-__
+- **參與者：** Crypto WG 核心、發布工程師、安全審查、SDK 負責人
+- **協調員：** ___________________
 
-## Agenda
-1. Lock refresh approval (`sm_lock_refresh_plan.md`)
-2. Deterministic policy & config knobs (SM-1/SM-3 tasks)
-3. Compliance brief status (SM-6a complete) & operator checklist updates (SM-6b)
-4. Dependency audit reviewers for `sm2`, `sm3`, `sm4`, `rfc6979`
+## 議程
+1. 鎖定刷新批准（`sm_lock_refresh_plan.md`）
+2. 確定性策略和配置旋鈕（SM-1/SM-3 任務）
+3. 合規簡要狀態（SM-6a 完整）和操作員清單更新（SM-6b）
+4. `sm2`、`sm3`、`sm4`、`rfc6979` 的依賴性審計審核者
 
-## Decisions
-- [ ] Lock refresh approved? Details:
-- [ ] Deterministic policy affirmed? Notes:
-- [ ] Compliance brief owner + due date:
-- [ ] Audit reviewers assigned:
+## 決定
+- [ ] 鎖定刷新已獲批准？詳情：
+- [ ] 確定性政策得到確認？注意事項：
+- [ ] 合規簡介所有者 + 截止日期：
+- [ ] 分配的審核審核員：
 
-## Action Items
-| Item | Owner | Due | Status |
-|------|-------|-----|--------|
-| Prepare Cargo.lock PR after approval | Release Eng | ████ | ☐ |
-| Verify Annex D OpenSSL checks | Crypto WG | ████ | ☐ |
-| Track compliance brief revisions & operator checklist addenda | Docs/Legal | ████ | ☐ |
+## 行動項目
+|項目 |業主|到期|狀態 |
+|------|--------|-----|--------|
+|批准後準備 Cargo.lock PR |發布英語 | ████ | ○|
+|驗證附件 D OpenSSL 檢查 |加密工作組 | ████ | ○|
+|跟踪合規性簡要修訂和操作員清單附錄 |文件/法律 | ████ | ○|
 
-## Notes / Risks
+## 注意事項/風險
 - _______________________________
 - _______________________________
 
-## Follow-up
-- Next review date:
-- Reporting back channel:
+## 後續行動
+- 下次審核日期：
+- 舉報渠道：

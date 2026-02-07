@@ -4,36 +4,38 @@ direction: rtl
 source: docs/portal/docs/devportal/observability.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# مراقبة البوابة والتحليلات
+# پورٹل مانیٹرنگ اور تجزیات
 
-خارطة طريق DOCS-SORA تتطلب تحليلات، وprobes اصطناعية، واتمتة الروابط المكسورة لكل build معاينة.
-توثق هذه الملاحظة التوصيلات التي تأتي مع البوابة حتى يتمكن المشغلون من ربط المراقبة دون تسريب بيانات الزوار.
+DOCS-SORA روڈ میپ میں ہر پیش نظارہ تعمیر کے لئے تجزیات ، مصنوعی تحقیقات ، اور ٹوٹے ہوئے لنک آٹومیشن کی ضرورت ہوتی ہے۔
+اس نوٹ میں گیٹ وے کے ساتھ آنے والے رابطوں کی دستاویز کی گئی ہے تاکہ آپریٹرز وزیٹر ڈیٹا کو لیک کیے بغیر مانیٹرنگ کو مربوط کرسکیں۔
 
-## وسم الاصدار
+## ورژن ٹیگ
 
-- اضبط `DOCS_RELEASE_TAG=<identifier>` (يرجع الى `GIT_COMMIT` او `dev` عند الغياب) عند
-  بناء البوابة. يتم حقن القيمة في `<meta name="sora-release">`
-  حتى تتمكن probes وdashboards من تمييز عمليات النشر.
-- `npm run build` ينتج `build/release.json` (يكتبه
-  `scripts/write-checksums.mjs`) ويصف الوسم والطابع الزمني و`DOCS_RELEASE_SOURCE` الاختياري.
-  يتم تضمين الملف نفسه في اثار المعاينة ويشار اليه في تقرير فحص الروابط.
+- `DOCS_RELEASE_TAG=<identifier>` سیٹ کریں (غیر موجودگی میں `GIT_COMMIT` یا `dev` کا حوالہ دیتے ہوئے)
+  پورٹل کی تعمیر. قیمت `<meta name="sora-release">` میں انجکشن کی گئی ہے
+  لہذا تحقیقات اور ڈیش بورڈز تعیناتیوں میں فرق کرسکتے ہیں۔
+- `npm run build` `build/release.json` تیار کرتا ہے (اسے لکھتا ہے
+  `scripts/write-checksums.mjs`) ٹیگ ، ٹائم اسٹیمپ اور اختیاری `DOCS_RELEASE_SOURCE` کی وضاحت کرتا ہے۔
+  فائل خود پیش نظارہ کے نشانات میں شامل ہے اور لنک اسکین رپورٹ میں اس کا حوالہ دیا گیا ہے۔
 
-## تحليلات تحافظ على الخصوصية
+## رازداری سے متعلق تجزیات
 
-- اضبط `DOCS_ANALYTICS_ENDPOINT=<https://collector.example/ingest>` لتمكين المتتبع الخفيف.
-  تحتوي الحمولات على `{ event, path, locale, release, ts }` دون metadata مرجع او IP، ويتم استخدام
-  `navigator.sendBeacon` كلما امكن لتجنب حجب التنقلات.
-- تحكم في اخذ العينات عبر `DOCS_ANALYTICS_SAMPLE_RATE` (0-1). يخزن المتتبع اخر path مرسل ولا يرسل
-  احداثا مكررة لنفس التنقل.
-- التنفيذ موجود في `src/components/AnalyticsTracker.jsx` ويتم تركيبه عالميا عبر `src/theme/Root.js`.
+- لائٹ ٹریکر کو فعال کرنے کے لئے `DOCS_ANALYTICS_ENDPOINT=<https://collector.example/ingest>` سیٹ کریں۔
+  پے لوڈ میں میٹا ڈیٹا حوالہ یا IP کے بغیر `{ event, path, locale, release, ts }` ہوتا ہے ، اور استعمال ہوتے ہیں
+  `navigator.sendBeacon` جب بھی ممکن ہو مسدود حرکتوں سے بچنے کے ل .۔
+- `DOCS_ANALYTICS_SAMPLE_RATE` (0-1) کے ذریعے نمونے لینے کا کنٹرول۔ ٹریکر آخری بھیجے ہوئے راستے کو محفوظ کرتا ہے اور اسے نہیں بھیجتا ہے
+  اسی نیویگیشن کے لئے ڈپلیکیٹ واقعات۔
+- عمل `src/components/AnalyticsTracker.jsx` میں ہے اور `src/theme/Root.js` کے ذریعے عالمی سطح پر انسٹال کیا گیا ہے۔
 
-## probes اصطناعية
+## مصنوعی تحقیقات
 
-- `npm run probe:portal` يرسل طلبات GET الى المسارات الشائعة
-  (`/`, `/norito/overview`, `/reference/torii-swagger`, وغيرها) ويتحقق من ان وسم
-  `sora-release` يطابق `--expect-release` (او `DOCS_RELEASE_TAG`). مثال:
+- `npm run probe:portal` عام راستوں پر درخواستیں بھیجتا ہے
+  (`/`, `/norito/overview`, `/reference/torii-swagger`, etc.) and verifies that the marking
+  `sora-release` سے ملتے ہیں `--expect-release` (یا `DOCS_RELEASE_TAG`)۔ مثال:
 
 ```bash
 PORTAL_BASE_URL="https://docs.staging.sora" \
@@ -41,51 +43,49 @@ DOCS_RELEASE_TAG="preview-42" \
 npm run probe:portal -- --expect-release=preview-42
 ```
 
-يتم الابلاغ عن الاخفاقات لكل path، ما يسهل بوابة CD على نجاح probes.
+ہر راستے کے لئے ناکامیوں کی اطلاع دی جاتی ہے ، جس سے سی ڈی گیٹ کامیاب تحقیقات کو آسان بناتا ہے۔
 
-## اتتمة الروابط المكسورة
+## ٹوٹے ہوئے لنکس کو ٹھیک کریں
 
-- `npm run check:links` يفحص `build/sitemap.xml`، ويتاكد ان كل مدخل يطابق ملفا محليا
-  (مع التحقق من fallbacks `index.html`)، ويكتب `build/link-report.json` الذي يحتوي على
-  metadata الاصدار، الاجمالي، الاخفاقات، وبصمة SHA-256 لـ `checksums.sha256`
-  (معروضة كـ `manifest.id`) حتى يرتبط كل تقرير بmanifest الاثر.
-- السكربت يخرج بكود غير صفري عند فقدان صفحة، لذا يمكن لـ CI منع الاصدارات عند وجود مسارات قديمة او
-  مكسورة. التقارير تذكر المسارات المرشحة التي تمت تجربتها، ما يساعد على تتبع تراجعات التوجيه
-  الى شجرة docs.
+- `npm run check:links` `build/sitemap.xml` چیک کرتا ہے ، اور اس بات کو یقینی بناتا ہے کہ ہر اندراج مقامی فائل سے مماثل ہے۔
+  (فال بیکس کے لئے چیک کے ساتھ `index.html`) ، `build/link-report.json` لکھتا ہے جس میں موجود ہے
+  میٹا ڈیٹا ورژن ، کل ، ناکامی ، اور `checksums.sha256` کے لئے SHA-256 فنگر پرنٹ
+  ۔
+- اسکرپٹ غیر صفر کوڈ کے ساتھ باہر نکلتا ہے جب کوئی صفحہ غائب ہوتا ہے ، لہذا جب پرانے راستے ہوتے ہیں تو سی آئی ورژن کو روک سکتا ہے یا ...
+  ٹوٹا ہوا رپورٹس کی فہرست امیدوار کے راستوں کی فہرست ہے جن کی کوشش کی گئی ہے ، جو روٹنگ ریگریشنز کو ٹریک کرنے میں مدد کرتا ہے
+  دستاویزات کے درخت کو۔
 
-## لوحة Grafana والتنبيهات
+## Grafana بورڈ اور الرٹس- `dashboards/grafana/docs_portal.json` پینل Grafana ** دستاویزات پورٹل پبلشنگ ** شائع کرتا ہے۔
+  اس میں مندرجہ ذیل پینل شامل ہیں:
+  - * گیٹ وے سے انکار (5 میٹر) * `torii_sorafs_gateway_refusals_total` ایک حد کے ساتھ استعمال ہوتا ہے
+    `profile`/`reason` تاکہ SRE پالیسی کی غلط ادائیگیوں یا ناکام کوڈوں کا پتہ لگاسکے۔
+  - * عرف کیشے کے نتائج کو تازہ کریں * اور * عرف پروف ایج P90 * ٹریکنگ
+    `torii_sorafs_alias_cache_*` DNS کے کٹ جانے سے پہلے حالیہ ثبوتوں کی موجودگی کو ثابت کرنے کے لئے۔
+  ۔
+    اور مجموعی طور پر عرف ہے تاکہ گورننس ہر ورژن کا آڈٹ کرسکے۔
+  - * گیٹ وے TLS میعاد ختم (گھنٹے) * جب پبلشنگ گیٹ وے کے لئے TLS سرٹ تکمیل کے قریب ہوتا ہے تو دکھاتا ہے
+    (الارم کی حد 72 H)۔
+  - * نقل ایس ایل اے کے نتائج * اور * نقل کی بیکلاگ * مانیٹر ٹیلی میٹیا
+    `torii_sorafs_replication_*` اس بات کو یقینی بنانے کے لئے کہ تمام کاپیاں اشاعت کے بعد GA کے معیار پر پورا اتریں۔
+- پوسٹ فائل `docs.sora` پر توجہ دینے کے لئے بلٹ ان ٹیمپلیٹ متغیرات (`profile` ، `reason`) استعمال کریں
+  یا تمام پورٹلز کے ذریعے تغیرات کی تحقیقات کریں۔
+- پیجریڈی روٹنگ ڈیش بورڈز کو بطور گائیڈ استعمال کرتی ہے: انتباہات
+  `DocsPortal/GatewayRefusals` ، `DocsPortal/AliasCache` ، اور `DocsPortal/TLSExpiry`
+  جب اسی طرح کے ڈور ان کی دہلیز سے تجاوز کرتے ہیں تو فائر کیا جاتا ہے۔ الرٹ رن بک کو اس صفحے سے لنک کریں تاکہ یہ ہوسکے
+  آن کال انجینئر عین مطابق Prometheus سوالات کو دوبارہ چلا سکتے ہیں۔
 
-- `dashboards/grafana/docs_portal.json` ينشر لوحة Grafana **Docs Portal Publishing**.
-  وتتضمن اللوحات التالية:
-  - *Gateway Refusals (5m)* يستخدم `torii_sorafs_gateway_refusals_total` بنطاق
-    `profile`/`reason` حتى يتمكن SRE من كشف دفعات سياسة خاطئة او فشل رموز.
-  - *Alias Cache Refresh Outcomes* و*Alias Proof Age p90* تتبع
-    `torii_sorafs_alias_cache_*` لاثبات وجود proofs حديثة قبل DNS cut over.
-  - *Pin Registry Manifest Counts* واحصائية *Active Alias Count* تعكس backlog pin-registry
-    واجمالي alias حتى تتمكن الحوكمة من تدقيق كل اصدار.
-  - *Gateway TLS Expiry (hours)* يبرز عندما يقترب TLS cert لبوابة النشر من الانتهاء
-    (عتبة التنبيه 72 h).
-  - *Replication SLA Outcomes* و*Replication Backlog* تراقب telemetria
-    `torii_sorafs_replication_*` لضمان ان كل النسخ تحقق معيار GA بعد النشر.
-- استخدم متغيرات القالب المدمجة (`profile`, `reason`) للتركيز على ملف نشر `docs.sora`
-  او التحقيق في الطفرات عبر كل البوابات.
-- توجيه PagerDuty يستخدم لوحات dashboard كدليل: التنبيهات
-  `DocsPortal/GatewayRefusals`, `DocsPortal/AliasCache`, و`DocsPortal/TLSExpiry`
-  تطلق عندما تتجاوز السلاسل المقابلة عتباتها. اربط runbook التنبيه بهذه الصفحة حتى يتمكن
-  مهندسو on-call من اعادة تشغيل استعلامات Prometheus الدقيقة.
+## اقدامات جمع کریں
 
-## جمع الخطوات
-
-1. اثناء `npm run build`، اضبط متغيرات بيئة release/analytics ودع خطوة ما بعد البناء تصدر
-   `checksums.sha256`, `release.json`, و`link-report.json`.
-2. شغل `npm run probe:portal` مقابل hostname المعاينة مع
-   `--expect-release` مربوطا بنفس الوسم. احفظ stdout لقائمة نشر النشر.
-3. شغل `npm run check:links` للفشل السريع على مدخلات sitemap المكسورة وارشف تقرير JSON الناتج
-   مع اثار المعاينة. تقوم CI بوضع اخر تقرير في `artifacts/docs_portal/link-report.json` حتى تتمكن
-   الحوكمة من تنزيل حزمة الادلة مباشرة من سجلات البناء.
-4. وجه endpoint التحليلات الى مجمع يحافظ على الخصوصية (Plausible، OTEL ingest مستضاف ذاتيا، وغيرها)
-   وتاكد من توثيق معدلات العينة لكل اصدار حتى تفسر لوحات التحكم العدادات بدقة.
-5. CI تربط هذه الخطوات بالفعل عبر workflows المعاينة/النشر
-   (`.github/workflows/docs-portal-preview.yml`,
-   `.github/workflows/docs-portal-deploy.yml`)، لذلك يكفي ان تغطي الاختبارات المحلية
-   سلوك الاسرار فقط.
+1. `npm run build` کے دوران ، ریلیز/تجزیاتی ماحولیاتی متغیرات کو مرتب کریں اور بلڈ کے بعد کے مرحلے کی ریلیز ہونے دیں
+   `checksums.sha256` ، `release.json` ، اور `link-report.json`۔
+2. `npm run probe:portal` بمقابلہ میزبان نام کا پیش نظارہ چلائیں
+   `--expect-release` اسی ٹیگ سے منسلک ہے۔ پوسٹ پوسٹ لسٹ میں STDOUT کو محفوظ کریں۔
+3. چلائیں `npm run check:links` ٹوٹے ہوئے سائٹ کا نقشہ اندراجات پر فاسٹ فیل اوور اور اس کے نتیجے میں JSON رپورٹ کے نتیجے میں محفوظ کریں
+   پیش نظارہ اثرات کے ساتھ۔ CI تازہ ترین رپورٹ `artifacts/docs_portal/link-report.json` میں رکھتا ہے تاکہ آپ کر سکیں
+   تعمیراتی ریکارڈوں سے براہ راست ثبوت کے پیکیج کو ڈاؤن لوڈ کرنے سے گورننس۔
+4. پرائیویسی کو محفوظ رکھنے والے تالاب (قابل ، خود سے میزبان اوٹیل ، وغیرہ) کا روٹ تجزیات اختتامی نقطہ
+   ہر ورژن کے نمونے کی شرحوں کو دستاویز کرنا یقینی بنائیں تاکہ کنٹرول پینل میٹروں کی درست ترجمانی کریں۔
+5. سی آئی دراصل ان اقدامات کو پیش نظارہ/تعیناتی ورک فلوز میں جوڑتا ہے
+   (`.github/workflows/docs-portal-preview.yml` ،
+   `.github/workflows/docs-portal-deploy.yml`) ، لہذا یہ مقامی ٹیسٹوں کا احاطہ کرنے کے لئے کافی ہے
+   صرف خفیہ سلوک۔

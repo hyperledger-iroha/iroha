@@ -7,133 +7,129 @@ generator: scripts/sync_docs_i18n.py
 source_hash: d1f1005d6a273ab732a7c7a7adca349c17569fe2e2755b8daccf2186724044f8
 source_last_modified: "2026-01-22T16:26:46.568382+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-## Settlement ↔ ISO 20022 Field Mapping
+## 結算 ↔ ISO 20022 字段映射
 
-This note captures the canonical mapping between Iroha settlement instructions
-(`DvpIsi`, `PvpIsi`, repo collateral flows) and the ISO 20022 messages exercised
-by the bridge. It reflects the message scaffolding implemented in
-`crates/ivm/src/iso20022.rs` and serves as a reference when producing or
-validating Norito payloads.
+本註釋捕獲了 Iroha 結算指令之間的規範映射
+（`DvpIsi`、`PvpIsi`、回購抵押品流量）和執行的 ISO 20022 消息
+在橋邊。它反映了在中實現的消息腳手架
+`crates/ivm/src/iso20022.rs` 並作為生產或時的參考
+驗證 Norito 有效負載。
 
-### Reference Data Policy (Identifiers and Validation)
+### 參考數據政策（標識符和驗證）
 
-This policy packages the identifier preferences, validation rules, and reference-data
-obligations that the Norito ↔ ISO 20022 bridge must enforce before emitting messages.
+該策略打包了標識符首選項、驗證規則和參考數據
+Norito ↔ ISO 20022 網橋在發出消息之前必須執行的義務。
 
-**Anchor points inside the ISO message:**
-- **Instrument identifiers** → `delivery_leg.asset_definition_id` ↔ `SctiesLeg/FinInstrmId`
-  (or the equivalent instrument field).
-- **Parties / agents** → `DlvrgSttlmPties/Pty` and `RcvgSttlmPties/Pty` for `sese.*`,
-  or the agent structures in `pacs.009`.
-- **Accounts** → `…/Acct` elements for safekeeping/cash accounts; mirror the on-ledger
-  `AccountId` in `SupplementaryData`.
-- **Proprietary identifiers** → `…/OthrId` with `Tp/Prtry` and mirrored in
-  `SupplementaryData`. Never replace regulated identifiers with proprietary ones.
+**ISO 消息內的錨點：**
+- **儀器標識符** → `delivery_leg.asset_definition_id` ↔ `SctiesLeg/FinInstrmId`
+  （或同等儀器領域）。
+- **當事方/代理人** → `DlvrgSttlmPties/Pty` 和 `RcvgSttlmPties/Pty` 為 `sese.*`，
+  或 `pacs.009` 中的代理結構。
+- **賬戶** → `…/Acct` 保管/現金賬戶要素；鏡像賬本
+  `AccountId` 中的 `SupplementaryData`。
+- **專有標識符** → `…/OthrId` 和 `Tp/Prtry` 並鏡像
+  `SupplementaryData`。切勿用專有標識符替換受監管的標識符。
 
-#### Identifier preference by message family
+#### 消息系列的標識符首選項
 
-##### `sese.023` / `.024` / `.025` (securities settlement)
+##### `sese.023` / `.024` / `.025`（證券結算）
 
-- **Instrument (`FinInstrmId`)**
-  - Preferred: **ISIN** under `…/ISIN`. It is the canonical identifier for CSDs / T2S.[^anna]
-  - Fallbacks:
-    - **CUSIP** or other NSIN under `…/OthrId/Id` with `Tp/Cd` set from the ISO external
-      code list (e.g., `CUSP`); include the issuer in `Issr` when mandated.[^iso_mdr]
-    - **Norito asset ID** as proprietary: `…/OthrId/Id`, `Tp/Prtry="NORITO_ASSET_ID"`, and
-      record the same value in `SupplementaryData`.
-  - Optional descriptors: **CFI** (`ClssfctnTp`) and **FISN** where supported to ease
-    reconciliation.[^iso_cfi][^iso_fisn]
-- **Parties (`DlvrgSttlmPties`, `RcvgSttlmPties`)**
-  - Preferred: **BIC** (`AnyBIC/BICFI`, ISO 9362).[^swift_bic]
-  - Fallback: **LEI** where the version of the message exposes a dedicated LEI field; if
-    absent, carry proprietary IDs with clear `Prtry` labels and include BIC in metadata.[^iso_cr]
-- **Place of settlement / venue** → **MIC** for the venue and **BIC** for the CSD.[^iso_mic]
+- **儀器 (`FinInstrmId`)**
+  - 首選：`…/ISIN` 下的 **ISIN**。它是 CSD / T2S 的規範標識符。 [^anna]
+  - 後備方案：
+    - **CUSIP** 或 `…/OthrId/Id` 下的其他 NSIN，其中 `Tp/Cd` 從 ISO 外部設置
+      代碼列表（例如，`CUSP`）；必要時將發行人包含在 `Issr` 中。 [^iso_mdr]
+    - **Norito 資產 ID** 作為專有：`…/OthrId/Id`、`Tp/Prtry="NORITO_ASSET_ID"` 和
+      在 `SupplementaryData` 中記錄相同的值。
+  - 可選描述符：**CFI** (`ClssfctnTp`) 和 **FISN**（支持緩解）
+    和解。 [^iso_cfi][^iso_fisn]
+- **各方 (`DlvrgSttlmPties`, `RcvgSttlmPties`)**
+  - 首選：**BIC**（`AnyBIC/BICFI`，ISO 9362）。 [^swift_bic]
+  - 後備：**LEI**，其中消息版本公開專用 LEI 字段；如果
+    不存在，攜帶帶有清晰 `Prtry` 標籤的專有 ID，並在元數據中包含 BIC。 [^iso_cr]
+- **定居點/場地** → **MIC** 代表場地，**BIC** 代表 CSD。 [^iso_mic]
 
-##### `colr.010` / `.011` / `.012` and `colr.007` (collateral management)
+##### `colr.010` / `.011` / `.012` 和 `colr.007`（抵押品管理）
 
-- Follow the same instrument rules as `sese.*` (ISIN preferred).
-- Parties use **BIC** by default; **LEI** is acceptable where the schema exposes it.[^swift_bic]
-- Cash amounts must use **ISO 4217** currency codes with correct minor units.[^iso_4217]
+- 遵循與 `sese.*` 相同的儀器規則（首選 ISIN）。
+- 各方默認使用**BIC**； **LEI** 在架構公開的情況下是可接受的。 [^swift_bic]
+- 現金金額必須使用 **ISO 4217** 貨幣代碼和正確的小單位。 [^iso_4217]
 
-##### `pacs.009` / `camt.054` (PvP funding and statements)
+##### `pacs.009` / `camt.054`（PvP 資金和報表）- **代理人（`InstgAgt`、`InstdAgt`、債務人/債權人代理人）** → **BIC** 可選
+  LEI 在允許的情況下。 [^swift_bic]
+- **賬戶**
+  - 銀行間：通過 **BIC** 和內部賬戶參考進行識別。
+  - 面向客戶的聲明 (`camt.054`)：包括 **IBAN**（如果存在）並進行驗證
+    （長度、國家/地區規則、mod-97 校驗和）。 [^swift_iban]
+- **貨幣** → **ISO 4217** 3 個字母代碼，尊重小單位舍入。 [^iso_4217]
+- **Torii 攝取** → 通過 `POST /v1/iso20022/pacs009` 提交 PvP 資金；橋
+  需要 `Purp=SECU`，現在在配置參考數據時強制執行 BIC 人行橫道。
 
-- **Agents (`InstgAgt`, `InstdAgt`, debtor/creditor agents)** → **BIC** with optional
-  LEI where allowed.[^swift_bic]
-- **Accounts**
-  - Interbank: identify by **BIC** and internal account references.
-  - Customer-facing statements (`camt.054`): include **IBAN** when present and validate it
-    (length, country rules, mod-97 checksum).[^swift_iban]
-- **Currency** → **ISO 4217** 3-letter code, respect minor-unit rounding.[^iso_4217]
-- **Torii ingestion** → Submit PvP funding legs via `POST /v1/iso20022/pacs009`; the bridge
-  requires `Purp=SECU` and now enforces BIC crosswalks when reference data is configured.
+#### 驗證規則（在發射前應用）
 
-#### Validation rules (apply before emission)
+|標識符 |驗證規則 |筆記|
+|------------|-----------------|--------|
+| **ISIN** |正則表達式 `^[A-Z]{2}[A-Z0-9]{9}[0-9]$` 和 Luhn (mod-10) 校驗位符合 ISO 6166 附錄 C |橋接發射前拒絕；更喜歡上游富集。 [^anna_luhn] |
+| **CUSIP** |正則表達式 `^[A-Z0-9]{9}$` 和模數 10，權重為 2（字符映射到數字）|僅當 ISIN 不可用時；獲取後通過 ANNA/CUSIP 人行橫道繪製地圖。 [^cusip] |
+| **雷** |正則表達式 `^[A-Z0-9]{18}[0-9]{2}$` 和 mod-97 校驗位 (ISO 17442) |在接受之前對照 GLEIF 每日增量文件進行驗證。 [^gleif] |
+| **BIC** |正則表達式 `^[A-Z]{4}[A-Z]{2}[A-Z0-9]{2}([A-Z0-9]{3})?$` |可選的分支代碼（最後三個字符）。確認 RA 文件中的活動狀態。 [^swift_bic] |
+| **麥克風** |根據 ISO 10383 RA 文件進行維護；確保場館處於活動狀態（無 `!` 終止標誌）|在發射前標記退役的 MIC。 [^iso_mic] |
+| **國際銀行賬號** |國家/地區特定長度，大寫字母數字，mod-97 = 1 |使用 SWIFT 維護的註冊表；拒絕結構上無效的 IBAN。 [^swift_iban] |
+| **專有帳戶/方 ID** | `Max35Text`（UTF-8，≤35 個字符），帶有修剪的空格 |適用於 `GenericAccountIdentification1.Id` 和 `PartyIdentification135.Othr/Id` 字段。拒絕超過 35 個字符的條目，以便橋接有效負載符合 ISO 架構。 |
+| **代理帳戶標識符** | `…/Prxy/Id` 下的非空 `Max2048Text`，`…/Prxy/Tp/{Cd,Prtry}` 中具有可選類型代碼 |與主要 IBAN 一起存儲；驗證仍然需要 IBAN，同時接受代理句柄（帶有可選類型代碼）以鏡像 PvP 軌道。 |
+| **CFI** |六字符代碼，使用 ISO 10962 分類法的大寫字母 |可選的豐富；確保字符與儀器類別匹配。 [^iso_cfi] |
+| **FISN** |最多 35 個字符，大寫字母數字加有限標點符號 |選修的;根據 ISO 18774 指南進行截斷/標準化。 [^iso_fisn] |
+| **貨幣** | ISO 4217 3 字母代碼，由小單位確定的比例 |金額必須四捨五入到允許的小數位；在 Norito 端強制執行。 [^iso_4217] |
 
-| Identifier | Validation rule | Notes |
-|------------|-----------------|-------|
-| **ISIN** | Regex `^[A-Z]{2}[A-Z0-9]{9}[0-9]$` and Luhn (mod-10) check digit per ISO 6166 Annex C | Reject before bridge emission; prefer upstream enrichment.[^anna_luhn] |
-| **CUSIP** | Regex `^[A-Z0-9]{9}$` and modulus-10 with 2 weighting (characters map to digits) | Only when ISIN is unavailable; map via ANNA/CUSIP crosswalk once sourced.[^cusip] |
-| **LEI** | Regex `^[A-Z0-9]{18}[0-9]{2}$` and mod-97 check digit (ISO 17442) | Validate against GLEIF daily delta files before acceptance.[^gleif] |
-| **BIC** | Regex `^[A-Z]{4}[A-Z]{2}[A-Z0-9]{2}([A-Z0-9]{3})?$` | Optional branch code (last three chars). Confirm active status in RA files.[^swift_bic] |
-| **MIC** | Maintain from ISO 10383 RA file; ensure venues are active (no `!` termination flag) | Flag decommissioned MICs before emission.[^iso_mic] |
-| **IBAN** | Country-specific length, uppercase alphanumeric, mod-97 = 1 | Use registry maintained by SWIFT; reject structurally invalid IBANs.[^swift_iban] |
-| **Proprietary account/party IDs** | `Max35Text` (UTF-8, ≤35 characters) with trimmed whitespace | Applies to `GenericAccountIdentification1.Id` and `PartyIdentification135.Othr/Id` fields. Reject entries exceeding 35 characters so bridge payloads conform to ISO schemas. |
-| **Proxy account identifiers** | Non-empty `Max2048Text` under `…/Prxy/Id` with optional type codes in `…/Prxy/Tp/{Cd,Prtry}` | Stored alongside the primary IBAN; validation still requires IBANs while accepting proxy handles (with optional type codes) to mirror PvP rails. |
-| **CFI** | Six-character code, uppercase letters using ISO 10962 taxonomy | Optional enrichment; ensure characters match instrument class.[^iso_cfi] |
-| **FISN** | Up to 35 characters, uppercase alphanumeric plus limited punctuation | Optional; truncate/normalise per ISO 18774 guidance.[^iso_fisn] |
-| **Currency** | ISO 4217 3-letter code, scale determined by minor units | Amounts must round to permitted decimals; enforce on Norito side.[^iso_4217] |
+#### 人行橫道和數據維護義務- 維護 **ISIN ↔ Norito 資產 ID** 和 **CUSIP ↔ ISIN** 人行橫道。每晚更新自
+  ANNA/DSB 提供 CI 使用的快照並進行版本控制。 [^anna_crosswalk]
+- 刷新 GLEIF 公共關係文件中的 **BIC ↔ LEI** 映射，以便橋接器可以
+  需要時同時發出。 [^bic_lei]
+- 將 **MIC 定義** 與橋元數據一起存儲，以便場地驗證
+  即使 RA 文件在中午發生變化，也具有確定性。 [^iso_mic]
+- 在橋元數據中記錄數據來源（時間戳+來源）以供審核。堅持
+  快照標識符與發出的指令一起。
+- 配置 `iso_bridge.reference_data.cache_dir` 以保留每個加載的數據集的副本
+  以及出處元數據（版本、來源、時間戳、校驗和）。這使得審核員
+  即使在上游快照輪換之後，操作員也可以區分歷史源。
+- ISO 人行橫道快照由 `iroha_core::iso_bridge::reference_data` 使用
+  `iso_bridge.reference_data` 配置塊（路徑 + 刷新間隔）。儀表
+  `iso_reference_status`、`iso_reference_age_seconds`、`iso_reference_records` 和
+  `iso_reference_refresh_interval_secs` 公開運行時運行狀況以進行警報。 Torii
+  網橋拒絕其代理 BIC 不存在於配置中的 `pacs.008` 提交
+  人行橫道，當對手方處於
+  未知。 【crates/iroha_torii/src/iso20022_bridge.rs#L1078】
+- IBAN 和 ISO 4217 綁定在同一層強制執行：現在 pacs.008/pacs.009 流
+  當債務人/債權人 IBAN 缺少配置的別名或當
+  `currency_assets` 中缺少結算貨幣，防止橋接畸形
+  到達分類賬的指令。 IBAN 驗證也適用於特定國家/地區
+  ISO 7064 mod-97 通過之前的長度和數字校驗位，因此在結構上無效
+  值被提前拒絕。 【crates/iroha_torii/src/iso20022_bridge.rs#L775】【crates/iroha_torii/src/iso20022_bridge.rs#L827】【crates/ivm/src/iso20022.rs#L1255】
+- CLI結算助手繼承相同的護欄：通過
+  `--iso-reference-crosswalk <path>` 與 `--delivery-instrument-id` 一起獲得 DvP
+  在發出 `sese.023` XML 快照之前預覽驗證儀器 ID。 【crates/iroha_cli/src/main.rs#L3752】
+- `cargo xtask iso-bridge-lint`（和 CI 包裝器 `ci/check_iso_reference_data.sh`）lint
+  人行橫道快照和固定裝置。該命令接受 `--isin`、`--bic-lei`、`--mic` 和
+  運行時，`--fixtures` 標記並回退到 `fixtures/iso_bridge/` 中的示例數據集
+  不帶參數。 【xtask/src/main.rs#L146】【ci/check_iso_reference_data.sh#L1】
+- IVM 幫助程序現在攝取真正的 ISO 20022 XML 信封（head.001 + `DataPDU` + `Document`）
+  並通過 `head.001` 架構驗證業務應用程序標頭，因此 `BizMsgIdr`，
+  `MsgDefIdr`、`CreDt` 和 BIC/ClrSysMmbId 代理被確定性地保留； XMLDSig/XAdES
+  塊仍然被故意跳過。回歸測試消耗樣本和新的用於保護映射的標頭信封固定裝置。 【crates/ivm/src/iso20022.rs:265】【crates/ivm/src/iso20022.rs:3301】【crates/ivm/src/iso20022.rs:3703】
 
-#### Crosswalk and data maintenance obligations
+#### 監管和市場結構考慮因素
 
-- Maintain **ISIN ↔ Norito asset ID** and **CUSIP ↔ ISIN** crosswalks. Update nightly from
-  ANNA/DSB feeds and version control the snapshots used by CI.[^anna_crosswalk]
-- Refresh **BIC ↔ LEI** mappings from the GLEIF public relationship files so the bridge can
-  emit both when required.[^bic_lei]
-- Store **MIC definitions** alongside the bridge metadata so venue validation is
-  deterministic even when RA files change mid-day.[^iso_mic]
-- Record data provenance (timestamp + source) in bridge metadata for audit. Persist the
-  snapshot identifier alongside emitted instructions.
-- Configure `iso_bridge.reference_data.cache_dir` to persist a copy of each loaded dataset
-  alongside provenance metadata (version, source, timestamp, checksum). This allows auditors
-  and operators to diff historical feeds even after upstream snapshots rotate.
-- ISO crosswalk snapshots are ingested by `iroha_core::iso_bridge::reference_data` using
-  the `iso_bridge.reference_data` configuration block (paths + refresh interval). Gauges
-  `iso_reference_status`, `iso_reference_age_seconds`, `iso_reference_records`, and
-  `iso_reference_refresh_interval_secs` expose runtime health for alerting. The Torii
-  bridge rejects `pacs.008` submissions whose agent BICs are absent from the configured
-  crosswalk, surfacing deterministic `InvalidIdentifier` errors when a counterparty is
-  unknown.【crates/iroha_torii/src/iso20022_bridge.rs#L1078】
-- IBAN and ISO 4217 bindings are enforced at the same layer: pacs.008/pacs.009 flows now
-  emit `InvalidIdentifier` errors when debtor/creditor IBANs lack configured aliases or when
-  the settlement currency is missing from `currency_assets`, preventing malformed bridge
-  instructions from reaching the ledger. IBAN validation also applies country-specific
-  lengths and numeric check digits before the ISO 7064 mod‑97 pass so structurally invalid
-  values are rejected early.【crates/iroha_torii/src/iso20022_bridge.rs#L775】【crates/iroha_torii/src/iso20022_bridge.rs#L827】【crates/ivm/src/iso20022.rs#L1255】
-- The CLI settlement helpers inherit the same guard rails: pass
-  `--iso-reference-crosswalk <path>` alongside `--delivery-instrument-id` to have the DvP
-  preview validate instrument IDs before emitting the `sese.023` XML snapshot.【crates/iroha_cli/src/main.rs#L3752】
-- `cargo xtask iso-bridge-lint` (and the CI wrapper `ci/check_iso_reference_data.sh`) lint
-  crosswalk snapshots and fixtures. The command accepts `--isin`, `--bic-lei`, `--mic`, and
-  `--fixtures` flags and falls back to the sample datasets in `fixtures/iso_bridge/` when run
-  without arguments.【xtask/src/main.rs#L146】【ci/check_iso_reference_data.sh#L1】
-- The IVM helper now ingests real ISO 20022 XML envelopes (head.001 + `DataPDU` + `Document`)
-  and validates the Business Application Header via the `head.001` schema so `BizMsgIdr`,
-  `MsgDefIdr`, `CreDt`, and BIC/ClrSysMmbId agents are preserved deterministically; XMLDSig/XAdES
-  blocks remain intentionally skipped. Regression tests consume the samples and the new
-  header envelope fixture to guard the mappings.【crates/ivm/src/iso20022.rs:265】【crates/ivm/src/iso20022.rs:3301】【crates/ivm/src/iso20022.rs:3703】
-
-#### Regulatory and market-structure considerations
-
-- **T+1 settlement**: US/Canada equity markets moved to T+1 in 2024; adjust Norito
-  scheduling and SLA alerts accordingly.[^sec_t1][^csa_t1]
-- **CSDR penalties**: Settlement discipline rules enforce cash penalties; ensure Norito
-  metadata captures penalty references for reconciliation.[^csdr]
-- **Same-day settlement pilots**: India’s regulator is phasing in T0/T+0 settlement; keep
-  bridge calendars updated as pilots expand.[^india_t0]
-- **Collateral buy-ins / holds**: Monitor ESMA updates on buy-in timelines and optional holds
-  so conditional delivery (`HldInd`) aligns with the latest guidance.[^csdr]
+- **T+1結算**：美國/加拿大股票市場於2024年轉向T+1；調整 Norito
+  相應地安排和 SLA 警報。 [^sec_t1][^csa_t1]
+- **CSDR 處罰**：和解紀律規則強制執行現金處罰；確保 Norito
+  元數據捕獲用於調節的懲罰參考。 [^csdr]
+- **當日結算試點**：印度監管機構正在逐步推行T0/T+0結算；保留
+  隨著試點範圍的擴大，橋樑日曆也隨之更新。 [^india_t0]
+- **抵押買入/持有**：監控 ESMA 關於買入時間表和可選持有的更新
+  因此有條件交付 (`HldInd`) 與最新指南保持一致。 [^csdr]
 
 [^anna]: ANNA ISIN Guidelines, December 2023. https://anna-web.org/wp-content/uploads/2024/01/ISIN-Guidelines-Version-22-Dec-2023.pdf
 [^iso_mdr]: ISO 20022 external code list (CUSIP `CUSP`) and MDR Part 2. https://www.iso20022.org/milestone/22048/download
@@ -154,65 +150,61 @@ obligations that the Norito ↔ ISO 20022 bridge must enforce before emitting m
 [^csdr]: ESMA CSDR settlement discipline / penalty mechanism updates. https://www.esma.europa.eu/sites/default/files/2024-11/ESMA74-2119945925-2059_Final_Report_on_Technical_Advice_on_CSDR_Penalty_Mechanism.pdf
 [^india_t0]: SEBI circular on same-day settlement pilot. https://www.reuters.com/sustainability/boards-policy-regulation/india-markets-regulator-extends-deadline-same-day-settlement-plan-brokers-2025-04-29/
 
-### Delivery-versus-Payment → `sese.023`
+### 貨到付款 → `sese.023`| DvP 領域 | ISO 20022 路徑 |筆記|
+|--------------------------------------------------------------------|----------------------------------------|------|
+| `settlement_id` | `TxId` |穩定的生命週期標識符 |
+| `delivery_leg.asset_definition_id`（安全）| `SctiesLeg/FinInstrmId` |規範標識符（ISIN、CUSIP……）|
+| `delivery_leg.quantity` | `SctiesLeg/Qty` |十進製字符串；榮譽資產精準 |
+| `payment_leg.asset_definition_id`（貨幣）| `CashLeg/Ccy` | ISO 貨幣代碼 |
+| `payment_leg.quantity` | `CashLeg/Amt` |十進製字符串；根據數字規范進行四捨五入 |
+| `delivery_leg.from`（賣家/送貨方）| `DlvrgSttlmPties/Pty/Bic` |交付參與者的 BIC *（帳戶規範 ID 目前在元數據中導出）* |
+| `delivery_leg.from` 帳戶標識符 | `DlvrgSttlmPties/Acct` |自由形式； Norito 元數據攜帶準確的帳戶 ID |
+| `delivery_leg.to`（買方/接收方）| `RcvgSttlmPties/Pty/Bic` |接收參與者的 BIC |
+| `delivery_leg.to` 帳戶標識符 | `RcvgSttlmPties/Acct` |自由形式；匹配接收帳戶 ID |
+| `plan.order` | `Plan/ExecutionOrder` |枚舉：`DELIVERY_THEN_PAYMENT` 或 `PAYMENT_THEN_DELIVERY` |
+| `plan.atomicity` | `Plan/Atomicity` |枚舉：`ALL_OR_NOTHING`、`COMMIT_FIRST_LEG`、`COMMIT_SECOND_LEG` |
+| **留言目的** | `SttlmTpAndAddtlParams/SctiesMvmntTp` | `DELI`（發送）或 `RECE`（接收）；反映提交方執行的分支。 |
+|                                                        | `SttlmTpAndAddtlParams/Pmt` | `APMT`（付款）或 `FREE`（免付款）。 |
+| `delivery_leg.metadata`，`payment_leg.metadata` | `SctiesLeg/Metadata`、`CashLeg/Metadata` |可選 Norito JSON 編碼為 UTF-8 |
 
-| DvP field                                              | ISO 20022 path                          | Notes |
-|--------------------------------------------------------|----------------------------------------|-------|
-| `settlement_id`                                        | `TxId`                                 | Stable lifecycle identifier |
-| `delivery_leg.asset_definition_id` (security)          | `SctiesLeg/FinInstrmId`                | Canonical identifier (ISIN, CUSIP, …) |
-| `delivery_leg.quantity`                                | `SctiesLeg/Qty`                        | Decimal string; honours asset precision |
-| `payment_leg.asset_definition_id` (currency)           | `CashLeg/Ccy`                          | ISO currency code |
-| `payment_leg.quantity`                                 | `CashLeg/Amt`                          | Decimal string; rounded per Numeric spec |
-| `delivery_leg.from` (seller / delivering party)        | `DlvrgSttlmPties/Pty/Bic`              | BIC of delivering participant *(account canonical ID is currently exported in metadata)* |
-| `delivery_leg.from` account identifier                 | `DlvrgSttlmPties/Acct`                 | Free-form; Norito metadata carries exact account ID |
-| `delivery_leg.to` (buyer / receiving party)            | `RcvgSttlmPties/Pty/Bic`               | BIC of receiving participant |
-| `delivery_leg.to` account identifier                   | `RcvgSttlmPties/Acct`                  | Free-form; matches receiving account ID |
-| `plan.order`                                           | `Plan/ExecutionOrder`                  | Enum: `DELIVERY_THEN_PAYMENT` or `PAYMENT_THEN_DELIVERY` |
-| `plan.atomicity`                                       | `Plan/Atomicity`                       | Enum: `ALL_OR_NOTHING`, `COMMIT_FIRST_LEG`, `COMMIT_SECOND_LEG` |
-| **Message purpose**                                    | `SttlmTpAndAddtlParams/SctiesMvmntTp`  | `DELI` (deliver) or `RECE` (receive); mirrors which leg the submitting party executes. |
-|                                                        | `SttlmTpAndAddtlParams/Pmt`            | `APMT` (against payment) or `FREE` (free-of-payment). |
-| `delivery_leg.metadata`, `payment_leg.metadata`        | `SctiesLeg/Metadata`, `CashLeg/Metadata` | Optional Norito JSON encoded as UTF‑8 |
+> **結算限定符** – 橋接器通過將結算條件代碼 (`SttlmTxCond`)、部分結算指標 (`PrtlSttlmInd`) 以及 Norito 元數據中的其他可選限定符複製到 `sese.023/025`（如果存在）來反映市場慣例。強制執行 ISO 外部代碼列表中發布的枚舉，以便目標 CSD 識別這些值。
 
-> **Settlement qualifiers** – the bridge mirrors market practice by copying settlement condition codes (`SttlmTxCond`), partial settlement indicators (`PrtlSttlmInd`), and other optional qualifiers from Norito metadata into `sese.023/025` when present. Enforce the enumerations published in the ISO external code lists so the destination CSD recognises the values.
+### 支付與支付資金 → `pacs.009`
 
-### Payment-versus-Payment Funding → `pacs.009`
+為 PvP 指令提供資金的現金換現金部分以 FI-to-FI 信用形式發放
+轉移。該橋對這些付款進行了註釋，以便下游系統識別
+他們為證券結算提供資金。| PvP 資金領域 | ISO 20022 路徑 |筆記|
+|------------------------------------------------|--------------------------------------------------------|--------------------|
+| `primary_leg.quantity` / {金額，貨幣} | `IntrBkSttlmAmt` + `IntrBkSttlmCcy` |從發起人處扣除的金額/貨幣。 |
+|交易對手代理標識符 | `InstgAgt`，`InstdAgt` |發送和接收代理的 BIC/LEI。 |
+|落戶目的 | `CdtTrfTxInf/PmtTpInf/CtgyPurp/Cd` |設置為 `SECU` 用於證券相關的 PvP 資金。 |
+| Norito 元數據（賬戶 ID、FX 數據）| `CdtTrfTxInf/SplmtryData` |包含完整的 AccountId、FX 時間戳、執行計劃提示。 |
+|指令標識符/生命週期鏈接| `CdtTrfTxInf/PmtId/InstrId`、`CdtTrfTxInf/RmtInf` |與 Norito `settlement_id` 相匹配，以便現金部分與證券方保持一致。 |
 
-The cash-for-cash legs that fund a PvP instruction are issued as FI-to-FI credit
-transfers. The bridge annotates these payments so downstream systems recognise
-they finance a securities settlement.
+JavaScript SDK 的 ISO 橋通過默認的
+`pacs.009` 類別目的為 `SECU`；調用者可以用另一個覆蓋它
+發出非證券信用轉賬時有效的 ISO 代碼，但無效
+值被預先拒絕。
 
-| PvP funding field                              | ISO 20022 path                                      | Notes |
-|------------------------------------------------|-----------------------------------------------------|-------|
-| `primary_leg.quantity` / {amount, currency}    | `IntrBkSttlmAmt` + `IntrBkSttlmCcy`                 | Amount/currency debited from the initiator. |
-| Counterparty agent identifiers                 | `InstgAgt`, `InstdAgt`                              | BIC/LEI of sending and receiving agents. |
-| Settlement purpose                             | `CdtTrfTxInf/PmtTpInf/CtgyPurp/Cd`                  | Set to `SECU` for securities-related PvP funding. |
-| Norito metadata (account ids, FX data)         | `CdtTrfTxInf/SplmtryData`                           | Carries full AccountId, FX timestamps, execution plan hints. |
-| Instruction identifier / lifecycle linking     | `CdtTrfTxInf/PmtId/InstrId`, `CdtTrfTxInf/RmtInf`   | Matches the Norito `settlement_id` so the cash leg reconciles with the securities side. |
+如果基礎設施需要明確的證券確認，那麼橋樑
+繼續發出 `sese.025`，但該確認反映了證券腿
+狀態（例如，`ConfSts = ACCP`）而不是 PvP“目的”。
 
-The JavaScript SDK’s ISO bridge aligns with this requirement by defaulting the
-`pacs.009` category purpose to `SECU`; callers may override it with another
-valid ISO code when emitting non-securities credit transfers, but invalid
-values are rejected up front.
+### 付款與付款確認 → `sese.025`
 
-If an infrastructure requires an explicit securities confirmation, the bridge
-continues to emit `sese.025`, but that confirmation reflects the securities leg
-status (e.g., `ConfSts = ACCP`) rather than the PvP “purpose”.
+| PvP 領域 | ISO 20022 路徑 |筆記|
+|------------------------------------------------------------|----------------------------------------|------|
+| `settlement_id` | `TxId` |穩定的生命週期標識符 |
+| `primary_leg.asset_definition_id` | `SttlmCcy` |主要支線的貨幣代碼 |
+| `primary_leg.quantity` | `SttlmAmt` |發起人交付的金額 |
+| `counter_leg.asset_definition_id` | `AddtlInf`（JSON 有效負載）|補充信息中嵌入的櫃檯貨幣代碼 |
+| `counter_leg.quantity` | `SttlmQty` |櫃檯金額|
+| `plan.order` | `Plan/ExecutionOrder` |與 DvP | 相同的枚舉集
+| `plan.atomicity` | `Plan/Atomicity` |與 DvP | 相同的枚舉集
+| `plan.atomicity` 狀態 (`ConfSts`) | `ConfSts` |匹配時為 `ACCP`；橋在拒絕​​時發出故障代碼 |
+|交易對手標識符| `AddtlInf` JSON |當前橋在元數據中序列化完整的 AccountId/BIC 元組 |
 
-### Payment-versus-Payment Confirmation → `sese.025`
-
-| PvP field                                     | ISO 20022 path            | Notes |
-|-----------------------------------------------|---------------------------|-------|
-| `settlement_id`                               | `TxId`                    | Stable lifecycle identifier |
-| `primary_leg.asset_definition_id`             | `SttlmCcy`                | Currency code for the primary leg |
-| `primary_leg.quantity`                        | `SttlmAmt`                | Amount delivered by initiator |
-| `counter_leg.asset_definition_id`             | `AddtlInf` (JSON payload) | Counter currency code embedded in supplemental info |
-| `counter_leg.quantity`                        | `SttlmQty`                | Counter amount |
-| `plan.order`                                  | `Plan/ExecutionOrder`     | Same enum set as DvP |
-| `plan.atomicity`                              | `Plan/Atomicity`          | Same enum set as DvP |
-| `plan.atomicity` status (`ConfSts`)           | `ConfSts`                 | `ACCP` when matched; bridge emits failure codes on rejection |
-| Counterparty identifiers                      | `AddtlInf` JSON           | Current bridge serialises full AccountId/BIC tuples in metadata |
-
-Example (CLI ISO preview with linkages, hold, and market MIC):
+示例（具有鏈接、保留和市場 MIC 的 CLI ISO 預覽）：
 
 ```sh
 iroha app settlement dvp \
@@ -235,164 +227,156 @@ iroha app settlement dvp \
   --iso-xml-out sese023_preview.xml
 ```
 
-### Repo Collateral Substitution → `colr.007`
+### 回購抵押品替代 → `colr.007`|回購字段/上下文 | ISO 20022 路徑 |筆記|
+|------------------------------------------------|------------------------------------------------|--------|
+| `agreement_id` (`RepoIsi` / `ReverseRepoIsi`) | `OblgtnId` |回購合約標識符 |
+|抵押品替代交易標識符 | `TxId` |每次替換生成 |
+|原始抵押品數量 | `Substitution/OriginalAmt` |比賽在替換前承諾抵押品|
+|原始抵押幣 | `Substitution/OriginalCcy` |貨幣代碼 |
+|替代抵押品數量 | `Substitution/SubstituteAmt` |更換金額 |
+|替代抵押貨幣 | `Substitution/SubstituteCcy` |貨幣代碼 |
+|生效日期（治理保證金時間表）| `Substitution/EffectiveDt` | ISO 日期 (YYYY-MM-DD) |
+|理髮分類| `Substitution/Type` |目前基於治理策略的 `FULL` 或 `PARTIAL` |
+|治理/理髮注意| `Substitution/ReasonCd` |可選，承載治理原理|
+|理髮尺寸| `Substitution/Haircut` |數字;映射替換期間應用的髮型 |
+|原始/替代儀器 ID | `Substitution/OriginalFinInstrmId`、`Substitution/SubstituteFinInstrmId` |每條腿可選 ISIN/CUSIP |
 
-| Repo field / context                            | ISO 20022 path                     | Notes |
-|-------------------------------------------------|-----------------------------------|-------|
-| `agreement_id` (`RepoIsi` / `ReverseRepoIsi`)   | `OblgtnId`                        | Repo contract identifier |
-| Collateral substitution Tx identifier           | `TxId`                            | Generated per substitution |
-| Original collateral quantity                    | `Substitution/OriginalAmt`        | Matches pledged collateral before substitution |
-| Original collateral currency                    | `Substitution/OriginalCcy`        | Currency code |
-| Substitute collateral quantity                  | `Substitution/SubstituteAmt`      | Replacement amount |
-| Substitute collateral currency                  | `Substitution/SubstituteCcy`      | Currency code |
-| Effective date (governance margin schedule)     | `Substitution/EffectiveDt`        | ISO date (YYYY-MM-DD) |
-| Haircut classification                          | `Substitution/Type`               | Currently `FULL` or `PARTIAL` based on governance policy |
-| Governance reason / hair-cut note               | `Substitution/ReasonCd`           | Optional, carries governance rationale |
-| Haircut size                                    | `Substitution/Haircut`            | Numeric; maps the haircut applied during substitution |
-| Original/substitute instrument IDs              | `Substitution/OriginalFinInstrmId`, `Substitution/SubstituteFinInstrmId` | Optional ISIN/CUSIP for each leg |
+### 資金和報表
 
-### Funding and Statements
+| Iroha 上下文 | ISO 20022 消息 |地圖位置 |
+|----------------------------------|--------------------------------|------------------|
+|回購現金腿點火/解除| `pacs.009` | `IntrBkSttlmAmt`、`IntrBkSttlmCcy`、`IntrBkSttlmDt`、`InstgAgt`、`InstdAgt` 從 DvP/PvP 分支填充 |
+|結算後報表| `camt.054` |支付腿移動記錄在 `Ntfctn/Ntry[*]` 下；橋在 `SplmtryData` 中註入賬本/賬戶元數據 |
 
-| Iroha context                    | ISO 20022 message | Mapping location |
-|----------------------------------|-------------------|------------------|
-| Repo cash leg ignition / unwind  | `pacs.009`        | `IntrBkSttlmAmt`, `IntrBkSttlmCcy`, `IntrBkSttlmDt`, `InstgAgt`, `InstdAgt` populated from DvP/PvP legs |
-| Post-settlement statements       | `camt.054`        | Payment leg movements recorded under `Ntfctn/Ntry[*]`; bridge injects ledger/account metadata in `SplmtryData` |
+### 使用說明* 所有金額均使用 Norito 數字助手 (`NumericSpec`) 進行序列化
+  確保資產定義之間的規模一致性。
+* `TxId` 值為 `Max35Text` — 強制 UTF-8 長度≤35 個字符
+  導出為 ISO 20022 消息。
+* BIC 必須是 8 或 11 個大寫字母數字字符 (ISO9362)；拒絕
+  Norito 在發出付款或結算之前未通過此檢查的元數據
+  確認。
+* 賬戶標識符（AccountId / ChainId）導出到補充中
+  元數據，以便接收參與者可以根據其本地分類賬進行核對。
+* `SupplementaryData` 必須是規範的 JSON（UTF-8、排序鍵、JSON 原生
+  逃跑）。 SDK 幫助程序強制執行此操作，以便簽名、遙測哈希和 ISO
+  有效負載檔案在重建過程中保持確定性。
+* 貨幣金額遵循 ISO4217 小數位（例如 JPY 為 0
+  小數點，美元有 2);橋相應地箝位 Norito 數字精度。
+* CLI 結算助手 (`iroha app settlement ... --atomicity ...`) 現在發出
+  Norito 指令，其執行計劃以 1:1 映射到 `Plan/ExecutionOrder`，並且
+  `Plan/Atomicity` 以上。
+* ISO 助手 (`ivm::iso20022`) 驗證上面列出的字段並拒絕
+  DvP/PvP 分支違反數字規範或交易對手互惠的消息。
 
-### Usage Notes
+### SDK 構建器助手
 
-* All amounts are serialised using the Norito numeric helpers (`NumericSpec`)
-  to ensure scale conformance across asset definitions.
-* `TxId` values are `Max35Text` — enforce UTF‑8 length ≤ 35 characters before
-  exporting to ISO 20022 messages.
-* BICs must be 8 or 11 uppercase alphanumeric characters (ISO 9362); reject
-  Norito metadata that fails this check before emitting payments or settlement
-  confirmations.
-* Account identifiers (AccountId / ChainId) are exported into supplementary
-  metadata so receiving participants can reconcile against their local ledgers.
-* `SupplementaryData` must be canonical JSON (UTF‑8, sorted keys, JSON-native
-  escaping). SDK helpers enforce this so signatures, telemetry hashes, and ISO
-  payload archives remain deterministic across rebuilds.
-* Currency amounts follow ISO 4217 fraction digits (for example JPY has 0
-  decimals, USD has 2); the bridge clamps Norito numeric precision accordingly.
-* The CLI settlement helpers (`iroha app settlement ... --atomicity ...`) now emit
-  Norito instructions whose execution plans map 1:1 to `Plan/ExecutionOrder` and
-  `Plan/Atomicity` above.
-* The ISO helper (`ivm::iso20022`) validates the fields listed above and rejects
-  messages where DvP/PvP legs violate Numeric specs or counterparty reciprocity.
-
-### SDK Builder Helpers
-
-- The JavaScript SDK now exposes `buildPacs008Message` /
-  `buildPacs009Message` (see `javascript/iroha_js/src/isoBridge.js`) so client
-  automation can convert structured settlement metadata (BIC/LEI, IBANs,
-  purpose codes, supplementary Norito fields) into deterministic pacs XML
-  without reimplementing the mapping rules from this guide.
-- Both helpers require an explicit `creationDateTime` (ISO‑8601 with timezone)
-  so operators must thread a deterministic timestamp from their workflow instead
-  of letting the SDK default to wall-clock time.
-- `recipes/iso_bridge_builder.mjs` demonstrates how to wire those helpers into
-  a CLI that merges environment variables or JSON config files, prints the
-  generated XML, and optionally submits it to Torii (`ISO_SUBMIT=1`), reusing
-  the same wait cadence as the ISO bridge recipe.
+- JavaScript SDK 現在公開 `buildPacs008Message` /
+  `buildPacs009Message`（參見 `javascript/iroha_js/src/isoBridge.js`）所以客戶端
+  自動化可以轉換結構化結算元數據（BIC/LEI、IBAN、
+  目的代碼、補充 Norito 字段）轉換為確定性 pacs XML
+  無需重新實現本指南中的映射規則。
+- 兩個助手都需要明確的 `creationDateTime`（帶時區的 ISO-8601）
+  因此操作員必須從其工作流程中線程化確定性時間戳
+  讓 SDK 默認為掛鐘時間。
+- `recipes/iso_bridge_builder.mjs` 演示瞭如何將這些助手連接到
+  合併環境變量或 JSON 配置文件的 CLI，打印
+  生成的 XML，並可選擇將其提交給 Torii (`ISO_SUBMIT=1`)，重用
+  與 ISO 橋配方相同的等待節奏。
 
 
-### References
+### 參考文獻
 
-- LuxCSD / Clearstream ISO 20022 settlement examples showing `SttlmTpAndAddtlParams/SctiesMvmntTp` (`DELI`/`RECE`) and `Pmt` (`APMT`/`FREE`).<sup>[1](https://www.luxcsd.com/resource/blob/3434074/6f8add4708407a4701055be4dd04846b/c23005-eis-examples-cbf-data.pdf)</sup>
-- Clearstream DCP specifications covering settlement qualifiers (`SttlmTxCond`, `PrtlSttlmInd`).<sup>[2](https://www.clearstream.com/clearstream-en/res-library/market-coverage/instruction-specifications-swift-iso-20022-dcp-mode-ceu-spain-2357008)</sup>
-- SWIFT PMPG guidance recommending `pacs.009` with `CtgyPurp/Cd = SECU` for securities-related PvP funding.<sup>[3](https://www.swift.com/swift-resource/251897/download)</sup>
-- ISO 20022 message definition reports for identifier length constraints (BIC, Max35Text).<sup>[4](https://www.iso20022.org/sites/default/files/2020-12/ISO20022_MDRPart2_ChangeOrVerifyAccountIdentification_2020_2021_v1_ForSEGReview.pdf)</sup>
-- ANNA DSB guidance on ISIN format and checksum rules.<sup>[5](https://www.anna-dsb.com/isin/)</sup>
+- LuxCSD / Clearstream ISO 20022 結算示例顯示 `SttlmTpAndAddtlParams/SctiesMvmntTp` (`DELI`/`RECE`) 和 `Pmt` (`APMT`/`FREE`)。 [1](https://www.luxcsd.com/resource/blob/3434074/6f8add4708407a4701055be4dd04846b/c23005-eis-examples-cbf-data.pdf)
+- Clearstream DCP 規範涵蓋結算限定符（`SttlmTxCond`、`PrtlSttlmInd`）。 [2](https://www.clearstream.com/clearstream-en/res-library/market-coverage/instruction-specifications-swift-iso-20022-dcp-mode-ceu-spain-2357008)
+- SWIFT PMPG 指南建議將 `pacs.009` 和 `CtgyPurp/Cd = SECU` 用於證券相關的 PvP 融資。 [3](https://www.swift.com/swift-resource/251897/download)
+- 針對標識符長度限制的 ISO 20022 消息定義報告（BIC、Max35Text）。 [4](https://www.iso20022.org/sites/default/files/2020-12/ISO20022_MDRPart2_ChangeOrVerifyAccountIdentification_2020_2021_v1_ForSEGReview.pdf)
+- ANNA DSB 有關 ISIN 格式和校驗和規則的指南。 [5](https://www.anna-dsb.com/isin/)
 
-### Usage Tips
+### 使用技巧- 始終粘貼相關的 Norito 片段或 CLI 命令，以便 LLM 可以檢查
+  準確的字段名稱和數字比例。
+- 請求引用 (`provide clause references`) 以保留書面記錄
+  合規性和審計師審查。
+- 在 `docs/source/finance/settlement_iso_mapping.md` 中捕獲答案摘要
+  （或鏈接的附錄），這樣未來的工程師就不需要重複查詢。
 
-- Always paste the relevant Norito snippet or CLI command so LLM can inspect
-  exact field names and Numeric scales.
-- Request citations (`provide clause references`) to keep a paper trail for
-  compliance and auditor review.
-- Capture the answer summary in `docs/source/finance/settlement_iso_mapping.md`
-  (or linked appendices) so future engineers do not need to repeat the query.
+## 事件排序手冊（ISO 20022 ↔ Norito Bridge）
 
-## Event Ordering Playbooks (ISO 20022 ↔ Norito Bridge)
+### 場景 A — 抵押品替代（回購/質押）
 
-### Scenario A — Collateral Substitution (Repo / Pledge)
+**參與者：** 抵押品給予者/接受者（和/或代理人）、託管人、CSD/T2S  
+**時間：** 每個市場截止時間和 T2S 日/夜週期；協調兩條腿，使它們在同一個結算窗口內完成。
 
-**Participants:** collateral giver/taker (and/or agents), custodian(s), CSD/T2S  
-**Timing:** per market cut-offs and T2S day/night cycles; orchestrate the two legs so they complete within the same settlement window.
+#### 消息編排
+1. `colr.010` 抵押品替代請求 → 抵押品給予者/接受者或代理人。  
+2. `colr.011` 抵押替代響應 → 接受/拒絕（可選拒絕原因）。  
+3. `colr.012` 抵押品替代確認 → 確認替代協議。  
+4、`sese.023`指令（兩條腿）：  
+   - 返還原始抵押品（`SctiesMvmntTp=DELI`、`Pmt=FREE`、`SctiesTxTp=COLO`）。  
+   - 交付替代抵押品（`SctiesMvmntTp=RECE`、`Pmt=FREE`、`SctiesTxTp=COLI`）。  
+   鏈接該對（見下文）。  
+5. `sese.024` 狀態建議（已接受、匹配、待處理、失敗、拒絕）。  
+6. `sese.025` 預訂後確認。  
+7. 可選現金增量（費用/折扣） → `pacs.009` 通過 `CtgyPurp/Cd = SECU` 進行 FI 到 FI 信用轉賬；狀態通過 `pacs.002`，通過 `pacs.004` 返回。
 
-#### Message choreography
-1. `colr.010` Collateral Substitution Request → collateral giver/taker or agent.  
-2. `colr.011` Collateral Substitution Response → accept/reject (optional rejection reason).  
-3. `colr.012` Collateral Substitution Confirmation → confirms substitution agreement.  
-4. `sese.023` instructions (two legs):  
-   - Return original collateral (`SctiesMvmntTp=DELI`, `Pmt=FREE`, `SctiesTxTp=COLO`).  
-   - Deliver substitute collateral (`SctiesMvmntTp=RECE`, `Pmt=FREE`, `SctiesTxTp=COLI`).  
-   Link the pair (see below).  
-5. `sese.024` status advices (accepted, matched, pending, failing, rejected).  
-6. `sese.025` confirmations once booked.  
-7. Optional cash delta (fees/haircut) → `pacs.009` FI-to-FI Credit Transfer with `CtgyPurp/Cd = SECU`; status via `pacs.002`, returns via `pacs.004`.
+#### 所需的確認/狀態
+- 傳輸層：網關可能會在業務處理之前發出 `admi.007` 或拒絕。  
+- 結算生命週期：`sese.024`（處理狀態+原因代碼）、`sese.025`（最終）。  
+- 現金方面：`pacs.002`（`PDNG`、`ACSC`、`RJCT` 等）、`pacs.004` 用於退貨。
 
-#### Required acknowledgements / statuses
-- Transport level: gateways may emit `admi.007` or rejects before business processing.  
-- Settlement lifecycle: `sese.024` (processing statuses + reason codes), `sese.025` (final).  
-- Cash side: `pacs.002` (`PDNG`, `ACSC`, `RJCT` etc.), `pacs.004` for returns.
+#### 條件/展開字段
+- `SctiesSttlmTxInstr/Lnkgs` (`WITH`/`BEFO`/`AFTE`) 鏈接兩條指令。  
+- `SttlmParams/HldInd` 保留直至滿足標準；通過 `sese.030` 發布（`sese.031` 狀態）。  
+- `SttlmParams/PrtlSttlmInd` 控制部分沉降（`NPAR`、`PART`、`PARC`、`PARQ`）。  
+- `SttlmParams/SttlmTxCond/Cd` 適用於市場特定條件（`NOMC` 等）。  
+- 可選的 T2S 有條件證券交割 (CoSD) 規則（如果支持）。
 
-#### Conditionality / unwind fields
-- `SctiesSttlmTxInstr/Lnkgs` (`WITH`/`BEFO`/`AFTE`) to chain the two instructions.  
-- `SttlmParams/HldInd` to hold until criteria met; release via `sese.030` (`sese.031` status).  
-- `SttlmParams/PrtlSttlmInd` to control partial settlement (`NPAR`, `PART`, `PARC`, `PARQ`).  
-- `SttlmParams/SttlmTxCond/Cd` for market-specific conditions (`NOMC`, etc.).  
-- Optional T2S Conditional Securities Delivery (CoSD) rules when supported.
+#### 參考文獻
+- SWIFT 抵押品管理 MDR (`colr.010/011/012`)。  
+- 用於鏈接和狀態的 CSD/T2S 使用指南（例如 DNB、ECB Insights）。  
+- SMPG 結算實踐、Clearstream DCP 手冊、ASX ISO 研討會。
 
-#### References
-- SWIFT collateral management MDR (`colr.010/011/012`).  
-- CSD/T2S usage guides (e.g., DNB, ECB Insights) for linking and statuses.  
-- SMPG settlement practice, Clearstream DCP manuals, ASX ISO workshops.
+### 場景 B — 外匯窗口違規（PvP 資金失敗）
 
-### Scenario B — FX Window Breach (PvP Funding Failure)
+**參與者：** 交易對手和現金代理人、證券託管人、CSD/T2S  
+**時間安排：** FX PvP 窗口（CLS/雙邊）和 CSD 截止；在現金確認之前，保持證券交易狀態。#### 消息編排
+1. `pacs.009` 通過 `CtgyPurp/Cd = SECU` 每種貨幣進行 FI 到 FI 信用轉賬；通過 `pacs.002` 獲取狀態；通過 `camt.056`/`camt.029` 召回/取消；如果已經結算，則返回 `pacs.004`。  
+2. `sese.023` 與 `HldInd=true` 的 DvP 指令，因此證券分支等待現金確認。  
+3. 生命週期 `sese.024` 通知（已接受/已匹配/待定）。  
+4. 如果 `pacs.009` 的兩條腿在窗口到期前均達到 `ACSC` → 以 `sese.030` 釋放 → `sese.031` (mod 狀態) → `sese.025` (確認)。  
+5. 如果外匯窗口被突破 → 取消/召回現金（`camt.056/029` 或 `pacs.004`）並取消證券（`sese.020` + `sese.027`，或 `sese.026` 逆轉（如果已根據市場規則確認）。
 
-**Participants:** counterparties and cash agents, securities custodian, CSD/T2S  
-**Timing:** FX PvP windows (CLS/bilateral) and CSD cut-offs; keep securities legs on hold pending cash confirmation.
+#### 所需的確認/狀態
+- 現金：`pacs.002`（`PDNG`、`ACSC`、`RJCT`）、`pacs.004` 用於退貨。  
+- 證券：`sese.024`（待決/失敗原因，如 `NORE`、`ADEA`）、`sese.025`。  
+- 傳輸：`admi.007`/網關在業務處理之前拒絕。
 
-#### Message choreography
-1. `pacs.009` FI-to-FI Credit Transfer per currency with `CtgyPurp/Cd = SECU`; status via `pacs.002`; recall/cancel via `camt.056`/`camt.029`; if already settled, `pacs.004` return.  
-2. `sese.023` DvP instruction(s) with `HldInd=true` so the securities leg waits for cash confirmation.  
-3. Lifecycle `sese.024` notices (accepted/matched/pending).  
-4. If both `pacs.009` legs reach `ACSC` before the window expires → release with `sese.030` → `sese.031` (mod status) → `sese.025` (confirmation).  
-5. If the FX window is breached → cancel/recall cash (`camt.056/029` or `pacs.004`) and cancel securities (`sese.020` + `sese.027`, or `sese.026` reversal if already confirmed per market rule).
+#### 條件/展開字段
+- `SttlmParams/HldInd` + `sese.030` 成功/失敗時釋放/取消。  
+- `Lnkgs` 將證券指令與現金部分聯繫起來。  
+- T2S CoSD 規則（如果使用有條件交付）。  
+- `PrtlSttlmInd` 以防止意外部分。  
+- 在 `pacs.009` 上，`CtgyPurp/Cd = SECU` 標記與證券相關的資金。
 
-#### Required acknowledgements / statuses
-- Cash: `pacs.002` (`PDNG`, `ACSC`, `RJCT`), `pacs.004` for returns.  
-- Securities: `sese.024` (pending/failing reasons like `NORE`, `ADEA`), `sese.025`.  
-- Transport: `admi.007` / gateway rejects before business processing.
+#### 參考文獻
+- PMPG / CBPR+ 證券流程支付指南。  
+- SMPG 結算實踐、關於鏈接/保留的 T2S 見解。  
+- Clearstream DCP 手冊、維護消息的 ECMS 文檔。
 
-#### Conditionality / unwind fields
-- `SttlmParams/HldInd` + `sese.030` release/cancel on success/failure.  
-- `Lnkgs` to tie securities instructions to the cash leg.  
-- T2S CoSD rule if using conditional delivery.  
-- `PrtlSttlmInd` to prevent unintended partials.  
-- On `pacs.009`, `CtgyPurp/Cd = SECU` flags securities-related funding.
+### pacs.004 返回映射註釋
 
-#### References
-- PMPG / CBPR+ guidance for payments in securities processes.  
-- SMPG settlement practices, T2S insights on linking/holds.  
-- Clearstream DCP manuals, ECMS documentation for maintenance messages.
+- 退貨固定裝置現在規範化 `ChrgBr` (`DEBT`/`CRED`/`SHAR`/`SLEV`) 和公開為 `TxInf[*]/RtrdRsn/Prtry` 的專有退貨原因，因此橋樑消費者可以重播費用歸屬和運營商代碼，而無需重新解析XML 信封。
+- `DataPDU` 信封內的 AppHdr 簽名塊在攝取時仍然被忽略；審計應依賴於渠道來源而不是嵌入的 XMLDSIG 字段。
 
-### pacs.004 return mapping notes
+### 橋樑操作檢查表
+- 執行上述編排（抵押品：`colr.010/011/012 → sese.023/024/025`；外匯違規：`pacs.009 (+pacs.002) → sese.023 held → release/cancel`）。  
+- 將 `sese.024`/`sese.025` 狀態和 `pacs.002` 結果視為門控信號； `ACSC` 觸發釋放，`RJCT` 強制釋放。  
+- 通過 `HldInd`、`Lnkgs`、`PrtlSttlmInd`、`SttlmTxCond` 和可選 CoSD 規則對有條件交付進行編碼。  
+- 需要時，使用 `SupplementaryData` 關聯外部 ID（例如 `pacs.009` 的 UETR）。  
+- 通過市場日曆/截止時間參數化持有/平倉時間；在取消截止日期之前發出 `sese.030`/`camt.056`，必要時退回退貨。
 
-- return fixtures now normalise `ChrgBr` (`DEBT`/`CRED`/`SHAR`/`SLEV`) and proprietary return reasons exposed as `TxInf[*]/RtrdRsn/Prtry`, so bridge consumers can replay fee attribution and operator codes without re-parsing the XML envelope.
-- AppHdr signature blocks inside `DataPDU` envelopes remain ignored on ingest; audits should rely on channel provenance rather than embedded XMLDSIG fields.
+### ISO 20022 有效負載示例（帶註釋）
 
-### Operational checklist for the bridge
-- Enforce the choreography above (collateral: `colr.010/011/012 → sese.023/024/025`; FX breach: `pacs.009 (+pacs.002) → sese.023 held → release/cancel`).  
-- Treat `sese.024`/`sese.025` statuses and `pacs.002` outcomes as gating signals; `ACSC` triggers release, `RJCT` forces unwind.  
-- Encode conditional delivery via `HldInd`, `Lnkgs`, `PrtlSttlmInd`, `SttlmTxCond`, and optional CoSD rules.  
-- Use `SupplementaryData` to correlate external IDs (e.g., UETR for the `pacs.009`) when required.  
-- Parameterise hold/unwind timing by market calendar/cut-offs; issue `sese.030`/`camt.056` before cancellation deadlines, fallback to returns when necessary.
-
-### Sample ISO 20022 Payloads (Annotated)
-
-#### Collateral substitution pair (`sese.023`) with instruction linkage
+#### 具有指令鏈接的附帶替換對 (`sese.023`)
 
 ```xml
 <sese:Document xmlns:sese="urn:iso:std:iso:20022:tech:xsd:sese.023.001.11">
@@ -433,11 +417,9 @@ iroha app settlement dvp \
     </sese:SctiesMvmntDtls>
   </sese:SctiesSttlmTxInstr>
 </sese:Document>
-```
+```提交鏈接指令 `SUBST-2025-04-001-B`（替代抵押品的 FoP 接收），其中包含 `SctiesMvmntTp=RECE`、`Pmt=FREE` 和指向回 `SUBST-2025-04-001-A` 的 `WITH` 鏈接。一旦替換獲得批准，用匹配的 `sese.030` 釋放兩條腿。
 
-Submit the linked instruction `SUBST-2025-04-001-B` (FoP receive of substitute collateral) with `SctiesMvmntTp=RECE`, `Pmt=FREE`, and the `WITH` linkage pointing back to `SUBST-2025-04-001-A`. Release both legs with a matching `sese.030` once the substitution is approved.
-
-#### Securities leg on hold pending FX confirmation (`sese.023` + `sese.030`)
+#### 證券腿處於等待外匯確認狀態 (`sese.023` + `sese.030`)
 
 ```xml
 <sese:Document xmlns:sese="urn:iso:std:iso:20022:tech:xsd:sese.023.001.11">
@@ -466,7 +448,7 @@ Submit the linked instruction `SUBST-2025-04-001-B` (FoP receive of substitute c
 </sese:Document>
 ```
 
-Release once both `pacs.009` legs reach `ACSC`:
+一旦 `pacs.009` 腿到達 `ACSC` 就釋放：
 
 ```xml
 <sese:Document xmlns:sese="urn:iso:std:iso:20022:tech:xsd:sese.030.001.04">
@@ -481,9 +463,9 @@ Release once both `pacs.009` legs reach `ACSC`:
 </sese:Document>
 ```
 
-`sese.031` confirms the hold release, followed by `sese.025` once the securities leg is booked.
+`sese.031` 確認解除持有，一旦證券腿被預訂，`sese.025` 隨後確認。
 
-#### PvP funding leg (`pacs.009` with securities purpose)
+#### PvP 資金來源（`pacs.009` 具有證券用途）
 
 ```xml
 <pacs:Document xmlns:pacs="urn:iso:std:iso:20022:tech:xsd:pacs.009.001.08">
@@ -526,4 +508,4 @@ Release once both `pacs.009` legs reach `ACSC`:
 </pacs:Document>
 ```
 
-`pacs.002` tracks the payment status (`ACSC` = confirmed, `RJCT` = reject). If the window is breached, recall via `camt.056`/`camt.029` or send `pacs.004` to return settled funds.
+`pacs.002` 跟踪付款狀態（`ACSC` = 已確認，`RJCT` = 拒絕）。如果窗口被突破，請通過 `camt.056`/`camt.029` 調用或發送 `pacs.004` 以返還已結算資金。

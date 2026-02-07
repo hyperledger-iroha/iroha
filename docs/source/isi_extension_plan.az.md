@@ -7,94 +7,93 @@ generator: scripts/sync_docs_i18n.py
 source_hash: f3502fc6de75095282d44ce778b00d1b0d554773de1861d1b92f7dc573dfafa2
 source_last_modified: "2025-12-29T18:16:35.969398+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# ISI Extension Plan (v1)
+# ISI Genişləndirilməsi Planı (v1)
 
-This note signs off on the priority order for the new Iroha Special Instructions and captures
-non-negotiable invariants for each instruction ahead of implementation. The ordering matches
-security and operability risk first, UX throughput second.
+Bu qeyd yeni Iroha Xüsusi Təlimatlar və çəkilişlər üçün prioritet qaydada imzalanır.
+icradan əvvəl hər bir təlimat üçün müzakirə olunmayan invariantlar. Sifariş uyğun gəlir
+təhlükəsizlik və əməliyyat riski birinci, UX ötürmə qabiliyyəti ikinci.
 
-## Priority Stack
+## Prioritet yığını
 
-1. **RotateAccountSignatory** – Required for hygienic key rotation without destructive migrations.
-2. **DeactivateContractInstance** / **RemoveSmartContractBytes** – Provide deterministic contract
-   kill switches and storage reclamation for compromised deployments.
-3. **SetAssetKeyValue** / **RemoveAssetKeyValue** – Extend metadata parity to concrete asset
-   balances so observability tooling can tag holdings.
-4. **BatchMintAsset** / **BatchTransferAsset** – Deterministic fan-out helpers to keep payload size
-   and VM fallback pressure manageable.
+1. **RotateAccountSignatory** – Dağıdıcı miqrasiya olmadan açarların gigiyenik fırlanması üçün tələb olunur.
+2. **DeactivateContractInstance** / **RemoveSmartContractBytes** – Deterministik müqavilə təmin edin
+   açarları öldürün və təhlükəyə məruz qalmış yerləşdirmələr üçün yaddaşın bərpası.
+3. **SetAssetKeyValue** / **RemoveAssetKeyValue** – Metadata paritetini konkret aktivə genişləndirin
+   balanslaşdırır, belə ki, müşahidə edilə bilən alətlər holdinqləri etiketləyə bilər.
+4. **BatchMintAsset** / **BatchTransferAsset** – Yük həcmini saxlamaq üçün deterministik fan-out köməkçiləri
+   və VM geri qaytarılma təzyiqi idarə edilə bilər.
 
-## Instruction Invariants
+## Təlimat dəyişikliyi
 
 ### SetAssetKeyValue / RemoveAssetKeyValue
-- Reuse the `AssetMetadataKey` namespace (`state.rs`) so canonical WSV keys stay stable.
-- Enforce JSON size and schema limits identically to account metadata helpers.
-- Emit `AssetEvent::MetadataInserted` / `AssetEvent::MetadataRemoved` with the affected `AssetId`.
-- Require the same permission tokens as existing asset metadata edits (definition owner OR
-  `CanModifyAssetMetadata`-style grants).
-- Abort if the asset record is missing (no implicit creation).
+- `AssetMetadataKey` ad sahəsini (`state.rs`) təkrar istifadə edin ki, kanonik WSV açarları sabit qalsın.
+- Hesab metadata köməkçiləri ilə eyni şəkildə JSON ölçüsü və sxem məhdudiyyətlərini tətbiq edin.
+- Təsirə məruz qalan `AssetId` ilə `AssetEvent::MetadataInserted` / `AssetEvent::MetadataRemoved` buraxın.
+- Mövcud aktiv metadata redaktələri ilə eyni icazə nişanlarını tələb edin (tərif sahibi OR
+  `CanModifyAssetMetadata` üslublu qrantlar).
+- Aktiv qeydi yoxdursa dayandırın (dolaylı yaradılması yoxdur).
 
-### RotateAccountSignatory
-- Atomic swap of the signatory in `AccountId` while preserving account metadata and linked
-  resources (assets, triggers, roles, permissions, pending events).
-- Verify the current signatory matches the caller (or delegated authority via explicit token).
-- Reject if the new public key already backs another account in the same domain.
-- Update all canonical keys that embed the account ID and invalidate caches before commit.
-- Emit a dedicated `AccountEvent::SignatoryRotated` with old/new keys for audit trails.
-- Migration scaffold: introduce `AccountLabel` + `AccountRekeyRecord` (see `account::rekey`) so
-  existing accounts can be mapped to stable labels during a rolling upgrade without hash breaks.
+### Hesabı İmzalayanı Döndürün
+- `AccountId`-də hesabın metadatasını qoruyarkən imzalayanın atom mübadiləsi və əlaqəli
+  resurslar (aktivlər, tetikler, rollar, icazələr, gözlənilən hadisələr).
+- Cari imza sahibinin zəng edənə (yaxud açıq-saçıq işarə ilə verilmiş səlahiyyətə) uyğun olduğunu yoxlayın.
+- Yeni açıq açar artıq eyni domendə başqa hesabı dəstəkləyirsə, rədd edin.
+- Hesab identifikatorunu daxil edən bütün kanonik açarları yeniləyin və əməliyyatdan əvvəl keşləri etibarsız edin.
+- Audit yolları üçün köhnə/yeni açarlarla xüsusi `AccountEvent::SignatoryRotated` buraxın.
+- Miqrasiya iskelesi: `AccountLabel` + `AccountRekeyRecord` (bax `account::rekey`) təqdim edin
+  mövcud hesablar hash fasilələri olmadan yuvarlanan təkmilləşdirmə zamanı sabit etiketlərə uyğunlaşdırıla bilər.
 
-### DeactivateContractInstance
-- Remove or tombstone the `(namespace, contract_id)` binding while persisting provenance data
-  (who, when, reason code) for troubleshooting.
-- Require the same governance permission set as activation, with policy hooks to disallow
-  deactivation of core system namespaces without elevated approval.
-- Reject when the instance is already inactive to keep event logs deterministic.
-- Emit a `ContractInstanceEvent::Deactivated` that downstream watchers can consume.
-
-### RemoveSmartContractBytes
-- Allow pruning of stored bytecode by `code_hash` only when no manifests or active instances
-  reference the artifact; otherwise fail with a descriptive error.
-- Permission gate mirrors registration (`CanRegisterSmartContractCode`) plus an operator-level
-  guard (e.g., `CanManageSmartContractStorage`).
-- Verify the provided `code_hash` matches the stored body digest just before deletion to avoid
-  stale handles.
-- Emit `ContractCodeEvent::Removed` with hash and caller metadata.
+### Müqavilə Nümunəsini Deaktiv edin
+- Mənbə məlumatlarını davam etdirərkən `(namespace, contract_id)` bağlamasını silin və ya məzar daşı
+  problemlərin aradan qaldırılması üçün (kim, nə vaxt, səbəb kodu).
+- Aktivləşdirmə ilə eyni idarəetmə icazəsini tələb edin, icazə verilməməsi üçün siyasət qarmaqları
+  yüksək təsdiq olmadan əsas sistem ad boşluqlarının deaktiv edilməsi.
+- Hadisə qeydlərini deterministik saxlamaq üçün instansiya artıq qeyri-aktiv olduqda rədd edin.
+- Aşağı axını müşahidə edənlərin istehlak edə biləcəyi `ContractInstanceEvent::Deactivated` buraxın.### SmartContractBytes Sil
+- Yalnız heç bir manifest və ya aktiv nümunə olmadıqda `code_hash` tərəfindən saxlanılan bayt kodunun kəsilməsinə icazə verin
+  artefakt istinad; əks halda təsviri xəta ilə uğursuz olur.
+- İcazə qapısı güzgülərinin qeydiyyatı (`CanRegisterSmartContractCode`) və operator səviyyəsində
+  qoruyucu (məsələn, `CanManageSmartContractStorage`).
+- Təqdim olunan `code_hash`-in silinməmişdən əvvəl saxlanılan bədən həzminə uyğun olduğunu yoxlayın.
+  köhnə tutacaqlar.
+- Hash və zəng edən metadata ilə `ContractCodeEvent::Removed` emit.
 
 ### BatchMintAsset / BatchTransferAsset
-- All-or-nothing semantics: either every tuple succeeds or the instruction aborts without side
-  effects.
-- Input vectors must be deterministically ordered (no implicit sorting) and bounded by config
+- Hamısı və ya heç nə semantikası: ya hər bir dəst uğurlu olur, ya da göstəriş yan olmadan dayandırılır
+  effektləri.
+- Giriş vektorları deterministik qaydada sıralanmalı (dolaylı çeşidləmə yoxdur) və konfiqurasiya ilə məhdudlaşdırılmalıdır.
   (`max_batch_isi_items`).
-- Emit per-item asset events so downstream accounting stays consistent; batch context is additive,
-  not a replacement.
-- Permission checks reuse existing single-item logic per target (asset owner, definition owner,
-  or granted capability) before state mutation.
-- Advisory access sets must union all read/write keys to keep optimistic concurrency correct.
+- Aşağı axın mühasibat uçotunun ardıcıl qalması üçün hər bir maddə üzrə aktiv hadisələri buraxın; toplu kontekst əlavədir,
+  əvəzedici deyil.
+- İcazə yoxlamaları hər bir hədəf üçün mövcud tək elementli məntiqi təkrar istifadə edir (aktiv sahibi, tərif sahibi,
+  və ya verilmiş qabiliyyət) dövlət mutasiyasından əvvəl.
+- Məsləhətçi giriş dəstləri optimist paralelliyi düzgün saxlamaq üçün bütün oxu/yazma düymələrini birləşdirməlidir.
 
-## Implementation Scaffolding
+## İcra İskeleleri
 
-- Data model now carries `SetAssetKeyValue` / `RemoveAssetKeyValue` scaffolds for balance metadata
-  edits (`transparent.rs`).
-- Executor visitors expose placeholders that will gate permissions once host wiring lands
+- Data modeli indi balans metadatası üçün `SetAssetKeyValue` / `RemoveAssetKeyValue` skafoldlarını daşıyır
+  redaktələr (`transparent.rs`).
+- İcraçı ziyarətçilər məftil torpaqlarına ev sahibliyi etdikdən sonra icazələri bağlayacaq yer tutucuları ifşa edirlər
   (`default/mod.rs`).
-- Rekey prototype types (`account::rekey`) provide a landing zone for rolling migrations.
-- World state includes `account_rekey_records` keyed by `AccountLabel` so we can stage label →
-  signatory migrations without touching the historical `AccountId` encoding.
+- Rekey prototip növləri (`account::rekey`) yuvarlanan miqrasiya üçün eniş zonasını təmin edir.
+- Dünya dövlətinə `AccountLabel` ilə işarələnmiş `account_rekey_records` daxildir ki, biz etiket hazırlaya bilək →
+  tarixi `AccountId` kodlaşdırmasına toxunmadan imzalayan miqrasiya.
 
-## IVM Syscall Drafting
+## IVM Syscall Layihəsi
 
-- Host shims for `DeactivateContractInstance` / `RemoveSmartContractBytes` ship as
-  `SYSCALL_DEACTIVATE_CONTRACT_INSTANCE` (0x43) and
-  `SYSCALL_REMOVE_SMART_CONTRACT_BYTES` (0x44), both consuming Norito TLVs that mirror the
-  canonical ISI structs.
-- Extend `abi_syscall_list()` only after host handlers mirror `iroha_core` execution paths to keep
-  ABI hashes stable during development.
-- Update Kotodama lowering once syscall numbers stabilize; add golden coverage for the expanded
-  surface at the same time.
+- `DeactivateContractInstance` / `RemoveSmartContractBytes` üçün host şimləri kimi göndərilir
+  `SYSCALL_DEACTIVATE_CONTRACT_INSTANCE` (0x43) və
+  `SYSCALL_REMOVE_SMART_CONTRACT_BYTES` (0x44), hər ikisini əks etdirən Norito TLV-ləri istehlak edir.
+  kanonik ISI strukturları.
+- `abi_syscall_list()`-i yalnız host işləyiciləri saxlamaq üçün `iroha_core` icra yollarını əks etdirdikdən sonra genişləndirin
+  ABI hashləri inkişaf zamanı sabitdir.
+- Sistem zəngi nömrələri sabitləşdikdən sonra aşağı salınan Kotodama-i yeniləyin; genişləndirilmiş üçün qızıl örtük əlavə edin
+  eyni zamanda səth.
 
-## Status
+## Vəziyyət
 
-The above ordering and invariants are ready for implementation. Follow-up branches should reference
-this document when wiring execution paths and syscall exposure.
+Yuxarıdakı sifariş və invariantlar icraya hazırdır. Təqib filialları istinad etməlidir
+icra yolları və sistemə məruz qalma zamanı bu sənəd.

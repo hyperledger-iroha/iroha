@@ -6,34 +6,35 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 459e8ed4612da7cfa68053e4e299b2f68e7620d4f3b98a8a721ebf8327829ea1
 source_last_modified: "2026-01-09T07:05:10.922933+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# JDG Attestations: Guard, Rotation, and Retention
+# شهادات JDG: الحراسة والتناوب والاحتفاظ
 
-This note documents the v1 JDG attestation guard that now ships in `iroha_core`.
+توثق هذه المذكرة حارس التصديق v1 JDG الذي يأتي الآن في `iroha_core`.
 
-- **Committee manifests:** Norito-encoded `JdgCommitteeManifest` bundles carry per-dataspace rotation
-  schedules (`committee_id`, ordered members, threshold, `activation_height`, `retire_height`).
-  Manifests are loaded with `JdgCommitteeSchedule::from_path` and enforce strictly increasing
-  activation heights with an optional grace overlap (`grace_blocks`) between retiring/activating
-  committees.
-- **Attestation guard:** `JdgAttestationGuard` enforces dataspace binding, expiry, stale bounds,
-  committee id/threshold matching, signer membership, supported signature schemes, and optional
-  SDN validation via `JdgSdnEnforcer`. Size caps, max lag, and allowed signature schemes are
-  constructor parameters; `validate(attestation, dataspace, current_height)` returns the active
-  committee or a structured error.
-  - `scheme_id = 1` (`simple_threshold`): per-signer signatures, optional signer bitmap.
-  - `scheme_id = 2` (`bls_normal_aggregate`): single pre-aggregated BLS-normal signature over the
-    attestation hash; signer bitmap optional, defaults to all signers in the attestation. BLS
-    aggregate validation requires a valid PoP per committee member in the manifest; missing or
-    invalid PoPs reject the attestation.
-  Configure the allow-list via `governance.jdg_signature_schemes`.
-- **Retention store:** `JdgAttestationStore` tracks attestations per dataspace with a configurable
-  per-dataspace cap, pruning oldest entries on insert. Call `for_dataspace` or
-  `for_dataspace_and_epoch` to retrieve audit/replay bundles.
-- **Tests:** Unit coverage now exercises valid committee selection, unknown signer rejection, stale
-  attestation rejection, unsupported scheme ids, and retention pruning. See
+- **بيانات اللجنة:** تحمل حزم `JdgCommitteeManifest` ذات الترميز `JdgCommitteeManifest` إمكانية التدوير لكل مساحة بيانات
+  الجداول (`committee_id`، الأعضاء المرتبون، العتبة، `activation_height`، `retire_height`).
+  يتم تحميل البيانات بـ `JdgCommitteeSchedule::from_path` ويتم فرض زيادة صارمة
+  ارتفاعات التنشيط مع تداخل اختياري (`grace_blocks`) بين التقاعد/التنشيط
+  اللجان.
+- **حارس التصديق:** يفرض `JdgAttestationGuard` ربط مساحة البيانات، وانتهاء الصلاحية، والحدود التي لا معنى لها،
+  مطابقة معرف اللجنة/العتبة، وعضوية الموقع، وأنظمة التوقيع المدعومة، واختيارية
+  التحقق من صحة SDN عبر `JdgSdnEnforcer`. الحدود القصوى للحجم والحد الأقصى للتأخر وأنظمة التوقيع المسموح بها هي
+  معلمات المنشئ `validate(attestation, dataspace, current_height)` يُرجع النشاط
+  لجنة أو خطأ منظم.
+  - `scheme_id = 1` (`simple_threshold`): توقيعات كل موقّع، صورة نقطية اختيارية للموقّع.
+  - `scheme_id = 2` (`bls_normal_aggregate`): توقيع عادي BLS واحد مُجمَّع مسبقًا عبر
+    تجزئة الشهادة؛ الصورة النقطية للموقّع اختيارية، وتكون افتراضيًا لجميع الموقعين في الشهادة. مكتب إحصاءات العمل
+    يتطلب التحقق الإجمالي وجود نقطة اتصال صالحة لكل عضو في اللجنة في البيان؛ مفقود أو
+    نقاط التواجد غير الصالحة ترفض التصديق.
+  قم بتكوين القائمة المسموح بها عبر `governance.jdg_signature_schemes`.
+- **مخزن الاستبقاء:** يتتبع `JdgAttestationStore` الشهادات لكل مساحة بيانات باستخدام ملف قابل للتكوين
+  الحد الأقصى لكل مساحة بيانات، تقليم الإدخالات الأقدم عند الإدراج. اتصل على `for_dataspace` أو
+  `for_dataspace_and_epoch` لاسترداد حزم التدقيق/إعادة التشغيل.
+- **الاختبارات:** تمارس تغطية الوحدة الآن اختيار اللجنة الصحيح، ورفض الموقّع غير المعروف، والتي لا معنى لها
+  رفض الشهادة، ومعرفات المخطط غير المدعومة، وتقليص الاحتفاظ. انظر
   `crates/iroha_core/src/jurisdiction.rs`.
 
-The guard rejects schemes outside the configured allow-list.
+يرفض الحارس المخططات خارج القائمة المسموح بها التي تم تكوينها.

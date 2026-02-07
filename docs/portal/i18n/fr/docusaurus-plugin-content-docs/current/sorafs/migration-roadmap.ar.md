@@ -4,21 +4,23 @@ direction: ltr
 source: docs/portal/docs/sorafs/migration-roadmap.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: "خارطة طريق ترحيل SoraFS"
+titre : "خارطة طريق ترحيل SoraFS"
 ---
 
 > مقتبس من [`docs/source/sorafs/migration_roadmap.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/migration_roadmap.md).
 
 # خارطة طريق ترحيل SoraFS (SF-1)
 
-هذا المستند يُحوِّل إرشادات الترحيل الموثقة في
-`docs/source/sorafs_architecture_rfc.md` إلى خطة تشغيلية. يوسِّع مخرجات SF-1 إلى
+هذا المستند يُحوِّل إرشادات الترحيل الموثقة في
+`docs/source/sorafs_architecture_rfc.md` est en cours de réalisation. يوسِّع مخرجات SF-1 إلى
 معالم جاهزة للتنفيذ ومعايير بوابة وقوائم تحقق للمالكين حتى تتمكن فرق التخزين
-والحوكمة وDevRel وSDK من تنسيق الانتقال من استضافة artefacts القديمة إلى نشر
-مدعوم بـ SoraFS.
+والحوكمة وDevRel وSDK من تنسيق الانتقال من استضافة artefacts إلى نشر
+مدعوم par SoraFS.
 
 خارطة الطريق حتمية عمدا: كل معلم يسمي artefacts المطلوبة واستدعاءات الأوامر وخطوات
 الاستيثاق حتى تنتج خطوط الأنابيب اللاحقة مخرجات متطابقة وتحافظ الحوكمة على أثر
@@ -27,23 +29,21 @@ title: "خارطة طريق ترحيل SoraFS"
 ## نظرة عامة على المعالم
 
 | المعلم | النافذة | الأهداف الأساسية | ما يجب تسليمه | المالكون |
-|--------|---------|------------------|----------------|----------|
-| **M1 - Deterministic Enforcement** | الأسابيع 7-12 | فرض fixtures موقعة وتجهيز إثباتات alias بينما تعتمد خطوط الأنابيب expectation flags. | تحقق ليلي من fixtures، manifests موقعة من المجلس، إدخالات staging في سجل alias. | Storage, Governance, SDKs |
+|--------|---------|--------|----------------|--------------|
+| **M1 - Application déterministe** | الأسابيع 7-12 | Les luminaires et les alias sont également des drapeaux d'attente. | Il y a des luminaires, des manifestes et des alias de mise en scène. | Stockage, gouvernance, SDK |
 
-يتم تتبع حالة المعالم في `docs/source/sorafs/migration_ledger.md`. كل تغيير في هذه
-الخارطة يجب أن يحدِّث السجل ليبقى الحوكمة وهندسة الإصدارات على نفس النسق.
+Vous êtes actuellement en contact avec `docs/source/sorafs/migration_ledger.md`. كل تغيير في هذه
+الخارطة يجب أن يحدِّث السجل ليبقى الحوكمة وهندسة الإصدارات على نفس النسق.
 
 ## مسارات العمل
 
-### 2. اعتماد pinning الحتمي
-
-| الخطوة | المعلم | الوصف | المالك(ون) | المخرجات |
+### 2. اعتماد épinglant الحتمي| الخطوة | المعلم | الوصف | المالك(ون) | المخرجات |
 |--------|--------|-------|------------|----------|
-| تدريبات fixtures | M0 | Dry-runs أسبوعية تقارن digests المحلية للـ chunk مع `fixtures/sorafs_chunker`. نشر التقرير تحت `docs/source/sorafs/reports/`. | Storage Providers | `determinism-<date>.md` مع مصفوفة pass/fail. |
-| فرض التواقيع | M1 | `ci/check_sorafs_fixtures.sh` + `.github/workflows/sorafs-fixtures-nightly.yml` تفشل إذا انحرفت التواقيع أو manifests. overrides التطوير تتطلب waiver من الحوكمة مرفق بالـ PR. | Tooling WG | سجل CI، رابط تذكرة waiver (إن وجدت). |
-| Expectation flags | M1 | خطوط الأنابيب تستدعي `sorafs_manifest_stub` بتوقعات صريحة لتثبيت المخرجات: | Docs CI | سكربتات محدثة تشير إلى expectation flags (انظر كتلة الأمر أدناه). |
-| Registry-first pinning | M2 | `sorafs pin propose` و`sorafs pin approve` يغلِّفان تقديمات manifest؛ CLI الافتراضي يستخدم `--require-registry`. | Governance Ops | سجل تدقيق CLI للـ registry، تليمترية فشل المقترحات. |
-| تكافؤ observability | M3 | لوحات Prometheus/Grafana تنبه عند اختلاف مخزون chunks عن manifests في registry؛ التنبيهات موصولة بمناوبة ops. | Observability | رابط لوحة، IDs قواعد التنبيه، نتائج GameDay. |
+| calendriers de تدريبات | M0 | Les essais à sec digèrent le morceau du morceau `fixtures/sorafs_chunker`. Il s'agit de `docs/source/sorafs/reports/`. | Fournisseurs de stockage | `determinism-<date>.md` est une réussite/échec. |
+| فرض التواقيع | M1 | `ci/check_sorafs_fixtures.sh` + `.github/workflows/sorafs-fixtures-nightly.yml` sont des manifestes. remplace la renonciation de التطوير تتطلب من الحوكمة مرفق بالـ PR. | GT Outillage | Il y a une renonciation au CI, رابط تذكرة (إن وجدت). |
+| Indicateurs d'attente | M1 | خطوط الأنابيب تستدعي `sorafs_manifest_stub` بتوقعات صريحة لتثبيت المخرجات: | Documents CI | Il s'agit de drapeaux d'attente (انظر كتلة الأمر أدناه). |
+| Épinglage dans le registre en premier | M2 | `sorafs pin propose` و`sorafs pin approve` يغلِّفان تقديمات manifeste؛ CLI est disponible sur `--require-registry`. | Opérations de gouvernance | سجل تدقيق CLI للـ Registry, تليمترية فشل المقترحات. |
+| Voir observabilité | M3 | Prometheus/Grafana vous permet de récupérer des morceaux dans les manifestes du registre. التنبيهات موصولة بمناوبة ops. | Observabilité | Utilisez les ID pour le GameDay. |
 
 #### أمر النشر القياسي
 
@@ -62,29 +62,25 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
 استبدل قيم digest والحجم وCID بالمراجع المتوقعة المسجلة في إدخال سجل الترحيل
 للـ artefact.
 
-### 3. انتقال alias والاتصالات
-
-| الخطوة | المعلم | الوصف | المالك(ون) | المخرجات |
+### 3. انتقال alias والاتصالات| الخطوة | المعلم | الوصف | المالك(ون) | المخرجات |
 |--------|--------|-------|------------|----------|
-| إثباتات alias في staging | M1 | تسجيل مطالبات alias في Pin Registry الخاص بـ staging وإرفاق إثباتات Merkle مع manifests (`--alias`). | Governance, Docs | bundle إثباتات مخزن بجوار manifest + تعليق في السجل باسم alias. |
-| فرض الإثباتات | M2 | Gateways ترفض manifests بدون رؤوس `Sora-Proof` حديثة؛ CI يضيف خطوة `sorafs alias verify` لجلب الإثباتات. | Networking | تصحيح إعدادات gateway + مخرجات CI توثق التحقق الناجح. |
+| إثباتات alias pour la mise en scène | M1 | Il existe un alias dans le registre Pin pour la mise en scène et les manifestes Merkle (`--alias`). | Gouvernance, Docs | bundle إثباتات مخزن بجوار manifest + تعليق في السجل باسم alias. |
+| فرض الإثباتات | M2 | Gateways ترفض manifestes بدون رؤوس `Sora-Proof` حديثة؛ CI يضيف خطوة `sorafs alias verify` لجلب الإثباتات. | Réseautage | تصحيح إعدادات gateway + مخرجات CI توثق التحقق الناجح. |
 
 ### 4. الاتصالات والتدقيق
 
-- **انضباط السجل:** كل تغيير حالة (drift للـ fixtures، تقديم registry، تفعيل alias) يجب أن يضيف
+- **انضباط السجل:** كل تغيير حالة (drift للـ luminaires, تقديمregistration, تفعيل alias) يجب أن يضيف
   ملاحظة مؤرخة في `docs/source/sorafs/migration_ledger.md`.
-- **محاضر الحوكمة:** جلسات المجلس التي تعتمد تغييرات Pin Registry أو سياسات alias يجب أن تشير
+- **محاضر الحوكمة:** جلسات المجلس التي تعتمد تغييرات Pin Registry et alias يجب أن تشير
   إلى هذه الخارطة والسجل معا.
 - **الاتصالات الخارجية:** DevRel ينشر تحديثات الحالة عند كل معلم (مدونة + مقتطف changelog)
   مع إبراز الضمانات الحتمية وجداول alias الزمنية.
 
-## التبعيات والمخاطر
-
-| التبعية | الأثر | التخفيف |
+## التبعيات والمخاطر| التبعية | الأثر | التخفيف |
 |---------|-------|---------|
-| توفر عقد Pin Registry | يمنع rollout M2 pin-first. | تجهيز العقد قبل M2 مع اختبارات replay؛ الحفاظ على fallback للـ envelope حتى زوال أي regressions. |
-| مفاتيح توقيع المجلس | مطلوبة لـ manifest envelopes وموافقات registry. | مراسم التوقيع موثقة في `docs/source/sorafs/signing_ceremony.md`؛ تدوير المفاتيح بتداخل وتدوين ذلك في السجل. |
-| إيقاع إصدارات SDK | يجب على العملاء احترام إثباتات alias قبل M3. | مواءمة نوافذ إصدار SDK مع بوابات المعالم؛ إضافة checklists للترحيل في قوالب الإصدار. |
+| توفر عقد Registre des broches | Je déploie le M2 en premier. | تجهيز العقد قبل M2 مع اختبارات replay؛ Il s'agit d'une enveloppe de secours ou d'une enveloppe de régression. |
+| مفاتيح توقيع المجلس | مطلوبة لـ enveloppes manifestes et registre. | مراسم التوقيع موثقة في `docs/source/sorafs/signing_ceremony.md`؛ تدوير المفاتيح بتداخل وتدوين ذلك في السجل. |
+| Voir SDK | Il s'agit d'un alias M3. | Utiliser le SDK avec des fonctionnalités supplémentaires إضافة checklists للترحيل في قوالب الإصدار. |
 
 المخاطر المتبقية ووسائل التخفيف مذكورة أيضا في `docs/source/sorafs_architecture_rfc.md`
 ويجب الرجوع إليها عند إجراء تعديلات.
@@ -93,14 +89,14 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
 
 | المعلم | المعايير |
 |--------|----------|
-| M1 | - مهمة fixtures الليلية خضراء لسبعة أيام متتالية. <br /> - تحقق إثباتات alias في staging داخل CI. <br /> - الحوكمة تصادق على سياسة expectation flags. |
+| M1 | - مهمة luminaires الليلية خضراء لسبعة أيام متتالية.  - تحقق إثباتات alias في staging داخل CI.  - Les drapeaux d'attente sont également disponibles. |
 
 ## إدارة التغيير
 
 1. اقترح التعديلات عبر PR يقوم بتحديث هذا الملف **و**
    `docs/source/sorafs/migration_ledger.md`.
 2. اربط محاضر الحوكمة وأدلة CI في وصف الـ PR.
-3. بعد الدمج، أخطر قائمة بريد storage + DevRel بملخص وإجراءات متوقعة للمشغلين.
+3. Utilisez le stockage + DevRel pour ajouter des éléments de stockage.
 
 اتباع هذا الإجراء يضمن أن rollout SoraFS يبقى حتميا وقابلا للتدقيق وشفافا عبر
-الفرق المشاركة في إطلاق Nexus.
+Il s'agit d'un Nexus.

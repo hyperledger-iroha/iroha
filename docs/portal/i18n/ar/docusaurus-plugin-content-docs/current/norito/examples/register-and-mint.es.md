@@ -4,30 +4,32 @@ direction: rtl
 source: docs/portal/docs/norito/examples/register-and-mint.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-slug: /norito/examples/register-and-mint
-title: Registrar dominio y acuñar activos
-description: Demuestra la creación de dominios con permisos, el registro de activos y la acuñación determinista.
-source: crates/ivm/docs/examples/13_register_and_mint.ko
+سبيكة: /norito/examples/register-and-mint
+العنوان: مسجل dominio y acuñar activos
+الوصف: عرض إنشاء النطاقات بالأذونات وسجل الأنشطة والضغط المحدد.
+المصدر: صناديق/ivm/docs/examples/13_register_and_mint.ko
 ---
 
-Demuestra la creación de dominios con permisos, el registro de activos y la acuñación determinista.
+قم بإظهار إنشاء النطاقات بالأذونات، وسجل الأنشطة، والنقر المحدد.
 
 ## Recorrido del libro mayor
 
-- Asegúrate de que exista la cuenta de destino (por ejemplo `ih58...`), reflejando la fase de configuración en cada quickstart del SDK.
-- Invoca el entrypoint `register_and_mint` para crear la definición de activo ROSE y acuñar 250 unidades para Alice en una sola transacción.
-- Verifica los balances mediante `client.request(FindAccountAssets)` o `iroha_cli ledger assets list --account ih58...` para confirmar que la acuñación tuvo éxito.
+- التأكد من وجود حساب الوجهة (على سبيل المثال `ih58...`)، مما يعكس عملية التكوين في كل Quickstart من SDK.
+- استدعاء نقطة الدخول `register_and_mint` لإنشاء تعريف نشط ROSE والحصول على 250 وحدة لـ Alice في معاملة واحدة فقط.
+- تحقق من الأرصدة المتوسطة `client.request(FindAccountAssets)` أو `iroha_cli ledger assets list --account ih58...` لتأكيد نجاح الإحصاء.
 
-## Guías de SDK relacionadas
+## أدلة SDK ذات الصلة
 
 - [Quickstart del SDK de Rust](/sdks/rust)
 - [Quickstart del SDK de Python](/sdks/python)
-- [Quickstart del SDK de JavaScript](/sdks/javascript)
+- [بدء التشغيل السريع لـ SDK لـ JavaScript](/sdks/javascript)
 
-[Descarga la fuente de Kotodama](/norito-snippets/register-and-mint.ko)
+[تنزيل مصدر Kotodama](/norito-snippets/register-and-mint.ko)
 
 ```text
 // Register a new asset and mint some to the specified account.

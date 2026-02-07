@@ -4,28 +4,30 @@ direction: ltr
 source: docs/portal/docs/intro.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Bienvenido al portal de desarrolladores de SORA Nexus
+# Bienvenido al port de desarrolladores de SORA Nexus
 
-El portal de desarrolladores de SORA Nexus agrupa documentacion interactiva, tutoriales de SDK y referencias de API para operadores de Nexus y contribuyentes de Hyperledger Iroha. Complementa el sitio principal de docs al mostrar guias practicas y especificaciones generadas directamente desde este repositorio. La pagina de inicio ahora incluye puntos de entrada tematicos de Norito/SoraFS, snapshots OpenAPI firmados y una referencia dedicada de Norito Streaming para que los contribuyentes encuentren el contrato del plano de control de streaming sin tener que buscar en la especificacion raiz.
+Портал описания SORA Nexus представляет собой интерактивную документацию, учебные пособия по SDK и ссылки на API для операторов Nexus и вклады Hyperledger Iroha. Дополнение к основному месту документации в большинстве практических и специальных общих рекомендаций, направленных непосредственно из этого хранилища. Начальная страница сейчас включает тематические точки входа Norito/SoraFS, снимки OpenAPI фирмы и специальную ссылку Norito Streaming для тех, кто вносит свой вклад в этот процесс. Контракт с планом управления потоковой передачей, если он не соответствует заданной спецификации.
 
-## Lo que puedes hacer aqui
+## Вот что может быть здесь
 
-- **Aprender Norito** - comienza con la descripcion general y la guia de inicio rapido para entender el modelo de serializacion y las herramientas de bytecode.
-- **Poner en marcha los SDKs** - sigue los quickstarts de JavaScript y Rust hoy; las guias de Python, Swift y Android se sumaran conforme se migren las recetas.
-- **Explorar referencias de API** - la pagina OpenAPI de Torii renderiza la especificacion REST mas reciente, y las tablas de configuracion enlazan a las fuentes canonicas en Markdown.
-- **Preparar despliegues** - los runbooks operativos (telemetria, settlement, Nexus overlays) se estan migrando desde `docs/source/` y llegaran a este sitio conforme avance la migracion.
+- **Aprender Norito** - введите общее описание и быстрое начало, чтобы получить модель сериализации и структуру байт-кода.
+- **Покажите SDK** - используйте быстрые старты по JavaScript и Rust; Языки Python, Swift и Android соответствуют вашим рецептам.
+- **Изучите ссылки на API** - страница OpenAPI от Torii отображает конкретную спецификацию REST, а также таблицы конфигурации, расположенные в канонических файлах в Markdown.
+- **Подготовка к работе** - рабочие книги Runbook (телеметрия, расчет, наложения Nexus) будут мигрировать из `docs/source/` и будут созданы в соответствии с условиями миграции.
 
-## Estado actual
+## Фактический статус
 
--  Landing de Docusaurus v3 con tema, tipografia renovada, hero/tarjetas con gradientes y tiles de recursos que incluyen el resumen de Norito Streaming.
--  Plugin OpenAPI de Torii conectado a `npm run sync-openapi`, con verificaciones de snapshots firmados y guardas CSP aplicadas por `buildSecurityHeaders`.
--  La cobertura de preview y probe corre en CI (`docs-portal-preview.yml` + `scripts/portal-probe.mjs`), y ahora bloquea el doc de streaming, los quickstarts de SoraFS y las checklists de referencia antes de publicar artefactos.
--  Los quickstarts de Norito, SoraFS y SDKs, junto con secciones de referencia, ya estan en la barra lateral; nuevas importaciones desde `docs/source/` (streaming, orchestration, runbooks) llegan aqui conforme se redactan.
+- Посадка Docusaurus v3 с темой, обновленной типографией, героями/объектами с градиентами и рекурсивными плитками, включающими возобновление потоковой передачи Norito.
+- Плагин OpenAPI от Torii, подключенный к `npm run sync-openapi`, для проверки фирменных снимков и защиты приложений CSP для `buildSecurityHeaders`.
+- Панель предварительного просмотра и проверка соответствия в CI (`docs-portal-preview.yml` + `scripts/portal-probe.mjs`), а также блокировка потокового документа, краткие руководства по SoraFS и контрольные списки ссылок перед публикацией артефактов.
+- Краткое руководство по Norito, SoraFS и SDK, вместе с справочными разделами, которые находятся на боковой полосе; nuevas importaciones desde `docs/source/` (потоковая передача, оркестровка, Runbook) будет изменена.
 
-## Como participar
+## Как участник
 
-- Consulta `docs/portal/README.md` para comandos de desarrollo local (`npm install`, `npm run start`, `npm run build`).
-- Las tareas de migracion de contenido se rastrean junto a los items `DOCS-*` del roadmap. Se agradecen contribuciones: porta secciones desde `docs/source/` y agrega la pagina a la barra lateral.
-- Si agregas un artefacto generado (specs, tablas de configuracion), documenta el comando de build para que futuros contribuyentes puedan refrescarlo facilmente.
+- Проконсультируйтесь с `docs/portal/README.md` для локальных команд локальной настройки (`npm install`, `npm run start`, `npm run build`).
+- Условия миграции контента могут быть добавлены вместе с элементами `DOCS-*` дорожной карты. Если вы добавили вклад: porta secciones desde `docs/source/` и объединили страницу с боковой панелью.
+- Если собраны созданные артефакты (спецификации, таблицы конфигурации), документация команды сборки для того, чтобы будущие вкладчики могли быть легко отображены.

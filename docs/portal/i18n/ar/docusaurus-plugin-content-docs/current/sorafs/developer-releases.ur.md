@@ -4,94 +4,92 @@ direction: rtl
 source: docs/portal/docs/sorafs/developer-releases.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: Release process
-summary: CLI/SDK release gate چلائیں، مشترکہ versioning policy لاگو کریں، اور canonical release notes شائع کریں۔
+العنوان: عملية الإصدار
+ملخص: بوابة إصدار CLI/SDK چلائيں، سياسة الإصدارات الأكثر انتشارًا لاگو کریں، وملاحظات الإصدار الأساسية الشائعة کریں۔
 ---
 
-# Release process
+#عملية الإصدار
 
-SoraFS binaries (`sorafs_cli`, `sorafs_fetch`, helpers) اور SDK crates
-(`sorafs_car`, `sorafs_manifest`, `sorafs_chunker`) ایک ساتھ ship ہوتے ہیں۔ Release
-pipeline CLI اور libraries کو aligned رکھتا ہے، lint/test coverage یقینی بناتا ہے،
-اور downstream consumers کے لیے artifacts capture کرتا ہے۔ ہر candidate tag کے لیے
-نیچے دی گئی checklist چلائیں۔
+الثنائيات SoraFS (`sorafs_cli`، `sorafs_fetch`، المساعدون) وصناديق SDK
+(`sorafs_car`, `sorafs_manifest`, `sorafs_chunker`) تم تشغيل هذه السفينة. الافراج
+تمت محاذاة سطر الأوامر (CLI) لخط الأنابيب والمكتبات، وتغطية الوبر/الاختبار رائعة.
+والمستهلكون النهائيون يلتقطون القطع الأثرية. ہر علامة المرشح کے لیے
+لا يوجد أي قائمة مرجعية أخرى.
 
-## 0. Security review sign-off کی تصدیق
+## 0. تسجيل الخروج لمراجعة الأمان کی تصدیق
 
-Technical release gate چلانے سے پہلے تازہ ترین security review artifacts capture کریں:
+بوابة الإصدار الفني التي تم التقاطها من أحدث عناصر المراجعة الأمنية:
 
-- سب سے تازہ SF-6 security review memo ڈاؤن لوڈ کریں ([reports/sf6-security-review](./reports/sf6-security-review.md))
-  اور اس کا SHA256 hash release ticket میں درج کریں۔
-- Remediation ticket link (مثلاً `governance/tickets/SF6-SR-2026.md`) منسلک کریں اور
-  Security Engineering اور Tooling Working Group کے sign-off approvers نوٹ کریں۔
-- تصدیق کریں کہ memo کی remediation checklist بند ہے؛ unresolved items release کو block کرتے ہیں۔
-- Parity harness logs (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`) کو
-  manifest bundle کے ساتھ upload کرنے کے لیے تیار رہیں۔
-- یہ بھی تصدیق کریں کہ signing command میں `--identity-token-provider` کے ساتھ
-  واضح `--identity-token-audience=<aud>` شامل ہو تاکہ Fulcio scope release evidence میں capture ہو۔
+- مذكرة المراجعة الأمنية لـ SF-6 ([reports/sf6-security-review](./reports/sf6-security-review.md))
+  وهي عبارة عن تذكرة إصدار تجزئة SHA256 ذات مستوى أعلى.
+- رابط تذكرة المعالجة (مثلاً `governance/tickets/SF6-SR-2026.md`) منسلک کریں و
+  مجموعة عمل الهندسة الأمنية والأدوات هي الموافقون على التوقيع.
+- التحقق من مذكرة قائمة مراجعة الإصلاح؛ يتم تحرير العناصر التي لم يتم حلها من خلال حظر الحظر.
+- سجلات تسخير التكافؤ (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`) کو
+  يتم حاليًا تحميل حزمة البيان بشكل مستمر.
+- هناك أيضًا زر لتوقيع الأمر `--identity-token-provider`
+  يتضمن `--identity-token-audience=<aud>` الواضح إمكانية التقاط دليل إصدار نطاق Fulcio.
 
-Governance کو اطلاع دیتے وقت اور release publish کرتے وقت ان artifacts کو شامل کریں۔
+تعمل الحوكمة على إعلام البيانات وقت إصدارها ونشرها عندما تكون الأعمال الفنية التي تشمل القراءة.## 1. بوابة الإصدار/الاختبار چلائیں
 
-## 1. Release/test gate چلائیں
-
-`ci/check_sorafs_cli_release.sh` helper CLI اور SDK crates پر formatting، Clippy اور tests
-چلاتا ہے، اور workspace-local target directory (`.target`) استعمال کرتا ہے تاکہ CI
-containers میں permission conflicts سے بچا جا سکے۔
+`ci/check_sorafs_cli_release.sh` مساعد CLI وصناديق SDK للتنسيق وClippy والاختبارات
+استخدام دليل الهدف المحلي لمساحة العمل (`.target`) وCI
+تحتوي الحاويات على تعارضات في الأذونات.
 
 ```bash
 CARGO_TARGET_DIR=.target ci/check_sorafs_cli_release.sh
 ```
 
-یہ script درج ذیل assertions کرتا ہے:
+هناك تأكيدات ضمن البرنامج النصي:
 
-- `cargo fmt --all -- --check` (workspace)
-- `cargo clippy --locked --all-targets` `sorafs_car` کے لیے (feature `cli` کے ساتھ)،
-  `sorafs_manifest` اور `sorafs_chunker`
-- `cargo test --locked --all-targets` انہی crates کے لیے
+- `cargo fmt --all -- --check` (مساحة العمل)
+- `cargo clippy --locked --all-targets` `sorafs_car` کے لیے (الميزة `cli` کے ساتھ)،
+  `sorafs_manifest` و`sorafs_chunker`
+- `cargo test --locked --all-targets` الصناديق المخصصة
 
-اگر کوئی قدم fail ہو تو tagging سے پہلے regression درست کریں۔ Release builds کو main
-کے ساتھ continuous رہنا چاہیے؛ release branches میں fixes cherry-pick نہ کریں۔ Gate
-یہ بھی چیک کرتا ہے کہ keyless signing flags (`--identity-token-issuer`, `--identity-token-audience`)
-جہاں ضروری ہوں فراہم کیے گئے ہوں؛ missing arguments run کو fail کر دیتے ہیں۔
+إذا فشل التقدم، فيمكنك وضع العلامات على الانحدار الصحيح. الإصدار يبني کو الرئيسي
+استمرار الرفاه المستمر؛ تحرير الفروع يعمل على إصلاح عدم اختيار الكرز. بوابة
+يوجد أيضًا مفتاح واحد وإشارات التوقيع بدون مفتاح (`--identity-token-issuer`, `--identity-token-audience`)
+هناك حاجة إلى ما هو ضروري؛ تشغيل الوسائط المفقودة قد يفشل.
 
-## 2. Versioning policy لاگو کریں
+## 2. سياسة الإصدار لاغو کریں
 
-SoraFS CLI/SDK crates سب SemVer استعمال کرتے ہیں:
+SoraFS CLI/SDK صناديق سب SemVer استخدام البطاقة:
 
-- `MAJOR`: پہلی 1.0 release میں introduce ہوتا ہے۔ 1.0 سے پہلے `0.y` minor bump
-  **breaking changes** کو ظاہر کرتا ہے، چاہے وہ CLI surface میں ہوں یا Norito schemas میں۔
-- `PATCH`: Bug fixes، documentation-only releases، اور dependency updates جو observable behavior کو تبدیل نہیں کرتے۔
+- `MAJOR`: الإصدار الأحدث 1.0 يقدم المزيد. 1.0 سے پہلے `0.y` نتوء طفيف
+  **التغييرات العاجلة** تظهر الخريطة وما هي وسطح CLI في مخططات Norito.
+- `PATCH`: إصلاحات الأخطاء، وإصدارات التوثيق فقط، وتحديثات التبعية التي لا يمكن ملاحظتها.
 
-`sorafs_car`، `sorafs_manifest` اور `sorafs_chunker` کو ہمیشہ ایک ہی version پر رکھیں تاکہ
-SDK downstream consumers ایک aligned version string پر depend کر سکیں۔ Version bump کرتے وقت:
+`sorafs_car` و`sorafs_manifest` و`sorafs_chunker` يحتوي على إصدار واحد فقط
+يعتمد المستهلكون النهائيون لـ SDK على سلسلة إصدار محاذية. النسخة نتوء کرتے الوقت:1. يحتوي الصندوق على `Cargo.toml` على حقول `version =`.
+2. تم تجديد `cargo update -p <crate>@<new-version>` `Cargo.lock` (تفرض الإصدارات الصريحة لمساحة العمل الإجراء).
+3. قم بتحرير البوابة مرة أخرى بعد إزالة القطع الأثرية القديمة.
 
-1. ہر crate کے `Cargo.toml` میں `version =` fields اپڈیٹ کریں۔
-2. `cargo update -p <crate>@<new-version>` کے ذریعے `Cargo.lock` regenerate کریں (workspace explicit versions enforce کرتا ہے)۔
-3. Release gate دوبارہ چلائیں تاکہ stale artifacts باقی نہ رہیں۔
+## 3. قم بتدوين ملاحظات الإصدار
 
-## 3. Release notes تیار کریں
+إصدار سجل تغيير تخفيض السعر الشائع شاع کرنا چاہیے جو CLI، SDK والتغييرات المؤثرة على الحوكمة
+کو تسليط الضوء کرے۔ استخدام قالب `docs/examples/sorafs_release_notes.md` (إصدار سابق
+دليل التحف الفنية والأقسام التي تحتوي على تفاصيل محددة)).
 
-ہر release کو markdown changelog شائع کرنا چاہیے جو CLI، SDK اور governance-impacting changes
-کو highlight کرے۔ `docs/examples/sorafs_release_notes.md` کا template استعمال کریں (اسے release
-artifacts directory میں کاپی کریں اور sections کو concrete details سے بھر دیں)۔
+الحد الأدنى للمحتوى:
 
-Minimum content:
+- **أبرز النقاط**: يبرز مستهلكو CLI وSDK العناوين الرئيسية.
+- **خطوات الترقية**: عثرة تبعيات البضائع وإعادة تشغيل التركيبات الحتمية إلى TL;أوامر DR.
+- **التحقق**: تنفيذ تجزئات إخراج الأوامر أو المغلفات و`ci/check_sorafs_cli_release.sh` للمراجعة الدقيقة.
 
-- **Highlights**: CLI اور SDK consumers کے لیے feature headlines۔
-- **Upgrade steps**: cargo dependencies bump کرنے اور deterministic fixtures rerun کرنے کے TL;DR commands۔
-- **Verification**: command output hashes یا envelopes اور `ci/check_sorafs_cli_release.sh` کی exact revision جو execute ہوئی۔
+هناك أيضًا ملاحظات الإصدار مثل العلامة التي تلتصق بالبطاقة (مثل نص إصدار GitHub) والأمر الحتمي
+القطع الأثرية التي تم إنشاؤها هي شيء محفوظ.
 
-بھری ہوئی release notes کو tag کے ساتھ attach کریں (مثلاً GitHub release body) اور انہیں deterministically
-generated artifacts کے ساتھ محفوظ کریں۔
+## 4. قم بتحرير الخطافات
 
-## 4. Release hooks چلائیں
-
-`scripts/release_sorafs_cli.sh` چلائیں تاکہ signature bundle اور verification summary generate ہو جو ہر release
-کے ساتھ ship ہوتے ہیں۔ Wrapper ضرورت کے مطابق CLI build کرتا ہے، `sorafs_cli manifest sign` چلاتا ہے، اور فوراً
-`manifest verify-signature` replay کرتا ہے تاکہ tagging سے پہلے failures سامنے آ جائیں۔ مثال:
+`scripts/release_sorafs_cli.sh` إنشاء حزمة التوقيع وملخص التحقق وتحريرها
+لقد سعت السفينة. يجب أن يتوافق الغلاف مع بنية CLI، `sorafs_cli manifest sign`، فورًا
+`manifest verify-signature` إعادة تشغيل البطاقة ووضع العلامات على الفشل المتكرر. مثال:
 
 ```bash
 scripts/release_sorafs_cli.sh \
@@ -105,40 +103,34 @@ scripts/release_sorafs_cli.sh \
   --expect-token-hash "$(cat .release/token.hash)"
 ```
 
-Tips:
+نصائح:- تحرير المدخلات (الحمولة، الخطط، الملخصات، تجزئة الرمز المميز المتوقع) أو الريبو أو تكوين النشر لتتبع النص القابل للتكرار. `fixtures/sorafs_manifest/ci_sample/` وحزمة التركيبات التخطيط المتعارف عليه.
+- أتمتة CI على أساس `.github/workflows/sorafs-cli-release.yml`؛ إنها بوابة تحرير چلاتا، والإصدار الأول والبرنامج النصي چلاتا، والحزم/التوقيعات وعناصر سير العمل الموجودة في الأرشيف. يمكن أيضًا استخدام أنظمة CI المزدوجة وأمر الأمر (بوابة التحرير -> التوقيع -> التحقق) حيث تقوم سجلات التدقيق بإنشاء تجزئات يتم محاذاةها تلقائيًا.
+- `manifest.bundle.json`، و`manifest.sig`، و`manifest.sign.summary.json`، و`manifest.verify.summary.json` وهو آخر ما في الأمر؛ يشير هذا الإشعار الخاص بإدارة الحزمة إلى ما يلي.
+- قم بإصدار بيانات التركيبات الأساسية لتتمكن من تحديث البيان وخطة القطعة والملخصات التي تحتوي على `fixtures/sorafs_manifest/ci_sample/` (وملف `docs/examples/sorafs_ci_sample/manifest.template.json`) ووضع العلامات عليها. يلتزم مشغلو المصب بالتركيبات التي تعتمد على الإصدار وإعادة إنتاج حزمة الإصدار.
+- `sorafs_cli proof stream` التحقق من القناة المحدودة لتشغيل تسجيل التقاط السجل وتحرير الحزمة وإرفاق ضمانات تدفق إثبات فعالة.
+- التوقيع على الاستخدام والدقيق `--identity-token-audience` ملاحظات الإصدار في درج؛ سياسة الحوكمة الكاملة تتجاهل الجمهور وتتحقق من صحته.
 
-- Release inputs (payload, plans, summaries, expected token hash) کو repo یا deployment config میں track کریں تاکہ script reproducible رہے۔ `fixtures/sorafs_manifest/ci_sample/` والا fixture bundle canonical layout دکھاتا ہے۔
-- CI automation کو `.github/workflows/sorafs-cli-release.yml` پر base کریں؛ یہ release gate چلاتا ہے، اوپر والا script چلاتا ہے، اور bundles/signatures کو workflow artifacts کے طور پر archive کرتا ہے۔ دوسرے CI systems میں بھی وہی command order (release gate -> sign -> verify) رکھیں تاکہ audit logs generated hashes کے ساتھ align رہیں۔
-- `manifest.bundle.json`, `manifest.sig`, `manifest.sign.summary.json`, اور `manifest.verify.summary.json` کو اکٹھا رکھیں؛ یہی packet governance notification میں refer ہوتا ہے۔
-- جب release canonical fixtures اپڈیٹ کرے تو refreshed manifest، chunk plan، اور summaries کو `fixtures/sorafs_manifest/ci_sample/` میں کاپی کریں (اور `docs/examples/sorafs_ci_sample/manifest.template.json` اپڈیٹ کریں) tagging سے پہلے۔ Downstream operators committed fixtures پر depend کرتے ہیں تاکہ release bundle reproduce کر سکیں۔
-- `sorafs_cli proof stream` bounded-channel verification کا run log capture کریں اور release packet کے ساتھ attach کریں تاکہ proof streaming safeguards فعال رہنے کا ثبوت ملے۔
-- Signing میں استعمال ہونے والا exact `--identity-token-audience` release notes میں درج کریں؛ governance Fulcio policy کے خلاف audience کو cross-check کرتی ہے۔
-
-جب release میں gateway rollout بھی شامل ہو تو `scripts/sorafs_gateway_self_cert.sh` استعمال کریں۔ اسی manifest bundle کی طرف point کریں تاکہ attestation candidate artifact سے match ہو:
-
-```bash
+عند إطلاق سراح إطلاق البوابة، سيتضمن أيضًا استخدام `scripts/sorafs_gateway_self_cert.sh`. هذه الحزمة الواضحة هي نقطة مهمة لشهادة قطعة أثرية للمرشح متطابقة:```bash
 scripts/sorafs_gateway_self_cert.sh --config docs/examples/sorafs_gateway_self_cert.conf \
   --manifest artifacts/site.manifest.to \
   --manifest-bundle artifacts/release/manifest.bundle.json
 ```
 
-## 5. Tag اور publish
+## 5. وضع علامة ونشر
 
-Checks پاس ہونے اور hooks مکمل ہونے کے بعد:
+يتم إجراء الشيكات والخطافات بعد:
 
-1. `sorafs_cli --version` اور `sorafs_fetch --version` چلائیں تاکہ binaries نئی version report کریں۔
-2. Release configuration کو checked-in `sorafs_release.toml` (preferred) یا کسی اور config file میں تیار کریں جو آپ کے deployment repo میں track ہو۔ Ad-hoc environment variables پر انحصار نہ کریں؛ CLI کو `--config` (یا equivalent) کے ذریعے paths دیں تاکہ release inputs واضح اور reproducible رہیں۔
-3. Signed tag (preferred) یا annotated tag بنائیں:
+1. `sorafs_cli --version` و`sorafs_fetch --version` قم بتشغيل الثنائيات الجديدة لإصدار التقرير.
+2. قم بتحرير التكوين الذي تم تسجيله في `sorafs_release.toml` (المفضل) أو الملف وملف التكوين الذي سيعمل على تتبع مستودع النشر. متغيرات البيئة المخصصة لا حصر لها؛ CLI إلى `--config` (أو ما يعادله) وهي مسارات متعرجة تعمل على تحرير المدخلات بشكل واضح وقابل للتكرار.
+3. العلامة الموقعة (المفضلة) أو العلامة المشروحة:
    ```bash
    git tag -s sorafs-vX.Y.Z -m "SoraFS CLI & SDK vX.Y.Z"
    git push origin sorafs-vX.Y.Z
    ```
-4. Artifacts (CAR bundles, manifests, proof summaries, release notes, attestation outputs) کو project registry میں upload کریں اور governance checklist (deployment guide: [deployment guide](./developer-deployment.md)) follow کریں۔ اگر release نے نئی fixtures بنائیں تو انہیں shared fixture repo یا object store میں push کریں تاکہ audit automation published bundle کا source control کے ساتھ diff کر سکے۔
-5. Governance channel کو signed tag، release notes، manifest bundle/signature hashes، archived `manifest.sign/verify` summaries، اور attestation envelopes کے links کے ساتھ مطلع کریں۔ CI job URL (یا log archive) شامل کریں جس نے `ci/check_sorafs_cli_release.sh` اور `scripts/release_sorafs_cli.sh` چلایا۔ Governance ticket اپڈیٹ کریں تاکہ auditors approvals کو artifacts سے trace کر سکیں؛ جب `.github/workflows/sorafs-cli-release.yml` job notifications post کرے تو ad-hoc summaries کے بجائے recorded hashes link کریں۔
+4. العناصر (حزم CAR، والبيانات، وملخصات الإثبات، وملاحظات الإصدار، ومخرجات التصديق) ويمكن تحميل سجل المشروع وقائمة مراجعة الإدارة (دليل النشر: [دليل النشر](./developer-deployment.md)) اتبع کریں۔ إذا تم إصدار تركيبات جديدة، يمكنك إنشاء مستودع تثبيت مشترك أو مخزن كائنات، مما يؤدي إلى دفع عملية نشر حزمة أتمتة التدقيق التي تتحكم في المصدر بشكل مختلف.
+5. قناة الحوكمة والعلامة الموقعة، وملاحظات الإصدار، وحزمة البيان/تجزئات التوقيع، وملخصات `manifest.sign/verify` المؤرشفة، ومظاريف الشهادات والروابط التي تم اكتشافها. يتضمن عنوان URL لوظيفة CI (أو أرشيف السجل) كلاً من `ci/check_sorafs_cli_release.sh` و`scripts/release_sorafs_cli.sh`. تذكرة الحوكمة تعتمد على موافقات مدققي الحسابات والتحف التي يمكن تتبعها؛ جب `.github/workflows/sorafs-cli-release.yml` نشر إشعارات الوظائف كملخصات مخصصة ورابط التجزئات المسجلة.
 
-## 6. Post-release follow-up
+## 6. متابعة ما بعد الإصدار- الإصدار الجديد من وثائق الدليل الإرشادي (البدء السريع، قوالب CI) لم يتم تغييره بعد.
+- تحرير سجلات مخرجات البوابة من قبل المراجعين لحفظ أرشيف السجلات - القطع الأثرية الموقعة والتي تم حفظها بشكل محفوظ.
 
-- نئی version کی طرف اشارہ کرنے والی documentation (quickstarts, CI templates) اپڈیٹ کریں یا تصدیق کریں کہ کوئی تبدیلی درکار نہیں۔
-- Release gate output logs کو auditors کے لیے archive کریں - انہیں signed artifacts کے ساتھ محفوظ رکھیں۔
-
-اس pipeline کی پیروی ہر release cycle میں CLI، SDK crates اور governance collateral کو lock-step میں رکھتی ہے۔
+تشتمل دورة الإصدار الخاصة بخط الأنابيب على CLI وصناديق SDK وضمانات الحوكمة التي تتميز بقفل الخطوة.

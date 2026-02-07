@@ -4,60 +4,62 @@ direction: ltr
 source: docs/portal/docs/sns/bulk-onboarding-toolkit.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 ---
-id: bulk-onboarding-toolkit
-title: SNS Bulk Onboarding Toolkit
-sidebar_label: Bulk onboarding toolkit
-description: CSV to RegisterNameRequestV1 automation for SN-3b registrar runs.
+id: күпләп-онборт-инструменттар комплекты
+исем: СНС күпләп Онбординг ҡоралдары комплекты
+sidebable_label: Төп бортинг инструменталь
+тасуирлама: CSV to RegisterNameRequestV1 автоматлаштырыу өсөн SN-3b регистратор йүгерә.
 ---
 
-:::note Canonical Source
-Mirrors `docs/source/sns/bulk_onboarding_toolkit.md` so external operators see
-the same SN-3b guidance without cloning the repository.
-:::
+:::иҫкәртергә канонлы сығанаҡ
+Көҙгөләр I18NI000000023X шулай тышҡы операторҙар ҡарағыҙ
+шул уҡ SN-3b етәкселеге клонлауһыҙ һаҡлағыс.
+::: 1990 й.
 
-# SNS Bulk Onboarding Toolkit (SN-3b)
+# SNS Bulk Onboarding ҡоралдары комплекты (SN-3b)
 
-**Roadmap reference:** SN-3b "Bulk onboarding tooling"  
-**Artifacts:** `scripts/sns_bulk_onboard.py`, `scripts/tests/test_sns_bulk_onboard.py`,
+**Юл картаһы һылтанмаһы:** SN-3b "Күплек onboarding инструменттары".  
+**Артефакттар:** I18NI000000024X, I18NI000000025X, .
 `docs/portal/scripts/sns_bulk_release.sh`
 
-Large registrars often pre-stage hundreds of `.sora` or `.nexus` registrations
-with the same governance approvals and settlement rails. Manually crafting JSON
-payloads or re-running the CLI does not scale, so SN-3b ships a deterministic
-CSV to Norito builder that prepares `RegisterNameRequestV1` structures for
-Torii or the CLI. The helper validates every row up front, emits both an
-aggregated manifest and optional newline-delimited JSON, and can submit the
-payloads automatically while recording structured receipts for audits.
+Ҙур регистраторҙар йыш ҡына стадияға тиклемге йөҙҙәрсә I18NI000000027X йәки `.nexus` теркәүҙәре
+шул уҡ идара итеү раҫлауҙары һәм ҡасаба рельстары менән. Ҡул менән эшләү JSON
+файҙалы йөкләмәләр йәки яңынан эшләү CLI масштаблы түгел, шуға күрә SN-3b суднолары детерминистик
+CSV I18NT00000000003Х төҙөүсе, тип әҙерләй I18NI0000000029X структуралары өсөн .
+Torii йәки CLI. Ярҙам һәр рәтте алдан раҫлай, икеһен дә сығара.
+агрегацияланған манифест һәм опциональ яңы һыҙыҡ-дилимитированный JSON, һәм тапшыра ала
+йөк йөкләй автоматик рәүештә, шул уҡ ваҡытта яҙма структуралы квитанциялар өсөн аудит.
 
-## 1. CSV schema
+## 1. CSV схемаһы
 
-The parser requires the following header row (order is flexible):
+Пасер өсөн түбәндәге баш рәт талап ителә (заказ һығылмалы):
 
-| Column | Required | Description |
-|--------|----------|-------------|
-| `label` | Yes | Requested label (mixed case accepted; tool normalises per Norm v1 and UTS-46). |
-| `suffix_id` | Yes | Numeric suffix identifier (decimal or `0x` hex). |
-| `owner` | Yes | AccountId string (IH58 literal; optional @domain hint) for the registration owner. |
-| `term_years` | Yes | Integer `1..=255`. |
-| `payment_asset_id` | Yes | Settlement asset (for example `xor#sora`). |
-| `payment_gross` / `payment_net` | Yes | Unsigned integers representing asset-native units. |
-| `settlement_tx` | Yes | JSON value or literal string describing the payment transaction or hash. |
-| `payment_payer` | Yes | AccountId that authorised the payment. |
-| `payment_signature` | Yes | JSON or literal string containing the steward or treasury signature proof. |
-| `controllers` | Optional | Semicolon- or comma-separated list of controller account addresses. Defaults to `[owner]` when omitted. |
-| `metadata` | Optional | Inline JSON or `@path/to/file.json` providing resolver hints, TXT records, etc. Defaults to `{}`. |
-| `governance` | Optional | Inline JSON or `@path` pointing at a `GovernanceHookV1`. `--require-governance` enforces this column. |
+| Бағана | Кәрәк | Тасуирлама |
+|-------|----------|-------------|
+| I18NI000000030X | Эйе | Һораулы ярлыҡ (ҡатнаш осраҡ ҡабул ителә; инструмент нормалашалар бер Норма v1 һәм UTS-46). |
+| `suffix_id` | Эйе | Һанлы суффикс идентификаторы (ун йәки I18NI000000032X гекс). |
+| `owner` | Эйе | Иҫәп яҙмаһы стринг (IH58 тура килә; опциональ @domain кәңәше) теркәү хужаһы өсөн. |
+| `term_years` | Эйе | Integer I18NI000000035X. |
+| `payment_asset_id` | Эйе | Ҡасаба активы (мәҫәлән, `xor#sora`). |
+| I18NI000000038X / I18NI000000039X X | Эйе | Актив-тыуған берәмектәрҙе күрһәткән ҡултамғаһыҙ бөтөн һандар. |
+| `settlement_tx` | Эйе | JSON ҡиммәте йәки туранан-тура строка һүрәтләү түләү операцияһы йәки хеш. |
+| `payment_payer` | Эйе | Иҫәп яҙмаһы, тип рөхсәт түләү. |
+| `payment_signature` | Эйе | JSON йәки туранан-тура еп составында стюард йәки ҡаҙна ҡултамғаһы иҫбатлау. |
+| `controllers` | Опциональ | Семиколон- йәки запятой-айырым исемлеге контроллер иҫәбенә адрестары. I18NI000000044X тиклем ғәҙәттәгесә ғәҙәттәгесә. |
+| `metadata` | Опциональ | JSON йәки I18NI000000046X рәт рособлы кәңәштәрен тәьмин итеү, TXT рекордтары, һ.б. |
+| `governance` | Опциональ | JSON йәки `@path` X рәтендә I18NI000000050X-та күрһәтеп. `--require-governance` был бағананы үтәй. |
 
-Any column may reference an external file by prefixing the cell value with `@`.
-Paths are resolved relative to the CSV file.
+Теләһә ниндәй бағана тышҡы файлға һылтанма яһай ала, күҙәнәк ҡиммәтен I18NI000000052X менән префиксациялау.
+Юлдар CSV файлына ҡарата хәл ителә.
 
-## 2. Running the helper
+## 2. Ярҙамсы йүгереүҙе
 
 ```bash
 python3 scripts/sns_bulk_onboard.py registrations.csv \
@@ -65,16 +67,16 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   --ndjson artifacts/sns_bulk_requests.ndjson
 ```
 
-Key options:
+Төп варианттар:
 
-- `--require-governance` rejects rows without a governance hook (useful for
-  premium auctions or reserved assignments).
-- `--default-controllers {owner,none}` decides whether empty controller cells
-  fall back to the owner account.
-- `--controllers-column`, `--metadata-column`, and `--governance-column` rename
-  optional columns when working with upstream exports.
+- I18NI000000053X идара итеү ҡармаҡһыҙ рәттәрҙе кире ҡаға (файҙалы өсөн
+  премиум аукциондар йәки запас заданиелар).
+- I18NI000000054X буш контроллер күҙәнәктәрен хәл итә
+  кире хужа иҫәбенә төшөп.
+- `--controllers-column`, `--metadata-column`, һәм I18NI000000057X үҙгәртергә
+  экспорт менән эшләгәндә опциональ бағана.
 
-On success the script writes an aggregated manifest:
+Уңыш менән сценарий агрегацияланған манифест яҙа:
 
 ```json
 {
@@ -111,8 +113,8 @@ On success the script writes an aggregated manifest:
 }
 ```
 
-If `--ndjson` is provided, each `RegisterNameRequestV1` is also written as a
-single-line JSON document so automations can stream requests directly into
+Әгәр I18NI0000000058X тәьмин ителә, һәр I18NI000000059X шулай уҡ тип яҙылған а
+бер һыҙыҡлы JSON документы шулай автомациялар туранан-тура запростар ағымға инә ала
 Torii:
 
 ```bash
@@ -125,12 +127,12 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
   done
 ```
 
-## 3. Automated submissions
+## 3. Автоматлаштырылған тапшырыуҙар
 
-### 3.1 Torii REST mode
+### 3.1 I18NT000000006X REST режимы
 
-Specify `--submit-torii-url` plus either `--submit-token` or
-`--submit-token-file` to push every manifest entry directly into Torii:
+I18NI000000060X плюс йәки I18NI000000061X йәки
+I18NI0000000062X туранан-тура I18NT000000007X-ға һәр манифест яҙмаһын этәрергә:
 
 ```bash
 python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json \
@@ -141,90 +143,71 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- The helper issues one `POST /v1/sns/registrations` per request and aborts on
-  the first HTTP error. Responses are appended to the log path as NDJSON
-  records.
-- `--poll-status` re-queries `/v1/sns/registrations/{selector}` after each
-  submission (up to `--poll-attempts`, default 5) to confirm that the record is
-  visible. Provide `--suffix-map` (JSON of `suffix_id` to `"suffix"` values) so
-  the tool can derive `{label}.{suffix}` literals for polling.
-- Tunables: `--submit-timeout`, `--poll-attempts`, and `--poll-interval`.
+- Ярҙамсыһы бер тапҡыр үтенескә һәм 2019 йылда аборттарҙы бер тапҡыр 2018-се `POST /v1/sns/registrations` сығара.
+  беренсе HTTP хатаһы. Яуаптар лог юлына ҡушыла, тип NDJSON
+  яҙмалары.
+- I18NI00000000064X ҡабаттан эҙләүҙәр I18NI0000000065X һәр береһенән һуң
+  тапшырыу (I18NI000000066X тиклем, 5-се ғәҙәттәгесә) рекордлы тип раҫлау өсөн
+  күренеп тора. I18NI0000000067X (JSON I18NI0000000068X JSON I18NI000000069X ҡиммәттәре) шулай уҡ.
+  ҡоралы һайлау өсөн I18NI000000070Х литрҙар сығара ала.
+- Tunables: `--submit-timeout`, I18NI00000072Х, һәм `--poll-interval`.
 
-### 3.2 iroha CLI mode
+### 3.2 ирха CLI режимы
 
-To route each manifest entry through the CLI, supply the binary path:
+Һәр манифест яҙмаһын CLI аша маршрутлаштырыу өсөн бинар юлды тәьмин итегеҙ:
 
-```bash
-python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json \
-  --submit-cli-path ./target/release/iroha \
-  --submit-cli-config configs/registrar.toml \
-  --submit-cli-extra-arg --chain-id=devnet \
-  --submission-log artifacts/sns_bulk_submit.log
-```
+I18NF000000018X
 
-- Controllers must be `Account` entries (`controller_type.kind = "Account"`)
-  because the CLI currently exposes only account-based controllers.
-- Metadata and governance blobs are written to temporary files per request and
-  forwarded to `iroha sns register --metadata-json ... --governance-json ...`.
-- CLI stdout and stderr plus exit codes are logged; non-zero exit codes abort
-  the run.
+- Контроллерҙар `Account` яҙмалары булырға тейеш (`controller_type.kind = "Account"`)
+  сөнки CLI әлеге ваҡытта тик иҫәп-хисап контроллерҙарын фашлай.
+- Метадата һәм идара итеү таптары яҙыла ваҡытлыса файлдар өсөн үтенес һәм
+  `iroha sns register --metadata-json ... --governance-json ...`-ға ебәрелгән.
+- CLI stdout һәм stderr плюс сығыу кодтары теркәлә; нульдән тыш сығыу кодтары аборт
+  йүгерә.
 
-Both submission modes can run together (Torii and CLI) to cross-check registrar
-deployments or rehearse fallbacks.
+Ике тапшырыу режимы ла бергә эшләй ала (Torii һәм CLI) кросс-тикшерергә регистратор
+таратыу йәки репетиция fallbacks.
 
-### 3.3 Submission receipts
+### 3.3 тапшырыу квитанциялары
 
-When `--submission-log <path>` is provided, the script appends NDJSON entries
-capturing:
+Ҡасан I18NI000000077X бирелгән, сценарий NDJSON яҙмаларын ҡуша .
+тотоу:
 
-```json
-{"timestamp":"2026-03-30T07:22:04.123Z","mode":"torii","index":12,"selector":"1:alpha","status":200,"success":true,"detail":"..."}
-{"timestamp":"2026-03-30T07:22:05.456Z","mode":"torii-poll","index":12,"selector":"1:alpha","status":200,"success":true,"detail":"{...}","attempt":2}
-{"timestamp":"2026-03-30T07:22:06.789Z","mode":"cli","index":12,"selector":"1:alpha","status":0,"success":true,"detail":"Registration accepted"}
-```
+I18NF000000019X
 
-Successful Torii responses include structured fields extracted from
-`NameRecordV1` or `RegisterNameResponseV1` (for example `record_status`,
+Уңышлы I18NT000000009X яуаптары 2012 йылдан сығарылған структуралы яландарҙы үҙ эсенә ала.
+I18NI000000078X йәки I18NI000000079X X (мәҫәлән, `record_status`,
 `record_pricing_class`, `record_owner`, `record_expires_at_ms`,
-`registry_event_version`, `suffix_id`, `label`) so dashboards and governance
-reports can parse the log without inspecting free-form text. Attach this log to
-registrar tickets alongside the manifest for reproducible evidence.
+`registry_event_version`, `suffix_id`, `label`) шулай приборҙар таҡталары һәм идара итеү
+отчеттар ирекле форма тексты тикшермәйенсә анализлай ала. Был журналға беркетегеҙ
+теркәү билеттары менән бер рәттән манифест өсөн ҡабатланған дәлилдәр.
 
-## 4. Docs portal release automation
+## 4. Доктар порталы релиз автоматлаштырыу
 
-CI and portal jobs call `docs/portal/scripts/sns_bulk_release.sh`, which wraps
-the helper and stores artefacts under `artifacts/sns/releases/<timestamp>/`:
+CI һәм порталь эш урындары шылтырата I18NI0000000087X, был урап .
+ярҙамсы һәм һаҡлаусы артефакттар буйынса I18NI00000000088X:
 
-```bash
-docs/portal/scripts/sns_bulk_release.sh \
-  --csv assets/sns/registrations_2026q2.csv \
-  --torii-url https://torii.sora.network \
-  --token-env SNS_TORII_TOKEN \
-  --suffix-map configs/sns_suffix_map.json \
-  --poll-status \
-  --cli-path ./target/release/iroha \
-  --cli-config configs/registrar.toml
-```
+I18NF000000020X
 
-The script:
+Сценарий:
 
-1. Builds `registrations.manifest.json`, `registrations.ndjson`, and copies the
-   original CSV into the release directory.
-2. Submits the manifest using Torii and/or the CLI (when configured), writing
-   `submissions.log` with the structured receipts above.
-3. Emits `summary.json` describing the release (paths, Torii URL, CLI path,
-   timestamp) so portal automation can upload the bundle to artefact storage.
-4. Produces `metrics.prom` (override via `--metrics`) containing
-   Prometheus-format counters for total requests, suffix distribution,
-   asset totals, and submission outcomes. The summary JSON links to this file.
+1. `registrations.manifest.json` X, I18NI000000090X төҙөй һәм күсермәләр
+   оригиналь CSV релиз каталогы.
+2. I18NT0000000010X һәм/йәки CLI (конфигурацияланғанда), яҙыу ярҙамында манифест тапшыра.
+   `submissions.log` структуралы квитанциялар менән өҫтә.
+3. Emits I18NI000000092X сығарыуҙы һүрәтләү (юлдар, I18NT0000000011X URL, CLI юл,
+   ваҡыт тамғаһы) шулай порталь автоматлаштырыу өйөмдө артефакт һаҡлау өсөн тейәп була.
+4. `metrics.prom` (I18NI000000094X аша өҫтөнлөк) етештерә.
+   I18NT00000000000ф форматта иҫәпләүселәр өсөн дөйөм үтенестәр, суффикс таралыу,
+   активтар дөйөм, һәм тапшырыу һөҙөмтәләре. Йыйынтыҡ JSON был файлға һылтанмалар.
 
-Workflows simply archive the release directory as a single artefact, which now
-contains everything governance needs for auditing.
+Эш ағымы ябай ғына архивлау релиз каталогы бер артефакт булараҡ, хәҙер
+үҙ эсенә бөтә идара итеү ихтыяждары өсөн аудит.
 
-## 5. Telemetry & dashboards
+## 5. Телеметрия & приборҙар таҡтаһы
 
-The metrics file generated by `sns_bulk_release.sh` exposes the following
-series:
+I18NI0000000955X генерацияланған метрика файлы түбәндәгеләрҙе фашлай
+киҙемтә:
 
 ```
 # HELP sns_bulk_release_requests_total Number of registration requests per release and suffix.
@@ -235,41 +218,41 @@ sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="xor#sora"} 
 sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",success="true"} 118
 ```
 
-Feed `metrics.prom` into your Prometheus sidecar (for example via Promtail or a
-batch importer) to keep registrars, stewards, and governance peers aligned on
-bulk progress. Grafana board
-`dashboards/grafana/sns_bulk_release.json` visualises the same data with panels
-for per-suffix counts, payment volume, and submission success/failure ratios.
-The board filters by `release` so auditors can drill into a single CSV run.
+Һеҙҙең I18NI00000000096X һеҙҙең I18NT00000000001X sidecar (мәҫәлән, Promtail аша йәки а
+партия импортеры) теркәүселәрҙе, стюардтарҙы һәм идара итеү тиҫтерҙәрен һаҡлау өсөн
+күпләп алға китеш. Grafana платаһы
+I18NI000000097X панелдәр менән бер үк мәғлүмәттәрҙе визуалләштерә
+өсөн бер суффикс иҫәптәре, түләү күләме, һәм тапшырыу уңыш/уңышһыҙлыҡ нисбәттәре.
+I18NI000000098X тарафынан плата фильтрҙары шулай итеп, аудиторҙар бер CSV йүгерергә быраулай ала.
 
-## 6. Validation and failure modes
+## 6. Валидация һәм етешһеҙлектәр режимдары
 
-- **Label canonicalisation:** inputs are normalised with Python IDNA plus
-  lowercase and Norm v1 character filters. Invalid labels fail fast before any
-  network calls.
-- **Numeric guardrails:** suffix ids, term years, and pricing hints must fall
-  within `u16` and `u8` bounds. Payment fields accept decimal or hex integers
-  up to `i64::MAX`.
-- **Metadata or governance parsing:** inline JSON is parsed directly; file
-  references are resolved relative to the CSV location. Non-object metadata
-  produces a validation error.
-- **Controllers:** blank cells honour `--default-controllers`. Provide explicit
-  controller lists (for example `ih58...;ih58...`) when delegating to non-owner
-  actors.
+- **Яҡтылыҡ канонлаштырыу:** индереүҙәр Python IDNA плюс менән нормалаштырылған.
+  бәләкәй һәм Норма v1 символ фильтрҙары. Дөрөҫ булмаған ярлыҡтар тиҙ уңышһыҙлыҡҡа тиклем ниндәй ҙә булһа
+  селтәр шылтыратыуҙары.
+- ** Һанлы ҡоршауҙар:** ялғау ids, сроклы йылдар, һәм хаҡтар һиҙеүҙәре төшөргә тейеш
+  `u16` һәм I18NI000000100X сиктәре сиктәрендә. Түләү яландары унлыҡ йәки гекс бөтөн һандарын ҡабул итә
+  тиклем `i64::MAX`.
+- **Метадата йәки идара итеү анализлау:** рәт JSON туранан-тура анализлана; файл
+  һылтанмалар CSV урынлашҡан урынға ҡарата хәл ителә. Объект булмаған метамағлүмәттәр
+  раҫлау хатаһын етештерә.
+- **Контроллер:** буш күҙәнәктәр `--default-controllers` X. Асыҡтан-асыҡ тәьмин итегеҙ
+  контроллер исемлектәре (мәҫәлән, I18NI000000103X) хужа булмағанға тапшырғанда
+  актерҙар.
 
-Failures are reported with contextual row numbers (for example
-`error: row 12 term_years must be between 1 and 255`). The script exits with
-code `1` on validation errors and `2` when the CSV path is missing.
+Уңышһыҙлыҡтар тураһында хәбәр ителә контекстуаль рәт һандары (мәҫәлән,
+`error: row 12 term_years must be between 1 and 255`). Сценарий менән сыға.
+Coce `1` валидация хаталары буйынса һәм I18NI00000106ХХХ юл юғалғанда.
 
-## 7. Testing and provenance
+## 7. Һынау һәм провенанс
 
-- `python3 -m pytest scripts/tests/test_sns_bulk_onboard.py` covers CSV parsing,
-  NDJSON emission, governance enforcement, and the CLI or Torii submission
-  paths.
-- The helper is pure Python (no additional dependencies) and runs anywhere
-  `python3` is available. Commit history is tracked alongside the CLI in the
-  main repository for reproducibility.
+- `python3 -m pytest scripts/tests/test_sns_bulk_onboard.py` CSV анализлауҙы ҡаплай,
+  NDJSON эмиссияһы, идара итеүҙе үтәү, һәм CLI йәки I18NT0000000012X тапшырыу
+  юлдар.
+- Ярҙамсы саф Python (өҫтәмә бәйлелек юҡ) һәм теләһә ҡайҙа йүгерә
+  `python3` бар. Эш хаҡы тарихы менән бер рәттән күҙәтелә CLI .
+  төп һаҡлағыс өсөн ҡабатлаусанлыҡ.
 
-For production runs, attach the generated manifest and NDJSON bundle to the
-registrar ticket so stewards can replay the exact payloads that were submitted
-to Torii.
+Етештереүҙең йүгереүе өсөн генерацияланған манифест һәм NDJSON өйөмөн беркетергә
+теркәүсе билет шулай стюардтар теүәл файҙалы йөктәрҙе ҡабатлай ала, улар тапшырылған
+тиклем Torii.

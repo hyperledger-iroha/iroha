@@ -4,55 +4,57 @@ direction: ltr
 source: docs/portal/docs/api/overview.mdx
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-import TryItConsole from '@site/src/components/TryItConsole.jsx';
+TryItConsole ni '@site/src/components/TryItConsole.jsx' dan import qiling;
 
-# Torii API Overview
+# Torii API umumiy ko'rinishi
 
-The Torii gateway exposes a REST + WebSocket surface for interacting with Iroha
-nodes. The canonical OpenAPI document is generated via:
+Torii shlyuzi Iroha bilan ishlash uchun REST + WebSocket sirtini ochib beradi.
+tugunlar. Kanonik OpenAPI hujjati quyidagilar orqali yaratiladi:
 
 ```bash
 cargo xtask openapi
 ```
 
-Running the command above writes `docs/portal/static/openapi/torii.json` and
-feeds the `docusaurus-plugin-openapi-docs` integration so this section updates
-automatically. The generator spins up an in-memory Torii router and attempts to
-query its OpenAPI endpoint; if that fails (for example, router initialization
-errors) a deterministic placeholder spec is emitted instead.
+Yuqoridagi buyruqni ishga tushirish `docs/portal/static/openapi/torii.json` va yozadi
+`docusaurus-plugin-openapi-docs` integratsiyasini ta'minlaydi, shuning uchun bu bo'lim yangilanadi
+avtomatik ravishda. Generator xotiradagi Torii routerini aylantiradi va
+uning OpenAPI so'nggi nuqtasini so'rang; agar bu bajarilmasa (masalan, marshrutizatorni ishga tushirish
+xatolar) o'rniga deterministik to'ldiruvchi spetsifikatsiya chiqariladi.
 
-## Current status
+## Joriy holat
 
-- **Spec source:** `cargo xtask openapi` queries the Torii router directly; the
-  fallback stub is only emitted when the router fails to expose an OpenAPI
-  document.
-- **Determinism:** JSON output is canonicalised to ensure stable diffing in CI.
-- **Authentication:** The “Try it” sandbox now forwards requests through a
-  constrained staging proxy. Operators must supply a Torii endpoint and bearer
-  token before issuing calls.
-- **Version selector:** Swagger UI, RapiDoc, and the full Torii OpenAPI page
-  expose a dropdown that reads `openapi/versions.json` so you can compare
-  historical snapshots. The `Latest (tracked)` option points to
-  `/openapi/torii.json`, while all other entries load the corresponding
-  `openapi/versions/<version>/torii.json` artifact.
-- **Snapshot workflow:** After running `npm run docs:version -- <label>`, refresh
-  the matching OpenAPI file with `npm run sync-openapi -- --version=<label> --latest`
-  so the dropdown can load both the frozen snapshot and the rolling “Latest” build.
+- **Maxsus manba:** `cargo xtask openapi` to'g'ridan-to'g'ri Torii routeriga so'rov yuboradi; the
+  zaxira stub faqat marshrutizator OpenAPI ni ochib bera olmasa chiqariladi.
+  hujjat.
+- **Determinizm:** JSON chiqishi CIda barqaror farqni taʼminlash uchun kanoniklashtirilgan.
+- **Autentifikatsiya:** “Sinab ko‘ring” sinov maydoni endi so‘rovlarni a orqali yuboradi
+  cheklangan staging proksi. Operatorlar Torii so'nggi nuqta va tashuvchini taqdim etishlari kerak
+  qo'ng'iroq qilishdan oldin token.
+- **Versiya selektori:** Swagger UI, RapiDoc va toʻliq Torii OpenAPI sahifasi
+  `openapi/versions.json` o'qiydigan ochiladigan ro'yxatni oching, shunda solishtirishingiz mumkin
+  tarixiy suratlar. `Latest (tracked)` variantiga ishora qiladi
+  `/openapi/torii.json`, boshqa barcha yozuvlar mos keladiganlarni yuklaydi
+  `openapi/versions/<version>/torii.json` artefakt.
+- **Snapshot ish jarayoni:** `npm run docs:version -- <label>` ishga tushirilgandan so'ng, yangilang
+  `npm run sync-openapi -- --version=<label> --latest` bilan mos keladigan OpenAPI fayli
+  Shunday qilib, ochiladigan menyu muzlatilgan suratni ham, "So'nggi" tuzilmasini ham yuklashi mumkin.
 
-The router-backed extractor now emits the full Torii surface. If you see the
-placeholder stub, treat it as a build-time failure and inspect the Torii
-router startup logs.
+Router tomonidan qo'llab-quvvatlanadigan ekstraktor endi to'liq Torii sirtini chiqaradi. Agar ko'rsangiz
+to'ldiruvchi stub, uni qurilish vaqtidagi nosozlik sifatida ko'rib chiqing va Torii ni tekshiring
+marshrutizatorni ishga tushirish jurnallari.
 
-## Try it sandbox (DOCS-3)
+## Sinab ko'ring (DOCS-3)
 
-The developer portal embeds a small console that relays REST requests through a
-Node-based proxy. The proxy enforces CORS, rate limits, and optional bearer
-tokens so the widget can talk to staging gateways without exposing credentials.
-See `docs/devportal/try-it.md` for the full operator checklist.
+Ishlab chiquvchi portali REST so'rovlarini a orqali yuboradigan kichik konsolni o'rnatadi
+Tugunga asoslangan proksi-server. Proksi-server CORS, tarif cheklovlari va ixtiyoriy tashuvchini qo'llaydi
+tokenlar, shuning uchun vidjet hisobga olish ma'lumotlarini oshkor qilmasdan staging shlyuzlari bilan gaplashishi mumkin.
+To'liq operator nazorat ro'yxati uchun `docs/devportal/try-it.md` ga qarang.
 
-Start the proxy alongside the Docusaurus dev server:
+Docusaurus dev serveri bilan birga proksi-serverni ishga tushiring:
 
 ```bash
 cd docs/portal
@@ -68,15 +70,14 @@ npm run tryit-proxy
 npm run start
 ```
 
-- The proxy listens on `TRYIT_PROXY_LISTEN` (default `127.0.0.1:8787`) and
-  forwards any `/proxy/...` requests to `TRYIT_PROXY_TARGET`.
-- Supply `TRYIT_PROXY_BEARER` for static bearer tokens or let callers provide
-  one per request via the “Bearer token” field.
-- Rate limits default to 60 requests per minute and can be tuned through
+- Proksi-server `TRYIT_PROXY_LISTEN` (standart `127.0.0.1:8787`) da tinglaydi va
+  har qanday `/proxy/...` so'rovlarini `TRYIT_PROXY_TARGET` ga yo'naltiradi.
+- Statik tokenlar uchun `TRYIT_PROXY_BEARER` yetkazib bering yoki qo'ng'iroq qiluvchilarga taqdim etishiga ruxsat bering.
+  “Tashuvchi token” maydoni orqali har bir so‘rov uchun bittadan.
+- Tarifni sukut bo'yicha daqiqada 60 so'rov bilan cheklaydi va ularni sozlash mumkin
   `TRYIT_PROXY_RATE_LIMIT` / `TRYIT_PROXY_RATE_WINDOW_MS`.
 
-> ⚠️ The proxy is intended for staging/demo access. Production deployments
-> should run behind hardened ingress and reuse the same rate limiting policy in
-> front of Torii.
+> ⚠️ Proksi-server sahnalashtirish/demo kirish uchun mo'ljallangan. Ishlab chiqarishni joylashtirish
+> qattiqlashtirilgan kirish ortidan yugurishi va bir xil tezlikni cheklash siyosatini qayta ishlatishi kerak
+> Torii old tomoni.
 
-<TryItConsole />

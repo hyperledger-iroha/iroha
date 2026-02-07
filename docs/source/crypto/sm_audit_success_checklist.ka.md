@@ -7,66 +7,67 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 624ef9305dc14d477a616923c80445094c692bc6a38d69465f679b54ccd52e92
 source_last_modified: "2025-12-29T18:16:35.940844+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% SM2/SM3/SM4 Audit Success Criteria
-% Iroha Crypto Working Group
+% SM2/SM3/SM4 აუდიტის წარმატების კრიტერიუმები
+% Iroha კრიპტო სამუშაო ჯგუფი
 % 2026-01-30
 
-# Purpose
+#მიზანი
 
-This checklist captures the concrete criteria required for a successful
-completion of the SM2/SM3/SM4 external audit. It should be reviewed during
-kick-off, revisited at each status checkpoint, and used to confirm exit
-conditions before enabling SM signing for production validators.
+ეს ჩამონათვალი ასახავს კონკრეტულ კრიტერიუმებს, რომლებიც საჭიროა წარმატებისთვის
+SM2/SM3/SM4 გარე აუდიტის დასრულება. დროს უნდა გადაიხედოს
+დაწყება, ხელახლა განიხილება სტატუსის თითოეულ საგუშაგოზე და გამოიყენება გასასვლელის დასადასტურებლად
+პირობები SM ხელმოწერის ჩართვამდე წარმოების ვალიდატორებისთვის.
 
-# Pre-Engagement Readiness
+# ჩართულობის წინა მზადყოფნა
 
-- [ ] Contract signed, including scope, deliverables, confidentiality, and
-      remediation support language.
-- [ ] Audit team receives repository mirror access, CI artefact bucket, and
-      documentation bundle listed in `docs/source/crypto/sm_audit_brief.md`.
-- [ ] Points of contact confirmed with backups for each role
-      (crypto, IVM, platform ops, security, docs).
-- [ ] Internal stakeholders align on target release date and freeze windows.
-- [ ] SBOM export (`cargo auditable` + CycloneDX) generated and shared.
-- [ ] OpenSSL/Tongsuo build provenance package prepared
-      (source tarball hash, build script, reproducibility notes).
-- [ ] Latest deterministic test outputs captured:
-      `scripts/sm_openssl_smoke.sh`, `cargo test -p iroha_crypto sm`, and
-      Norito round-trip fixtures.
-- [ ] Torii `/v1/node/capabilities` advert (via `iroha runtime capabilities`) recorded, verifying the `crypto.sm` manifest fields and acceleration policy snapshot.
+- [ ] ხელმოწერილი ხელშეკრულება, მათ შორის ფარგლები, მიწოდება, კონფიდენციალობა და
+      გამოსწორების მხარდაჭერის ენა.
+- [ ] აუდიტის ჯგუფი იღებს საცავში სარკის წვდომას, CI არტეფაქტის თაიგულს და
+      დოკუმენტაციის ნაკრები ჩამოთვლილია `docs/source/crypto/sm_audit_brief.md`-ში.
+- [ ] საკონტაქტო წერტილები დადასტურებულია სარეზერვო ასლებით თითოეული როლისთვის
+      (კრიპტო, IVM, პლატფორმის ოპერაციები, უსაფრთხოება, დოკუმენტები).
+- [ ] შიდა დაინტერესებული მხარეები უერთდებიან მიზნობრივი გამოშვების თარიღს და ყინავს ფანჯრებს.
+- [ ] SBOM ექსპორტი (`cargo auditable` + CycloneDX) გენერირებული და გაზიარებული.
+- [ ] OpenSSL/Tongsuo build წარმოშობის პაკეტი მომზადებულია
+      (წყარო tarball hash, build script, reproducibility notes).
+- [ ] დაფიქსირებული უახლესი დეტერმინისტული ტესტის შედეგები:
+      `scripts/sm_openssl_smoke.sh`, `cargo test -p iroha_crypto sm` და
+      Norito ორმხრივი მოწყობილობები.
+- [ ] ჩაწერილია Torii `/v1/node/capabilities` რეკლამა (`iroha runtime capabilities`-ით), რომელიც ადასტურებს `crypto.sm` მანიფესტის ველებს და აჩქარების პოლიტიკის სურათს.
 
-# Engagement Execution
+# ჩართულობის შესრულება
 
-- [ ] Kick-off workshop completed with shared understanding of goals,
-      timelines, and communication cadence.
-- [ ] Weekly status reports received and triaged; risk register updated.
-- [ ] Findings communicated within one business day of discovery when severity
-      is High or Critical.
-- [ ] Audit team validates determinism paths on ≥2 CPU architectures (x86_64,
-      aarch64) with matching outputs.
-- [ ] Side-channel review includes constant-time proofs or empirical testing
-      evidence for both Rust and FFI paths.
-- [ ] Compliance and documentation review confirms operator guidance matches
-      regulatory obligations.
-- [ ] Differential testing against reference implementations (RustCrypto,
-      OpenSSL/Tongsuo) executed with auditor oversight.
-- [ ] Fuzz harnesses evaluated; new seed corpora provided where gaps exist.
+- [ ] საწყისი სემინარი დასრულდა მიზნების საერთო გაგებით,
+      ვადები და კომუნიკაციის კადენცია.
+- [ ] ყოველკვირეული სტატუსის მოხსენებები მიღებული და ტრიაჟირებული; განახლებულია რისკის რეესტრი.
+- [ ] დასკვნები გადაცემული იქნა აღმოჩენიდან ერთი სამუშაო დღის განმავლობაში, როდესაც სიმძიმე იყო
+      არის მაღალი ან კრიტიკული.
+- [ ] აუდიტის გუნდი ამოწმებს დეტერმინიზმის ბილიკებს ≥2 CPU არქიტექტურაზე (x86_64,
+      aarch64) შესაბამისი შედეგებით.
+- [ ] გვერდითი არხის მიმოხილვა მოიცავს მუდმივი დროის მტკიცებულებებს ან ემპირიულ ტესტირებას
+      მტკიცებულება როგორც Rust, ასევე FFI ბილიკებისთვის.
+- [ ] შესაბამისობისა და დოკუმენტაციის მიმოხილვა ადასტურებს ოპერატორის მითითებების შესაბამისობას
+      მარეგულირებელი ვალდებულებები.
+- [ ] დიფერენციალური ტესტირება საცნობარო დანერგვის წინააღმდეგ (RustCrypto,
+      OpenSSL/Tongsuo) შესრულებულია აუდიტორის ზედამხედველობით.
+- [ ] შეფასებული Fuzz აღკაზმულობა; ახალი სათესლე კორპორები უზრუნველყოფილია იქ, სადაც ხარვეზები არსებობს.
 
-# Remediation & Exit
+# გამოსწორება და გასვლა
 
-- [ ] All findings categorised with severity, impact, exploitability, and
-      recommended remediation steps.
-- [ ] High/Critical issues receive patches or mitigations with auditor-approved
-      verification; residual risks documented.
-- [ ] Auditor supplies re-test validation evidencing fixed issues (diff, test
-      runs, or signed attestation).
-- [ ] Final report delivered: executive summary, detailed findings, methodology,
-      determinism verdict, compliance verdict.
-- [ ] Internal sign-off meeting concludes next steps, release adjustments,
-      and documentation updates.
-- [ ] `status.md` updated with audit outcome and outstanding remediation
-      follow-ups.
-- [ ] Post-mortem captured in `docs/source/crypto/sm_program.md` (lessons
-      learned, future hardening tasks).
+- [ ] ყველა აღმოჩენა კატეგორიზებულია სიმძიმის, ზემოქმედების, ექსპლუატაციისა და
+      რეკომენდირებული აღდგენის ნაბიჯები.
+- [ ] მაღალი/კრიტიკული საკითხები იღებს პატჩებს ან შემარბილებლებს აუდიტორის მიერ დამტკიცებული
+      გადამოწმება; ნარჩენი რისკები დოკუმენტირებული.
+- [ ] აუდიტორი აწვდის ხელახალი ტესტირების ვალიდაციას, რომელიც ადასტურებს დაფიქსირებულ პრობლემებს (განსხვავებები, ტესტი
+      გადის, ან ხელმოწერილი ატესტაცია).
+- [ ] მიწოდებული საბოლოო ანგარიში: აღმასრულებელი რეზიუმე, დეტალური დასკვნები, მეთოდოლოგია,
+      დეტერმინიზმის განაჩენი, შესაბამისობის ვერდიქტი.
+- [ ] შიდა ხელმოწერის შეხვედრა ამთავრებს შემდეგ ნაბიჯებს, გამოშვების კორექტირებას,
+      და დოკუმენტაციის განახლებები.
+- [ ] `status.md` განახლებულია აუდიტის შედეგებით და გამორჩეული გამოსწორებით
+      შემდგომი დაკვირვებები.
+- [ ] სიკვდილის შემდეგ გადაღებული `docs/source/crypto/sm_program.md`-ში (გაკვეთილები
+      ნასწავლი, მომავალი გამკვრივების ამოცანები).

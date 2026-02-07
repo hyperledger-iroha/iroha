@@ -10,30 +10,31 @@ translation_last_reviewed: 2026-02-07
 id: training-collateral
 title: SNS Training Collateral
 description: Curriculum, localization workflow, and annex evidence capture required by SN-8.
+translator: machine-google-reviewed
 ---
 
-> Mirrors `docs/source/sns/training_collateral.md`. Use this page when briefing
-> registrar, DNS, guardian, and finance teams ahead of each suffix launch.
+> Nometall `docs/source/sns/training_collateral.md`. Brifing paytida ushbu sahifadan foydalaning
+> har bir qo'shimchani ishga tushirishdan oldin ro'yxatga oluvchi, DNS, vasiy va moliya guruhlari.
 
-## 1. Curriculum snapshot
+## 1. Oʻquv dasturining surati
 
-| Track | Objectives | Pre-reads |
+| Track | Maqsadlar | Oldindan o'qish |
 |-------|------------|-----------|
-| Registrar ops | Submit manifests, monitor KPI dashboards, escalate errors. | `sns/onboarding-kit`, `sns/kpi-dashboard`. |
-| DNS & gateway | Apply resolver skeletons, rehearse freezes/rollback. | `sorafs/gateway-dns-runbook`, direct-mode policy samples. |
-| Guardians & council | Execute disputes, update governance addenda, log annexes. | `sns/governance-playbook`, steward scorecards. |
-| Finance & analytics | Capture ARPU/bulk metrics, publish annex bundles. | `finance/settlement-iso-mapping`, KPI dashboard JSON. |
+| Registrator operatsiyalari | Manifestlarni yuboring, KPI asboblar panelini kuzatib boring, xatolarni oshiring. | `sns/onboarding-kit`, `sns/kpi-dashboard`. |
+| DNS va shlyuz | Resolver skeletlarini qo'llang, muzlatish/orqaga qaytarishni mashq qiling. | `sorafs/gateway-dns-runbook`, toʻgʻridan-toʻgʻri rejimdagi siyosat namunalari. |
+| Vasiylar va kengash | Nizolarni hal qiling, boshqaruv qo'shimchalarini yangilang, qo'shimchalarni jurnalga kiriting. | `sns/governance-playbook`, boshqaruvchi ko'rsatkich kartalari. |
+| Moliya va tahlil | ARPU/ommaviy koʻrsatkichlarni yozib oling, ilova toʻplamlarini nashr eting. | `finance/settlement-iso-mapping`, KPI asboblar paneli JSON. |
 
-### Module flow
+### Modul oqimi
 
-1. **M1 — KPI orientation (30 min):** Walk suffix filters, exports, and fugitive
-   freeze counters. Deliverable: PDF/CSV snapshots with SHA-256 digest.
-2. **M2 — Manifest lifecycle (45 min):** Build & validate registrar manifests,
-   generate resolver skeletons via `scripts/sns_zonefile_skeleton.py`. Deliverable:
-   git diff showing skeleton + GAR evidence.
-3. **M3 — Dispute drills (40 min):** Simulate guardian freeze + appeal, capture
-   guardian CLI logs beneath `artifacts/sns/training/<suffix>/<cycle>/logs/`.
-4. **M4 — Annex capture (25 min):** Export dashboard JSON and run:
+1. **M1 — KPI yoʻnalishi (30 daqiqa):** Yurish qoʻshimchasi filtrlari, eksport va qochoq
+   hisoblagichlarni muzlatish. Etkazib beriladi: SHA-256 dayjestiga ega PDF/CSV suratlari.
+2. **M2 — Manifestning ishlash davri (45 daqiqa):** Registrator manifestlarini yaratish va tasdiqlash,
+   `scripts/sns_zonefile_skeleton.py` orqali hal qiluvchi skeletlari hosil qiling. Yetkazib beriladi:
+   git diff skelet + GAR dalillarini ko'rsatadi.
+3. **M3 — bahsli mashqlar (40 daqiqa):** Qo'riqchini muzlatish + apellyatsiya, qo'lga olishni taqlid qilish
+   qo'riqchi CLI jurnallari `artifacts/sns/training/<suffix>/<cycle>/logs/` ostida.
+4. **M4 — Ilovani suratga olish (25 daqiqa):** JSON boshqaruv panelini eksport qiling va ishga tushiring:
 
    ```bash
    cargo xtask sns-annex \
@@ -46,43 +47,43 @@ description: Curriculum, localization workflow, and annex evidence capture requi
      --portal-entry docs/portal/docs/sns/regulatory/<memo-id>.md
    ```
 
-   Deliverable: updated annex Markdown + regulatory + portal memo blocks.
+   Yetkazib beriladi: yangilangan Markdown ilovasi + normativ hujjatlar + portal memo bloklari.
 
-## 2. Localization workflow
+## 2. Lokalizatsiya ish jarayoni
 
-- Languages: `ar`, `es`, `fr`, `ja`, `pt`, `ru`, `ur`.
-- Each translation lives beside the source file
-  (`docs/source/sns/training_collateral.<lang>.md`). Update `status` +
-  `translation_last_reviewed` after refreshing.
-- Assets per language belong under
-  `artifacts/sns/training/<suffix>/<lang>/<cycle>/` (slides/, workbooks/,
-  recordings/, logs/).
-- Run `python3 scripts/sync_docs_i18n.py --lang <code>` after editing the English
-  source so translators see the new hash.
+- Tillar: `ar`, `es`, `fr`, `ja`, `pt`, `ru`, I180NI05X00.
+- Har bir tarjima manba fayli yonida yashaydi
+  (`docs/source/sns/training_collateral.<lang>.md`). `status` + yangilang
+  Yangilangandan keyin `translation_last_reviewed`.
+- Har bir tilga tegishli aktivlar
+  `artifacts/sns/training/<suffix>/<lang>/<cycle>/` (slaydlar/, ish kitoblari/,
+  yozuvlar/, jurnallar/).
+- Ingliz tilini tahrir qilgandan so'ng `python3 scripts/sync_docs_i18n.py --lang <code>` ni ishga tushiring
+  manba, shuning uchun tarjimonlar yangi xeshni ko'rishadi.
 
-### Delivery checklist
+### Etkazib berishni tekshirish ro'yxati
 
-1. Update translation stub (`status: complete`) once localized.
-2. Export slides to PDF and upload to the per-language `slides/` directory.
-3. Record ≤10 min KPI walkthrough; link from the language stub.
-4. File governance ticket tagged `sns-training` containing slide/workbook
-   digests, recording links, and annex evidence.
+1. Mahalliylashtirilgandan keyin tarjima stubini (`status: complete`) yangilang.
+2. Slaydlarni PDF formatiga eksport qiling va har bir til uchun `slides/` katalogiga yuklang.
+3. Yozish ≤10min KPI yurishi; til stubidan havola.
+4. `sns-training` yorlig'i ostida slayd/ishchi kitobi bo'lgan faylni boshqarish chiptasi
+   dayjestlar, havolalarni yozib olish va qo'shimcha dalillar.
 
-## 3. Training assets
+## 3. O'quv aktivlari
 
-- Slide outline: `docs/examples/sns_training_template.md`.
-- Workbook template: `docs/examples/sns_training_workbook.md` (one per attendee).
-- Invite + reminders: `docs/examples/sns_training_invite_email.md`.
-- Evaluation form: `docs/examples/sns_training_eval_template.md` (responses
-  archived under `artifacts/sns/training/<suffix>/<cycle>/feedback/`).
+- Slayd konturi: `docs/examples/sns_training_template.md`.
+- Ish kitobi shabloni: `docs/examples/sns_training_workbook.md` (har bir ishtirokchiga bittadan).
+- Taklif + eslatmalar: `docs/examples/sns_training_invite_email.md`.
+- Baholash shakli: `docs/examples/sns_training_eval_template.md` (javoblar
+  `artifacts/sns/training/<suffix>/<cycle>/feedback/` ostida arxivlangan).
 
-## 4. Scheduling & metrics
+## 4. Rejalashtirish va ko'rsatkichlar
 
-| Cycle | Window | Metrics | Notes |
+| Velosiped | Oyna | Ko'rsatkichlar | Eslatmalar |
 |-------|--------|---------|-------|
-| 2026‑03 | Post KPI review | Attendance %, annex digest logged | `.sora` + `.nexus` cohorts |
-| 2026‑06 | Pre `.dao` GA | Finance readiness ≥90 % | Include policy refresh |
-| 2026‑09 | Expansion | Dispute drill <20 min, annex SLA ≤2 days | Align with SN-7 incentives |
+| 2026-03 | KPI sharhini yuborish | Davomat %, ilova dayjest qayd etilgan | `.sora` + `.nexus` kohortlar |
+| 2026-06 | Oldindan `.dao` GA | Moliyaviy tayyorgarlik ≥90% | Siyosat yangilanishini qo'shish |
+| 2026-09 | Kengaytirish | Munozarali matkap <20min, ilova SLA ≤2days | SN-7 rag'batlantirishlari bilan moslash |
 
-Capture anonymous feedback in `docs/source/sns/reports/sns_training_feedback.md`
-so subsequent cohorts can improve localization and labs.
+`docs/source/sns/reports/sns_training_feedback.md` da anonim fikr-mulohazalarni yozib oling
+shuning uchun keyingi kohortlar mahalliylashtirish va laboratoriyalarni yaxshilashi mumkin.

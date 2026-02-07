@@ -8,140 +8,90 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Sora Name Service Registry Schema
 sidebar_label: Registry schema
 description: Norito data structures, lifecycle rules, and event contracts for SNS registry smart contracts (SN-2a).
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
-This page mirrors `docs/source/sns/registry_schema.md` and now serves as the
-canonical portal copy. The source file remains for translation updates.
+:::དྲན་ཐོའི་འབྱུང་ཁུངས།
+ཤོག་ངོས་འདི་ `docs/source/sns/registry_schema.md` ལུ་མེ་ལོང་དང་ ད་ལྟོ་འདི་ ༡ བཟུམ་སྦེ་ལཱ་འབདཝ་ཨིན།
+ཀེ་ནོ་ནིག་ དྲྭ་ཚིགས་ཀྱི་འདྲ་བཤུས། སྐད་སྒྱུར་དུས་མཐུན་བཟོ་ནིའི་དོན་ལུ་ འབྱུང་ཁུངས་ཡིག་སྣོད་འདི་ལུས་ཡོདཔ་ཨིན།
 :::
 
-# Sora Name Service Registry Schema (SN-2a)
+# སོ་ར་མིང་ཞབས་ཏོག་ཐོ་བཀོད་ལས་རིམ་ (SN-2a)
 
-**Status:** Drafted 2026-03-24 -- submitted for SNS program review  
-**Roadmap link:** SN-2a “Registry schema & storage layout”  
-**Scope:** Define the canonical Norito structures, lifecycle states, and emitted events for the Sora Name Service (SNS) so registry and registrar implementations stay deterministic across contracts, SDKs, and gateways.
+**Status:** ཟིན་བྲིས་ ༢༠༢༦-༠༣-༢༤ -- ཨེསི་ཨེན་ཨེསི་ལས་རིམ་བསྐྱར་ཞིབ་ཀྱི་དོན་ལུ་ ཕུལ་ཡོདཔ།  
+**ལམ་གྱི་འབྲེལ་ལམ་:** SN-2a “ཐོ་བཀོད་ལས་རིམ་དང་ གསོག་འཇོག་སྒྲིག་བཀོད་”  
+**Scope:** ཁྲིམས་ལུགས་ Norito གི་བཟོ་བཀོད་དང་ མི་ཚེ་གི་གནས་སྟངས་ དེ་ལས་ སོ་ར་མིང་ཞབས་ཏོག་ (SNS) གི་དོན་ལུ་ ཐོ་བཀོད་དང་ ཐོ་བཀོད་དང་ཐོ་བཀོད་ལག་ལེན་འཐབ་མི་ཚུ་གི་དོན་ལུ་ ལས་རིམ་ཚུ་ གན་རྒྱ་དང་ SDKs དེ་ལས་ སྒོ་སྒྲིག་ཚུ་ནང་ གཏན་འབེབས་བཟོཝ་ཨིན།
 
-This document completes the schema deliverable for SN-2a by specifying:
+ཡིག་ཆ་འདི་གིས་ SN-2a གི་དོན་ལུ་ བཀྲམ་སྤེལ་འབད་ཚུགས་པའི་ ལས་རིམ་འདི་ གསལ་བཀོད་འབད་དེ་མཇུག་བསྡུཝ་ཨིན།
 
-1. Identifiers and hashing rules (`SuffixId`, `NameHash`, selector derivation).
-2. Norito structs/enums for name records, suffix policies, pricing tiers, revenue splits, and registry events.
-3. Storage layout and index prefixes for deterministic replay.
-4. A state machine covering registration, renewal, grace/redemption, freezes, and tombstones.
-5. Canonical events consumed by DNS/gateway automation.
+༡ ངོས་འཛིན་དང་ ཧ་ཤིང་ལམ་ལུགས་ (`SuffixId`, I18NI000000018X, གདམ་ཁའི་འབྱུང་ཁུངས་)།
+༢ མིང་ཐོ་བཀོད་དང་ རྗེས་འཇུག་སྲིད་བྱུས་ གོང་ཚད་བཀོད་ནི་ རིམ་པ་འོང་འབབ་བགོ་བཤའ་རྐྱབ་ནི་ དེ་ལས་ ཐོ་བཀོད་ཀྱི་བྱུང་རིམ་ཚུ་གི་དོན་ལུ་ བཀོད་སྒྲིག་/ཨང་གྲངས་ཚུ་ བཀོད་སྒྲིག་འབདཝ་ཨིན།
+༣ གཏན་འབེབས་བཟོ་ནིའི་དོན་ལུ་ བཀོད་སྒྲིག་དང་ ཟུར་ཐོ་སྔོན་འཇུག་ཚུ་ གསོག་འཇོག་འབད་ནི།
+༤ མངའ་སྡེའི་འཕྲུལ་ཆས་ཁྱབ་ཁོངས་ཐོ་བཀོད་དང་ བསྐྱར་གསོ་ མཛེས་རྒྱན་/ སྐྱོབ་ཐབས་ གྱང་ཁོག་དང་ དུར་ཁྲོད་ཀྱི་རྡོ་ཚུ་ཨིན་པས།
+༥ ཌི་ཨེན་ཨེསི་/གཱེཊ་རང་བཞིན་གྱིས་ བཀོལ་སྤྱོད་འབད་མི་ ཀེ་ནོ་ནིཀ་བྱུང་ལས་ཚུ།
 
-## 1. Identifiers & Hashing
+## 1. ངོས་འཛིན་དང་ཧ་ཤིང་།
 
-| Identifier | Description | Derivation |
-|------------|-------------|------------|
-| `SuffixId` (`u16`) | Registry-wide identifier for top-level suffixes (`.sora`, `.nexus`, `.dao`). Aligned with the suffix catalog in [`sns_suffix_governance_charter.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns_suffix_governance_charter.md). | Assigned by governance vote; stored in `SuffixPolicyV1`. |
-| `SuffixSelector` | Canonical string form of the suffix (ASCII, lower-case). | Example: `.sora` → `sora`. |
-| `NameSelectorV1` | Binary selector for the registered label. | `struct NameSelectorV1 { version:u8 (=1); suffix_id:u16; label_len:u16; label_bytes:Vec<u8> }`. Label is NFC + lower-case per Norm v1. |
-| `NameHash` (`[u8;32]`) | Primary lookup key used by contracts, events, and caches. | `blake3(NameSelectorV1_bytes)`. |
+| ངོས་འཛིན་འབད་མི་ | འགྲེལ་བཤད་ | འབྱུང་ཁུངས་ |
+|------------------------------------------------ |
+| `SuffixId` (I18NI0000020X) | མཐོ་རིམ་རྗེས་འཇུག་ (`.sora`, I18NI000000022X, `.dao`). [`sns_suffix_governance_charter.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns_suffix_governance_charter.md)ནང་རྗེས་འཇུག་ཐོ་གཞུང་དང་གཅིག་ཁར་ཕྲང་སྒྲིག་འབད་ཡོདཔ། | གཞུང་སྐྱོང་ཚོགས་རྒྱན་ཐོག་ལས་ འགན་སྤྲོད་འབད་ཡོདཔ། `SuffixPolicyV1` ནང་གསོག་འཇོག་འབད་ཡོདཔ། |
+| `SuffixSelector` | རྗེས་འཇུག་ (ཨེ་ཨེསི་སི་ཨའི་, གནས་སྟངས་དམའ་བ།) གི་ ཀེ་ནོ་ནིག་ཡིག་རྒྱུན་རྣམ་པ་། | དཔེར་ན་: I18NI000000027X → I18NI0000028X. |
+| I18NI0000029X | ཐོ་བཀོད་འབད་ཡོད་པའི་ཁ་ཡིག་གི་དོན་ལུ་ གཉིས་ལྡན་འདེམས་སྒྲུགས། | `struct NameSelectorV1 { version:u8 (=1); suffix_id:u16; label_len:u16; label_bytes:Vec<u8> }`. ཁ་ཡིག་འདི་ NFC + sorgor-case per Normv1 ཨིན། |
+| I18NI0000031X (I18NI0000032X) | གན་ཡིག་དང་བྱུང་ལས་ དེ་ལས་ འདྲ་མཛོད་ཚུ་གིས་ ལག་ལེན་འཐབ་མི་ གཞི་རིམ་བལྟ་ཞིབ་ལྡེ་མིག་། | `blake3(NameSelectorV1_bytes)`. |
 
-Determinism requirements:
+གཏན་འབེབས་རིང་ལུགས་ཀྱི་དགོས་མཁོ།
 
-- Labels are normalised via Norm v1 (UTS-46 strict, STD3 ASCII, NFC). Incoming user strings MUST be normalised before hashing.
-- Reserved labels (from `SuffixPolicyV1.reserved_labels`) never enter the registry; governance-only overrides emit `ReservedNameAssigned` events.
+- ཁ་ཡིག་ཚུ་ Normv1 བརྒྱུད་དེ་ སྤྱིར་བཏང་བཟོ་ཡོདཔ་ཨིན། ནང་འོང་ལག་ལེན་པའི་ཡིག་རྒྱུན་ཚུ་ ཧ་ཤིང་གི་ཧེ་མ་ སྤྱིར་བཏང་བཟོ་དགོ།
+- བཀག་བཞག་ཡོད་པའི་ཁ་ཡིག་ཚུ་ (`SuffixPolicyV1.reserved_labels` ལས་) ཐོ་བཀོད་ཐོ་བཀོད་ནང་ ནམ་ཡང་མི་བཙུགས། གཞུང་སྐྱོང་རྐྱངམ་གཅིག་གིས་ It I18NI000000035X བྱུང་རིམ་ཚུ་ བཀག་ཆ་འབདཝ་ཨིན།
 
-## 2. Norito Structures
+## 2. Norito བཟོ་བཀོད།
 
-### 2.1 NameRecordV1
+### 2.1 མིང་ཐོབ།
 
-| Field | Type | Notes |
-|-------|------|-------|
-| `suffix_id` | `u16` | References `SuffixPolicyV1`. |
-| `selector` | `NameSelectorV1` | Raw selector bytes for audit/debug. |
-| `name_hash` | `[u8; 32]` | Key for maps/events. |
-| `normalized_label` | `AsciiString` | Human-readable label (post Norm v1). |
-| `display_label` | `AsciiString` | Steward-provided casing; optional cosmetics. |
-| `owner` | `AccountId` | Controls renewals/transfers. |
-| `controllers` | `Vec<NameControllerV1>` | References target account addresses, resolvers, or application metadata. |
-| `status` | `NameStatus` | Lifecycle flag (see Section 4). |
-| `pricing_class` | `u8` | Index into suffix pricing tiers (standard, premium, reserved). |
-| `registered_at` | `Timestamp` | Block timestamp of the initial activation. |
-| `expires_at` | `Timestamp` | End of paid term. |
-| `grace_expires_at` | `Timestamp` | End of auto-renew grace (default +30 days). |
-| `redemption_expires_at` | `Timestamp` | End of redemption window (default +60 days). |
-| `auction` | `Option<NameAuctionStateV1>` | Present when Dutch reopen or premium auctions are active. |
-| `last_tx_hash` | `Hash` | Deterministic pointer to the transaction that produced this version. |
-| `metadata` | `Metadata` | Arbitrary registrar metadata (text records, proofs). |
+| ཕིལཌ་ | དབྱེ་བ་ | དྲན་ཐོ། |
+|--------|-----------|--------------------------------------------------------
+| `suffix_id` | `u16` | གཞི་བསྟུན་ `SuffixPolicyV1`. |
+| I18NI0000039X | I18NI0000040X | རྩིས་ཞིབ་/རྐྱེན་སེལ་གྱི་དོན་ལུ་ གདམ་ཁའི་བཱའིཊི། |
+| I18NI0000041X | I18NI0000042X | ས་ཁྲ་/བྱུང་འབྲེལ། |
+| I18NI0000043X | I18NI0000044X | མི་གིས་ལྷག་ཚུགས་པའི་ ཁ་ཡིག་ (post Normv1)། |
+| `display_label` | I18NI0000046X | སི་ཊི་ཝརཌ་བྱིན་ཡོད་པའི་རྩོད་གཞི་; གདམ་ཁའི་ མཛེས་བཟོས། |
+| I18NI0000047X | I18NI0000048X | བསྐྱར་གསོ་ཚུ་ ཚད་འཛིན་/སྤོ་བཤུད་ཚུ། |
+| I18NI0000049X | `Vec<NameControllerV1>` | གཞི་བསྟུན་ཚུ་དམིགས་གཏད་རྩིས་ཐོ་ཁ་བྱང་ཚུ་དང་ ཐག་གཅོད་འབད་མི་ ཡང་ན་ གློག་རིམ་མེ་ཊ་ཌེ་ཊ་ཚུ་ཨིན། |
+| `status` | I18NI0000002X | མི་ཚེའི་འཁོར་ལོའི་རྒྱལ་དར་ (དོན་ཚན་༤) |
+| I18NI0000003X | `u8` | རྗེས་འཇུག་གོང་ཚད་ཀྱི་རིམ་པ་ (ཚད་ལྡན་ མཐོ་ཚད། གསོག་འཇོག་འབད་ཡོདཔ།) ཟུར་ཐོ། |
+| I18NI0000005X | I18NI0000005X | འགོ་བཙུགས་ཤུགས་ལྡན་གྱི་བཀག་ཆའི་དུས་ཚོད་མཚོན་རྟགས། |
+| I18NI0000007X | I18NI0000008X | གླ་ཆ་སྤྲོད་པའི་དུས་ཡུན་མཇུག་བསྡུ། |
+| `grace_expires_at` | `Timestamp` | རང་བཞིན་བསྐྱར་གསོ་འབད་ནིའི་བྱིན་རླབས་ཀྱི་མཇུག་ (སྔོན་སྒྲིག་+༣༠ཉིན)། |
+| `redemption_expires_at` | `Timestamp` | བསྐྱར་གསོའི་སྒོ་སྒྲིག་ (སྔོན་སྒྲིག་ +༦༠ ཉིན་གྲངས་) མཇུག་བསྡུ། |
+| `auction` | `Option<NameAuctionStateV1>` | ཌཆ་ལོག་ཁ་ཕྱེ་མི་ཡང་ན་ གོང་ཚད་མཐོ་ཤོས་རིན་བསྡུར་ཚུ་ ཤུགས་ལྡན་ཡོད་པའི་སྐབས་ལུ་ བཀྲམ་སྟོན་འབད། |
+| `last_tx_hash` | I18NI0000006X | ཐོན་རིམ་འདི་བཟོ་མི་ ཚོང་འབྲེལ་ལུ་ གཏན་འབེབས་བརྡ་སྟོན་འབད། |
+| `metadata` | `Metadata` | བར་འདུམ་གྱི་ registrar མེ་ཊ་ཌེ་ཊ་ (ཚིག་ཡིག་དྲན་ཐོ་ བདེན་དཔང་།) |
 
-Supporting structs:
+སྒྲིག་བཀོད་ལུ་རྒྱབ་སྐྱོར་འབད་ནི།
 
-```text
-Enum NameStatus {
-    Available,          // derived, not stored on-ledger
-    PendingAuction,
-    Active,
-    GracePeriod,
-    Redemption,
-    Frozen(NameFrozenStateV1),
-    Tombstoned(NameTombstoneStateV1)
-}
+I18NF0000009X
 
-Struct NameFrozenStateV1 {
-    reason: String,
-    until_ms: u64,
-}
+### 2.2 སུ་ཕིག་པོ་ལི་སི་V1
 
-Struct NameTombstoneStateV1 {
-    reason: String,
-}
-
-Struct NameControllerV1 {
-    controller_type: ControllerType,   // Account, ResolverTemplate, ExternalLink
-    account_address: Option<AccountAddress>,   // Serialized as canonical `0x…` hex in JSON
-    resolver_template_id: Option<String>,
-    payload: Metadata,                 // Extra selector/value pairs for wallets/gateways
-}
-
-Struct TokenValue {
-    asset_id: AsciiString,
-    amount: u128,
-}
-
-Enum ControllerType {
-    Account,
-    Multisig,
-    ResolverTemplate,
-    ExternalLink
-}
-
-Struct NameAuctionStateV1 {
-    kind: AuctionKind,             // Vickrey, DutchReopen
-    opened_at_ms: u64,
-    closes_at_ms: u64,
-    floor_price: TokenValue,
-    highest_commitment: Option<Hash>,  // reference to sealed bid
-    settlement_tx: Option<Json>,
-}
-
-Enum AuctionKind {
-    VickreyCommitReveal,
-    DutchReopen
-}
-```
-
-### 2.2 SuffixPolicyV1
-
-| Field | Type | Notes |
-|-------|------|-------|
-| `suffix_id` | `u16` | Primary key; stable across policy versions. |
-| `suffix` | `AsciiString` | e.g., `sora`. |
-| `steward` | `AccountId` | Steward defined in the governance charter. |
-| `status` | `SuffixStatus` | `Active`, `Paused`, `Revoked`. |
-| `payment_asset_id` | `AsciiString` | Default settlement asset identifier (for example `xor#sora`). |
-| `pricing` | `Vec<PriceTierV1>` | Tiered pricing coefficients and duration rules. |
-| `min_term_years` | `u8` | Floor for purchased term regardless of tier overrides. |
-| `grace_period_days` | `u16` | Default 30. |
-| `redemption_period_days` | `u16` | Default 60. |
-| `max_term_years` | `u8` | Maximum upfront renewal length. |
-| `referral_cap_bps` | `u16` | <=1000 (10%) per charter. |
-| `reserved_labels` | `Vec<ReservedNameV1>` | Governance supplied list with assignment instructions. |
-| `fee_split` | `SuffixFeeSplitV1` | Treasury / steward / referral shares (basis points). |
-| `fund_splitter_account` | `AccountId` | Account that holds escrow + distributes funds. |
-| `policy_version` | `u16` | Incremented on every change. |
-| `metadata` | `Metadata` | Extended notes (KPI covenant, compliance doc hashes). |
+| ཕིལཌ་ | དབྱེ་བ་ | དྲན་ཐོ། |
+|--------|-----------|--------------------------------------------------------
+| `suffix_id` | `u16` | གཞི་རྟེན་ལྡེ་མིག་; སྲིད་བྱུས་ཐོན་རིམ་ནང་ལུ་ བརྟན་ཏོག་ཏོ་ཨིན། |
+| `suffix` | `AsciiString` | དཔེར་ན་ `sora`. |
+| `steward` | `AccountId` | གཞུང་སྐྱོང་ཆིངས་ཡིག་ནང་ Staward གིས་ ངེས་ཚིག་བཀོད་ཡོདཔ་ཨིན། |
+| `status` | I18NI0000007X | I18NI000000078X, `Paused`, I18NI000000080X. |
+| I18NI0000081X | I18NI0000082X | སྔོན་སྒྲིག་གཞིས་ཆགས་རྒྱུ་དངོས་ངོས་འཛིན་ (དཔེར་ན་ I18NI0000083X). |
+| I18NI0000084X | `Vec<PriceTierV1>` | བསྡམས་པའི་གོང་ཚད་འཇོན་ཚད་དང་དུས་ཡུན་གྱི་ལམ་ལུགས། |
+| I18NI0000086X | `u8` | ཉོ་བའི་དུས་ཡུན་གྱི་ རིམ་པ་ གང་ལྟར་ཡང་ མ་ལྟོས་པར་ འཛོལ་བ། |
+| I18NI0000008X | I18NI0000089X | སྔོན་སྒྲིག་ 30. |
+| `redemption_period_days` | I18NI0000091X | སྔོན་སྒྲིག་ ༦༠. |
+| I18NI0000092X | `u8` | གདོང་ཕྱོགས་ཀྱི་བསྐྱར་གསོ་རིང་ཚད་མཐོ་ཤོས་འདི། |
+| I18NI0000094X | I18NI0000095X | <=༡༠༠༠ (༡༠%) ཆིངས་ཡིག། |
+| I18NI0000096X | `Vec<ReservedNameV1>` | གཞུང་སྐྱོང་གིས་ ལས་འགན་བཀོད་རྒྱ་ཚུ་དང་གཅིག་ཁར་ བཀྲམ་སྤེལ་འབད་ཡོདཔ། |
+| I18NI0000098X | I18NI000009X | དངུལ་ཁང་/ བདག་འཛིན་/ བརྡ་སྤྲོད་ཀྱི་བགོ་བཤའ་ (གཞི་རྟེན་ས་ཚིག)། |
+| `fund_splitter_account` | I18NI0000010101 མ་དངུལ་ + བཀྲམ་སྤེལ་འབད་མི་ རྩིས་ཁྲ་ + བཀྲམ་སྤེལ་འབདཝ་ཨིན། |
+| `policy_version` | `u16` | བསྒྱུར་བཅོས་ག་ར་ལུ་ ཡར་སེང་། |
+| `metadata` | `Metadata` | རྒྱ་བསྐྱེད་འབད་ཡོད་པའི་དྲན་ཐོ་ (ཀེ་པི་ཨའི་ཆིངས་ཡིག་ བསྟར་སྤྱོད་ཀྱི་ ཌོག་ཧེ་ཤེ)། |
 
 ```text
 Struct PriceTierV1 {
@@ -169,18 +119,18 @@ Struct SuffixFeeSplitV1 {
 }
 ```
 
-### 2.3 Revenue & Settlement Records
+### 2.3 ཡོང་འབབ་དང་ གཞིས་ཆགས་དྲན་ཐོ།
 
-| Struct | Fields | Purpose |
-|--------|--------|---------|
-| `RevenueShareRecordV1` | `suffix_id`, `epoch_id`, `treasury_amount`, `steward_amount`, `referral_amount`, `escrow_amount`, `settled_at`, `tx_hash`. | Deterministic record of routed payments per settlement epoch (weekly). |
-| `RevenueAccrualEventV1` | `name_hash`, `suffix_id`, `event`, `gross_amount`, `net_amount`, `referral_account`. | Emitted each time a payment posts (registration, renewal, auction). |
+| སྒྲིག་བཀོད་ | ཕིལཌ་ | དམིགས་ཡུལ། |
+|-------------------------------------- |
+| `RevenueShareRecordV1` | `suffix_id`, `epoch_id`, `treasury_amount`, `steward_amount`, `referral_amount`, `escrow_amount`, `settled_at`, `tx_hash`. | གཞིས་ཆགས་ཀྱི་ གླ་ཆ་གི་ གཏན་འཁེལ་གྱི་ ཐོ་བཀོད་ཚུ་ དུས་རབས་རེ་ལུ་ (བདུན་ཕྲག་རེ) |
+| `RevenueAccrualEventV1` | I18NI000000116X, I18NI0000000118X, I18NI0000000119X, I18NI000000120X, I18NI0000000000000121X. | དུས་ཚོད་རེ་ལུ་ དངུལ་སྤྲོད་ཀྱི་བརྡ་འཕྲིན་ (ཐོ་བཀོད་དང་ བསྐྱར་གསོ་ རིན་བསྡུར་) ཚུ་ བཏོན་གཏང་། |
 
-All `TokenValue` fields use Norito’s canonical fixed-point encoding with the currency code declared in the associated `SuffixPolicyV1`.
+I18NI00000000122X ས་སྒོ་ཆ་མཉམ་གྱིས་ Norito གི་ ཀེ་ནོ་ནིག་གཏན་འཇགས་ཨེན་ཀོ་ཌིང་འདི་ འབྲེལ་མཐུན་ `SuffixPolicyV1` ནང་གསལ་བསྒྲགས་འབད་ཡོད་པའི་ དངུལ་གྱི་ཨང་རྟགས་དང་གཅིག་ཁར་ ལག་ལེན་འཐབ་ཨིན།
 
-### 2.4 Registry Events
+### 2.4 ཐོ་འགོད་ལས་རིམ།
 
-Canonical events provide a replay log for DNS/gateway automation and analytics.
+ཀེ་ནོ་ནིག་བྱུང་ལས་ཚུ་གིས་ ཌི་ཨེན་ཨེསི་/སྒོ་སྒྲིག་རང་བཞིན་དང་དབྱེ་དཔྱད་ཀྱི་དོན་ལུ་ བསྐྱར་རྩེད་དྲན་ཐོ་བྱིནམ་ཨིན།
 
 ```text
 Struct RegistryEventV1 {
@@ -209,52 +159,52 @@ Enum RegistryEventKind {
 }
 ```
 
-Events must be appended to a replayable log (e.g., `RegistryEvents` domain) and mirrored to gateway feeds so DNS caches invalidate within SLA.
+ལས་རིམ་ཚུ་ བསྐྱར་རྩེད་འབད་བཏུབ་པའི་དྲན་ཐོ་ (དཔེར་ན་ I18NI000000124X domain) དང་ འཛུལ་སྒོ་ཕིཌི་ཚུ་ལུ་ མེ་ལོང་ནང་བཙུགས་དགོཔ་ལས་ ཌི་ཨེན་ཨེསི་ འདྲ་མཛོད་ཚུ་ ཨེསི་ཨེལ་ཨེ་ནང་འཁོད་ལུ་ ཆ་མེད་བཏང་དགོ།
 
-## 3. Storage Layout & Indexes
+## 3. བགོ་སྒྲིག་དང་ཟུར་ཐོ།
 
-| Key | Description |
-|-----|-------------|
-| `Names::<name_hash>` | Primary map from `name_hash` to `NameRecordV1`. |
-| `NamesByOwner::<AccountId, suffix_id>` | Secondary index for wallet UI (pagination friendly). |
-| `NamesByLabel::<suffix_id, normalized_label>` | Detect conflicts, power deterministic search. |
-| `SuffixPolicies::<suffix_id>` | Latest `SuffixPolicyV1`. |
-| `RevenueShare::<suffix_id, epoch_id>` | `RevenueShareRecordV1` history. |
-| `RegistryEvents::<u64>` | Append-only log keyed by monotonically increasing sequence. |
+| ལྡེ་མིག་ | འགྲེལ་བཤད་ |
+|-----|-------------------------------------------------------------------------------------------------
+| `Names::<name_hash>` | `name_hash` ལས་ I18NI000000127X ལས་ གཞི་རྩ། |
+| `NamesByOwner::<AccountId, suffix_id>` | དངུལ་ཁུག་ཡུ་ཨའི་ (pagination མཐུན་སྒྲིག་) གི་དོན་ལུ་ གཞི་རིམ་ཟུར་ཐོ། |
+| `NamesByLabel::<suffix_id, normalized_label>` | འཁྲུག་རྩོད་དང་ ནུས་ཤུགས་གཏན་འབེབས་འཚོལ་ཞིབ་འབད་ནི། |
+| `SuffixPolicies::<suffix_id>` | `SuffixPolicyV1`. |
+| `RevenueShare::<suffix_id, epoch_id>` | `RevenueShareRecordV1` རྒྱུ། |
+| `RegistryEvents::<u64>` | ཟུར་ཐོ་རྐྱངམ་ཅིག་གིས་ ལྡེ་མིག་འདི་ གཅིག་མཚུངས་སྦེ་ཡར་སེང་འགྱོ་བའི་གོ་རིམ་ཐོག་ལས་ ལྡེ་མིག་བརྐྱབ། |
 
-All keys serialise using Norito tuples to keep hashing deterministic across hosts. Index updates occur atomically alongside the primary record.
+ལྡེ་མིག་ཆ་མཉམ་ Norito ཊུ་པལ་ཚུ་ལག་ལེན་འཐབ་སྟེ་ ཧ་ཤིང་གཏན་འབེབས་འདི་ ཧོསིཊི་ཚུ་ནང་ལས་ཕར་བཞག་དགོ། ཟུར་ཐོ་དུས་མཐུན་བཟོ་ནི་ཚུ་ གཞི་རིམ་དྲན་ཐོ་དང་གཅིག་ཁར་ རྡུལ་ཕྲན་གྱི་ཐོག་ལས་འབྱུངམ་ཨིན།
 
-## 4. Lifecycle State Machine
+## 4. འཚོ་འཁོར་གྱི་མངའ་སྡེའི་འཕྲུལ་རིས།
 
-| State | Entry Conditions | Allowed Transitions | Notes |
+| མངའ་སྡེ་ | འཛུལ་ཞུགས་གནས་སྟངས་ | བསྒྱུར་ཆོག་ཆོག་པའི་ཆོག་ཐམ། | དྲན་ཐོ། |
 |-------|-----------------|---------------------|-------|
-| Available | Derived when `NameRecord` absent. | `PendingAuction` (premium), `Active` (standard register). | Availability search reads indexes only. |
-| PendingAuction | Created when `PriceTierV1.auction_kind` ≠ none. | `Active` (auction settles), `Tombstoned` (no bids). | Auctions emit `AuctionOpened` and `AuctionSettled`. |
-| Active | Registration or renewal succeeded. | `GracePeriod`, `Frozen`, `Tombstoned`. | `expires_at` drives transition. |
-| GracePeriod | Automatically when `now > expires_at`. | `Active` (on-time renewal), `Redemption`, `Tombstoned`. | Default +30 days; still resolves but flagged. |
-| Redemption | `now > grace_expires_at` but `< redemption_expires_at`. | `Active` (late renewal), `Tombstoned`. | Commands require penalty fee. |
-| Frozen | Governance or guardian freeze. | `Active` (after remediation), `Tombstoned`. | Cannot transfer or update controllers. |
-| Tombstoned | Voluntary surrender, permanent dispute outcome, or expired redemption. | `PendingAuction` (Dutch reopen) or remains tombstoned. | Event `NameTombstoned` must include reason. |
+| འཐོབ་ཚུགསཔ་ | I18NI000000135X མེད་པའི་སྐབས་ལས་ཐོན་ཡོདཔ། | `PendingAuction` (premium), I18NI000000137X (ཚད་ལྡན་གྱི་ཐོ་ཡིག)། | འཐོབ་ཚུགས་པའི་འཚོལ་ཞིབ་འཚོལ་ཞིབ་འདི་གིས་ ཟུར་ཐོ་ཚུ་རྐྱངམ་ཅིག་ཨིན། |
+| Pending རིན་བསྡུར་ | `PriceTierV1.auction_kind` མེད་པའི་སྐབས་གསར་བསྐྲུན་འབད་ཡོདཔ། | I18NI000000139X (རིན་བསྡུར་གཞི་བཅོལ་) I18NI000000140X (མེད་པ)། | རིན་བསྡུར་ཚུ་གིས་ `AuctionOpened` དང་ I18NI000000142X ཚུ་བཏོན་ཡོདཔ་ཨིན། |
+| ཤུགས་ལྡན་ | ཐོ་བཀོད་ཡང་ན་ བསྐྱར་གསོ་མཐར་འཁྱོལ་བྱུང་ཡོདཔ། | `GracePeriod`, `Frozen`, `Tombstoned`. | I18NI000000146X འདྲེན་བྱེད་འཕོ་འགྱུར་. |
+| གེ་རེསི་པེ་རིའོཌ | རང་བཞིན་གྱིས་ `now > expires_at` སྐབས། | I18NI00000000148X (དུས་རྒྱུན་བསྐྱར་གསོ་) `Redemption`, I18NI000000150X. | སྔོན་སྒྲིག་ +༣༠ ; ད་ལྟོ་ཡང་སེལ་ཡོད་རུང་ དར་ཁྱབ་བཏང་ཡོདཔ་ཨིན། |
+| བསྐྱར་གསོ་ | `now > grace_expires_at` ཡིན་ནའང་ `< redemption_expires_at`. | `Active` (མཇུག་བསྡུའི་བསྐྱར་གསོ) `Tombstoned`. | བརྡ་བཀོད་ཚུ་ལུ་ ཉེས་ཆད་ཀྱི་འཐུས་དགོཔ་ཨིན། |
+| འཁྱགས་རོམ། | གཞུང་སྐྱོང་ ཡང་ན་ ལྟ་རྟོག་པ་ འཁྱགས་རོམ། | `Active` (བཅོས་སྒྲིག་རྗེས་) `Tombstoned`. | ཚད་འཛིན་ཚུ་ སྤོ་བཤུད་འབད་ནི་དང་ དུས་མཐུན་བཟོ་མི་ཚུགས། |
+| དུར་ཁྲོད་རྡོ་བཟོ། | ཁས་བླངས་མགོ་སྐོར་ གཏན་འཇགས་རྩོད་རྙོགས་ཀྱི་གྲུབ་འབྲས་ ཡང་ན་ དུས་ཡུན་ཚང་བའི་ བསྐྱར་གསོས། | `PendingAuction` (Dutch reopen) ཡང་ན་ དུར་ཁྲོད་ཀྱི་རྡོ་བཟོས་ཡོད། | བྱུང་ལས་ `NameTombstoned` ནང་ རྒྱུ་མཚན་ཚུད་དགོ། |
 
-State transitions MUST emit the corresponding `RegistryEventKind` so downstream caches stay coherent. Tombstoned names entering Dutch reopen auctions attach an `AuctionKind::DutchReopen` payload.
+མངའ་སྡེ་གི་འགྱུར་བ་ཚུ་ མཐུན་སྒྲིག་ཡོད་པའི་ `RegistryEventKind` འདི་བཏོན་དགོཔ་ལས་ མར་གྱི་འདྲ་མཛོད་ཚུ་ གཅིག་མཐུན་སྦེ་སྡོད་དགོ། ཌཆ་ཁ་ཕྱེ་མི་ འདྲུད་པའི་མིང་ཚུ་གིས་ I18NI000000160X པེ་ལོཌ་ཅིག་ མཉམ་སྦྲགས་འབདཝ་ཨིན།
 
-## 5. Canonical Events & Gateway Sync
+## 5. ཏན་ཏན་བྱུང་རིམ་དང་སྒོ་ལམ།
 
-Gateways subscribe to `RegistryEventV1` and synchronise to DNS/SoraFS by:
+སྒོ་སྒྲིག་ཚུ་གིས་ `RegistryEventV1` ལུ་ མིང་རྟགས་བཀོདཔ་ཨིནམ་དང་ DNS/I18N1NT000000007X ལུ་ མཉམ་འབྱུང་འབདཝ་ཨིན།
 
-1. Fetching the latest `NameRecordV1` referenced by the event sequence.
-2. Regenerating resolver templates (preferred IH58 + second-best compressed (`sora`) addresses, text records).
-3. Pinning updated zone data via the SoraDNS workflow described in [`soradns_registry_rfc.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md).
+1. བྱུང་ལས་རིམ་པ་གིས་ གཞི་བསྟུན་འབད་མི་ `NameRecordV1` གསརཔ་འདི་ ལེན་དོ།
+2. ཐག་གཅོད་པ་ ཊེམ་པེལེཊི་ཚུ་ སླར་གསོ་འབད་ (དགའ་གདམ་འབད་ཡོད་པའི་ IH58 + གཉིས་པ་ བསྡམ་བཞག་ཡོད་པའི་ (`sora`) ཁ་བྱང་ཚུ་, ཚིག་ཡིག་དྲན་ཐོ་ཚུ་)།
+3. པིན་ནིང་གིས་ [`soradns_registry_rfc.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md) ནང་གསལ་བཀོད་འབད་ཡོད་པའི་ SoraDNS ལཱ་གི་རྒྱུན་རིམ་བརྒྱུད་དེ་ དུས་མཐུན་བཟོ་ཡོདཔ་ཨིན།
 
-Event delivery guarantees:
+བྱུང་རིམ་སྤྲོད་ལེན་འགན་ལེན་ཚུ།
 
-- Every transaction affecting a `NameRecordV1` *must* append exactly one event with a strictly increasing `version`.
-- `RevenueSharePosted` events reference settlements emitted by `RevenueShareRecordV1`.
-- Freeze/unfreeze/tombstone events include governance artefact hashes inside `metadata` for audit replay.
+- `NameRecordV1` *must* ལུ་གནོད་པ་ཡོད་པའི་ ཚོང་འབྲེལ་ག་ར་གིས་ `version` དམ་དམ་སྦེ་ཡར་སེང་འབད་དེ་ བྱུང་རིམ་གཅིག་ལུ་ ཐོ་ཕོག་ཡོདཔ་ཨིན།
+- I18NI000000167X `RevenueShareRecordV1` གིས་བཏོན་མི་ གཞི་བསྟུན་གཞི་ཚོགས་ཚུ།
+- རྩིས་ཞིབ་འབད་ནི་གི་དོན་ལུ་ `metadata` ནང་ལུ་ ཉམས་ཆག་/མེད་པའི་/གཤོག་སྒྲོ་རྡོ་གི་བྱུང་རིམ་ཚུ་ཚུདཔ་ཨིན།
 
-## 6. Example Norito Payloads
+## 6. དཔེ་ Norito དངུལ་སྤྲོད་པ།
 
-### 6.1 NameRecord Example
+### ༦.༡ མིང་ཐོབ།
 
 ```text
 NameRecordV1 {
@@ -284,7 +234,7 @@ NameRecordV1 {
 }
 ```
 
-### 6.2 SuffixPolicy Example
+### ༦.༢ རྗེས་འཇུག་པོ་ལི་སི་དཔེ།
 
 ```text
 SuffixPolicyV1 {
@@ -312,10 +262,8 @@ SuffixPolicyV1 {
 }
 ```
 
-## 7. Next Steps
+## 7. རྗེས་འབྲེལ།- **SN-2b (Registrar API & གཞུང་སྐྱོང་ཧུཀ་):** བཀོད་སྒྲིག་འདི་ཚུ་ Torii (Norito དང་ JSON བཅིངས་པ) བརྒྱུད་དེ་ ཕྱིར་བཏོན་འབདཝ་ཨིན།
+- **SN-3 (རིན་མེད་དང་ཐོ་བཀོད་འཕྲུལ་ཆ):* བསྐྱར་དུ་ལག་ལེན་འཐབ་ཨིན།
+- **SN-5 (Payment & defectment):** དངུལ་འབྲེལ་མཐུན་སྒྲིག་དང་ འཕྲུལ་ཆས་སྙན་ཞུ་འབད་ནིའི་དོན་ལུ་ `RevenueShareRecordV1` གི་ ལྕགས་ཐག་ `RevenueShareRecordV1`.
 
-- **SN-2b (Registrar API & governance hooks):** expose these structs via Torii (Norito and JSON bindings) and wire admission checks to governance artefacts.
-- **SN-3 (Auction & registration engine):** reuse `NameAuctionStateV1` to implement commit/reveal and Dutch reopen logic.
-- **SN-5 (Payment & settlement):** leverage `RevenueShareRecordV1` for finance reconciliation and reporting automation.
-
-Questions or change requests should be filed alongside the SNS roadmap updates in `roadmap.md` and mirrored in `status.md` when merged.
+དྲི་བ་ཡང་ན་བསྒྱུར་བཅོས་ཀྱི་ཞུ་བ་ཚུ་ I18NI000000172X ནང་ SNS ལམ་གྱི་ས་ཁྲ་དུས་མཐུན་ཚུ་དང་གཅིག་ཁར་ བཙུགས་དགོཔ་དང་ མཉམ་བསྡོམས་འབད་བའི་སྐབས་ I18NI000000173X ནང་ མེ་ལོང་བཟོ་དགོ།

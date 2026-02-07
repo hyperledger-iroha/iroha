@@ -4,47 +4,45 @@ direction: rtl
 source: docs/portal/docs/sorafs/reports/sf1-determinism.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: SoraFS SF1 Determinism Dry-Run
-summary: Checklist et digests attendus pour valider le profil chunker canonique `sorafs.sf1@1.0.0`.
+العنوان: SoraFS SF1 الحتمية التشغيل الجاف
+ملخص: قائمة المراجعة والخلاصات متاحة للتحقق من الملف التعريفي الخاص بـ Canonique `sorafs.sf1@1.0.0`.
 ---
 
-# SoraFS SF1 Determinism Dry-Run
+# SoraFS SF1 الحتمية التشغيل الجاف
 
-Ce rapport capture le dry-run de base pour le profil chunker canonique
-`sorafs.sf1@1.0.0`. Tooling WG doit relancer le checklist ci-dessous lors de la
-validation des refreshes de fixtures ou de nouveaux pipelines de consommateurs.
-Consignez le résultat de chaque commande dans le tableau afin de maintenir une
-trace auditable.
+يلتقط هذا التقرير التشغيل الأساسي للملف التعريفي الخاص بـ Canonique
+`sorafs.sf1@1.0.0`. يجب على Tooling WG إعادة تعيين قائمة التحقق من خلال ذلك
+التحقق من تحديثات التركيبات أو خطوط أنابيب المستهلكين الجدد.
+قم بإرسال نتيجة كل أمر على اللوحة من أجل الحفاظ على واحدة
+تتبع للتدقيق.
 
-## Checklist
-
-| Étape | Commande | Résultat attendu | Notes |
+## قائمة المراجعة| إيتاب | أمر | نتائج الحضور | ملاحظات |
 |------|---------|------------------|-------|
-| 1 | `cargo test -p sorafs_chunker` | Tous les tests passent ; le test de parité `vectors` réussit. | Confirme que les fixtures canoniques compilent et correspondent à l'implémentation Rust. |
-| 2 | `ci/check_sorafs_fixtures.sh` | Le script sort en 0 ; rapporte les digests de manifest ci-dessous. | Vérifie que les fixtures se régénèrent proprement et que les signatures restent attachées. |
-| 3 | `cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles` | L'entrée pour `sorafs.sf1@1.0.0` correspond au descriptor du registry (`profile_id=1`). | S'assure que la metadata du registry reste synchronisée. |
-| 4 | `cargo run --locked -p sorafs_chunker --bin export_vectors` | La régénération réussit sans `--allow-unsigned` ; les fichiers de manifest et de signature restent inchangés. | Fournit une preuve de déterminisme pour les limites de chunk et les manifests. |
-| 5 | `node scripts/check_sf1_vectors.mjs` | Ne rapporte aucune diff entre les fixtures TypeScript et le JSON Rust. | Helper optionnel ; garantir la parité cross-runtime (script maintenu par Tooling WG). |
+| 1 | `cargo test -p sorafs_chunker` | تم اجتياز جميع الاختبارات ؛ اختبار التكافؤ `vectors` يتكرر. | تأكد من أن التركيبات الأساسية متوافقة ومتوافقة مع تطبيق Rust. |
+| 2 | `ci/check_sorafs_fixtures.sh` | فرز البرنامج النصي en 0 ; قم بتقرير خلاصات البيان بوضوح. | تحقق من أن التركيبات تم تجديدها بشكل صحيح وأن التوقيعات لا تزال مرفقة. |
+| 3 | `cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles` | المدخل إلى `sorafs.sf1@1.0.0` يتوافق مع واصف التسجيل (`profile_id=1`). | تأكد من مزامنة بيانات تعريف التسجيل. |
+| 4 | `cargo run --locked -p sorafs_chunker --bin export_vectors` | يتم إعادة التجديد بدون `--allow-unsigned` ; تظل ملفات البيان والتوقيع قابلة للتغيير. | قم بتوفير إجراء تحديد لحدود القطع والبيانات. |
+| 5 | `node scripts/check_sf1_vectors.mjs` | لا توجد علاقة بين تركيبات TypeScript وJSON Rust. | خيار مساعد؛ ضمان التكافؤ عبر وقت التشغيل (يتم الحفاظ على البرنامج النصي بواسطة Tooling WG). |
 
-## Digests attendus
+## خلاصات الحضور
 
-- Chunk digest (SHA3-256): `13fa919c67e55a2e95a13ff8b0c6b40b2e51d6ef505568990f3bc7754e6cc482`
-- `manifest_blake3.json`: `101ec2aa55346e0ec57b2da6c7b9a9adde85ef13cbbf56c349bceafad7917c21`
-- `sf1_profile_v1.json`: `23a14fe4bf06a44bc2cc84ad0f287659f62a3ff99e4147e9e7730988d9eb01be`
+- ملخص القطعة (SHA3-256): `13fa919c67e55a2e95a13ff8b0c6b40b2e51d6ef505568990f3bc7754e6cc482`
+-`manifest_blake3.json`: `101ec2aa55346e0ec57b2da6c7b9a9adde85ef13cbbf56c349bceafad7917c21`
+-`sf1_profile_v1.json`: `23a14fe4bf06a44bc2cc84ad0f287659f62a3ff99e4147e9e7730988d9eb01be`
 - `sf1_profile_v1.ts`: `2bc35d45a9a1e539c4b0e3571817dc57d5a938e954882537379d7abba7b751a1`
-- `sf1_profile_v1.go`: `dcca46978768cca5fdbc5174a35036d5e168cc5e584bba33056b76f316590666`
+-`sf1_profile_v1.go`: `dcca46978768cca5fdbc5174a35036d5e168cc5e584bba33056b76f316590666`
 - `sf1_profile_v1.rs`: `181f0595284dcbb862db997d1c18564832c157f9e1eaf804f0bf88c846f73d65`
 
-## Journal de sign-off
+## مجلة تسجيل الخروج| التاريخ | مهندس | نتيجة قائمة المراجعة | ملاحظات |
+|------|----------|----------------------|-------|
+| 2026-02-12 | الأدوات (ماجستير في القانون) | ✅ رويسي | تم تجديد التركيبات عبر `cargo run --locked -p sorafs_chunker --bin export_vectors -- --signing-key=000102…1f`، مما أدى إلى إنتاج القائمة القياسية + الأسماء المستعارة وملخص واضح `2084f98010fd59b630fede19fa85d448e066694f77fa41a03c62b867eb5a9e55`. تم التحقق باستخدام `cargo test -p sorafs_chunker` و`ci/check_sorafs_fixtures.sh` الخاص (التركيبات المرحلية للتحقق). Étape 5 en attente jusqu'à l'arrivée du helper de parité Node. |
+| 2026-02-20 | أدوات التخزين CI | ✅ رويسي | مظروف البرلمان (`fixtures/sorafs_chunker/manifest_signatures.json`) تم استرداده عبر `ci/check_sorafs_fixtures.sh` ; قام البرنامج النصي بإعادة ضبط التركيبات، وتأكيد ملخص البيان `101ec2aa55346e0ec57b2da6c7b9a9adde85ef13cbbf56c349bceafad7917c21`، وربط أداة Rust (يتم تنفيذ أشرطة Go/Node عندما تكون متاحة) بدون فرق. |
 
-| Date | Engineer | Résultat du checklist | Notes |
-|------|----------|-----------------------|-------|
-| 2026-02-12 | Tooling (LLM) | ✅ Réussi | Fixtures régénérées via `cargo run --locked -p sorafs_chunker --bin export_vectors -- --signing-key=000102…1f`, produisant la liste canonique + aliases et un manifest digest frais `2084f98010fd59b630fede19fa85d448e066694f77fa41a03c62b867eb5a9e55`. Vérifié avec `cargo test -p sorafs_chunker` et un `ci/check_sorafs_fixtures.sh` propre (fixtures stagées pour la vérification). Étape 5 en attente jusqu'à l'arrivée du helper de parité Node. |
-| 2026-02-20 | Storage Tooling CI | ✅ Réussi | Parliament envelope (`fixtures/sorafs_chunker/manifest_signatures.json`) récupéré via `ci/check_sorafs_fixtures.sh` ; le script a régénéré les fixtures, confirmé le manifest digest `101ec2aa55346e0ec57b2da6c7b9a9adde85ef13cbbf56c349bceafad7917c21`, et relancé le harness Rust (les étapes Go/Node s'exécutent quand disponibles) sans diff. |
-
-Tooling WG doit ajouter une ligne datée après l'exécution du checklist. Si une
-étape échoue, ouvrir un issue lié ici et inclure les détails de remédiation
-avant d'approuver de nouveaux fixtures ou profils.
+يجب على Tooling WG إضافة خط تاريخ بعد تنفيذ قائمة التحقق. سي اوني
+étape échoue، افتح مشكلة Lié ici وأدرج تفاصيل العلاج
+قبل الموافقة على التركيبات أو الملفات الشخصية الجديدة.

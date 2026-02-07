@@ -4,49 +4,51 @@ direction: ltr
 source: docs/portal/docs/sorafs/capacity-simulation.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: capacity-simulation
-title: Runbook de simulación de capacidad de SoraFS
-sidebar_label: Runbook de simulación de capacidad
-description: Ejecutar el toolkit de simulación del marketplace de capacidad SF-2c con fixtures reproducibles, exportaciones de Prometheus y dashboards de Grafana.
+id: 容量シミュレーション
+タイトル: SoraFS の容量シミュレーションのランブック
+Sidebar_label: 容量シミュレーションのランブック
+説明: 静電容量 SF-2c コンフィクスチャの再現品の市場シミュレーション、Prometheus および Grafana のダッシュボードのエクスポート用ツールキットの取り出し。
 ---
 
-:::note Fuente canónica
-Esta página refleja `docs/source/sorafs/runbooks/sorafs_capacity_simulation.md`. Mantén ambas copias sincronizadas hasta que el conjunto de documentación heredada en Sphinx se haya migrado por completo.
+:::メモ フエンテ カノニカ
+`docs/source/sorafs/runbooks/sorafs_capacity_simulation.md` のページを参照してください。スフィンクスの記録は完全に記録されており、すべての記録が保存されています。
 :::
 
-Este runbook explica cómo ejecutar el kit de simulación del marketplace de capacidad SF-2c y visualizar las métricas resultantes. Valida la negociación de cuotas, el manejo de failover y la remediación de slashing de extremo a extremo usando los fixtures deterministas en `docs/examples/sorafs_capacity_simulation/`. Los payloads de capacidad aún usan `sorafs_manifest_stub capacity`; usa `iroha app sorafs toolkit pack` para los flujos de empaquetado de manifest/CAR.
+Este Runbook は、SF-2C 容量の市場シミュレーションと、結果のメトリクスを視覚化するためのキットの詳細を説明します。 `docs/examples/sorafs_capacity_simulation/` では、必要な調整、フェイルオーバーの有効性、および極端なスラッシュ修正の検証が行われます。 `sorafs_manifest_stub capacity` での容量損失ペイロード。米国 `iroha app sorafs toolkit pack` マニフェスト/CAR のフルホス デ エンパケタド。
 
-## 1. Generar artefactos de CLI
+## 1. CLI の一般的な成果物
 
 ```bash
 cd $REPO_ROOT/docs/examples/sorafs_capacity_simulation
 ./run_cli.sh ./artifacts
 ```
 
-`run_cli.sh` envuelve `sorafs_manifest_stub capacity` para emitir payloads Norito, blobs base64, cuerpos de solicitud para Torii y resúmenes JSON para:
+`run_cli.sh` envuelve `sorafs_manifest_stub capacity` para Emiir payloads Norito、blobbase64、cuerpos de solicitud para Torii y resúmenes JSON para:
 
-- Tres declaraciones de proveedores que participan en el escenario de negociación de cuotas.
-- Una orden de replicación que asigna el manifiesto en staging entre esos proveedores.
-- Snapshots de telemetría para el baseline previo a la caída, el intervalo de caída y la recuperación por failover.
-- Un payload de disputa solicitando slashing tras la caída simulada.
+- 交渉のシナリオに参加するための証明を宣言します。
+- 証明されたイベントをステージングするために、複製を作成する必要があります。
+- ベースライン前のテレメトリ、フェールオーバーの回復期間中のスナップショット。
+- ペイロードの紛争要求を解除して、トラフィックのシミュレーションをスラッシュします。
 
-Todos los artefactos se escriben bajo `./artifacts` (puedes reemplazarlo pasando un directorio diferente como primer argumento). Inspecciona los archivos `_summary.json` para contexto legible.
+Todos los artefactos se escriben bajo `./artifacts` (puedes reemplazarlo pasando undirectio diferente como primer argumento)。 `_summary.json` のコンテキストを読み取れるように検査します。
 
-## 2. Agregar resultados y emitir métricas
+## 2. 結果と排出量の集計
 
 ```bash
 ./analyze.py --artifacts ./artifacts
 ```
 
-El analizador produce:
+エル・アナリザドール・プロデュース:
 
-- `capacity_simulation_report.json` - asignaciones agregadas, deltas de failover y metadatos de disputa.
-- `capacity_simulation.prom` - métricas de textfile de Prometheus (`sorafs_simulation_*`) adecuadas para el textfile collector de node-exporter o un scrape job independiente.
+- `capacity_simulation_report.json` - 集計、フェイルオーバーの差分、および議論のメタデータを割り当てます。
+- `capacity_simulation.prom` - Prometheus (`sorafs_simulation_*`) のテキストファイルのメトリクスは、ノードエクスポータのテキストファイルコレクターと独立したジョブのスクレイピングをサポートします。
 
-Ejemplo de configuración de scrape de Prometheus:
+Prometheus のスクレイピング構成の例:
 
 ```yaml
 scrape_configs:
@@ -61,22 +63,22 @@ scrape_configs:
       format: ["prometheus"]
 ```
 
-Apunta el textfile collector a `capacity_simulation.prom` (si usas node-exporter, cópialo al directorio pasado vía `--collector.textfile.directory`).
+テキストファイル コレクター `capacity_simulation.prom` (ノード エクスポーターを使用し、`--collector.textfile.directory` 経由でディレクトリをコピーします)。
 
-## 3. Importar el dashboard de Grafana
+## 3. Grafana のダッシュボードのインポート
 
-1. En Grafana, importa `dashboards/grafana/sorafs_capacity_simulation.json`.
-2. Vincula la variable del datasource `Prometheus` al scrape target configurado arriba.
-3. Verifica los paneles:
-   - **Quota Allocation (GiB)** muestra los balances comprometidos/asignados de cada proveedor.
-   - **Failover Trigger** cambia a *Failover Active* cuando entran las métricas de caída.
-   - **Uptime Drop During Outage** grafica la pérdida porcentual para el proveedor `alpha`.
-   - **Requested Slash Percentage** visualiza la proporción de remediación extraída del fixture de disputa.
+1. En Grafana、importa `dashboards/grafana/sorafs_capacity_simulation.json`。
+2. Vincula はデータソース `Prometheus` の変数からターゲット設定を取得します。
+3. ベリフィカ・ロス・パネル:
+   - **クォータ割り当て (GiB)** は、comprometidos/asignados de cada proveedor のバランスを保ちます。
+   - **フェイルオーバー トリガー** カンビアと *フェイルオーバー アクティブ* が実行されます。
+   - **停止中の稼働時間の低下** グラフィック `alpha`。
+   - **要求されたスラッシュ パーセンテージ** は、紛争の修復に必要な割合を視覚化します。
 
-## 4. Comprobaciones esperadas
+## 4. コンプロバシオネス エスペラダス
 
-- `sorafs_simulation_quota_total_gib{scope="assigned"}` equivale a `600` mientras el total comprometido se mantiene >=600.
-- `sorafs_simulation_failover_triggered` reporta `1` y la métrica del proveedor de reemplazo resalta `beta`.
-- `sorafs_simulation_slash_requested` reporta `0.15` (15% de slash) para el identificador de proveedor `alpha`.
+- `sorafs_simulation_quota_total_gib{scope="assigned"}` は、`600` mientras el total comprometido se mantiene >=600 と同等です。
+- `sorafs_simulation_failover_triggered` レポート `1` は、`beta` の指標を証明します。
+- `sorafs_simulation_slash_requested` レポート `0.15` (15% スラッシュ) 証明者 `alpha` の識別子。
 
-Ejecuta `cargo test -p sorafs_car --features cli --test capacity_simulation_toolkit` para confirmar que los fixtures siguen siendo aceptados por el esquema de la CLI.
+Ejecuta `cargo test -p sorafs_car --features cli --test capacity_simulation_toolkit` は、CLI の検査結果を確認するためのフィクスチャを確認します。

@@ -4,24 +4,26 @@ direction: ltr
 source: docs/portal/docs/sns/local-to-global-toolkit.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Kit de direcciones Local -> Global
+# Kit de direções Local -> Global
 
-Esta pagina refleja `docs/source/sns/local_to_global_toolkit.md` del mono-repo. Empaqueta los helpers de CLI y runbooks requeridos por el item de roadmap **ADDR-5c**.
+Esta página reflete `docs/source/sns/local_to_global_toolkit.md` do mono-repo. Empaque os auxiliares de CLI e runbooks necessários para o item de roteiro **ADDR-5c**.
 
-## Resumen
+## Resumo
 
-- `scripts/address_local_toolkit.sh` envuelve la CLI `iroha` para producir:
-  - `audit.json` -- salida estructurada de `iroha tools address audit --format json`.
-  - `normalized.txt` -- literales IH58 (preferido) / compressed (`sora`) (segunda mejor opcion) convertidos para cada selector de dominio Local.
-- Combina el script con el dashboard de ingesta de direcciones (`dashboards/grafana/address_ingest.json`)
-  y las reglas de Alertmanager (`dashboards/alerts/address_ingest_rules.yml`) para probar que el cutover Local-8 /
-  Local-12 es seguro. Observa los paneles de colision Local-8 y Local-12 y las alertas
-  `AddressLocal8Resurgence`, `AddressLocal12Collision`, y `AddressInvalidRatioSlo` antes de
-  promover cambios de manifest.
-- Referencia las [Address Display Guidelines](address-display-guidelines.md) y el
-  [Address Manifest runbook](../../../source/runbooks/address_manifest_ops.md) para contexto de UX y respuesta a incidentes.
+- `scripts/address_local_toolkit.sh` usa CLI `iroha` para produzir:
+  - `audit.json` -- saída estruturada de `iroha tools address audit --format json`.
+  - `normalized.txt` -- literais IH58 (preferido) / compactado (`sora`) (segunda melhor opção) convertidos para cada seletor de domínio Local.
+- Combine o script com o painel de ingestão de direções (`dashboards/grafana/address_ingest.json`)
+  e as regras do Alertmanager (`dashboards/alerts/address_ingest_rules.yml`) para testar a transferência Local-8 /
+  Local-12 é seguro. Observe os painéis de colisão Local-8 e Local-12 e os alertas
+  `AddressLocal8Resurgence`, `AddressLocal12Collision`, e `AddressInvalidRatioSlo` antes de
+  promover mudanças de manifesto.
+- Referência a [Diretrizes de exibição de endereço](address-display-guidelines.md) e el
+  [Address Manifest runbook](../../../source/runbooks/address_manifest_ops.md) para contexto de UX e resposta a incidentes.
 
 ## Uso
 
@@ -29,25 +31,25 @@ Esta pagina refleja `docs/source/sns/local_to_global_toolkit.md` del mono-repo. 
 scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_examples.txt       --output-dir artifacts/address_migration       --network-prefix 753       --format ih58
 ```
 
-Opciones:
+Opções:
 
-- `--format compressed (`sora`)` para salida `sora...` en lugar de IH58.
-- `--no-append-domain` para emitir literales sin dominio.
-- `--audit-only` para omitir el paso de conversion.
-- `--allow-errors` para seguir escaneando cuando aparezcan filas malformadas (coincide con el comportamiento de la CLI).
+- `--format compressed (`sora`)` para saída `sora...` em vez de IH58.
+- `--no-append-domain` para emitir literalmente sem domínio.
+- `--audit-only` para omitir a etapa de conversão.
+- `--allow-errors` para seguir escaneando quando aparecerem filas malformadas (coincide com o comportamento da CLI).
 
-El script escribe las rutas de artefactos al final de la ejecucion. Adjunta ambos archivos a
-tu ticket de gestion de cambios junto con el screenshot de Grafana que pruebe cero
-detecciones Local-8 y cero colisiones Local-12 por >=30 dias.
+O script descreve as rotas de artefatos até o final da execução. Juntando ambos os arquivos a
+seu ticket de gerenciamento de mudanças junto com a captura de tela de Grafana que provavelmente será zero
+detecções Local-8 e zero colisões Local-12 por >=30 dias.
 
-## Integracion CI
+## Integração CI
 
-1. Ejecuta el script en un job dedicado y sube sus salidas.
-2. Bloquea merges cuando `audit.json` reporte selectores Local (`domain.kind = local12`).
-   en su valor por defecto `true` (solo override a `false` en clusters dev/test al
-   diagnosticar regresiones) y agrega
-   `iroha tools address normalize --fail-on-warning --only-local` a CI para que intentos de
-   regresion fallen antes de llegar a produccion.
+1. Execute o script em um trabalho dedicado e suba suas saídas.
+2. Bloco mescla quando `audit.json` relata seletores locais (`domain.kind = local12`).
+   em seu valor por defeito `true` (solo override a `false` em clusters dev/test al
+   diagnosticar regressões) e agregar
+   `iroha tools address normalize --fail-on-warning --only-local` para CI para que intenções de
+   regressão caída antes de começar a produção.
 
-Consulta el documento fuente para mas detalles, checklists de evidencia y el snippet de
-release notes que puedes reutilizar al anunciar el cutover a clientes.
+Consulte o documento fonte para mais detalhes, listas de verificação de evidências e o trecho de
+notas de lançamento que você pode reutilizar para anunciar a transferência aos clientes.

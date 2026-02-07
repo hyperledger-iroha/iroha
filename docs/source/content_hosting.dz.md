@@ -7,60 +7,59 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 4c0c7f98dbd9f49c573302f0b5cbe2e7a663d7fe35a1a9eea8da4f24c6f9bc8b
 source_last_modified: "2026-01-05T18:22:23.402176+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% Content Hosting Lane
-% Iroha Core
+% ནང་དོན་ ཧོསིཊིང་ལམ།
+% Iroha ཀོར།
 
-# Content Hosting Lane
+# ནང་དོན་ཧོསཊི་ ལམ།
 
-The content lane stores small static bundles (tar archives) on-chain and serves
-individual files directly from Torii.
+ནང་དོན་ལམ་འདི་གིས་ གནས་སྟངས་མེད་པའི་ བཱན་ཌལ་ཆུང་ཀུ་ཚུ་ རིམ་སྒྲིག་འབད་དེ་ ཕྱག་ཞུ་དོ་ཡོདཔ་ཨིན།
+ཡིག་སྣོད་ངོ་རྐྱང་ཚུ་ ཐད་ཀར་དུ་ Torii ལས་ཨིན།
 
-- **Publish**: submit `PublishContentBundle` with a tar archive, optional expiry
-  height, and an optional manifest. The bundle ID is the blake2b hash of the
-  tarball. Tar entries must be regular files; names are normalised UTF-8 paths.
-  Size/path/file-count caps come from `content` config (`max_bundle_bytes`,
-  `max_files`, `max_path_len`, `max_retention_blocks`, `chunk_size_bytes`).
-  Manifests include the Norito-index hash, dataspace/lane, cache policy
-  (`max_age_seconds`, `immutable`), auth mode (`public` / `role:<role>` /
-  `sponsor:<uaid>`), retention policy placeholder, and MIME overrides.
-- **Deduping**: tar payloads are chunked (default 64 KiB) and stored once per
-  hash with reference counts; retiring a bundle decrements and prunes chunks.
-- **Serve**: Torii exposes `GET /v1/content/{bundle}/{path}`. Responses stream
-  directly from the chunk store with `ETag` = file hash, `Accept-Ranges: bytes`,
-  Range support, and Cache-Control derived from the manifest. Reads honour the
-  manifest auth mode: role-gated and sponsor-gated responses require canonical
-  request headers (`X-Iroha-Account`, `X-Iroha-Signature`) for the signed
-  account; missing/expired bundles return 404.
-- **CLI**: `iroha content publish --bundle <path.tar>` (or `--root <dir>`) now
-  auto-generates a manifest, emits optional `--manifest-out/--bundle-out`, and
-  accepts `--auth`, `--cache-max-age-secs`, `--dataspace`, `--lane`, `--immutable`,
-  and `--expires-at-height` overrides. `iroha content pack --root <dir>` builds
-  a deterministic tarball + manifest without submitting anything.
-- **Config**: cache/auth knobs live under `content.*` in `iroha_config`
-  (`default_cache_max_age_secs`, `max_cache_max_age_secs`, `immutable_bundles`,
-  `default_auth_mode`) and are enforced at publish time.
-- **SLO + limits**: `content.max_requests_per_second` / `request_burst` and
-  `content.max_egress_bytes_per_second` / `egress_burst_bytes` cap read-side
-  throughput; Torii enforces both before serving bytes and exports
-  `torii_content_requests_total`, `torii_content_request_duration_seconds`, and
-  `torii_content_response_bytes_total` metrics with outcome labels. Latency
-  targets live under `content.target_p50_latency_ms` /
+- **དཔེ་སྐྲུན་**: `PublishContentBundle` འདི་ ཊར་ཡིག་མཛོད་དང་གཅིག་ཁར་ བཙུགས་དགོ། གདམ་ཁ་ཅན་གྱི་དུས་སྟོན།
+  མཐོ་ཚད་དང་ གདམ་ཁའི་མངོན་གསལ་ཅིག། བཱན་ཌལ་ཨའི་ཌི་འདི་ blax2b a of the ཨིན།
+  ཊར་བཱོལ་. ཊར་ཐོ་བཀོད་ཚུ་ དུས་རྒྱུན་གྱི་ཡིག་སྣོད་ཚུ་ཨིན་དགོ། མིང་ཚུ་ སྤྱིར་བཏང་བཟོ་ཡོད་པའི་ UTF-8 འགྲུལ་ལམ་ཚུ་ཨིན།
+  ཚད་/ལམ་/ཡིག་སྣོད་-གྱངས་ཁ་-རྩིས་རྟགས་ཚུ་ `content` རིམ་སྒྲིག་ (`max_bundle_bytes`, ལས་འོངམ་ཨིན།
+  `max_files`, `max_path_len`, `max_retention_blocks`, Torii).
+  མངོན་གསལ་ཚུ་ནང་ Norito-index ཧེཤ་ གནད་སྡུད་ས་སྟོང་/ལམ་ཐིག་ འདྲ་མཛོད་སྲིད་བྱུས་ཚུ་ཚུདཔ་ཨིན།
+  (Torii, `immutable`), བདེན་བཤད་ཐབས་ལམ་ (`public` / `role:<role>` /
+  `sponsor:<uaid>` དང་ བཀག་འཛིན་སྲིད་བྱུས་ས་གནས་འཛིན་མི་དང་ MIME གིས་ བཀག་ཆ་འབད་ཡོདཔ།
+- **རྩིས་ཞིབ་**: ཏར་པེ་ལོཌི་ཚུ་ ཆ་ཤས་ (སྔོན་སྒྲིག་ ༦༤ཀིབི་) དང་ གཅིག་རེ་ གསོག་འཇོག་འབདཝ་ཨིན།
+  གཞི་བསྟུན་རྩིས་ཐོ་ཚུ་དང་གཅིག་ཁར་ hash; དགོངས་ཞུ་འབད་དེ་ མར་ཕབ་དང་ གཞུ་དབྱིབས་ཀྱི་ཆ་ཤས་ཚུ་ དགོངས་ཞུ་འབད་ཡོདཔ།
+- **ཞབས་ཏོག་**: Torii `GET /v1/content/{bundle}/{path}` ཕྱིར་འདོན་འབདཝ་ཨིན། ལན་འདེབས་རྒྱུན་ལམ།
+  ཐད་ཀར་གྱི་ཆན་ཀ་ལས་ `ETag` = ཡིག་སྣོད་ཧེཤ་, `Accept-Ranges: bytes`,
+  ཁྱབ་ཚད་རྒྱབ་སྐྱོར་དང་ གསལ་སྟོན་ལས་བྱུང་བའི་ འདྲ་མཛོད་ཚད་འཛིན་འབད། ལྷག་བསམ་རྣམ་དག་གིས་གུས་ཞབས་ནི།
+  གསལ་བསྒྲགས། འགན་འཁུར་དང་རྒྱབ་སྐྱོར་འབད་མི་ལན་འདེབས་ཚུ་ལུ་ ཁྲིམས་ལུགས་དགོཔ་ཨིན།
+  ཞུ་བ་མགོ་ཡིག་ཚུ་ (`X-Iroha-Account`, `X-Iroha-Signature`) མཚན་རྟགས་བཀོད་པའི་དོན་ལུ་ཨིན།
+  རྩིས་ཁྲ; བརླག་སྟོར་ཞུགས་མི་/དུས་ཡུན་ཚང་བའི་ བུནཌལ་ཚུ་ ༤༠༤ ལོག་འོང་།
+- **CLI**: `iroha content publish --bundle <path.tar>` ད་ལྟ།
+  རང་བཞིན་གྱིས་གསལ་སྟོན་འབདཝ་ཨིན་ གདམ་ཁ་ཅན་ `--manifest-out/--bundle-out`, དང་།
+  `--auth`, `--cache-max-age-secs`, `--dataspace`, `--lane`, `--lane`, `--immutable`, `--immutable`, `--immutable`, `--immutable`,
+  དང་ `--expires-at-height` བརྒལ་ཡོད། `iroha content pack --root <dir>` བསྐྲུན།
+  a determistic tarball + ག་ནི་ཡང་མ་བཙུགས་པར་ གསལ་སྟོན་འབད།
+- **Config**: འདྲ་མཛོད་/རྩོམ་སྒྲུང་གི་མཛུབ་མོ་ཚུ་ `content.*` ནང་ `iroha_config` ནང་སྡོད་དོ་ཡོདཔ་ཨིན།
+  (I 18NI00000038X, `max_cache_max_age_secs`, `immutable_bundles`,
+  `default_auth_mode`) དང་ དཔར་བསྐྲུན་དུས་ཚོད་ནང་ བསྟར་སྤྱོད་འབདཝ་ཨིན།
+- **SLO + ཚད་གཞི་***: `content.max_requests_per_second` / `request_burst` དང་།
+  `content.max_egress_bytes_per_second` / `egress_burst_bytes` ཁབ་ལེན་ཀླད་པ།
+  proput; Torii བཱའིཊི་དང་ཕྱིར་འདྲེན་ཚུ་ ཕྱག་ཞུ་མ་ཚར་བའི་ཧེ་མ་ གཉིས་ཆ་ར་ བསྟར་སྤྱོད་འབདཝ་ཨིན།
+  `torii_content_requests_total`, Iroha, དང་།
+  གྲུབ་འབྲས་ཁ་ཡིག་ཚུ་དང་གཅིག་ཁར་ `torii_content_response_bytes_total` མེ་ཊིགས། རྒྱབ་ལྗོངས།
+  དམིགས་ཚད་ཚུ་ `content.target_p50_latency_ms` གི་འོག་ལུ་ཡོདཔ་ཨིན།
   `content.target_p99_latency_ms` / `content.target_availability_bps`.
-- **Abuse controls**: Rate buckets are keyed by UAID/API token/remote IP, and an
-  optional PoW guard (`content.pow_difficulty_bits`, `content.pow_header`) can
-  be required before reads. DA stripe layout defaults come from
-  `content.stripe_layout` and are echoed in receipts/manifest hashes.
-- **Receipts & DA evidence**: successful responses attach
-  `sora-content-receipt` (base64 Norito-framed `ContentDaReceipt` bytes) carrying
-  `bundle_id`, `path`, `file_hash`, `served_bytes`, the served byte range,
-  `chunk_root` / `stripe_layout`, optional PDP commitment, and a timestamp so
-  clients can pin what was fetched without re-reading the body.
+- **རྒྱབ་བཤུད་ཚད་འཛིན་ཚུ་**: ཚད་གཞི་གི་བཱ་ཀེཊི་ཚུ་ ཡུ་ཨའི་ཌི་/ཨེ་པི་ཨའི་ཊོ་ཀེན་/ཐག་རིང་ཨའི་པི་གིས་ ལྡེ་མིག་བརྐྱབ་ཡོདཔ་དང་ ཅིག།
+  གདམ་ཁའི་ པོ་ཝ་ སྲུང་སྐྱོབ།
+  ལྷག་མ་ཚར་བའི་ཧེ་མ་དགོཔ་ཨིན། DA stripe བཀོད་སྒྲིག་སྔོན་སྒྲིག་སྔོན་སྒྲིག་ཚུ་ ལས།
+  `content.stripe_layout` དང་ འོང་འབབ་/སྣ་མང་ཧ་ཤེ་ཚུ་ནང་ བསྐྱར་སྒྲོག་འབདཝ་ཨིན།
+- **ལེན་དང་ DA སྒྲུབ་བྱེད་**: མཐར་ཕྱིན་གྱི་ལན་འདེབས་མཉམ་སྦྲགས།
+  Torii (base64 (base64T0000000001X-frabed Torii) འབག་པ།
+  `bundle_id`, `path`, `file_hash`, Norito, ཕྱག་ཞུ་བའི་ཕྱག་ཞུ་མི་ ཁྱད་ཆོས།
+  `chunk_root` / Iroha གདམ་ཁའི་PDP ཁས་བླངས་དང་དེ་བས་དུས་ཚོད་ཀྱི་རྟགས་བཀོད་ཡོད།
+  གཟུགས་པོ་འདི་ ལོག་སྟེ་མ་ལྷག་པར་ ག་ཅི་འབག་འོང་ཡི་ག་ མཁོ་མངགས་འབད་མི་ཚུ་གིས་ བཀལ་ཚུགས།
 
-Key references:
-
-- Data model: `crates/iroha_data_model/src/content.rs`
-- Execution: `crates/iroha_core/src/smartcontracts/isi/content.rs`
-- Torii handler: `crates/iroha_torii/src/content.rs`
-- CLI helper: `crates/iroha_cli/src/content.rs`
+ལྡེ་མིག་གཞི་བསྟུན་ཚུ།- གནས་སྡུད་དཔེ་ཚད།: `crates/iroha_data_model/src/content.rs`
+- ལག་བསྟར་: `crates/iroha_core/src/smartcontracts/isi/content.rs`
+- Torii ལེགས་སྐྱོང་: `crates/iroha_torii/src/content.rs`
+- སི་ཨེལ་ཨའི་གྲོགས་རམ་པ་: `crates/iroha_cli/src/content.rs`

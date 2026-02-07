@@ -4,62 +4,64 @@ direction: ltr
 source: docs/portal/docs/sorafs/developer-deployment.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: developer-deployment
-title: Notas de despliegue de SoraFS
-sidebar_label: Notas de despliegue
-description: Lista de verificación para promover el pipeline de SoraFS de CI a producción.
+ID: 開発者デプロイメント
+title: SoraFS に関する記述
+サイドバーラベル: ノートの説明
+説明: SoraFS の CI 製造パイプラインのプロモーターの検証リスト。
 ---
 
-:::note Fuente canónica
-Esta página refleja `docs/source/sorafs/developer/deployment.md`. Mantén ambas versiones sincronizadas hasta que los docs heredados se retiren.
+:::メモ フエンテ カノニカ
+`docs/source/sorafs/developer/deployment.md` のページを参照してください。定期的にバージョンを確認し、ドキュメントを保存し、引退します。
 :::
 
-# Notas de despliegue
+# ノート・ド・デスリーグ
 
-El flujo de empaquetado de SoraFS refuerza la determinación, por lo que pasar de CI a producción requiere principalmente guardarraíles operativos. Usa esta lista cuando despliegues la herramienta en gateways y proveedores de almacenamiento reales.
+SoraFS の決定は、CI の運用に必要な保護措置を講じる必要があります。米国は、ゲートウェイとアルマセナミエントの現実を証明するために、ラ・ヘルラミエンタのリストを作成します。
 
-## Preparación previa
+## 事前準備
 
-- **Alineación del registro** — confirma que los perfiles de chunker y los manifests referencian la misma tupla `namespace.name@semver` (`docs/source/sorafs/chunker_registry.md`).
-- **Política de admisión** — revisa los adverts de proveedor firmados y los alias proofs necesarios para `manifest submit` (`docs/source/sorafs/provider_admission_policy.md`).
-- **Runbook de pin registry** — mantén `docs/source/sorafs/runbooks/pin_registry_ops.md` a mano para escenarios de recuperación (rotación de alias, fallos de replicación).
+- **登録情報** — チャンカーとマニフェストの参照ファイル `namespace.name@semver` (`docs/source/sorafs/chunker_registry.md`) を確認します。
+- **承認政治** — `manifest submit` (`docs/source/sorafs/provider_admission_policy.md`) に必要な別名証明の改訂。
+- **ピン レジストリのランブック** — 管理 `docs/source/sorafs/runbooks/pin_registry_ops.md` 回復のための管理 (エイリアスの回転、複製の失敗)。
 
-## Configuración del entorno
+## エントルノの構成
 
-- Los gateways deben habilitar el endpoint de streaming de proofs (`POST /v1/sorafs/proof/stream`) para que el CLI emita resúmenes de telemetría.
-- Configura la política `sorafs_alias_cache` usando los valores predeterminados de `iroha_config` o el helper del CLI (`sorafs_cli manifest submit --alias-*`).
-- Proporciona stream tokens (o credenciales de Torii) mediante un gestor de secretos seguro.
-- Habilita los exportadores de telemetría (`torii_sorafs_proof_stream_*`, `torii_sorafs_chunk_range_*`) y envíalos a tu stack Prometheus/OTel.
+- ゲートウェイは、ストリーミングおよび証明のエンドポイントで使用可能 (`POST /v1/sorafs/proof/stream`)、CLI からテレメトリの再開を可能にします。
+- 政治 `sorafs_alias_cache` を `iroha_config` または CLI ヘルパー (`sorafs_cli manifest submit --alias-*`) で事前決定するための設定を行います。
+- Proporciona ストリーム トークン (Torii の認証情報) は、秘密の中央値です。
+- テレメトリーの輸出入 (`torii_sorafs_proof_stream_*`、`torii_sorafs_chunk_range_*`) はスタック Prometheus/OTel を参照します。
 
-## Estrategia de despliegue
+## 絶望的な戦略
 
-1. **Manifests blue/green**
-   - Usa `manifest submit --summary-out` para archivar las respuestas de cada despliegue.
-   - Vigila `torii_sorafs_gateway_refusals_total` para detectar desajustes de capacidades temprano.
-2. **Validación de proofs**
-   - Trata los fallos en `sorafs_cli proof stream` como bloqueadores del despliegue; los picos de latencia suelen indicar throttling del proveedor o tiers mal configurados.
-   - `proof verify` debe formar parte del smoke test posterior al pin para asegurar que el CAR alojado por los proveedores sigue coincidiendo con el digest del manifest.
-3. **Dashboards de telemetría**
-   - Importa `docs/examples/sorafs_proof_streaming_dashboard.json` en Grafana.
-   - Añade paneles adicionales para la salud del pin registry (`docs/source/sorafs/runbooks/pin_registry_ops.md`) y estadísticas de chunk range.
-4. **Habilitación multi-source**
-   - Sigue los pasos de despliegue por etapas en `docs/source/sorafs/runbooks/multi_source_rollout.md` al activar el orquestador y archiva los artefactos de scoreboard/telemetría para auditorías.
+1. **青/緑で表示されます**
+   - 米国 `manifest submit --summary-out` パラ アーカイブ ラス レスプエスタ デ カーダ デスリーグ。
+   - Vigila `torii_sorafs_gateway_refusals_total` パラディテクター デサジャスト デ キャパシダーデス テンプラノ。
+2. **証明の検証**
+   - Trata los fallos en `sorafs_cli proof stream` como bloqueadores del despliegue;ロス ピコス デ レイテンシア スエレン インディカル スロットル デル プローブまたは層のマル構成。
+   - `proof verify` デベ・フォーマル・パート・デル・スモーク・テスト後部アル・ピン・パラ・アセグラル・クエリ・カル・アロハド・ポル・ロス・プロベドーレス・シグエの偶然の一致とマニフェストのダイジェスト。
+3. **テレメトリのダッシュボード**
+   - `docs/examples/sorafs_proof_streaming_dashboard.json` と Grafana をインポートします。
+   - ピン レジストリ (`docs/source/sorafs/runbooks/pin_registry_ops.md`) のチャンク範囲に関する追加パネル。
+4. **マルチソースのハビリタシオン**
+   - `docs/source/sorafs/runbooks/multi_source_rollout.md` で、スコアボード/テレメトリのスコアボード/テレメトリのアーカイブとアクティベーション エル オルケスタドールの情報を入手できます。
 
-## Gestión de incidentes
+## 事件の発生
 
-- Sigue las rutas de escalado en `docs/source/sorafs/runbooks/`:
-  - `sorafs_gateway_operator_playbook.md` para caídas de gateway y agotamiento de stream-token.
-  - `dispute_revocation_runbook.md` cuando ocurran disputas de replicación.
-  - `sorafs_node_ops.md` para mantenimiento a nivel de nodo.
-  - `multi_source_rollout.md` para overrides del orquestador, listas negras de peers y despliegues por etapas.
-- Registra fallos de proofs y anomalías de latencia en GovernanceLog mediante las APIs de PoR tracker existentes para que gobernanza pueda evaluar el rendimiento del proveedor.
+- `docs/source/sorafs/runbooks/` でのエスカラドの進行状況:
+  - `sorafs_gateway_operator_playbook.md` ゲートウェイとストリーム トークンの処理。
+  - `dispute_revocation_runbook.md` 複製に関する紛争が発生しました。
+  - `sorafs_node_ops.md` は、完璧なノードを管理します。
+  - `multi_source_rollout.md` パラは、オルケスタドール、ピアのリスト、およびエタパスのデスリーグをオーバーライドします。
+- GovernanceLog での証拠や遅延の異常を登録し、PoR トラッカーの API が存在するかどうかを確認し、検証を行います。
 
-## Próximos pasos
+## プロキシモス パソス
 
-- Integra la automatización del orquestador (`sorafs_car::multi_fetch`) cuando llegue el orquestador de multi-source fetch (SF-6b).
-- Sigue las actualizaciones de PDP/PoTR bajo SF-13/SF-14; el CLI y los docs evolucionarán para exponer plazos y selección de tiers cuando esas proofs se estabilicen.
+- 自動制御システム (`sorafs_car::multi_fetch`) マルチソース フェッチ (SF-6b) の制御機能を統合します。
+- Sigue lasactualizaciones de PDP/PoTR bajo SF-13/SF-14; CLI とドキュメントの進化に関する説明者計画と段階の選択は、安全性の証明を確立します。
 
-Al combinar estas notas de despliegue con el quickstart y las recetas de CI, los equipos pueden pasar de experimentos locales a pipelines SoraFS en producción con un proceso repetible y observable.
+クイック スタートと CI のテストを組み合わせて、パイプライン SoraFS の製造プロセスを再現し、観察可能な場所で実験を行います。

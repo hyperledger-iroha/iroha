@@ -6,34 +6,35 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: cb67b304bae01fa4a50d25dc9f086811dabfbcb24239b3ec9679338248e18be6
 source_last_modified: "2026-01-03T18:07:57.000591+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# MOCHI Troubleshooting Guide
+# موچی خرابیوں کا سراغ لگانا گائیڈ
 
-Use this runbook when local MOCHI clusters refuse to start, get wedged in a
-restart loop, or stop streaming block/event/status updates. It extends the
-roadmap item “Documentation & rollout” by turning the supervisor behaviours in
-`mochi-core` into concrete recovery steps.
+اس رن بک کا استعمال کریں جب مقامی موچی کلسٹرز شروع کرنے سے انکار کرتے ہیں تو ، میں شامل ہوجائیں
+لوپ کو دوبارہ شروع کریں ، یا بلاک/واقعہ/حیثیت کی تازہ کاریوں کو اسٹریمنگ بند کریں۔ اس میں توسیع ہوتی ہے
+سپروائزر کے طرز عمل کو تبدیل کرکے روڈ میپ آئٹم "دستاویزات اور رول آؤٹ"
+ٹھوس بحالی کے اقدامات میں `mochi-core`۔
 
-## 1. First responder checklist
+## 1۔ پہلی جواب دہندگان چیک لسٹ
 
-1. Capture the data root that MOCHI is using. The default follows
-   `$TMPDIR/mochi/<profile-slug>`; custom paths appear in the UI title bar and
-   via `cargo run -p mochi-ui-egui -- --data-root ...`.
-2. Run `./ci/check_mochi.sh` from the workspace root. This validates the core,
-   UI, and integration crates before you begin modifying configs.
-3. Note the preset (`single-peer` or `four-peer-bft`). The generated topology
-   determines how many peer folders/logs you should expect under the data root.
+1. ڈیٹا کی جڑ پر قبضہ کریں جو موچی استعمال کررہا ہے۔ پہلے سے طے شدہ مندرجہ ذیل ہے
+   `$TMPDIR/mochi/<profile-slug>` ؛ UI ٹائٹل بار اور میں کسٹم راہیں ظاہر ہوتی ہیں
+   `cargo run -p mochi-ui-egui -- --data-root ...` کے ذریعے۔
+2. ورک اسپیس روٹ سے `./ci/check_mochi.sh` چلائیں۔ یہ بنیادی کو توثیق کرتا ہے ،
+   UI ، اور انضمام کریٹس سے پہلے کہ آپ تشکیلات میں ترمیم کرنا شروع کردیں۔
+3. پیش سیٹ (`single-peer` یا `four-peer-bft`) نوٹ کریں۔ پیدا شدہ ٹوپولوجی
+   اس بات کا تعین کرتا ہے کہ آپ کو ڈیٹا روٹ کے تحت کتنے پیر فولڈر/لاگز کی توقع کرنی چاہئے۔
 
-## 2. Collect logs & telemetry evidence
+## 2. لاگ اور ٹیلی میٹری کے ثبوت جمع کریں
 
-`NetworkPaths::ensure` (see `mochi/mochi-core/src/config.rs`) creates a stable
-layout:
+`NetworkPaths::ensure` (`mochi/mochi-core/src/config.rs` دیکھیں) ایک مستحکم تخلیق کرتا ہے
+لے آؤٹ:
 
 ```
 <data_root>/<profile>/
@@ -43,28 +44,28 @@ layout:
   snapshots/
 ```
 
-Follow these steps before making changes:
+تبدیلیاں کرنے سے پہلے ان اقدامات پر عمل کریں:
 
-- Use the **Logs** tab or open `logs/<alias>.log` directly to capture the last
-  200 lines for each peer. The supervisor tails stdout/stderr/system channels
-  via `PeerLogStream`, so these files match the UI output.
-- Export a snapshot via **Maintenance → Export snapshot** (or call
-  `Supervisor::export_snapshot`). The snapshot bundles storage, configs, and
-  logs into `snapshots/<timestamp>-<label>/`.
-- If the issue involves stream widgets, copy the `ManagedBlockStream`,
-  `ManagedEventStream`, and `ManagedStatusStream` health indicators from the
-  Dashboard. The UI surfaces the last reconnect attempt and error reason; grab
-  a screenshot for the incident record.
+- آخری گرفتاری کے لئے براہ راست براہ راست `logs/<alias>.log` ** لاگ*** ٹیب استعمال کریں
+  ہر ہم مرتبہ کے لئے 200 لائنیں۔ سپروائزر نے stdout/stderr/سسٹم چینلز کو دم کیا
+  `PeerLogStream` کے ذریعے ، لہذا یہ فائلیں UI آؤٹ پٹ سے ملتی ہیں۔
+- ** بحالی → ایکسپورٹ اسنیپ شاٹ ** (یا کال کریں
+  `Supervisor::export_snapshot`)۔ اسنیپ شاٹ اسٹوریج ، تشکیل ، اور
+  `snapshots/<timestamp>-<label>/` میں لاگ ان کریں۔
+- اگر اس مسئلے میں اسٹریم ویجٹ شامل ہیں تو ، `ManagedBlockStream` کو کاپی کریں ،
+  `ManagedEventStream` ، اور `ManagedStatusStream` صحت کے اشارے سے
+  ڈیش بورڈ UI آخری کوشش اور غلطی کی وجہ سے دوبارہ منسلک ہے۔ پکڑو
+  واقعے کے ریکارڈ کے لئے ایک اسکرین شاٹ۔
 
-## 3. Resolving peer startup issues
+## 3. ہم مرتبہ کے آغاز کے مسائل کو حل کرنا
 
-Most peer launch failures fall into three buckets:
+زیادہ تر ہم مرتبہ لانچ کی ناکامی تین بالٹیوں میں آتی ہے:
 
-### Missing binaries or bad overrides
+### بائنریز یا خراب اوور رائڈز لاپتہ
 
-`SupervisorBuilder` shells out to `irohad`, `kagami`, and (future) `iroha_cli`.
-If the UI reports “failed to spawn process” or “permission denied”, point MOCHI
-at known-good binaries:
+`SupervisorBuilder` `irohad` ، `kagami` ، اور (مستقبل) `iroha_cli` پر گول کرتا ہے۔
+اگر UI کی اطلاعات "عمل کو تیز کرنے میں ناکام" یا "اجازت سے انکار" کرتی ہیں تو ، پوائنٹ موچی
+مشہور اچھی بائنریز میں:
 
 ```bash
 cargo run -p mochi-ui-egui -- \
@@ -73,96 +74,92 @@ cargo run -p mochi-ui-egui -- \
   --iroha-cli /path/to/iroha_cli
 ```
 
-You can set `MOCHI_IROHAD`, `MOCHI_KAGAMI`, and `MOCHI_IROHA_CLI` to avoid
-typing the flags repeatedly. When debugging bundle builds, compare the
-`BundleConfig` in `mochi/mochi-ui-egui/src/config/` against the paths in
-`target/mochi-bundle`.
+آپ `MOCHI_IROHAD` ، `MOCHI_KAGAMI` ، اور `MOCHI_IROHA_CLI` سے بچنے کے لئے سیٹ کرسکتے ہیں
+جھنڈوں کو بار بار ٹائپ کرنا۔ جب ڈیبگنگ بنڈل بناتا ہے تو ، اس کا موازنہ کریں
+`BundleConfig` in `mochi/mochi-ui-egui/src/config/` میں راستے کے خلاف
+`target/mochi-bundle`۔
 
-### Port collisions
+### پورٹ تصادم
 
-`PortAllocator` probes the loopback interface before writing configs. If you see
-`failed to allocate Torii port` or `failed to allocate P2P port`, another
-process is already listening on the default range (8080/1337). Relaunch MOCHI
-with explicit bases:
+`PortAllocator` تشکیل لکھنے سے پہلے لوپ بیک انٹرفیس کی تحقیقات کرتا ہے۔ اگر آپ دیکھتے ہیں
+`failed to allocate Torii port` یا `failed to allocate P2P port` ، ایک اور
+عمل پہلے سے طے شدہ حد (8080/1337) پر سن رہا ہے۔ دوبارہ لانچ موچی
+واضح اڈوں کے ساتھ:
 
 ```bash
 cargo run -p mochi-ui-egui -- --torii-start 12000 --p2p-start 19000
 ```
 
-The builder will fan out sequential ports from those bases, so reserve a range
-sized for your preset (`peer_count` peers → `peer_count` ports per transport).
+بلڈر ان اڈوں سے ترتیب وار بندرگاہوں کا پرستار کرے گا ، لہذا ایک حد محفوظ کریں
+آپ کے پیش سیٹ (`peer_count` پیرس → `peer_count` بندرگاہیں فی ٹرانسپورٹ) کے لئے سائز)۔
 
-### Genesis and storage corruption
+### پیدائش اور اسٹوریج بدعنوانیاگر Kagami کسی منشور کو خارج کرنے سے پہلے باہر آجاتا ہے تو ، ساتھی فورا. ہی گر کر تباہ ہوجائیں گے۔ چیک کریں
+`genesis/*.json`/`.toml` ڈیٹا روٹ کے اندر۔ دوبارہ چلائیں
+`--kagami /path/to/kagami` یا صحیح بائنری میں ** ترتیبات ** ڈائیلاگ کی نشاندہی کریں۔
+اسٹوریج بدعنوانی کے ل the ، بحالی کے حصے کا ** مسح اور دوبارہ جنیس ** استعمال کریں
+ہاتھ سے فولڈرز کو حذف کرنے کے بجائے بٹن (نیچے احاطہ کیا گیا) ؛ یہ دوبارہ تخلیق کرتا ہے
+عمل کو دوبارہ شروع کرنے سے پہلے ہم مرتبہ ڈائریکٹریوں اور اسنیپ شاٹ کی جڑیں۔
 
-If Kagami exits before emitting a manifest, peers will crash immediately. Check
-`genesis/*.json`/`.toml` inside the data root. Re-run with
-`--kagami /path/to/kagami` or point the **Settings** dialog at the right binary.
-For storage corruption, use the Maintenance section’s **Wipe & re-genesis**
-button (covered below) instead of deleting folders by hand; it recreates the
-peer directories and snapshot roots before restarting processes.
+### خود کار طریقے سے دوبارہ شروع ہونے والی ٹیوننگ
 
-### Tuning automatic restarts
+`[supervisor.restart]` `config/local.toml` میں (یا CLI جھنڈے
+`--restart-mode` ، `--restart-max` ، `--restart-backoff-ms`) کنٹرول کریں کتنی بار
+سپروائزر نے ناکام ساتھیوں کی دوبارہ کوشش کی۔ جب آپ کو UI کی ضرورت ہو تو `mode = "never"` سیٹ کریں
+پہلی ناکامی کو فوری طور پر سطح پر رکھیں ، یا `max_restarts`/`backoff_ms` کو مختصر کریں
+CI ملازمتوں کے لئے دوبارہ کوشش کرنے والی ونڈو کو سخت کرنے کے لئے جو تیزی سے ناکام ہوجاتے ہیں۔
 
-`[supervisor.restart]` in `config/local.toml` (or the CLI flags
-`--restart-mode`, `--restart-max`, `--restart-backoff-ms`) control how often the
-supervisor retries failed peers. Set `mode = "never"` when you need the UI to
-surface the first failure immediately, or shorten `max_restarts`/`backoff_ms`
-to tighten the retry window for CI jobs that must fail fast.
+## 4. ساتھیوں کو بحفاظت دوبارہ ترتیب دینا
 
-## 4. Resetting peers safely
-
-1. Stop the affected peers from the Dashboard or quit the UI. The supervisor
-   refuses to wipe storage while a peer is running (`PeerHandle::wipe_storage`
-   returns `PeerStillRunning`).
-2. Navigate to **Maintenance → Wipe & re-genesis**. MOCHI will:
-   - delete `peers/<alias>/storage`;
-   - rerun Kagami to rebuild configs/genesis under `genesis/`; and
-   - restart peers with the preserved CLI/environment overrides.
-3. If you must do this manually:
+1. متاثرہ ساتھیوں کو ڈیش بورڈ سے روکیں یا UI چھوڑ دیں۔ سپروائزر
+   جب ایک ہم مرتبہ چل رہا ہے تو اسٹوریج کا صفایا کرنے سے انکار کرتا ہے (`PeerHandle::wipe_storage`
+   `PeerStillRunning` واپس کرتا ہے)۔
+2. ** بحالی → کو صاف کریں اور دوبارہ جنیسس ** پر جائیں۔ موچی ول:
+   - `peers/<alias>/storage` کو حذف کریں ؛
+   - `genesis/` کے تحت تشکیل/پیدائش کی تعمیر نو کے لئے Kagami ؛ اور
+   - محفوظ سی ایل آئی/ماحولیات کے اوور رائڈز کے ساتھ ساتھیوں کو دوبارہ شروع کریں۔
+3. اگر آپ کو یہ دستی طور پر کرنا چاہئے:
    ```bash
    cargo run -p mochi-ui-egui -- --data-root /tmp/mochi --profile four-peer-bft --help
    # Note the actual root printed above, then:
    rm -rf /tmp/mochi/four-peer-bft
    ```
-   Afterwards, restart MOCHI so `NetworkPaths::ensure` recreates the tree.
+   اس کے بعد ، موچی کو دوبارہ اسٹارٹ کریں تو `NetworkPaths::ensure` درخت کو دوبارہ تخلیق کرتا ہے۔
 
-Always archive the `snapshots/<timestamp>` folder before wiping, even in local
-development—those bundles capture the precise `irohad` logs and configs needed
-to reproduce bugs.
+مقامی میں بھی ، یہاں تک کہ مقامی میں بھی ، `snapshots/<timestamp>` فولڈر کو ہمیشہ محفوظ شدہ دستاویزات
+ترقی - وہ بنڈل عین مطابق `irohad` لاگز اور تشکیلات کی ضرورت ہے
+کیڑے کو دوبارہ پیش کرنے کے لئے.
 
-### 4.1 Restoring from snapshots
+### 4.1 سنیپ شاٹس سے بحال کرنا
 
-When an experiment corrupts storage or you need to replay a known-good state, use the Maintenance
-dialog’s **Restore snapshot** button (or call `Supervisor::restore_snapshot`) instead of copying
-directories manually. Provide either an absolute path to the bundle or the sanitised folder name
-under `snapshots/`. The supervisor will:
+جب کوئی تجربہ اسٹوریج کو خراب کرتا ہے یا آپ کو معروف اچھی حالت کو دوبارہ چلانے کی ضرورت ہوتی ہے تو ، بحالی کا استعمال کریں
+ڈائیلاگ کا ** اسنیپ شاٹ کو بحال کریں ** بٹن (یا `Supervisor::restore_snapshot` پر کال کریں) کاپی کرنے کے بجائے
+دستی طور پر ڈائریکٹریز۔ بنڈل یا سینیٹائزڈ فولڈر کا نام یا تو مطلق راستہ فراہم کریں
+`snapshots/` کے تحت۔ سپروائزر ول:
 
-1. stop any running peers;
-2. verify that the snapshot’s `metadata.json` matches the current `chain_id` and peer count;
-3. copy `peers/<alias>/{storage,snapshot,config.toml,latest.log}` back into the active profile; and
-4. restore `genesis/genesis.json` before restarting peers if they were running beforehand.
+1. کسی بھی چلنے والے ساتھیوں کو روکیں۔
+2. تصدیق کریں کہ اسنیپ شاٹ کا `metadata.json` موجودہ `chain_id` اور ہم مرتبہ کی گنتی سے میل کھاتا ہے۔
+3. `peers/<alias>/{storage,snapshot,config.toml,latest.log}` کو فعال پروفائل میں واپس کاپی کریں۔ اور
+4. ساتھیوں کو دوبارہ شروع کرنے سے پہلے `genesis/genesis.json` کو بحال کریں اگر وہ پہلے ہی چل رہے ہیں۔
 
-If the snapshot was created for a different preset or chain identifier the restore call returns a
-`SupervisorError::Config` so you can grab a matching bundle instead of silently mixing artefacts.
-Keep at least one fresh snapshot per preset to accelerate recovery drills.
+اگر اسنیپ شاٹ کو کسی مختلف پیش سیٹ یا چین شناخت کنندہ کے لئے بنایا گیا تھا تو بحالی کال واپس آتی ہے
+`SupervisorError::Config` تاکہ آپ خاموشی سے ملاپ کے بجائے ایک مماثل بنڈل پر قبضہ کرسکیں۔
+بحالی کی مشقوں کو تیز کرنے کے لئے کم از کم ایک تازہ اسنیپ شاٹ فی پیش سیٹ رکھیں۔
 
-## 5. Repairing block/event/status streams
+## 5. بلاک/واقعہ/حیثیت کے سلسلے کی مرمت- ** اسٹریم رک گیا لیکن ہم عمر صحتمند ہیں۔ ** ** واقعات **/** بلاکس ** پینل چیک کریں
+  سرخ حیثیت کی سلاخوں کے لئے۔ "اسٹاپ" کے بعد "اسٹاپ" پر کلک کریں تاکہ منظم اسٹریم کو مجبور کریں
+  ریسبسکرائب ؛ سپروائزر ہر دوبارہ منسلک کوشش کو لاگ کرتا ہے (ہم مرتبہ عرف اور کے ساتھ
+  غلطی) لہذا آپ بیک آف مراحل کی تصدیق کرسکتے ہیں۔
+- ** حیثیت سے باہر کی حیثیت سے باہر۔
+  `status_poll_interval * کے بعد دو سیکنڈ اور ڈیٹا باسی کو نشان زد کریں
+  status_stale_multiplier` (پہلے سے طے شدہ چھ سیکنڈ)۔ اگر بیج سرخ رہتا ہے تو ، تصدیق کریں
+  ہم مرتبہ تشکیل میں `torii_status_url` اور یقینی بنائیں کہ گیٹ وے یا وی پی این نہیں ہے
+  لوپ بیک کنکشن کو مسدود کرنا۔
+- ** ایونٹ کی ضابطہ کشائی کی ناکامی۔
+  `BlockSummary` ، یا Norito ڈیکوڈ) اور مجرمانہ ٹرانزیکشن ہیش۔ برآمد
+  کلپ بورڈ کے بٹن کے ذریعے واقعہ تاکہ آپ ٹیسٹوں میں ڈیکوڈ کو دوبارہ پیش کرسکیں
+  (`mochi-core` کے تحت مددگار تعمیر کنندگان کو بے نقاب کرتا ہے
+  `mochi/mochi-core/src/torii.rs`)۔
 
-- **Stream stalled but peers healthy.** Check the **Events**/**Blocks** panels
-  for red status bars. Click “Stop” then “Start” to force the managed stream to
-  resubscribe; the supervisor logs every reconnect attempt (with peer alias and
-  error) so you can confirm backoff stages.
-- **Status overlay out of date.** `ManagedStatusStream` polls `/status` every
-  two seconds and marks data stale after `STATUS_POLL_INTERVAL *
-  STATUS_STALE_MULTIPLIER` (default six seconds). If the badge stays red, verify
-  `torii_status_url` in the peer config and ensure the gateway or VPN is not
-  blocking loopback connections.
-- **Event decoding failures.** The UI prints the decode stage (raw bytes,
-  `BlockSummary`, or Norito decode) and the offending transaction hash. Export
-  the event via the clipboard button so you can reproduce the decode in tests
-  (`mochi-core` exposes helper constructors under
-  `mochi/mochi-core/src/torii.rs`).
-
-When streams repeatedly crash, update the issue with the exact peer alias and
-error string (`ToriiErrorKind`) so the roadmap telemetry milestones stay tied
-to concrete evidence.
+جب اسٹریمز بار بار کریش ہوجاتے ہیں تو ، عین مطابق ہم مرتبہ عرف اور اس مسئلے کو اپ ڈیٹ کریں
+غلطی کی تار (`ToriiErrorKind`) لہذا روڈ میپ ٹیلی میٹری سنگ میل بندھے رہیں
+ٹھوس ثبوت کے لئے.

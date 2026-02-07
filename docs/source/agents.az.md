@@ -7,111 +7,110 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 7f35a28d00188a3e1f3db76b56e6b29c708dbb75afa3dd009d416b7cd4314754
 source_last_modified: "2025-12-29T18:16:35.916241+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Automation Agent Execution Guide
+# Avtomatlaşdırma Agentinin İcra Bələdçisi
 
-This page summarizes the operational guardrails for any automation agent
-working inside the Hyperledger Iroha workspace. It mirrors the canonical
-`AGENTS.md` guidance and the roadmap references so build, documentation, and
-telemetry changes all look the same whether they were produced by a human or
-an automated contributor.
+Bu səhifə istənilən avtomatlaşdırma agenti üçün əməliyyat qoruyucularını ümumiləşdirir
+Hyperledger Iroha iş sahəsində işləyir. Kanonikləri əks etdirir
+`AGENTS.md` təlimatı və yol xəritəsi istinadları buna görə də qurun, sənədləşdirin və
+telemetriya dəyişiklikləri insan tərəfindən istehsal olunmamasından asılı olmayaraq eyni görünür
+avtomatlaşdırılmış töhfəçi.
 
-Each task is expected to land deterministic code plus matching docs, tests,
-and operational evidence. Treat the sections below as a ready reference before
-touching `roadmap.md` items or replying to behaviour questions.
+Hər bir tapşırığın deterministik kodu və uyğun sənədləri, testləri,
+və əməliyyat sübutları. Aşağıdakı bölmələri əvvəl hazır istinad kimi qəbul edin
+`roadmap.md` elementlərinə toxunmaq və ya davranış suallarına cavab vermək.
 
-## Quickstart Commands
+## Sürətli Başlama Əmrləri
 
-| Action | Command |
+| Fəaliyyət | Komanda |
 |--------|---------|
-| Build the workspace | `cargo build --workspace` |
-| Run the full test suite | `cargo test --workspace` *(typically takes several hours)* |
-| Run clippy with deny-by-default warnings | `cargo clippy --workspace --all-targets -- -D warnings` |
-| Format Rust code | `cargo fmt --all` *(edition 2024)* |
-| Test a single crate | `cargo test -p <crate>` |
-| Run one test | `cargo test -p <crate> <test_name> -- --nocapture` |
-| Swift SDK tests | From `IrohaSwift/`, run `swift test` |
+| İş sahəsini yaradın | `cargo build --workspace` |
+| Tam sınaq dəstini işə salın | `cargo test --workspace` *(adətən bir neçə saat çəkir)* |
+| Clippy-ni defolt xəbərdarlıqları ilə işə salın | `cargo clippy --workspace --all-targets -- -D warnings` |
+| Format Rust kodu | `cargo fmt --all` *(2024-cü il nəşri)* |
+| Tək sandığı sınayın | `cargo test -p <crate>` |
+| Bir sınaq keçirin | `cargo test -p <crate> <test_name> -- --nocapture` |
+| Swift SDK testləri | `IrohaSwift/`-dən, `swift test` |
 
-## Workflow Fundamentals
+## İş axınının əsasları
 
-- Read the relevant code paths before answering questions or changing logic.
-- Break large roadmap items into tractable commits; never reject work outright.
-- Stay inside the existing workspace membership, reuse internal crates, and do
-  **not** alter `Cargo.lock` unless explicitly instructed.
-- Use feature flags and capability toggles only where mandated by hardware
-  accelerators; keep deterministic fallbacks available on every platform.
-- Update documentation and Markdown references alongside any functional change
-  so docs always describe current behaviour.
-- Add at least one unit test for every new or modified function. Prefer inline
-  `#[cfg(test)]` modules or the crate’s `tests/` folder depending on scope.
-- After finishing work, update `status.md` with a short summary and reference
-  relevant files; keep `roadmap.md` focused on items that still need work.
+- Suallara cavab vermədən və ya məntiqi dəyişməzdən əvvəl müvafiq kod yollarını oxuyun.
+- Böyük yol xəritəsi bəndlərini sürüklənən öhdəliklərə bölmək; heç vaxt işi birbaşa rədd etməyin.
+- Mövcud iş sahəsi üzvlüyündə qalın, daxili qutuları təkrar istifadə edin və edin
+  **açıq göstəriş verilmədiyi halda, `Cargo.lock`-i dəyişdirməyin**.
+- Xüsusiyyət bayraqlarından və qabiliyyət keçidlərindən yalnız avadanlıq tərəfindən tələb olunduğu yerlərdə istifadə edin
+  sürətləndiricilər; hər platformada deterministik geri dönüşləri mövcud saxlayın.
+- İstənilən funksional dəyişikliklə yanaşı sənədləri və Markdown istinadlarını yeniləyin
+  buna görə də sənədlər həmişə cari davranışı təsvir edir.
+- Hər yeni və ya dəyişdirilmiş funksiya üçün ən azı bir vahid testi əlavə edin. Daxil olana üstünlük verin
+  Əhatə dairəsindən asılı olaraq `#[cfg(test)]` modulları və ya qutunun `tests/` qovluğu.
+- İşi bitirdikdən sonra `status.md`-i qısa xülasə və arayışla yeniləyin
+  müvafiq fayllar; `roadmap.md` diqqətini hələ də işə ehtiyacı olan elementlərə cəmləyin.
 
-## Implementation Guardrails
+## İcra Qoruyucuları
 
-### Serialization & Data Models
-- Use the Norito codec everywhere (binary via `norito::{Encode, Decode}`,
-  JSON via `norito::json::*`). Do not add direct serde/`serde_json` usage.
-- Norito payloads must advertise their layout (version byte or header flags),
-  and new formats require corresponding documentation updates (e.g.,
+### Serializasiya və Məlumat Modelləri
+- Hər yerdə Norito kodekindən istifadə edin (`norito::{Encode, Decode}` vasitəsilə ikili,
+  `norito::json::*` vasitəsilə JSON). Birbaşa serde/`serde_json` istifadəsini əlavə etməyin.
+- Norito faydalı yükləri öz tərtibatını reklam etməlidir (versiya baytı və ya başlıq bayraqları),
+  və yeni formatlar müvafiq sənəd yeniləmələrini tələb edir (məsələn,
   `norito.md`, `docs/source/da/*.md`).
-- Genesis data, manifests, and networking payloads should remain deterministic
-  so two peers with the same inputs produce identical hashes.
+- Yaradılış məlumatları, manifestlər və şəbəkə yükləri deterministik olaraq qalmalıdır
+  beləliklə, eyni girişlərə malik iki həmyaşıd eyni hashlər yaradır.
 
-### Configuration & Runtime Behaviour
-- Prefer knobs living in `crates/iroha_config` over new environment variables.
-  Thread values explicitly through constructors or dependency injection.
-- Never gate IVM syscalls or opcode behaviour—ABI v1 ships everywhere.
-- When new config options are added, update defaults, docs, and any related
-  templates (`peer.template.toml`, `docs/source/configuration*.md`, etc.).
-
-### ABI, Syscalls, and Pointer Types
-- Treat ABI policy as unconditional. Adding/removing syscalls or pointer types
-  requires updating:
-  - `ivm::syscalls::abi_syscall_list` and `crates/ivm/tests/abi_syscall_list_golden.rs`
-  - `ivm::pointer_abi::PointerType` plus the golden tests
-  - `crates/ivm/tests/abi_hash_versions.rs` whenever the ABI hash changes
-- Unknown syscalls must map to `VMError::UnknownSyscall`, and manifests must
-  retain signed `abi_hash` equality checks in admission tests.
+### Konfiqurasiya və İcra Davranışı
+- Yeni mühit dəyişənləri əvəzinə `crates/iroha_config`-də yaşayan düymələrə üstünlük verin.
+  Dəyərləri konstruktorlar və ya asılılıq inyeksiyası vasitəsilə açıq şəkildə ötürün.
+- Heç vaxt IVM sistem zənglərinə və ya əməliyyat kodu davranışına qapılmayın—ABI v1 hər yerdə göndərilir.
+- Yeni konfiqurasiya seçimləri əlavə edildikdə, defoltları, sənədləri və hər hansı əlaqəliləri yeniləyin
+  şablonlar (`peer.template.toml`, `docs/source/configuration*.md` və s.).### ABI, Syscalls və Pointer Tipləri
+- ABI siyasətinə qeyd-şərtsiz yanaşın. Sistem zənglərinin və ya göstərici növlərinin əlavə edilməsi/çıxarılması
+  yeniləməni tələb edir:
+  - `ivm::syscalls::abi_syscall_list` və `crates/ivm/tests/abi_syscall_list_golden.rs`
+  - `ivm::pointer_abi::PointerType` plus qızıl testlər
+  - ABI hash dəyişdikdə `crates/ivm/tests/abi_hash_versions.rs`
+- Naməlum sistem zəngləri `VMError::UnknownSyscall` ilə əlaqələndirilməlidir və manifestlər olmalıdır
+  qəbul imtahanlarında imzalanmış `abi_hash` bərabərlik yoxlamalarını qoruyun.
 
 ### Hardware Acceleration & Determinism
-- New cryptographic primitives or heavy math must ship hardware-accelerated
-  paths (METAL/NEON/SIMD/CUDA) while maintaining deterministic fallbacks.
-- Avoid non-deterministic parallel reductions; priority is identical outputs on
-  every peer even when hardware differs.
-- Keep the Norito and FASTPQ fixtures reproducible so SRE can audit fleet-wide
-  telemetry.
+- Yeni kriptoqrafik primitivlər və ya ağır riyaziyyat hardware sürətləndirilmiş şəkildə göndərilməlidir
+  deterministik ehtiyatları qoruyarkən yollar (METAL/NEON/SIMD/CUDA).
+- Qeyri-deterministik paralel azalmalardan çəkinin; prioritet eyni çıxışlardır
+  hardware fərqli olsa belə, hər bir həmyaşıd.
+- Norito və FASTPQ qurğularını təkrar istehsal oluna bilən saxlayın ki, SRE bütün donanmanı yoxlaya bilsin.
+  telemetriya.
 
-### Documentation & Evidence
-- Mirror any public-facing doc change in the portal (`docs/portal/...`) when
-  applicable so the docs site stays current with the Markdown sources.
-- When new workflows are introduced, add runbooks, governance notes, or
-  checklists explaining how to rehearse, rollback, and capture evidence.
-- When translating content into Akkadian, provide semantic renderings written
-  in cuneiform rather than phonetic transliterations.
+### Sənədlər və Sübutlar
+- Portalda (`docs/portal/...`) hər hansı ictimai sənəd dəyişikliyini əks etdirin
+  Sənədlər saytının Markdown mənbələri ilə aktual qalması üçün tətbiq edilir.
+- Yeni iş axınları təqdim edildikdə, runbooks, idarəetmə qeydləri və ya əlavə edin
+  məşq etməyi, geri qaytarmağı və sübutları ələ keçirməyi izah edən yoxlama siyahıları.
+- Məzmunu Akkad dilinə tərcümə edərkən, yazılmış semantik renderləri təmin edin
+  fonetik transliterasiyalardan çox mixi yazı ilə.
 
-### Testing & Tooling Expectations
-- Run the relevant test suites locally (`cargo test`, `swift test`,
-  integration harnesses) and document the commands in the PR testing section.
-- Keep CI guard scripts (`ci/*.sh`) and dashboards in sync with new telemetry.
-- For proc-macros, pair unit tests with `trybuild` UI tests to lock diagnostics.
+### Test və Alət Gözləntiləri
+- Müvafiq test paketlərini yerli olaraq işə salın (`cargo test`, `swift test`,
+  inteqrasiya qoşquları) və PR testi bölməsində əmrləri sənədləşdirin.
+- CI qoruyucu skriptlərini (`ci/*.sh`) və idarə panellərini yeni telemetriya ilə sinxronlaşdırın.
+- Proc-makroslar üçün diaqnostikanı kilidləmək üçün vahid testlərini `trybuild` UI testləri ilə birləşdirin.
 
-## Ready-to-Ship Checklist
+## Göndərməyə Hazır Yoxlama Siyahısı
 
-1. Code compiles and `cargo fmt` produced no diffs.
-2. Updated docs (workspace Markdown plus portal mirrors) describe the new
-   behaviour, new CLI flags, or config knobs.
-3. Tests cover every new code path and fail deterministically when regressions
-   appear.
-4. Telemetry, dashboards, and alert definitions reference any new metrics or
-   error codes.
-5. `status.md` includes a short summary referencing the relevant files and
-   roadmap section.
+1. Kod tərtib edir və `cargo fmt` heç bir fərq yaratmadı.
+2. Yenilənmiş sənədlər (iş sahəsi Markdown və portal güzgüləri) yeniləri təsvir edir
+   davranış, yeni CLI bayraqları və ya konfiqurasiya düymələri.
+3. Testlər hər bir yeni kod yolunu əhatə edir və reqressiyalar zamanı deterministik şəkildə uğursuz olur
+   görünür.
+4. Telemetriya, idarə panelləri və xəbərdarlıq tərifləri hər hansı yeni ölçülərə istinad edir və ya
+   səhv kodları.
+5. `status.md` müvafiq fayllara istinad edən qısa xülasə daxildir və
+   yol xəritəsi bölməsi.
 
-Following this checklist keeps roadmap execution auditable and ensures every
-agent contributes evidence that other teams can trust.
+Bu yoxlama siyahısına əməl etmək yol xəritəsinin icrasını yoxlanıla bilir və hər şeyi təmin edir
+agent digər komandaların etibar edə biləcəyi sübutları təqdim edir.

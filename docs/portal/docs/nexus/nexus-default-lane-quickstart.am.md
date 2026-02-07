@@ -11,34 +11,35 @@ id: nexus-default-lane-quickstart
 title: Default lane quickstart (NX-5)
 sidebar_label: Default Lane Quickstart
 description: Configure and verify the Nexus default lane fallback so Torii and SDKs can omit lane_id in public lanes.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
-This page mirrors `docs/source/quickstart/default_lane.md`. Keep both copies
-aligned until the localization sweep lands in the portal.
-:::
+::: ማስታወሻ ቀኖናዊ ምንጭ
+ይህ ገጽ `docs/source/quickstart/default_lane.md` ያንጸባርቃል። ሁለቱንም ቅጂዎች ያስቀምጡ
+በፖርታሉ ውስጥ ለትርጉም መሬቶች እስኪያጣ ድረስ የተስተካከለ።
+::
 
-# Default Lane Quickstart (NX-5)
+# ነባሪ ሌይን ፈጣን ማስጀመሪያ (NX-5)
 
-> **Roadmap context:** NX-5 — default public lane integration. The runtime now
-> exposes a `nexus.routing_policy.default_lane` fallback so Torii REST/gRPC
-> endpoints and every SDK can safely omit a `lane_id` when the traffic belongs
-> on the canonical public lane. This guide walks operators through configuring
-> the catalog, verifying the fallback in `/status`, and exercising the client
-> behaviour end to end.
+> ** የመንገድ ካርታ አውድ፡** NX-5 — ነባሪ የህዝብ መስመር ውህደት። የሩጫ ጊዜ አሁን
+> የ I18NI0000015X ውድቀትን ያጋልጣል ስለዚህ Torii REST/gRPC
+> የመጨረሻ ነጥቦች እና እያንዳንዱ ኤስዲኬ ትራፊክ በሚኖርበት ጊዜ `lane_id` በደህና መተው ይችላል።
+> በቀኖናዊው የሕዝብ መስመር ላይ። ይህ መመሪያ ኦፕሬተሮችን በማዋቀር በኩል ይራመዳል
+> ካታሎግ፣ በ`/status` ውስጥ ያለውን ውድቀት ማረጋገጥ እና ደንበኛውን የአካል ብቃት እንቅስቃሴ ማድረግ
+> ባህሪ ከመጨረሻ እስከ መጨረሻ።
 
-## Prerequisites
+## ቅድመ ሁኔታዎች
 
-- A Sora/Nexus build of `irohad` (run with `irohad --sora --config ...`).
-- Access to the configuration repository so you can edit `nexus.*` sections.
-- `iroha_cli` configured to talk to the target cluster.
-- `curl`/`jq` (or equivalent) to inspect the Torii `/status` payload.
+- የ `irohad` የሶራ/I18NT0000001X ግንባታ (በ `irohad --sora --config ...` አሂድ)።
+- የ `nexus.*` ክፍሎችን ማርትዕ እንዲችሉ የማዋቀሪያው ማከማቻ ይድረሱ።
+- `iroha_cli` ከዒላማው ስብስብ ጋር ለመነጋገር ተዋቅሯል።
+- `curl`/`jq` (ወይም ተመጣጣኝ) የ Torii I18NI0000024X ክፍያን ለመመርመር።
 
-## 1. Describe the lane and dataspace catalog
+## 1. የሌይን እና የውሂብ ቦታ ካታሎግ ይግለጹ
 
-Declare the lanes and dataspaces that should exist on the network. The snippet
-below (trimmed from `defaults/nexus/config.toml`) registers three public lanes
-plus matching dataspace aliases:
+በአውታረ መረቡ ላይ መኖር ያለባቸውን መስመሮችን እና የውሂብ ክፍተቶችን ያውጁ። ቅንጭቡ
+ከታች (ከI18NI0000025X የተከረከመ) ሶስት የህዝብ መስመሮችን ይመዘግባል
+በተጨማሪም ተዛማጅ የውሂብ ቦታ ተለዋጭ ስሞች
 
 ```toml
 [nexus]
@@ -81,17 +82,17 @@ description = "Zero-knowledge proofs and attachments"
 fault_tolerance = 1
 ```
 
-Each `index` must be unique and contiguous. Dataspace ids are 64-bit values;
-the examples above use the same numeric values as the lane indexes for clarity.
+እያንዳንዱ `index` ልዩ እና ተከታታይ መሆን አለበት። የውሂብ ቦታ መታወቂያዎች 64-ቢት እሴቶች ናቸው;
+ከላይ ያሉት ምሳሌዎች ግልጽነት ለማግኘት ከሌይን ኢንዴክሶች ጋር ተመሳሳይ የቁጥር እሴቶችን ይጠቀማሉ።
 
-## 2. Set routing defaults and optional overrides
+## 2. የማዞሪያ ነባሪዎችን እና አማራጭ መሻሮችን ያዘጋጁ
 
-The `nexus.routing_policy` section controls the fallback lane and lets you
-override routing for specific instructions or account prefixes. If no rule
-matches, the scheduler routes the transaction to the configured `default_lane`
-and `default_dataspace`. The router logic lives in
-`crates/iroha_core/src/queue/router.rs` and applies the policy transparently to
-Torii REST/gRPC surfaces.
+የ`nexus.routing_policy` ክፍል የመመለሻ መስመርን ይቆጣጠራል እና ይፈቅዳል
+ለተወሰኑ መመሪያዎች ወይም የመለያ ቅድመ ቅጥያዎች ማዞሪያን መሻር። ደንብ ከሌለ
+ግጥሚያዎች፣ መርሐግብር አውጪው ግብይቱን ወደ የተዋቀረው I18NI0000028X ያመራዋል።
+እና `default_dataspace`. የራውተር አመክንዮ ይኖራል
+`crates/iroha_core/src/queue/router.rs` እና ፖሊሲውን በግልፅ ለ
+Torii REST/gRPC ንጣፎች።
 
 ```toml
 [nexus.routing_policy]
@@ -113,31 +114,31 @@ instruction = "smartcontract::deploy"
 description = "Route contract deployments to the zk lane for proof tracking"
 ```
 
-When you later add new lanes, update the catalog first, then extend the routing
-rules. The fallback lane should continue to point at the public lane that holds
+በኋላ አዲስ መስመሮችን ሲያክሉ መጀመሪያ ካታሎጉን ያዘምኑ፣ ከዚያ ማዘዋወሩን ያራዝሙ
+ደንቦች. የኋለኛው መስመር ወደያዘው የህዝብ መስመር መጠቆሙን መቀጠል አለበት።
 
-## 3. Boot a node with the policy applied
+## 3. ከተተገበረው ፖሊሲ ጋር መስቀለኛ መንገድ አስነሳ
 
 ```bash
 IROHA_CONFIG=/path/to/nexus/config.toml
 irohad --sora --config "${IROHA_CONFIG}"
 ```
 
-The node logs the derived routing policy during startup. Any validation errors
-(missing indexes, duplicated aliases, invalid dataspace ids) are surfaced before
-gossip begins.
+መስቀለኛ መንገድ በሚነሳበት ጊዜ የተገኘውን የማዞሪያ መመሪያ ይመዘግባል። ማንኛውም የማረጋገጫ ስህተቶች
+(የጠፉ ኢንዴክሶች፣ የተባዙ ተለዋጭ ስሞች፣ ልክ ያልሆኑ የውሂብ ቦታ መታወቂያዎች) ከዚህ በፊት ታይተዋል።
+ወሬ ይጀምራል።
 
-## 4. Confirm lane governance state
+## 4. የሌይን አስተዳደር ሁኔታን ያረጋግጡ
 
-Once the node is online, use the CLI helper to verify that the default lane is
-sealed (manifest loaded) and ready for traffic. The summary view prints one row
-per lane:
+አንዴ መስቀለኛ መንገድ መስመር ላይ ከሆነ፣ ነባሪው መስመር መሆኑን ለማረጋገጥ የCLI አጋዥን ይጠቀሙ
+የታሸገ (ግልጽ የተጫነ) እና ለትራፊክ ዝግጁ። የማጠቃለያ እይታ አንድ ረድፍ ያትማል
+በየመንገድ
 
 ```bash
 iroha_cli app nexus lane-report --summary
 ```
 
-Example output:
+ምሳሌ ውፅዓት፡
 
 ```
 Lane  Alias            Module           Status  Quorum  Validators  Detail
@@ -146,20 +147,20 @@ Lane  Alias            Module           Status  Quorum  Validators  Detail
    2  zk               parliament       sealed     03           05  manifest required
 ```
 
-If the default lane shows `sealed`, follow the lane governance runbook before
-allowing external traffic. The `--fail-on-sealed` flag is handy for CI.
+ነባሪው መስመር `sealed` ካሳየ ከዚህ በፊት የሌይን አስተዳደርን መጽሐፍ ይከተሉ
+የውጭ ትራፊክን መፍቀድ. የ`--fail-on-sealed` ባንዲራ ለCI ምቹ ነው።
 
-## 5. Inspect Torii status payloads
+## 5. የ Torii ሁኔታን የሚጫኑ ጭነቶችን ይፈትሹ
 
-The `/status` response exposes both the routing policy and the per-lane scheduler
-snapshot. Use `curl`/`jq` to confirm the configured defaults and to check that
-the fallback lane is producing telemetry:
+የ`/status` ምላሽ ሁለቱንም የማዞሪያ ፖሊሲውን እና የየሌይን መርሐግብርን ያጋልጣል
+ቅጽበታዊ ገጽ እይታ የተዋቀሩ ነባሪዎችን ለማረጋገጥ እና ያንን ለመፈተሽ `curl`/`jq` ይጠቀሙ
+የኋላው መስመር ቴሌሜትሪ እያመረተ ነው፡-
 
 ```bash
 curl -s http://127.0.0.1:8080/status | jq '.nexus.routing_policy'
 ```
 
-Sample output:
+የናሙና ውጤት፡
 
 ```json
 {
@@ -172,7 +173,7 @@ Sample output:
 }
 ```
 
-To inspect the live scheduler counters for lane `0`:
+የቀጥታ መርሐግብር ቆጣሪዎችን ለመንገድ `0` ለመመርመር፡-
 
 ```bash
 curl -s http://127.0.0.1:8080/status \
@@ -180,37 +181,37 @@ curl -s http://127.0.0.1:8080/status \
         | {lane_id, alias, dataspace_alias, committed, manifest_ready, scheduler_utilization_pct}'
 ```
 
-This confirms that the TEU snapshot, alias metadata, and manifest flags align
-with the configuration. The same payload is what Grafana panels use for the
-lane-ingest dashboard.
+ይህ የTEU ቅጽበታዊ ገጽ እይታ፣ ሜታዳታ እየተለዋወጠ እና አንጸባራቂ ባንዲራዎች እንደሚሰመሩ ያረጋግጣል
+ከማዋቀሩ ጋር. ተመሳሳይ ጭነት I18NT0000000X ፓነሎች ለ
+ሌይን-ingest ዳሽቦርድ.
 
-## 6. Exercise client defaults
+## 6. የደንበኛ ነባሪዎችን ይለማመዱ
 
-- **Rust/CLI.** `iroha_cli` and the Rust client crate omit the `lane_id` field
-  when you do not pass `--lane-id` / `LaneSelector`. The queue router therefore
-  falls back to `default_lane`. Use explicit `--lane-id`/`--dataspace-id` flags
-  only when targeting a non-default lane.
-- **JS/Swift/Android.** Latest SDK releases treat `laneId`/`lane_id` as optional
-  and fall back to the value advertised by `/status`. Keep the routing policy in
-  sync across staging and production so mobile apps do not need emergency
-  reconfigurations.
-- **Pipeline/SSE tests.** The transaction event filters accept
-  `tx_lane_id == <u32>` predicates (see `docs/source/pipeline.md`). Subscribe to
-  `/v1/pipeline/events/transactions` with that filter to prove that writes sent
-  without an explicit lane arrive under the fallback lane id.
+** ዝገት/CLI
+  `--lane-id` / `LaneSelector` ሳያልፉ ሲቀሩ። ወረፋው ራውተር ስለዚህ
+  ወደ `default_lane` ይመለሳል። ግልጽ I18NI0000042X/I18NI0000043X ባንዲራዎችን ተጠቀም
+  ነባሪ ያልሆነ መስመር ላይ ዒላማ ሲደረግ ብቻ።
+- **ጄኤስ/ስዊፍት/አንድሮይድ
+  እና በ`/status` ወደ ተገለጸው እሴት ይመለሱ። የማዘዣ መመሪያውን እንደገባ ያቆዩት።
+  የሞባይል መተግበሪያዎች ድንገተኛ አያስፈልጋቸውም ስለዚህ በማዘጋጀት እና በማምረት ላይ ያመሳስሉ።
+  መልሶ ማዋቀር.
+- **የቧንቧ መስመር/ኤስኤስኢ ሙከራዎች።** የግብይቱ ክስተት ማጣሪያዎች ይቀበላሉ።
+  `tx_lane_id == <u32>` ትንበያዎች (I18NI0000048X ይመልከቱ)። ይመዝገቡ
+  የተላከ መሆኑን ለማረጋገጥ `/v1/pipeline/events/transactions` ከዚያ ማጣሪያ ጋር
+  ያለ ግልጽ ሌይን ከወደ ኋላ ሌይን መታወቂያ ስር ይደርሳል።
 
-## 7. Observability and governance hooks
+## 7. ታዛቢነት እና የአስተዳደር መንጠቆዎች
 
-- `/status` also publishes `nexus_lane_governance_sealed_total` and
-  `nexus_lane_governance_sealed_aliases` so Alertmanager can warn whenever a
-  lane loses its manifest. Keep those alerts enabled even for devnets.
-- The scheduler telemetry map and the lane governance dashboard
-  (`dashboards/grafana/nexus_lanes.json`) expect the alias/slug fields from the
-  catalog. If you rename an alias, relabel the corresponding Kura directories so
-  auditors keep deterministic paths (tracked under NX-1).
-- Parliament approvals for default lanes should include a rollback plan. Record
-  the manifest hash and governance evidence alongside this quickstart in your
-  operator runbook so future rotations do not guess the required state.
+- `/status` እንዲሁም `nexus_lane_governance_sealed_total` እና ያትማል።
+  `nexus_lane_governance_sealed_aliases` ስለዚህ Alertmanager በማንኛውም ጊዜ ማስጠንቀቅ ይችላል ሀ
+  ሌይን አንጸባራቂውን ያጣል። እነዚያ ማንቂያዎች ለዴቭኔትስ እንኳን እንደነቁ ያቆዩት።
+- የጊዜ ሰሌዳ ሰጪው ቴሌሜትሪ ካርታ እና የሌይን አስተዳደር ዳሽቦርድ
+  (`dashboards/grafana/nexus_lanes.json`) ተለዋጭ ስሞችን / ስሎግ መስኮችን ከ
+  ካታሎግ. ተለዋጭ ስም ከቀየሩ፣ ተጓዳኝ የኩራ ማውጫዎችን እንደገና ይሰይሙ
+  ኦዲተሮች ቆራጥ መንገዶችን ይጠብቃሉ (በNX-1 ስር ይከተላሉ)።
+- ለነባሪ መስመሮች የፓርላማ ማጽደቂያዎች የመመለሻ እቅድን ማካተት አለባቸው። መዝገብ
+  በእርስዎ ውስጥ ከዚህ ፈጣን ጅምር ጎን ለጎን ግልፅ ሃሽ እና የአስተዳደር ማስረጃ
+  ኦፕሬተር runbook ስለዚህ የወደፊት ሽክርክሪቶች አስፈላጊውን ሁኔታ አይገምቱም.
 
-Once these checks pass you can treat `nexus.routing_policy.default_lane` as the
-code paths on the network.
+አንዴ እነዚህ ቼኮች ካለፉ `nexus.routing_policy.default_lane` እንደ
+በአውታረ መረቡ ላይ የኮድ መንገዶች.

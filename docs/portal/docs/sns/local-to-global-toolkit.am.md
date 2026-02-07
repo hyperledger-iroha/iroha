@@ -8,25 +8,26 @@ source_hash: d4493e69ce57c4f691f368fb13c1bbe96e2c73991dfb39045753b5652d2f10a9
 source_last_modified: "2026-01-28T17:11:30.702818+00:00"
 translation_last_reviewed: 2026-02-07
 title: Local → Global Address Toolkit
+translator: machine-google-reviewed
 ---
 
-This page mirrors [`docs/source/sns/local_to_global_toolkit.md`](../../../source/sns/local_to_global_toolkit.md)
-from the mono-repo. It packages the CLI helpers and runbooks required by roadmap item **ADDR-5c**.
+ይህ ገጽ [`docs/source/sns/local_to_global_toolkit.md`](../../../source/sns/local_to_global_toolkit.md) ያንጸባርቃል
+ከሞኖ-ሪፖ. በፍኖተ ካርታ ንጥል ** ADDR-5c** የሚፈለጉትን የCLI አጋዥ እና የሩጫ መጽሐፍትን ያጠቃልላል።
 
-## Overview
+## አጠቃላይ እይታ
 
-- `scripts/address_local_toolkit.sh` wraps the `iroha` CLI to produce:
-  - `audit.json` — structured output from `iroha tools address audit --format json`.
-  - `normalized.txt` — converted preferred IH58 / second-best compressed (`sora`) literals for every Local-domain selector.
-- Pair the script with the address ingest dashboard (`dashboards/grafana/address_ingest.json`)
-  and Alertmanager rules (`dashboards/alerts/address_ingest_rules.yml`) to prove the Local-8 /
-  Local-12 cutover is safe. Watch the Local-8 and Local-12 collision panels plus the
-  `AddressLocal8Resurgence`, `AddressLocal12Collision`, and `AddressInvalidRatioSlo` alerts before
-  promoting manifest changes.
-- Reference the [Address Display Guidelines](address-display-guidelines.md) and the
-  [Address Manifest runbook](../../../source/runbooks/address_manifest_ops.md) for UX and incident-response context.
+- `scripts/address_local_toolkit.sh` `iroha` CLI ይጠቀልላል፡-
+  - `audit.json` - ከ I18NI0000009X የተዋቀረ ውፅዓት።
+  - `normalized.txt` — የተቀየረ ተመራጭ IH58/ሁለተኛ-ምርጥ የታመቀ (`sora`) ቃል በቃል ለእያንዳንዱ የአካባቢ-ጎራ መራጭ።
+- ስክሪፕቱን ከአድራሻ ኢንጌስት ዳሽቦርድ (`dashboards/grafana/address_ingest.json`) ጋር ያጣምሩ
+  እና የአለርትማኔጀር ደንቦች (`dashboards/alerts/address_ingest_rules.yml`) የአካባቢ-8 / ለማረጋገጥ
+  የአካባቢ-12 መቁረጫ ደህንነቱ የተጠበቀ ነው። የአካባቢ-8 እና የአካባቢ-12 የግጭት ፓነሎች እና የ
+  `AddressLocal8Resurgence`፣ `AddressLocal12Collision`፣ እና `AddressInvalidRatioSlo` ማንቂያዎች በፊት
+  አንጸባራቂ ለውጦችን ማስተዋወቅ።
+- [የአድራሻ ማሳያ መመሪያዎችን](address-display-guidelines.md) እና
+  [የአድራሻ ማንፌስት runbook](../../../source/runbooks/address_manifest_ops.md) ለ UX እና ለአደጋ ምላሽ አውድ።
 
-## Usage
+##አጠቃቀም
 
 ```bash
 scripts/address_local_toolkit.sh \
@@ -36,24 +37,24 @@ scripts/address_local_toolkit.sh \
   --format ih58
 ```
 
-Options:
+አማራጮች፡-
 
-- `--format compressed` for `sora…` output instead of IH58.
-- `--no-append-domain` to emit bare literals.
-- `--audit-only` to skip the conversion step.
-- `--allow-errors` to keep scanning when malformed rows appear (matches the CLI behaviour).
+- `--format compressed` ለ `sora…` ውፅዓት ከ IH58 ይልቅ።
+- ባዶ ቃል በቃል ለመልቀቅ `--no-append-domain`።
+- የልወጣ ደረጃን ለመዝለል `--audit-only`።
+- `--allow-errors` የተበላሹ ረድፎች ሲታዩ መቃኘቱን ለመቀጠል (ከ CLI ባህሪ ጋር ይዛመዳል)።
 
-The script writes the artefact paths at the end of the run. Attach both files to
-your change-management ticket alongside the Grafana screenshot that proves zero
-Local-8 detections and zero Local-12 collisions for ≥30 days.
+ስክሪፕቱ በሩጫው መጨረሻ ላይ የስነ ጥበብ መንገዶችን ይጽፋል። ሁለቱንም ፋይሎች ያያይዙ
+የእርስዎ የለውጥ አስተዳደር ትኬት ከ Grafana ቅጽበታዊ ገጽ እይታ ጋር ዜሮ መሆኑን ያረጋግጣል
+የአካባቢ-8 ግኝቶች እና ዜሮ አካባቢያዊ-12 ግጭቶች ለ≥30 ቀናት።
 
-## CI integration
+## CI ውህደት
 
-1. Run the script in a dedicated job and upload its outputs.
-2. Block merges when `audit.json` reports Local selectors (`domain.kind = local12`).
-   at its default `true` value (only override to `false` on dev/test clusters when
-   diagnosing regressions) and add
-   `iroha tools address normalize --fail-on-warning --only-local` to CI so regression
-   attempts fail before hitting production.
+1. ስክሪፕቱን በልዩ ሥራ ውስጥ ያሂዱ እና ውጤቱን ይስቀሉ።
+2. I18NI0000022X የአካባቢያዊ መራጮችን (`domain.kind = local12`) ሲዘግብ ይዋሃዳል።
+   በነባሪ የ`true` ዋጋ (ወደ `false` በdev/የሙከራ ስብስቦች ላይ መሻር ብቻ
+   መመለሻዎችን መመርመር) እና መጨመር
+   `iroha tools address normalize --fail-on-warning --only-local` ወደ CI ስለዚህ regression
+   ምርቱን ከመምታቱ በፊት ሙከራዎች አልተሳኩም.
 
-See the source document for more details, sample evidence checklists, and the release-note snippet you can reuse when announcing the cutover to customers.
+ለተጨማሪ ዝርዝሮች፣ የናሙና ማስረጃዎችን ዝርዝር እና የመልቀቂያ-ማስታወሻ ቅንጣቢውን ለደንበኞች ሲያስታውቁ እንደገና ለመጠቀም የምንጭ ሰነዱን ይመልከቱ።

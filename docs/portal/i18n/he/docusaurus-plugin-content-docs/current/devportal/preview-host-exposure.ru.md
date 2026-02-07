@@ -4,20 +4,22 @@ direction: rtl
 source: docs/portal/docs/devportal/preview-host-exposure.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 # Руководство по экспозиции preview-хоста
 
-Дорожная карта DOCS-SORA требует, чтобы каждый публичный preview использовал тот же bundle, проверенный checksum, который ревьюеры проверяют локально. Используйте этот runbook после завершения онбординга ревьюеров (и одобрения приглашений), чтобы вывести beta preview host в сеть.
+Дорожная карта DOCS-SORA требует, чтобы каждый публичный תצוגה מקדימה использовал тот же חבילה, проверыкорный проверяют локально. Используйте этот runbook после завершения онбординга ревьюеров (и одобрения приглашений), чтобы всетьв בטא תצוגה מקדימה.
 
 ## Предварительные требования
 
-- Волна онбординга ревьюеров одобрена и зафиксирована в preview tracker.
+- Волна онбординга ревьюеров одобрена и зафиксирована в מעקב תצוגה מקדימה.
 - Последний билд портала находится в `docs/portal/build/` и checksum проверен (`build/checksums.sha256`).
-- Учётные данные SoraFS preview (Torii URL, authority, private key, отправленный epoch) сохранены в переменных окружения или JSON конфиге, например [`docs/examples/sorafs_preview_publish.json`](../../../examples/sorafs_preview_publish.json).
-- Открыт тикет на изменение DNS с желаемым hostname (`docs-preview.sora.link`, `docs.iroha.tech` и т.д.) и on-call контактами.
+- Учётные данные SoraFS (Torii כתובת אתר, סמכות, מפתח פרטי, עידן отправленный) сохранены в переменных окружо например [`docs/examples/sorafs_preview_publish.json`](../../../examples/sorafs_preview_publish.json).
+- כתובות ל-DNS עם שם מארח של желаемым (`docs-preview.sora.link`, `docs.iroha.tech` ועוד) ושיחות כוננות.
 
-## Шаг 1 - Собрать и проверить bundle
+## Шаг 1 - חבילת Собрать и проверить
 
 ```bash
 cd docs/portal
@@ -27,11 +29,11 @@ npm run build
 ./scripts/preview_verify.sh --build-dir build
 ```
 
-Скрипт проверки откажется продолжать, если манифест checksum отсутствует или подделан, что сохраняет аудит всех preview артефактов.
+הצג את הבדיקה או את התוכנית, הצג את התצוגה המקדימה של התוכנית.
 
 ## Шаг 2 - Упаковать артефакты SoraFS
 
-Преобразуйте статический сайт в детерминированную пару CAR/manifest. `ARTIFACT_DIR` по умолчанию `docs/portal/artifacts/`.
+Преобразуйте статический сайт в детерминированную пару CAR/מניפסט. `ARTIFACT_DIR` по умолчанию `docs/portal/artifacts/`.
 
 ```bash
 ./scripts/sorafs-pin-release.sh       --alias docs-preview.sora       --alias-namespace docs       --alias-name preview       --pin-label docs-preview       --skip-submit
@@ -39,19 +41,19 @@ npm run build
 node scripts/generate-preview-descriptor.mjs       --manifest artifacts/checksums.sha256       --archive artifacts/sorafs/portal.tar.gz       --out artifacts/sorafs/preview-descriptor.json
 ```
 
-Прикрепите `portal.car`, `portal.manifest.*`, descriptor и манифест checksum к тикету preview wave.
+Прикрепите `portal.car`, `portal.manifest.*`, מתאר и манифест checksum к тикету תצוגה מקדימה גל.
 
-## Шаг 3 - Опубликовать preview alias
+## Шаг 3 - Опубликовать כינוי תצוגה מקדימה
 
-Запустите pin helper **без** `--skip-submit`, когда будете готовы открыть хост. Передайте JSON конфиг или явные CLI флаги:
+Запустите pin helper **חינם** `--skip-submit`, когда будете готовы открыть хост. הצג את JSON קונפיג או מפלגות CLI:
 
 ```bash
 ./scripts/sorafs-pin-release.sh       --alias docs-preview.sora       --alias-namespace docs       --alias-name preview       --pin-label docs-preview       --config ~/secrets/sorafs_preview_publish.json
 ```
 
-Команда пишет `portal.pin.report.json`, `portal.manifest.submit.summary.json` и `portal.submit.response.json`, которые должны быть включены в evidence bundle приглашений.
+Команда пишет `portal.pin.report.json`, `portal.manifest.submit.summary.json` ו-`portal.submit.response.json`, которые должны быть включены в חבילת ראיות прига.
 
-## Шаг 4 - Сгенерировать план DNS cutover
+## Шаг 4 - Сгенерировать план חיתוך DNS
 
 ```bash
 node scripts/generate-dns-cutover-plan.mjs       --dns-hostname docs.iroha.tech       --dns-zone sora.link       --dns-change-ticket DOCS-SORA-Preview       --dns-cutover-window "2026-03-05 18:00Z"       --dns-ops-contact "pagerduty:sre-docs"       --manifest artifacts/sorafs/portal.manifest.to       --cache-purge-endpoint https://cache.api/purge       --cache-purge-auth-env CACHE_PURGE_TOKEN       --out artifacts/sorafs/portal.dns-cutover.json
@@ -65,17 +67,17 @@ node scripts/generate-dns-cutover-plan.mjs       --dns-hostname docs.iroha.tech 
 npm run probe:portal --       --base-url=https://docs-preview.sora.link       --expect-release="$DOCS_RELEASE_TAG"
 ```
 
-Probe подтверждает отдаваемый release tag, CSP заголовки и метаданные подписи. Повторите команду из двух регионов (или приложите вывод curl), чтобы аудиторы увидели, что edge cache прогрет.
+Probe подтверждает отдаваемый תג שחרור, CSP заголовки ו метаданные подписи. Повторите команду из двух регионов (или приложите вывод curl), чтобы аудиторы увидели, что edge cache прогрет.
 
-## Evidence bundle
+## חבילת ראיות
 
-Включите следующие артефакты в тикет preview wave и укажите их в письме-приглашении:
+Включите следующие артефакты в тикет תצוגה מקדימה wave и укажите их в письме-приглашении:
 
 | Артефакт | Назначение |
-|----------|------------|
-| `build/checksums.sha256` | Доказывает, что bundle соответствует CI build. |
-| `artifacts/sorafs/portal.tar.gz` + `portal.manifest.to` | Канонический SoraFS payload + manifest. |
-| `portal.pin.report.json`, `portal.manifest.submit.summary.json`, `portal.submit.response.json` | Показывает, что отправка manifest и привязка alias успешны. |
-| `artifacts/sorafs/portal.dns-cutover.json` | DNS метаданные (тикет, окно, контакты), сводка продвижения маршрута (`Sora-Route-Binding`), указатель `route_plan` (JSON план + шаблоны header), сведения о cache purge и инструкции rollback для Ops. |
-| `artifacts/sorafs/preview-descriptor.json` | Подписанный descriptor, связывающий archive + checksum. |
-| Вывод `probe` | Подтверждает, что live host публикует ожидаемый release tag. |
+|--------|----------------|
+| `build/checksums.sha256` | Доказывает, что חבילה соответствует CI build. |
+| `artifacts/sorafs/portal.tar.gz` + `portal.manifest.to` | Канонический SoraFS מטען + מניפסט. |
+| `portal.pin.report.json`, `portal.manifest.submit.summary.json`, `portal.submit.response.json` | Показывает, что отправка מניפסט и привязка כינוי успешны. |
+| `artifacts/sorafs/portal.dns-cutover.json` | DNS метаданные (тикет, окно, контакты), сводка продвижения маршрута (`Sora-Route-Binding`), указатель SoraFS (+J18NI00000000SON) header), сведения о ניקוי מטמון и инструкции rollback ל-Ops. |
+| `artifacts/sorafs/preview-descriptor.json` | מתאר Подписанный, связывающий ארכיון + בדיקת סכום. |
+| Вывод `probe` | Подтверждает, что מארח חי публикует ожидаемый תג שחרור. |

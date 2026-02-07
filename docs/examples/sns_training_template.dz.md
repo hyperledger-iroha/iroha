@@ -7,40 +7,41 @@ generator: scripts/sync_docs_i18n.py
 source_hash: dd9da5045f5f40dbc31837145ad13bf79b4d751b0803c0b6d69bab49885ed1b4
 source_last_modified: "2025-12-29T18:16:35.079313+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# SNS Training Slide Template
+# SNS སྦྱོང་བརྡར་བཤུད་བརྙན།
 
-This Markdown outline mirrors the slides that facilitators should adapt for
-their language cohorts. Copy these sections into Keynote/PowerPoint/Google
-Slides and localise the bullet points, screenshots, and diagrams as needed.
+འདི་ མརཀ་ཌའོན་གྱི་ བཀོད་རིས་འདི་གིས་ མཐུན་སྒྲིག་འབད་དགོ་པའི་ བཤུད་བརྙན་ཚུ་ མེ་ལོང་བཟོཝ་ཨིན།
+ཁོང་གི་སྐད་ཡིག་སྡེ་ཚན་ཚུ། དབྱེ་ཚན་འདི་ཚུ་ ལྡེ་སྒྲོམ་/པའོ་ཝར་པོའིནཊི་/གུ་གཱལ་ནང་ལུ་འདྲ་བཤུས་རྐྱབས།
+དགོས་མཁོ་དང་འཁྲིལ་ མདའ་རྟགས་ས་ཚིགས་དང་ གསལ་གཞི་པར་རིས་ དེ་ལས་ རི་མོ་ཚུ་ བཤུད་དང་ གཞི་སྒྲིག་འབད།
 
-## Title slide
-- Program: “Sora Name Service onboarding”
-- Subtitle: specify suffix + cycle (e.g., `.sora — 2026‑03`)
-- Presenters + affiliations
+## མགོ་མིང་གི་བཤུད།
+- ལས་རིམ་: “སོ་ར་མིང་ཞབས་ཏོག” ནང་བསྐྱོད་ནི།”
+- Subtitle: རྗེས་འཇུག་ + འཁོར་རིམ་གསལ་བཀོད་འབད་ (དཔེར་ན་ I18NI0000002X)
+- གསལ་སྟོན་པ་ + འབྲེལ་མཐུད་ཚུ།
 
-## KPI orientation
-- Screenshot or embed of `docs/portal/docs/sns/kpi-dashboard.md`
-- Bullet list explaining suffix filters, ARPU table, freeze tracker
-- Callouts for exporting PDF/CSV
+## KPI གཞི་རྩ།
+- པར་ལེན་ཡང་ན་ `docs/portal/docs/sns/kpi-dashboard.md` གི་བཙུགས་ཡོདཔ།
+- རྗེས་འཇུག་ཚགས་མ་ཚུ་འགྲེལ་བཤད་རྐྱབ་མི་ བུལ་ལེཊི་ཐོ་ཡིག་ ཨེ་ཨར་པི་ཡུ་ཐིག་ཁྲམ་ གྱང་ཤུགས་འཚོལ་ཞིབ་པ།
+- པི་ཌི་ཨེཕ་/སི་ཨེསི་ཝི་ཕྱིར་འདྲེན་འབད་ནིའི་དོན་ལུ་ འབོད་བརྡ་ཚུ།
 
-## Manifest lifecycle
-- Diagram: registrar → Torii → governance → DNS/gateway
-- Steps referencing `docs/source/sns/registry_schema.md`
-- Example manifest excerpt with annotations
+## ངོ་མའི་མི་ཚེ་འཁོར་ཆ།
+- རི་མོ། རེག་ཊར་ → Torii → གཞུང་སྐྱོང་ → DNS/gateway
+- གཞི་བསྟུན་འབད་མི་ I18NI0000004X
+- མཆན་བཀོད་ཡོད་པའི་གསལ་རྟགས་ཕྱིར་བཏོན།
 
-## Dispute and freeze drills
-- Flow diagram for guardian intervention
-- Checklist referencing `docs/source/sns/governance_playbook.md`
-- Example freeze ticket timeline
+## རྩོད་གཞི་དང་འཁྱགས་སྦྱོང་།
+- ལྟ་རྟོག་པ་ བར་འཛུལ་གྱི་དོན་ལུ་ ཆུ་རུད་ཀྱི་ རི་མོ་བྲིས།
+- བརྟག་ཞིབ་ཐོ་ཡིག་ `docs/source/sns/governance_playbook.md` ལུ་གཞི་བསྟུན་འབད་དོ།
+- དཔེར་བརྗོད གྲང་བའི་ཤོག་འཛིན་དུས་ཚོད།
 
-## Annex capture
-- Command snippet showing `cargo xtask sns-annex ... --portal-entry ...`
-- Reminder to archive Grafana JSON under `artifacts/sns/regulatory/<suffix>/<cycle>/`
-- Link to `docs/source/sns/reports/.<suffix>/<cycle>.md`
+## ཟུར་འཛིན་འཛིན་བཟུང་།
+- བརྡ་བཀོད་ཀྱི་ པར་ཆས་ `cargo xtask sns-annex ... --portal-entry ...` སྟོན་ཡོད།
+- གཏན་མཛོད་ནང་ Grafana JSON འོག་ལུ་ `artifacts/sns/regulatory/<suffix>/<cycle>/` དྲན་སྐུལ་འབད།
+- I18NI0000008X ལུ་འབྲེལ་མཐུད་འབད།
 
-## Next steps
-- Training feedback link (see `docs/examples/sns_training_eval_template.md`)
-- Slack/Matrix channel handles
-- Upcoming milestone dates
+## ཤུལ་མམ་གྱི་གོམ་པ།
+- སྦྱོང་བརྡར་བསམ་འཆར་འབྲེལ་མཐུད་ (I18NI000009X ལུ་བལྟ།)
+- སྦ་བཞག་/མེ་ཊིགསི་རྒྱུ་ལམ་ཚུ་ འཛིན་སྐྱོང་འཐབ་ཨིན།
+- མཐའ་དོན་གྱི་ ཚེས་གྲངས་ཚུ་ འགོ་བཙུགས།

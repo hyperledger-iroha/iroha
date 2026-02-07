@@ -8,33 +8,35 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraFS Publishing & Monitoring
 sidebar_label: Publishing & Monitoring
 description: Capture the end-to-end monitoring flow for SoraFS portal releases so DOCS-3c has deterministic probes, telemetry, and evidence bundles.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-Roadmap item **DOCS-3c** requires more than a packaging checklist: after every
-SoraFS publish we must continuously prove that the developer portal, Try it
-proxy, and gateway bindings remain healthy. This page documents the monitoring
-surface that accompanies the [deployment guide](./deploy-guide.md) so CI and on
-call engineers can exercise the same checks that Ops uses to enforce the SLO.
+路线图项目 **DOCS-3c** 需要的不仅仅是包装清单：在每个
+SoraFS发布我们必须不断证明开发者门户，尝试一下
+代理和网关绑定保持健康。该页面记录了监控
+[部署指南](./deploy-guide.md) 附带的表面，所以 CI 等等
+呼叫工程师可以执行与运营部门用于强制执行 SLO 相同的检查。
 
-## Pipeline recap
+## 管道回顾
 
-1. **Build and sign** – follow the [deployment guide](./deploy-guide.md) to run
-   `npm run build`, `scripts/preview_wave_preflight.sh`, and the Sigstore +
-   manifest submission steps. The preflight script emits `preflight-summary.json`
-   so every preview carries build/link/probe metadata.
-2. **Pin and verify** – `sorafs_cli manifest submit`, `cargo xtask soradns-verify-binding`,
-   and the DNS cutover plan provide deterministic artefacts for governance.
-3. **Archive evidence** – store the CAR summary, Sigstore bundle, alias proof,
-   probe output, and `docs_portal.json` dashboard snapshots under
-   `artifacts/sorafs/<tag>/`.
+1. **构建并签名** – 按照[部署指南](./deploy-guide.md)运行
+   `npm run build`、`scripts/preview_wave_preflight.sh` 和 Sigstore +
+   清单提交步骤。预检脚本发出 `preflight-summary.json`
+   因此每个预览都带有构建/链接/探测元数据。
+2. **固定并验证** – `sorafs_cli manifest submit`、`cargo xtask soradns-verify-binding`、
+   DNS 切换计划为治理提供了确定性的人工制品。
+3. **存档证据** – 存储 CAR 摘要、Sigstore 捆绑包、别名证明、
+   探针输出，以及 `docs_portal.json` 仪表板快照
+   `artifacts/sorafs/<tag>/`。
 
-## Monitoring channels
+## 监控通道
 
-### 1. Publishing monitors (`scripts/monitor-publishing.mjs`)
+### 1. 发布监视器 (`scripts/monitor-publishing.mjs`)
 
-The new `npm run monitor:publishing` command wraps the portal probe, Try it
-proxy probe, and binding verifier into a single CI-friendly check. Provide a
-JSON config (checked into CI secrets or `configs/docs_monitor.json`) and run:
+新的 `npm run monitor:publishing` 命令包装了门户探针，尝试一下
+代理探针，并将验证器绑定到单个 CI 友好的检查中。提供一个
+JSON 配置（签入 CI 机密或 `configs/docs_monitor.json`）并运行：
 
 ```bash
 cd docs/portal
@@ -44,13 +46,13 @@ npm run monitor:publishing -- \
   --evidence-dir ../../artifacts/sorafs/preview-2026-02-14/monitoring
 ```
 
-Add `--prom-out ../../artifacts/docs_monitor/monitor.prom` (and optionally
-`--prom-job docs-preview`) to emit Prometheus text-format metrics suitable for
-Pushgateway uploads or direct Prometheus scrapes in staging/production. The
-metrics mirror the JSON summary so SLO dashboards and alert rules can track
-portal, Try it, binding, and DNS health without parsing the evidence bundle.
+添加 `--prom-out ../../artifacts/docs_monitor/monitor.prom`（并且可选
+`--prom-job docs-preview`) 发出 Prometheus 文本格式指标，适用于
+Pushgateway 上传或直接在暂存/生产中抓取 Prometheus。的
+指标镜像 JSON 摘要，以便 SLO 仪表板和警报规则可以跟踪
+门户、尝试一下、绑定和 DNS 运行状况，无需解析证据包。
 
-Example config with required knobs and multiple bindings:
+具有所需旋钮和多个绑定的示例配置：
 
 ```json
 {
@@ -117,101 +119,101 @@ Example config with required knobs and multiple bindings:
 }
 ```
 
-The monitor writes a JSON summary (S3/SoraFS friendly) and exits non‑zero when
-any probe fails, making it suitable for Cron jobs, Buildkite steps, or
-Alertmanager webhooks. Passing `--evidence-dir` persists `summary.json`,
-`portal.json`, `tryit.json`, and `binding.json` alongside a `checksums.sha256`
-manifest so governance reviewers can diff the monitor results without having to
-re-run the probes.
+监视器写入 JSON 摘要（S3/SoraFS 友好）并在以下情况下退出非零值：
+任何探测失败，使其适合 Cron 作业、Buildkite 步骤或
+Alertmanager Webhooks。通过 `--evidence-dir` 仍然存在 `summary.json`，
+`portal.json`、`tryit.json` 和 `binding.json` 以及 `checksums.sha256`
+清单，以便治理审查者可以区分监控结果，而无需
+重新运行探针。
 
-> **TLS guardrail:** `monitorPortal` rejects `http://` base URLs unless you set
-> `allowInsecureHttp: true` in the config. Keep production/staging probes on
-> HTTPS; the opt-in exists solely for local previews.
+> **TLS 护栏：** `monitorPortal` 拒绝 `http://` 基本 URL，除非您设置
+> 配置中的 `allowInsecureHttp: true`。保持生产/分段探针开启
+> HTTPS；选择加入仅适用于本地预览。
 
-Each binding entry runs `cargo xtask soradns-verify-binding` against the captured
-`portal.gateway.binding.json` bundle (and optional `manifestJson`) so alias,
-proof status, and content CID stay aligned with the published evidence. The
-optional `hostname` guard confirms the alias-derived canonical host matches the
-gateway host you intend to promote, preventing DNS cutovers that drift from the
-recorded binding.
+每个绑定条目针对捕获的数据运行 `cargo xtask soradns-verify-binding`
+`portal.gateway.binding.json` 捆绑包（和可选的 `manifestJson`）所以别名，
+证据状态和内容 CID 与已发布的证据保持一致。的
+可选的 `hostname` 防护确认别名派生的规范主机与
+您打算升级的网关主机，防止偏离的 DNS 切换
+记录绑定。
 
-The optional `dns` block wires DOCS-7’s SoraDNS rollout into the same monitor.
-Each entry resolves a hostname/record-type pair (for example the
-`docs-preview.sora.link` → `docs-preview.sora.link.gw.sora.name` CNAME) and
-confirms the answers match `expectedRecords` or `expectedIncludes`. The second
-entry in the snippet above hard-codes the canonical hashed hostname produced by
-`cargo xtask soradns-hosts --name docs-preview.sora.link`; the monitor now proves
-both the human-friendly alias and the canonical hash (`igjssx53…gw.sora.id`)
-resolve to the pinned pretty host. This makes DNS promotion evidence automatic:
-the monitor will fail if either host drifts, even when the HTTP bindings still
-staple the right manifest.
+可选的 `dns` 块将 DOCS-7 的 SoraDNS 部署连接到同一显示器。
+每个条目解析一个主机名/记录类型对（例如
+`docs-preview.sora.link` → `docs-preview.sora.link.gw.sora.name` CNAME) 和
+确认答案与 `expectedRecords` 或 `expectedIncludes` 匹配。第二个
+上面代码片段中的条目硬编码了由以下方法生成的规范哈希主机名
+`cargo xtask soradns-hosts --name docs-preview.sora.link`；监视器现在证明
+人类友好的别名和规范哈希 (`igjssx53…gw.sora.id`)
+解决固定的漂亮主机。这使得 DNS 升级证据自动化：
+如果任一主机发生漂移，即使 HTTP 绑定仍然存在，监视器也会失败
+装订正确的清单。
 
-### 2. OpenAPI version manifest guard
+### 2. OpenAPI版本清单防护
 
-DOCS-2b’s “signed OpenAPI manifest” requirement now ships an automated guard:
-`ci/check_openapi_spec.sh` calls `npm run check:openapi-versions`, which invokes
-`scripts/verify-openapi-versions.mjs` to cross-check
-`docs/portal/static/openapi/versions.json` with the actual Torii specs and
-manifests. The guard verifies that:
+DOCS-2b 的“签名 OpenAPI 清单”要求现在提供自动防护：
+`ci/check_openapi_spec.sh` 调用 `npm run check:openapi-versions`，它调用
+`scripts/verify-openapi-versions.mjs` 进行交叉检查
+`docs/portal/static/openapi/versions.json` 与实际 Torii 规格和
+体现出来。警卫核实：
 
-- Every version listed in `versions.json` has a matching directory under
-  `static/openapi/versions/`.
-- Each entry’s `bytes` and `sha256` fields match the on-disk spec file.
-- The `latest` alias mirrors the `current` entry (digest/size/signature metadata)
-  so the default download cannot drift.
-- Signed entries reference a manifest whose `artifact.path` points back to the
-  same spec and whose signature/public key hex values match the manifest.
+- `versions.json` 中列出的每个版本在下面都有一个匹配的目录
+  `static/openapi/versions/`。
+- 每个条目的 `bytes` 和 `sha256` 字段与磁盘上的规范文件匹配。
+- `latest` 别名镜像 `current` 条目（摘要/大小/签名元数据）
+  所以默认下载不能漂移。
+- 签名条目引用了一个清单，其 `artifact.path` 指向
+  相同的规范，其签名/公钥十六进制值与清单匹配。
 
-Run the guard locally whenever you mirror a new spec:
+每当您镜像新规范时，请在本地运行防护：
 
 ```bash
 cd docs/portal
 npm run check:openapi-versions
 ```
 
-Failure messages include the stale-file hint (`npm run sync-openapi -- --latest`)
-so portal contributors know how to refresh the snapshots. Keeping the guard in
-CI prevents portal releases where the signed manifest and the published digest
-fall out of sync.
+失败消息包括陈旧文件提示 (`npm run sync-openapi -- --latest`)
+因此门户贡献者知道如何刷新快照。把守卫留在里面
+CI 阻止门户发布已签名的清单和已发布的摘要
+不同步。
 
-### 2. Dashboards & alerts
+### 2. 仪表板和警报
 
-- **`dashboards/grafana/docs_portal.json`** – primary board for DOCS-3c. Panels
-  track `torii_sorafs_gateway_refusals_total`, replication SLA misses, Try it
-  proxy errors, and probe latency (`docs.preview.integrity` overlay). Export the
-  board after every release and attach it to the operations ticket.
-- **Try it proxy alerts** – Alertmanager rule `TryItProxyErrors` fires on
-  sustained `probe_success{job="tryit-proxy"}` drops or
-  `tryit_proxy_requests_total{status="error"}` spikes.
-- **Gateway SLO** – `DocsPortal/GatewayRefusals` ensures alias bindings continue
-  to advertise the pinned manifest digest; escalations link to the
-  `cargo xtask soradns-verify-binding` CLI transcript captured during publish.
+- **`dashboards/grafana/docs_portal.json`** – DOCS-3c 主板。面板
+  跟踪 `torii_sorafs_gateway_refusals_total`，复制 SLA 未命中，尝试一下
+  代理错误和探测延迟（`docs.preview.integrity` 覆盖）。导出
+  每次发布后登机并将其附在操作票上。
+- **尝试代理警报** – Alertmanager 规则 `TryItProxyErrors` 触发
+  `probe_success{job="tryit-proxy"}` 持续下降或
+  `tryit_proxy_requests_total{status="error"}` 尖峰。
+- **网关 SLO** – `DocsPortal/GatewayRefusals` 确保别名绑定继续
+  公布固定的清单摘要；升级链接至
+  `cargo xtask soradns-verify-binding` 在发布期间捕获的 CLI 记录。
 
-### 3. Evidence trail
+### 3. 证据追踪
 
-Each monitoring run should append:
+每次监控运行应附加：
 
-- `monitor-publishing` evidence bundle (`summary.json`, per-section files, and
-  `checksums.sha256`).
-- Grafana screenshots for the `docs_portal` board over the release window.
-- Try it proxy change/rollback transcripts (`npm run manage:tryit-proxy` logs).
-- Alias verification output from `cargo xtask soradns-verify-binding`.
+- `monitor-publishing` 证据包（`summary.json`、每个部分的文件和
+  `checksums.sha256`）。
+- `docs_portal` 板在发布窗口上的 Grafana 屏幕截图。
+- 尝试代理更改/回滚记录（`npm run manage:tryit-proxy` 日志）。
+- `cargo xtask soradns-verify-binding` 的别名验证输出。
 
-Store these under `artifacts/sorafs/<tag>/monitoring/` and link them in the
-release issue so the audit trail survives after CI logs expire.
+将它们存储在 `artifacts/sorafs/<tag>/monitoring/` 下并将它们链接到
+发布问题，以便审计跟踪在 CI 日志过期后仍然存在。
 
-## Operational checklist
+## 操作清单
 
-1. Run the deployment guide through Step 7.
-2. Execute `npm run monitor:publishing` with production configuration; archive
-   the JSON output.
-3. Capture Grafana panels (`docs_portal`, `TryItProxyErrors`,
-   `DocsPortal/GatewayRefusals`) and attach them to the release ticket.
-4. Schedule recurring monitors (recommended: every 15 minutes) pointing at the
-   production URLs with the same config to satisfy the DOCS-3c SLO gate.
-5. During incidents, re-run the monitor command with `--json-out` to record
-   before/after evidence and attach it to the postmortem.
+1. 通过Step7运行部署指南。
+2.使用生产配置执行`npm run monitor:publishing`；存档
+   JSON 输出。
+3. 捕获 Grafana 面板（`docs_portal`、`TryItProxyErrors`、
+   `DocsPortal/GatewayRefusals`）并将其附加到发行票上。
+4. 安排定期监控（建议：每 15 分钟一次），指向
+   具有相同配置的生产 URL 以满足 DOCS-3c SLO 门。
+5. 发生事件时，重新运行监控命令 `--json-out` 进行记录
+   证据之前/之后并将其附加到尸检中。
 
-Following this loop closes DOCS-3c: the portal build flow, publishing pipeline,
-and monitoring stack now live in a single playbook with reproducible commands,
-sample configs, and telemetry hooks.
+遵循此循环将关闭 DOCS-3c：门户构建流程、发布管道、
+监控堆栈现在位于具有可重现命令的单个剧本中，
+示例配置和遥测挂钩。

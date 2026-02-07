@@ -7,43 +7,44 @@ generator: scripts/sync_docs_i18n.py
 source_hash: ba5f4fdc9221210a793fd0c2120d8cfb68487d7ddcbe67c208976798446ca5db
 source_last_modified: "2025-12-29T18:16:35.945760+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-//! SM program risk register for SM2/SM3/SM4 enablement.
+//! SM2/SM3/SM4 ဖွင့်ခြင်းအတွက် SM ပရိုဂရမ် စွန့်စားစာရင်းသွင်းခြင်း။
 
-# SM Program Risk Register
+# SM Program Risk Register လုပ်ပါ။
 
-Last updated: 2025-03-12.
+နောက်ဆုံးမွမ်းမံမှု- 2025-03-12။
 
-This register expands on the summary in `sm_program.md`, pairing each risk with
-ownership, monitoring triggers, and the current mitigation state. The Crypto WG
-and Core Platform leads review this register at the weekly SM cadence; changes
-are reflected both here and in the public roadmap.
+ဤမှတ်ပုံတင်မှုသည် `sm_program.md` တွင် အကျဉ်းချုပ်ကို ချဲ့ထွင်ပြီး အန္တရာယ်တစ်ခုစီကို တွဲလျက်၊
+ပိုင်ဆိုင်မှု၊ စောင့်ကြည့်မှု အစပျိုးမှုများနှင့် လက်ရှိ လျှော့ချရေး အခြေအနေ။ Crypto WG
+နှင့် Core Platform သည် အပတ်စဉ် SM cadence တွင် ဤစာရင်းကို ပြန်လည်သုံးသပ်ပါသည်။ အပြောင်းအလဲများ
+ဤနေရာတွင်ရော အများသူငှာ လမ်းပြမြေပုံတွင်ပါ ထင်ဟပ်နေပါသည်။
 
-## Risk Summary
+## အန္တရာယ်အကျဉ်းချုပ်
 
-| ID | Risk | Category | Probability | Impact | Severity | Owner | Mitigation | Status | Triggers |
-|----|------|----------|-------------|--------|----------|-------|------------|--------|----------|
-| R1 | External audit for RustCrypto SM crates not executed before validator signing GA | Supply chain | Medium | High | High | Crypto WG | Contract Trail of Bits/NCC Group, keep verify-only posture until report accepted | Mitigation in progress | Audit SOW unsigned by 2025-04-15 or audit report delayed past 2025-06-01 |
-| R2 | Deterministic nonce regressions across SDKs | Implementation | Medium | High | High | SDK Program Leads | Share fixtures across SDK CI, enforce canonical r∥s encoding, add cross-SDK tamper tests | Monitoring | Fixture drift detected in CI or SDK release without SM fixtures |
-| R3 | ISA-specific bugs in intrinsics (NEON/SIMD) | Performance | Low | Medium | Medium | Performance WG | Gate intrinsics behind feature flags, require CI coverage on ARM, maintain scalar fallback | Mitigation in progress | NEON benches fail or hardware regression uncovered in SM perf matrix |
-| R4 | Compliance ambiguity delaying SM adoption | Governance | Medium | Medium | Medium | Docs & Legal Liaison | Publish compliance brief, operator checklist, liaison with legal counsel prior to GA | Mitigation in progress | Legal review outstanding after 2025-05-01 or missing checklist updates |
-| R5 | FFI backend drift with provider updates | Integration | Medium | Medium | Medium | Platform Ops | Pin provider versions, add parity tests, keep OpenSSL/Tongsuo preview opt-in | Monitoring | Package update merged without parity run or preview enabled outside pilot scope |
+| ID | အန္တရာယ် | အမျိုးအစား | ဖြစ်နိုင်ခြေ | ထိခိုက်မှု | ပြင်းထန်မှု | ပိုင်ရှင် | လျော့ပါးရေး | အဆင့်အတန်း | အစပျိုး |
+|----|------|----------|----------------|--------|----------------|--------|--------------------|--------|----------|
+| R1 | တရားဝင်သူလက်မှတ်ထိုးခြင်းမပြုမီ RustCrypto SM သေတ္တာများအတွက် ပြင်ပစာရင်းစစ် GA | ထောက်ပံ့ရေးကွင်းဆက် | လတ် | မြင့် | မြင့် | Crypto WG | Bits/NCC Group ၏ စာချုပ်လမ်းကြောင်း၊ အစီရင်ခံချက်လက်ခံသည်အထိ | လျော့ပါးရေး လုပ်ဆောင်နေ | စာရင်းစစ် SOW ကို 2025-04-15 တွင် လက်မှတ်မထိုးထားပါ သို့မဟုတ် စာရင်းစစ်အစီရင်ခံစာ နှောင့်နှေးပြီး 2025-06-01 |
+| R2 | SDKs များ | အကောင်အထည်ဖော် | လတ် | မြင့် | မြင့် | SDK ပရိုဂရမ် ဦးဆောင် | SDK CI တစ်လျှောက် အစုံအလင်ကို မျှဝေပါ၊ canonical r∥s ကုဒ်နံပါတ်ကို ကျင့်သုံးပါ၊ SDK ဖြတ်ကျော်ခြင်း စမ်းသပ်မှုများကို ထည့်ပါ | စောင့်ကြည့်ရေး | Fixture drift ကို SM မပါဘဲ CI သို့မဟုတ် SDK ထုတ်လွှတ်မှုတွင် တွေ့ရှိခဲ့သည်။
+| R3 | ပင်ကိုယ်ရှိ ISA သီးသန့် bugs (NEON/SIMD) | စွမ်းဆောင်ရည် | နိမ့် | လတ် | လတ် | စွမ်းဆောင်ရည် WG | အင်္ဂါရပ်အလံများနောက်ကွယ်ရှိ ဂိတ်ပေါက် ပင်ကိုယ်အချက်များ၊ ARM တွင် CI လွှမ်းခြုံမှု လိုအပ်သည်၊ scalar ဆုတ်ယုတ်မှုကို ထိန်းသိမ်း | လျော့ပါးရေး လုပ်ဆောင်နေ | NEON ခုံတန်းရှည်များ ပျက်ကွက်ခြင်း သို့မဟုတ် SM perf matrix | တွင် တွေ့ရှိရသော ဟာ့ဒ်ဝဲဆုတ်ယုတ်မှု
+| R4 | လိုက်နာမှု မရေရာသော SM မွေးစားခြင်း | အုပ်ချုပ်မှု | လတ် | လတ် | လတ် | Docs & Legal Liaison | လိုက်နာမှုအကျဉ်းချုပ်၊ အော်ပရေတာစစ်ဆေးချက်စာရင်း၊ GA | မတိုင်မီ ဥပဒေအကြံပေးနှင့် ဆက်ဆံရေးရုံးကို ထုတ်ပြန်ပါ။ လျော့ပါးရေး လုပ်ဆောင်နေ | 2025-05-01 နောက်ပိုင်းတွင် တရားဝင်ပြန်လည်သုံးသပ်ခြင်း သို့မဟုတ် ပျောက်ဆုံးနေသော စစ်ဆေးစာရင်းအပ်ဒိတ်များ |
+| R5 | ဝန်ဆောင်မှုပေးသူ အပ်ဒိတ်များ | ပေါင်းစည်းခြင်း | လတ် | လတ် | လတ် | ပလပ်ဖောင်း Ops | ဝန်ဆောင်မှုပေးသူ ဗားရှင်းများကို ပင်ထိုးပါ၊ တူညီမှု စမ်းသပ်မှုများ ထည့်ပါ၊ OpenSSL/Tongsuo အစမ်းကြည့်ရှုမှု ရွေးချယ်မှုတွင် ထားရှိပါ | စောင့်ကြည့်ရေး | ပက်ကေ့ဂျ်မွမ်းမံမှုကို တူညီမှုလုပ်ဆောင်ခြင်း သို့မဟုတ် အစမ်းကြည့်ရှုခြင်းမရှိဘဲ ပေါင်းစပ်စမ်းသပ်မှုနယ်ပယ်ပြင်ပ |
 
-## Review Cadence
+## သုံးသပ်ချက် Cadence
 
-- Weekly Crypto WG sync (standing agenda item).
-- Monthly joint review with Platform Ops and Docs to confirm compliance posture.
-- Pre-release checkpoint: risk register freeze and attestation bundled with GA
-  artefacts.
+- အပတ်စဉ် Crypto WG စင့်ခ်လုပ်ခြင်း (ရပ်ဆဲအစီအစဉ်အကြောင်းအရာ)။
+- လိုက်နာမှုအနေအထားကို အတည်ပြုရန် Platform Ops နှင့် Docs တို့နှင့် လစဉ် ပူးတွဲသုံးသပ်ခြင်း။
+- မဖြန့်ချိမီ စစ်ဆေးရေးဂိတ်- GA ဖြင့် ထုပ်ပိုးထားသော အန္တရာယ် မှတ်ပုံတင်ခြင်းနှင့် သက်သေအထောက်အထား
+  ရှေးဟောင်းပစ္စည်း။
 
-## Sign-off
+## လက်မှတ်ဖြတ်ခြင်း။
 
-| Role | Representative | Date | Notes |
-|------|----------------|------|-------|
-| Crypto WG Lead | (signature on file) | 2025-03-12 | Approved for publication and shared with WG backlog. |
-| Core Platform Lead | (signature on file) | 2025-03-12 | Accepted mitigations and monitoring cadence. |
+| အခန်းကဏ္ဍ | ကိုယ်စားလှယ် | ရက်စွဲ | မှတ်စုများ |
+|--------|----------------|------|-------|
+| Crypto WG ဦးဆောင် | (ဖိုင်တွင်လက်မှတ်) | 2025-03-12 | ထုတ်ဝေရန် ခွင့်ပြုပြီး WG backlog နှင့် မျှဝေခဲ့သည်။ |
+| Core Platform Lead | (ဖိုင်တွင်လက်မှတ်) | 2025-03-12 | လျော့ပါးသက်သာစေရေးနှင့် စောင့်ကြည့်ရေးလမ်းကြောင်းများကို လက်ခံထားသည်။ |
 
-For historic approvals and meeting minutes, see `docs/source/crypto/sm_program.md`
-(`Communication Plan`) and the SM agenda archive linked from the Crypto WG
-workspace.
+သမိုင်းဝင်ခွင့်ပြုချက်များနှင့် အစည်းအဝေးမှတ်တမ်းများအတွက် `docs/source/crypto/sm_program.md` ကိုကြည့်ပါ။
+(`Communication Plan`) နှင့် Crypto WG မှချိတ်ဆက်ထားသော SM အစီအစဉ်မှတ်တမ်း
+အလုပ်ခွင်။

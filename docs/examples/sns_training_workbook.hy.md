@@ -7,42 +7,43 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 7d6965998c392217380a1722e49098f831438e2f4499b9e3258398a66f905a35
 source_last_modified: "2025-12-29T18:16:35.080069+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# SNS Training Workbook Template
+# SNS Training Workbook Կաղապար
 
-Use this workbook as the canonical handout for each training cohort. Replace
-placeholders (`<...>`) before distributing to attendees.
+Օգտագործեք այս աշխատանքային գրքույկը որպես կանոնական թերթիկ յուրաքանչյուր ուսումնական խմբի համար: Փոխարինել
+տեղապահներ (`<...>`) նախքան մասնակիցներին բաշխելը:
 
-## Session details
-- Suffix: `<.sora | .nexus | .dao>`
-- Cycle: `<YYYY-MM>`
-- Language: `<ar/es/fr/ja/pt/ru/ur>`
-- Facilitator: `<name>`
+## Նիստի մանրամասները
+- վերջածանց՝ `<.sora | .nexus | .dao>`
+- Ցիկլ՝ `<YYYY-MM>`
+- Լեզուն՝ `<ar/es/fr/ja/pt/ru/ur>`
+- Օժանդակող՝ `<name>`
 
-## Lab 1 — KPI export
-1. Open the portal KPI dashboard (`docs/portal/docs/sns/kpi-dashboard.md`).
-2. Filter by suffix `<suffix>` and time range `<window>`.
-3. Export PDF + CSV snapshots.
-4. Record SHA-256 of the exported JSON/PDF here: `______________________`.
+## Լաբորատորիա 1 - KPI արտահանում
+1. Բացեք պորտալի KPI վահանակը (`docs/portal/docs/sns/kpi-dashboard.md`):
+2. Զտել ըստ `<suffix>` վերջածանցի և `<window>` ժամանակային միջակայքի:
+3. Արտահանել PDF + CSV snapshots:
+4. Արտահանված JSON/PDF-ի SHA-256-ը գրանցեք այստեղ՝ `______________________`:
 
-## Lab 2 — Manifest drill
-1. Fetch the sample manifest from `artifacts/sns/training/<suffix>/<cycle>/manifests/<lang>.json`.
-2. Validate with `cargo run --bin sns_manifest_check -- --input <file>`.
-3. Generate resolver skeleton with `scripts/sns_zonefile_skeleton.py`.
-4. Paste the diff summary:
+## Լաբորատորիա 2 — Մանիֆեստ փորված
+1. Վերցրեք նմուշի մանիֆեստը `artifacts/sns/training/<suffix>/<cycle>/manifests/<lang>.json`-ից:
+2. Վավերացնել `cargo run --bin sns_manifest_check -- --input <file>`-ով:
+3. Ստեղծեք լուծիչի կմախք `scripts/sns_zonefile_skeleton.py`-ով:
+4. Տեղադրեք տարբերությունների ամփոփագիրը.
    ```
    <git diff output>
    ```
 
-## Lab 3 — Dispute simulation
-1. Use guardian CLI to start a freeze (case id `<case-id>`).
-2. Record the dispute hash: `______________________`.
-3. Upload the evidence log to `artifacts/sns/training/<suffix>/<cycle>/logs/`.
+## Լաբորատորիա 3 — Վեճերի մոդելավորում
+1. Օգտագործեք Guardian CLI-ը՝ սառեցումը սկսելու համար (գործի ID `<case-id>`):
+2. Գրանցեք վեճի հեշը՝ `______________________`:
+3. Վերբեռնեք ապացույցների մատյանը `artifacts/sns/training/<suffix>/<cycle>/logs/`:
 
-## Lab 4 — Annex automation
-1. Export the Grafana dashboard JSON and copy it into `artifacts/sns/regulatory/<suffix>/<cycle>/sns_suffix_analytics.json`.
-2. Run:
+## Լաբորատորիա 4 — Հավելվածի ավտոմատացում
+1. Արտահանեք Grafana վահանակը JSON և պատճենեք այն `artifacts/sns/regulatory/<suffix>/<cycle>/sns_suffix_analytics.json`-ում:
+2. Վազել:
    ```bash
    cargo xtask sns-annex \
      --suffix <suffix> \
@@ -53,12 +54,12 @@ placeholders (`<...>`) before distributing to attendees.
      --regulatory-entry docs/source/sns/regulatory/<memo>.md \
      --portal-entry docs/portal/docs/sns/regulatory/<memo-id>.md
    ```
-3. Paste the annex path + SHA-256 output: `________________________________`.
+3. Տեղադրեք հավելվածի ուղին + SHA-256 ելք՝ `________________________________`:
 
-## Feedback notes
-- What was unclear?
-- Which labs ran over time?
-- Tooling bugs observed?
+## Հետադարձ գրառումներ
+- Ի՞նչն էր անհասկանալի:
+- Ո՞ր լաբորատորիաներն են աշխատել ժամանակի ընթացքում:
+- Գործիքավորման վրիպակներ նկատվե՞լ են:
 
-Return completed workbooks to the facilitator; they belong under
+Ավարտված աշխատանքային գրքույկները վերադարձրեք վարողին. տակ են պատկանում
 `artifacts/sns/training/<suffix>/<cycle>/workbooks/`.

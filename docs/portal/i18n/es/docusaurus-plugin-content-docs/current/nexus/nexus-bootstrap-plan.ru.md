@@ -4,101 +4,93 @@ direction: ltr
 source: docs/portal/docs/nexus/nexus-bootstrap-plan.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: nexus-bootstrap-plan
-title: Bootstrap и наблюдаемость Sora Nexus
-description: Операционный план вывода базового кластера валидаторов Nexus перед подключением сервисов SoraFS и SoraNet.
+id: plan-bootstrap-nexus
+título: Bootstrap y наблюдаемость Sora Nexus
+descripción: Plan de operación para validadores de armarios de base Nexus antes de los servicios de SoraFS y SoraNet.
 ---
 
-:::note Канонический источник
-Эта страница отражает `docs/source/soranexus_bootstrap_plan.md`. Держите обе копии синхронизированными, пока локализованные версии не попадут в портал.
+:::nota Канонический источник
+Esta página está escrita `docs/source/soranexus_bootstrap_plan.md`. Deje copias sincronizadas, pero las versiones localizadas no se pueden publicar en el portal.
 :::
 
-# План Bootstrap и Observability Sora Nexus
+# Plan Bootstrap y Observabilidad Sora Nexus
 
 ## Цели
-- Развернуть базовую сеть валидаторов/наблюдателей Sora Nexus с governance keys, Torii API и мониторингом консенсуса.
-- Проверить ключевые сервисы (Torii, consensus, persistence) до включения piggyback деплоев SoraFS/SoraNet.
-- Настроить CI/CD workflows и observability dashboards/alerts для здоровья сети.
+- Utilice la configuración básica de validadores/navegadores Sora Nexus con claves de gobernanza, API Torii y consenso de monitorización.
+- Проверить ключевые сервисы (Torii, consenso, persistencia) до включения piggyback деплоев SoraFS/SoraNet.
+- Creación de flujos de trabajo de CI/CD y paneles de control/alertas de observabilidad para cada conjunto.
 
 ## Предпосылки
-- Материал governance keys (multisig совета, committee keys) доступен в HSM или Vault.
-- Базовая инфраструктура (Kubernetes кластеры или bare-metal узлы) в primary/secondary регионах.
-- Обновленная bootstrap конфигурация (`configs/nexus/bootstrap/*.toml`), отражающая актуальные параметры консенсуса.
-
-## Сетевые окружения
-- Эксплуатируйте два окружения Nexus с разными сетевыми префиксами:
-- **Sora Nexus (mainnet)** - префикс продакшн сети `nexus`, размещает каноническое управление и piggyback сервисы SoraFS/SoraNet (chain ID `0x02F1` / UUID `00000000-0000-0000-0000-000000000753`).
-- **Sora Testus (testnet)** - префикс staging сети `testus`, зеркалирует mainnet конфигурацию для интеграционных тестов и pre-release валидации (chain UUID `809574f5-fee7-5e69-bfcf-52451e42d50f`).
-- Держите отдельные genesis файлы, governance keys и инфраструктурные footprints для каждого окружения. Testus служит полигоном для всех rollouts SoraFS/SoraNet перед продвижением в Nexus.
-- CI/CD pipelines должны сначала деплоить в Testus, выполнять автоматические smoke tests и требовать ручной промоушн в Nexus после прохождения проверок.
-- Референсные конфигурационные bundles лежат в `configs/soranexus/nexus/` (mainnet) и `configs/soranexus/testus/` (testnet), каждая содержит образцы `config.toml`, `genesis.json` и каталоги admission Torii.
-
-## Шаг 1 - Ревью конфигурации
-1. Аудировать существующую документацию:
-   - `docs/source/nexus/architecture.md` (consensus, layout Torii).
-   - `docs/source/nexus/deployment_checklist.md` (infra requirements).
+- Claves de gobernanza materiales (multisig совета, claves de comité) disponibles en HSM o Vault.
+- Infraestructura básica (clasterios de Kubernetes o dispositivos bare-metal) en regiones primarias/secundarias.
+- Configuración de arranque predeterminada (`configs/nexus/bootstrap/*.toml`), configuración de parámetros reales consensuada.## Сетевые окружения
+- Utilice la configuración Nexus según las siguientes preferencias:
+- **Sora Nexus (mainnet)** - Ajustes de configuración del producto `nexus`, actualización de software y servicios a cuestas SoraFS/SoraNet (ID de cadena `0x02F1` / UUID `00000000-0000-0000-0000-000000000753`).
+- **Sora Testus (testnet)** - Configuraciones de puesta en escena precisas `testus`, configuraciones de mainnet personalizadas para pruebas integradas y validaciones previas al lanzamiento (UUID de cadena) `809574f5-fee7-5e69-bfcf-52451e42d50f`).
+- Держите отдельные genesis файлы, claves de gobernanza y huellas de infraestructura para каждого окружения. Testus se adapta a sus implementaciones SoraFS/SoraNet antes de su implementación en Nexus.
+- Tuberías de CI/CD que se implementarán en Testus, realizarán pruebas de humo automáticas y se promocionarán mucho en Nexus después прохождения проверок.
+- Los paquetes de configuración de referencia se conectan a `configs/soranexus/nexus/` (mainnet) y `configs/soranexus/testus/` (testnet), como base de operaciones `config.toml`, `genesis.json` y admisión de catálogos Torii.## Capítulo 1 - Configuración reciente
+1. Auditar el contenido de los documentos:
+   - `docs/source/nexus/architecture.md` (consenso, diseño Torii).
+   - `docs/source/nexus/deployment_checklist.md` (requisitos de infraestructura).
    - `docs/source/nexus/governance_keys.md` (процедуры хранения ключей).
-2. Проверить, что genesis файлы (`configs/nexus/genesis/*.json`) соответствуют текущему roster валидаторов и staking weights.
-3. Подтвердить параметры сети:
-   - Размер консенсусного комитета и quorum.
-   - Интервал блоков / пороги finality.
-   - Порты Torii сервисов и TLS сертификаты.
+2. Proverite, что genesis файлы (`configs/nexus/genesis/*.json`) соответствуют текущему validadores de listas y apuestas de pesos.
+3. Introduzca el conjunto de parámetros:
+   - Размер консенсусного комитета и quórum.
+   - Интервал блоков / пороги finalidad.
+   - Puertos Torii para servicios y certificados TLS.
 
-## Шаг 2 - Деплой bootstrap кластера
+## Paso 2 - Implementación del grupo bootstrap
 1. Подготовить валидаторские узлы:
-   - Развернуть `irohad` инстансы (validators) с persistent volumes.
-   - Убедиться, что firewall rules разрешают consensus & Torii трафик между узлами.
-2. Запустить Torii сервисы (REST/WebSocket) на каждом валидаторе с TLS.
-3. Развернуть observer узлы (read-only) для дополнительной устойчивости.
-4. Запустить bootstrap скрипты (`scripts/nexus_bootstrap.sh`) для распространения genesis, старта консенсуса и регистрации узлов.
-5. Выполнить smoke tests:
-   - Отправить тестовые транзакции через Torii (`iroha_cli tx submit`).
-   - Проверить production/finality блоков через телеметрию.
-   - Проверить репликацию ledger между валидаторами/observer.
+   - Развернуть `irohad` инстансы (validadores) con volúmenes persistentes.
+   - Убедиться, estas reglas de firewall eliminan el consenso y el tráfico Torii.
+2. Introduzca el servicio Torii (REST/WebSocket) en el validador de código TLS.
+3. Развернуть observador узлы (solo lectura) для дополнительной устойчивости.
+4. Abra los scripts de arranque (`scripts/nexus_bootstrap.sh`) para iniciar el proceso de génesis, iniciar un acuerdo y registrar usuarios.
+5. Realizar pruebas de humo:
+   - Utilice estas transmisiones desde Torii (`iroha_cli tx submit`).
+   - Проверить producción/finalidad bloques через телеметрию.
+   - Проверить репликацию libro mayor между валидаторами/observador.## Paso 3 - Gobernanza y mejora de las claves
+1. Загрузить multisig конфигурацию совета; подтвердить, что gobernancia предложения можно отправлять y ратифицировать.
+2. Безопасно хранить claves de consenso/comité; настроить автоматические бэкапы с acceso al registro.
+3. Configure el procedimiento de rotación variable (`docs/source/nexus/key_rotation.md`) y proporcione el runbook.
 
-## Шаг 3 - Governance и управление ключами
-1. Загрузить multisig конфигурацию совета; подтвердить, что governance предложения можно отправлять и ратифицировать.
-2. Безопасно хранить consensus/committee keys; настроить автоматические бэкапы с access logging.
-3. Настроить процедуры аварийной ротации ключей (`docs/source/nexus/key_rotation.md`) и проверить runbook.
-
-## Шаг 4 - Интеграция CI/CD
-1. Настроить pipelines:
-   - Build и публикация validator/Torii images (GitHub Actions или GitLab CI).
-   - Автоматическая валидация конфигурации (lint genesis, verify signatures).
-   - Deployment pipelines (Helm/Kustomize) для staging и production кластеров.
-2. Внедрить smoke tests в CI (поднять ephemeral cluster и запустить каноническую транзакционную suite).
-3. Добавить rollback скрипты для неудачных деплоев и задокументировать runbooks.
-
-## Шаг 5 - Observability и алерты
-1. Развернуть мониторинговый стек (Prometheus + Grafana + Alertmanager) по регионам.
+## Paso 4 - Integración CI/CD
+1. Настроить tuberías:
+   - Creación y publicación de imágenes del validador/Torii (GitHub Actions y GitLab CI).
+   - Автоматическая валидация конфигурации (génesis de pelusa, verificación de firmas).
+   - Canalizaciones de implementación (Helm/Kustomize) para los centros de puesta en escena y producción.
+2. Realizar pruebas de humo en CI (combinar grupos efímeros y eliminar una suite de transferencia canónica).
+3. Agregue scripts de reversión para los runbooks no implementados y almacenados.## Paso 5 - Observabilidad y alertas
+1. Reduzca el sistema de monitorización (Prometheus + Grafana + Alertmanager) por región.
 2. Собирать ключевые метрики:
   - `nexus_consensus_height`, `nexus_finality_lag`, `torii_request_duration_seconds`, `validator_peer_count`.
-   - Логи через Loki/ELK для Torii и consensus сервисов.
+   - Logotipos de Loki/ELK para Torii y servicios de consenso.
 3. Дашборды:
-   - Здоровье консенсуса (высота блоков, finality, статус peers).
+   - Здоровье консенсуса (высота блоков, finalidad, статус pares).
    - Латентность/ошибки Torii API.
-   - Governance транзакции и статусы предложений.
-4. Алерты:
-   - Остановка производства блоков (>2 block intervals).
-   - Падение peer count ниже quorum.
+   - Gobernanza транзакции и статусы предложений.
+4. Alertas:
+   - Остановка производства блоков (>2 intervalos de bloque).
+   - Mayor recuento de pares sin quórum.
    - Спайки ошибок Torii.
-   - Backlog очереди governance предложений.
+   - Backlog очереди gobernanza предложений.
 
-## Шаг 6 - Валидация и handoff
-1. Запустить end-to-end валидацию:
-   - Отправить governance proposal (например изменение параметра).
-   - Пропустить через одобрение совета, чтобы убедиться, что pipeline governance работает.
-   - Запустить ledger state diff для проверки консистентности.
-2. Документировать runbook для on-call (incident response, failover, scaling).
-3. Сообщить о готовности командам SoraFS/SoraNet; подтвердить, что piggyback деплои могут указывать на Nexus узлы.
-
-## Чеклист реализации
-- [ ] Аудит genesis/configuration завершен.
-- [ ] Валидаторские и observer узлы развернуты с здоровым консенсусом.
-- [ ] Governance keys загружены, proposal протестирован.
-- [ ] CI/CD pipelines работают (build + deploy + smoke tests).
-- [ ] Observability dashboards активны с алертами.
-- [ ] Документация handoff передана downstream командам.
+## Paso 6 - Validación y traspaso
+1. Completar validaciones de extremo a extremo:
+   - Отправить propuesta de gobernanza (например изменение параметра).
+   - Пропустить через одобрение совета, чтобы убедиться, что проботает la gobernanza de tuberías.
+   - Запустить la diferencia de estado del libro mayor para comprobar la coherencia.
+2. Documentar el runbook de guardia (respuesta a incidentes, conmutación por error, escalado).
+3. Сообщить о готовности командам SoraFS/SoraNet; Después de todo, este piggyback puede implementarse en los usuarios Nexus.## Чеклист реализации
+- [ ] Аудит génesis/configuración завершен.
+- [ ] Validador y observador según el acuerdo de cada usuario.
+- [ ] Claves de gobernanza загружены, propuesta протестирован.
+- [ ] работают de tuberías de CI/CD (construcción + implementación + pruebas de humo).
+- [] Paneles de observabilidad que se activan con alertas.
+- [] Transferencia de documentos realizada por el comando descendente.

@@ -7,39 +7,40 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 0397eec8373494a74060a7244a7f923714723e5feacc4a54374ee4461f0ddde1
 source_last_modified: "2025-12-29T18:16:35.078130+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# SNS Training Evaluation Template
+# SNS སྦྱོང་བརྡར་བརྟག་དཔྱད།
 
-Please distribute this survey immediately after each session. Responses can be
-captured via form tool or Markdown and archived under
+ལཱ་ཡུན་རེ་རེ་གི་ཤུལ་ལས་ བརྟག་ཞིབ་འདི་ དེ་འཕྲོ་ལས་ བཀྲམ་སྤེལ་འབད་གནང་། ལན་ཚུ་ འབད་ཚུགས།
+འབྲི་ཤོག་ལག་ཆས་ ཡང་ན་ མརཀ་ཌའོན་དང་ འོག་ལུ་ གཏན་མཛོད་འབད་ཡོདཔ།
 `artifacts/sns/training/<suffix>/<cycle>/feedback/`.
 
-## Session metadata
-- Suffix:
-- Cycle:
-- Language:
-- Date:
-- Facilitator(s):
+## ལཱ་ཡུན་མེ་ཊ་ཌེ་ཊ་
+- རྗེས་འཇུག:
+- རྐང༌འཁོར:
+- སྐད༌ཡིག:
+- སྤྱི་ཚེས:
+- ཕེསི་ལི་ཊེ་ཊར་(ཚུ་):
 
-## Rating scale
-1 — Poor · 2 — Fair · 3 — Good · 4 — Very good · 5 — Excellent
+## ཚད་གཞི།
+1 — དབུལ་ཕོངས་ · — དྲང་བདེན། · · ལེགས་ཤོམ། · 4 — ཧ་ཅང་ལེགས་ཤོམ།
 
-| Question | 1 | 2 | 3 | 4 | 5 |
-|----------|---|---|---|---|---|
-| Clarity of KPI walkthrough | ☐ | ☐ | ☐ | ☐ | ☐ |
-| Usefulness of labs | ☐ | ☐ | ☐ | ☐ | ☐ |
-| Pace + time allocation | ☐ | ☐ | ☐ | ☐ | ☐ |
-| Localization quality (slides + facilitation) | ☐ | ☐ | ☐ | ☐ | ☐ |
-| Overall confidence entering suffix launch | ☐ | ☐ | ☐ | ☐ | ☐ |
+| དྲི་བ། 1 | 2 | 3 | 4 | 5 |
+|----------|--|--|-|-|-|--|--|--|--|--|
+| KPI གི་གསལ་བ། འགྲུལ་བཞུད། | ☐ | ☐ | ☐ | ☐ | ☐ |
+| བརྟག་དཔྱད་ཁང་གི་ཕན་ཐོགས་ | ☐ | ☐ | ☐ | ☐ | ☐ |
+| Pace + དུས་ཚོད་བགོ་བཀྲམ་ | ☐ | ☐ | ☐ | ☐ | ☐ |
+| ས་གནས་ཀྱི་སྤུས་ཚད་ (བཤུད་བརྙན་ + མཐུན་རྐྱེན།) | ☐ | ☐ | ☐ | ☐ | ☐ |
+| རྗེས་འཇུག་འགོ་བཙུགས་ནང་འཛུལ་བའི་སྤྱིར་བཏང་བློ་གཏད་ཅན། | ☐ | ☐ | ☐ | ☐ | ☐ |
 
-## Open questions
-1. Which topic needs more depth?
-2. Were any tools/docs missing from the workbook?
-3. Did the localization meet your expectations? If not, why?
-4. Additional comments / blockers the program should track.
+## དྲི་བ་ཁ་ཕྱེ།
+༡ དོན་ཚན་ག་ལུ་གཏིང་ཟབ་དགོཔ་ཨིན་ན།
+༢ ལཱ་གི་དེབ་ནང་ལས་ ལག་ཆས་/ཡིག་ཆ་ཚུ་ མེདཔ་ཨིན་ན?
+༣ ས་གནས་ཀྱི་གནས་སྟངས་འདི་གིས་ ཁྱོད་ཀྱི་རེ་བ་ཚུ་ གྲུབ་ཡོདཔ་ཨིན་ན? དེ་མེན་པ་ཅིན་ ག་ཅི་འབད་སྨོ?
+༤ ལས་རིམ་འདི་གིས་ བསམ་བརྗོད་ཁ་སྐོང་/བཀག་ཆ་འབད་མི་ཚུ་གིས་ བརྟག་ཞིབ་འབད་དགོ།
 
-## Follow-up
-- `[]` Feedback logged in governance tracker (ticket: __________)
-- `[]` Annex export captured (path: ____________________)
-- `[]` Action items assigned (owner + due date)
+## འཕྲོ་མཐུད
+- `[]` གཞུང་སྐྱོང་རྗེས་འདེད་ནང་ བསམ་ཚུལ་བྱུང་ཡོད། (Ticket: __________)
+- I18NI000000002X ཟུར་དེབ་འཛིན་བཟུང་འབད་ཡོདཔ། (འགྲུལ་ལམ་: ___________________)
+- `[]` བྱ་བའི་རྣམ་གྲངས་འགན་སྤྲོད་ (ཇོ་བདག་ + དུས་ཚོད་)

@@ -8,56 +8,53 @@ source_hash: a0022f5f9c53445d26876f0097635092b5c685d332bfa25b13243c584d358dfe
 source_last_modified: "2026-01-05T09:28:12.006723+00:00"
 translation_last_reviewed: 2026-02-07
 title: FASTPQ Metal Kernel Suite
+translator: machine-google-reviewed
 ---
 
-# FASTPQ Metal Kernel Suite
+# FASTPQ metall yadro to'plami
 
-The Apple Silicon backend ships a single `fastpq.metallib` that contains every
-Metal Shading Language (MSL) kernel exercised by the prover. This note explains
-the available entry points, their threadgroup limits, and the determinism
-guarantees that make the GPU path interchangeable with the scalar fallback.
+Apple Silicon backend har bir narsani o'z ichiga olgan bitta `fastpq.metallib` ni yetkazib beradi.
+Prover tomonidan qo'llaniladigan metall Shading Language (MSL) yadrosi. Bu eslatma tushuntiradi
+mavjud kirish nuqtalari, ularning ish zarralari chegaralari va determinizm
+GPU yo'lini skalyar qaytarilish bilan almashtirishni kafolatlaydi.
 
-The canonical implementation lives under
-`crates/fastpq_prover/metal/kernels/` and is compiled by
-`crates/fastpq_prover/build.rs` whenever `fastpq-gpu` is enabled on macOS.
-Runtime metadata (`metal_kernel_descriptors`) mirrors the information below so
-benchmarks and diagnostics can surface the same facts programmatically.【crates/fastpq_prover/metal/kernels/ntt_stage.metal:1】【crates/fastpq_prover/metal/kernels/poseidon2.metal:1】【crates/fastpq_prover/build.rs:1】【crates/fastpq_prover/src/metal.rs:248】
+Kanonik amalga oshirish ostida yashaydi
+`crates/fastpq_prover/metal/kernels/` va tomonidan tuzilgan
+MacOS tizimida `fastpq-gpu` yoqilganda `crates/fastpq_prover/build.rs`.
+Ish vaqti metama'lumotlari (`metal_kernel_descriptors`) quyidagi ma'lumotlarni aks ettiradi
+mezon va diagnostika bir xil faktlarni yuzaga keltirishi mumkin dasturiy jihatdan.【crates/fastpq_prover/metal/kernels/ntt_stage.metal:1】【crates/fastpq_prover/metal /kernels/poseidon2.metal:1】【crates/fastpq_prover/build.rs:1】【crates/fastpq_prover/src/metal.rs:248】
 
-## Kernel inventory
-
-| Entry point | Operation | Threadgroup cap | Tile stage cap | Notes |
+## Yadro inventarizatsiyasi| Kirish nuqtasi | Operatsiya | Mavzular guruhi qopqog'i | Plitka sahna qopqog'i | Eslatmalar |
 | ----------- | --------- | --------------- | -------------- | ----- |
-| `fastpq_fft_columns` | Forward FFT over trace columns | 256 threads | 32 stages | Uses shared-memory tiles for the first stages and applies inverse scaling when the planner requests an IFFT mode.【crates/fastpq_prover/metal/kernels/ntt_stage.metal:223】【crates/fastpq_prover/src/metal.rs:262】
-| `fastpq_fft_post_tiling` | Completes FFT/IFFT/LDE after the tile depth is reached | 256 threads | — | Runs the remaining butterflies directly out of device memory and handles the final coset/inverse factors before returning to the host.【crates/fastpq_prover/metal/kernels/ntt_stage.metal:447】【crates/fastpq_prover/src/metal.rs:262】
-| `fastpq_lde_columns` | Low-degree extension across columns | 256 threads | 32 stages | Copies coefficients into the evaluation buffer, executes tiled stages with the configured coset, and leaves the final stages to `fastpq_fft_post_tiling` when needed.【crates/fastpq_prover/metal/kernels/ntt_stage.metal:341】【crates/fastpq_prover/src/metal.rs:262】
-| `poseidon_trace_fused` | Hash columns and compute depth‑1 parents in one pass | 256 threads | — | Runs the same absorption/permutation as `poseidon_hash_columns`, stores the leaf digests directly into the output buffer, and immediately folds each `(left,right)` pair under the `fastpq:v1:trace:node` domain so `(⌈columns / 2⌉)` parents land after the leaf slice. Odd column counts duplicate the final leaf on-device, eliminating the follow-up kernel and the CPU fallback for the first Merkle layer.【crates/fastpq_prover/metal/kernels/poseidon2.metal:384】【crates/fastpq_prover/src/metal.rs:2407】
-| `poseidon_permute` | Poseidon2 permutation (STATE_WIDTH = 3) | 256 threads | — | Threadgroups cache the round constants/MDS rows in threadgroup memory, copy the MDS rows into per-thread registers, and process states in 4-state chunks so each round constant fetch is reused across multiple states before advancing. The rounds stay fully unrolled and every lane still walks multiple states, guaranteeing ≥4 096 logical threads per dispatch. `FASTPQ_METAL_POSEIDON_LANES` / `FASTPQ_METAL_POSEIDON_BATCH` pin the launch width and per-lane batch without rebuilding the metallib.【crates/fastpq_prover/metal/kernels/poseidon2.metal:1】【crates/fastpq_prover/src/metal_config.rs:78】【crates/fastpq_prover/src/metal.rs:1971】
+| `fastpq_fft_columns` | FFT-ni iz ustunlari ustidan yo'naltirish | 256 mavzu | 32 bosqich | Birinchi bosqichlar uchun umumiy xotira plitalaridan foydalanadi va rejalashtiruvchi IFFT rejimini talab qilganda teskari masshtabni qo'llaydi.【crates/fastpq_prover/metal/kernels/ntt_stage.metal:223】【crates/fastpq_prover/src/metal.rs:262】
+| `fastpq_fft_post_tiling` | Plitka chuqurligiga erishilgandan so'ng FFT/IFFT/LDE ni yakunlaydi | 256 mavzu | — | Qolgan kapalaklarni to'g'ridan-to'g'ri qurilma xotirasidan chiqaradi va xostga qaytishdan oldin yakuniy koset/teskari omillarni boshqaradi.【crates/fastpq_prover/metal/kernels/ntt_stage.metal:447】【crates/fastpq_prover/src/metal.rs:262】
+| `fastpq_lde_columns` | Ustunlar bo'ylab past darajali kengaytma | 256 mavzu | 32 bosqich | Koeffitsientlarni baholash buferiga ko'chiradi, sozlangan koset bilan qoplangan bosqichlarni bajaradi va yakuniy bosqichlarni `fastpq_fft_post_tiling` ga qoldiradi. kerak.【crates/fastpq_prover/metal/kernels/ntt_stage.metal:341】【crates/fastpq_prover/src/metal.rs:262】
+| `poseidon_trace_fused` | Xesh ustunlari va hisoblash chuqurligi‑1 ota-onani bir o‘tishda | 256 mavzu | — | `poseidon_hash_columns` bilan bir xil yutilish/o'zgartirishni amalga oshiradi, barg hazm qilishlarini to'g'ridan-to'g'ri chiqish buferiga saqlaydi va darhol `(left,right)` juftligini `fastpq:v1:trace:node` domeni ostida buklaydi, shunda `(⌈columns / 2⌉)` ota-onalar bargdan keyin erga tushadilar. G'alati ustunlar soni qurilmadagi oxirgi bargni takrorlaydi, birinchi Merkle qatlami uchun keyingi yadro va protsessor zaxirasini yo'q qiladi.【crates/fastpq_prover/metal/kernels/poseidon2.metal:384】【crates/fastpq_prover/src:2/407rs.】.
+| `poseidon_permute` | Poseidon2 almashtirish (STATE_WIDTH = 3) | 256 mavzu | — | Mavzular guruhlari dumaloq konstantalarni/MDS satrlarini mavzular guruhi xotirasida keshlaydi, MDS satrlarini har bir mavzu registrlariga ko'chiradi va holatlarni 4-holatli bo'laklarda qayta ishlaydi, shuning uchun har bir davra konstantasi oldinga siljishdan oldin bir nechta holatlar bo'ylab qayta ishlatiladi. Raundlar to'liq ochilgan bo'lib qoladi va har bir bo'lak hali ham bir nechta shtatlarni bosib o'tadi va har bir jo'natma uchun ≥4096 mantiqiy ipni kafolatlaydi. `FASTPQ_METAL_POSEIDON_LANES` / `FASTPQ_METAL_POSEIDON_BATCH` ishga tushirish kengligi va har bir chiziqli partiyani qayta tiklamasdan mahkamlang. metallib.【crates/fastpq_prover/metal/kernels/poseidon2.metal:1】【crates/fastpq_prover/src/metal_config.rs:78】【crates/fastpq_prover/src/metal.rs:1971】
 
-The descriptors are available at runtime via
-`fastpq_prover::metal_kernel_descriptors()` for tooling that wants to display
-the same metadata.
+Deskriptorlar ish vaqtida orqali mavjud
+Ko'rsatmoqchi bo'lgan asboblar uchun `fastpq_prover::metal_kernel_descriptors()`
+bir xil metama'lumotlar.
 
-## Deterministic Goldilocks arithmetic
+## Deterministik Goldilocks arifmetikasi- Barcha yadrolar Goldilocks maydonida belgilangan yordamchilar bilan ishlaydi
+  `field.metal` (modulli qo'shimcha/mul/sub, teskari, `pow5`).【crates/fastpq_prover/metal/kernels/field.metal:1】
+- FFT/LDE bosqichlari protsessor rejalashtiruvchisi ishlab chiqaradigan bir xil twiddle jadvallarini qayta ishlatadi.
+  `compute_stage_twiddles` har bir bosqichda bir twiddli va xostni oldindan hisoblaydi
+  Har bir jo'natishdan oldin massivni 1-bufer uyasi orqali yuklaydi, bu esa kafolatlanadi
+  GPU yo'li bir xil ildizlardan foydalanadi.【crates/fastpq_prover/src/metal.rs:1527】
+- LDE uchun Coset ko'paytirish yakuniy bosqichga birlashtiriladi, shuning uchun GPU hech qachon
+  protsessor kuzatuvi tartibidan ajralib turadi; xost baholash buferini nol bilan to'ldiradi
+  jo'natishdan oldin, to'ldirish xatti-harakatlarini deterministik holda saqlang.【crates/fastpq_prover/metal/kernels/ntt_stage.metal:288】【crates/fastpq_prover/src/metal.rs:898】
 
-- All kernels work over the Goldilocks field with helpers defined in
-  `field.metal` (modular add/mul/sub, inverses, `pow5`).【crates/fastpq_prover/metal/kernels/field.metal:1】
-- FFT/LDE stages reuse the same twiddle tables that the CPU planner produces.
-  `compute_stage_twiddles` precomputes one twiddle per stage and the host
-  uploads the array through buffer slot 1 before each dispatch, guaranteeing the
-  GPU path uses identical roots of unity.【crates/fastpq_prover/src/metal.rs:1527】
-- Coset multiplication for LDE is fused into the final stage so the GPU never
-  diverges from the CPU trace layout; the host zero-fills the evaluation buffer
-  before dispatch, keeping padding behaviour deterministic.【crates/fastpq_prover/metal/kernels/ntt_stage.metal:288】【crates/fastpq_prover/src/metal.rs:898】
+## Metallib avlodi
 
-## Metallib generation
+`build.rs` individual `.metal` manbalarini `.air` obyektlariga kompilyatsiya qiladi va keyin
+ularni `fastpq.metallib` ga bog'laydi va yuqorida sanab o'tilgan har bir kirish nuqtasini eksport qiladi.
+`FASTPQ_METAL_LIB`ni ushbu yo'lga o'rnatish (qurilish skripti buni amalga oshiradi
+avtomatik) ish vaqti kutubxonani qat'iy nazar yuklash imkonini beradi
+`cargo` qurilish artefaktlarini joylashtirgan joydan.【crates/fastpq_prover/build.rs:45】
 
-`build.rs` compiles the individual `.metal` sources into `.air` objects and then
-links them into `fastpq.metallib`, exporting every entry point listed above.
-Setting `FASTPQ_METAL_LIB` to that path (the build script does this
-automatically) allows the runtime to load the library deterministically regardless
-of where `cargo` placed the build artifacts.【crates/fastpq_prover/build.rs:45】
-
-For parity with CI runs you can regenerate the library manually:
+CI ishlanmalari bilan tenglik uchun kutubxonani qo'lda qayta tiklashingiz mumkin:
 
 ```bash
 export OUT_DIR=$PWD/target/metal && mkdir -p "$OUT_DIR"
@@ -67,18 +64,18 @@ xcrun metallib "$OUT_DIR/ntt_stage.air" "$OUT_DIR/poseidon2.air" -o "$OUT_DIR/fa
 export FASTPQ_METAL_LIB="$OUT_DIR/fastpq.metallib"
 ```
 
-## Threadgroup sizing heuristics
+## Mavzular guruhini o'lchash evristikasi
 
-`metal_config::fft_tuning` threads the device execution width and max threads per
-threadgroup into the planner so runtime dispatches respect the hardware limits.
-The defaults clamp to 32/64/128/256 lanes as the log-size increases, and the
-tile depth now walks from five stages to four at `log_len ≥ 12`, then keeps the
-shared-memory pass active for 12/14/16 stages once the trace crosses
-`log_len ≥ 18/20/22` before handing work to the post-tiling kernel. Operator
-overrides (`FASTPQ_METAL_FFT_LANES`, `FASTPQ_METAL_FFT_TILE_STAGES`) flow through
-`FftArgs::threadgroup_lanes`/`local_stage_limit` and are applied by the kernels
-above without rebuilding the metallib.【crates/fastpq_prover/src/metal_config.rs:12】【crates/fastpq_prover/src/metal.rs:599】
+`metal_config::fft_tuning` qurilmaning ishlash kengligi va har biriga maksimal iplarni o'tkazadi
+ish vaqti jo'natmalari apparat chegaralarini hurmat qilish uchun rejalashtiruvchiga ish zarrachalarini kiriting.
+Standartlar log o'lchami kattalashgani sayin 32/64/128/256 qatorlarga mahkamlanadi va
+plitka chuqurligi endi `log_len ≥ 12` da besh bosqichdan to'rt bosqichga o'tadi, keyin esa
+umumiy xotira o'tish 12/14/16 bosqichlari uchun faol iz kesib bir marta
+Ishni plitkadan keyingi yadroga topshirishdan oldin `log_len ≥ 18/20/22`. Operator
+bekor qilish (`FASTPQ_METAL_FFT_LANES`, `FASTPQ_METAL_FFT_TILE_STAGES`) orqali oqim
+`FftArgs::threadgroup_lanes`/`local_stage_limit` va yadrolar tomonidan qo'llaniladi
+yuqoridagi metallibni qayta tiklamasdan.【crates/fastpq_prover/src/metal_config.rs:12】【crates/fastpq_prover/src/metal.rs:599】
 
-Use `fastpq_metal_bench` to capture the resolved tuning values and verify that
-the multi-pass kernels were exercised (`post_tile_dispatches` in the JSON) before
-shipping a benchmark bundle.【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:1048】
+Yechilgan sozlash qiymatlarini olish va buni tekshirish uchun `fastpq_metal_bench` dan foydalaning
+ko'p o'tishli yadrolar (JSONda `post_tile_dispatches`) oldin ishlatilgan
+benchmark to'plamini jo'natish.【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:1048】

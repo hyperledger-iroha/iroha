@@ -7,39 +7,40 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 164bd373091ae3280f9f90fcfd915a90088b0c79b8f3759ffd2548edb64d0a90
 source_last_modified: "2026-01-28T17:11:30.632934+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# IH58 Rollout Note for SDK & Codec Owners
+# IH58 ཨེསི་ཌི་ཀེ་དང་ཨང་རྟགས་བདག་པོ་ཚུ་གི་དོན་ལུ་ ཐོ་ཡིག་དྲན་ཐོ།
 
-Teams: Rust SDK, TypeScript/JavaScript SDK, Python SDK, Kotlin SDK, Codec tooling
+སྡེ་ཚན་: རཱསི་ཨེསི་ཌི་ཀེ་ ཊའིཔ་སི་ཀིརིཔཊི་/ཇ་བ་ཨིསི་ཀིརིཔ་ཨེསི་ཌི་ཀེ་ པའི་ཐོན་ཨེསི་ཌི་ཀེ་ ཀོཊ་ལིན་ཨེསི་ཌི་ཀེ་ ཀོཌེཀ་ལག་ཆས་ཚུ།
 
-Context: `docs/account_structure.md` now reflects the shipping IH58 account ID
-implementation. Please align SDK behaviour and tests with the canonical spec.
+སྐབས་དོན་: I18NI000000000X ད་ལྟ་ IH58 རྩིས་ཁྲའི་ ID གྲུ་གཟིངས་བཏང་བའི་ IH58 རྩིས་ཁྲའི་ ID བསྟན་ཡོད།
+ལག་ལེན་འཐབ་ནི། ཨེསི་ཌི་ཀེ་ སྤྱོད་ལམ་དང་ བརྟག་དཔྱད་ཚུ་ ཀེ་ནོ་ནིག་ སི་ཊིབ་དང་གཅིག་ཁར་ ཕྲང་སྒྲིག་འབད་གནང་།
 
-Key references:
-- Address codec + header layout — `docs/account_structure.md` §2
-- Curve registry — `docs/source/references/address_curve_registry.md`
-- Norm v1 domain handling — `docs/source/references/address_norm_v1.md`
-- Fixture vectors — `fixtures/account/address_vectors.json`
+ལྡེ་མིག་གཞི་བསྟུན་ཚུ།
+- ཁ་བྱང་ ཀོ་ཌེཀ་ + མགོ་ཡིག་སྒྲིག་བཀོད་ — I18NI000000001X §2
+- གུག་གུག — `docs/source/references/address_curve_registry.md`
+- Norm v1 མངའ་ཁོངས་འཛིན་སྐྱོང་ — `docs/source/references/address_norm_v1.md`
+- ཕིག་ཅར་བེག་ཊར་ — `fixtures/account/address_vectors.json`
 
-Action items:
-1. **Canonical output:** `AccountId::to_string()`/Display MUST emit IH58 only
-   (no `@domain` suffix). Canonical hex is for debugging (`0x...`).
-2. **Accepted inputs:** parsers MUST accept IH58 (preferred), `sora` compressed,
-   and canonical hex (`0x...` only; bare hex is rejected). Inputs MAY carry an
-   `@<domain>` suffix for routing hints; `<label>@<domain>` aliases require a
-   resolver. Raw `public_key@domain` (multihash hex) remains supported.
-3. **Resolvers:** domainless IH58/sora parsing requires a domain-selector
-   resolver unless the selector is implicit default (use the configured default
-   domain label). UAID (`uaid:...`) and opaque (`opaque:...`) literals require
-   resolvers.
-4. **IH58 checksum:** use Blake2b-512 over `IH58PRE || prefix || payload`, take
-   the first 2 bytes. Compressed alphabet base is **105**.
-5. **Curve gating:** SDKs default to Ed25519-only. Provide explicit opt-in for
-   ML‑DSA/GOST/SM (Swift build flags; JS/Android `configureCurveSupport`). Do
-   not assume secp256k1 is enabled by default outside Rust.
-6. **No CAIP-10:** there is no shipped CAIP‑10 mapping yet; do not expose or
-   depend on CAIP‑10 conversions.
+བྱ་བའི་རྣམ་གྲངས།
+1. **ཀེ་ནོ་ནིག་ཨའུཊི་པུཊི་:** `AccountId::to_string()`/བཀྲམ་སྟོན་འབད་དགོཔ་ IH58 རྐྱངམ་གཅིག
+   (No I18NI0000006X རྗེས་འཇུག་)། ཀེ་ནོ་ནིག་ཧེགསི་འདི་ རྐྱེན་སེལ་འབད་ནིའི་དོན་ལུ་ཨིན། (I18NI000000007X)
+2. **ངོས་ལེན་འབད་ཡོད་པའི་ཨིན་པུཊི་:** དབྱེ་དཔྱད་འབད་མི་ཚུ་གིས་ IH58 (དགའ་གདམ་) IH58 (དགའ་གདམ་), `sora` བསྡམ་བཞག་ཡོདཔ།
+   དང་ ཀེ་ནོ་ནིག་ཧེགསི་ (`0x...` རྐྱངམ་གཅིག; ཧྲིལ་བུམ་གྱི་ཧེག་སི་ ཆ་འཇོག་འབད་ཡོདཔ་)། ཨིན་པུཊི་ཚུ་ འབག་འོང་།
+   `@<domain>` འགྲུལ་ལམ་བརྡ་སྟོན་གྱི་དོན་ལུ་ རྗེས་འཇུག་; I18NI000000011 ཚིག་བརྗོད་ཚུ་ལུ་ a དགོཔ་ཨིན།
+   སེལ་ནི་; སེལ་ནི་ I18NI000000012X (multihash hex) འདི་རྒྱབ་སྐྱོར་ལུས་ཡོདཔ་ཨིན།
+3. **སེལ་མི་:** ཌོ་མེན་མེད་ IH58/sora དབྱེ་དཔྱད་འབད་ནི་ལུ་ མངའ་ཁོངས་-སེལ་འཐུའི་དོན་ལུ་དགོཔ་ཨིན།
+   སེལ་འཐུ་འདི་ མངོན་གསལ་ཅན་གྱི་སྔོན་སྒྲིག་ཨིན་པ་ཅིན་ (རིམ་སྒྲིག་འབད་ཡོད་པའི་སྔོན་སྒྲིག་ལག་ལེན་འཐབ།
+   མངའ་ཁོངས་ཁ་ཡིག་)། ཡུ་ཨེ་ཨའི་ཌི་ (`uaid:...`) དང་ མ་མཐོང་པའི་ (`opaque:...`) དོན་དངོས་ཚུ་ལུ་ དགོས་མཁོ་ཡོདཔ་ཨིན།
+   སེལ་མཁན།; སེལ་མི།
+4. **IH58 ཅེག་སམ་:** `IH58PRE || prefix || payload` ལས་ Blake2b-512 ལག་ལེན་འཐབ།
+   the དང་པོ་ ༢ བཱའིཊི། བསྡམས་ཡོད་པའི་ཡི་གུ་གཞི་རྟེན་འདི་ **105** ཨིན།
+༥ ** གུག་གུགཔ་གི་སྒྲ་སྒྲིག་:** ཨེསི་ཌི་ཀེ་ཚུ་ Ed25519-only ལུ་སྔོན་སྒྲིག་འབད། དོན་གསལ་གསལ་སྟོན་འབད་ནི།
+   ML‐DSA/GOST/SM (Swift བཟོ་བསྐྲུན་གྱི་རྒྱལ་དར་; JS/Android I18NI0000016X). འབད
+   secp256k1 འདི་ རཱསི་ཕྱི་ཁར་ སྔོན་སྒྲིག་གིས་ ལྕོགས་ཅན་བཟོ་ཡོདཔ་སྦེ་ མནོ་བསམ་མ་གཏང་།
+6. **CAIP-10:** ད་ལྟའི་བར་དུ་ CAIP‐10 སབ་ཁྲ་ད་དུང་བཏང་མེད། མ་བཏོན།
+   fult on CAIP‐10 བསྒྱུར་བཅོས་ཚུ།
 
-Please confirm once the codecs/tests are updated; open questions can be tracked
-in the account-addressing RFC thread.
+ཀོ་ཌེཀ་/བརྟག་དཔྱད་ཚུ་དུས་མཐུན་བཟོ་ཚར་བའི་ཤུལ་ལས་ ངེས་དཔྱད་འབད་གནང་། ཁ་ཕྱེ་བའི་དྲི་བ་ཚུ་ བརྟག་ཞིབ་འབད་ཚུགས།
+རྩིས་ཐོ་-ཁ་བྱང་ RFC ཐགསཔ་ནང་།

@@ -8,46 +8,48 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraFS Chunker Profile Authoring Guide
 sidebar_label: Chunker Authoring Guide
 description: Checklist for proposing new SoraFS chunker profiles and fixtures.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
+:::注意规范来源
 :::
 
-# SoraFS Chunker Profile Authoring Guide
+# SoraFS Chunker 配置文件创作指南
 
-This guide explains how to propose and publish new chunker profiles for SoraFS.
-It complements the architecture RFC (SF-1) and the registry reference (SF-2a)
-with concrete authoring requirements, validation steps, and proposal templates.
-For a canonical example, see
+本指南介绍了如何为 SoraFS 提议和发布新的分块配置文件。
+它补充了架构 RFC (SF-1) 和注册表参考 (SF-2a)
+具有具体的创作要求、验证步骤和提案模板。
+有关规范示例，请参阅
 `docs/source/sorafs/proposals/sorafs_sf1_profile_v1.json`
-and the accompanying dry-run log in
-`docs/source/sorafs/reports/sf1_determinism.md`.
+以及随附的试运行登录
+`docs/source/sorafs/reports/sf1_determinism.md`。
 
-## Overview
+## 概述
 
-Every profile that enters the registry must:
+进入注册表的每个配置文件都必须：
 
-- advertise deterministic CDC parameters and multihash settings identical across
-  architectures;
-- ship replayable fixtures (Rust/Go/TS JSON + fuzz corpora + PoR witnesses) that
-  downstream SDKs can verify without bespoke tooling;
-- include governance-ready metadata (namespace, name, semver) plus migration
-- pass the deterministic diff suite before council review.
+- 公布相同的确定性 CDC 参数和多重哈希设置
+  架构；
+- 发布可重玩的装置（Rust/Go/TS JSON + 模糊语料库 + PoR 见证）
+  下游 SDK 无需定制工具即可验证；
+- 包括治理就绪元数据（命名空间、名称、semver）以及迁移
+- 在理事会审查之前通过确定性差异套件。
 
-Follow the checklist below to prepare a proposal that satisfies those rules.
+请按照下面的清单准备满足这些规则的提案。
 
-## Registry Charter Snapshot
+## 注册章程快照
 
-Before drafting a proposal, confirm it conforms to the registry charter enforced
-by `sorafs_manifest::chunker_registry::ensure_charter_compliance()`:
+在起草提案之前，请确认其符合强制执行的注册管理机构章程
+通过 `sorafs_manifest::chunker_registry::ensure_charter_compliance()`：
 
-- Profile IDs are positive integers that increase monotonically without gaps.
-- The canonical handle (`namespace.name@semver`) must appear in the alias list
-  and **must** be the first entry.
-- No alias may collide with another canonical handle or appear more than once.
-- Aliases must be non-empty and trimmed of whitespace.
+- 配置文件 ID 是单调递增且无间隙的正整数。
+- 规范句柄 (`namespace.name@semver`) 必须出现在别名列表中
+  并且**必须**是第一个条目。
+- 别名不得与其他规范句柄冲突或出现多次。
+- 别名必须非空并删除空格。
 
-Handy CLI helpers:
+方便的 CLI 助手：
 
 ```bash
 # JSON listing of all registered descriptors (ids, handles, aliases, multihash)
@@ -58,76 +60,76 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
   --promote-profile=sorafs.sf1@1.0.0 --json-out=-
 ```
 
-These commands keep proposals aligned with the registry charter and provide the
-canonical metadata needed in governance discussions.
+这些命令使提案与注册管理机构章程保持一致，并提供
+治理讨论中所需的规范元数据。
 
-## Required Metadata
+## 所需的元数据
 
-| Field | Description | Example (`sorafs.sf1@1.0.0`) |
-|-------|-------------|------------------------------|
-| `namespace` | Logical grouping for related profiles. | `sorafs` |
-| `name` | Human-readable label. | `sf1` |
-| `semver` | Semantic version string for the parameter set. | `1.0.0` |
-| `profile_id` | Monotonic numeric identifier assigned once the profile lands. Reserve the next id but do not reuse existing numbers. | `1` |
-| `profile_aliases` | Optional additional handles exposed to clients during negotiation. Always include the canonical handle as the first entry. | `["sorafs.sf1@1.0.0"]` |
-| `profile.min_size` | Minimum chunk length in bytes. | `65536` |
-| `profile.target_size` | Target chunk length in bytes. | `262144` |
-| `profile.max_size` | Maximum chunk length in bytes. | `524288` |
-| `profile.break_mask` | Adaptive mask used by the rolling hash (hex). | `0x0000ffff` |
-| `profile.polynomial` | Gear polynomial constant (hex). | `0x3da3358b4dc173` |
-| `gear_seed` | Seed used to derive the 64 KiB gear table. | `sorafs-v1-gear` |
-| `chunk_multihash.code` | Multihash code for per-chunk digests. | `0x1f` (BLAKE3-256) |
-| `chunk_multihash.digest` | Digest of the canonical fixtures bundle. | `13fa...c482` |
-| `fixtures_root` | Relative directory containing the regenerated fixtures. | `fixtures/sorafs_chunker/sorafs.sf1@1.0.0/` |
-| `por_seed` | Seed for deterministic PoR sampling (`splitmix64`). | `0xfeedbeefcafebabe` (example) |
+|领域|描述 |示例 (`sorafs.sf1@1.0.0`) |
+|--------|-------------|------------------------------|
+| `namespace` |相关配置文件的逻辑分组。 | `sorafs` |
+| `name` |人类可读的标签。 | `sf1` |
+| `semver` |参数集的语义版本字符串。 | `1.0.0` |
+| `profile_id` |配置文件登陆后分配的单调数字标识符。保留下一个 ID，但不要重复使用现有号码。 | `1` |
+| `profile_aliases` |在谈判期间向客户公开的可选附加句柄。始终将规范句柄作为第一个条目。 | `["sorafs.sf1@1.0.0"]` |
+| `profile.min_size` |最小块长度（以字节为单位）。 | `65536` |
+| `profile.target_size` |目标块长度（以字节为单位）。 | `262144` |
+| `profile.max_size` |最大块长度（以字节为单位）。 | `524288` |
+| `profile.break_mask` |滚动哈希（十六进制）使用的自适应掩码。 | `0x0000ffff` |
+| `profile.polynomial` |齿轮多项式常数（十六进制）。 | `0x3da3358b4dc173` |
+| `gear_seed` |用于派生 64KiB 齿轮表的种子。 | `sorafs-v1-gear` |
+| `chunk_multihash.code` |每个块摘要的多重哈希代码。 | `0x1f` (BLAKE3-256) |
+| `chunk_multihash.digest` |规范固定装置包的摘要。 | `13fa...c482` |
+| `fixtures_root` |包含重新生成的装置的相对目录。 | `fixtures/sorafs_chunker/sorafs.sf1@1.0.0/` |
+| `por_seed` |确定性 PoR 采样的种子 (`splitmix64`)。 | `0xfeedbeefcafebabe`（示例）|
 
-The metadata must appear both in the proposal document and inside the generated
-fixtures so the registry, CLI tooling, and governance automation can confirm the
-values without manual cross-referencing. When in doubt, run the chunk-store and
-manifest CLIs with `--json-out=-` to stream the computed metadata into review
-notes.
+元数据必须同时出现在提案文档和生成的提案文档中
+固定装置，以便注册表、CLI 工具和治理自动化可以确认
+无需手动交叉引用的值。如有疑问，请运行 chunk-store 并
+带有 `--json-out=-` 的清单 CLI，用于将计算的元数据流式传输以供审核
+笔记。
 
-### CLI & Registry Touchpoints
+### CLI 和注册表接触点
 
-- `sorafs_manifest_chunk_store --profile=<handle>` – re-run chunk metadata,
-  manifest digest, PoR checks with the proposed parameters.
-- `sorafs_manifest_chunk_store --json-out=-` – stream the chunk-store report to
-  stdout for automated comparisons.
-- `sorafs_manifest_stub --chunker-profile=<handle>` – confirm manifests and CAR
-  plans embed the canonical handle plus aliases.
-- `sorafs_manifest_stub --plan=-` – feed the previous `chunk_fetch_specs` back
-  in to verify offsets/digests post-change.
+- `sorafs_manifest_chunk_store --profile=<handle>` – 重新运行块元数据，
+  清单摘要，PoR 使用建议的参数进行检查。
+- `sorafs_manifest_chunk_store --json-out=-` – 将块存储报告流式传输至
+  用于自动比较的标准输出。
+- `sorafs_manifest_stub --chunker-profile=<handle>` – 确认舱单和 CAR
+  计划嵌入规范句柄和别名。
+- `sorafs_manifest_stub --plan=-` – 反馈之前的 `chunk_fetch_specs`
+  来验证更改后的偏移量/摘要。
 
-Record the command output (digests, PoR roots, manifest hashes) in the proposal
-so reviewers can reproduce them verbatim.
+在提案中记录命令输出（摘要、PoR 根、清单哈希）
+这样审稿人就可以逐字重现它们。
 
-## Determinism & Validation Checklist
+## 确定性和验证清单
 
-1. **Regenerate fixtures**
+1. **重新生成灯具**
    ```bash
    cargo run --locked -p sorafs_chunker --bin export_vectors \
      --signature-out=fixtures/sorafs_chunker/manifest_signatures.json
    ```
-2. **Run the parity suite** – `cargo test -p sorafs_chunker` and the
-   cross-language diff harness (`crates/sorafs_chunker/tests/vectors.rs`) must be
-   green with the new fixtures in place.
-3. **Replay fuzz/back-pressure corpora** – execute `cargo fuzz list` and the
-   streaming harness (`fuzz/sorafs_chunker`) against the regenerated assets.
-4. **Verify Proof-of-Retrievability witnesses** – run
-   `sorafs_manifest_chunk_store --por-sample=<n>` using the proposed profile and
-   confirm the roots match the fixture manifest.
-5. **CI dry run** – invoke `ci/check_sorafs_fixtures.sh` locally; the script
-   should succeed with the new fixtures and existing `manifest_signatures.json`.
-6. **Cross-runtime confirmation** – ensure Go/TS bindings consume the regenerated
-   JSON and emit identical chunk boundaries and digests.
+2. **运行奇偶校验套件** – `cargo test -p sorafs_chunker` 和
+   跨语言差异工具 (`crates/sorafs_chunker/tests/vectors.rs`) 必须是
+   绿色，新装置就位。
+3. **重放模糊/背压语料库** – 执行 `cargo fuzz list` 和
+   针对再生资产的流式处理（`fuzz/sorafs_chunker`）。
+4. **验证可检索性证明见证** – 运行
+   `sorafs_manifest_chunk_store --por-sample=<n>` 使用建议的配置文件和
+   确认根与夹具清单匹配。
+5. **CI 试运行** – 本地调用 `ci/check_sorafs_fixtures.sh`；脚本
+   新的灯具和现有的 `manifest_signatures.json` 应该会成功。
+6. **跨运行时确认** – 确保 Go/TS 绑定消耗重新生成的
+   JSON 并发出相同的块边界和摘要。
 
-Document the commands and resulting digests in the proposal so the Tooling WG
-can re-run them without guesswork.
+在提案中记录命令和生成的摘要，以便工具工作组
+可以重新运行它们而无需猜测。
 
-### Manifest / PoR Confirmation
+### 清单/PoR 确认
 
-After regenerating fixtures, run the full manifest pipeline to ensure CAR
-metadata and PoR proofs remain consistent:
+重新生成固定装置后，运行完整的清单管道以确保 CAR
+元数据和 PoR 证明保持一致：
 
 ```bash
 # Validate chunk metadata + PoR with the new profile
@@ -151,44 +153,44 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
   --plan=chunk_plan.json --json-out=-
 ```
 
-Replace the input file with any representative corpus used by your fixtures
-(e.g., the 1 GiB deterministic stream) and attach the resulting digests to the
-proposal.
+将输入文件替换为您的装置使用的任何代表性语料库
+（例如，1GiB 确定性流）并将生成的摘要附加到
+提案。
 
-## Proposal Template
+## 提案模板
 
-Proposals are submitted as `ChunkerProfileProposalV1` Norito records checked into
-`docs/source/sorafs/proposals/`. The JSON template below illustrates the expected
-shape (substitute your values as needed):
+提案作为已签入的 `ChunkerProfileProposalV1` Norito 记录提交
+`docs/source/sorafs/proposals/`。下面的 JSON 模板说明了预期的结果
+形状（根据需要替换您的值）：
 
 
-Provide a matching Markdown report (`determinism_report`) that captures the
-command output, chunk digests, and any deviations encountered during validation.
+提供匹配的 Markdown 报告 (`determinism_report`)，以捕获
+命令输出、块摘要以及验证过程中遇到的任何偏差。
 
-## Governance Workflow
+## 治理工作流程
 
-1. **Submit PR with proposal + fixtures.** Include the generated assets, the
-   Norito proposal, and updates to `chunker_registry_data.rs`.
-2. **Tooling WG review.** Reviewers re-run the validation checklist and confirm
-   the proposal aligns with registry rules (no id reuse, determinism satisfied).
-3. **Council envelope.** Once approved, council members sign the proposal digest
-   (`blake3("sorafs-chunker-profile-v1" || canonical_bytes)`) and append their
-   signatures to the profile envelope stored alongside the fixtures.
-4. **Registry publish.** Merge bumps the registry, docs, and fixtures. The
-   default CLI remains on the previous profile until governance declares the
-   migration ready.
-5. **Deprecation tracking.** After the migration window, update the registry to
-   ledger.
+1. **提交带有提案+固定装置的 PR。** 包括生成的资产、
+   Norito提案，并更新为`chunker_registry_data.rs`。
+2. **工具工作组审查。** 审查人员重新运行验证清单并确认
+   该提案符合注册管理机构规则（无 ID 重用，满足确定性）。
+3. **理事会信封。** 一旦获得批准，理事会成员签署提案摘要
+   (`blake3("sorafs-chunker-profile-v1" || canonical_bytes)`) 并附加它们
+   与灯具一起存储的配置文件信封的签名。
+4. **注册表发布。** 合并会影响注册表、文档和固定装置。的
+   默认 CLI 保留在以前的配置文件上，直到治理声明
+   迁移准备就绪。
+5. **弃用跟踪。** 在迁移窗口之后，将注册表更新为
+   分类帐。
 
-## Authoring Tips
+## 创作技巧
 
-- Prefer even power-of-two bounds to minimise edge-case chunking behaviour.
-- Avoid changing the multihash code without coordinating manifest and gateway
-- Keep gear table seeds human-readable but globally unique to simplify audit
-  trails.
-- Store any benchmarking artefacts (e.g., throughput comparisons) under
-  `docs/source/sorafs/reports/` for future reference.
+- 甚至更喜欢二次幂边界以最小化边缘情况分块行为。
+- 避免在未协调清单和网关的情况下更改多重哈希代码
+- 保持齿轮表种子可读但全球唯一，以简化审核
+  踪迹。
+- 将任何基准测试工件（例如吞吐量比较）存储在
+  `docs/source/sorafs/reports/` 供将来参考。
 
-For operational expectations during rollout refer to the migration ledger
-(`docs/source/sorafs/migration_ledger.md`). For runtime conformance rules see
-`docs/source/sorafs/chunker_conformance.md`.
+有关推出期间的运营预期，请参阅迁移分类账
+（`docs/source/sorafs/migration_ledger.md`）。有关运行时一致性规则，请参阅
+`docs/source/sorafs/chunker_conformance.md`。

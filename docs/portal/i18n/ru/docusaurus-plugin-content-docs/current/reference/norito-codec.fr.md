@@ -4,45 +4,45 @@ direction: ltr
 source: docs/portal/docs/reference/norito-codec.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Reference du codec Norito
+# Ссылка на кодек Norito
 
-Norito est la couche de serialisation canonique d'Iroha. Chaque message on-wire, payload sur disque et API inter-composants utilise Norito afin que les nuds s'accordent sur des octets identiques meme lorsqu'ils tournent sur du materiel different. Cette page resume les elements cles et renvoie vers la specification complete dans `norito.md`.
+Norito — это канонический диван для сериализации Iroha. Передача сообщений по сети, полезная нагрузка на диске и межкомпонентные API используют Norito в зависимости от того, что данные совпадают с идентификаторами октетов, например, турниры по различным материалам. На этой странице резюме элементов cles и отправка в соответствии со спецификацией, полной в `norito.md`.
 
-## Disposition de base
+## Расположение базы
 
-| Composant | Objectif | Source |
+| Композитор | Объектиф | Источник |
 | --- | --- | --- |
-| **Header** | Encapsule les payloads avec magic/version/schema hash, CRC64, longueur et tag de compression; v1 exige `VERSION_MINOR = 0x00` et valide les flags d'en-tete contre le masque supporte (par defaut `0x00`). | `norito::header` - voir `norito.md` ("Header & Flags", racine du depot) |
-| **Payload nu** | Encodage deterministe des valeurs utilise pour le hashing/comparaison. Le transport on-wire utilise toujours un header; les octets nus sont internes uniquement. | `norito::codec::{Encode, Decode}` |
-| **Compression** | Zstd optionnel (et acceleration GPU experimentale) selectionne via l'octet de compression du header. | `norito.md`, "Compression negotiation" |
+| **Заголовок** | Инкапсуляция полезных данных с хешем магии/версии/схемы, CRC64, длиной и тегами сжатия; v1 содержит `VERSION_MINOR = 0x00` и действительные флаги для борьбы с поддержкой маски (по умолчанию `0x00`). | `norito::header` - voir `norito.md` ("Заголовок и флаги", racine du depot) |
+| **Полезная нагрузка отсутствует** | Определенное кодирование значений используется для хеширования/сравнения. Для проводного транспорта используется toujours un header; les Octets nus sont internes unique. | `norito::codec::{Encode, Decode}` |
+| **Сжатие** | Опция Zstd (и экспериментальное ускорение графического процессора) выбирается с помощью октета сжатия заголовка. | `norito.md`, «Согласование сжатия» |
 
-Le registre des flags de layout (packed-struct, packed-seq, field bitset, compact lengths) vit dans `norito::header::flags`. La v1 utilise par defaut les flags `0x00` mais accepte des flags explicites dans le masque supporte; les bits inconnus sont rejetes. `norito::header::Flags` est conserve pour l'inspection interne et les versions futures.
+Регистрация флагов макета (упакованная структура, упакованная последовательность, битовый набор полей, компактная длина) в `norito::header::flags`. В версии 1 используются флаги по умолчанию `0x00`, которые принимают явные флаги в поддерживаемой маске; les bits inconnus sont rejetes. `norito::header::Flags` предназначен для внутренней проверки и будущих версий.
 
-## Support des derives
+## Поддержка производных
 
-`norito_derive` fournit les derives `Encode`, `Decode`, `IntoSchema` et les helpers JSON. Conventions cles:
+`norito_derive` образует файлы `Encode`, `Decode`, `IntoSchema` и вспомогательные файлы JSON. Условные обозначения:
 
-- Les derives generent des chemins AoS et packed; v1 utilise le layout AoS par defaut (flags `0x00`) sauf si les flags d'en-tete optent pour des variantes packed. L'implementation se trouve dans `crates/norito_derive/src/derive_struct.rs`.
-- Les fonctionnalites qui affectent le layout (`packed-struct`, `packed-seq`, `compact-len`) sont opt-in via les flags d'en-tete et doivent etre encodees/decodees de maniere coherente entre pairs.
-- Les helpers JSON (`norito::json`) fournissent un JSON deterministe adosse a Norito pour les API publiques. Utilisez `norito::json::{to_json_pretty, from_json}` - jamais `serde_json`.
+- Les genent des chemins AoS и упакованы; v1 использует макет AoS по умолчанию (флаги `0x00`) с использованием флагов, выбранных отдельно для упакованных вариантов. Реализация найдена в `crates/norito_derive/src/derive_struct.rs`.
+- Функциональные возможности, влияющие на макет файла (`packed-struct`, `packed-seq`, `compact-len`), можно включить с помощью флажков для согласования и декодирования маньерных последовательностей между парами.
+- Помощники JSON (`norito::json`) четырежды определяют JSON и добавляют Norito для общедоступных API. Используйте `norito::json::{to_json_pretty, from_json}` - jamais `serde_json`.
 
-## Multicodec et tables d'identifiants
+## Мультикодек и таблицы идентификаторов
 
-Norito conserve ses affectations multicodec dans `norito::multicodec`. La table de reference (hashes, types de cles, descripteurs de payload) est maintenue dans `multicodec.md` a la racine du depot. Lorsqu'un nouvel identifiant est ajoute:
+Norito сохраняет влияние мультикодека в `norito::multicodec`. Справочная таблица (хэши, типы файлов, описания полезной нагрузки) поддерживается в `multicodec.md` в режиме хранилища. Новый идентификатор Lorsqu'un est ajoute:
 
-1. Mettez a jour `norito::multicodec::registry`.
-2. Etendez la table dans `multicodec.md`.
-3. Regenerez les bindings downstream (Python/Java) s'ils consomment la map.
+1. Меттез в журнале `norito::multicodec::registry`.
+2. Откройте таблицу в `multicodec.md`.
+3. Повторно создать последующие привязки (Python/Java) для соответствия карте.
 
-## Regenerer les docs et fixtures
+## Обновить документы и приспособления
 
-Avec le portail qui heberge actuellement un resume en prose, utilisez les sources Markdown amont comme source de verite:
+Чтобы получить доступ к резюме в прозе, используйте исходные тексты Markdown, а не настоящие источники:
 
-- **Spec**: `norito.md`
-- **Table multicodec**: `multicodec.md`
-- **Benchmarks**: `crates/norito/benches/`
-- **Golden tests**: `crates/norito/tests/`
-
-Quand l'automatisation Docusaurus sera en ligne, le portail sera mis a jour via un script de sync (suivi dans `docs/portal/scripts/`) qui extrait les donnees depuis ces fichiers. D'ici la, gardez cette page alignee manuellement a chaque changement de spec.
+- **Спецификация**: `norito.md`
+- **Таблица мультикодеков**: `multicodec.md`
+- **Бенчмарки**: `crates/norito/benches/`
+- **Золотые тесты**: `crates/norito/tests/`Когда автоматизация Docusaurus будет запущена в режиме онлайн, порт будет выполнен в течение дня с помощью сценария синхронизации (suivi dans `docs/portal/scripts/`), который позволит извлечь данные из этих файлов. Итак, проверьте эту страницу, выровняйте ее и внесите изменения в спецификации.

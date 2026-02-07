@@ -9,90 +9,85 @@ source_last_modified: "2025-12-29T18:16:35.978869+00:00"
 translation_last_reviewed: 2026-02-07
 title: Ministry Red-Team & Chaos Drill Plan
 summary: Execution plan for roadmap item MINFO-9 covering recurring adversarial campaigns, telemetry hooks, and reporting requirements.
+translator: machine-google-reviewed
 ---
 
-# Moderation Red-Team & Chaos Drills (MINFO-9)
+# 紅隊與混亂演習 (MINFO-9)
 
-Roadmap reference: **MINFO-9 — Moderation red-team & chaos drills** (targets Q3 2026)
+路線圖參考：**MINFO-9 — 審核紅隊和混亂演習**（目標為 2026 年第 3 季度）
 
-The Ministry of Information must run reproducible adversarial campaigns that stress AI moderation pipelines, bounty programs, gateways, and governance controls. This plan closes the “🈳 Not Started” gap noted in the roadmap by defining scope, cadence, drill templates, and evidence requirements that tie directly into the existing moderation dashboards (`dashboards/grafana/ministry_moderation_overview.json`) and emergency canon workflows.
+信息部必須開展可重複的對抗性活動，強調人工智能審核管道、賞金計劃、網關和治理控制。該計劃通過定義直接與現有審核儀表板 (`dashboards/grafana/ministry_moderation_overview.json`) 和緊急規範工作流程相關的範圍、節奏、演練模板和證據要求，彌補了路線圖中指出的“🈳 未開始”差距。
 
-## Goals & Deliverables
+## 目標和可交付成果
 
-- Run quarterly red-team exercises that cover multi-part smuggling attempts, bribery/appeal tampering, and gateway side-channel probes before widening coverage to additional threat classes.
-- Capture deterministic artefacts (CLI logs, Norito manifests, Grafana exports, SoraFS CIDs) for every drill and file them via `docs/source/ministry/reports/<YYYY-MM>-mod-red-team-<scenario>.md`.
-- Feed drill output back into calibration manifests (`docs/examples/ai_moderation_calibration_*.json`) and the denylist policy so remediation tasks become traceable roadmap tickets.
-- Wire alert/runbook integration so failures surface alongside the MINFO-1 dashboards and Alertmanager packs (`dashboards/alerts/ministry_moderation_rules.yml`).
+- 在將覆蓋範圍擴大到其他威脅類別之前，進行季度紅隊演習，涵蓋多部分走私企圖、賄賂/上訴篡改和網關旁道探測。
+- 捕獲每次演練的確定性工件（CLI 日誌、Norito 清單、Grafana 導出、SoraFS CID），並通過 `docs/source/ministry/reports/<YYYY-MM>-mod-red-team-<scenario>.md` 將其歸檔。
+- 將演練輸出反饋到校準清單 (`docs/examples/ai_moderation_calibration_*.json`) 和拒絕名單策略中，以便修復任務成為可追踪的路線圖票證。
+- 有線警報/運行手冊集成，以便故障與 MINFO-1 儀表板和 Alertmanager 包 (`dashboards/alerts/ministry_moderation_rules.yml`) 一起出現。
 
-## Scope & Dependencies
+## 範圍和依賴關係
 
-- **Systems under test:** SoraFS ingest/orchestrator paths, AI moderation runner defined in `docs/source/sorafs_ai_moderation_plan.md`, denylist/Merkle enforcement, appeal treasury tooling, and gateway rate-limits.
-- **Prerequisites:** Emergency canon & TTL policy (`docs/source/ministry/emergency_canon_policy.md`), moderation calibration fixtures, and Torii mock harness parity so reproducible payloads can be replayed during chaos runs.
-- **Out-of-scope:** SoraDNS policies, Kaigi conferencing, or non-Ministry communications channels (tracked separately under SNNet and DOCS-SORA programs).
+- **測試中的系統：** SoraFS 攝取/編排器路徑、`docs/source/sorafs_ai_moderation_plan.md` 中定義的 AI 審核運行器、拒絕名單/Merkle 執行、申訴金庫工具和網關速率限制。
+- **先決條件：** 緊急規範和 TTL 策略 (`docs/source/ministry/emergency_canon_policy.md`)、調節校準裝置和 Torii 模擬線束奇偶校驗，以便在混亂運行期間可以重播可重現的有效負載。
+- **超出範圍：** SoraDNS 政策、Kaigi 會議或非部委通信渠道（在 SNNet 和 DOCS-SORA 計劃下單獨跟踪）。
 
-## Roles & Responsibilities
+## 角色和職責
 
-| Role | Responsibilities | Primary Owner | Backup |
-|------|------------------|---------------|--------|
-| Drill Director | Approves scenario list, assigns red-teamers, signs off on runbooks | Ministry Security Lead | Deputy Moderator |
-| Adversarial Cell | Crafts payloads, runs attacks, records evidence | Security Engineering guild | Volunteer operators |
-| Observability Lead | Monitors dashboards/alerts, captures Grafana exports, files incident timelines | SRE / Observability TL | On-call SRE |
-| Moderator on Duty | Drives escalation flow, validates override requests, updates emergency canon records | Incident commander | Reserve commander |
-| Reporting Scribe | Populates the template under `docs/source/ministry/reports/moderation_red_team_template.md`, links artefacts, opens follow-up issues | Docs/DevRel | Product liaison |
+|角色 |職責|主要所有者 |備份|
+|------|--------------------|----------------|--------|
+|鑽探總監|批准場景列表、分配紅隊成員、簽署運行手冊 |部安全負責人|副主持人|
+|對抗細胞 |製作有效負載、運行攻擊、記錄證據 |安防工程行業協會|志願者經營者|
+|可觀察性主管 |監控儀表板/警報、捕獲 Grafana 導出、記錄事件時間表 | SRE / 可觀察性 TL |待命 SRE |
+|值班主持人 |推動升級流程、驗證覆蓋請求、更新緊急規範記錄 |事件指揮官|預備役指揮官 |
+|報告抄寫員|填充 `docs/source/ministry/reports/moderation_red_team_template.md` 下的模板、鏈接工件、打開後續問題 |文檔/開發版本 |產品聯絡 |
 
-## Cadence & Timeline
+## 節奏和時間軸|相|目標窗口|主要活動|文物|
+|--------|-------------|----------------|------------------------|
+| **計劃** | T−4 週 |選擇場景，通過 `scripts/ministry/scaffold_red_team_drill.py` 刷新有效負載固定裝置、腳手架工件，並試運行鑽頭鏡像的遙測助手（`scripts/telemetry/check_redaction_status.py`、`ci/run_android_telemetry_chaos_prep.sh`）|場景簡報、票務跟踪器 |
+| **準備好** | T−1 週 |鎖定參與者、階段 SoraFS/Torii 沙箱、凍結儀表板/警報哈希 |準備好清單、儀表板摘要 |
+| **執行** |演習日（4 小時）|啟動對抗流程、收集 Alertmanager 通知、捕獲 Torii/CLI 跟踪、強制執行覆蓋批准 |實時日誌、Grafana 快照 |
+| **恢復** | T+1 天 |將覆蓋恢復、清理數據集、將工件存檔至 `artifacts/ministry/red-team/<YYYY-MM>/` 和 SoraFS |證據包，清單 |
+| **報告** | T+1週|從模板發布 Markdown 報告、記錄修復票證、更新 roadmap/status.md |報告文件、Jira/GitHub 鏈接 |
 
-| Phase | Target Window | Key Activities | Artefacts |
-|-------|---------------|----------------|-----------|
-| **Plan** | T−4 weeks | Select scenarios, refresh payload fixtures, scaffold artefacts via `scripts/ministry/scaffold_red_team_drill.py`, and dry-run the telemetry helpers (`scripts/telemetry/check_redaction_status.py`, `ci/run_android_telemetry_chaos_prep.sh`) that the drills mirror | Scenario briefs, ticket tracker |
-| **Ready** | T−1 week | Lock participants, stage SoraFS/Torii sandboxes, freeze dashboards/alert hashes | Ready checklist, dashboard digests |
-| **Execute** | Drill day (4 h) | Launch adversarial flows, collect Alertmanager notifications, capture Torii/CLI traces, enforce override approvals | Live logbook, Grafana snapshots |
-| **Recover** | T+1 day | Revert overrides, scrub datasets, archive artefacts to `artifacts/ministry/red-team/<YYYY-MM>/` and SoraFS | Evidence bundle, manifest |
-| **Report** | T+1 week | Publish Markdown report from template, log remediation tickets, update roadmap/status.md | Report file, Jira/GitHub links |
+季度演習（三月/六月/九月/十二月）至少進行；高風險發現會觸發遵循相同證據工作流程的臨時運行。
 
-Quarterly drills (Mar/Jun/Sep/Dec) run at minimum; high-risk findings trigger ad-hoc runs that follow the same evidence workflow.
+## 場景庫（初始）
 
-## Scenario Library (Initial)
+|場景|描述 |成功信號|證據輸入|
+|----------|-------------|-----------------|------------------|
+|多部分走私 |區塊鏈遍布 SoraFS 提供商，其多態有效負載試圖隨著時間的推移繞過 AI 過濾器。練習 Orchestrator 範圍獲取、審核 TTL 和拒絕列表傳播。 |用戶交付前檢測到走私；發出拒絕名單增量； `ministry_moderation_overview` 在 SLA 範圍內發出火災警報。 | CLI 重放日誌、塊清單、拒絕列表差異、來自 `sorafs.fetch.*` 儀表板的跟踪 ID。 |
+|賄賂和上訴篡改|成對的惡意版主試圖批准因賄賂而導致的越權行為；測試資金流量、推翻批准和審計日誌記錄。 |使用強制性證據記錄覆蓋，標記國庫轉移，記錄治理投票。 | Norito 覆蓋記錄、`docs/source/ministry/volunteer_brief_template.md` 更新、國庫分類賬條目。 |
+|網關旁路探測|模擬流氓發布商測量緩存時間和 TTL 以推斷經過審核的內容。在 SNNet-15 之前練習 CDN/網關強化。 |速率限制和異常儀表板突出顯示探針；管理 CLI 顯示策略執行情況；沒有內容洩露。 |網關訪問日誌、Grafana `ministry_gateway_observability` 面板的抓取、捕獲數據包跟踪 (pcap) 以供離線查看。 |
 
-| Scenario | Description | Success Signals | Evidence Inputs |
-|----------|-------------|-----------------|-----------------|
-| Multi-part smuggling | Chain of chunks spread across SoraFS providers with polymorphic payloads that attempt to bypass AI filters over time. Exercises orchestrator range fetches, moderation TTLs, and denylist propagation. | Smuggling detected before user delivery; denylist delta emitted; `ministry_moderation_overview` alerts fire within SLA. | CLI replay logs, chunk manifests, denylist diff, Trace IDs from `sorafs.fetch.*` dashboards. |
-| Bribery & appeal tampering | Pairs of malicious moderators attempt to approve bribe-induced overrides; tests treasury flows, override approvals, and audit logging. | Override logged with mandatory evidence, treasury transfers flagged, governance vote recorded. | Norito override records, `docs/source/ministry/volunteer_brief_template.md` updates, treasury ledger entries. |
-| Gateway side-channel probing | Simulates rogue publishers measuring cache timing and TTLs to infer moderated content. Exercises CDN/gateway hardening before SNNet-15. | Rate-limit & anomaly dashboards highlight probes; admin CLI shows policy enforcement; no content leak. | Gateway access logs, Grafana scrape of `ministry_gateway_observability` panels, capture packet traces (pcap) for offline review. |
+一旦最初的三個場景從學習節奏中畢業，未來的迭代將添加 `honey-payload beacons`、`AI adversarial prompt floods` 和 `SoraFS metadata poisoning`。
 
-Future iterations will add `honey-payload beacons`, `AI adversarial prompt floods`, and `SoraFS metadata poisoning` once the initial three scenarios graduate from the learning cadence.
+## 執行清單1. **預鑽孔**
+   - 確認運行手冊+場景文檔已發布並獲得批准。
+   - 快照儀表板 (`dashboards/grafana/ministry_moderation_overview.json`) 和 `artifacts/ministry/red-team/<YYYY-MM>/dashboards/` 的警報規則。
+   - 使用 `scripts/ministry/scaffold_red_team_drill.py` 創建報告 + 工件目錄，然後記錄為演練準備的任何夾具包的 SHA256 摘要。
+   - 在註入對抗性有效負載之前驗證拒絕名單 Merkle 根源和緊急規範註釋。
+2. **演習期間**
+   - 將每個操作（時間戳、操作員、命令）記錄到實時日誌（共享文檔或 `docs/source/ministry/reports/tmp/<timestamp>.md`）中。
+   - 捕獲 Torii 響應和 AI 審核裁決，包括請求 ID、模型名稱和風險評分。
+   - 執行升級工作流程（覆蓋請求 → 指揮官批准 → `emergency_canon_policy` 更新）。
+   - 觸發至少一項警報清除活動和文檔響應延遲。
+3. **演習後**
+   - 清除覆蓋，將拒絕列表條目回滾到生產值，並驗證警報是否安靜。
+   - 導出 Grafana/Alertmanager 歷史記錄、CLI 日誌、Norito 清單，並將它們附加到證據包。
+   - 向所有者提出補救問題（高/中/低）並註明截止日期；最終報告的鏈接。
 
-## Execution Checklist
+## 遙測、指標和證據
 
-1. **Pre-Drill**
-   - Confirm runbook + scenario doc is published and approved.
-   - Snapshot dashboards (`dashboards/grafana/ministry_moderation_overview.json`) and alert rules to `artifacts/ministry/red-team/<YYYY-MM>/dashboards/`.
-   - Use `scripts/ministry/scaffold_red_team_drill.py` to create the report + artefact directories, then record SHA256 digests for any fixture bundles staged for the drill.
-   - Verify denylist Merkle roots and emergency canon notes before injecting adversarial payloads.
-2. **During Drill**
-   - Log every action (timestamp, operator, command) into the live logbook (shared doc or `docs/source/ministry/reports/tmp/<timestamp>.md`).
-   - Capture Torii responses and AI moderation verdicts, including request IDs, model names, and risk scores.
-   - Exercise the escalation workflow (override request → commander approval → `emergency_canon_policy` update).
-   - Trigger at least one alert-clearing exercise and document response latency.
-3. **Post-Drill**
-   - Clear overrides, roll denylist entries back to production values, and verify alerts quiet.
-   - Export Grafana/Alertmanager history, CLI logs, Norito manifests, and attach them to the evidence bundle.
-   - File remediation issues (high/medium/low) with owners and due dates; link to the final report.
+- **儀表板：** `dashboards/grafana/ministry_moderation_overview.json` + 未來的 `ministry_red_team_heatmap.json`（佔位符）捕獲實時信號。每次鑽取導出 JSON 快照。
+- **警報：** `dashboards/alerts/ministry_moderation_rules.yml` 以及即將推出的 `ministry_red_team_rules.yml` 必須包含引用演練 ID 和場景的註釋，以簡化審核。
+- **Norito 工件：** 將每個鑽探運行編碼為 `RedTeamDrillV1` 事件（規範即將推出），因此 Torii/CLI 導出是確定性的，並且可以與治理共享。
+- **報告模板：** 複製 `docs/source/ministry/reports/moderation_red_team_template.md` 並填寫場景、指標、證據摘要、補救狀態和治理簽核。
+- **存檔：** 將工件存儲在 `artifacts/ministry/red-team/<YYYY-MM>/<scenario>/` 中（日誌、CLI 輸出、Norito 捆綁包、儀表板導出），並在治理批准後發布匹配的 SoraFS CAR 清單以供公眾審查。
 
-## Telemetry, Metrics & Evidence
+## 自動化和後續步驟1. 在 `scripts/ministry/` 下實施幫助程序腳本來播種有效負載固定裝置、切換拒絕列表條目並收集 CLI/Grafana 導出。 （`scaffold_red_team_drill.py`、`moderation_payload_tool.py` 和 `check_red_team_reports.py` 現在涵蓋腳手架、有效負載捆綁、拒絕名單修補和占位符強制執行；`export_red_team_evidence.py` 通過 Grafana API 支持添加了缺少的儀表板/日誌導出，因此證據清單保持確定性。）
+2. 使用 `ci/check_ministry_red_team.sh` 擴展 CI，以在合併報告之前驗證模板完整性和證據摘要。 ✅（`scripts/ministry/check_red_team_reports.py` 強制刪除所有已提交的鑽探報告中的佔位符。）
+3. 將 `ministry_red_team_status` 部分添加到 `status.md`，以顯示即將進行的演練、未完成的修復項目和上次運行指標。
+4. 將鑽探元數據集成到透明度管道中，以便季度報告可以參考最新的混亂結果。
+5. 將演練報告直接輸入 `cargo xtask ministry-transparency ingest --red-team-report <path>...`，​​​​以便經過淨化的季度指標和治理清單將演練 ID、證據包和儀表板 SHA 與現有賬本/申訴/拒絕列表源一起攜帶。
 
-- **Dashboards:** `dashboards/grafana/ministry_moderation_overview.json` + future `ministry_red_team_heatmap.json` (placeholder) capture live signals. Export JSON snapshots per drill.
-- **Alerting:** `dashboards/alerts/ministry_moderation_rules.yml` plus upcoming `ministry_red_team_rules.yml` must include annotations referencing the drill ID and scenario to simplify audits.
-- **Norito artefacts:** encode every drill run as `RedTeamDrillV1` events (spec forthcoming) so Torii/CLI exports are deterministic and can be shared with governance.
-- **Report template:** copy `docs/source/ministry/reports/moderation_red_team_template.md` and fill in the scenario, metrics, evidence digests, remediation status, and governance sign-off.
-- **Archive:** Store artefacts in `artifacts/ministry/red-team/<YYYY-MM>/<scenario>/` (logs, CLI output, Norito bundles, dashboard exports) and publish a matching SoraFS CAR manifest for public review when governance approves.
-
-## Automation & Next Steps
-
-1. Implement helper scripts under `scripts/ministry/` to seed payload fixtures, toggle denylist entries, and collect CLI/Grafana exports. (`scaffold_red_team_drill.py`, `moderation_payload_tool.py`, and `check_red_team_reports.py` now cover scaffolding, payload bundling, denylist patching, and placeholder enforcement; `export_red_team_evidence.py` adds the missing dashboard/log export with Grafana API support so evidence manifests stay deterministic.)
-2. Extend CI with `ci/check_ministry_red_team.sh` to verify template completeness and evidence digests before merging reports. ✅ (`scripts/ministry/check_red_team_reports.py` enforces placeholder removal across all committed drill reports.)
-3. Add `ministry_red_team_status` section to `status.md` to surface upcoming drills, open remediation items, and last-run metrics.
-4. Integrate drill metadata into the transparency pipeline so quarterly reports can reference the most recent chaos results.
-5. Feed drill reports directly into `cargo xtask ministry-transparency ingest --red-team-report <path>...` so sanitized quarterly metrics and governance manifests carry the drill IDs, evidence bundles, and dashboard SHAs alongside the existing ledger/appeal/denylist feeds.
-
-Once these steps land, MINFO-9 transitions from 🈳 Not Started to 🈺 In Progress with traceable artefacts and measurable success criteria.
+一旦這些步驟落地，MINFO-9 就會從🈳 未開始轉變為 🈺 進行中，並具有可追踪的工件和可衡量的成功標準。

@@ -7,43 +7,45 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Nexus telemetry remediation plan (B2)
 description: Mirror of `docs/source/nexus_telemetry_remediation_plan.md`, documenting the telemetry gap matrix and operational workflow.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Overview
+# Ընդհանուր ակնարկ
 
-Roadmap item **B2 — telemetry gap ownership** requires a published plan tying
-every outstanding Nexus telemetry gap to a signal, alert guardrail, owner,
-deadline, and verification artifact before the Q1 2026 audit windows begin.
-This page mirrors `docs/source/nexus_telemetry_remediation_plan.md` so release
-engineering, telemetry ops, and SDK owners can confirm coverage ahead of the
-routed-trace and `TRACE-TELEMETRY-BRIDGE` rehearsals.
+Ճանապարհային քարտեզի կետ **B2 — հեռաչափության բացը սեփականության իրավունքը** պահանջում է հրապարակված պլանի կապակցում
+յուրաքանչյուր ակնառու Nexus հեռաչափական բացը դեպի ազդանշան, զգոն պահակ, սեփականատեր,
+վերջնաժամկետը և ստուգման արտեֆակտը մինչև 2026 թվականի առաջին եռամսյակի աուդիտի պատուհանների սկիզբը:
+Այս էջը արտացոլում է `docs/source/nexus_telemetry_remediation_plan.md`-ը, ուստի թողարկեք
+ճարտարագիտություն, հեռաչափության օպերացիաներ և SDK-ի սեփականատերերը կարող են հաստատել նախօրոք ծածկույթը
+routed-trace և `TRACE-TELEMETRY-BRIDGE` փորձեր:
 
-# Gap matrix
+# Բաց մատրիցա
 
-| Gap ID | Signal & alert guardrail | Owner / escalation | Due (UTC) | Evidence & verification |
+| Բաց ID | Ազդանշանի և ազդանշանային պահակապակույտ | Սեփականատեր / էսկալացիա | Ժամկետանց (UTC) | Ապացույցներ և ստուգում |
 |--------|-------------------------|--------------------|-----------|-------------------------|
-| `GAP-TELEM-001` | Histogram `torii_lane_admission_latency_seconds{lane_id,endpoint}` with alert **`SoranetLaneAdmissionLatencyDegraded`** firing when `histogram_quantile(0.95, rate(bucket[5m])) * 1000 > 750` for 5 minutes (`dashboards/alerts/soranet_lane_rules.yml`). | `@torii-sdk` (signal) + `@telemetry-ops` (alert); escalate via Nexus routed-trace on-call. | 2026‑02‑23 | Alert tests under `dashboards/alerts/tests/soranet_lane_rules.test.yml` plus the `TRACE-LANE-ROUTING` rehearsal capture showing fired/recovered alert and Torii `/metrics` scrape archived in [Nexus transition notes](./nexus-transition-notes). |
-| `GAP-TELEM-002` | Counter `nexus_config_diff_total{knob,profile}` with guardrail `increase(nexus_config_diff_total{profile="active"}[5m]) > 0` gating deploys (`docs/source/telemetry.md`). | `@nexus-core` (instrumentation) → `@telemetry-ops` (alert); governance duty officer paged when counter increments unexpectedly. | 2026‑02‑26 | Governance dry-run outputs stored next to `docs/source/project_tracker/nexus_config_deltas/2026Q1.md`; release checklist includes the Prometheus query screenshot plus log excerpt proving `StateTelemetry::record_nexus_config_diff` emitted the diff. |
-| `GAP-TELEM-003` | Event `TelemetryEvent::AuditOutcome` (metric `nexus.audit.outcome`) with alert **`NexusAuditOutcomeFailure`** when failures or missing outcomes persist for >30 minutes (`dashboards/alerts/nexus_audit_rules.yml`). | `@telemetry-ops` (pipeline) escalating to `@sec-observability`. | 2026‑02‑27 | CI gate `scripts/telemetry/check_nexus_audit_outcome.py` archives NDJSON payloads and fails when a TRACE window lacks a success event; alert screenshots attached to the routed-trace report. |
-| `GAP-TELEM-004` | Gauge `nexus_lane_configured_total` with guardrail `nexus_lane_configured_total != EXPECTED_LANE_COUNT` feeding the SRE on-call checklist. | `@telemetry-ops` (gauge/export) escalating to `@nexus-core` when nodes report inconsistent catalog sizes. | 2026‑02‑28 | Scheduler telemetry test `crates/iroha_core/tests/scheduler_telemetry.rs::records_lane_catalog_size` proves emission; operators attach Prometheus diff + `StateTelemetry::set_nexus_catalogs` log excerpt to the TRACE rehearsal package. |
+| `GAP-TELEM-001` | `torii_lane_admission_latency_seconds{lane_id,endpoint}` հիստոգրամը զգուշացումով **`SoranetLaneAdmissionLatencyDegraded`** կրակում է `histogram_quantile(0.95, rate(bucket[5m])) * 1000 > 750` 5 րոպեի ընթացքում (`dashboards/alerts/soranet_lane_rules.yml`): | `@torii-sdk` (ազդանշան) + `@telemetry-ops` (զգուշացում); էսկալացիա Nexus երթուղված-հետք կանչի միջոցով: | 2026-02-23 | Զգուշացման փորձարկումներ `dashboards/alerts/tests/soranet_lane_rules.test.yml`-ի ներքո, գումարած `TRACE-LANE-ROUTING` փորձնական նկարահանումը, որը ցույց է տալիս կրակված/վերականգնված ահազանգը և Torii `/metrics` քերծվածքը՝ արխիվացված [I18NT00000005-ում: նշումներ](./nexus-transition-notes): |
+| `GAP-TELEM-002` | `nexus_config_diff_total{knob,profile}` հաշվիչը պաշտպանիչ բազրիքով `increase(nexus_config_diff_total{profile="active"}[5m]) > 0` տեղադրվում է դարպաս (`docs/source/telemetry.md`): | `@nexus-core` (գործիքավորում) → `@telemetry-ops` (զգուշացում); կառավարման հերթապահը էջ է անում, երբ հաշվիչն անսպասելիորեն ավելանում է: | 2026-02-26 | Կառավարման չոր գործարկման արդյունքները պահվում են `docs/source/project_tracker/nexus_config_deltas/2026Q1.md`-ի կողքին; թողարկման ստուգաթերթը ներառում է Prometheus հարցման սքրինշոթը և գրանցամատյանի հատվածը, որն ապացուցում է, որ `StateTelemetry::record_nexus_config_diff`-ը թողարկել է տարբերությունը: |
+| `GAP-TELEM-003` | Իրադարձություն `TelemetryEvent::AuditOutcome` (մետրային `nexus.audit.outcome`) զգուշացումով **`NexusAuditOutcomeFailure`**, երբ ձախողումները կամ բացակայող արդյունքները պահպանվում են ավելի քան 30 րոպե (`dashboards/alerts/nexus_audit_rules.yml`): | `@telemetry-ops` (խողովակաշար)՝ աճող մինչև `@sec-observability`: | 2026-02-27 | CI gate `scripts/telemetry/check_nexus_audit_outcome.py`-ը արխիվացնում է NDJSON-ի ծանրաբեռնվածությունը և ձախողվում է, երբ TRACE պատուհանում բացակայում է հաջող իրադարձությունը. ազդանշանային սքրինշոթներ, որոնք կցված են երթուղված հետքի հաշվետվությանը: |
+| `GAP-TELEM-004` | Չափիչ `nexus_lane_configured_total` պաշտպանական բազրիքով `nexus_lane_configured_total != EXPECTED_LANE_COUNT`, որը սնուցում է SRE-ի հերթապահ ստուգաթերթը: | `@telemetry-ops` (չափիչ/արտահանում) աճում է մինչև `@nexus-core`, երբ հանգույցները հայտնում են կատալոգի անհամապատասխան չափերը: | 2026-02-28 | Ժամանակացույցի հեռաչափության թեստը `crates/iroha_core/tests/scheduler_telemetry.rs::records_lane_catalog_size` ապացուցում է արտանետումը; օպերատորները TRACE փորձնական փաթեթին կցում են Prometheus diff + `StateTelemetry::set_nexus_catalogs` մատյանից քաղվածք: |
 
-# Operational workflow
+# Գործառնական աշխատանքային հոսք
 
-1. **Weekly triage.** Owners report progress in the Nexus readiness call;
-   blockers and alert-test artefacts are logged in `status.md`.
-2. **Alert dry-runs.** Each alert rule ships alongside a
-   `dashboards/alerts/tests/*.test.yml` entry so CI executes `promtool test
-   rules` whenever the guardrail changes.
-3. **Audit evidence.** During `TRACE-LANE-ROUTING` and
-   `TRACE-TELEMETRY-BRIDGE` rehearsals the on-call captures the Prometheus query
-   results, alert history, and relevant script outputs
+1. **Շաբաթական տրաժ.** Սեփականատերերը հայտնում են առաջընթացի մասին Nexus պատրաստականության զանգի ժամանակ;
+   արգելափակողները և ազդանշանային փորձարկման արտեֆակտները գրանցված են `status.md`-ում:
+2. **Զգուշացնել չոր վազքները։** Զգուշացման յուրաքանչյուր կանոն առաքվում է ա
+   `dashboards/alerts/tests/*.test.yml` մուտքագրում, այնպես որ CI-ն իրականացնում է «promtool test
+   կանոններ՝ ամեն անգամ, երբ փոխվում է պահակապակույտը:
+3. **Աուդիտորական ապացույցներ.** `TRACE-LANE-ROUTING` ընթացքում և
+   `TRACE-TELEMETRY-BRIDGE`-ը կրկնում է հերթապահությունը և գրավում է Prometheus հարցումը
+   արդյունքներ, ահազանգերի պատմություն և համապատասխան սցենարի արդյունքներ
    (`scripts/telemetry/check_nexus_audit_outcome.py`,
-   `scripts/telemetry/check_redaction_status.py` for correlated signals) and
-   stores them with the routed-trace artefacts.
-4. **Escalation.** If any guardrail fires outside a rehearsed window, the owning
-   team files a Nexus incident ticket referencing this plan, including the
-   metric snapshot and mitigation steps before resuming audits.
+   `scripts/telemetry/check_redaction_status.py` փոխկապակցված ազդանշանների համար) և
+   պահում է դրանք հետագծված արտեֆակտներով:
+4. **Էսկալացիա։** Եթե որևէ պաշտպանական բազրիք կրակում է փորձված պատուհանից դուրս, սեփականատիրոջը.
+   թիմը ներկայացնում է Nexus միջադեպի տոմս՝ հղում կատարելով այս պլանին, ներառյալ
+   Աուդիտը վերսկսելուց առաջ մետրական պատկեր և մեղմացման քայլեր:
 
-With this matrix published — and referenced from both `roadmap.md` and
-`status.md` — roadmap item **B2** now meets the “responsibility, deadline,
-alert, verification” acceptance criteria.
+Այս մատրիցով հրապարակված — և հղում է արվել ինչպես `roadmap.md`-ից, այնպես էլ
+`status.md` — ճանապարհային քարտեզի կետը **B2** այժմ համապատասխանում է «պատասխանատվությունը, վերջնաժամկետը,
+ահազանգ, ստուգում» ընդունման չափանիշները:

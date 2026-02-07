@@ -9,82 +9,79 @@ source_last_modified: "2026-01-05T09:28:12.023255+00:00"
 translation_last_reviewed: 2026-02-07
 title: MOCHI Architecture Plan
 description: High-level design for the MOCHI local-network GUI supervisor.
+translator: machine-google-reviewed
 ---
 
-# MOCHI Architecture Plan
+# MOCHI архитектуралық жоспары
 
 
-## Goals
+## Мақсаттар
 
-- Bootstrap single-peer or multi-peer (four-node BFT) local networks quickly.
-- Wrap `kagami`, `irohad`, and supporting binaries in a friendly GUI workflow.
-- Surface live block, event, and state data through Torii HTTP/WebSocket endpoints.
-- Provide structured builders for transactions and Iroha Special Instructions (ISI), with local signing and submission.
-- Manage snapshots, re-genesis flows, and configuration tweaks without editing files manually.
-- Ship as a single cross-platform Rust binary with no webview or Docker dependency.
+- Бір деңгейлі немесе көп деңгейлі (төрт түйінді BFT) жергілікті желілерді жылдам жүктеңіз.
+- `kagami`, `irohad` және қолдау көрсететін екілік файлдарды ыңғайлы GUI жұмыс процесінде ораңыз.
+- Torii HTTP/WebSocket соңғы нүктелері арқылы беттік тікелей блок, оқиға және күй деректері.
+- Жергілікті қол қою және жіберу арқылы транзакциялар мен Iroha Арнайы нұсқаулары (ISI) үшін құрылымдық құрастырушыларды қамтамасыз етіңіз.
+- Файлдарды қолмен өңдемей-ақ суреттерді, қайта генезис ағындарын және конфигурация түзетулерін басқарыңыз.
+- Веб-көрініссіз немесе Docker тәуелділігі жоқ жалғыз кросс-платформалық Rust екілік файлы ретінде жөнелтіңіз.
 
-## Architecture Overview
+## Архитектураға шолу
 
-MOCHI is split into two primary crates housed in a new `/mochi` directory (see the
-[MOCHI Quickstart](mochi/quickstart.md) for build and usage instructions):
+MOCHI жаңа `/mochi` каталогында орналасқан екі негізгі жәшікке бөлінген (қараңыз.
+[MOCHI Quickstart](mochi/quickstart.md) құрастыру және пайдалану нұсқаулары үшін):
 
-1. `mochi-core`: a headless library responsible for configuration templating, key and genesis material generation, supervising child processes, driving Torii clients, and managing filesystem state.
-2. `mochi-ui-egui`: a desktop application built on `egui`/`eframe` that renders the user interface and delegates all orchestration through the `mochi-core` API.
+1. `mochi-core`: конфигурация үлгісін жасауға, кілт пен генезис материалын генерациялауға, еншілес процестерді қадағалауға, Torii клиенттерін басқаруға және файлдық жүйе күйін басқаруға жауапты бассыз кітапхана.
+2. `mochi-ui-egui`: пайдаланушы интерфейсін көрсететін және `mochi-core` API арқылы барлық оркестрді тапсыратын `egui`/`eframe` негізінде құрылған жұмыс үстелі қолданбасы.
 
-Additional front ends (for example a Tauri shell) can hook into `mochi-core` later without reworking the supervisor logic.
+Қосымша алдыңғы ұштар (мысалы, Tauri қабықшасы) кейінірек супервайзер логикасын қайта өңдеусіз `mochi-core` жүйесіне қосыла алады.
 
-## Process Model
+## Процесс үлгісі
 
-- Peer nodes run as separate `irohad` child processes. MOCHI never links the peer as a library, avoiding unstable internal APIs and matching production deployment topologies.
-- Genesis and key material are created through `kagami` invocations with user provided inputs (chain ID, initial accounts, assets).
-- Configuration files are generated from TOML templates, filling in Torii and P2P ports, storage paths, snapshot settings, and trusted peer lists. Generated configs are stored beneath a per-network workspace directory.
-- The supervisor tracks process lifecycles, streams stdout/stderr for log surfaces, and polls `/status`, `/metrics`, and `/configuration` endpoints for health.
-- A thin Torii client layer wraps HTTP and WebSocket calls, leaning on the Iroha Rust client crates where possible to avoid reimplementing SCALE encoding/decoding.
+- Бірдей түйіндер жеке `irohad` еншілес процестер ретінде іске қосылады. MOCHI ешқашан тұрақты емес ішкі API интерфейстерін және сәйкес өндірісті орналастыру топологияларын болдырмай, әріптесті кітапхана ретінде байланыстырмайды.
+- Жаратылыс және негізгі материал `kagami` шақырулары арқылы пайдаланушы берген кірістермен (тізбек идентификаторы, бастапқы тіркелгілер, активтер) жасалады.
+- Конфигурация файлдары Torii және P2P порттарын, сақтау жолдарын, сурет параметрлерін және сенімді тең тізімдерді толтыратын TOML үлгілерінен жасалады. Жасалған конфигурациялар әр желілік жұмыс кеңістігі каталогының астында сақталады.
+- Қадағалаушы процестің өмірлік циклдерін қадағалайды, журнал беттері үшін stdout/stderr ағындарын жүргізеді және денсаулыққа арналған `/status`, `/metrics` және `/configuration` соңғы нүктелерін сұрайды.
+- Жұқа Torii клиенттік қабаты HTTP және WebSocket қоңырауларын орап, Iroha Rust клиент жәшіктеріне сүйенеді, мүмкіндігінше SCALE кодтауын/декодтауын қайта іске асырмау үшін.
 
-## User Flows Backed by `mochi-core`
+## `mochi-core` арқылы қолдау көрсетілетін пайдаланушы ағындары- **Желі құру шебері**: жеке немесе төрт деңгейлі профильді таңдап, каталогтарды таңдап, `kagami` нөміріне қоңырау шалып, сәйкестендірулерді және генезиске қосыңыз.
+- **Lifecycle Controls**: бастау, тоқтату, қайта іске қосу; беттік кернеу көрсеткіштері; бөрене құйрықтарын ашу; орындау уақыты конфигурациясының соңғы нүктелерін ауыстырып қосу (мысалы, журнал деңгейлері).
+- **Блок және оқиға ағындары**: UI панельдері үшін жадтағы жылжымалы буферді сақтай отырып, `/block/stream` және `/events` жазылу.
+- **State Explorer**: беттеу көмекшілері мен метадеректер жиынтықтары бар домендерді, тіркелгілерді, активтерді және актив анықтамаларын тізімдеу үшін Norito қолдауымен `/query` қоңырауларын іске қосыңыз.
+- **Транзакция құрастырушы**: нұсқау жобаларын жасау/тасымалдау, оларды қол қойылған транзакцияларға топтастыру, Norito пайдалы жүктемесін алдын ала қарау, `/transaction` арқылы жіберу және нәтижелі оқиғаларды бақылау; қоймаға қол қою ілмектері болашақ итерация болып қалады.
+- **Snapshots және Re-Genesis**: Kura суретін экспорттау/импорттау, дүкендерді өшіру және жылдам қалпына келтіру үшін генезистік материалды қалпына келтіру.
 
-- **Network Creation Wizard**: choose single or four-peer profile, pick directories, and call `kagami` to generate identities plus genesis.
-- **Lifecycle Controls**: start, stop, restart peers; surface live metrics; expose log tails; toggle runtime configuration endpoints (e.g., log levels).
-- **Block and Event Streams**: subscribe to `/block/stream` and `/events`, storing an in-memory rolling buffer for UI panels.
-- **State Explorer**: run Norito-backed `/query` calls to list domains, accounts, assets, and asset definitions with pagination helpers and metadata summaries.
-- **Transaction Composer**: stage mint/transfer instruction drafts, batch them into signed transactions, preview the Norito payload, submit via `/transaction`, and monitor the resulting events; vault signing hooks remain a future iteration.
-- **Snapshots and Re-Genesis**: orchestrate Kura snapshot export/import, wipe stores, and regenerate genesis material for quick resets.
+## UI деңгейі (`mochi-ui-egui`)
 
-## UI Layer (`mochi-ui-egui`)
+- `egui`/`eframe` пайдаланады, сыртқы орындалу уақыттары жоқ жалғыз жергілікті орындалатын файлды жөнелту үшін.
+- Орналасу мыналарды қамтиды:
+  - Құрдас карталары, денсаулық көрсеткіштері және жылдам әрекеттері бар **Желілік бақылау тақтасы**.
+  - **Блоктар** панелі соңғы тапсырмаларды ағынмен жібереді және биіктікте іздеуге мүмкіндік береді.
+  - **Оқиғалар** транзакция күйлерін хэш немесе тіркелгі бойынша сүзетін панель.
+  - Беттелген Norito нәтижелері бар домендерге, тіркелгілерге, активтерге және актив анықтамаларына арналған **State Explorer** қойындылары және тексеруге арналған өңделмеген қалдықтар.
+- **Композитор** пішіні пакеттік жалбыз/тасымалдау палитралары, кезекті басқару (қосу/жою/тазарту), өңделмеген Norito алдын ала қарау және операторлар әзірлеуші ​​мен нақты өкілеттіктер арасында ауыса алатындай қол қоюшы қоймасы қолдайтын жіберу пікірі.
+- **Genesis & Snapshots** басқару көрінісі.
+- **Орындау уақытының ауыстырып-қосқыштары мен деректер каталогының таңбашаларына арналған параметрлер**.
+- UI арналар арқылы `mochi-core` асинхронды жаңартуларға жазылады; ядро құрылымдық оқиғаларды ағынмен жіберетін `SupervisorHandle` көрсетеді (тең күй, блок тақырыптары, транзакция жаңартулары).
 
-- Uses `egui`/`eframe` to ship a single native executable without external runtimes.
-- Layout includes:
-  - **Network Dashboard** with peer cards, health indicators, and quick actions.
-  - **Blocks** panel streaming recent commits and allowing height search.
-  - **Events** panel filtering transaction statuses by hash or account.
-  - **State Explorer** tabs for domains, accounts, assets, and asset definitions with paginated Norito results plus raw dumps for inspection.
-- **Composer** form with batchable mint/transfer palettes, queue management (add/remove/clear), raw Norito preview, and submission feedback backed by the signer vault so operators can swap between dev and real authorities.
-- **Genesis & Snapshots** management view.
-- **Settings** for runtime toggles and data directory shortcuts.
-- UI subscribes to asynchronous updates from `mochi-core` via channels; the core exposes a `SupervisorHandle` that streams structured events (peer status, block headers, transaction updates).
+## Жергілікті даму туралы ескертпелер
 
-## Local Development Notes
+- Жұмыс кеңістігінің конфигурациясы `ZSTD_SYS_USE_PKG_CONFIG=1`, сондықтан `zstd-sys`, жеткізуші мұрағаттарды алудың орнына `libzstd` хостына қарсы орнатады. Бұл pqcrypto-тәуелді құрастырмаларды (және MOCHI сынақтарын) офлайн немесе құм жәшігіндегі орталарда іске қосады.
 
-- The workspace config sets `ZSTD_SYS_USE_PKG_CONFIG=1` so `zstd-sys` links against the host `libzstd` instead of fetching vendored archives. This keeps pqcrypto-dependent builds (and MOCHI tests) running inside offline or sandboxed environments.
+## Орау және тарату
 
-## Packaging and Distribution
+- MOCHI бумалары (немесе `PATH` жүйесінде ашылады) `irohad`, `iroha_cli` және `kagami` екілік файлдары.
+- OpenSSL тәуелділіктерін болдырмау үшін шығыс HTTPS үшін `rustls` пайдаланады.
+- Барлық жасалған артефактілерді арнайы қолданба деректерінің түбірінде (мысалы, `~/.local/share/mochi` немесе платформа баламасы) желіге арналған ішкі каталогтары бар сақтайды. GUI «Finder/Explorer бағдарламасында көрсету» көмекшілерін қамтамасыз етеді.
+- Torii (8080+) және P2P (1337+) порттарын қақтығыстарды болдырмау үшін теңдестіруден бұрын автоматты түрде анықтайды және резервтейді.
 
-- MOCHI bundles (or discovers on `PATH`) the `irohad`, `iroha_cli`, and `kagami` binaries.
-- Uses `rustls` for outbound HTTPS to avoid OpenSSL dependencies.
-- Stores all generated artifacts in a dedicated application data root (e.g., `~/.local/share/mochi` or platform equivalent) with per-network subdirectories. GUI provides “reveal in Finder/Explorer” helpers.
-- Auto-detects and reserves Torii (8080+) and P2P (1337+) ports before launching peers to prevent conflicts.
+## Болашақ кеңейтімдер (MVP үшін қолданылмайды)- `mochi-core` ортақ пайдаланатын балама алдыңғы ұштары (Tauri, CLI бассыз режимі).
+- Бөлінген тестілеу кластерлеріне арналған көп хостты оркестрлеу.
+- Ішкі консенсусқа арналған визуализаторлар (Sumeragi дөңгелек күйлері, өсек уақыттары).
+- Автоматтандырылған эфемерлі желі суреттері үшін CI құбырларымен интеграция.
+- Пайдаланушы бақылау тақталарына немесе доменге арналған инспекторларға арналған қосылатын жүйе.
 
-## Future Extensions (Out of Scope for MVP)
+## Анықтамалар
 
-- Alternate front ends (Tauri, CLI headless mode) sharing `mochi-core`.
-- Multi-host orchestration for distributed testing clusters.
-- Visualizers for consensus internals (Sumeragi round states, gossip timings).
-- Integration with CI pipelines for automated ephemeral network snapshots.
-- Plug-in system for custom dashboards or domain-specific inspectors.
-
-## References
-
-- [Torii Endpoints](https://docs.iroha.tech/reference/torii-endpoints.html)
+- [Torii Соңғы нүктелер](https://docs.iroha.tech/reference/torii-endpoints.html)
 - [Peer Configuration Parameters](https://docs.iroha.tech/reference/peer-config/params.html)
-- [`kagami` repository documentation](https://github.com/hyperledger-iroha/iroha)
-- [Iroha Special Instructions](https://iroha-test.readthedocs.io/en/iroha2-dev/references/isi/)
+- [`kagami` репозиторийінің құжаттамасы](https://github.com/hyperledger-iroha/iroha)
+- [Iroha Арнайы нұсқаулар](https://iroha-test.readthedocs.io/en/iroha2-dev/references/isi/)

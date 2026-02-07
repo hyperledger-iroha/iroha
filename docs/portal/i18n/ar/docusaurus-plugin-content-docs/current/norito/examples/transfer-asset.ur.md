@@ -4,30 +4,32 @@ direction: rtl
 source: docs/portal/docs/norito/examples/transfer-asset.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-slug: /norito/examples/transfer-asset
-title: اکاؤنٹس کے درمیان اثاثہ منتقل کریں
-description: سادہ اثاثہ ٹرانسفر ورک فلو جو SDK quickstarts اور لیجر walkthroughs کی عکاسی کرتا ہے۔
-source: examples/transfer/transfer.ko
+سبيكة: /norito/examples/transfer-asset
+العنوان: انتقال الأثاث الجلدي
+الوصف: أدوات بسيطة لإدارة السفر والبدء السريع لـ SDK والإرشادات التفصيلية البسيطة للكلمات الرئيسية.
+المصدر: أمثلة/نقل/transfer.ko
 ---
 
-سادہ اثاثہ ٹرانسفر ورک فلو جو SDK quickstarts اور لیجر walkthroughs کی عکاسی کرتا ہے۔
+الأدوات البسيطة التي تعمل على السفر هي البداية السريعة لـ SDK والإرشادات التفصيلية الصحيحة.
 
-## لیجر واک تھرو
+## ليجر واک تھرو
 
-- Alice کو ہدف اثاثہ پہلے سے فنڈ کریں (مثلا `register and mint` اسنیپٹ یا SDK quickstart فلو کے ذریعے)۔
-- `do_transfer` انٹری پوائنٹ چلائیں تاکہ Alice سے Bob کو 10 یونٹس منتقل ہوں، اور `AssetTransferRole` اجازت پوری ہو۔
-- بیلنس (`FindAccountAssets`, `iroha_cli ledger assets list`) چیک کریں یا پائپ لائن ایونٹس سبسکرائب کریں تاکہ ٹرانسفر کے نتیجے کا مشاہدہ ہو۔
+- أليس لديها أثاث جديد لتكنولوجيا المعلومات (مثل `register and mint` أو برنامج SDK Quickstart فلو).
+- انتقلت `do_transfer` عبر الإنترنت إلى أليس وبوب حيث انتقلت 10 يونا، وتم السماح بـ `AssetTransferRole`.
+- بيلنس (`FindAccountAssets`, `iroha_cli ledger assets list`) يتم إجراء عملية تحويل قروض صغيرة أو ورق عبر الإنترنت.
 
-## متعلقہ SDK گائیڈز
+## مواضيع ذات صلة SDK
 
-- [Rust SDK quickstart](/sdks/rust)
-- [Python SDK quickstart](/sdks/python)
-- [JavaScript SDK quickstart](/sdks/javascript)
+- [البدء السريع لـ Rust SDK](/sdks/rust)
+- [البدء السريع لـ Python SDK](/sdks/python)
+- [البدء السريع لـ JavaScript SDK](/sdks/javascript)
 
-[Kotodama سورس ڈاؤن لوڈ کریں](/norito-snippets/transfer-asset.ko)
+[Kotodama تنزيل التنزيل](/norito-snippets/transfer-asset.ko)
 
 ```text
 // Transfer example: uses typed pointer constructors and transfer_asset syscall

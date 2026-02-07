@@ -10,86 +10,87 @@ translation_last_reviewed: 2026-02-07
 id: nexus-operator-onboarding
 title: Sora Nexus data-space operator onboarding
 description: Mirror of `docs/source/sora_nexus_operator_onboarding.md`, tracking the end-to-end release checklist for Nexus operators.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
-This page mirrors `docs/source/sora_nexus_operator_onboarding.md`. Keep both copies aligned until the localized editions arrive in the portal.
+:::注意規範來源
+此頁面鏡像 `docs/source/sora_nexus_operator_onboarding.md`。保持兩個副本對齊，直到本地化版本到達門戶。
 :::
 
-# Sora Nexus Data-Space Operator Onboarding
+# Sora Nexus 數據空間操作員入門
 
-This guide captures the end-to-end flow Sora Nexus data-space operators must follow once a release is announced. It complements the dual-track runbook (`docs/source/release_dual_track_runbook.md`) and the artefact selection note (`docs/source/release_artifact_selection.md`) by describing how to align downloaded bundles/images, manifests, and configuration templates with the global lane expectations before bringing a node online.
+本指南介紹了 Sora Nexus 數據空間操作員在發布版本後必須遵循的端到端流程。它通過描述如何在使節點上線之前將下載的捆綁包/映像、清單和配置模板與全局通道期望保持一致，對雙軌運行手冊 (`docs/source/release_dual_track_runbook.md`) 和工件選擇說明 (`docs/source/release_artifact_selection.md`) 進行了補充。
 
-## Audience & prerequisites
-- You have been approved by the Nexus Program and received your data-space assignment (lane index, data-space ID/alias, and routing policy requirements).
-- You can access the signed release artefacts published by Release Engineering (tarballs, images, manifests, signatures, public keys).
-- You have generated or received production key material for your validator/observer role (Ed25519 node identity; BLS consensus key + PoP for validators; plus any confidential feature toggles).
-- You can reach the existing Sora Nexus peers that will bootstrap your node.
+## 受眾和先決條件
+- 您已獲得 Nexus 計劃批准並收到您的數據空間分配（通道索引、數據空間 ID/別名和路由策略要求）。
+- 您可以訪問發布工程發布的簽名發布工件（tarball、圖像、清單、簽名、公鑰）。
+- 您已為驗證者/觀察者角色生成或收到生產密鑰材料（Ed25519 節點身份；BLS 共識密鑰 + 驗證者的 PoP；加上任何機密功能切換）。
+- 您可以訪問現有的 Sora Nexus 對等點來引導您的節點。
 
-## Step 1 — Confirm the release profile
-1. Identify the network alias or chain ID you were given.
-2. Run `scripts/select_release_profile.py --network <alias>` (or `--chain-id <id>`) on a checkout of this repository. The helper consults `release/network_profiles.toml` and prints the profile to deploy. For Sora Nexus the response must be `iroha3`. For any other value, stop and contact Release Engineering.
-3. Note the version tag the release announcement referenced (e.g. `iroha3-v3.2.0`); you will use it to fetch artefacts and manifests.
+## 步驟 1 — 確認發布配置文件
+1. 確定為您提供的網絡別名或鏈 ID。
+2. 簽出此存儲庫時運行 `scripts/select_release_profile.py --network <alias>`（或 `--chain-id <id>`）。幫助程序查閱 `release/network_profiles.toml` 並打印要部署的配置文件。對於 Sora Nexus，響應必須是 `iroha3`。對於任何其他值，請停止並聯繫發布工程。
+3. 記下發佈公告引用的版本標籤（例如 `iroha3-v3.2.0`）；您將使用它來獲取文物和清單。
 
-## Step 2 — Retrieve and validate artefacts
-1. Download the `iroha3` bundle (`<profile>-<version>-<os>.tar.zst`) and its companion files (`.sha256`, optional `.sig/.pub`, `<profile>-<version>-manifest.json`, and `<profile>-<version>-image.json` if you deploy containers).
-2. Validate integrity before unpacking:
+## 步驟 2 — 檢索並驗證人工製品
+1. 下載 `iroha3` 捆綁包 (`<profile>-<version>-<os>.tar.zst`) 及其配套文件（`.sha256`、可選的 `.sig/.pub`、`<profile>-<version>-manifest.json` 和 `<profile>-<version>-image.json`（如果部署容器））。
+2. 開箱前驗證完整性：
    ```bash
    sha256sum -c iroha3-<version>-linux.tar.zst.sha256
    openssl dgst -sha256 -verify iroha3-<version>-linux.tar.zst.pub \
        -signature iroha3-<version>-linux.tar.zst.sig \
        iroha3-<version>-linux.tar.zst
    ```
-   Replace `openssl` with the organisation-approved verifier if you use a hardware-backed KMS.
-3. Inspect `PROFILE.toml` inside the tarball and the JSON manifests to confirm:
+   如果您使用硬件支持的 KMS，請將 `openssl` 替換為組織批准的驗證程序。
+3. 檢查 tarball 內的 `PROFILE.toml` 和 JSON 清單以確認：
    - `profile = "iroha3"`
-   - The `version`, `commit`, and `built_at` fields match the release announcement.
-   - The OS/architecture match your deployment target.
-4. If you use the container image, repeat the hash/signature verification for `<profile>-<version>-<os>-image.tar` and confirm the image ID recorded in `<profile>-<version>-image.json`.
+   - `version`、`commit` 和 `built_at` 字段與發佈公告相符。
+   - 操作系統/架構與您的部署目標相匹配。
+4. 如果使用容器鏡像，請對`<profile>-<version>-<os>-image.tar`重複哈希/簽名驗證，並確認`<profile>-<version>-image.json`中記錄的鏡像ID。
 
-## Step 3 — Stage configuration from templates
-1. Extract the bundle and copy `config/` to the location where the node will read its configuration.
-2. Treat the files under `config/` as templates:
-   - Replace `public_key`/`private_key` with your production Ed25519 keys. Remove private keys from disk if the node will source them from an HSM; update the config to point at the HSM connector instead.
-   - Adjust `trusted_peers`, `network.address`, and `torii.address` so they reflect your reachable interfaces and the bootstrap peers you were assigned.
-   - Update `client.toml` with the operator-facing Torii endpoint (including TLS configuration if applicable) and the credentials you provision for operational tooling.
-3. Keep the chain ID provided in the bundle unless Governance explicitly instructs otherwise—the global lane expects a single canonical chain identifier.
-4. Plan to start the node with the Sora profile flag: `irohad --sora --config <path>`. The configuration loader will reject SoraFS or multi-lane settings when the flag is absent.
+## 步驟 3 — 從模板進行階段配置
+1. 解壓捆綁包並將 `config/` 複製到節點將讀取其配置的位置。
+2. 將 `config/` 下的文件視為模板：
+   - 將 `public_key`/`private_key` 替換為您的生產 Ed25519 密鑰。如果節點將從 HSM 獲取私鑰，則從磁盤中刪除私鑰；更新配置以指向 HSM 連接器。
+   - 調整 `trusted_peers`、`network.address` 和 `torii.address`，以便它們反映您可訪問的接口以及分配給您的引導對等點。
+   - 使用面向操作員的 Torii 端點（包括 TLS 配置，如果適用）以及您為操作工具提供的憑據更新 `client.toml`。
+3. 保留捆綁包中提供的鏈 ID，除非治理明確指示，否則全局通道需要單個規範鏈標識符。
+4. 計劃啟動帶有 Sora 配置文件標誌的節點：`irohad --sora --config <path>`。當該標誌不存在時，配置加載器將拒絕 SoraFS 或多通道設置。
 
-## Step 4 — Align data-space metadata and routing
-1. Edit `config/config.toml` so the `[nexus]` section matches the data-space catalogue the Nexus Council provided:
-   - `lane_count` must equal the total lanes enabled in the current epoch.
-   - Every entry in `[[nexus.lane_catalog]]` and `[[nexus.dataspace_catalog]]` must contain a unique `index`/`id` and the agreed aliases. Do not delete the existing global entries; add your delegated aliases if the council assigned additional data-spaces.
-   - Ensure each dataspace entry includes `fault_tolerance (f)`; lane-relay committees are sized at `3f+1`.
-2. Update `[[nexus.routing_policy.rules]]` to capture the policy you were given. The default template routes governance instructions to lane `1` and contract deployments to lane `2`; append or modify rules so traffic destined for your data-space is forwarded to the correct lane and alias. Coordinate with Release Engineering before changing rule order.
-3. Review `[nexus.da]`, `[nexus.da.audit]`, and `[nexus.da.recovery]` thresholds. Operators are expected to keep the council-approved values; only adjust them if an updated policy was ratified.
-4. Record the final configuration in your operations tracker. The dual-track release runbook requires attaching the effective `config.toml` (with secrets redacted) to the onboarding ticket.
+## 步驟 4 — 調整數據空間元數據和路由
+1. 編輯 `config/config.toml`，使 `[nexus]` 部分與 Nexus 委員會提供的數據空間目錄相匹配：
+   - `lane_count` 必須等於當前時期啟用的通道總數。
+   - `[[nexus.lane_catalog]]` 和 `[[nexus.dataspace_catalog]]` 中的每個條目必須包含唯一的 `index`/`id` 和商定的別名。不要刪除現有的全局條目；如果理事會分配了額外的數據空間，請添加您委託的別名。
+   - 確保每個數據空間條目包括 `fault_tolerance (f)`；車道接力委員會的規模為 `3f+1`。
+2. 更新 `[[nexus.routing_policy.rules]]` 以獲取為您提供的策略。默認模板將治理指令路由到通道 `1`，將合約部署路由到通道 `2`；附加或修改規則，以便將發往您的數據空間的流量轉發到正確的通道和別名。在更改規則順序之前與發布工程人員協調。
+3. 查看 `[nexus.da]`、`[nexus.da.audit]` 和 `[nexus.da.recovery]` 閾值。運營商應保持理事會批准的值；僅在更新的政策獲得批准後才進行調整。
+4. 在操作跟踪器中記錄最終配置。雙軌發布操作手冊需要將有效的 `config.toml`（已編輯機密）附加到入職票據。
 
-## Step 5 — Pre-flight validation
-1. Run the built-in configuration validator before joining the network:
+## 步驟 5 — 飛行前驗證
+1. 在加入網絡之前運行內置配置驗證器：
    ```bash
    ./bin/irohad --sora --config config/config.toml --trace-config
    ```
-   This prints the resolved configuration and fails early if catalogue/routing entries are inconsistent or if genesis and config disagree.
-2. If you deploy containers, run the same command inside the image after loading it with `docker load -i <profile>-<version>-<os>-image.tar` (remember to include `--sora`).
-3. Check logs for warnings about placeholder lane/data-space identifiers. If any appear, revisit Step 4—production deployments must not rely on the placeholder IDs that ship with the templates.
-4. Execute your local smoke procedure (e.g., submit a `FindNetworkStatus` query with `iroha_cli`, confirm telemetry endpoints expose `nexus_lane_state_total`, and verify streaming keys are rotated or imported as required).
+   這會打印已解析的配置，如果目錄/路由條目不一致或者創世和配置不一致，則會提前失敗。
+2. 如果部署容器，請在使用 `docker load -i <profile>-<version>-<os>-image.tar` 加載映像後在映像中運行相同的命令（請記住包含 `--sora`）。
+3. 檢查日誌中有關佔位符通道/數據空間標識符的警告。如果出現任何情況，請重新訪問步驟 4 - 生產部署不得依賴於模板附帶的佔位符 ID。
+4. 執行本地冒煙程序（例如，使用 `iroha_cli` 提交 `FindNetworkStatus` 查詢，確認遙測端點公開 `nexus_lane_state_total`，並驗證流密鑰是否按要求輪換或導入）。
 
-## Step 6 — Cutover and hand-off
-1. Store the verified `manifest.json` and signature artifacts in the release ticket so auditors can reproduce your checks.
-2. Notify Nexus Operations that the node is ready to be introduced; include:
-   - Node identity (peer ID, hostnames, Torii endpoint).
-   - Effective lane/data-space catalogue and routing policy values.
-   - Hashes of the binaries/images you verified.
-3. Coordinate the final peer admission (gossip seeds and lane assignment) with `@nexus-core`. Do not join the network until you receive approval; Sora Nexus enforces deterministic lane occupancy and requires an updated admissions manifest.
-4. After the node is live, update your runbooks with any overrides you introduced and note the release tag so the next iteration can start from this baseline.
+## 步驟 6 — 切換和移交
+1. 將經過驗證的 `manifest.json` 和簽名工件存儲在發布票據中，以便審核員可以重現您的檢查。
+2. 通知Nexus Operations該節點已準備好引入；包括：
+   - 節點身份（對等 ID、主機名、Torii 端點）。
+   - 有效的車道/數據空間目錄和路由策略值。
+   - 您驗證的二進製文件/圖像的哈希值。
+3. 與 `@nexus-core` 協調最終的同伴准入（八卦種子和通道分配）。在獲得批准之前請勿加入網絡； Sora Nexus 強制執行確定性車道佔用並需要更新的入場清單。
+4. 節點上線後，使用您引入的任何替代更新 Runbook，並記下發布標籤，以便下一次迭代可以從此基線開始。
 
-## Reference checklist
-- [ ] Release profile validated as `iroha3`.
-- [ ] Bundle/image hashes and signatures verified.
-- [ ] Keys, peer addresses, and Torii endpoints updated to production values.
-- [ ] Nexus lane/dataspace catalogue and routing policy match council assignment.
-- [ ] Configuration validator (`irohad --sora --config … --trace-config`) passes without warnings.
-- [ ] Manifests/signatures archived in the onboarding ticket and Ops notified.
+## 參考清單
+- [ ] 發布配置文件已驗證為 `iroha3`。
+- [ ] 捆綁包/圖像哈希值和簽名已驗證。
+- [ ] 密鑰、對等地址和 Torii 端點已更新為生產值。
+- [ ] Nexus 通道/數據空間目錄和路由策略匹配委員會分配。
+- [ ] 配置驗證器 (`irohad --sora --config … --trace-config`) 通過，沒有警告。
+- [ ] 清單/簽名存檔在入職通知單和通知的操作人員中。
 
-For broader context on Nexus migration phases and telemetry expectations, review [Nexus transition notes](./nexus-transition-notes).
+有關 Nexus 遷移階段和遙測預期的更廣泛背景，請查看 [Nexus 轉換說明](./nexus-transition-notes)。

@@ -4,35 +4,37 @@ direction: rtl
 source: docs/portal/docs/nexus/settlement-faq.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: nexus-settlement-faq
-title: الأسئلة الشائعة للتسوية
-description: إجابات موجهة للمشغلين تغطي توجيه التسوية وتحويل XOR والقياس عن بعد وأدلة التدقيق.
+ID: گٹھ جوڑ-سیٹلمنٹ-ایف اے کیو
+عنوان: تصفیے کے عمومی سوالنامہ
+تفصیل: آپریٹر پر مبنی جوابات فلیٹ روٹنگ ، XOR تبادلوں ، ٹیلی میٹری ، اور آڈٹ گائیڈز کا احاطہ کرتے ہیں۔
 ---
 
-تعكس هذه الصفحة الأسئلة الشائعة الداخلية للتسوية (`docs/source/nexus_settlement_faq.md`) بحيث يستطيع قراء البوابة مراجعة نفس الإرشادات دون التنقيب في mono-repo. تشرح كيف يعالج Settlement Router المدفوعات، وما المقاييس التي يجب مراقبتها، وكيف ينبغي للـ SDK دمج حمولات Norito.
+یہ صفحہ داخلی تصفیے کے عمومی سوالنامہ (`docs/source/nexus_settlement_faq.md`) کی آئینہ دار ہے لہذا پورٹل کے قارئین مونو ریپو میں کھودے بغیر اسی ہدایات کا جائزہ لے سکتے ہیں۔ یہ بتاتا ہے کہ تصفیہ روٹر ادائیگیوں پر کارروائی کرتا ہے ، کس پیمائش کی نگرانی کرنا ہے ، اور ایس ڈی کے کو Norito ایکس پے لوڈ کو کس طرح ضم کرنا چاہئے۔
 
-## أبرز النقاط
+## جھلکیاں
 
-1. **تعيين lane** — يعلن كل dataspace عن `settlement_handle` (`xor_global` أو `xor_lane_weighted` أو `xor_hosted_custody` أو `xor_dual_fund`). راجع أحدث كتالوج lane تحت `docs/source/project_tracker/nexus_config_deltas/`.
-2. **تحويل حتمي** — يحول الـ router جميع التسويات إلى XOR عبر مصادر السيولة المعتمدة من الحوكمة. تقوم lanes الخاصة بتمويل مخازن XOR مسبقا؛ ولا تطبق haircuts إلا عندما تنحرف المخازن خارج السياسة.
-3. **القياس عن بعد** — راقب `nexus_settlement_latency_seconds` وعدادات التحويل ومقاييس haircut. توجد لوحات المتابعة في `dashboards/grafana/nexus_settlement.json` والتنبيهات في `dashboards/alerts/nexus_audit_rules.yml`.
-4. **الأدلة** — أرشف الإعدادات وسجلات الـ router وتصديرات القياس عن بعد وتقارير المطابقة لأغراض التدقيق.
-5. **مسؤوليات SDK** — يجب على كل SDK توفير أدوات مساعدة للتسوية ومعرفات lane ومشفري حمولات Norito للحفاظ على التكافؤ مع الـ router.
+1. ** سیٹ لین ** - ہر ڈیٹا اسپیس `settlement_handle` (`xor_global` یا `xor_lane_weighted` یا `xor_hosted_custody` یا `xor_dual_fund`) کا اعلان کرتا ہے۔ `docs/source/project_tracker/nexus_config_deltas/` کے تحت تازہ ترین لین کیٹلاگ دیکھیں۔
+2. نجی لین پری فنڈ XOR بفرز ؛ بال کٹوانے کا اطلاق تب ہی ہوتا ہے جب بفر پالیسی سے باہر ہٹ جاتے ہیں۔
+3. مانیٹرنگ پینل `dashboards/grafana/nexus_settlement.json` پر واقع ہیں اور الرٹس `dashboards/alerts/nexus_audit_rules.yml` پر واقع ہیں۔
+4. ** ثبوت ** - آرکائیو کی ترتیبات ، روٹر لاگز ، ٹیلی میٹری برآمدات ، اور آڈیٹنگ کے مقاصد کے لئے تعمیل کی رپورٹیں۔
+5. ** ایس ڈی کے ذمہ داریاں ** - ہر ایس ڈی کے کو روٹر کے ساتھ برابری کو برقرار رکھنے کے لئے پارسنگ یوٹیلیٹیز ، لین شناخت کار ، اور Norito پے لوڈ انکوڈرز فراہم کرنا ہوں گے۔
 
-## أمثلة على التدفقات
+## بہاؤ کی مثالیں
 
-| نوع lane | الأدلة المطلوبة | ماذا يثبت |
-|-----------|--------------------|----------------|
-| خاصة `xor_hosted_custody` | سجل الـ router + `nexus_settlement_latency_seconds{lane}` + `settlement_router_haircut_total{lane}` | تؤكد أن مخازن CBDC تخصم XOR حتمي وأن haircuts تبقى ضمن السياسة. |
-| عامة `xor_global` | سجل الـ router + مرجع DEX/TWAP + مقاييس زمن الاستجابة/التحويل | يثبت أن مسار السيولة المشترك سعّر التحويل وفق TWAP المنشور دون haircut. |
-| هجينة `xor_dual_fund` | سجل الـ router يظهر تقسيم public مقابل shielded + عدادات القياس عن بعد | يثبت أن المزج بين shielded/public احترم نسب الحوكمة وسجل haircut المطبق على كل جزء. |
+| ٹائپ لین | مطلوبہ ثبوت یہ کیا ثابت کرتا ہے؟
+| ----------- | ---------------------- | -------------------- |
+| خاص طور پر `xor_hosted_custody` | روٹر رجسٹر + `nexus_settlement_latency_seconds{lane}` + `settlement_router_haircut_total{lane}` | یہ اس بات کی تصدیق کرتا ہے کہ سی بی ڈی سی اسٹورز ایک عین مطابق XOR میں کٹوتی کرتے ہیں اور یہ کہ بال کٹوانے پالیسی میں ہی رہتے ہیں۔ |
+| جنرل `xor_global` | راؤٹر لاگ + ڈیکس/ٹیوپ ریفرنس + رسپانس/ٹرانسفر ٹائم میٹرکس | یہ ثابت کرتا ہے کہ عام لیکویڈیٹی راہ نے بغیر کسی کٹے کے شائع ہونے والے ٹوپپ کے مطابق تبادلوں کی قیمت کا حوالہ دیا۔ |
+| ہائبرڈ `xor_dual_fund` | راؤٹر لاگ عوامی بمقابلہ شیلڈڈ + ٹیلی میٹری کاؤنٹرز کی خرابی کو ظاہر کرتا ہے یہ ثابت کرتا ہے کہ ڈھال/پبلک مکس ہر حصے پر لاگو گورننس نسب اور بال کٹوانے کی رجسٹری کا احترام کرتا ہے۔ |
 
-## هل تحتاج مزيدا من التفاصيل؟
+## مزید تفصیلات کی ضرورت ہے؟
 
-- FAQ الكامل: `docs/source/nexus_settlement_faq.md`
-- مواصفة Settlement router: `docs/source/settlement_router.md`
-- دليل سياسات CBDC: `docs/source/cbdc_lane_playbook.md`
-- دليل التشغيل: [عمليات Nexus](./nexus-operations)
+- مکمل عمومی سوالنامہ: `docs/source/nexus_settlement_faq.md`
+- تصفیہ روٹر کی تفصیلات: `docs/source/settlement_router.md`
+- سی بی ڈی سی پالیسی گائیڈ: `docs/source/cbdc_lane_playbook.md`
+- آپریشن دستی: [Nexus آپریشن] (./nexus-operations)

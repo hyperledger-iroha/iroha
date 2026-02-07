@@ -7,45 +7,46 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 676798a4cf7c3e7737a0f80640f3f268a2f625f92afdd359ac528881d2aeb046
 source_last_modified: "2025-12-29T18:16:35.060950+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Android Documentation Automation Baseline (AND5)
+# Android Hujjatlarni Avtomatlashtirishning Baseline (AND5)
 
-Roadmap item AND5 requires documentation, localization, and publishing
-automation to be auditable before AND6 (CI & Compliance) can start. This folder
-records the commands, artefacts, and evidence layout that AND5/AND6 reference,
-mirroring the plans captured in
-`docs/source/sdk/android/developer_experience_plan.md` and
+Yo‘l xaritasining AND5 bandi hujjatlashtirish, mahalliylashtirish va nashr etishni talab qiladi
+AND6 (CI & Compliance) ishga tushirilgunga qadar tekshirilishi mumkin bo'lgan avtomatlashtirish. Ushbu jild
+AND5/AND6 havolasi bo'lgan buyruqlar, artefaktlar va dalillar tartibini qayd etadi,
+olingan rejalarni aks ettiradi
+`docs/source/sdk/android/developer_experience_plan.md` va
 `docs/source/sdk/android/parity_dashboard_plan.md`.
 
-## Pipelines & Commands
+## Quvurlar va buyruqlar
 
-| Task | Command(s) | Expected Artefacts | Notes |
-|------|------------|--------------------|-------|
-| Localization stub sync | `python3 scripts/sync_docs_i18n.py` (optionally pass `--lang <code>` per run) | Log file stored under `docs/automation/android/i18n/<timestamp>-sync.log` plus the translated stub commits | Keeps `docs/i18n/manifest.json` in sync with translated stubs; the log records language codes touched and the git commit captured in the baseline. |
-| Norito fixture + parity verification | `ci/check_android_fixtures.sh` (wraps `python3 scripts/check_android_fixtures.py --json-out artifacts/android/parity/<stamp>/summary.json`) | Copy the generated summary JSON into `docs/automation/android/parity/<stamp>-summary.json` | Verifies `java/iroha_android/src/test/resources` payloads, manifest hashes, and signed fixture lengths. Attach the summary alongside the cadence evidence under `artifacts/android/fixture_runs/`. |
-| Sample manifest & publishing proof | `scripts/publish_android_sdk.sh --version <semver> [--repo-url …]` (runs tests + SBOM + provenance) | Provenance bundle metadata plus the resulting `sample_manifest.json` from `docs/source/sdk/android/samples/` stored under `docs/automation/android/samples/<version>/` | Ties AND5 sample apps and release automation together—capture the generated manifest, SBOM hash, and provenance log for the beta review. |
-| Parity dashboard feed | `python3 scripts/check_android_fixtures.py … --json-out artifacts/android/parity/<stamp>/summary.json` followed by `python3 scripts/android_parity_metrics.py --summary <summary> --output artifacts/android/parity/<stamp>/metrics.prom` | Copy the `metrics.prom` snapshot or the Grafana export JSON into `docs/automation/android/parity/<stamp>-metrics.prom` | Feeds the dashboard plan so AND5/AND7 governance can verify invalid submission counters and telemetry adoption. |
+| Vazifa | Buyruq(lar) | Kutilayotgan artefaktlar | Eslatmalar |
+|------|------------|-------------------|-------|
+| Mahalliylashtirish stub sinxronlash | `python3 scripts/sync_docs_i18n.py` (ixtiyoriy ravishda har bir ish uchun `--lang <code>` o'tishi) | `docs/automation/android/i18n/<timestamp>-sync.log` ostida saqlangan jurnal fayli va tarjima qilingan stub majburiyatlari | `docs/i18n/manifest.json` ni tarjima qilingan stublar bilan sinxronlashtiradi; jurnal tegilgan til kodlarini va asosiy chiziqda olingan git majburiyatini qayd qiladi. |
+| Norito armatura + paritetni tekshirish | `ci/check_android_fixtures.sh` (`python3 scripts/check_android_fixtures.py --json-out artifacts/android/parity/<stamp>/summary.json` o'raladi) | Yaratilgan JSON xulosasini `docs/automation/android/parity/<stamp>-summary.json` | ga nusxalash `java/iroha_android/src/test/resources` foydali yuklarni, manifest xeshlarini va imzolangan armatura uzunliklarini tasdiqlaydi. Xulosani `artifacts/android/fixture_runs/` ostida kadans dalillari bilan birga ilova qiling. |
+| Namuna manifest va nashriyot isboti | `scripts/publish_android_sdk.sh --version <semver> [--repo-url …]` (sinovlar + SBOM + kelib chiqishi) | `docs/automation/android/samples/<version>/` ostida saqlangan `docs/source/sdk/android/samples/` dan olingan manba toʻplami metamaʼlumotlari va `sample_manifest.json` | AND5 namunaviy ilovalarini bog‘lang va avtomatlashtirishni birga chiqaring — beta tekshiruvi uchun yaratilgan manifest, SBOM xesh va kelib chiqish jurnalini yozib oling. |
+| Parite boshqaruv paneli tasmasi | `python3 scripts/check_android_fixtures.py … --json-out artifacts/android/parity/<stamp>/summary.json` keyin `python3 scripts/android_parity_metrics.py --summary <summary> --output artifacts/android/parity/<stamp>/metrics.prom` | `metrics.prom` suratini yoki Grafana eksport JSON faylini `docs/automation/android/parity/<stamp>-metrics.prom` ga nusxalash | AND5/AND7 boshqaruvi noto‘g‘ri topshirish hisoblagichlari va telemetriya qabul qilinishini tekshirishi uchun asboblar paneli rejasini ta’minlaydi. |
 
-## Evidence Capture
+## Dalillarni olish
 
-1. **Timestamp everything.** Name files using UTC timestamps
-   (`YYYYMMDDTHHMMSSZ`) so parity dashboards, governance minutes, and published
-   docs can reference the same run deterministically.
-2. **Reference commits.** Each log should include the git commit hash of the run
-   plus any relevant configuration (e.g., `ANDROID_PARITY_PIPELINE_METADATA`).
-   When privacy requires redaction, include a note and link to the secure vault.
-3. **Archive minimal context.** We only check in structured summaries (JSON,
-   `.prom`, `.log`). Heavy artefacts (APK bundles, screenshots) should remain in
-   `artifacts/` or object storage with a signed hash recorded in the log.
-4. **Update status entries.** When AND5 milestones advance in `status.md`, cite
-   the corresponding file (e.g., `docs/automation/android/parity/20260324T010203Z-summary.json`)
-   so auditors can trace the baseline without scraping CI logs.
+1. **Hamma narsani vaqt tamg‘asi bilan belgilang.** UTC vaqt belgilaridan foydalanib fayllarga nom bering
+   (`YYYYMMDDTHHMMSSZ`) shunday parite panellari, boshqaruv protokollari va nashr etilgan
+   docs bir xil ishga deterministik tarzda murojaat qilishi mumkin.
+2. **Ma'lumotnoma topshiriladi.** Har bir jurnal ishga tushirishning git commit xeshini o'z ichiga olishi kerak.
+   plus har qanday tegishli konfiguratsiya (masalan, `ANDROID_PARITY_PIPELINE_METADATA`).
+   Maxfiylik tahrir qilishni talab qilganda, eslatmani qo'shing va xavfsiz omborga havola qiling.
+3. **Minimal kontekstni arxivlash.** Biz faqat tuzilgan xulosalarni tekshiramiz (JSON,
+   `.prom`, `.log`). Og'ir artefaktlar (APK to'plamlari, skrinshotlar) ichida qolishi kerak
+   `artifacts/` yoki jurnalda qayd etilgan imzolangan xesh bilan ob'ektni saqlash.
+4. **Holat yozuvlarini yangilash.** `status.md` da AND5 bosqichlari oldinga siljiganida, iqtibos keltiring
+   mos keladigan fayl (masalan, `docs/automation/android/parity/20260324T010203Z-summary.json`)
+   Shunday qilib, auditorlar CI jurnallarini qirib tashlamasdan bazani kuzatishi mumkin.
 
-Following this layout satisfies the “docs/automation baselines available for
-audit” prerequisite that AND6 cites and keeps the Android documentation program
-in lockstep with the published plans.
+Ushbu tartibdan so'ng mavjud bo'lgan "hujjatlar/avtomatlashtirish asoslari."
+audit” sharti, bu AND6 Android hujjatlashtirish dasturini keltirib chiqaradi va saqlaydi
+e'lon qilingan rejalar bilan qulflangan.

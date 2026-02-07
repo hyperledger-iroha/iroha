@@ -7,95 +7,93 @@ generator: scripts/sync_docs_i18n.py
 source_hash: c9ce6010594e495116c1397b984000d1ee5d45d064294eca046f8dc762fa73b6
 source_last_modified: "2026-01-05T09:28:11.999442+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Env → Config Migration Tracker
+# Env → የስደት መከታተያ አዋቅር
 
-This tracker summarizes production-facing environment-variable toggles surfaced
-by `docs/source/agents/env_var_inventory.{json,md}` and the intended migration
-path into `iroha_config` (or explicit dev/test-only scoping).
+ይህ መከታተያ ምርትን የሚጋፈጡ አካባቢ-ተለዋዋጭ መቀያየሪያዎችን ወለል ብሎ ያሳያል
+በ `docs/source/agents/env_var_inventory.{json,md}` እና የታሰበው ፍልሰት
+ወደ `iroha_config` (ወይም ግልጽ ዲቪ/ሙከራ-ብቻ ወሰን) የሚወስድ መንገድ።
 
 
-Note: `ci/check_env_config_surface.sh` now fails when new **production** env
-shims appear relative to `AGENTS_BASE_REF` unless `ENV_CONFIG_GUARD_ALLOW=1` is
-set; document intentional additions here before using the override.
+ማሳሰቢያ፡ `ci/check_env_config_surface.sh` አሁን አዲስ **ምርት** env
+`ENV_CONFIG_GUARD_ALLOW=1` ካልሆነ በስተቀር ሺምስ ከ `AGENTS_BASE_REF` አንፃር ይታያል
+አዘጋጅ; መሻርን ከመጠቀምዎ በፊት ሆን ተብሎ የተጨመሩትን እዚህ ይመዝግቡ።
 
-## Completed migrations
+## የተጠናቀቁ ፍልሰቶች- **IVM ABI መርጦ መውጣት** - ተወግዷል `IVM_ALLOW_NON_V1_ABI`; አቀናባሪው አሁን ውድቅ ያደርጋል
+  v1 ያልሆኑ ኤቢአይዎች ያለምንም ቅድመ ሁኔታ የስህተቱን ዱካ የሚጠብቅ የክፍል ሙከራ።
+- **IVM የማረሚያ ባነር env shim** - `IVM_SUPPRESS_BANNER` env መርጦ መውጣትን ተወ።
+  ባነር ማፈን በፕሮግራማዊ አቀናባሪ በኩል ይገኛል።
+- **IVM መሸጎጫ/መጠን** - ባለ ክር መሸጎጫ/ማሳያ/ጂፒዩ መጠን
+  `iroha_config` (`pipeline.{cache_size,ivm_cache_max_decoded_ops,ivm_cache_max_bytes,ivm_prover_threads}`፣
+  `accel.max_gpus`) እና የአሂድ ጊዜ env shims ተወግዷል። አስተናጋጆች አሁን ይደውሉ
+  `ivm::ivm_cache::configure_limits` እና `ivm::zk::set_prover_threads`፣ ሙከራዎች ጥቅም ላይ ይውላሉ
+  የኢንቪ መሻር ፋንታ `CacheLimitsGuard`።
+- ** የወረፋ ሥርን ያገናኙ *** - `connect.queue.root` ታክሏል (ነባሪ፡-
+  `~/.iroha/connect`) ወደ ደንበኛው ማዋቀር እና በ CLI ውስጥ ፈትለው እና
+  JS ምርመራዎች. የጄኤስ ረዳቶች አወቃቀሩን (ወይም ግልጽ የሆነ `rootDir`) እና
+  በ `allowEnvOverride` በኩል በዴቭ/ሙከራ `IROHA_CONNECT_QUEUE_ROOT` ብቻ ያክብሩ።
+  አብነቶች አንጓውን ይመዘግባሉ ስለዚህ ኦፕሬተሮች ከአሁን በኋላ env መሻር አያስፈልጋቸውም።
+- **Izanami አውታረ መረብ መርጦ መግባት** — ግልጽ የሆነ `allow_net` CLI/config ባንዲራ ታክሏል ለ
+  የ Izanami ትርምስ መሳሪያ; አሁን ለማሄድ `allow_net=true`/`--allow-net` እና
+- **IVM ባነር ድምፅ** — `IROHA_BEEP` env shim በማዋቀር በሚነዳ ተተካ
+  `ivm.banner.{show,beep}` መቀያየሪያዎች (ነባሪ፡ እውነት/እውነት)። የጅምር ባነር/ቢፕ
+  የወልና አሁን በምርት ውስጥ ብቻ ውቅር ያነባል; ዴቭ/ሙከራ አሁንም ክብርን ይገነባል።
+  በእጅ ለመቀያየር env መሻር።
+- ** DA spool መሻር (ሙከራዎች ብቻ) *** - የ `IROHA_DA_SPOOL_DIR` መሻር አሁን ነው
+  ከ `cfg(test)` ረዳቶች በስተጀርባ የታጠረ; የምርት ኮድ ሁል ጊዜ ስፖሉን ያመነጫል።
+  ከማዋቀር መንገድ.
+- ** ክሪፕቶ ውስጣዊ ነገሮች *** - ተተክቷል `IROHA_DISABLE_SM_INTRINSICS` /
+  `IROHA_ENABLE_SM_INTRINSICS` በማዋቀር የሚመራ
+  `crypto.sm_intrinsics` ፖሊሲ (`auto`/`force-enable`/`force-disable`) እና
+  የ `IROHA_SM_OPENSSL_PREVIEW` ጠባቂውን አስወግዷል. አስተናጋጆች ፖሊሲውን በ
+  ጅምር፣ አግዳሚ ወንበሮች/ሙከራዎች በ`CRYPTO_SM_INTRINSICS` እና በOpenSSL በኩል መርጠው መግባት ይችላሉ።
+  ቅድመ እይታ አሁን የሚያከብረው የውቅር ባንዲራውን ብቻ ነው።
+  Izanami ቀድሞውንም `--allow-net`/የቀጠለ ውቅረት ይፈልጋል፣ እና ሙከራዎች አሁን በ ላይ ይተማመናሉ።
+  ከድባብ env መቀያየር ይልቅ ያ ቋጠሮ።
+- ** FastPQ GPU ማስተካከያ *** - `fastpq.metal.{max_in_flight,threadgroup_width,metal_trace,metal_debug_enum,metal_debug_fused}` ታክሏል።
+  የማዋቀር ቁልፎች (ነባሪዎች፡ `None`/`None`/`false`/`false`/`false`) እና በCLI ትንተና በኩል ፈትኑዋቸው።
+  `FASTPQ_METAL_*`/`FASTPQ_DEBUG_*` ሺምስ አሁን እንደ ዴቭ/ሙከራ ውድቀት እና
+  አንዴ ውቅረት ሲጫኑ ችላ ይባላሉ (ውቅሩ ሳይስተካከሉ በሚቀርባቸው ጊዜም ቢሆን)። ሰነዶች/እቃዎች ነበሩ።
+  ስደትን ለመጠቆም ታደሰ።【crates/irohad/src/main.rs:2609】【crates/iroha_core/src/fastpq/lane.rs:109】【crates/fastpq_prover/src/overrides.rs:11】
+  (`IVM_DECODE_TRACE`፣ `IVM_DEBUG_WSV`፣ `IVM_DEBUG_COMPACT`፣ `IVM_DEBUG_INVALID`፣
+  `IVM_DEBUG_REGALLOC`፣ `IVM_DEBUG_METAL_ENUM`፣ `IVM_DEBUG_METAL_SELFTEST`፣
+  `IVM_FORCE_METAL_ENUM`፣ `IVM_FORCE_METAL_SELFTEST_FAIL`፣ `IVM_FORCE_CUDA_SELFTEST_FAIL`፣
+  `IVM_DISABLE_METAL`፣ `IVM_DISABLE_CUDA`) አሁን በጋራ ከማረሚያ/ሙከራ ግንባታዎች ጀርባ ተዘግተዋል
+  ረዳት ስለዚህ የምርት ሁለትዮሽዎች ለአካባቢያዊ ምርመራዎች ቁልፎችን በሚጠብቁበት ጊዜ ችላ ይላቸዋል። ኢንቨስት
+  የ dev/የሙከራ-ብቻ ወሰንን ለማንፀባረቅ ቆጠራ እንደገና ተፈጠረ።- ** FASTPQ ቋሚ ዝመናዎች *** - `FASTPQ_UPDATE_FIXTURES` አሁን በ FASTPQ ውህደት ውስጥ ብቻ ነው የሚታየው
+  ፈተናዎች; የምርት ምንጮች የኢንቪ መቀያየርን አያነቡም እና እቃው የሙከራ-ብቻውን ያንፀባርቃል
+  ስፋት.
+- **የኢንቬንቶሪ እድሳት + ወሰን ማወቂያ** — የኢንቪ ቆጠራ መሣሪያ አሁን `build.rs` ፋይሎችን እንደ መለያ ይሰጣል
+  ወሰን ይገንቡ እና `#[cfg(test)]`/የመዋሃድ ማሰሪያ ሞጁሎችን ይከታተላል ስለዚህ ለሙከራ ብቻ ይቀየራል (ለምሳሌ፣
+  `IROHA_TEST_*`፣ `IROHA_RUN_IGNORED`) እና CUDA የግንባታ ባንዲራዎች ከምርት ብዛት ውጭ ይታያሉ።
+  ኢንቬንቶሪ በዲሴምበር 07፣ 2025 (518 refs / 144 vars) የኤንቭ-ውቅር ጠባቂ ልዩነትን አረንጓዴ ለማቆየት ተፈጠረ።
+- ** P2P ቶፖሎጂ env shim መልቀቂያ ጠባቂ *** - `IROHA_P2P_TOPOLOGY_UPDATE_MS` አሁን መወሰኛ ቀስቅሷል
+  የጅምር ስህተት በመልቀቂያ ግንባታዎች (ማስጠንቀቅ-በማረሚያ/ሙከራ ላይ ብቻ) ስለዚህ የምርት አንጓዎች የሚታመኑት
+  `network.peer_gossip_period_ms`. የኢንቪው ክምችት ጠባቂውን እና የ
+  የዘመነ ክላሲፋየር አሁን `cfg!`-የተጠበቁ መቀያየርን እንደ ማረም/ሙከራ ይሸፍናል።
 
-- **IVM ABI opt-out** — Removed `IVM_ALLOW_NON_V1_ABI`; the compiler now rejects
-  non-v1 ABIs unconditionally with a unit test guarding the error path.
-- **IVM debug banner env shim** — Dropped the `IVM_SUPPRESS_BANNER` env opt-out;
-  banner suppression remains available via the programmatic setter.
-- **IVM cache/sizing** — Threaded cache/prover/GPU sizing through
-  `iroha_config` (`pipeline.{cache_size,ivm_cache_max_decoded_ops,ivm_cache_max_bytes,ivm_prover_threads}`,
-  `accel.max_gpus`) and removed runtime env shims. Hosts now call
-  `ivm::ivm_cache::configure_limits` and `ivm::zk::set_prover_threads`, tests use
-  `CacheLimitsGuard` instead of env overrides.
-- **Connect queue root** — Added `connect.queue.root` (default:
-  `~/.iroha/connect`) to the client config and threaded it through the CLI and
-  JS diagnostics. JS helpers resolve the config (or an explicit `rootDir`) and
-  only honour `IROHA_CONNECT_QUEUE_ROOT` in dev/test via `allowEnvOverride`;
-  templates document the knob so operators no longer need env overrides.
-- **Izanami network opt-in** — Added an explicit `allow_net` CLI/config flag for
-  the Izanami chaos tool; runs now require `allow_net=true`/`--allow-net` and
-- **IVM banner beep** — Replaced the `IROHA_BEEP` env shim with config-driven
-  `ivm.banner.{show,beep}` toggles (default: true/true). Startup banner/beep
-  wiring now reads configuration only in production; dev/test builds still honour
-  the env override for manual toggles.
-- **DA spool override (tests only)** — The `IROHA_DA_SPOOL_DIR` override is now
-  fenced behind `cfg(test)` helpers; production code always sources the spool
-  path from configuration.
-- **Crypto intrinsics** — Replaced `IROHA_DISABLE_SM_INTRINSICS` /
-  `IROHA_ENABLE_SM_INTRINSICS` with the config-driven
-  `crypto.sm_intrinsics` policy (`auto`/`force-enable`/`force-disable`) and
-  removed the `IROHA_SM_OPENSSL_PREVIEW` guard. Hosts apply the policy at
-  startup, benches/tests may opt in via `CRYPTO_SM_INTRINSICS`, and the OpenSSL
-  preview now respects only the config flag.
-  Izanami already requires `--allow-net`/persisted config, and tests now rely on
-  that knob rather than ambient env toggles.
-- **FastPQ GPU tuning** — Added `fastpq.metal.{max_in_flight,threadgroup_width,metal_trace,metal_debug_enum,metal_debug_fused}`
-  config knobs (defaults: `None`/`None`/`false`/`false`/`false`) and thread them through CLI parsing
-  `FASTPQ_METAL_*` / `FASTPQ_DEBUG_*` shims now behave as dev/test fallbacks and
-  are ignored once configuration loads (even when the config leaves them unset); docs/inventory were
-  refreshed to flag the migration.【crates/irohad/src/main.rs:2609】【crates/iroha_core/src/fastpq/lane.rs:109】【crates/fastpq_prover/src/overrides.rs:11】
-  (`IVM_DECODE_TRACE`, `IVM_DEBUG_WSV`, `IVM_DEBUG_COMPACT`, `IVM_DEBUG_INVALID`,
-  `IVM_DEBUG_REGALLOC`, `IVM_DEBUG_METAL_ENUM`, `IVM_DEBUG_METAL_SELFTEST`,
-  `IVM_FORCE_METAL_ENUM`, `IVM_FORCE_METAL_SELFTEST_FAIL`, `IVM_FORCE_CUDA_SELFTEST_FAIL`,
-  `IVM_DISABLE_METAL`, `IVM_DISABLE_CUDA`) are now gated behind debug/test builds via a shared
-  helper so production binaries ignore them while preserving the knobs for local diagnostics. Env
-  inventory was regenerated to reflect the dev/test-only scope.
-- **FASTPQ fixture updates** — `FASTPQ_UPDATE_FIXTURES` now appears only in FASTPQ integration
-  tests; production sources no longer read the env toggle and the inventory reflects the test-only
-  scope.
-- **Inventory refresh + scope detection** — The env inventory tooling now tags `build.rs` files as
-  build scope and tracks `#[cfg(test)]`/integration harness modules so test-only toggles (e.g.,
-  `IROHA_TEST_*`, `IROHA_RUN_IGNORED`) and CUDA build flags show up outside the production count.
-  Inventory regenerated Dec 07, 2025 (518 refs / 144 vars) to keep the env-config guard diff green.
-- **P2P topology env shim release guard** — `IROHA_P2P_TOPOLOGY_UPDATE_MS` now triggers a deterministic
-  startup error in release builds (warn-only in debug/test) so production nodes rely solely on
-  `network.peer_gossip_period_ms`. The env inventory was regenerated to reflect the guard and the
-  updated classifier now scopes `cfg!`-guarded toggles as debug/test.
+## ከፍተኛ ቅድሚያ የሚሰጠው ፍልሰት (የምርት መንገዶች)
 
-## High-priority migrations (production paths)
+- _ምንም (የእቅድ ክምችት በ cfg ታድሷል!/ማረሚያ ማግኘቱ፤ env-config guard green from P2P shim hardening)
 
-- _None (inventory refreshed with cfg!/debug detection; env-config guard green after P2P shim hardening)._
+## ዴቭ/ሙከራ-ብቻ ወደ አጥር ይቀየራል።
 
-## Dev/test-only toggles to fence
+- የአሁኑ መጥረግ (ታህሳስ 07፣ 2025)፡-ግንባታ-ብቻ CUDA ባንዲራዎች (`IVM_CUDA_*`) እንደ `build` እና
+  የመታጠቂያ መቀየሪያዎች (`IROHA_TEST_*`, `IROHA_RUN_IGNORED`, `IROHA_SKIP_BIND_CHECKS`) አሁን ይመዝገቡ እንደ
+  `test`/`debug` በዕቃው ውስጥ (`cfg!` የተጠበቁ ሺምስን ጨምሮ)። ተጨማሪ አጥር አያስፈልግም;
+  የወደፊት ተጨማሪዎችን ከ `cfg(test)`/ቤንች-ብቻ ረዳቶች ከ TODO ምልክቶች ጋር ጊዜያዊ ሲሆኑ ያቆዩ።
 
-- Current sweep (Dec 07, 2025): build-only CUDA flags (`IVM_CUDA_*`) are scoped as `build` and the
-  harness toggles (`IROHA_TEST_*`, `IROHA_RUN_IGNORED`, `IROHA_SKIP_BIND_CHECKS`) now register as
-  `test`/`debug` in the inventory (including `cfg!`-guarded shims). No additional fencing is required;
-  keep future additions behind `cfg(test)`/bench-only helpers with TODO markers when shims are temporary.
+## የግንባታ ጊዜ ኢንቨስ (እንደሆነ ይውጡ)
 
-## Build-time envs (leave as-is)
+- ጭነት/ባህሪ ኢንቪስ (`CARGO_*`፣ `OUT_DIR`፣ `DOCS_RS`፣ `PROFILE`፣ `CUDA_HOME`፣
+  `CUDA_PATH`፣ `JSONSTAGE1_CUDA_ARCH`፣ `FASTPQ_SKIP_GPU_BUILD`፣ ወዘተ) ይቀራሉ
+  የግንባታ-ስክሪፕት ስጋቶች እና ለሩጫ ጊዜ ማዋቀር ከወሰን ውጪ ናቸው።
 
-- Cargo/feature envs (`CARGO_*`, `OUT_DIR`, `DOCS_RS`, `PROFILE`, `CUDA_HOME`,
-  `CUDA_PATH`, `JSONSTAGE1_CUDA_ARCH`, `FASTPQ_SKIP_GPU_BUILD`, etc.) remain
-  build-script concerns and are out-of-scope for runtime config migration.
+## ቀጣይ ድርጊቶች
 
-## Next actions
-
-1) Run `make check-env-config-surface` after config-surface updates to catch new production env shims
-   early and assign subsystem owners/ETAs.  
-2) Refresh the inventory (`make check-env-config-surface`) after each sweep so
-   the tracker stays aligned with new guardrails and the env-config guard diff stays noise-free.
+1) አዲስ የምርት env shims ለመያዝ ከውቅረት-የገጽታ ዝመናዎች በኋላ `make check-env-config-surface` ን ያሂዱ
+   ቀደም ብሎ እና የንዑስ ስርዓት ባለቤቶችን/ኢታኤዎችን ይመድቡ።  
+2) ከእያንዳንዱ መጥረግ በኋላ እቃውን ያድሱ (`make check-env-config-surface`)
+   መከታተያው ከአዲስ የጥበቃ ሀዲዶች ጋር ተስተካክሎ ይቆያል እና env-config guard diff ከድምፅ ነፃ ሆኖ ይቆያል።

@@ -11,29 +11,30 @@ id: repair-plan
 title: SoraFS Repair Automation & Auditor API
 sidebar_label: Repair Automation
 description: Governance policy, escalation lifecycle, and API expectations for SoraFS repair automation.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
-Mirrors `docs/source/sorafs_repair_plan.md`. Keep both versions in sync until the Sphinx set is retired.
+:::དྲན་ཐོའི་འབྱུང་ཁུངས།
+མེ་ལོང་ `docs/source/sorafs_repair_plan.md`. ཐོན་རིམ་གཉིས་ཆ་ར་ སི་ཕིནཀསི་ཆ་ཚན་འདི་ དགོངས་ཞུ་མ་འབད་ཚུན་ཚོད་ མཉམ་འབྱུང་སྦེ་བཞག།
 :::
 
-## Governance Decision Lifecycle
-1. Escalated repairs create a slash proposal draft and open the dispute window.
-2. Governance voters submit approve/reject votes during the dispute window.
-3. At `escalated_at_unix + dispute_window_secs` the decision is computed deterministically: minimum voters, approvals exceed rejections, and the approval ratio meets the quorum threshold.
-4. Approved decisions open an appeal window; appeals recorded before `approved_at_unix + appeal_window_secs` mark the decision as appealed.
-5. Penalty caps apply to all proposals; submissions above the cap are rejected.
+## གཞུང་སྐྱོང་གྲོས་ཆོད་ཀྱི་མི་ཚེ་འཁོར་སྐྱོན།
+1. ཡར་འཛེགས་པའི་ཉམས་བཅོས་ཀྱིས་ གྲོས་འཆར་ཟིན་བྲིས་བཟོ་སྟེ་ རྩོད་རྙོགས་སྒོ་སྒྲིག་ཁ་ཕྱེ་ནི།
+༢ གཞུང་སྐྱོང་ཚོགས་རྒྱན་བཙུགས་མི་ཚུ་གིས་ རྩོད་གཞི་སྒོ་སྒྲིག་གི་སྐབས་ལུ་ ཆ་འཇོག་/ངོས་ལེན་མེད་པའི་ཚོགས་རྒྱན་ཚུ་ བཙུགསཔ་ཨིན།
+༣ གྲོས་ཐག་འདི་ རྩིས་རྐྱབ་སྟེ་ ཚོགས་རྒྱན་བཙུགས་མི་ ཉུང་མཐའ་དང་ ཆ་འཇོག་ཚུ་ ངོས་ལེན་ལས་ལྷག་སྟེ་ ཆ་འཇོག་འབད་བའི་ ཆ་ཚད་འདི་ གྲུབ་ཡོདཔ་ཨིན།
+༤ ཆ་འཇོག་གྲུབ་པའི་གྲོས་ཐག་ཚུ་གིས་ མཐོ་གཏུགས་སྒོ་སྒྲིག་ཅིག་ཁ་ཕྱེ། མཐོ་གཏུགས་འབད་མི་ཚུ་གིས་ མཐོ་གཏུགས་འབད་མི་གི་གྲོས་ཆོད་འདི་ རྟགས་བཀལ་ཡོདཔ་ཨིན།
+༥ ཉེས་ཆད་ཀྱི་ མཐོ་ཚད་ཚུ་ གྲོས་འཆར་ཆ་མཉམ་ལུ་ ལག་ལེན་འཐབ་དགོ། མགོ་ཡིག་གི་ལྟག་ལུ་ཕུལ་མི་ཚུ་ ངོས་ལེན་མ་འབད་བས།
 
-## Governance Escalation Policy
-The escalation policy is sourced from `governance.sorafs_repair_escalation` in `iroha_config` and is enforced for every repair slash proposal.
+## གཞུང་སྐྱོང་ཡར་འཕེལ་གྱི་སྲིད་བྱུས།
+ཡར་འཕར་གྱི་སྲིད་བྱུས་འདི་ `governance.sorafs_repair_escalation` ལས་ I18NI000000004X ལས་ ཐོབ་ཡོདཔ་ལས་ ཉམས་བཅོས་འབད་ནི་གི་གྲོས་འཆར་ག་ར་གི་དོན་ལུ་ བསྟར་སྤྱོད་འབདཝ་ཨིན།
 
-| Setting | Default | Meaning |
-|---------|---------|---------|
-| `quorum_bps` | 6667 | Minimum approval ratio (basis points) among counted votes. |
-| `minimum_voters` | 3 | Minimum number of distinct voters required to resolve a decision. |
-| `dispute_window_secs` | 86400 | Time after escalation before votes are finalized (seconds). |
-| `appeal_window_secs` | 604800 | Time after approval during which appeals are accepted (seconds). |
-| `max_penalty_nano` | 1,000,000,000 | Maximum slash penalty allowed for repair escalations (nano-XOR). |
+| གཞི་སྒྲིག་འབད་ནི། | སྔོན་སྒྲིག་ | དོན་དག་ |
+|---------------------------------------|
+| I18NI0000000X | ༦༦༧ | ཚོགས་རྒྱན་གྱངས་ཁ་བརྐྱབ་མི་ཚུ་གི་བར་ན་ ཆ་འཇོག་ཆ་སྙོམས་ (གཞི་རྟེན་གྱི་ས་ཚིགས)། |
+| I18NI0000006X | 3 | ཐག་གཅོད་ཅིག་སེལ་ཐབས་ལུ་ ཚོགས་རྒྱན་བཙུགས་མི་ མ་འདྲཝ་གི་གྱངས་ཁ་ ཉུང་མཐའ། |
+| `dispute_window_secs` | ༨༦༤༠༠ | ཚོགས་རྒྱན་མཇུག་མ་བསྡུ་བའི་ཧེ་མར་ ཡར་འཕར་གྱི་དུས་ཚོད་ (སྐར་ཆ་)། |
+| I18NI0000008X | ༦༠༤༨༠༠ | མཐོ་གཏུགས་ཚུ་ངོས་ལེན་འབད་བའི་དུས་ཚོད་ཀྱི་ཆ་འཇོག་འབད་བའི་ཤུལ་ལས་ དུས་ཚོད་ (སྐར་ཆ་)། |
+| I18NI0000009X | ༡,༠༠༠,༠༠༠,༠༠༠ | ཉེས་ཆད་མཐོ་ཤོས་འདི་ ཉམས་བཅོས་འབད་བཅུག་དོ་ཡོདཔ་ཨིན། (nano-XOR) |
 
-- Scheduler-generated proposals are capped at `max_penalty_nano`; auditor submissions above the cap are rejected.
-- Vote records are stored in `repair_state.to` with deterministic ordering (`voter_id` sorting) so all nodes derive the same decision timestamp and outcome.
+- དུས་ཚོད་བཀོད་མི་གིས་ བཟོ་མི་ གྲོས་འཆར་ཚུ་ I18NI000000010X ལུ་ མཇུག་བསྡུ་ཡོདཔ་ཨིན། རྩིས་ཞིབ་པ་ཕུལ་མི་ཚུ་ མཐོ་ཚད་ལས་ ཆ་མེད་བཏང་ཡོདཔ་ཨིན།
+- ཚོགས་རྒྱན་བཙུགས་པའི་དྲན་ཐོ་ཚུ་ `repair_state.to` ནང་ལུ་ གཏན་འབེབས་བཀོད་སྒྲིག་ (`voter_id` དབྱེ་སེལ་འབད་ནི) དང་གཅིག་ཁར་ གསོག་འཇོག་འབད་དེ་ཡོདཔ་ལས་ མཐུད་མཚམས་ཆ་མཉམ་རང་ ཐག་བཅད་དུས་ཚོད་ཀྱི་རྟགས་བཀོད་དང་ གྲུབ་འབྲས་གཅིག་མཚུངས་སྦེ་ བཏོན་བཏངམ་ཨིན།

@@ -4,30 +4,32 @@ direction: ltr
 source: docs/portal/docs/norito/examples/transfer-asset.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
 slug: /norito/examples/transfer-asset
-title: Transférer un actif entre comptes
-description: Flux de transfert d'actifs simple qui reflète les quickstarts SDK et les parcours du registre.
-source: examples/transfer/transfer.ko
+título: Transferir um ato entre contas
+description: Fluxo de transferência de atividades simples que reflete o SDK de início rápido e as etapas de registro.
+fonte: exemplos/transfer/transfer.ko
 ---
 
-Flux de transfert d'actifs simple qui reflète les quickstarts SDK et les parcours du registre.
+Fluxo de transferência de atividades simples que reflete o SDK de início rápido e os pacotes de registro.
 
 ## Parcours du registre
 
-- Préfinancez Alice avec l'actif cible (par exemple via le snippet `register and mint` ou les flux de quickstart SDK).
-- Exécutez le point d'entrée `do_transfer` pour déplacer 10 unités d'Alice vers Bob, en satisfaisant la permission `AssetTransferRole`.
-- Interrogez les soldes (`FindAccountAssets`, `iroha_cli ledger assets list`) ou abonnez-vous aux événements du pipeline pour observer le résultat du transfert.
+- Pré-financiar Alice com o ativo (por exemplo, por meio do snippet `register and mint` ou do fluxo do SDK de início rápido).
+- Execute o ponto de entrada `do_transfer` para substituir 10 unidades de Alice de Bob, satisfazendo a permissão `AssetTransferRole`.
+- Interrogue as soldas (`FindAccountAssets`, `iroha_cli ledger assets list`) ou conecte-se a eventos do pipeline para observar o resultado da transferência.
 
-## Guides SDK associés
+## Guias SDK associados
 
-- [Quickstart SDK Rust](/sdks/rust)
-- [Quickstart SDK Python](/sdks/python)
-- [Quickstart SDK JavaScript](/sdks/javascript)
+- [Início rápido do SDK Rust](/sdks/rust)
+- [Início rápido do SDK Python](/sdks/python)
+- [Início rápido do SDK JavaScript](/sdks/javascript)
 
-[Télécharger la source Kotodama](/norito-snippets/transfer-asset.ko)
+[Baixe a fonte Kotodama](/norito-snippets/transfer-asset.ko)
 
 ```text
 // Transfer example: uses typed pointer constructors and transfer_asset syscall

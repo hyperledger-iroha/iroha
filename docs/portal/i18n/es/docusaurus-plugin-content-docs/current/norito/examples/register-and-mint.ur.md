@@ -4,28 +4,30 @@ direction: ltr
 source: docs/portal/docs/norito/examples/register-and-mint.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-slug: /norito/examples/register-and-mint
-title: ڈومین رجسٹر کریں اور اثاثے منٹ کریں
-description: اجازت یافتہ ڈومین تخلیق، اثاثہ رجسٹریشن اور ڈیٹرمنسٹک منٹنگ کو ظاہر کرتا ہے۔
-source: crates/ivm/docs/examples/13_register_and_mint.ko
+babosa: /norito/examples/register-and-mint
+título: ڈومین رجسٹر کریں اور اثاثے منٹ کریں
+descripción: اجازت یافتہ ڈومین تخلیق، اثاثہ رجسٹریشن اور ڈیٹرمنسٹک منٹنگ کو ظاہر کرتا ہے۔
+fuente: crates/ivm/docs/examples/13_register_and_mint.ko
 ---
 
 اجازت یافتہ ڈومین تخلیق، اثاثہ رجسٹریشن اور ڈیٹرمنسٹک منٹنگ کو ظاہر کرتا ہے۔
 
 ## لیجر واک تھرو
 
-- یقینی بنائیں کہ منزل اکاؤنٹ (مثلا `ih58...`) موجود ہے، جو ہر SDK quickstart کے سیٹ اپ مرحلے کی عکاسی کرتا ہے۔
+- یقینی بنائیں کہ منزل اکاؤنٹ (مثلا `ih58...`) موجود ہے، جو ہر SDK inicio rápido کے سیٹ اپ مرحلے کی عکاسی کرتا ہے۔
 - `register_and_mint` انٹری پوائنٹ کال کریں تاکہ ROSE اثاثہ ڈیفینیشن بنے اور ایک ہی ٹرانزیکشن میں Alice کو 250 یونٹس منٹ ہوں۔
 - `client.request(FindAccountAssets)` یا `iroha_cli ledger assets list --account ih58...` کے ذریعے بیلنس چیک کریں تاکہ منٹنگ کی کامیابی کی تصدیق ہو۔
 
 ## متعلقہ SDK گائیڈز
 
-- [Rust SDK quickstart](/sdks/rust)
-- [Python SDK quickstart](/sdks/python)
-- [JavaScript SDK quickstart](/sdks/javascript)
+- [Inicio rápido del SDK de Rust](/sdks/rust)
+- [Inicio rápido del SDK de Python](/sdks/python)
+- [Inicio rápido del SDK de JavaScript](/sdks/javascript)
 
 [Kotodama سورس ڈاؤن لوڈ کریں](/norito-snippets/register-and-mint.ko)
 

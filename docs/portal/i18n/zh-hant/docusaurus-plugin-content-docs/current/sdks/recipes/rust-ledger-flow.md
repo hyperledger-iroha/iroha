@@ -7,27 +7,29 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Rust ledger flow recipe
 description: Use the Rust SDK to register an asset, mint supply, transfer it, and query balances against the default single-peer network.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-import SampleDownload from '@site/src/components/SampleDownload';
+從“@site/src/components/SampleDownload”導入 SampleDownload；
 
-This recipe mirrors the [CLI ledger walkthrough](../../norito/ledger-walkthrough.md)
-but runs everything from a Rust binary. It reuses the default dev network
-(`docker compose -f defaults/docker-compose.single.yml up --build`) and the demo
-credentials in `defaults/client.toml`, so you can compare SDK and CLI hashes one
-for one.
+此配方反映了 [CLI 賬本演練](../../norito/ledger-walkthrough.md)
+但從 Rust 二進製文件運行所有內容。它重用默認的開發網絡
+(`docker compose -f defaults/docker-compose.single.yml up --build`) 和演示
+`defaults/client.toml` 中的憑據，因此您可以比較 SDK 和 CLI 哈希值
+其一。
 
-<SampleDownload
+<樣本下載
   href="/sdk-recipes/rust/src/main.rs"
-  filename="src/main.rs"
-  description="Use this Rust source file as a baseline to follow along or to diff against your changes."
+  文件名=“src/main.rs”
+  description="使用此 Rust 源文件作為基線來跟踪或比較您的更改。"
 />
 
-## Prerequisites
+## 先決條件
 
-1. Run the dev peer with Docker Compose (see the [Norito quickstart](../../norito/quickstart.md)).
-2. Export the default admin/receiver accounts and the admin private key from
-   `defaults/client.toml`:
+1. 使用 Docker Compose 運行開發同級（請參閱 [Norito 快速入門](../../norito/quickstart.md)）。
+2. 從以下位置導出默認管理員/接收者帳戶和管理員私鑰
+   `defaults/client.toml`：
 
    ```bash
    export ADMIN_ACCOUNT="ih58..."
@@ -35,16 +37,16 @@ for one.
    export ADMIN_PRIVATE_KEY="802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
    ```
 
-   The private key string is the multihash-encoded value stored under `[account].private_key`.
-3. Create a new workspace binary (or reuse an existing one):
+   私鑰字符串是存儲在 `[account].private_key` 下的多重哈希編碼值。
+3. 創建一個新的工作區二進製文件（或重複使用現有的工作區二進製文件）：
 
    ```bash
    cargo new --bin rust-ledger-recipe
    cd rust-ledger-recipe
    ```
 
-4. Add the dependencies (use a crates.io version if you are outside the
-   workspace):
+4. 添加依賴項（如果您不在 crates.io 版本中，請使用 crates.io 版本）
+   工作區）：
 
    ```toml title="Cargo.toml"
    [dependencies]
@@ -54,7 +56,7 @@ for one.
    iroha_data_model = { path = "../../crates/iroha_data_model", features = ["transparent_api", "json"] }
    ```
 
-## Example program
+## 示例程序
 
 ```rust title="src/main.rs"
 use std::str::FromStr;
@@ -109,28 +111,28 @@ fn main() -> Result<()> {
 }
 ```
 
-## Run the recipe
+## 運行菜譜
 
 ```bash
 cargo run
 ```
 
-You should see log output similar to:
+您應該看到類似於以下內容的日誌輸出：
 
 ```
 ih58... now holds:
   50 units of coffee#wonderland
 ```
 
-If the asset definition already exists, the register call returns a
-`ValidationError::Duplicate`. Either ignore it (the mint still succeeds) or pick
-a new name.
+如果資產定義已存在，則寄存器調用將返回
+`ValidationError::Duplicate`。要么忽略它（鑄幣廠仍然成功），要么選擇
+一個新名字。
 
-## Verify hashes and parity
+## 驗證哈希值和奇偶校驗
 
-- Use `iroha --config defaults/client.toml transaction get --hash <hash>` to
-  inspect the transactions that the SDK submitted.
-- Cross-check balances with `iroha --config defaults/client.toml asset list all --table`
-  or `asset list filter '{"id":"coffee#wonderland##<account>"}'`.
-- Repeat the same flow from the CLI walkthrough to confirm both surfaces produce
-  the same Norito payloads and transaction statuses.
+- 使用 `iroha --config defaults/client.toml transaction get --hash <hash>` 來
+  檢查SDK提交的交易。
+- 與 `iroha --config defaults/client.toml asset list all --table` 交叉檢查餘額
+  或 `asset list filter '{"id":"coffee#wonderland##<account>"}'`。
+- 重複 CLI 演練中的相同流程，以確認兩個表面都產生
+  相同的 Norito 有效負載和事務狀態。

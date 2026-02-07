@@ -4,67 +4,65 @@ direction: rtl
 source: docs/portal/docs/sorafs/reports/ai-moderation-calibration-202602.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: Отчет о калибровке модерации ИИ (2026-02)
-summary: Базовый калибровочный набор данных, пороги и scoreboard для первого релиза управления MINFO-1.
+العنوان: نهاية الاعتدال II (2026-02)
+ملخص: مجموعة المعايرة الأساسية للبيانات والمسارات ولوحة النتائج للإصدار الأول من إدارة MINFO-1.
 ---
 
-# Отчет о калибровке модерации ИИ - Февраль 2026
+# نهاية اعتدال العيار II - فبراير 2026
 
-Этот отчет содержит начальные артефакты калибровки для **MINFO-1**. Датасет,
-manifest и scoreboard были сформированы 2026-02-05, рассмотрены советом
-министерства 2026-02-10 и закреплены в governance DAG на высоте `912044`.
+هذا هو ما يتم تأمينه من العيارات اليدوية الأولى لـ **MINFO-1**. البيانات,
+تم تشكيل البيان ولوحة النتائج في 2026-02-05, рассmoтrenы советом
+الوزارة 2026-02-10 والمسؤولون في الحوكمة DAG على `912044`.
 
-## Манифест датасета
+## بيان البيانات
 
-- **Dataset reference:** `c0956583-355a-43cc-9a60-e3a5d9a0f7d0`
-- **Slug:** `ai-moderation-calibration-202602`
-- **Entries:** manifest 480, chunk 12,800, metadata 920, audio 160
-- **Label mix:** safe 68%, suspect 19%, escalate 13%
-- **Artefact digest:** `9c4f86a3c099a48d0e3d7cfbf14d22bb9492960c41cba3858f0722519ff612ab`
-- **Distribution:** `sora://datasets/ministry/ai-moderation/calibration/2026-02.tar.zst`
+- **مرجع مجموعة البيانات:** `c0956583-355a-43cc-9a60-e3a5d9a0f7d0`
+- **السبيكة:** `ai-moderation-calibration-202602`
+- **الإدخالات:** البيان 480، القطعة 12,800، البيانات الوصفية 920، الصوت 160
+- **مزيج التصنيف:** آمن بنسبة 68%، ومشتبه به بنسبة 19%، ومتصاعد بنسبة 13%
+- **ملخص المصنوعات:** `9c4f86a3c099a48d0e3d7cfbf14d22bb9492960c41cba3858f0722519ff612ab`
+- **التوزيع:** `sora://datasets/ministry/ai-moderation/calibration/2026-02.tar.zst`
 
-Полный manifest находится в `docs/examples/ai_moderation_calibration_manifest_202602.json`
-и содержит подпись управления, а также hash runner, зафиксированный в момент
-релиза.
+تم الوصول إلى البيان الكامل في `docs/examples/ai_moderation_calibration_manifest_202602.json`
+والتواصل مع الإدارة، بالإضافة إلى عداء التجزئة، الذي يتم تثبيته في الوقت الحالي
+إصدار.
 
-## Сводка scoreboard
+## لوحة النتائج السويدية
 
-Калибровки запускались с opset 17 и детерминированным seed pipeline. Полный JSON
-scoreboard (`docs/examples/ai_moderation_calibration_scorecard_202602.json`)
-содержит hashes и digests telemetry; таблица ниже выделяет ключевые метрики.
-
-| Модель (семейство) | Brier | ECE | AUROC | Precision@Quarantine | Recall@Escalate |
+يتم إغلاق العيارات مع opset 17 وتحديد خط أنابيب البذور. JSON كامل
+لوحة النتائج (`docs/examples/ai_moderation_calibration_scorecard_202602.json`)
+содеродит تجزئة وهضم القياس عن بعد؛ يتم عرض مقاييس رئيسية جديدة على اللوحة.| نموذج (المنزل) | برير | اللجنة الاقتصادية لأوروبا | أوروك | الدقة @ الحجر الصحي | استدعاء @ التصعيد |
 | ----------------- | ----- | --- | ----- | -------------------- | --------------- |
-| ViT-H/14 Safety (vision) | 0.141 | 0.031 | 0.987 | 0.964 | 0.912 |
-| LLaVA-1.6 34B Safety (multimodal) | 0.118 | 0.028 | 0.978 | 0.942 | 0.904 |
-| Perceptual ensemble (perceptual) | 0.162 | 0.047 | 0.953 | 0.883 | 0.861 |
+| ViT-H/14 السلامة (الرؤية) | 0.141 | 0.031 | 0.987 | 0.964 | 0.912 |
+| LLaVA-1.6 34B السلامة (متعدد الوسائط) | 0.118 | 0.028 | 0.978 | 0.942 | 0.904 |
+| المجموعة الإدراكية (الإدراك الحسي) | 0.162 | 0.047 | 0.953 | 0.883 | 0.861 |
 
-Сводные метрики: `Brier = 0.126`, `ECE = 0.034`, `AUROC = 0.982`. Распределение
-вердиктов в окне калибровки составило pass 91.2%, quarantine 6.8%,
-escalate 2.0%, что соответствует ожиданиям политики в сводке manifest.
-Бэклог ложных срабатываний оставался нулевым, а drift score (7.1%) находился
-далеко ниже порога тревоги 20%.
+مقاييس المياه: `Brier = 0.126`، `ECE = 0.034`، `AUROC = 0.982`. الانتشار
+الحكم في نهاية العيار نجح 91.2%, الحجر الصحي 6.8%,
+تصاعد بنسبة 2.0%، مما أدى إلى ظهور سياسة سياسية جيدة.
+تم إلغاء الحظر الشامل للعمال، وحققت درجة الانجراف (7.1٪)
+بعد أن نخفض سعر 20%.
 
-## Пороговые значения и согласование
+## التشجيع والتشجيع
 
-- `thresholds.quarantine = 0.42`
-- `thresholds.escalate = 0.78`
-- Governance motion: `MINFO-2026-02-07`
-- Signed by `ministry-council-seat-03` at `2026-02-10T11:33:12Z`
+-`thresholds.quarantine = 0.42`
+-`thresholds.escalate = 0.78`
+- اقتراح الحوكمة: `MINFO-2026-02-07`
+- تم التوقيع عليه بواسطة `ministry-council-seat-03` في `2026-02-10T11:33:12Z`
 
-CI сохранила подписанный bundle в `artifacts/ministry/ai_moderation/2026-02/`
-вместе с бинарями moderation runner. Указанные выше digest manifest и hashes
-scoreboard должны использоваться при аудитах и апелляциях.
+تم تسجيل CI لحزمة النشر في `artifacts/ministry/ai_moderation/2026-02/`
+вместе с бинарами عداء الاعتدال. اشرح جميع الملخصات والبيانات
+يتم استخدام لوحة النتائج أثناء عمليات التدقيق والشكوى.
 
-## Дашборды и алерты
-
-SRE по модерации должны импортировать Grafana dashboard из
-`dashboards/grafana/ministry_moderation_overview.json` и правила алертов Prometheus
-из `dashboards/alerts/ministry_moderation_rules.yml` (покрытие тестами находится в
-`dashboards/alerts/tests/ministry_moderation_rules.test.yml`). Эти артефакты
-генерируют алерты при блокировках ingestion, всплесках drift и росте очереди
-quarantine, выполняя требования мониторинга, указанные в
-[AI Moderation Runner Specification](../../ministry/ai-moderation-runner.md).
+## لوحات المعلومات والتنبيهاتSRE من خلال الاعتدال في استيراد لوحة المعلومات Grafana من
+`dashboards/grafana/ministry_moderation_overview.json` والتنبيهات الصحيحة Prometheus
+من `dashboards/alerts/ministry_moderation_rules.yml` (تتم الموافقة على الاختبارات في
+`dashboards/alerts/tests/ministry_moderation_rules.test.yml`). هذه القطع الأثرية
+إنشاء تنبيهات عند تناول الحظر والانجراف الزائد والمتابعة
+الحجر الصحي, المراقبة المستمرة, العزل في
+[مواصفات مشغل الاعتدال AI](../../ministry/ai-moderation-runner.md).

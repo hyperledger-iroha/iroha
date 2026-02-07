@@ -4,13 +4,15 @@ direction: ltr
 source: docs/portal/docs/sorafs/runbooks-index.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: runbooks-index
-title: آپریٹر رن بکس کا اشاریہ
+id: índice de runbooks
+título: آپریٹر رن بکس کا اشاریہ
 sidebar_label: رن بک اشاریہ
-description: منتقل شدہ SoraFS آپریٹر رن بکس کے لیے مستند نقطۂ آغاز.
+descripción: منتقل شدہ SoraFS آپریٹر رن بکس کے لیے مستند نقطۂ آغاز.
 ---
 
 > `docs/source/sorafs/runbooks/` میں موجود ذمہ داران کے رجسٹر کی عکاسی کرتا ہے۔
@@ -26,18 +28,16 @@ DocOps کی لہر نے جائزہ لینے والوں کے منظور شدہ ب
 پر پروموٹ کر دیا ہے۔ جب آپریٹرز یا ریویورز کو کسی منتقل شدہ رن بک کی طرف رہنمائی کریں تو
 اسی ہوسٹ نیم کا حوالہ دیں تاکہ وہ checksum سے محفوظ پورٹل اسنیپ شاٹ استعمال کریں۔
 پبلشنگ/رول بیک کے طریقۂ کار یہاں ہیں
-[`devportal/preview-host-exposure`](../devportal/preview-host-exposure.md).
-
-| رن بک | مالکان | پورٹل کاپی | ماخذ |
+[`devportal/preview-host-exposure`](../devportal/preview-host-exposure.md).| رن بک | مالکان | پورٹل کاپی | ماخذ |
 |-------|--------|-----------|------|
-| گیٹ وے اور DNS کی ابتدا | Networking TL, Ops Automation, Docs/DevRel | [`sorafs/gateway-dns-runbook`](./gateway-dns-runbook.md) | `docs/source/sorafs_gateway_dns_design_runbook.md` |
-| SoraFS آپریشنز پلے بُک | Docs/DevRel | [`sorafs/operations-playbook`](./operations-playbook.md) | `docs/source/sorafs/operations_playbook.md` |
-| کپیسٹی ریکنسیلی ایشن | Treasury / SRE | [`sorafs/capacity-reconciliation`](./capacity-reconciliation.md) | `docs/source/sorafs/runbooks/capacity_reconciliation.md` |
-| پن رجسٹری آپریشنز | Tooling WG | [`sorafs/pin-registry-ops`](./pin-registry-ops.md) | `docs/source/sorafs/pin_registry_ops.md` |
-| نوڈ آپریشنز چیک لسٹ | Storage Team, SRE | [`sorafs/node-operations`](./node-operations.md) | `docs/source/sorafs/runbooks/sorafs_node_ops.md` |
-| تنازع اور منسوخی رن بک | Governance Council | [`sorafs/dispute-revocation-runbook`](./dispute-revocation-runbook.md) | `docs/source/sorafs/dispute_revocation_runbook.md` |
-| اسٹیجنگ مینی فیسٹ پلے بُک | Docs/DevRel | [`sorafs/staging-manifest-playbook`](./staging-manifest-playbook.md) | `docs/source/sorafs/staging_manifest_playbook.md` |
-| Taikai اینکر آبزرویبیلٹی | Media Platform WG / DA Program / Networking TL | [`sorafs/taikai-anchor-runbook`](./taikai-anchor-runbook.md) | `docs/source/taikai_anchor_monitoring.md` |
+| گیٹ وے اور DNS کی ابتدا | TL de redes, automatización de operaciones, documentos/DevRel | [`sorafs/gateway-dns-runbook`](./gateway-dns-runbook.md) | `docs/source/sorafs_gateway_dns_design_runbook.md` |
+| SoraFS آپریشنز پلے بُک | Documentos/DevRel | [`sorafs/operations-playbook`](./operations-playbook.md) | `docs/source/sorafs/operations_playbook.md` |
+| کپیسٹی ریکنسیلی ایشن | Tesorería/SRE | [`sorafs/capacity-reconciliation`](./capacity-reconciliation.md) | `docs/source/sorafs/runbooks/capacity_reconciliation.md` |
+| پن رجسٹری آپریشنز | Grupo de Trabajo sobre Herramientas | [`sorafs/pin-registry-ops`](./pin-registry-ops.md) | `docs/source/sorafs/pin_registry_ops.md` |
+| نوڈ آپریشنز چیک لسٹ | Equipo de Almacenamiento, SRE | [`sorafs/node-operations`](./node-operations.md) | `docs/source/sorafs/runbooks/sorafs_node_ops.md` |
+| تنازع اور منسوخی رن بک | Consejo de Gobierno | [`sorafs/dispute-revocation-runbook`](./dispute-revocation-runbook.md) | `docs/source/sorafs/dispute_revocation_runbook.md` |
+| اسٹیجنگ مینی فیسٹ پلے بُک | Documentos/DevRel | [`sorafs/staging-manifest-playbook`](./staging-manifest-playbook.md) | `docs/source/sorafs/staging_manifest_playbook.md` |
+| Taikai اینکر آبزرویبیلٹی | Media Platform WG / Programa DA / Networking TL | [`sorafs/taikai-anchor-runbook`](./taikai-anchor-runbook.md) | `docs/source/taikai_anchor_monitoring.md` |
 
 ## تصدیقی چیک لسٹ
 

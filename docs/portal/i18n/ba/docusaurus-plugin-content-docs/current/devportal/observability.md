@@ -8,40 +8,42 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Portal Observability & Analytics
 sidebar_label: Observability
 description: Telemetry, release tagging, and verification automation for the developer portal.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-The DOCS-SORA roadmap requires analytics, synthetic probes, and broken-link
-automation for every preview build. This note documents the plumbing that now
-ships with the portal so operators can wire monitoring without leaking visitor
-data.
+DOCS-I18NT0000000003Х юл картаһы аналитика, синтетик зондтар һәм өҙөлгән һылтанма талап итә.
+автоматлаштырыу өсөн һәр алдан ҡарау төҙөү. Был иҫкәрмә документы сантехника, тип хәҙер
+портал менән караптар шулай операторҙар сым мониторингы ала, ағып, ҡунаҡ ағып
+мәғлүмәт.
 
-## Release tagging
+##
 
-- Set `DOCS_RELEASE_TAG=<identifier>` (falls back to `GIT_COMMIT` or `dev`) when
-  building the portal. The value is injected into `<meta name="sora-release">`
-  so probes and dashboards can distinguish deployments.
-- `npm run build` emits `build/release.json` (written by
-  `scripts/write-checksums.mjs`) describing the tag, timestamp, and optional
-  `DOCS_RELEASE_SOURCE`. The same file is bundled into preview artefacts and
-  referenced by the link checker report.
+- I18NI000000006X комплекты (I18NI000000007X йәки `dev` X) ҡасан 1800 й.
+  портал төҙөү. Ҡиммәте I18NI000000009X XI180000 индерелә.
+  тимәк, зондтар һәм приборҙар таҡталары таратыуҙарҙы айыра ала.
+- `npm run build` I18NI000000011X сыға (яҙыу 2019 йылға тиклем.
+  `scripts/write-checksums.mjs`) тег, ваҡыт маркаһы һәм теләк буйынса һүрәтләү
+  `DOCS_RELEASE_SOURCE`. Шул уҡ файл алдан ҡарау артефакттарына йыйылған һәм
+  һылтанма тикшерелгән отчет һылтанма.
 
-## Privacy-preserving analytics
+## Хосусилыҡты һаҡлаусы аналитика
 
-- Configure `DOCS_ANALYTICS_ENDPOINT=<https://collector.example/ingest>` to
-  enable the lightweight tracker. Payloads contain `{ event, path, locale,
-  release, ts }` with no referrer or IP metadata, and `navigator.sendBeacon`
-  is used whenever possible to avoid blocking navigations.
-- Control sampling with `DOCS_ANALYTICS_SAMPLE_RATE` (0–1). The tracker stores
-  the last-sent path and never emits duplicate events for the same navigation.
-- The implementation lives in `src/components/AnalyticsTracker.jsx` and is
-  mounted globally through `src/theme/Root.js`.
+- I18NI000000014X конфигурациялау.
+  еңел трекер мөмкинлек бирә. Түләүҙәрҙә `{ ваҡиға, юл, локаль,
+  сығарыла, ts }I18NI000000015Xnavigator.sendBeacon`
+  навигацияларҙы блоклауҙан һаҡланыу өсөн мөмкин булғанда ҡулланыла.
+- `DOCS_ANALYTICS_SAMPLE_RATE` менән контроль үлсәү (0–1). Трекер һаҡлай
+  һуңғы ебәрелгән юл һәм бер ҡасан да бер үк навигация өсөн дубликаттар сығармай.
+— Ғәмәлгә ашырыу I18NI000000017X-та йәшәй һәм 1990 й.
+  глобаль кимәлдә I18NI000000018X аша монтажланған.
 
-## Synthetic probes
+## Синтетик зондтар
 
-- `npm run probe:portal` issues GET requests against common routes
-  (`/`, `/norito/overview`, `/reference/torii-swagger`, etc.) and verifies the
-  `sora-release` meta tag matches `--expect-release` (or
-  `DOCS_RELEASE_TAG`). Example:
+- I18NI000000019X дөйөм маршруттарға ҡаршы GET үтенестәрен сығара
+  (`/`, `/norito/overview`, `/reference/torii-swagger` һ.б.
+  `sora-release` мета-тег матчтары I18NI000000024X (йәки
+  `DOCS_RELEASE_TAG`). Миҫал:
 
 ```bash
 PORTAL_BASE_URL="https://docs.staging.sora" \
@@ -49,59 +51,59 @@ DOCS_RELEASE_TAG="preview-42" \
 npm run probe:portal -- --expect-release=preview-42
 ```
 
-Failures are reported per path, making it easy to gate CD on probe success.
+Уңышһыҙлыҡтар тураһында хәбәр ителә, юлға, еңел ҡапҡа CD зонд уңыш.
 
-## Broken-link automation
+## Һығылмалы автоматлаштырыу
 
-- `npm run check:links` scans `build/sitemap.xml`, ensures every entry maps to a
-  local file (checking `index.html` fallbacks), and writes
-  `build/link-report.json` containing the release metadata, totals, failures,
-  and the SHA-256 fingerprint of `checksums.sha256` (exposed as `manifest.id`)
-  so every report can be tied back to the artefact manifest.
-- The script exits non-zero when a page is missing, so CI can block releases on
-  stale or broken routes. Reports cite the candidate paths that were attempted,
-  which helps trace routing regressions back to the docs tree.
+- I18NI000000026X сканерлау I18NI000000027X, һәр инеү карталарын тәьмин итә
+  урындағы файл (тикшереп I18NI0000000028X fallbacks), һәм яҙа
+  I18NI000000029X, составында сығарыу метамағлүмәттәр, дөйөм, етешһеҙлектәр,
+  һәм SHA-256 бармаҡ эҙҙәре I18NI00000000300 X (`manifest.id` тип аталған)
+  шуға күрә һәр отчетты артефакт нәфислегенә кире бәйләргә мөмкин.
+- Сценарий нульдән тыш сыға, ҡасан бит етмәй, шуға күрә CI блокировкалай ала релиздар .
+  иҫке йәки өҙөлгән маршруттар. Отчеттар кандидат юлдарын һылтанма яһай, улар тырышҡан,
+  был маршруттарҙы эҙләргә ярҙам итә, регрессияларҙы кире docs ағасы.
 
-## Grafana dashboard & alerts
+## I18NT000000001X приборҙар таҡтаһы һәм иҫкәртмәләр
 
-- `dashboards/grafana/docs_portal.json` publishes the **Docs Portal Publishing**
-  Grafana board. It ships the following panels:
-  - *Gateway Refusals (5m)* uses `torii_sorafs_gateway_refusals_total` scoped by
-    `profile`/`reason` so SREs can detect bad policy pushes or token failures.
-  - *Alias Cache Refresh Outcomes* and *Alias Proof Age p90* track
-    `torii_sorafs_alias_cache_*` to prove fresh proofs exist before a DNS cut
-    over.
-  - *Pin Registry Manifest Counts* plus the *Active Alias Count* stat mirror the
-    pin-registry backlog and total aliases so governance can audit each release.
-  - *Gateway TLS Expiry (hours)* highlights when the publishing gateway’s TLS
-    cert approaches expiry (alert threshold at 72 h).
-  - *Replication SLA Outcomes* and *Replication Backlog* keep an eye on
-    `torii_sorafs_replication_*` telemetry to ensure all replicas meet the GA
-    bar after publishing.
-- Use the built-in template variables (`profile`, `reason`) to focus on the
-  `docs.sora` publishing profile or investigate spikes across all gateways.
-- PagerDuty routing uses the dashboard panels as evidence: alerts named
-  `DocsPortal/GatewayRefusals`, `DocsPortal/AliasCache`, and
-  `DocsPortal/TLSExpiry` fire when the corresponding series breach their
-  thresholds. Link the alert’s runbook to this page so on-call engineers can
-  replay the exact Prometheus queries.
+- I18NI000000032X **Докс порталы нәшриәтен баҫтырып сығара**
+  Grafana платаһы. Ул түбәндәге панелдәрҙе ебәрә:
+  - *Ҡапҡа баш тартыуҙары (5м)* I18NI000000033X грамоталы ҡулланыла.
+    `profile`/I18NI000000035X шулай SREs асыҡлай ала насар сәйәсәт йәки жетон етешһеҙлектәре.
+  - *Бәләкәй кэш яңыртыу һөҙөмтәләре* һәм *Әлийә иҫбатлау йәше p90* трек
+    I18NI0000000036X яңы иҫбатлауҙар барлығын иҫбатлау өсөн DNS ҡырҡыу алдынан
+    өҫтөндә.
+  - *Пин Реестры Манифест һандар* плюс *Әүҙем псевдонимы * стат көҙгө т.
+    булавка-реестр артта ҡалған һәм дөйөм псевдоним, шулай итеп, идара итеү һәр релиз аудит ала.
+  - *Шлюз TLS Sopreation (сәғәт)* нәшер итеү шлюз’s TLS ҡасан айырып күрһәтә
+    серт яҡынлаша тамамланыуы ( 72h-ла иҫкәртмә сиге).
+  - *репликация SLA һөҙөмтәләре* һәм *Ресмулятор фоны* күҙ һаҡлау.
+    I18NI0000000037X телеметрияһы бөтә репликаларҙы ГА-ға ҡаршы алыуын тәьмин итеү өсөн
+    бар баҫылғандан һуң.
+- Ҡулланыу өсөн төҙөлгән ҡалып үҙгәртеүселәр (I18NI000000038X, I18NI000000039X) йүнәлеш бирергә
+  I18NI000000040X нәшриәт профиле йәки бөтә шлюздар буйынса шпиктарҙы тикшерергә.
+- PagerDuty маршрутлаштырыу приборҙар таҡтаһы панелдәрен дәлил булараҡ ҡуллана: иҫкәртмәләр исемле
+  `DocsPortal/GatewayRefusals`, I18NI000000042X, һәм
+  I18NI000000043X ут ҡасан тейешле серия уларҙы боҙа
+  сиктәре. Һылтанма иҫкәртмә’s runbook был биткә шулай шылтыратыу инженерҙары ала
+  реплей теүәл I18NT0000000000000.
 
-## Putting it together
+##
 
-1. During `npm run build`, set the release/analytics environment variables and
-   let the post-build step emit `checksums.sha256`, `release.json`, and
+1. `npm run build` ваҡытында сығарыу/аналитика мөхите үҙгәртеүселәрен һәм
+   18NI000000045X, I18NI000000046X һәм
    `link-report.json`.
-2. Run `npm run probe:portal` against the preview hostname with
-   `--expect-release` wired to the same tag. Save the stdout for the publishing
-   checklist.
-3. Run `npm run check:links` to fail fast on broken sitemap entries and archive
-   the generated JSON report together with the preview artefacts. CI drops the
-   latest report at `artifacts/docs_portal/link-report.json` so governance can
-   download the evidence bundle straight from the build logs.
-4. Forward the analytics endpoint to your privacy-preserving collector (Plausible,
-   self-hosted OTEL ingest, etc.) and ensure sampling rates are documented per
-   release so dashboards interpret counts correctly.
-5. CI already wires these steps through the preview/deploy workflows
+2. Йүгерергә I18NI00000000048X ҡаршы алдан ҡарау хост-исем менән .
+   `--expect-release` X сымлы шул уҡ тег. Баҫма өсөн stdout һаҡлау
+   тикшерелгән исемлек.
+3. Йүгереп I18NI0000000050X тиҙ етешһеҙлектәр өҙөлгән сайт картаһы яҙмалары һәм архив
+   генерацияланған JSON отчеты менән бергә алдан ҡарау артефакттары. CI ташлай
+   Һуңғы отчет I18NI0000000051X адресы буйынса шулай идара итеү ала
+   скачать дәлилдәр өйөм туранан-тура төҙөү журналдарынан.
+4. Аналитиканы алға һеҙҙең хосусилыҡты һаҡлаусы коллекционерҙы тамамлағыҙ (Ышаныслы,
+   үҙ-үҙен ҡабул иткән OTEL ингест һ.б.) һәм үлсәү ставкаларын тәьмин итеү өсөн документлаштырылған бер .
+   сығарыу шулай приборҙар таҡталары дөрөҫ интерпретациялау дөрөҫ.
+5. CI инде сымдар был аҙымдар аша алдан ҡарау/диплоя эш ағымы
    (`.github/workflows/docs-portal-preview.yml`,
-   `.github/workflows/docs-portal-deploy.yml`), so local dry runs only need to
-   cover secret-specific behaviour.
+   I18NI000000053X), шуға күрә урындағы ҡоро йүгерә тик кәрәк
+   ҡаплау сер-специфик тәртибе.

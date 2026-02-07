@@ -4,50 +4,50 @@ direction: rtl
 source: docs/portal/docs/nexus/lane-model.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: nexus-lane-model
-title: Модель lanes Nexus
-description: Логическая таксономия lanes, геометрия конфигурации и правила слияния world-state для Sora Nexus.
+מזהה: nexus-lane-model
+כותרת: Модель lanes Nexus
+תיאור: מסלולי Логическая таксономия, геометрия конфигурации ו-правила слияния מדינת עולם ל-Sora Nexus.
 ---
 
-# Модель lanes Nexus и партиционирование WSV
+# מסלולי Модель Nexus и партиционирование WSV
 
-> **Статус:** поставка NX-1 - таксономия lanes, геометрия конфигурации и раскладка хранения готовы к внедрению.  
-> **Owners:** Nexus Core WG, Governance WG  
-> **Ссылка в roadmap:** NX-1 в `roadmap.md`
+> **סטטוס:** עמידה ב-NX-1 - מסלולי טאקסון, קונפליקטים ותקשורים.  
+> **בעלים:** Nexus Core WG, Governance WG  
+> ** מפת דרכים:** NX-1 в `roadmap.md`
 
-Эта страница портала зеркалирует канонический brief `docs/source/nexus_lanes.md`, чтобы операторы Sora Nexus, owners SDK и ревьюеры могли читать руководство по lanes без погружения в дерево mono-repo. Целевая архитектура сохраняет детерминизм world state, при этом позволяя отдельным data spaces (lanes) запускать публичные или частные наборы валидаторов с изолированными workloads.
+Эта страница портала зеркалирует канонический brief `docs/source/nexus_lanes.md`, чтобы операторы Sora Nexus, בעלים SDK и ревью руководство по נתיבים без погружения в дерево מונו-ריפו. Целевая архитектура сохраняет детерминизм מדינת העולם, при этом позволяя отдельным מרחבי נתונים (נתיבים) запускать публич валидаторов с изолированными עומסי עבודה.
 
-## Concepts
+## מושגים
 
-- **Lane:** логический shard ledger Nexus со своим набором валидаторов и backlog выполнения. Идентифицируется стабильным `LaneId`.
-- **Data Space:** governance bucket, группирующий одну или несколько lanes с общими политиками compliance, routing и settlement.
-- **Lane Manifest:** governance-контролируемая metadata, описывающая валидаторов, DA policy, gas token, правила settlement и routing permissions.
-- **Global Commitment:** proof, выпускаемая lane и суммирующая новые state roots, settlement data и опциональные cross-lane transfers. Глобальное кольцо NPoS упорядочивает commitments.
+- **Lane:** ספרי חשבונות רסיסים Nexus עם כמות רווחים וצבר צבר. Идентифицируется стабильным `LaneId`.
+- **מרחב נתונים:** דלי ממשל, הוראות אופציות או נתיבי תנועה с общими политиками תאימות, ניתוב והסדר.
+- **מניפסט הנתיב:** מטא נתונים של ממשל-קונטרולירו, אופציות валидаторов, מדיניות DA, אסימון גז, הסדר הסדר והרשאות ניתוב.
+- **מחויבות עולמית:** הוכחה, שורשי מדינה выпускаемая и суммирующая новые מדינה, נתוני התנחלויות и опциональные העברות חוצות נתיבים. Глобальное кольцо NPoS упорядочивает התחייבויות.
 
-## Таксономия lanes
+## נתיבי Таксономия
 
-Типы lanes канонически описывают видимость, governance surface и settlement hooks. Геометрия конфигурации (`LaneConfig`) фиксирует эти атрибуты, чтобы узлы, SDKs и tooling могли понимать layout без bespoke логики.
+נתיבי Типы канонически описывают видимость, משטח ממשל и ווי התנחלויות. Геометрия конфигурации (`LaneConfig`) фиксирует эти атрибуты, чтобы узлы, SDKs и tooling могли bespoke layout понимаг.
 
-| Тип lane | Видимость | Membership валидаторов | Экспозиция WSV | Governance по умолчанию | Политика settlement | Типичное применение |
-|-----------|------------|----------------------|--------------|--------------------|-------------------|-------------|
-| `default_public` | public | Permissionless (global stake) | Full state replica | SORA Parliament | `xor_global` | Базовый публичный ledger |
-| `public_custom` | public | Permissionless or stake-gated | Full state replica | Stake weighted module | `xor_lane_weighted` | Публичные приложения с высоким throughput |
-| `private_permissioned` | restricted | Фиксированный набор валидаторов (одобрен governance) | Commitments & proofs | Federated council | `xor_hosted_custody` | CBDC, консорциумные workloads |
-| `hybrid_confidential` | restricted | Смешанная membership; оборачивает ZK proofs | Commitments + selective disclosure | Programmable money module | `xor_dual_fund` | Privacy-preserving programmable money |
+| Тип ליין | Видимость | חברות валидаторов | Экспозиция WSV | ממשל по умолчанию | התיישבות Политика | Типичное применение |
+|----------------------------------------------------|
+| `default_public` | ציבורי | ללא רשות (הימור גלובלי) | העתק המדינה המלא | SORA הפרלמנט | `xor_global` | Базовый публичный ספר חשבונות |
+| `public_custom` | ציבורי | חסרי רשות או מוגנים | העתק המדינה המלא | מודול משוקלל הימור | `xor_lane_weighted` | Публичные приложения с высоким תפוקה |
+| `private_permissioned` | מוגבל | Фиксированный набор валидаторов (ממשל אופנתי) | התחייבויות והוכחות | מועצה פדרציה | `xor_hosted_custody` | CBDC, консорциумные עומסי עבודה |
+| `hybrid_confidential` | מוגבל | חברות Смешанная; оборачивает ZK הוכחות | התחייבויות + גילוי סלקטיבי | מודול כסף ניתן לתכנות | `xor_dual_fund` | כסף ניתן לתכנות לשמירה על הפרטיות |
 
-Все типы lane обязаны объявлять:
+Все типы lane обязаны объявлять:- כינוי מרחב נתונים - человекочитаемая группировка, связывающая политики תאימות.
+- ידית ממשל - идентификатор, разрешаемый через `Nexus.governance.modules`.
+- ידית יישוב - идентификатор, נתב התיישבות потребляемый для списания מאגרי XOR.
+- Опциональная מטא נתונים של טלמטריה (תיאור, איש קשר, תחום עסקי), отображаемая через `/status` ודשבורדים.
 
-- Dataspace alias - человекочитаемая группировка, связывающая политики compliance.
-- Governance handle - идентификатор, разрешаемый через `Nexus.governance.modules`.
-- Settlement handle - идентификатор, потребляемый settlement router для списания XOR buffers.
-- Опциональная telemetry metadata (description, contact, business domain), отображаемая через `/status` и dashboards.
+## מסלולי Геометрия конфигурации (`LaneConfig`)
 
-## Геометрия конфигурации lanes (`LaneConfig`)
-
-`LaneConfig` - runtime геометрия, выводимая из валидированного каталога lanes. Она не заменяет governance manifests; вместо этого предоставляет детерминированные storage identifiers и telemetry hints для каждой сконфигурированной lane.
+`LaneConfig` - זמן ריצה геометрия, выводимая из валидированного каталога נתיבי. Она не заменяет גילויי ממשל; вместо этого предоставляет детерминированные מזהי אחסון ורמזים לטלמטריה עבור каждой сконфигурированной ליין.
 
 ```text
 LaneConfigEntry {
@@ -65,60 +65,56 @@ LaneConfigEntry {
 ```
 
 - `LaneConfig::from_catalog` пересчитывает геометрию при загрузке конфигурации (`State::set_nexus`).
-- Aliases санитизируются в нижний регистр slug; последовательности неалфавитно-цифровых символов схлопываются в `_`. Если alias дает пустой slug, используем `lane{id}`.
-- `shard_id` выводится из metadata key `da_shard_id` (по умолчанию `lane_id`) и управляет журналом shard cursor, чтобы DA replay оставался детерминированным между restarts/resharding.
-- Key prefixes гарантируют, что WSV сохраняет раздельные key ranges по lane, даже если backend общий.
-- Имена Kura segment детерминированы между hosts; аудиторы могут сопоставлять директории сегментов и manifests без bespoke tooling.
-- Merge segments (`lane_{id:03}_merge`) хранят последние merge-hint roots и global state commitments для этой lane.
+- כינויים санитизируются в нижний регистр שבלול; последовательности неалфавитно-цифровых символов схлопываются в `_`. Если כינוי дает пустой slug, используем `lane{id}`.
+- `shard_id` выводится из מפתח מטא נתונים `da_shard_id` (באמצעות умолчанию `lane_id`) ו- управляет журналом журналом shard replay cursor, DA детерминированным между הפעלה מחדש / חלוקה מחדש.
+- קידומות מפתח гарантируют, что WSV сохраняет раздельные טווחי מפתחות по lane, даже если backend общий.
+- Имена Kura segment детерминированы между מארחים; аудиторы могут сопоставлять директории сегментов וגילויים ללא כלי עבודה בהתאמה אישית.
+- מיזוג מקטעים (`lane_{id:03}_merge`) хранят последние שורשי מיזוג רמז и מחויבויות מדינה גלובליות ל-этой ליין.
 
-## Партиционирование world-state
+## Партиционирование מדינה עולמית
 
-- Логический world state Nexus - это объединение state spaces по lane. Public lanes сохраняют full state; private/confidential lanes экспортируют Merkle/commitment roots в merge ledger.
-- MV storage префиксирует каждый ключ 4-байтовым префиксом `LaneConfigEntry::key_prefix`, получая ключи вида `[00 00 00 01] ++ PackedKey`.
-- Shared tables (accounts, assets, triggers, governance records) хранят записи, сгруппированные по lane prefix, сохраняя детерминизм range scans.
-- Merge-ledger metadata зеркалирует тот же layout: каждая lane пишет merge-hint roots и reduced global state roots в `lane_{id:03}_merge`, что позволяет делать targeted retention/eviction при выводе lane.
-- Cross-lane indexes (account aliases, asset registries, governance manifests) хранят явные lane prefixes, чтобы операторы могли быстро выполнять reconciliation.
-- **Retention policy** - public lanes сохраняют полные block bodies; commitment-only lanes могут компактизировать старые bodies после checkpoints, потому что commitments авторитетны. Confidential lanes хранят ciphertext journals в выделенных сегментах, чтобы не блокировать другие workloads.
-- **Tooling** - утилиты обслуживания (`kagami`, CLI admin commands) должны ссылаться на slugged namespace при экспонировании metrics, Prometheus labels или архивировании Kura segments.
+- Логический מדינה עולמית Nexus - это объединение מרחבי המדינה по ליין. נתיבים ציבוריים сохраняют מצב מלא; נתיבים פרטיים/סודיים экспортируют Merkle/שורשי מחויבות במיזוג חשבונות.
+- MV אחסון префиксирует каждый ключ 4-байтовым префиксом `LaneConfigEntry::key_prefix`, получая ключи вида `[00 00 00 01] ++ PackedKey`.
+- טבלאות משותפות (חשבונות, נכסים, טריגרים, רשומות ממשל) хранят записи, сгруппированные по ליין קידומת, сохраняя детерминизм טווח סריקות.
+- מטא-נתונים של מיזוג חשבונות זמין עבור פריסה: каждая lane пишет שורשי מיזוג-רמז и שורשי מדינה גלובליים מופחתים ב-`lane_{id:03}_merge`, что позволяет שמירה ממוקדת/evi. נתיב.
+- אינדקסים חוצי-נתיבים (כינויים של חשבונות, רישום נכסים, מניפסטים של ממשל) хранят явные קידומות נתיב, чтобы операторы могли быстро выполнять התאמה.
+- **מדיניות שימור** - נתיבים ציבוריים сохраняют полные בלוק גופים; נתיבי התחייבות בלבד могут компактизировать старые גופים после מחסומים, потому что התחייבויות авторитетны. נתיבים סודיים хранят יומני טקסט צופן в выделенных сегментах, чтобы не блокировать другие עומסי עבודה.
+- **כלים** - утилиты обслуживания (`kagami`, פקודות אדמין של CLI) должны ссылаться на מרחב שמות מבושל при экспонировании экспонировании ‎I18000X18000x, ‎ архивировании מקטעי Kura.
 
-## Routing & APIs
+## ניתוב וממשקי API- Torii נקודות קצה REST/gRPC принимают опциональный `lane_id`; отсутствие означает `lane_default`.
+- ערכות SDK מאפשרות בוררי נתיבים ומאפיינות כינויים ידידותיים למשתמש בנתיבי `LaneId` через каталог.
+- כללי ניתוב работают по валидированному каталогу и могут выбирать и ליין, и מרחב נתונים. `LaneConfig` מספק כינויים ידידותיים לטלמטריה ללוחות מחוונים ויומנים.
 
-- Torii REST/gRPC endpoints принимают опциональный `lane_id`; отсутствие означает `lane_default`.
-- SDKs показывают lane selectors и маппят user-friendly aliases в `LaneId` через каталог lanes.
-- Routing rules работают по валидированному каталогу и могут выбирать и lane, и dataspace. `LaneConfig` предоставляет telemetry-friendly aliases для dashboards и logs.
+## פשרה ועמלות
 
-## Settlement & fees
+- Каждая lane платит עמלות XOR глобальному набору валидаторов. נתיבים могут собирать אסימוני גז מקומיים, но обязаны נאמנות XOR מקבילות вместе с התחייבויות.
+- הוכחות הסדר включают סכום, מטא-נתונים של המרה ונאמנות הוכחה (например, перевод в глобальный כספת עמלות).
+- נתב יישוב Единый (NX-3) дебетует מאגרים теми же קידומות נתיב, поэтому טלמטריית יישוב совпадает со storage геометрией.
 
-- Каждая lane платит XOR fees глобальному набору валидаторов. Lanes могут собирать native gas tokens, но обязаны escrow XOR equivalents вместе с commitments.
-- Settlement proofs включают amount, conversion metadata и proof escrow (например, перевод в глобальный fee vault).
-- Единый settlement router (NX-3) дебетует buffers теми же lane prefixes, поэтому settlement telemetry совпадает со storage геометрией.
+## ממשל
 
-## Governance
+- נתיבים объявляют свой מודול ממשל через каталог. `LaneConfigEntry` несет оригинальные alias и slug, чтобы telmetry and audit trails оставались читаемыми.
+- Nexus רישום распространяет подписанные מניפסטים של מסלול, включающие `LaneId`, כריכת מרחב נתונים, טיפול ממשל, נקודת אחיזה להסדר ומטא נתונים.
+- ווי שדרוג זמן ריצה продолжают применять מדיניות ממשל (`gov_upgrade_id` по умолчанию) и логируют diffs через טלמטריה גשר (אירועים I008NI030X).
 
-- Lanes объявляют свой governance module через каталог. `LaneConfigEntry` несет оригинальные alias и slug, чтобы telemetry и audit trails оставались читаемыми.
-- Nexus registry распространяет подписанные lane manifests, включающие `LaneId`, dataspace binding, governance handle, settlement handle и metadata.
-- Runtime-upgrade hooks продолжают применять governance policies (`gov_upgrade_id` по умолчанию) и логируют diffs через telemetry bridge (events `nexus.config.diff`).
+## טלמטריה ומצב
 
-## Telemetry & status
+- `/status` כינויים של נתיבים, כריכות מרחב נתונים, נקודות שליטה ופרופילי יישוב, התקדמות של קבצים ו-`LaneConfig`.
+- מדדי מתזמן (`nexus_scheduler_lane_teu_*`) отображают כינויים/שבלולים, чтобы операторы быстро связывали צבר ולחץ TEU.
+- `nexus_lane_configured_total` считает количество выведенных כניסות נתיב и пересчитывается при измении конфигурации. טלמטריה испускает подписанные הבדלים при изменении גיאומטריה של נתיב.
+- מדדי צבר מרחב נתונים включают כינוי/מטא נתונים של תיאור, помогая операторам связывать לחץ תור с бизнес-доменами.
 
-- `/status` показывает lane aliases, dataspace bindings, governance handles и settlement profiles, производные от каталога и `LaneConfig`.
-- Scheduler metrics (`nexus_scheduler_lane_teu_*`) отображают aliases/slugs, чтобы операторы быстро связывали backlog и TEU pressure.
-- `nexus_lane_configured_total` считает количество выведенных lane entries и пересчитывается при изменении конфигурации. Telemetry испускает подписанные diffs при изменении lane geometry.
-- Dataspace backlog gauges включают alias/description metadata, помогая операторам связывать queue pressure с бизнес-доменами.
+## תצורה וסוגי Norito
 
-## Configuration & Norito types
-
-- `LaneCatalog`, `LaneConfig`, и `DataSpaceCatalog` находятся в `iroha_data_model::nexus` и предоставляют Norito-совместимые структуры для manifests и SDKs.
-- `LaneConfig` находится в `iroha_config::parameters::actual::Nexus` и автоматически выводится из каталога; Norito encoding не требуется, так как это внутренний runtime helper.
-- Пользовательская конфигурация (`iroha_config::parameters::user::Nexus`) продолжает принимать декларативные descriptors lane и dataspace; парсинг теперь выводит геометрию и отклоняет невалидные aliases или дублирующиеся lane IDs.
+- `LaneCatalog`, `LaneConfig`, ו-`DataSpaceCatalog` находятся в `iroha_data_model::nexus` и предоставляют Norito למניפסטים и SDKs.
+- `LaneConfig` находится в `iroha_config::parameters::actual::Nexus` и автоматически выводится из каталога; קידוד Norito לא טוב, זה עוזר בזמן ריצה.
+- Пользовательская конфигурация (`iroha_config::parameters::user::Nexus`) продолжает принимать декларативные נתיב מתארים ומרחב נתונים; парсинг теперь выводит геометрию и отклоняет невалидные כינויים או מזהי נתיב дублирующиеся.
 
 ## Оставшаяся работа
 
-- Интегрировать settlement router updates (NX-3) с новой геометрией, чтобы XOR buffer debits и receipts помечались slug lane.
-- Расширить admin tooling для списка column families, компакта retired lanes и проверки per-lane block logs через slugged namespace.
-- Финализировать merge алгоритм (ordering, pruning, conflict detection) и добавить regression fixtures для cross-lane replay.
-- Добавить compliance hooks для whitelists/blacklists и programmable-money policies (трекится под NX-12).
+- Интегрировать עדכוני נתב התנחלויות (NX-3) עם новой геометрией, чтобы חיובי XOR חיץ וקבלות помечались slug lane.
+- חפש כלי ניהול לניהול משפחות עמודות, רכיבי נתיבים בדימוס ופירוט יומני בלוק לכל נתיב ניצבים מרחב שמות עקום.
+- Финализировать מיזוג алгоритм (הזמנה, גיזום, זיהוי קונפליקטים) ו добавить מתקני רגרסיה למשחק חוזר חוצה נתיבים.
+- בדוק את הוקס של תאימות לרשימות הלבנות/רשימות שחורות ומדיניות כסף ניתנת לתכנות (трекится под NX-12).
 
----
-
-*Эта страница продолжит отслеживать NX-1 follow-ups по мере посадки NX-2 до NX-18. Пожалуйста, поднимайте открытые вопросы в `roadmap.md` или governance tracker, чтобы портал оставался синхронизированным с каноническими документами.*
+---*השתמשו במעקבי NX-1 על מספר נקודות NX-2 עד NX-18. פשרות, פנויות לשירותים ב-`roadmap.md` או גשש ממשל, שוטרים פורטלים אוסטרליים סינוניים. документами.*

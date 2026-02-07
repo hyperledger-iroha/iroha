@@ -4,35 +4,37 @@ direction: ltr
 source: docs/portal/docs/sorafs/priority-snapshot-2025-03.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: priority-snapshot-2025-03
-title: لقطة الأولويات — مارس 2025 (بيتا)
-description: نسخة مرآة من لقطة توجيه Nexus 2025-03؛ بانتظار ACKs قبل الطرح العام.
+id: 優先度-スナップショット-2025-03
+タイトル: لقطة الأولويات — مارس 2025 (بيتا)
+説明: نسخة مرآة من لقطة توجيه Nexus 2025-03؛ ACK を返します。
 ---
 
-> المصدر المعتمد: `docs/source/sorafs/priority_snapshot_2025-03.md`
+> 番号: `docs/source/sorafs/priority_snapshot_2025-03.md`
 >
-> الحالة: **بيتا / بانتظار ACKs التوجيه** (Networking, Storage, Docs leads).
+> 応答: **応答/応答応答** (ネットワーキング、ストレージ、ドキュメント リード)。
 
-## نظرة عامة
+## いいえ
 
-تحافظ لقطة مارس على اتساق مبادرات docs/content-network مع مسارات تسليم SoraFS
-(SF-3, SF-6b, SF-9). بمجرد إقرار جميع القادة باللقطة في قناة Nexus steering،
-أزل ملاحظة “Beta” أعلاه.
+ドキュメント/コンテンツ ネットワーク ドキュメント SoraFS
+(SF-3、SF-6b、SF-9)。ステアリングホイール Nexus ステアリング
+「ベータ版」です。
 
-### محاور التركيز
+### 特別な日
 
-1. **تعميم لقطة الأولويات** — جمع acknowledgements وتسجيلها في محاضر المجلس بتاريخ
-   2025-03-05.
-2. **إغلاق kickoff Gateway/DNS** — التدرب على حزمة التيسير الجديدة (القسم 6 في
-   runbook) قبل ورشة 2025-03-03.
-3. **ترحيل runbook للمشغلين** — بوابة `Runbook Index` أصبحت live؛ اكشف رابط
-   المعاينة beta بعد توقيع reviewer onboarding.
-4. **مسارات تسليم SoraFS** — مواءمة العمل المتبقي لـ SF-3/6b/9 مع plan/roadmap:
-   - عامل ingestion لـ PoR + endpoint الحالة في `sorafs-node`.
-   - صقل bindings الخاصة بـ CLI/SDK عبر تكاملات orchestrator في Rust/JS/Swift.
-   - توصيل runtime لمنسق PoR وأحداث GovernanceLog.
+1. **評価と評価** — 承認事項 في محاضر المجلس بتاريخ
+   2025年3月5日。
+2. **キックオフ ゲートウェイ/DNS** — التدرب على حزمة التيسير الجديدة (القسم 6 في)
+   ランブック) 2025 年 3 月 3 日。
+3. **ランブック للمشغلين** — ニュース `Runbook Index` ライブニュースああ、
+   ベータ版のレビュアーのオンボーディングです。
+4. **情報 SoraFS** — SF-3/6b/9 の計画/ロードマップ:
+   - PoR + エンドポイントの取り込み `sorafs-node`。
+   - CLI/SDK とバインディング、Rust/JS/Swift のオーケストレーター。
+   - ランタイムと PoR のガバナンスログ。
 
-راجع الملف المصدر للجدول الكامل وقائمة التوزيع وسجلات الإدخال.
+ログインしてください。

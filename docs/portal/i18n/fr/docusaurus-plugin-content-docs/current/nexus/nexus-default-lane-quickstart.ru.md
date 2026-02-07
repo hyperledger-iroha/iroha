@@ -4,22 +4,24 @@ direction: ltr
 source: docs/portal/docs/nexus/nexus-default-lane-quickstart.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: nexus-default-lane-quickstart
+identifiant : nexus-default-lane-quickstart
 title: Быстрый старт default lane (NX-5)
 sidebar_label: Быстрый старт default lane
-description: Настройте и проверьте fallback default lane в Nexus, чтобы Torii и SDK могли опускать lane_id в public lanes.
+description : Enregistrez et vérifiez la voie par défaut de secours dans Nexus, tandis que Torii et le SDK peuvent ouvrir lane_id dans les voies publiques.
 ---
 
 :::note Канонический источник
-Эта страница отражает `docs/source/quickstart/default_lane.md`. Держите обе копии синхронизированными, пока локализационный прогон не попадет в портал.
+Эта страница отражает `docs/source/quickstart/default_lane.md`. Il est possible de copier des copies de synchronisation si la localisation n'est pas disponible sur le portail.
 :::
 
-# Быстрый старт default lane (NX-5)
+# Voie par défaut de démarrage rapide (NX-5)
 
-> **Контекст roadmap:** NX-5 - интеграция default public lane. Рантайм теперь предоставляет fallback `nexus.routing_policy.default_lane`, чтобы REST/gRPC эндпоинты Torii и каждый SDK могли безопасно опускать `lane_id`, когда трафик относится к канонической public lane. Это руководство проводит операторов через настройку каталога, проверку fallback в `/status` и проверку поведения клиента от начала до конца.
+> **Контекст roadmap:** NX-5 - интеграция default public lane. L'option de secours `nexus.routing_policy.default_lane` est disponible pour l'entrée REST/gRPC Torii et le SDK peut être utilisé sans problème. `lane_id`, когда трафик относится к канонической public lane. Ce sont les opérateurs de fournisseurs à partir du catalogue qui fournissent une solution de secours dans `/status` et fournissent une réponse client à leur compte.
 
 ## Предварительные требования
 
@@ -28,9 +30,7 @@ description: Настройте и проверьте fallback default lane в N
 - `iroha_cli`, настроенный на целевой кластер.
 - `curl`/`jq` (или эквивалент) для просмотра payload `/status` в Torii.
 
-## 1. Описать каталог lane и dataspace
-
-Определите lanes и dataspaces, которые должны существовать в сети. Фрагмент ниже (вырезан из `defaults/nexus/config.toml`) регистрирует три public lane и соответствующие alias для dataspace:
+## 1. Описать каталог lane и dataspaceCréez des voies et des espaces de données qui doivent être utilisés dans ce domaine. Ce fragment (via `defaults/nexus/config.toml`) est enregistré sur une voie publique et un alias approprié pour l'espace de données :
 
 ```toml
 [nexus]
@@ -73,11 +73,11 @@ description = "Zero-knowledge proofs and attachments"
 fault_tolerance = 1
 ```
 
-Каждый `index` должен быть уникальным и непрерывным. Id dataspaces - это 64-битные значения; в примерах выше используются те же числовые значения, что и индексы lane, для наглядности.
+Le boîtier `index` doit être unique et non disponible. Espaces de données d'identification - c'est une taille de 64 bits ; En premier lieu, vous utilisez les règles de sécurité, celles et les voies d'indexation, pour la navigation.
 
-## 2. Задать дефолты маршрутизации и опциональные переопределения
+## 2. Supprimer les marchés et les opérations opérationnelles
 
-Секция `nexus.routing_policy` управляет fallback lane и позволяет переопределять маршрутизацию для конкретных инструкций или префиксов аккаунтов. Если ни одно правило не подходит, scheduler направляет транзакцию в `default_lane` и `default_dataspace`. Логика router находится в `crates/iroha_core/src/queue/router.rs` и прозрачно применяет политику к поверхностям Torii REST/gRPC.
+La section `nexus.routing_policy` active la voie de secours et permet de pré-démarrer la mise en œuvre des instructions de construction ou des spécifications. аккаунтов. Si ce n'est pas possible, le planificateur effectue la transition entre `default_lane` et `default_dataspace`. Le routeur logique est installé dans `crates/iroha_core/src/queue/router.rs` et est probablement basé sur la politique de gestion Torii REST/gRPC.
 
 ```toml
 [nexus.routing_policy]
@@ -107,36 +107,34 @@ IROHA_CONFIG=/path/to/nexus/config.toml
 irohad --sora --config "${IROHA_CONFIG}"
 ```
 
-Нода логирует вычисленную политику маршрутизации при старте. Любые ошибки валидации (отсутствующие индексы, дублирующиеся alias, некорректные ids dataspaces) всплывают до начала gossip.
+Il n'y a plus de place pour le marché politique avant le début. Les autorisations de validation (d'indexation, de double alias, d'espaces de données d'identifiants non reconnus) révèlent les potins.
 
-## 4. Подтвердить состояние governance для lane
+## 4. Améliorer la gouvernance de la voie
 
-После того как нода онлайн, используйте CLI helper, чтобы убедиться, что default lane запечатана (manifest загружен) и готова к трафику. Сводный вид выводит по одной строке на lane:
+Ensuite, lorsque vous êtes en ligne, utilisez l'assistant CLI pour détecter la voie par défaut (manifest affiché) et le trafic. La vidéo s'applique à votre course sur la voie :
 
 ```bash
 iroha_cli app nexus lane-report --summary
 ```
 
-Example output:
+Exemple de sortie :
 
 ```
 Lane  Alias            Module           Status  Quorum  Validators  Detail
    0  core             parliament       ready      05           07  manifest ok
    1  governance       parliament       ready      05           07  manifest ok
    2  zk               parliament       sealed     03           05  manifest required
-```
+```Si la voie par défaut utilise `sealed`, placez le runbook sur la gouvernance des voies avant ce thème, afin de gérer le trafic local. Le drapeau `--fail-on-sealed` est utilisé pour CI.
 
-Если default lane показывает `sealed`, следуйте runbook по governance для lanes перед тем, как разрешить внешний трафик. Флаг `--fail-on-sealed` удобен для CI.
+## 5. Vérifier l'état de la charge utile Torii
 
-## 5. Проверить status payload Torii
-
-Ответ `/status` раскрывает и политику маршрутизации, и снимок scheduler по lanes. Используйте `curl`/`jq`, чтобы подтвердить настроенные значения по умолчанию и проверить, что fallback lane публикует телеметрию:
+La réponse `/status` a permis de créer un trafic politique et un planificateur d'écrans sur les voies. Utilisez `curl`/`jq` pour mettre à jour les paramètres de sauvegarde et de vérification afin de publier la voie de secours. télémétrie :
 
 ```bash
 curl -s http://127.0.0.1:8080/status | jq '.nexus.routing_policy'
 ```
 
-Sample output:
+Exemple de sortie :
 
 ```json
 {
@@ -149,7 +147,7 @@ Sample output:
 }
 ```
 
-Чтобы посмотреть живые счетчики scheduler для lane `0`:
+Comment activer le planificateur de séquences pour la voie `0` :
 
 ```bash
 curl -s http://127.0.0.1:8080/status \
@@ -157,18 +155,14 @@ curl -s http://127.0.0.1:8080/status \
         | {lane_id, alias, dataspace_alias, committed, manifest_ready, scheduler_utilization_pct}'
 ```
 
-Это подтверждает, что TEU snapshot, метаданные alias и флаги manifest соответствуют конфигурации. Тот же payload используется панелями Grafana для dashboard lane-ingest.
+Il s'agit d'un instantané TEU, d'un alias de métadonnées et d'un drapeau manifeste qui correspondent à la configuration. Cette charge utile utilise les panneaux Grafana pour l'absorption des voies du tableau de bord.
 
-## 6. Проверить дефолтное поведение клиента
+## 6. Vérifier la disponibilité du client- **Rust/CLI.** `iroha_cli` et la caisse client Rust utilisent le pôle `lane_id`, mais vous ne devez pas remplacer `--lane-id` / `LaneSelector`. Le routeur de file d'attente est connecté à `default_lane`. Utilisez vos drapeaux `--lane-id`/`--dataspace-id` uniquement pour activer une voie qui n'est pas celle par défaut.
+- **JS/Swift/Android.** Les versions ultérieures du SDK incluent `laneId`/`lane_id`, options et solutions de secours disponibles dans `/status`. Les politiques de marketing de synchronisation ne permettent pas de faire de la mise en scène et de la production des projets mobiles.
+- **Tests Pipeline/SSE.** Les filtres sont basés sur les prédicats `tx_lane_id == <u32>` (avec `docs/source/pipeline.md`). Ajoutez le filtre `/v1/pipeline/events/transactions` à ce filtre pour obtenir un identifiant de voie de repli.
 
-- **Rust/CLI.** `iroha_cli` и клиентский crate Rust опускают поле `lane_id`, когда вы не передаете `--lane-id` / `LaneSelector`. Queue router в этом случае падает в `default_lane`. Используйте явные флаги `--lane-id`/`--dataspace-id` только при работе с не-default lane.
-- **JS/Swift/Android.** Последние релизы SDK считают `laneId`/`lane_id` опциональными и fallback-ят на значение, объявленное в `/status`. Держите политику маршрутизации синхронизированной между staging и production, чтобы мобильным приложениям не требовались аварийные перенастройки.
-- **Pipeline/SSE tests.** Фильтры событий транзакций принимают предикаты `tx_lane_id == <u32>` (см. `docs/source/pipeline.md`). Подпишитесь на `/v1/pipeline/events/transactions` с этим фильтром, чтобы доказать, что записи, отправленные без явного lane, приходят под fallback lane id.
+## 7. Observabilité et crochets de gouvernance- `/status` publie `nexus_lane_governance_sealed_total` et `nexus_lane_governance_sealed_aliases`, ce qui permet à Alertmanager de se présenter lorsque la voie est affichée. Obtenez ces alertes directement sur Devnet.
+- Le planificateur télémétrique et la gouvernance du tableau de bord pour les voies (`dashboards/grafana/nexus_lanes.json`) indiquent l'alias/slug du catalogue. Si vous choisissez un alias, choisissez et contactez le directeur Kura, les auditeurs sont responsables de la détection des choses (ensuite sur NX-1).
+- L'évolution des voies par défaut permet de restaurer le plan. Si vous souhaitez télécharger le manifeste de hachage et préparer le processus de gouvernance avec ce démarrage rapide dans votre runbook d'opérateur, vous n'avez pas vraiment besoin de gérer la rotation.
 
-## 7. Observability и governance hooks
-
-- `/status` также публикует `nexus_lane_governance_sealed_total` и `nexus_lane_governance_sealed_aliases`, чтобы Alertmanager мог предупреждать, когда lane теряет manifest. Держите эти алерты включенными даже на devnet.
-- Карта телеметрии scheduler и dashboard governance для lanes (`dashboards/grafana/nexus_lanes.json`) ожидают поля alias/slug из каталога. Если вы переименовываете alias, переименуйте и соответствующие директории Kura, чтобы аудиторы сохраняли детерминированные пути (отслеживается по NX-1).
-- Парламентские одобрения для default lanes должны включать план rollback. Зафиксируйте hash manifest и доказательства governance рядом с этим quickstart в вашем операторском runbook, чтобы будущие ротации не гадали требуемое состояние.
-
-Когда эти проверки пройдены, можно считать `nexus.routing_policy.default_lane` источником истины для конфигурации SDK и начинать отключать унаследованные single-lane кодовые пути в сети.
+Lors de ces vérifications, vous pouvez choisir `nexus.routing_policy.default_lane` pour installer les fichiers de configuration du SDK et désactiver l'option de configuration. les copropriétés à voie unique sont situées à Seti.

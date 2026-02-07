@@ -6,17 +6,18 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: a3158cd70a42104bacaafc520fdcc10e20e3bc347d895be448fcb10da4f668bd
 source_last_modified: "2026-01-03T18:08:01.692664+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Iroha 3 Bench Suite
+# Iroha 3 ベンチ スイート
 
-The Iroha 3 bench suite times the hot paths we rely on during staking, fee
-charging, proof verification, scheduling, and proof endpoints. It runs as an
-`xtask` command with deterministic fixtures (fixed seeds, fixed key material,
-and stable request payloads) so results are reproducible across hosts.
+Iroha 3 ベンチ スイートは、ステーキング中に依存するホット パスを倍増します。
+課金、プルーフ検証、スケジューリング、プルーフエンドポイント。として実行されます
+決定論的フィクスチャを使用した `xtask` コマンド (固定シード、固定キー マテリアル、
+安定したリクエスト ペイロード）により、ホスト間で結果を再現できます。
 
-## Running the suite
+## スイートの実行
 
 ```bash
 cargo xtask i3-bench-suite \
@@ -29,41 +30,41 @@ cargo xtask i3-bench-suite \
   --allow-overwrite
 ```
 
-Flags:
+フラグ:
 
-- `--iterations` controls iterations per scenario sample (default: 64).
-- `--sample-count` repeats each scenario to compute the median (default: 5).
-- `--json-out|--csv-out|--markdown-out` choose output artifacts (all optional).
-- `--threshold` compares medians against the baseline bounds (set `--no-threshold`
-  to skip).
-- `--flamegraph-hint` annotates the Markdown report with the `cargo flamegraph`
-  command to profile a scenario.
+- `--iterations` は、シナリオ サンプルごとの反復数を制御します (デフォルト: 64)。
+- `--sample-count` は、各シナリオを繰り返して中央値を計算します (デフォルト: 5)。
+- `--json-out|--csv-out|--markdown-out` 出力アーティファクトを選択します (すべてオプション)。
+- `--threshold` は中央値をベースライン境界と比較します (`--no-threshold` を設定)
+  スキップします）。
+- `--flamegraph-hint` は、Markdown レポートに `cargo flamegraph` の注釈を付けます
+  シナリオをプロファイリングするコマンド。
 
-CI glue lives in `ci/i3_bench_suite.sh` and defaults to the paths above; set
-`I3_BENCH_ITERATIONS`/`I3_BENCH_SAMPLES` to tune runtime in nightlies.
+CI グルーは `ci/i3_bench_suite.sh` に存在し、デフォルトでは上記のパスになります。セット
+`I3_BENCH_ITERATIONS`/`I3_BENCH_SAMPLES` は、nightlies でのランタイムを調整します。
 
-## Scenarios
+## シナリオ
 
-- `fee_payer` / `fee_sponsor` / `fee_insufficient` — payer vs sponsor debit
-  and shortfall rejection.
-- `staking_bond` / `staking_slash` — bond/unbond queue with and without
-  slashing.
+- `fee_payer` / `fee_sponsor` / `fee_insufficient` — 支払者とスポンサーの借方
+  そして不足分の拒否。
+- `staking_bond` / `staking_slash` — キューの結合/結合解除ありまたはなし
+  斬りつける。
 - `commit_cert_verify` / `jdg_attestation_verify` / `bridge_proof_verify` —
-  signature verification over commit certificates, JDG attestations, and bridge
-  proof payloads.
-- `commit_cert_assembly` — digest assembly for commit certificates.
-- `access_scheduler` — conflict-aware access-set scheduling.
-- `torii_proof_endpoint` — Axum proof endpoint parsing + verification round trip.
+  コミット証明書、JDG 証明書、ブリッジを介した署名検証
+  証拠のペイロード。
+- `commit_cert_assembly` — コミット証明書のダイジェスト アセンブリ。
+- `access_scheduler` — 競合を認識するアクセスセットのスケジューリング。
+- `torii_proof_endpoint` — Axum の証明エンドポイント解析 + 検証往復。
 
-Every scenario records median nanoseconds per iteration, throughput, and a
-deterministic allocation counter for quick regressions. Thresholds live in
-`benchmarks/i3/thresholds.json`; bump bounds there when hardware changes and
-commit the new artifact alongside a report.
+すべてのシナリオで、反復ごとのナノ秒の中央値、スループット、および
+迅速な回帰のための決定論的割り当てカウンター。しきい値が存在する
+`benchmarks/i3/thresholds.json`;ハードウェアが変更されると、そこにバンプ境界が発生します。
+レポートと一緒に新しいアーティファクトをコミットします。
 
-## Troubleshooting
+## トラブルシューティング
 
-- Pin CPU frequency/governor when collecting evidence to avoid noisy regressions.
-- Use `--no-threshold` for exploratory runs, then re-enable once the baseline is
-  refreshed.
-- To profile a single scenario, set `--iterations 1` and re-run under
-  `cargo flamegraph -p xtask -- i3-bench-suite --iterations 128 --sample-count 1 --no-threshold --flamegraph-hint`.
+- ノイズの多い回帰を避けるために、証拠を収集するときに CPU 周波数/ガバナを固定します。
+- 探索的な実行には `--no-threshold` を使用し、ベースラインが設定されたら再度有効にします。
+  リフレッシュされました。
+- 単一のシナリオをプロファイリングするには、`--iterations 1` を設定し、以下で再実行します。
+  `cargo flamegraph -p xtask -- i3-bench-suite --iterations 128 --sample-count 1 --no-threshold --flamegraph-hint`。

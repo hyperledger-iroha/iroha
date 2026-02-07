@@ -4,30 +4,32 @@ direction: rtl
 source: docs/portal/docs/norito/examples/register-and-mint.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-slug: /norito/examples/register-and-mint
-title: Registrar dominio e cunhar ativos
-description: Demonstra a criacao de dominios com permissao, o registro de ativos e a cunhagem deterministica.
-source: crates/ivm/docs/examples/13_register_and_mint.ko
+سبيكة: /norito/examples/register-and-mint
+العنوان: المسجل dominio e cunhar ativos
+الوصف: قم بإظهار إنشاء نطاقات من خلال السماح أو تسجيل المهام أو تحديد الحتمية.
+المصدر: صناديق/ivm/docs/examples/13_register_and_mint.ko
 ---
 
-Demonstra a criacao de dominios com permissao, o registro de ativos e a cunhagem deterministica.
+قم بإظهار إنشاء نطاقات من خلال السماح أو تسجيل المهام أو تحديد الحتمية.
 
 ## Roteiro do livro razao
 
-- Garanta que a conta de destino (por exemplo `ih58...`) exista, espelhando a fase de configuracao em cada quickstart do SDK.
-- Invoque o entrypoint `register_and_mint` para criar a definicao do ativo ROSE e cunhar 250 unidades para Alice em uma unica transacao.
-- Verifique os saldos via `client.request(FindAccountAssets)` ou `iroha_cli ledger assets list --account ih58...` para confirmar que a cunhagem foi bem-sucedida.
+- ضمان وجود حساب الوجهة (على سبيل المثال `ih58...`)، وبدء عملية التكوين في كل Quickstart من SDK.
+- قم باستدعاء نقطة الدخول `register_and_mint` لإنشاء تعريف لـ ROSE وجمع 250 وحدة لـ Alice في معاملة واحدة.
+- تحقق من الرسائل عبر `client.request(FindAccountAssets)` أو `iroha_cli ledger assets list --account ih58...` لتأكيد نجاح العملية.
 
-## Guias de SDK relacionados
+## أدلة SDK ذات الصلة
 
-- [Quickstart do SDK Rust](/sdks/rust)
-- [Quickstart do SDK Python](/sdks/python)
-- [Quickstart do SDK JavaScript](/sdks/javascript)
+- [بدء التشغيل السريع لـ SDK Rust](/sdks/rust)
+- [البدء السريع لـ SDK Python](/sdks/python)
+- [بدء التشغيل السريع لـ SDK JavaScript](/sdks/javascript)
 
-[Baixe a fonte Kotodama](/norito-snippets/register-and-mint.ko)
+[اضغط على الخط Kotodama](/norito-snippets/register-and-mint.ko)
 
 ```text
 // Register a new asset and mint some to the specified account.

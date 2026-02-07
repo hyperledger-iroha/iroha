@@ -7,18 +7,19 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 168513edcb6624ab76275b01aaaf6ab9dee310b9d6f5a2960504a9545801c511
 source_last_modified: "2026-01-28T13:08:23.284550+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Kotodama Examples Overview
+# Kotodama ምሳሌዎች አጠቃላይ እይታ
 
-This page shows concise Kotodama examples and how they map to IVM syscalls and pointer‑ABI arguments. See also:
-- `examples/` for runnable sources
-- `docs/source/ivm_syscalls.md` for the canonical syscall ABI
-- `kotodama_grammar.md` for the full language specification
+ይህ ገጽ አጭር የKotodama ምሳሌዎችን እና እንዴት ወደ IVM syscals እና pointer-ABI ነጋሪ እሴቶችን እንደሚያሳዩ ያሳያል። በተጨማሪ ይመልከቱ፡
+- `examples/` ለሩጫ ምንጮች
+- `docs/source/ivm_syscalls.md` ለ ቀኖናዊ syscall ABI
+- `kotodama_grammar.md` ለሙሉ የቋንቋ ዝርዝር መግለጫ
 
-## Hello + Account Detail
+## ሰላም + የመለያ ዝርዝር
 
-Source: `examples/hello/hello.ko`
+ምንጭ፡ `examples/hello/hello.ko`
 
 ```
 seiyaku Hello {
@@ -34,13 +35,13 @@ seiyaku Hello {
 }
 ```
 
-Mapping (pointer‑ABI):
-- `authority()` → `SCALL 0xA4` (host writes `&AccountId` into `r10`)
-- `set_account_detail(a, k, v)` → move `r10=&AccountId`, `r11=&Name`, `r12=&Json`, then `SCALL 0x1A`
+ካርታ ስራ (ጠቋሚ-ABI)፡-
+- `authority()` → `SCALL 0xA4` (አስተናጋጁ `&AccountId` ወደ `r10` ይጽፋል)
+- `set_account_detail(a, k, v)` → ማንቀሳቀስ `r10=&AccountId`፣ `r11=&Name`፣ `r12=&Json`፣ ከዚያ `SCALL 0x1A`
 
-## Asset Transfer
+## የንብረት ማስተላለፍ
 
-Source: `examples/transfer/transfer.ko`
+ምንጭ፡ `examples/transfer/transfer.ko`
 
 ```
 seiyaku TransferDemo {
@@ -55,12 +56,12 @@ seiyaku TransferDemo {
 }
 ```
 
-Mapping (pointer‑ABI):
-- `transfer_asset(from, to, def, amt)` → `r10=&AccountId(from)`, `r11=&AccountId(to)`, `r12=&AssetDefinitionId(def)`, `r13=amount`, then `SCALL 0x24`
+ካርታ ስራ (ጠቋሚ-ABI)፡-
+- `transfer_asset(from, to, def, amt)` → `r10=&AccountId(from)`፣ `r11=&AccountId(to)`፣ `r12=&AssetDefinitionId(def)`፣ `r13=amount`፣ ከዚያ `SCALL 0x24`
 
-## NFT Create + Transfer
+## NFT ይፍጠሩ + ያስተላልፉ
 
-Source: `examples/nft/nft.ko`
+ምንጭ፡ `examples/nft/nft.ko`
 
 ```
 seiyaku NftDemo {
@@ -79,16 +80,16 @@ seiyaku NftDemo {
 }
 ```
 
-Mapping (pointer‑ABI):
-- `nft_mint_asset(id, owner)` → `r10=&NftId`, `r11=&AccountId(owner)`, `SCALL 0x25`
-- `nft_transfer_asset(from, id, to)` → `r10=&AccountId(from)`, `r11=&NftId`, `r12=&AccountId(to)`, `SCALL 0x26`
+ካርታ ስራ (ጠቋሚ-ABI)፡-
+- `nft_mint_asset(id, owner)` → `r10=&NftId`፣ `r11=&AccountId(owner)`፣ `SCALL 0x25`
+- `nft_transfer_asset(from, id, to)` → `r10=&AccountId(from)`፣ `r11=&NftId`፣ `r12=&AccountId(to)`፣ `SCALL 0x26`
 
-## Pointer Norito Helpers
+## ጠቋሚ Norito አጋዦች
 
-Pointer-valued durable state requires converting typed TLVs to and from the
-`NoritoBytes` envelope that hosts persist. Kotodama now wires these helpers
-directly through the compiler so builders can use pointer defaults and map
-lookups without manual FFI glue:
+በጠቋሚ ዋጋ ያለው ዘላቂ ሁኔታ የተተየቡ TLVዎችን ወደ እና ከ መለወጥ ያስፈልገዋል
+የሚያስተናግደው `NoritoBytes` ፖስታ እንደቀጠለ ነው። Kotodama አሁን እነዚህን ረዳቶች በሽቦ ያገናኛል።
+ግንበኞች የጠቋሚ ነባሪዎችን እና ካርታዎችን መጠቀም እንዲችሉ በቀጥታ በማቀናበሪያው በኩል
+ያለ በእጅ የኤፍኤፍአይ ሙጫ ፍለጋዎች
 
 ```
 seiyaku PointerDemo {
@@ -107,21 +108,21 @@ seiyaku PointerDemo {
 }
 ```
 
-Lowering:
+ዝቅ ማድረግ፡
 
-- Pointer defaults emit `POINTER_TO_NORITO` after publishing the typed TLV, so
-  the host receives a canonical `NoritoBytes` payload for storage.
-- Reads perform the reverse operation with `POINTER_FROM_NORITO`, supplying the
-  expected pointer type id in `r11`.
-- Both paths automatically publish literal TLVs into the INPUT region, allowing
-  contracts to mix string literals and runtime pointers transparently.
+- የጠቋሚ ነባሪዎች የተተየበው TLV ካተም በኋላ `POINTER_TO_NORITO` ያወጣል፣ ስለዚህ
+  አስተናጋጁ ለማከማቻ ቀኖናዊ `NoritoBytes` ክፍያ ይቀበላል።
+- አንብቦ የተገላቢጦሽ ክዋኔውን በ `POINTER_FROM_NORITO` ያከናውናል፣
+  የሚጠበቀው የጠቋሚ አይነት መታወቂያ በ`r11`።
+- ሁለቱም መንገዶች በቀጥታ በቀጥታ TLVs ወደ INPUT ክልል ያትማሉ፣ ይህም ይፈቅዳሉ
+  የሕብረቁምፊ ቃል በቃል እና የሩጫ ጊዜ አመልካቾችን በግልፅ ለማደባለቅ ኮንትራቶች።
 
-See `crates/ivm/tests/kotodama_pointer_args.rs` for a runtime regression that
-exercises the round-trip against the `MockWorldStateView`.
+ለአሂድ ጊዜ መመለሻ `crates/ivm/tests/kotodama_pointer_args.rs` ይመልከቱ
+የዙር ጉዞውን ከ `MockWorldStateView` ጋር ይለማመዳል።
 
-## Deterministic Map Iteration (design)
+## ቆራጥ የካርታ መደጋገም (ንድፍ)
 
-Deterministic map for‑each requires a bound. Multi-entry iteration requires a state map; the compiler accepts `.take(n)` or a declared maximum length.
+ለእያንዳንዱ ቆራጥ ካርታ ገደብ ያስፈልገዋል። ባለብዙ-ግቤት ድግግሞሽ የስቴት ካርታ ያስፈልገዋል; አቀናባሪው `.take(n)` ወይም የተገለጸውን ከፍተኛ ርዝመት ይቀበላል።
 
 ```
 // design example (iteration requires bounds and state storage)
@@ -136,21 +137,21 @@ fn sum_first_two() -> int {
 }
 ```
 
-Semantics:
-- Iteration set is a snapshot at loop entry; order is lexicographic by Norito bytes of the key.
-- Structural mutations to `M` in the loop trap with `E_ITER_MUTATION`.
-- Without a bound the compiler emits `E_UNBOUNDED_ITERATION`.
+ትርጉም፡
+- የድግግሞሽ ስብስብ በ loop መግቢያ ላይ ቅጽበታዊ ገጽ እይታ ነው; ትዕዛዝ በ Norito የቁልፉ ባይት መዝገበ ቃላት ነው።
+- መዋቅራዊ ሚውቴሽን ወደ `M` በ loop trap ከ `E_ITER_MUTATION` ጋር።
+- ያለ ገደብ ማጠናከሪያው `E_UNBOUNDED_ITERATION` ያወጣል።
 
-## Compiler/host internals (Rust, not Kotodama source)
+## ኮምፕሌተር/አስተናጋጅ የውስጥ (ዝገት እንጂ Kotodama ምንጭ አይደለም)
 
-The snippets below live on the Rust side of the toolchain. They illustrate compiler helpers and VM lowering mechanics and are **not** valid Kotodama `.ko` source.
+ከታች ያሉት ቅንጥቦች በመሳሪያው ሰንሰለት ዝገት ጎን ላይ ይኖራሉ። የማጠናከሪያ አጋዥዎችን እና የቪኤም ዝቅ ማድረጊያ መካኒኮችን ይገልጻሉ እና ** አይደሉም ** ልክ ያልሆኑ Kotodama `.ko` ምንጭ።
 
-## Wide Opcode Chunked Frame Updates
+## ሰፊ የኦፕኮድ የተሰነጠቀ ፍሬም ዝማኔዎች
 
-Kotodama’s wide opcode helpers target the 8-bit operand layout used by the IVM
-wide encoding. Loads and stores that move 128-bit values reuse the third operand
-slot for the high register, so the base register must already hold the final
-address. Adjust the base with an `ADDI` before issuing the load/store:
+የKotodama ሰፊ የኦፕኮድ ረዳቶች በIVM ጥቅም ላይ የዋለውን ባለ 8-ቢት ኦፔራ አቀማመጥ ያነጣጥራሉ
+ሰፊ ኢንኮዲንግ. 128-ቢት እሴቶችን የሚያንቀሳቅሱ ጭነቶች እና መደብሮች ሶስተኛውን ኦፔራንድ እንደገና ይጠቀማሉ
+ማስገቢያ ለከፍተኛ መመዝገቢያ, ስለዚህ የመሠረት መዝገብ ቀድሞውኑ የመጨረሻውን መያዝ አለበት
+አድራሻ. ጭነቱን/መደብሩን ከማውጣትዎ በፊት መሰረቱን በ`ADDI` ያስተካክሉት፡
 
 ```
 use ivm::kotodama::wide::{encode_addi_checked, encode_load128, encode_store128};
@@ -160,40 +161,38 @@ fn emit_store_pair(base: u8, lo: u8, hi: u8) -> [u32; 2] {
     let store = encode_store128(base, lo, hi);
     [adjust, store]
 }
-```
+```የተቆራረጡ የፍሬም ማሻሻያዎች መሰረቱን በ16-ባይት ደረጃዎች ያራምዳሉ፣ ይህም መዝገቡን ያረጋግጣል
+በ `STORE128` መሬቶች የተፈፀመ ጥንድ በሚፈለገው የአሰላለፍ ወሰን ላይ። ተመሳሳይ
+ስርዓተ ጥለት ለ `LOAD128`; ከዚህ በፊት `ADDI` በሚፈለገው ደረጃ በማውጣት ላይ
+እያንዳንዱ ጭነት ከፍተኛውን የመድረሻ መዝገብ ከሶስተኛው ኦፔራንድ ማስገቢያ ጋር በማያያዝ ይይዛል.
+የተሳሳቱ አድራሻዎች ከቪኤም ጋር የሚዛመዱ ከ`VMError::MisalignedAccess` ጋር ወጥመድ ይይዛሉ
+በ `crates/ivm/tests/wide_memory128.rs` ውስጥ የተለማመዱ ባህሪያት.
 
-Chunked frame updates advance the base in 16-byte steps, ensuring the register
-pair committed by `STORE128` lands on the required alignment boundary. The same
-pattern applies to `LOAD128`; issuing an `ADDI` with the desired stride before
-each load keeps the high destination register bound to the third operand slot.
-Misaligned addresses trap with `VMError::MisalignedAccess`, matching the VM
-behaviour exercised in `crates/ivm/tests/wide_memory128.rs`.
+እነዚህን ባለ 128 ቢት ረዳቶች የሚለቁ ፕሮግራሞች የቬክተር አቅምን ማስተዋወቅ አለባቸው።
+የ Kotodama ማጠናከሪያ የ `VECTOR` ሞድ ቢትን በማንኛውም ጊዜ ያነቃል።
+`LOAD128`/`STORE128` ይታያል; የ VM ወጥመዶች ጋር
+አንድ ፕሮግራም እነሱን ለማስፈጸም ቢሞክር `VMError::VectorExtensionDisabled`
+ያለዚያ ትንሽ ስብስብ።
 
-Programs that emit these 128-bit helpers must advertise vector capability.
-The Kotodama compiler enables the `VECTOR` mode bit automatically whenever
-`LOAD128`/`STORE128` appear; the VM traps with
-`VMError::VectorExtensionDisabled` if a program attempts to execute them
-without that bit set.
+## ሰፊ ሁኔታዊ ቅርንጫፍ ዝቅ ማድረግ
 
-## Wide Conditional Branch Lowering
+Kotodama `if`/`else` ወይም ternary ቅርንጫፍ ወደ ሰፊ ባይትኮድ ሲቀንስ
+የተስተካከለ `BNE cond, zero, +2` ቅደም ተከተል ተከትሎ ጥንድ `JAL` መመሪያዎች:
 
-When Kotodama lowers an `if`/`else` or ternary branch to wide bytecode it emits a
-fixed `BNE cond, zero, +2` sequence followed by a pair of `JAL` instructions:
+1. አጭሩ `BNE` ሁኔታዊ ቅርንጫፉን በ8-ቢት አፋጣኝ መስመር ውስጥ ያስቀምጣል።
+   በመውደቅ `JAL` ላይ በመዝለል.
+2. የመጀመሪያው `JAL` `else` ብሎክን ያነጣጥራል (ሁኔታው ሲከሰት ይከናወናል)
+   ውሸት)።
+3. ሁለተኛው `JAL` ወደ `then` ብሎክ (ሁኔታው ሲከሰት ይወሰዳል)
+   እውነት)።
 
-1. The short `BNE` keeps the conditional branch within the 8-bit immediate lane
-   by jumping over the fallthrough `JAL`.
-2. The first `JAL` targets the `else` block (executed when the condition is
-   false).
-3. The second `JAL` jumps to the `then` block (taken when the condition is
-   true).
+ይህ ስርዓተ-ጥለት የሁኔታ ፍተሻው መቼም ቢሆን ትልቅ ማካካሻዎችን መመስጠር እንደማያስፈልገው ዋስትና ይሰጣል
+ለ `then` በዘፈቀደ ትላልቅ አካላትን እየደገፈ ከ± 127 ቃላት በላይ
+እና `else` ብሎኮች በሰፊው `JAL` ረዳት በኩል። ተመልከት
+`crates/ivm/tests/kotodama.rs::branch_lowering_uses_short_bne_and_dual_jal` ለ
+በቅደም ተከተል ውስጥ የሚቆለፈው የሪግሬሽን ሙከራ.
 
-This pattern guarantees the condition check never needs to encode offsets larger
-than ±127 words while still supporting arbitrarily large bodies for the `then`
-and `else` blocks via the wide `JAL` helper. See
-`crates/ivm/tests/kotodama.rs::branch_lowering_uses_short_bne_and_dual_jal` for
-the regression test that locks in the sequence.
-
-### Example Lowering
+### ምሳሌ ዝቅ ማድረግ
 
 ```
 fn branch(b: bool) -> int {
@@ -201,8 +200,8 @@ fn branch(b: bool) -> int {
 }
 ```
 
-Compiles to the following wide instruction skeleton (register numbers and
-absolute offsets depend on the enclosing function):
+ወደሚከተለው ሰፊ የማስተማሪያ አጽም ያጠናቅራል (ቁጥሮችን መመዝገቢያ እና
+ፍጹም ማካካሻዎች በማቀፊያው ተግባር ላይ የተመሰረቱ ናቸው)
 
 ```
 BNE cond_reg, x0, +2    # skip the fallthrough jump when the condition is true
@@ -210,6 +209,6 @@ JAL x0, else_offset     # execute when the condition is false
 JAL x0, then_offset     # execute when the condition is true
 ```
 
-Subsequent instructions materialise the constants and write the return value.
-Because the `BNE` jumps over the first `JAL`, the conditional offset is always
-`+2` words, keeping the branch within range even when the block bodies expand.
+የሚቀጥሉት መመሪያዎች ቋሚዎችን ተጨባጭነት ያደረጉ እና የመመለሻ ዋጋውን ይፃፉ.
+`BNE` በመጀመሪያው `JAL` ላይ ስለሚዘል፣ ሁኔታዊ ማካካሻ ሁል ጊዜ ነው።
+`+2` ቃላት፣ የቅርንጫፉን አካል በክልል ውስጥ በማቆየት የማገጃ አካላት ሲሰፋም።

@@ -4,102 +4,99 @@ direction: ltr
 source: docs/portal/docs/devportal/security-hardening.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Усиление безопасности и чеклист пен-теста
+# Усиление безопасности и контрольный список пен-теста
 
 ## Обзор
 
-Пункт дорожной карты **DOCS-1b** требует OAuth device-code login, сильных политик
-безопасности контента и повторяемых penetration tests прежде чем preview портал сможет
-работать в сетях вне лаборатории. Это приложение описывает модель угроз, реализованные
-в репозитории контроли и go-live чеклист, который должны выполнить gate reviews.
+Пункт дорожной карты **DOCS-1b** требует входа в систему по коду устройства OAuth, сильный политик
+безопасность контента и повторяемые тесты на проникновение перед предварительным просмотром портала можно
+работать в сетях вне лаборатории. В этом приложении описываются реализованные модели угроз.
+в репозитории средств контроля и контрольного списка для запуска, который должен корректировать проверки ворот.
 
-- **В рамках:** прокси Try it, встроенные панели Swagger/RapiDoc и кастомная
-  консоль Try it, рендеримая `docs/portal/src/components/TryItConsole.jsx`.
-- **Вне рамок:** сам Torii (покрывается Torii readiness reviews) и публикация SoraFS
+- **В рамках:** прокси Попробуйте, встроенные панели Swagger/RapiDoc и кастомная
+  консоль Попробуйте, рендеримая `docs/portal/src/components/TryItConsole.jsx`.
+- **Вне рамок:** сам Torii (покрывается Torii обзоры готовности) и публикация SoraFS
   (покрывается DOCS-3/7).
 
-## Модель угроз
+## Модель угрозы
 
-| Актив | Риск | Митигация |
+| Актив | Риск | Смягчение |
 | --- | --- | --- |
-| Torii bearer токены | Кража или повторное использование вне docs sandbox | device-code login (`DOCS_OAUTH_*`) выпускает короткоживущие токены, прокси редактирует headers, а консоль автоматически истекает кэшированные креды. |
-| Try it прокси | Злоупотребление как открытым реле или обход лимитов Torii | `scripts/tryit-proxy*.mjs` enforced origin allowlists, rate limiting, health probes и явный `X-TryIt-Auth` forwarding; креды не сохраняются. |
-| Runtime портала | Cross-site scripting или вредоносные embeds | `docusaurus.config.js` внедряет Content-Security-Policy, Trusted Types и Permissions-Policy headers; inline scripts ограничены runtime Docusaurus. |
-| Данные наблюдаемости | Отсутствие телеметрии или подмена | `docs/portal/docs/devportal/observability.md` документирует probes/dashboards; `scripts/portal-probe.mjs` запускается в CI перед публикацией. |
+| Torii токены на предъявителя | Кража или повторное использование вне песочницы документов | вход по коду устройства (`DOCS_OAUTH_*`) выпускает короткоживущие токены, прокси редактирует заголовки, консоль автоматически раскрывает кэшированные кредиты. |
+| Попробуйте прокси | Злоупотребление открыто как реле или обход лимитов Torii | `scripts/tryit-proxy*.mjs` применяет белые списки источников, ограничение скорости, проверки работоспособности и явную пересылку `X-TryIt-Auth`; кредиты не определяют. |
+| Runtime-портал | Межсайтовый скриптинг или инвестиционные вставки | `docusaurus.config.js` внедряет заголовки Content-Security-Policy, Trusted Types и Permissions-Policy; встроенные скрипты ограничены временем выполнения Docusaurus. |
+| Данные наблюдения | Отсутствие телеметрии или подмена | `docs/portal/docs/devportal/observability.md` документирует датчики/панели мониторинга; `scripts/portal-probe.mjs` запускается в CI перед публикацией. |
 
-Противники включают любопытных пользователей публичного preview, злоумышленников, тестирующих украденные ссылки,
-и скомпрометированные браузеры, пытающиеся вытащить сохраненные креды. Все контроли должны работать
+Противники включают любопытных пользователей публичного превью, злоумышленников, тестирующих украденные ссылки,
+и скомпрометированные браузеры, пытающиеся вытащить сохраненные кредиты. Все контроли должны работать
 в обычных браузерах без доверенных сетей.
 
-## Требуемые контроли
-
-1. **OAuth device-code login**
-   - Настройте `DOCS_OAUTH_DEVICE_CODE_URL`, `DOCS_OAUTH_TOKEN_URL`,
-     `DOCS_OAUTH_CLIENT_ID` и связанные knobs в build окружении.
-   - Карта Try it рендерит sign-in widget (`OAuthDeviceLogin.jsx`), который
-     получает device code, опрашивает token endpoint и автоматически очищает токены
-     после истечения. Ручные Bearer overrides остаются доступными для экстренного fallback.
-   - Сборки теперь падают, если отсутствует OAuth конфигурация или если fallback TTLs
-     выходят за окно 300-900 s, предписанное DOCS-1b; установите
-     `DOCS_OAUTH_ALLOW_INSECURE=1` только для одноразовых локальных preview.
-2. **Proxy guardrails**
-   - `scripts/tryit-proxy.mjs` применяет allowed origins, rate limits, caps на размер запроса
-     и upstream timeouts, одновременно помечая трафик `X-TryIt-Client` и редактируя токены
+## Требуемые элементы управления1. **Вход по коду устройства OAuth**
+   - Настроить `DOCS_OAUTH_DEVICE_CODE_URL`, `DOCS_OAUTH_TOKEN_URL`,
+     `DOCS_OAUTH_CLIENT_ID` и соответствующие ручки в сборке.
+   - Карта Попробуйте рендерить виджет входа в систему (`OAuthDeviceLogin.jsx`), который
+     получает код устройства, запрашивает конечную точку токена и автоматически очищает токены
+     после истечения. Ручные носители переопределяют постоянные доступы для экстренного отката.
+   - Сборки теперь падают, если отсутствует конфигурация OAuth или резервные TTL.
+     излучение за окном 300-900 с, обязательное DOCS-1b; установить
+     `DOCS_OAUTH_ALLOW_INSECURE=1` только для одноразовых локальных предварительных просмотров.
+2. **Прокси-ограждения**
+   - `scripts/tryit-proxy.mjs` заявлено разрешенное происхождение, ограничения скорости, ограничения на размер запроса
+     и таймауты восходящего потока, одновременно помечая трафик `X-TryIt-Client` и редактируя токены
      в логах.
    - `scripts/tryit-proxy-probe.mjs` плюс `docs/portal/docs/devportal/observability.md`
-     определяют liveness probe и правила dashboard; запускайте их перед каждым rollout.
-3. **CSP, Trusted Types, Permissions-Policy**
-   - `docusaurus.config.js` теперь экспортирует детерминированные security headers:
-     `Content-Security-Policy` (default-src self, строгие списки connect/img/script,
-     требования Trusted Types), `Permissions-Policy`, и
+     определение работоспособности зонда и правил приборной панели; запускайте их перед каждым развертыванием.
+3. **CSP, доверенные типы, политика разрешений**
+   - `docusaurus.config.js` теперь экспортирует определенные заголовки безопасности:
+     `Content-Security-Policy` (default-src self, строгие условия подключения/img/script,
+     требования доверенных типов), `Permissions-Policy`, и
      `Referrer-Policy: no-referrer`.
-   - Список connect CSP whitelist'ит OAuth device-code и token endpoints
-     (только HTTPS, если не задан `DOCS_SECURITY_ALLOW_INSECURE=1`), чтобы device login
-     работал без ослабления sandbox для других origins.
-   - Эти headers встроены прямо в сгенерированный HTML, поэтому статические хосты
-     не требуют дополнительной конфигурации. Держите inline scripts ограниченными
-     Docusaurus bootstrap.
-4. **Runbooks, observability и rollback**
-   - `docs/portal/docs/devportal/observability.md` описывает probes и dashboards, которые
-     следят за login failures, proxy response codes и request budgets.
+   - Список Connect CSP whitelist'ит код устройства OAuth и конечные точки токена
+     (только HTTPS, если не задано `DOCS_SECURITY_ALLOW_INSECURE=1`), для входа в устройство
+     работал без ослабления песочница для других происхождений.
+   - Эти заголовки встроены прямо в сгенерированный HTML, поэтому статические хосты
+     не требуют дополнительных конфигураций. Держите встроенные скрипты ограниченными
+     Docusaurus загрузочный файл.
+4. **Runbooks, наблюдаемость и откат**
+   - `docs/portal/docs/devportal/observability.md` описывает датчики и панели мониторинга, которые
+     следят за ошибками входа в систему, кодами ответов прокси и запросами бюджетов.
    - `docs/portal/docs/devportal/incident-runbooks.md` описывает путь эскалации
-     при злоупотреблении sandbox; комбинируйте с
-     `scripts/tryit-proxy-rollback.mjs` для безопасного переключения endpoints.
+     при злоупотреблении песочница; комбинируйте с
+     `scripts/tryit-proxy-rollback.mjs` для безопасного переключения конечных точек.
 
 ## Чеклист пен-теста и релиза
 
-Выполните этот список для каждого продвижения preview (приложите результаты к release тикету):
-
-1. **Проверить OAuth wiring**
-   - Запустите `npm run start` локально с production `DOCS_OAUTH_*` exports.
-   - Из чистого профиля браузера откройте Try it консоль и убедитесь, что device-code flow
-     выдает токен, считает время жизни и очищает поле после истечения или sign-out.
+Выполните этот список для каждого предварительного просмотра продвижения (приложите результаты к выпуску билета):1. **Проверить проводку OAuth**
+   - Запустите `npm run start` локально с экспортом продукции `DOCS_OAUTH_*`.
+   - Из чистого профиля браузера импорта. Попробуйте консоль и убедитесь, что поток кода устройства
+     выдает жетон, считает время жизни и очищает поле после обучения или выхода из системы.
 2. **Пробить прокси**
-   - `npm run tryit-proxy` против staging Torii, затем выполните
-     `npm run probe:tryit-proxy` с настроенным sample path.
-   - Проверьте логи на `authSource=override` и убедитесь, что rate limiting
-     увеличивает счетчики при превышении окна.
-3. **Подтвердить CSP/Trusted Types**
-   - `npm run build` и откройте `build/index.html`. Убедитесь, что тег `<meta
-     http-equiv="Content-Security-Policy">` соответствует ожидаемым директивам
-     и что DevTools не показывает CSP violations при загрузке preview.
-   - Используйте `npm run probe:portal` (или curl), чтобы получить развернутый HTML; probe
-     теперь падает, если meta tags `Content-Security-Policy`, `Permissions-Policy` или
-     `Referrer-Policy` отсутствуют или отличаются от значений в
-     `docusaurus.config.js`, так что reviewers governance могут доверять
-     exit code вместо ручной проверки curl output.
-4. **Проверить observability**
-   - Убедитесь, что dashboard Try it proxy зеленый (rate limits, error ratios,
-     health probe metrics).
-   - Запустите incident drill из `docs/portal/docs/devportal/incident-runbooks.md`,
+   - `npm run tryit-proxy` против постановки Torii, затем выполните
+     `npm run probe:tryit-proxy` с настроенным примером пути.
+   - Проверьте логи на `authSource=override` и убедитесь, что ограничение скорости
+     увеличивает счетчики над окном.
+3. **Подтвердить CSP/доверенные типы**
+   - `npm run build` и вступление `build/index.html`. Убедитесь, что тег `` соответствует ожидаемым директивам
+     и что DevTools не показывает нарушения CSP при предварительном просмотре.
+   - Используйте `npm run probe:portal` (или Curl), чтобы получить Расширенный HTML; зонд
+     теперь падает, если метатеги `Content-Security-Policy`, `Permissions-Policy` или
+     `Referrer-Policy` различия или различия в результатах
+     `docusaurus.config.js`, так что рецензенты могут доверять управлению
+     код выхода вместо ручной проверки вывода Curl.
+4. **Проверить наблюдаемость**
+   - Убедитесь, что информационная панель Try it proxy green (ограничения скорости, коэффициенты ошибок,
+     показатели здоровья).
+   - Запустите отработку инцидента из `docs/portal/docs/devportal/incident-runbooks.md`,
      если хост изменился (новое развертывание Netlify/SoraFS).
 5. **Документировать результаты**
-   - Приложите screenshots/logs к release тикету.
-   - Зафиксируйте каждую находку в шаблоне remediation report
+   - Приложите скриншоты/логи к релизному билету.
+   - Зафиксируйте каждую находку в шаблоне отчета об исправлениях.
      ([`docs/examples/pentest_remediation_report_template.md`](../../../examples/pentest_remediation_report_template.md))
-     чтобы owners, SLAs и evidence для retest было легко аудировать позже.
-   - Сошлитесь на этот чеклист, чтобы пункт дорожной карты DOCS-1b оставался auditable.
+     чтобы владельцы, соглашения об уровне обслуживания и доказательства для повторного тестирования можно было легко проверить позже.
+   - Сошлитесь на этот контрольный список, чтобы указать пункт карты DOCS-1b, подлежащей надежной проверке.
 
-Если любой шаг провален, остановите продвижение, заведите blocking issue и зафиксируйте план remediation в `status.md`.
+Если какой-либо шаг не удался, остановите продвижение, зафиксируйте проблему блокировки и зафиксируйте план исправления в `status.md`.

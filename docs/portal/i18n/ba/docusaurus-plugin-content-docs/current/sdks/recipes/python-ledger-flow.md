@@ -7,21 +7,23 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Python ledger flow recipe
 description: Reproduce the register → mint → transfer flow against the dev network using `iroha-python`.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-import SampleDownload from '@site/src/components/SampleDownload';
+импорт SapleDownload '@site/src/компоненттар/SampleDownload';
 
-This Python snippet mirrors the [CLI ledger walkthrough](../../norito/ledger-walkthrough.md)
-and the [Rust recipe](./rust-ledger-flow.md). It uses the default Docker
-compose network plus the demo credentials bundled in `defaults/client.toml`.
+Был Python өҙөк көҙгө [CLI леджер проходка] (../../norito/ledger-walkthrough.md)
+һәм [Рат рецепты] (./rust-ledger-flow.md). Ул Docker ғәҙәттәгесә ҡулланыла
+селтәрен төҙөү плюс демо-раҫмалар йыйылмаһы I18NI000000007X.
 
-<SampleDownload
-  href="/sdk-recipes/python/ledger_flow.py"
-  filename="ledger_flow.py"
-  description="Download the script showcased in this recipe to run it without copying code by hand."
+<СэмплДау-лог
+  href="/sdk-рецепттар/питон/леджер_ағым.п".
+  файл исеме="аркалы_ағым.п".
+  был рецептта күрһәтелгән сценарийҙы скачать итеп, уны ҡул менән күсермәйенсә эшләтмәйенсә эшләй.
 />
 
-## Prerequisites
+## Алдан шарттар
 
 ```bash
 pip install iroha-python
@@ -30,7 +32,7 @@ export RECEIVER_ACCOUNT="ih58..."
 export ADMIN_PRIVATE_KEY="802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
 ```
 
-## Example script
+## Миҫал сценарийы
 
 ```python title="ledger_flow.py"
 import os
@@ -100,12 +102,12 @@ for asset in result.items:
         print("Receiver holds", asset.value, "units of", asset.id.definition)
 ```
 
-Run with `python ledger_flow.py`. The output should report the transaction hash
-(from the receipt payload) followed by the new receiver balance. If the asset definition already exists,
-the register instruction is rejected while the mint/transfer continue to succeed.
+`python ledger_flow.py` менән йүгерә. Сығыш тураһында хәбәр итергә тейеш транзакция хеш
+(квитанциянан файҙалы йөктән) яңы приемник балансы килә. Әгәр актив билдәләмәһе инде бар,
+регистр инструкцияһы кире ҡағыла, ә мәтрүшкә/тапшырыу уңышҡа өлгәшеүен дауам итә.
 
-## Verify parity
+## Паритетты раҫлау
 
-Use the same CLI commands from the Norito walkthrough to cross-check hashes and
-balances. When you run the JavaScript and Rust recipes, all three SDKs should
-agree on transaction hashes and Norito payloads for the shared flow.
+Ҡулланыу өсөн шул уҡ CLI командалары I18NT0000000000000Х үткәреү өсөн кросс-тикшерергә хеш һәм
+баланс. Ҡасан һеҙ йүгерә JavaScript һәм Rust рецептары, өс SDK тейеш
+транзакция хештары һәм I18NT0000000001X файҙалы йөктәр тураһында уртаҡ ағым өсөн килешә.

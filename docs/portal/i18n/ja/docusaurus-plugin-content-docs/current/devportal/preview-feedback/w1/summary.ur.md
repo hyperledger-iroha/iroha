@@ -4,49 +4,51 @@ direction: ltr
 source: docs/portal/docs/devportal/preview-feedback/w1/summary.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: preview-feedback-w1-summary
-title: W1 فيڈبیک اور اختتامی خلاصہ
-sidebar_label: W1 خلاصہ
-description: پارٹنر/Torii integrators preview wave کے لئے نتائج، اقدامات اور اختتامی ثبوت۔
+id: プレビュー-フィードバック-w1-まとめ
+タイトル: W1 فيڈبیک اور اختتامی خلاصہ
+サイドバーラベル: W1 マーク
+説明: پارٹنر/Torii インテグレーター プレビュー ウェーブ ئے نتائج، اقدامات اور اختامی ثبوت۔
 ---
 
-| آئٹم | تفصیل |
+| और देखें評価 |
 | --- | --- |
-| لہر | W1 - پارٹنرز اور Torii integrators |
-| دعوتی ونڈو | 2025-04-12 -> 2025-04-26 |
+|ああ | W1 - Torii インテグレータ |
+| और देखें 2025-04-12 -> 2025-04-26 |
 | آرٹیفیکٹ ٹیگ | `preview-2025-04-12` |
 | ٹریکر ایشو | `DOCS-SORA-Preview-W1` |
-| شرکا | sorafs-op-01...03, torii-int-01...02, sdk-partner-01...02, gateway-ops-01 |
+| और देखें sorafs-op-01...03、torii-int-01...02、sdk-partner-01...02、gateway-ops-01 |
 
-## نمایاں نکات
+## ナオト
 
-1. **Checksum ورک فلو** - تمام reviewers نے `scripts/preview_verify.sh` کے ذریعے descriptor/archive کی تصدیق کی؛ logs کو دعوتی acknowledgements کے ساتھ محفوظ کیا گیا۔
-2. **ٹیلیمیٹری** - `docs.preview.integrity`, `TryItProxyErrors`, اور `DocsPortal/GatewayRefusals` dashboards پوری لہر کے دوران green رہے؛ کوئی incidents یا alert pages نہیں ہوئیں۔
-3. **Docs فيڈبیک (`docs-preview/w1`)** - دو معمولی نٹس ریکارڈ ہوئیں:
-   - `docs-preview/w1 #1`: Try it سیکشن میں navigation wording واضح کرنا (حل ہو گیا)۔
-   - `docs-preview/w1 #2`: Try it اسکرین شاٹ اپ ڈیٹ کرنا (حل ہو گیا)۔
-4. **Runbook parity** - SoraFS operators نے تصدیق کی کہ `orchestrator-ops` اور `multi-source-rollout` کے درمیان نئے cross-links نے W0 کے خدشات حل کیے۔
+1. **チェックサム فلو** - レビュー担当者 نے `scripts/preview_verify.sh` ذریعے 記述子/アーカイブ کی تصدیق کی؛ログ ٩و دعوتی 謝辞 کے ساتھ محفوظ کیا گیا۔
+2. **ٹیلیمیٹری** - `docs.preview.integrity`、`TryItProxyErrors`、`DocsPortal/GatewayRefusals` ダッシュボード پوری لہر کے دوران green رہے؛事件 アラート ページ فوئیں۔
+3. **ドキュメント فيڈبیک (`docs-preview/w1`)** - 説明:
+   - `docs-preview/w1 #1`: 試してみてください。ナビゲーション文言 واضح کرنا (حل ہو گیا)۔
+   - `docs-preview/w1 #2`: 試してみてください。
+4. **Runbook パリティ** - SoraFS 演算子 تصدیق کی کہ `orchestrator-ops` اور `multi-source-rollout` کے درمیان نئے クロスリンク نے W0 کے और देखें
 
-## ایکشن آئٹمز
+## ありがとうございます
 
-| ID | وضاحت | مالک | اسٹیٹس |
+| ID | |意味 | और देखें
 | --- | --- | --- | --- |
-| W1-A1 | `docs-preview/w1 #1` کے مطابق Try it navigation wording اپ ڈیٹ کرنا۔ | Docs-core-02 | ✅ مکمل (2025-04-18). |
-| W1-A2 | `docs-preview/w1 #2` کے مطابق Try it اسکرین شاٹ اپ ڈیٹ کرنا۔ | Docs-core-03 | ✅ مکمل (2025-04-19). |
-| W1-A3 | پارٹنر findings اور telemetry evidence کو roadmap/status میں سمری کرنا۔ | Docs/DevRel lead | ✅ مکمل (tracker + status.md دیکھیں). |
+| W1-A1 | `docs-preview/w1 #1` کے مطابق Try it ナビゲーション文言 اپ ڈیٹ کرنا۔ |ドキュメント-コア-02 | ✅ مکمل (2025-04-18)。 |
+| W1-A2 | `docs-preview/w1 #2` کے مطابق 試してみましょう اسکرین شاٹ اپ ڈیٹ کرنا۔ |ドキュメントコア-03 | ✅ مکمل (2025-04-19)。 |
+| W1-A3 |調査結果、テレメトリーの証拠、ロードマップ/ステータス、および結果|ドキュメント/DevRel リード | ✅ مکمل (トラッカー + status.md دیکھیں)。 |
 
-## اختتامی خلاصہ (2025-04-26)
+## ختتامی خلاصہ (2025-04-26)
 
-- تمام آٹھ reviewers نے آخری office hours میں تکمیل کی تصدیق کی، لوکل artefacts صاف کیے، اور ان کی رسائی واپس لی گئی۔
-- ٹیلیمیٹری اختتام تک green رہی؛ آخری snapshots `DOCS-SORA-Preview-W1` کے ساتھ منسلک ہیں۔
-- دعوتی log میں exit acknowledgements شامل کیے گئے؛ tracker نے W1 کو 🈴 پر سیٹ کیا اور checkpoints شامل کیے۔
-- evidence bundle (descriptor, checksum log, probe output, Try it proxy transcript, telemetry screenshots, feedback digest) `artifacts/docs_preview/W1/` میں archive ہوا۔
+- レビュー担当者 オフィスアワー 勤務時間 勤務時間 作業時間 成果物 作業時間 作業時間और देखें
+- ٹیلیمیٹری اختتام تک green رہی؛スナップショット `DOCS-SORA-Preview-W1` ساتھ منسلک ہیں۔
+- ログ メッセージ終了通知 メッセージ メッセージトラッカー نے W1 کو 🈴 پر سیٹ کیا اور チェックポイント شامل کیے۔
+- 証拠バンドル (記述子、チェックサム ログ、プローブ出力、Try it プロキシ トランスクリプト、テレメトリ スクリーンショット、フィードバック ダイジェスト) `artifacts/docs_preview/W1/` میں アーカイブ ہوا۔
 
-## اگلے اقدامات
+## ありがとうございます
 
-- W2 community intake plan تیار کریں (governance approval + request template tweaks).
-- W2 wave کے لئے preview artefact tag ریفریش کریں اور تاریخیں فائنل ہونے پر preflight اسکرپٹ دوبارہ چلائیں۔
-- W1 کے قابل اطلاق findings کو roadmap/status میں منتقل کریں تاکہ community wave کے پاس تازہ guidance ہو۔
+- W2 コミュニティ摂取計画 (政府の承認 + リクエスト テンプレートの調整)。
+- W2 波のプレビュー アーティファクト タグの表示 - プレビュー アーティファクト タグの表示
+- W1 の調査結果、ロードマップ/ステータス、コミュニティ ウェーブ、ガイダンス、ロードマップ/ステータス

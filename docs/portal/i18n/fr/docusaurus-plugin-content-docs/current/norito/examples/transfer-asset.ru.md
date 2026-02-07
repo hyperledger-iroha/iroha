@@ -4,28 +4,30 @@ direction: ltr
 source: docs/portal/docs/norito/examples/transfer-asset.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-slug: /norito/examples/transfer-asset
-title: Перевести актив между аккаунтами
-description: Простой сценарий перевода активов, отражающий quickstart'ы SDK и walkthrough'ы реестра.
-source: examples/transfer/transfer.ko
+slug : /norito/examples/transfer-asset
+titre : Перевести актив между аккаунтами
+description : Voici les principales activités du scénario, le SDK de démarrage rapide et la procédure pas à pas.
+source : exemples/transfert/transfer.ko
 ---
 
-Простой сценарий перевода активов, отражающий quickstart'ы SDK и walkthrough'ы реестра.
+Les activités précédentes du scénario incluent le SDK de démarrage rapide et la procédure pas à pas.
 
 ## Пошаговый обход реестра
 
-- Предварительно пополните Alice целевым активом (например через сниппет `register and mint` или потоки quickstart SDK).
-- Выполните точку входа `do_transfer`, чтобы перевести 10 единиц от Alice к Bob, удовлетворяя разрешению `AssetTransferRole`.
-- Проверьте балансы (`FindAccountAssets`, `iroha_cli ledger assets list`) или подпишитесь на события pipeline, чтобы наблюдать результат перевода.
+- Vous devez d'abord télécharger Alice comme activité (comme par exemple à partir du extrait `register and mint` ou du SDK de démarrage rapide).
+- Vous avez choisi `do_transfer`, qui a écrit 10 éditions d'Alice et Bob, en passant par `AssetTransferRole`.
+- Vérifiez les équilibres (`FindAccountAssets`, `iroha_cli ledger assets list`) ou installez-vous sur le pipeline pour obtenir les résultats souhaités.
 
-## Связанные руководства SDK
+## SDK de démarrage rapide
 
-- [Quickstart Rust SDK](/sdks/rust)
-- [Quickstart Python SDK](/sdks/python)
-- [Quickstart JavaScript SDK](/sdks/javascript)
+- [SDK de démarrage rapide Rust](/sdks/rust)
+- [SDK Python de démarrage rapide](/sdks/python)
+- [SDK JavaScript de démarrage rapide](/sdks/javascript)
 
 [Скачать исходник Kotodama](/norito-snippets/transfer-asset.ko)
 

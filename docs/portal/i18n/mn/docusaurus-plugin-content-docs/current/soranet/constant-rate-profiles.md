@@ -8,62 +8,64 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraNet constant-rate profiles
 sidebar_label: Constant-Rate Profiles
 description: SNNet-17B1 preset catalogue for core/home production relays plus the SNNet-17A2 null dogfood profile, with tick->bandwidth math, CLI helpers, and MTU guardrails.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
+::: Каноник эх сурвалжийг анхаарна уу
 :::
 
-SNNet-17B introduces fixed-rate transport lanes so relays move traffic in 1,024 B cells regardless
-of payload size. Operators pick from three presets:
+SNNet-17B нь тогтмол хурдтай тээврийн эгнээ нэвтрүүлдэг тул реле нь 1024 В эсийн хөдөлгөөнийг үл харгалзан хөдөлгөөнд оруулдаг.
+даацын хэмжээ. Операторууд гурван урьдчилсан тохиргооноос сонгоно:
 
-- **core** - data-centre or professionally hosted relays that can dedicate >=30 Mbps to cover
-  traffic.
-- **home** - residential or low-uplink operators that still need anonymous fetches for
-  privacy-critical circuits.
-- **null** - the SNNet-17A2 dogfood preset. It retains the same TLVs/envelope but stretches the
-  tick and ceiling for low-bandwidth staging.
+- **үндсэн** - дата төв эсвэл мэргэжлийн зохион байгуулалттай реле нь >=30 Mbps-ийг хамрах боломжтой
+  замын хөдөлгөөн.
+- **home** - орон сууцны болон бага холболттой операторууд нь нэрээ нууцлах шаардлагатай хэвээр байна
+  нууцлалын чухал хэлхээнүүд.
+- **null** - SNNet-17A2 туршилтын хувилбар. Энэ нь ижил TLV/дугтуйг хадгалах боловч сунгадаг
+  бага зурвасын өргөнтэй үе шатанд зориулсан хачиг ба тааз.
 
-## Preset summary
+## Урьдчилан тохируулсан хураангуй
 
-| Profile | Tick (ms) | Cell (B) | Lane cap | Dummy floor | Per-lane payload (Mb/s) | Ceiling payload (Mb/s) | Ceiling % of uplink | Recommended uplink (Mb/s) | Neighbor cap | Auto-disable trigger (%) |
-|---------|-----------|----------|----------|-------------|-------------------------|------------------------|---------------------|----------------------------|--------------|--------------------------|
-| core    | 5.0       | 1024     | 12       | 4           | 1.64                    | 19.50                  | 65                  | 30.0                       | 8            | 85                       |
-| home    | 10.0      | 1024     | 4        | 2           | 0.82                    | 4.00                   | 40                  | 10.0                       | 2            | 70                       |
-| null    | 20.0      | 1024     | 2        | 1           | 0.41                    | 0.75                   | 15                  | 5.0                        | 1            | 55                       |
+| Профайл | Шалг (ms) | Нүд (B) | эгнээний таг | Хуурамч шал | Нэг эгнээний ачаалал (Мб/с) | Таазны ачаалал (Мб/с) | Таазны% дээш холбоос | Санал болгож буй холболт (Mb/s) | Хөрш малгай | Триггерийг автоматаар идэвхгүй болгох (%) |
+|---------|-----------|----------|----------|-------------|-------------------------|--------------------|--------------------|--------------------------------|
+| үндсэн | 5.0 | 1024 | 12 | 4 | 1.64 | 19.50 | 65 | 30.0 | 8 | 85 |
+| гэр | 10.0 | 1024 | 4 | 2 | 0.82 | 4.00 | 40 | 10.0 | 2 | 70 |
+| null | 20.0 | 1024 | 2 | 1 | 0.41 | 0.75 | 15 | 5.0 | 1 | 55 |
 
-- **Lane cap** - maximum concurrent constant-rate neighbors. The relay rejects extra circuits once
-  the cap is hit and increments `soranet_handshake_capacity_reject_total`.
-- **Dummy floor** - minimum number of lanes that stay alive with dummy traffic even when actual
-  demand is lower.
-- **Ceiling payload** - uplink budget dedicated to constant-rate lanes after applying the ceiling
-  fraction. Operators should never exceed this budget even if extra bandwidth is available.
-- **Auto-disable trigger** - sustained saturation percentage (averaged per preset) that causes the
-  runtime to drop to the dummy floor. Capacity is restored after the recovery threshold
-  (75% for `core`, 60% for `home`, 45% for `null`).
+- **Lane cap** - хамгийн их зэрэгцээ тогтмол хурдтай хөршүүд. Реле нь нэмэлт хэлхээг нэг удаа татгалздаг
+  таг цохиж `soranet_handshake_capacity_reject_total` нэмэгдэнэ.
+- **Хуурамгай шал** - бодит үед ч дамми хөдөлгөөнд амьд үлдэх хамгийн бага эгнээний тоо
+  эрэлт бага байна.
+- **Таазны ачааллыг** - таазыг хэрэглэсний дараа тогтмол хурдтай эгнээнд зориулагдсан дээд холбоосын төсөв
+  бутархай. Нэмэлт зурвасын өргөн боломжтой байсан ч операторууд энэ төсвөөс хэзээ ч хэтрэх ёсгүй.
+- **Триггерийг автоматаар идэвхгүй болгох** - тогтвортой ханалтын хувь (урьдчилан тохируулсан дундаж)
+  дамми давхарт унахын тулд ажиллах хугацаа. Сэргээх босгоны дараа хүчин чадал сэргээгддэг
+  (`core`-д 75%, `home`-д 60%, `null`-д 45%).
 
-**Important:** the `null` preset is for staging and capability dogfooding only; it does not meet the
-privacy guarantees required for production circuits.
+**Чухал:** `null` урьдчилсан тохируулга нь зөвхөн үе шат болон туршилтад зориулагдсан; хангадаггүй
+үйлдвэрлэлийн хэлхээнд шаардлагатай нууцлалын баталгаа.
 
-## Tick -> bandwidth table
+## Шалз -> зурвасын өргөн хүснэгт
 
-Each payload cell carries 1,024 B, so the KiB/sec column equals the number of cells emitted per
-second. Use the helper to extend the table with custom ticks.
+Ачааны үүр бүр нь 1,024 В агуулдаг тул КиБ/сек багана нь тус бүрээс ялгарах эсийн тоотой тэнцүү байна.
+хоёрдугаарт. Туслагчийг ашиглан ширээг тусгай хачигтай сунгана уу.
 
-| Tick (ms) | Cells/sec | Payload KiB/sec | Payload Mb/s |
-|-----------|-----------|-----------------|--------------|
-| 5.0       | 200.00    | 200.00          | 1.64         |
-| 7.5       | 133.33    | 133.33          | 1.09         |
-| 10.0      | 100.00    | 100.00          | 0.82         |
-| 15.0      | 66.67     | 66.67           | 0.55         |
-| 20.0      | 50.00     | 50.00           | 0.41         |
+| Шалг (ms) | Нүд/сек | Ачаалал КиБ/сек | Ачаа Mb/s |
+|----------|-----------|-----------------|--------------|
+| 5.0 | 200.00 | 200.00 | 1.64 |
+| 7.5 | 133.33 | 133.33 | 1.09 |
+| 10.0 | 100.00 | 100.00 | 0.82 |
+| 15.0 | 66.67 | 66.67 | 0.55 |
+| 20.0 | 50.00 | 50.00 | 0.41 |
 
-Formula:
+Томъёо:
 
 ```
 payload_mbps = (cell_bytes x 8 / 1_000_000) x (1000 / tick_ms)
 ```
 
-CLI helper:
+CLI туслах:
 
 ```bash
 # Markdown table output for all presets plus default tick table
@@ -76,13 +78,13 @@ cargo xtask soranet-constant-rate-profile --profile core --format json
 cargo xtask soranet-constant-rate-profile --tick-table --tick-values 5,7.5,12,18 --format markdown
 ```
 
-`--format markdown` emits GitHub-style tables for both the preset summary and optional tick cheat
-sheet so you can paste deterministic output into the portal. Pair it with `--json-out` to archive
-the rendered data for governance evidence.
+`--format markdown` нь урьдчилан тохируулсан хураангуй болон нэмэлт хачиг хуурч мэхлэхийн тулд GitHub маягийн хүснэгтүүдийг гаргадаг.
+хуудасны тусламжтайгаар та детерминистик гаралтыг портал руу оруулах боломжтой. Үүнийг архивлахын тулд `--json-out`-тэй хослуул
+засаглалын нотлох баримт болгон өгсөн өгөгдөл.
 
-## Configuration & overrides
+## Тохиргоо ба хүчингүй болгох
 
-`tools/soranet-relay` exposes the presets in both config files and runtime overrides:
+`tools/soranet-relay` нь тохиргооны файлууд болон ажиллах хугацааны хүчингүй болгох аль алиных нь урьдчилан тохируулгыг ил гаргадаг:
 
 ```bash
 # Persisted in relay.json
@@ -92,23 +94,23 @@ the rendered data for governance evidence.
 soranet-relay --config relay.json --constant-rate-profile core
 ```
 
-The config key accepts `core`, `home`, or `null` (default `core`). CLI overrides are useful for
-staging drills or SOC requests that temporarily reduce the duty cycle without rewriting configs.
+Тохируулгын түлхүүр нь `core`, `home`, эсвэл `null` (өгөгдмөл `core`) -ийг хүлээн зөвшөөрдөг. CLI хүчингүй болгох нь ашигтай
+Тохиргоог дахин бичихгүйгээр ажлын мөчлөгийг түр хугацаагаар бууруулах бэлтгэл сургуулилт эсвэл SOC хүсэлт.
 
-## MTU guardrails
+## MTU хамгаалалтын хашлага
 
-- Payload cells use 1,024 B plus ~96 B of Norito+Noise framing and the minimal QUIC/UDP headers,
-  keeping each datagram below the IPv6 1,280 B minimum MTU.
-- When tunnels (WireGuard/IPsec) add extra encapsulation you **must** reduce `padding.cell_size`
-  so `cell_size + framing <= 1,280 B`. The relay validator enforces
-  `padding.cell_size <= 1,136 B` (1,280 B - 48 B UDP/IPv6 overhead - 96 B framing).
-- `core` profiles should pin >=4 neighbors even when idle so dummy lanes always cover a subset of
-  PQ guards. `home` profiles may limit constant-rate circuits to wallets/aggregators but must apply
-  back-pressure when saturation exceeds 70% for three telemetry windows.
+- Ачааны үүрүүд нь 1,024 B дээр нэмэх нь ~96 B-аас Norito+Шуу чимээний хүрээ болон хамгийн бага QUIC/UDP толгойг ашигладаг,
+  датаграм бүрийг IPv6 1,280 B хамгийн бага MTU-аас доогуур байлгах.
+- Хонгилууд (WireGuard/IPsec) нэмэлт бүрхүүл нэмэх үед та `padding.cell_size`-ийг **заавал ** багасгах хэрэгтэй.
+  тиймээс `cell_size + framing <= 1,280 B`. Реле баталгаажуулагч нь хэрэгжүүлдэг
+  `padding.cell_size <= 1,136 B` (1,280 B - 48 B UDP/IPv6 нэмэлт зардал - 96 B хүрээ).
+- `core` профайл нь сул зогсолттой байсан ч гэсэн >=4 хөршийг бэхлэх ёстой тул дамми эгнээ нь үргэлж дэд багцыг хамардаг.
+  PQ хамгаалагчид. `home` профайл нь түрийвч/агрегаторын тогтмол хурдтай хэлхээг хязгаарлаж болох боловч хэрэглэх ёстой
+  3 телеметрийн цонхны ханалт 70%-иас хэтэрсэн үед арын даралт.
 
-## Telemetry & alerts
+## Телеметр ба сэрэмжлүүлэг
 
-Relays export the following metrics per preset:
+Реле нь дараах хэмжүүрүүдийг урьдчилан тохируулсан болгон экспортолдог:
 
 - `soranet_constant_rate_active_neighbors`
 - `soranet_constant_rate_queue_depth`
@@ -118,12 +120,12 @@ Relays export the following metrics per preset:
 - `soranet_constant_rate_ceiling_hits_total`
 - `soranet_constant_rate_degraded`
 
-Alert when:
+Дараах үед анхааруулах:
 
-1. Dummy ratio stays below the preset floor (`core >= 4/8`, `home >= 2/2`, `null >= 1/1`) for more than
-   two windows.
-2. `soranet_constant_rate_ceiling_hits_total` grows faster than one hit per five minutes.
-3. `soranet_constant_rate_degraded` flips to `1` outside a planned drill.
+1. Дамми харьцаа нь урьдчилан тохируулсан шалнаас (`core >= 4/8`, `home >= 2/2`, `null >= 1/1`) доогуур байна.
+   хоёр цонх.
+2. `soranet_constant_rate_ceiling_hits_total` таван минут тутамд нэг цохилтоос хурдан өсдөг.
+3. Төлөвлөсөн өрөмдлөгийн гадна `soranet_constant_rate_degraded` `1` руу шилждэг.
 
-Record the preset label and neighbor list in incident reports so auditors can prove constant-rate
-policies matched the roadmap requirements.
+Урьдчилан тогтоосон шошго болон хөршийн жагсаалтыг тохиолдлын тайланд тэмдэглэснээр аудиторууд тогтмол хурдтай байгааг нотлох боломжтой
+бодлого нь замын зургийн шаардлагад нийцсэн.

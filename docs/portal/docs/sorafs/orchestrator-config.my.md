@@ -11,33 +11,34 @@ id: orchestrator-config
 title: SoraFS Orchestrator Configuration
 sidebar_label: Orchestrator Configuration
 description: Configure the multi-source fetch orchestrator, interpret failures, and debug telemetry output.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
+::: Canonical Source ကို သတိပြုပါ။
 :::
 
-# Multi-Source Fetch Orchestrator Guide
+# Multi-Source Fetch Orchestrator လမ်းညွှန်
 
-The SoraFS multi-source fetch orchestrator drives deterministic, parallel
-downloads from the provider set published in governance-backed adverts. This
-guide explains how to configure the orchestrator, what failure signals to expect
-during rollouts, and which telemetry streams expose health indicators.
+SoraFS ရင်းမြစ်ပေါင်းစုံ စုဆောင်းမှု သံစုံတီးဝိုင်းသည် အဆုံးအဖြတ်ပေးသော၊ အပြိုင်မောင်းနှင်သည်
+အုပ်ချုပ်မှု-ကျောထောက်နောက်ခံပြုထားသော ကြော်ငြာများတွင် ထုတ်ဝေထားသော သတ်မှတ်ဝန်ဆောင်မှုပေးသူမှ ဒေါင်းလုဒ်များ။ ဒီ
+လမ်းညွှန်သည် သံစုံတီးဝိုင်းကို မည်သို့စီစဉ်ရမည်၊ မည်သည့်အရာများ ပျက်ကွက်မည်ကို မျှော်လင့်ရန် အချက်ပြသည်။
+ထုတ်လွှင့်နေစဉ်အတွင်း၊ မည်သည့်တယ်လီမီတာစီးကြောင်းများသည် ကျန်းမာရေးဆိုင်ရာ ညွှန်ကိန်းများကို ဖော်ထုတ်ပေးသည်။
 
-## 1. Configuration Overview
+## 1. ဖွဲ့စည်းမှုအကျဉ်းချုပ်
 
-The orchestrator merges three sources of configuration:
+သံစုံတီးဝိုင်းသည် ဖွဲ့စည်းမှုဆိုင်ရာ အရင်းအမြစ်သုံးခုကို ပေါင်းစပ်ထားသည်-
 
-| Source | Purpose | Notes |
+| အရင်းအမြစ် | ရည်ရွယ်ချက် | မှတ်စုများ |
 |--------|---------|-------|
-| `OrchestratorConfig.scoreboard` | Normalises provider weights, validates telemetry freshness, and persists the JSON scoreboard used for audits. | Backed by `crates/sorafs_car::scoreboard::ScoreboardConfig`. |
-| `OrchestratorConfig.fetch` | Applies runtime limits (retry budgets, concurrency bounds, verification toggles). | Maps to `FetchOptions` in `crates/sorafs_car::multi_fetch`. |
-| CLI / SDK parameters | Cap the number of peers, attach telemetry regions, and surface deny/boost policies. | `sorafs_cli fetch` exposes these flags directly; SDKs thread them via `OrchestratorConfig`. |
+| `OrchestratorConfig.scoreboard` | ဝန်ဆောင်မှုပေးသူ၏အလေးချိန်ကို ပုံမှန်ဖြစ်စေသည်၊ တယ်လီမီတာ၏ လတ်ဆတ်မှုကို အတည်ပြုပေးပြီး စာရင်းစစ်များအတွက် အသုံးပြုသည့် JSON အမှတ်စာရင်းကို ဆက်လက်တည်မြဲစေသည်။ | `crates/sorafs_car::scoreboard::ScoreboardConfig` မှ ပံ့ပိုးထားသည်။ |
+| `OrchestratorConfig.fetch` | လုပ်ဆောင်ချိန်ကန့်သတ်ချက်များကို ကျင့်သုံးပါ (ဘတ်ဂျက်များ ထပ်စမ်းကြည့်ပါ၊ တူညီသောကန့်သတ်ချက်များ၊ အတည်ပြုခြင်းခလုတ်များ)။ | `crates/sorafs_car::multi_fetch` တွင် `FetchOptions` သို့ Maps |
+| CLI/SDK ဘောင်များ | သက်တူရွယ်တူများ၏ အရေအတွက်ကို ကန့်သတ်ပါ၊ တယ်လီမီတာ ဧရိယာများ ပူးတွဲပါနှင့် မျက်နှာပြင် ငြင်းပယ်ခြင်း/မြှင့်တင်ခြင်း မူဝါဒများ။ | `sorafs_cli fetch` သည် ဤအလံများကို တိုက်ရိုက်ဖော်ထုတ်သည်။ SDKs သည် ၎င်းတို့ကို `OrchestratorConfig` မှတဆင့် ချည်နှောင်ပါ။ |
 
-The JSON helpers in `crates/sorafs_orchestrator::bindings` serialise the entire
-configuration into Norito JSON, making it portable across SDK bindings and
-automation.
+`crates/sorafs_orchestrator::bindings` ရှိ JSON အကူအညီပေးသူများသည် တစ်ခုလုံးကို အမှတ်အသားပြုသည်။
+Norito JSON တွင်ထည့်သွင်းထားသောကြောင့် SDK bindings များတစ်လျှောက်သယ်ဆောင်ရလွယ်ကူစေသည်
+အလိုအလျောက်စနစ်။
 
-### 1.1 Sample JSON Configuration
+### 1.1 နမူနာ JSON ဖွဲ့စည်းမှုပုံစံ
 
 ```json
 {
@@ -60,17 +61,17 @@ automation.
 }
 ```
 
-Persist the file through the usual `iroha_config` layering (`defaults/`, user,
-actual) so deterministic deployments inherit the same limits across nodes.
-For a direct-only fallback profile that aligns with the SNNet-5a rollout,
-consult `docs/examples/sorafs_direct_mode_policy.json` and the companion
-guidance in `docs/source/sorafs/direct_mode_pack.md`.
+ပုံမှန် `iroha_config` အလွှာဖြင့် ဖိုင်ကို ဆက်ထားပါ (`defaults/`၊ အသုံးပြုသူ၊
+အမှန်တကယ်) ထို့ကြောင့် အဆုံးအဖြတ်ပေးသော အသုံးချမှုများသည် node များတစ်လျှောက် တူညီသောကန့်သတ်ချက်များကို အမွေဆက်ခံသည်။
+SNNet-5a ထုတ်လွှင့်မှုနှင့် ကိုက်ညီသော တိုက်ရိုက်-သီးသန့် ကျောထောက်နောက်ခံ ပရိုဖိုင်အတွက်၊
+`docs/examples/sorafs_direct_mode_policy.json` နှင့် အဖော်နှင့် တိုင်ပင်ပါ။
+`docs/source/sorafs/direct_mode_pack.md` တွင် လမ်းညွှန်ချက်။
 
-### 1.2 Compliance Overrides
+### 1.2 လိုက်နာမှုအား လွှမ်းမိုးမှုများ
 
-SNNet-9 threads governance-driven compliance into the orchestrator. A new
-`compliance` object in the Norito JSON configuration captures the carve-outs
-that force the fetch pipeline into direct-only mode:
+SNNet-9 သည် သံစုံတီးဝိုင်းသို့ အုပ်ချုပ်မှုစနစ်ဖြင့် လိုက်လျောညီထွေဖြစ်စေသော စာတွဲများ။ အသစ်တစ်ခု
+`compliance` သည် Norito JSON ဖွဲ့စည်းမှုပုံစံရှိ အရာဝတ္တုသည် ထွင်းထုမှုများကို ဖမ်းယူသည်
+ပိုက်လိုင်းကို တိုက်ရိုက်သီးသန့်မုဒ်သို့ တွန်းပို့သော၊
 
 ```json
 "compliance": {
@@ -83,123 +84,121 @@ that force the fetch pipeline into direct-only mode:
 }
 ```
 
-- `operator_jurisdictions` declares the ISO‑3166 alpha‑2 codes where this
-  orchestrator instance operates. Codes are normalised to uppercase during
-  parsing.
-- `jurisdiction_opt_outs` mirrors the governance register. When any operator
-  jurisdiction appears on the list, the orchestrator enforces
-  `transport_policy=direct-only` and emits the policy fallback reason
-  `compliance_jurisdiction_opt_out`.
-- `blinded_cid_opt_outs` lists manifest digests (blinded CIDs, encoded as
-  uppercase hex). Matching payloads also force direct-only scheduling and
-  surface the `compliance_blinded_cid_opt_out` fallback in telemetry.
-- `audit_contacts` records the URIs governance expects operators to publish in
-  their GAR playbooks.
-- `attestations` captures the signed compliance packets backing the policy.
-  Each entry defines an optional `jurisdiction` (ISO-3166 alpha-2 code), a
-  `document_uri`, the canonical 64-character `digest_hex`, the issuance
-  timestamp `issued_at_ms`, and an optional `expires_at_ms`. These artefacts
-  flow into the orchestrator’s audit checklist so governance tooling can link
-  overrides to the signed paperwork.
+- `operator_jurisdictions` သည် ISO-3166 alpha-2 ကုဒ်များကို ကြေငြာသည်
+  orchestrator instance လည်ပတ်သည်။ ကုဒ်များကို စာလုံးအကြီးအဖြစ် ပုံမှန်သတ်မှတ်ထားသည်။
+  ပိုင်းခြားခြင်း။
+- `jurisdiction_opt_outs` သည် အုပ်ချုပ်မှုစာရင်းကို ထင်ဟပ်စေသည်။ ဘယ်အချိန် အော်နေလဲ။
+  စီရင်ပိုင်ခွင့်အာဏာစာရင်းတွင် ပေါ်လာသည်၊ တီးမှုတ်သူက ပြဋ္ဌာန်းသည်။
+  `transport_policy=direct-only` နှင့် မူဝါဒ ဆုတ်ယုတ်မှု အကြောင်းအရင်းကို ထုတ်လွှတ်သည်။
+  `compliance_jurisdiction_opt_out`။
+- `blinded_cid_opt_outs` သည် ထင်ရှားသော အချေအတင်များကို စာရင်းပြုစုသည် (မျက်စိကန်းသော CIDs၊ အဖြစ်ကုဒ်လုပ်ထားသည်
+  စာလုံးကြီး hex)။ ကိုက်ညီသော ဝန်ဆောင်ခများသည် တိုက်ရိုက်သီးသန့် အချိန်ဇယားဆွဲခြင်းနှင့်လည်း တွန်းအားပေးပါသည်။
+  `compliance_blinded_cid_opt_out` အား တယ်လီမီတာတွင် လှည့်ကွက်ပေါ်အောင်ကြည့်ပါ။
+- `audit_contacts` သည် URIs အုပ်ချုပ်မှုတွင် အော်ပရေတာများမှ ထုတ်ဝေရန် မျှော်လင့်ထားသည်
+  ၎င်းတို့၏ GAR ကစားစာအုပ်များ။
+- `attestations` သည် မူဝါဒကို ကျောထောက်နောက်ခံပြုထားသော လက်မှတ်ရေးထိုးထားသော လိုက်နာမှု အစုံလိုက်များကို ဖမ်းယူပါသည်။
+  ထည့်သွင်းမှုတစ်ခုစီသည် စိတ်ကြိုက်ရွေးချယ်နိုင်သော `jurisdiction` (ISO-3166 alpha-2 ကုဒ်) ကို သတ်မှတ်သည်၊
+  `document_uri`၊ ထုတ်ဝေမှု 64-အက္ခရာ `digest_hex`၊
+  အချိန်တံဆိပ်တုံး `issued_at_ms` နှင့် ရွေးချယ်နိုင်သော `expires_at_ms`။ ဤအရာများ
+  အုပ်ချုပ်မှုကိရိယာကို ချိတ်ဆက်နိုင်စေရန် သံစုံတီးဝိုင်း၏ စာရင်းစစ်စာရင်းသို့ စီးဆင်းပါ။
+  လက်မှတ်ရေးထိုးထားသော စာရွက်စာတန်းကို ကျော်လွန်သွားသည် ။
 
-Provide the compliance block via the usual configuration layering so operators
-receive deterministic overrides. The orchestrator applies compliance _after_
-write-mode hints: even if an SDK requests `upload-pq-only`, jurisdictional or
-manifest opt-outs still fall back to direct-only transport and fail fast when no
-compliant providers exist.
+ထို့ကြောင့် အော်ပရေတာများအား ပုံမှန်ဖွဲ့စည်းပုံ အလွှာအလွှာမှတစ်ဆင့် လိုက်နာမှုပိတ်ဆို့ခြင်းကို ပေးပါ။
+အဆုံးအဖြတ်ပေးသည့်အရာများကို လက်ခံရယူပါ။ သံစုံတီးဝိုင်းသည် လိုက်နာမှု _after_ ကျင့်သုံးသည်
+စာရေးမုဒ် အရိပ်အမြွက်များ- SDK မှ `upload-pq-only` ကို တောင်းဆိုနေသော်လည်း၊ တရားစီရင်ပိုင်ခွင့် သို့မဟုတ်
+ဖယ်ထုတ်ခြင်းများကို ထင်ရှားစွာပြသခြင်းသည် တိုက်ရိုက်-သီးသန့် သယ်ယူပို့ဆောင်ရေးသို့ ပြန်လည်ရောက်ရှိနေဆဲဖြစ်ပြီး မရှိသည့်အခါ လျှင်မြန်စွာ ပျက်ကွက်ပါသည်။
+လိုက်လျောညီထွေရှိသော ဝန်ဆောင်မှုပေးသူများ ရှိပါသည်။
 
-Canonical opt-out catalogues live under
-`governance/compliance/soranet_opt_outs.json`; the Governance Council publishes
-updates via tagged releases. A complete example configuration (including
-attestations) is available in `docs/examples/sorafs_compliance_policy.json`, and
-the operational process is captured in the
-[GAR compliance playbook](../../../source/soranet/gar_compliance_playbook.md).
+Canonical ဖယ်ထုတ်ထားသော ကတ်တလောက်များအောက်တွင် နေထိုင်ပါသည်။
+`governance/compliance/soranet_opt_outs.json`; အုပ်ချုပ်ရေးကောင်စီက ထုတ်ပြန်သည်။
+တဂ်ထားသော ထုတ်ဝေမှုများမှတစ်ဆင့် အပ်ဒိတ်များ။ ပြီးပြည့်စုံသော နမူနာပုံစံဖွဲ့စည်းပုံ (အပါအဝင်
+သက်သေခံချက်များ) ကို `docs/examples/sorafs_compliance_policy.json`၊ နှင့်
+စစ်ဆင်ရေး လုပ်ငန်းစဉ်များကို ဖမ်းယူထားသည်။
+[GAR လိုက်နာမှုပြစာအုပ်](../../../source/soranet/gar_compliance_playbook.md)။
 
-### 1.3 CLI & SDK Knobs
+### 1.3 CLI & SDK ခလုတ်များ
 
-| Flag / Field | Effect |
-|--------------|--------|
-| `--max-peers` / `OrchestratorConfig::with_max_providers` | Limits how many providers survive the scoreboard filter. Set to `None` to use every eligible provider. |
-| `--retry-budget` / `FetchOptions::per_chunk_retry_limit` | Caps retries per chunk. Exceeding the limit raises `MultiSourceError::ExhaustedRetries`. |
-| `--telemetry-json` | Injects latency/failure snapshots into the scoreboard builder. Stale telemetry beyond `telemetry_grace_secs` marks providers ineligible. |
-| `--scoreboard-out` | Persists the computed scoreboard (eligible + ineligible providers) for post-run inspection. |
-| `--scoreboard-now` | Overrides the scoreboard timestamp (Unix seconds) so fixture captures remain deterministic. |
-| `--deny-provider` / score policy hook | Deterministically exclude providers from scheduling without deleting adverts. Useful for fast-response blacklisting. |
-| `--boost-provider=name:delta` | Adjust the weighted round-robin credits for a provider while leaving governance weights untouched. |
-| `--telemetry-region` / `OrchestratorConfig::with_telemetry_region` | Labels emitted metrics and structured logs so dashboards can pivot by geography or rollout wave. |
-| `--transport-policy` / `OrchestratorConfig::with_transport_policy` | Defaults to `soranet-first` now that the multi-source orchestrator is baseline. Use `direct-only` when staging a downgrade or following a compliance directive, and reserve `soranet-strict` for PQ-only pilots; compliance overrides still act as the hard ceiling. |
+| အလံ/အကွက် | အကျိုးသက်ရောက်မှု |
+|-----------------|--------|
+| `--max-peers` / `OrchestratorConfig::with_max_providers` | အမှတ်စာရင်း စစ်ထုတ်မှုတွင် ပံ့ပိုးပေးသူ မည်မျှ အသက်ရှင်သည်ကို ကန့်သတ်ထားသည်။ သတ်မှတ်ချက်ပြည့်မီသော ဝန်ဆောင်မှုပေးသူတိုင်းကို အသုံးပြုရန် `None` သို့ သတ်မှတ်ပါ။ |
+| `--retry-budget` / `FetchOptions::per_chunk_retry_limit` | အတုံးတစ်ခုစီကို စာလုံးကြီးဖြင့် ထပ်စမ်းသည်။ ကန့်သတ်ချက်ထက်ကျော်လွန်ပါက `MultiSourceError::ExhaustedRetries` ကို တိုးစေသည်။ |
+| `--telemetry-json` | ချိန်ညှိမှု/ပျက်ကွက်မှု လျှပ်တစ်ပြက်ရိုက်ချက်များကို အမှတ်စာရင်းဖန်တီးသူထံ ထိုးသွင်းပါ။ `telemetry_grace_secs` အမှတ်အသားများကိုကျော်လွန်၍ Stale telemetry ဝန်ဆောင်မှုပေးသူများသည် အရည်အချင်းမပြည့်မီပါ။ |
+| `--scoreboard-out` | လည်ပတ်ပြီးနောက် စစ်ဆေးခြင်းအတွက် တွက်ချက်ထားသော ရမှတ်ဘုတ် (အရည်အချင်းပြည့်မီသော + အရည်အချင်းမပြည့်မီသော ဝန်ဆောင်မှုပေးသူများ) ကို ဆက်လက်ထားရှိပါ။ |
+| `--scoreboard-now` | အမှတ်စာရင်းအချိန်တံဆိပ် (Unix စက္ကန့်) ကို လွှမ်းမိုးထားသောကြောင့် ပွဲချိန်အတွင်း ဖမ်းယူမှုများကို အဆုံးအဖြတ်ပေးသည်။ |
+| `--deny-provider` / ရမှတ်ပေါ်လစီချိတ် | ကြော်ငြာများကို မဖျက်ဘဲ စီစဉ်ပေးသူများကို အစီအစဉ်ဆွဲခြင်းမှ အဆုံးအဖြတ်ပေးသည်။ အမည်ပျက်စာရင်းသွင်းခြင်းအတွက် အသုံးဝင်သည်။ |
+| `--boost-provider=name:delta` | စီမံအုပ်ချုပ်မှုအလေးများကို မထိမခိုက်ထားဘဲ ဝန်ဆောင်မှုပေးသူအတွက် အလေးချိန်ရှိသော အဝိုင်း-ရိုဘင်ခရက်ဒစ်များကို ချိန်ညှိပါ။ |
+| `--telemetry-region` / `OrchestratorConfig::with_telemetry_region` | အညွှန်းများသည် မက်ထရစ်များနှင့် ဖွဲ့စည်းတည်ဆောက်ထားသော မှတ်တမ်းများကို ထုတ်လွှတ်သောကြောင့် ဒက်ရှ်ဘုတ်များသည် ပထဝီဝင်အနေအထား သို့မဟုတ် ထုတ်လွှင့်မှုလှိုင်းဖြင့် လှည့်ပတ်နိုင်သည်။ |
+| `--transport-policy` / `OrchestratorConfig::with_transport_policy` | ရင်းမြစ်အစုံလိုက်တီးမှုတ်သူသည် အခြေခံအားဖြင့် ယခု `soranet-first` သို့ ပုံသေဖြစ်သည်။ အဆင့်နှိမ့်ချခြင်း သို့မဟုတ် လိုက်နာမှုဆိုင်ရာ ညွှန်ကြားချက်ကို လိုက်နာသည့်အခါတွင် `direct-only` ကို အသုံးပြု၍ PQ သီးသန့် လေယာဉ်မှူးများအတွက် `soranet-strict` ကို အသုံးပြုပါ။ လိုက်လျောညီထွေမှုအပေါ် လွှမ်းမိုးမှုများသည် မာကျောသောမျက်နှာကျက်အဖြစ် ဆောင်ရွက်ဆဲဖြစ်သည်။ |
 
-SoraNet-first is now the shipping default, and rollbacks must cite the relevant SNNet blocker. After SNNet-4/5/5a/5b/6a/7/8/12/13 graduate, governance will ratchet the required posture forward (toward `soranet-strict`); until then, only incident-driven overrides should prioritise `direct-only`, and they must be recorded in the rollout log.
+SoraNet-ပထမသည် ယခုအခါ ပို့ဆောင်မှုပုံသေဖြစ်ပြီး၊ နောက်ပြန်ဆုတ်မှုများသည် သက်ဆိုင်ရာ SNNet blocker ကိုကိုးကားရပါမည်။ SNNet-4/5/5a/5b/6a/7/8/12/13 ဘွဲ့ရပြီးနောက်၊ အုပ်ချုပ်ရေးသည် လိုအပ်သော ကိုယ်ဟန်အနေအထားကို ရှေ့သို့ (`soranet-strict` သို့) အဆင့်သတ်မှတ်ပေးပါမည်။ ထိုအချိန်အထိ၊ အဖြစ်အပျက်မှမောင်းနှင်သော overrides များသာ `direct-only` ကို ဦးစားပေးသင့်ပြီး ၎င်းတို့ကို ထုတ်လွှတ်ခြင်းမှတ်တမ်းတွင် မှတ်တမ်းတင်ထားရပါမည်။
 
-All flags above accept `--`-style syntax in both `sorafs_cli fetch` and the
-developer-facing `sorafs_fetch` binary. SDKs expose the same options via typed
-builders.
+အထက်ဖော်ပြပါအလံများအားလုံးသည် `--` စတိုင်အထားအသိုကို `sorafs_cli fetch` နှင့် `sorafs_cli fetch` နှစ်မျိုးလုံးတွင် လက်ခံပါသည်။
+developer-facing `sorafs_fetch` binary။ SDK များသည် တူညီသောရွေးချယ်မှုများကို ရိုက်နှိပ်၍ ဖော်ထုတ်ပါ။
+ဆောက်လုပ်ရေးသမားများ။
 
 ### 1.4 Guard Cache Management
 
-The CLI now wires in the SoraNet guard selector so operators can pin entry
-relays deterministically ahead of the full SNNet-5 transport rollout. Three
-new flags control the workflow:
+ယခုအခါ CLI သည် အော်ပရေတာများ ဝင်ရောက်မှုကို ပင်ထိုးနိုင်စေရန် SoraNet အစောင့်ရွေးချယ်မှုတွင် ဝိုင်ယာကြိုးများ သွယ်တန်းထားသည်။
+SNNet-5 သယ်ယူပို့ဆောင်ရေး အပြည့်အ၀ မထွက်မီတွင် တိကျသေချာစွာ Relays များ။ သုံး
+အလံအသစ်များသည် အလုပ်အသွားအလာကို ထိန်းချုပ်သည်-
 
-| Flag | Purpose |
-|------|---------|
-| `--guard-directory <PATH>` | Points to a JSON file describing the latest relay consensus (subset shown below). Passing the directory refreshes the guard cache before executing the fetch. |
-| `--guard-cache <PATH>` | Persists the Norito-encoded `GuardSet`. Subsequent runs reuse the cache even when no new directory is supplied. |
-| `--guard-target <COUNT>` / `--guard-retention-days <DAYS>` | Optional overrides for the number of entry guards to pin (default 3) and the retention window (default 30 days). |
-| `--guard-cache-key <HEX>` | Optional 32-byte key used to tag guard caches with a Blake3 MAC so the file can be verified before reuse. |
+| အလံ | ရည်ရွယ်ချက် |
+|--------|---------|
+| `--guard-directory <PATH>` | နောက်ဆုံးထပ်ဆင့်သဘောတူညီချက်ကို ဖော်ပြသည့် JSON ဖိုင်ကို ညွှန်ပြသည် (အောက်တွင်ပြထားသည့် အစုခွဲ)။ လမ်းညွှန်ကို ဖြတ်သွားခြင်းသည် ထုတ်ယူမှုကို မလုပ်ဆောင်မီ guard cache ကို ပြန်လည်ဆန်းသစ်စေသည်။ |
+| `--guard-cache <PATH>` | Norito-ကုဒ်လုပ်ထားသော `GuardSet` ကို ဆက်ရှိနေပါသည်။ နောက်ဆက်တွဲလုပ်ဆောင်မှုများသည် လမ်းညွှန်အသစ်ကို ပေးဆောင်ခြင်းမရှိသည့်တိုင် ကက်ရှ်ကို ပြန်လည်အသုံးပြုပါ။ |
+| `--guard-target <COUNT>` / `--guard-retention-days <DAYS>` | ပင်ထိုးရန် entry guards အရေအတွက် (မူလ 3) နှင့် သိမ်းဆည်းခြင်းဝင်းဒိုး (မူလ 30 ရက်) အတွက် ရွေးချယ်နိုင်သည် ။ |
+| `--guard-cache-key <HEX>` | Blake3 MAC ဖြင့် ကက်ရှ်များကို ကာကွယ်ရန်အတွက် စိတ်ကြိုက်ရွေးချယ်နိုင်သော 32-byte သော့ကို အသုံးပြုပြီး ဖိုင်ကို ပြန်လည်အသုံးမပြုမီ စစ်ဆေးအတည်ပြုနိုင်ပါသည်။ |
 
-Guard directory payloads use a compact schema:
+Guardy directory payloads များသည် compact schema ကိုအသုံးပြုသည်-
 
-The `--guard-directory` flag now expects a Norito-encoded
-`GuardDirectorySnapshotV2` payload. The binary snapshot contains:
+ယခု `--guard-directory` အလံသည် Norito-ကုဒ်နံပါတ်ကို မျှော်လင့်ထားသည်
+`GuardDirectorySnapshotV2` payload။ ဒွိလျှပ်တစ်ပြက်တွင်-
 
-- `version` — schema version (currently `2`).
-- `directory_hash`, `published_at_unix`, `valid_after_unix`, `valid_until_unix` — consensus
-  metadata that must match every embedded certificate.
-- `validation_phase` — certificate policy gate (`1` = allow single Ed25519 signature,
-  `2` = prefer dual signatures, `3` = require dual signatures).
-- `issuers` — governance issuers with `fingerprint`, `ed25519_public`, and `mldsa65_public`.
-  Fingerprints are computed as
-  `BLAKE3("soranet.src.v2.issuer" || ed25519 || u32(len(ml-dsa)) || ml-dsa)`.
-- `relays` — a list of SRCv2 bundles (`RelayCertificateBundleV2::to_cbor()` output). Each bundle
-  carries the relay descriptor, capability flags, ML-KEM policy, and dual Ed25519/ML-DSA-65
-  signatures.
+- `version` — schema ဗားရှင်း (လောလောဆယ် `2`)။
+- `directory_hash`, `published_at_unix`, `valid_after_unix`, `valid_until_unix` — အများဆန္ဒ
+  ထည့်သွင်းထားသော လက်မှတ်တိုင်းနှင့် ကိုက်ညီရမည့် မက်တာဒေတာ။
+- `validation_phase` — လက်မှတ်မူဝါဒဂိတ် (`1` = Ed25519 လက်မှတ်တစ်ခုတည်းကို ခွင့်ပြုပါ၊
+  `2` = လက်မှတ်နှစ်ခုကို နှစ်သက်သည်၊ `3` = လက်မှတ်နှစ်ခု လိုအပ်သည်)။
+- `issuers` — `fingerprint`၊ `ed25519_public` နှင့် `mldsa65_public` ပါသော အုပ်ချုပ်မှုထုတ်ပေးသူများ။
+  လက်ဗွေရာများကို တွက်ချက်ထားသည်။
+  `BLAKE3("soranet.src.v2.issuer" || ed25519 || u32(len(ml-dsa)) || ml-dsa)`။
+- `relays` — SRCv2 အစုအဝေးများ (`RelayCertificateBundleV2::to_cbor()` အထွက်) စာရင်း။ အတွဲတစ်ခုစီ
+  ထပ်ဆင့်ဖော်ပြချက်၊ စွမ်းရည်အလံများ၊ ML-KEM မူဝါဒနှင့် Dual Ed25519/ML-DSA-65 တို့ပါရှိသည်။
+  လက်မှတ်များ။
 
-The CLI verifies every bundle against the declared issuer keys before merging the directory with
+CLI သည် လမ်းညွှန်နှင့် မပေါင်းခင် ကြေညာထားသော ထုတ်ပေးသူသော့များနှင့် အစုအစည်းတိုင်းကို စစ်ဆေးသည်
 
-Invoke the CLI with `--guard-directory` to merge the latest consensus with the
-existing cache. The selector preserves pinned guards that are still within the
-retention window and eligible in the directory; new relays replace expired
-entries. After a successful fetch the updated cache is written back to the path
-supplied via `--guard-cache`, keeping subsequent sessions deterministic. SDKs
-can reproduce the same behaviour by calling
-`GuardSelector::select(&RelayDirectory, existing_guard_set, now_unix_secs)` and
-threading the resulting `GuardSet` through `SorafsGatewayFetchOptions`.
+နောက်ဆုံးပေါ်သဘောတူညီမှုကို `--guard-directory` ဖြင့် CLI ကို တောင်းခံပါ။
+ရှိပြီးသား cache။ ရွေးချယ်သည့်ကိရိယာသည် အတွင်းတွင်ရှိနေဆဲဖြစ်သော ချိတ်ထားသော အစောင့်များကို ထိန်းသိမ်းသည်။
+ထိန်းသိမ်းမှုပြတင်းပေါက်နှင့် လမ်းညွှန်တွင် အရည်အချင်းပြည့်မီသော၊ သက်တမ်းကုန်ဆုံးသွားသော relay အသစ်များကို အစားထိုးပါ။
+ထည့်သွင်းမှုများ။ အောင်မြင်စွာရယူပြီးနောက် မွမ်းမံထားသော ကက်ရှ်ကို လမ်းကြောင်းသို့ ပြန်ရေးသည်။
+`--guard-cache` မှတစ်ဆင့် ပံ့ပိုးပေးထားပြီး နောက်ဆက်တွဲအစည်းအဝေးများကို အဆုံးအဖြတ်ပေးသည်။ SDKs
+ခေါ်ဆိုခြင်းဖြင့် အလားတူအပြုအမူမျိုးပွားနိုင်သည်။
+`GuardSelector::select(&RelayDirectory, existing_guard_set, now_unix_secs)` နှင့်
+ရလာတဲ့ `GuardSet` ကို `SorafsGatewayFetchOptions` ကို ချည်လိုက်ပါ။
 
-`ml_kem_public_hex` enables the selector to prioritise PQ-capable guards during
-the SNNet-5 rollout. Stage toggles (`anon-guard-pq`, `anon-majority-pq`,
-`anon-strict-pq`) now demote classical relays automatically: when a PQ guard is
-available the selector drops excess classical pins so subsequent sessions favour
-hybrid handshakes. CLI/SDK summaries surface the resulting mix via
-`anonymity_status`/`anonymity_reason`, `anonymity_effective_policy`,
-`anonymity_pq_selected`,
-`anonymity_classical_selected`, `anonymity_pq_ratio`,
-`anonymity_classical_ratio`, and the companion candidate/deficit/supply delta
-fields, making brownouts and classical fallbacks explicit.
+`ml_kem_public_hex` သည် ကာလအတွင်း PQ-စွမ်းဆောင်နိုင်သော အစောင့်များကို ဦးစားပေးရွေးချယ်ရန် ရွေးချယ်ပေးသည်
+SNNet-5 ကို စတင်ဖြန့်ချိသည်။ စင်မြင့်ခလုတ်များ (`anon-guard-pq`၊ `anon-majority-pq`၊
+`anon-strict-pq`) ယခု classical relay များကို အလိုအလျောက် နှိမ့်ချပါ- PQ guard သည်
+ရနိုင်သောရွေးချယ်ရေးကိရိယာသည် ပိုလျှံနေသော ဂန္တဝင်ပင်များကို လွှတ်ချလိုက်သောကြောင့် နောက်ဆက်တွဲအစည်းအဝေးများကို နှစ်သက်သည်။
+ပေါင်းစပ်လက်ဆွဲနှုတ်ဆက်ခြင်း။ CLI/SDK အနှစ်ချုပ်များသည် ရလဒ်များမှတစ်ဆင့် ပေါင်းစပ်မှုကို ဖော်ပြသည်။
+`anonymity_status`/`anonymity_reason`၊ `anonymity_effective_policy`၊
+`anonymity_pq_selected`၊
+`anonymity_classical_selected`, `anonymity_pq_ratio`၊
+`anonymity_classical_ratio` နှင့် အဖော် ကိုယ်စားလှယ်လောင်း/ လိုငွေပြမှု/ ထောက်ပံ့ရေး မြစ်ဝကျွန်းပေါ်ဒေသ
+နယ်ပယ်များ၊ ဖောက်ပြန်မှုများနှင့် ရှေးရိုးဆန်သော တုံ့ပြန်မှုများကို ရှင်းလင်းပြတ်သားစွာ ပြုလုပ်ခြင်း။
 
-Guard directories may now embed a complete SRCv2 bundle via
-`certificate_base64`. The orchestrator decodes every bundle, re-validates the
-Ed25519/ML-DSA signatures, and retains the parsed certificate alongside the
-guard cache. When a certificate is present it becomes the canonical source for
-PQ keys, handshake suite preferences, and weighting; expired certificates are
-propagate through circuit lifecycle management and are surfaced via
-`telemetry::sorafs.guard` and `telemetry::sorafs.circuit`, which record the
-validity window, handshake suites, and whether dual signatures were observed for
-each guard.
+Guard directories များသည် ယခုမှတဆင့် SRCv2 အစုအဝေးကို အပြည့်အစုံ ထည့်သွင်းနိုင်ပါပြီ။
+`certificate_base64`။ တီးမှုတ်သူသည် အစုအဝေးတိုင်းကို ကုဒ်ကုဒ်လုပ်ကာ ၎င်းကို ပြန်လည်အတည်ပြုသည်။
+Ed25519/ML-DSA လက်မှတ်များ နှင့် ခွဲခြမ်းစိတ်ဖြာထားသည့် အသိအမှတ်ပြုလက်မှတ်ကို တွဲလျက် ထိန်းသိမ်းထားသည်။
+guard cache။ လက်မှတ်တစ်ခုရှိနေသောအခါ၊
+PQ သော့များ သက်တမ်းလွန်လက်မှတ်များ
+circuit lifecycle management မှတဆင့် ပြန့်ပွားပြီး တစ်ဆင့်ချင်း ပေါ်ထွက်နေပါသည်။
+မှတ်တမ်းတင်ထားသည့် `telemetry::sorafs.guard` နှင့် `telemetry::sorafs.circuit`၊
+တရားဝင်ပြတင်းပေါက်၊ လက်ဆွဲနှုတ်ဆက်ခြင်းအစုံနှင့် လက်မှတ်နှစ်စောင်ရှိမရှိကို စောင့်ကြည့်လေ့လာခဲ့သည်။
+အသီးသီး။
 
-Use the CLI helpers to keep snapshots in sync with publishers:
-
-```bash
+ထုတ်ဝေသူများနှင့် လျှပ်တစ်ပြက်ရိုက်ချက်များ ထပ်တူကျစေရန် CLI အကူအညီပေးသူများကို သုံးပါ-```bash
 sorafs_cli guard-directory fetch \
   --url https://directory.soranet.dev/mainnet_snapshot.norito \
   --output ./state/guard_directory.norito \
@@ -210,23 +209,23 @@ sorafs_cli guard-directory verify \
   --expected-directory-hash <directory-hash-hex>
 ```
 
-`fetch` downloads and verifies the SRCv2 snapshot before writing it to disk,
-while `verify` replays the validation pipeline for artefacts sourced from other
-teams, emitting a JSON summary that mirrors the CLI/SDK guard selector output.
+`fetch` ဒေါင်းလုဒ်လုပ်ပြီး SRCv2 လျှပ်တစ်ပြက်ရိုက်ချက်အား ဒစ်ခ်သို့မရေးမီ၊
+`verify` သည် အခြားမှရရှိသော ပစ္စည်းများအတွက် တရားဝင် ပိုက်လိုင်းကို ပြန်ဖွင့်နေချိန်တွင်
+အဖွဲ့များ၊ CLI/SDK guard selector output ကို ထင်ဟပ်စေသော JSON အနှစ်ချုပ်ကို ထုတ်လွှတ်သည်။
 
 ### 1.5 Circuit Lifecycle Manager
 
-When both a relay directory and guard cache are provided, the orchestrator
-activates the circuit lifecycle manager to pre-build and renew SoraNet circuits
-before each fetch. Configuration lives in `OrchestratorConfig`
-(`crates/sorafs_orchestrator/src/lib.rs:305`) via two new fields:
+relay directory နှင့် guard cache နှစ်ခုလုံးကို ပေးသောအခါ၊ တီးမှုတ်သူ
+SoraNet ဆားကစ်များကို ကြိုတင်တည်ဆောက်ပြီး သက်တမ်းတိုးရန်အတွက် circuit lifecycle manager ကို အသက်သွင်းသည်။
+အကျိူးမမီ။ ဖွဲ့စည်းမှုပုံစံသည် `OrchestratorConfig` တွင် နေထိုင်သည်။
+အကွက်အသစ်နှစ်ခုမှတစ်ဆင့် (`crates/sorafs_orchestrator/src/lib.rs:305`)
 
-- `relay_directory`: carries the SNNet-3 directory snapshot so middle/exit hops
-  can be selected deterministically.
-- `circuit_manager`: optional configuration (enabled by default) controlling the
-  circuit TTL.
+- `relay_directory`- SNNet-3 လမ်းညွှန်လျှပ်တစ်ပြက်ကို သယ်ဆောင်ထားသောကြောင့် အလယ်/အထွက် ခုန်များ
+  အတိအကျရွေးချယ်နိုင်သည်။
+- `circuit_manager`- ထိန်းချုပ်သည့် စိတ်ကြိုက်ဖွဲ့စည်းမှု (ပုံမှန်အားဖြင့် ဖွင့်ထားသည်)
+  ပတ်လမ်း TTL
 
-Norito JSON now accepts a `circuit_manager` block:
+ယခု Norito JSON သည် `circuit_manager` ဘလောက်တစ်ခုကို လက်ခံနေပါပြီ-
 
 ```json
 "circuit_manager": {
@@ -235,30 +234,30 @@ Norito JSON now accepts a `circuit_manager` block:
 }
 ```
 
-SDKs forward directory data through
+SDKs သည် directory data မှတဆင့် ထပ်ဆင့်ပို့သည်။
 `SorafsGatewayFetchOptions::relay_directory`
-(`crates/iroha/src/client.rs:320`), and the CLI wires it automatically whenever
-`--guard-directory` is supplied (`crates/iroha_cli/src/commands/sorafs.rs:365`).
+(`crates/iroha/src/client.rs:320`) နှင့် CLI သည် အချိန်တိုင်း ၎င်းကို အလိုအလျောက် ပေးပါသည်။
+`--guard-directory` (`crates/iroha_cli/src/commands/sorafs.rs:365`) ပေးထားသည်။
 
-The manager renews circuits whenever guard metadata changes (endpoint, PQ key,
-or pinned timestamp) or the TTL elapses. The helper `refresh_circuits`
-invoked ahead of each fetch (`crates/sorafs_orchestrator/src/lib.rs:1346`)
-emits `CircuitEvent` logs so operators can trace lifecycle decisions. The soak
-test `circuit_manager_latency_soak_remains_stable_across_rotations`
-(`crates/sorafs_orchestrator/src/soranet.rs:1479`) demonstrates stable latency
-across three guard rotations; see the accompanying report at
-`docs/source/soranet/reports/circuit_stability.md:1`.
+ကာကွယ်သည့် မက်တာဒေတာများ ပြောင်းလဲသည့်အခါတိုင်း မန်နေဂျာသည် ဆားကစ်များကို သက်တမ်းတိုးသည် (အဆုံးမှတ်၊ PQ သော့၊
+သို့မဟုတ် ပင်ထိုးထားသော အချိန်တံဆိပ်) သို့မဟုတ် TTL သည် ကုန်ဆုံးသွားပါသည်။ အကူအညီပေးသူ `refresh_circuits`
+အကျိူးယူမှုတစ်ခုစီ၏ရှေ့တွင် တောင်းဆိုခဲ့သည် (`crates/sorafs_orchestrator/src/lib.rs:1346`)
+အော်ပရေတာများသည် ဘဝသံသရာ ဆုံးဖြတ်ချက်များကို ခြေရာခံနိုင်စေရန် `CircuitEvent` မှတ်တမ်းများကို ထုတ်လွှတ်သည်။ စိမ်သည်။
+စမ်းသပ်မှု `circuit_manager_latency_soak_remains_stable_across_rotations`
+(`crates/sorafs_orchestrator/src/soranet.rs:1479`) သည် တည်ငြိမ်နေချိန်ကို ပြသသည်။
+အစောင့်အလှည့်သုံးခုကိုဖြတ်၍ ပူးတွဲပါအစီရင်ခံစာကိုကြည့်ရှုပါ။
+`docs/source/soranet/reports/circuit_stability.md:1`။
 
-### 1.6 Local QUIC Proxy
+### 1.6 Local QUIC ပရောက်စီ
 
-The orchestrator can optionally spawn a local QUIC proxy so browser extensions
-and SDK adapters do not have to manage certificates or guard cache keys. The
-proxy binds to a loopback address, terminates QUIC connections, and returns a
-Norito manifest describing the certificate and optional guard cache key to the
-client. Transport events emitted by the proxy are counted via
-`sorafs_orchestrator_transport_events_total`.
+တီးမှုတ်သူသည် ဒေသဆိုင်ရာ QUIC ပရောက်စီကို စိတ်ကြိုက်ဖန်တီးနိုင်သောကြောင့် ဘရောက်ဆာ တိုးချဲ့မှုများ ပြုလုပ်နိုင်သည်။
+နှင့် SDK အဒက်တာများသည် လက်မှတ်များကို စီမံခန့်ခွဲရန် သို့မဟုတ် ကက်ရှ်ကီးများကို စောင့်ကြပ်ရန် မလိုအပ်ပါ။ ဟိ
+proxy သည် loopback လိပ်စာတစ်ခုသို့ ချိတ်ဆက်ပြီး၊ QUIC ချိတ်ဆက်မှုများကို အဆုံးသတ်ကာ a ကို ပြန်ပေးသည်။
+Norito သည် လက်မှတ်နှင့် ရွေးချယ်နိုင်သော guard cache key ကိုဖော်ပြသည့် manifest
+ဖောက်သည် ပရောက်စီမှ ထုတ်လွှတ်သော သယ်ယူပို့ဆောင်ရေးဖြစ်ရပ်များကို တစ်ဆင့်ရေတွက်သည်။
+`sorafs_orchestrator_transport_events_total`။
 
-Enable the proxy through the new `local_proxy` block in the orchestrator JSON:
+စီစဉ်သူ JSON ရှိ `local_proxy` ဘလောက်အသစ်မှတဆင့် proxy ကိုဖွင့်ပါ-
 
 ```json
 "local_proxy": {
@@ -282,321 +281,317 @@ Enable the proxy through the new `local_proxy` block in the orchestrator JSON:
 }
 ```
 
-- `bind_addr` controls where the proxy listens (use `0` port to request an
-  ephemeral port).
-- `telemetry_label` propagates into metrics so dashboards can distinguish
-  proxies from fetch sessions.
-- `guard_cache_key_hex` (optional) lets the proxy surface the same keyed guard
-  cache that the CLI/SDKs rely on, keeping browser extensions in sync.
-- `emit_browser_manifest` toggles whether the handshake returns a manifest that
-  extensions can store and validate.
-- `proxy_mode` selects whether the proxy bridges traffic locally (`bridge`) or
-  only emits metadata so SDKs can open SoraNet circuits themselves
-  (`metadata-only`). The proxy defaults to `bridge`; set `metadata-only` when a
-  workstation should expose the manifest without relaying streams.
-- `prewarm_circuits`, `max_streams_per_circuit`, and `circuit_ttl_hint_secs`
-  surface additional hints to the browser so it can budget parallel streams and
-  understand how aggressively the proxy reuses circuits.
-- `car_bridge` (optional) points at a local CAR archive cache. The `extension`
-  field controls the suffix appended when the stream target omits `*.car`; set
-  `allow_zst = true` to serve pre-compressed `*.car.zst` payloads directly.
-- `kaigi_bridge` (optional) exposes spooled Kaigi routes to the proxy. The
-  `room_policy` field advertises whether the bridge operates in `public` or
-  `authenticated` mode so browser clients can preselect the correct GAR labels.
-- `sorafs_cli fetch` exposes `--local-proxy-mode=bridge|metadata-only` and
-  `--local-proxy-norito-spool=PATH` overrides, letting operators toggle the
-  runtime mode or point at alternate spools without modifying the JSON policy.
-- `downgrade_remediation` (optional) configures the automatic downgrade hook.
-  When enabled the orchestrator watches relay telemetry for downgrade bursts
-  and, after the configured `threshold` within `window_secs`, forces the local
-  proxy into the `target_mode` (default `metadata-only`). Once downgrades stop
-  the proxy reverts to `resume_mode` after `cooldown_secs`. Use the `modes`
-  array to scope the trigger to specific relay roles (defaults to entry relays).
+- `bind_addr` သည် proxy နားထောင်သည့်နေရာကို ထိန်းချုပ်သည် (တစ်ခုတောင်းဆိုရန် `0` port ကိုသုံးပါ။
+  တဒင်္ဂဆိပ်ကမ်း)။
+- `telemetry_label` သည် ဒက်ရှ်ဘုတ်များကို ခွဲခြားသိမြင်နိုင်စေရန် မက်ထရစ်များအဖြစ် ပြန့်ပွားသည်
+  ထုတ်ယူခြင်းအစည်းအဝေးများမှ ပရောက်စီများ။
+- `guard_cache_key_hex` (ချန်လှပ်ထားနိုင်သည်) သည် ပရောက်စီမျက်နှာပြင်ကို တူညီသောသော့ခတ်ထားသော အကာအရံအဖြစ် ခွင့်ပြုသည်
+  CLI/SDKs များ အားကိုးသည့် ကက်ရှ်များ၊ ဘရောက်ဆာ တိုးချဲ့မှုများကို ထပ်တူပြု၍ ထားရှိပါ။
+- `emit_browser_manifest` သည် လက်ဆွဲနှုတ်ဆက်ခြင်းသည် ထင်ရှားသည့်အချက်ကို ပြန်ပြခြင်းရှိ၊
+  တိုးချဲ့မှုများသည် သိမ်းဆည်းနိုင်ပြီး အတည်ပြုနိုင်သည်။
+- `proxy_mode` သည် ပရောက်စီတံတားများကို စက်တွင်းသွားလာခြင်းရှိမရှိ (`bridge`) သို့မဟုတ် ရွေးချယ်သည်
+  မက်တာဒေတာကိုသာ ထုတ်လွှတ်သောကြောင့် SDK များသည် SoraNet ဆားကစ်များကို ကိုယ်တိုင်ဖွင့်နိုင်သည်။
+  (`metadata-only`)။ ပရောက်စီသည် `bridge` သို့ ပုံသေသတ်မှတ်ထားသည်။ `metadata-only` ကို သတ်မှတ်လိုက်တာနဲ့ a
+  workstation သည် stream များကို relay မလုပ်ဘဲ manifest ကို ဖော်ထုတ်သင့်သည်။
+- `prewarm_circuits`၊ `max_streams_per_circuit` နှင့် `circuit_ttl_hint_secs`
+  ဘရောက်ဆာအတွက် ထပ်လောင်းအရိပ်အမြွက်များကို ပေါ်အောင်တင်ထားသောကြောင့် ၎င်းသည် ပြိုင်တူစီးကြောင်းများကို ဘတ်ဂျက်ငွေနှင့် ထုတ်ပေးနိုင်သည်။
+  ပရောက်စီသည် ဆားကစ်များကို မည်ကဲ့သို့ ပြင်းထန်စွာ ပြန်လည်အသုံးပြုသည်ကို နားလည်ပါ။
+- `car_bridge` (ချန်လှပ်ထားနိုင်သည်) အမှတ်များ။ `extension`
+  ထုတ်လွှင့်မှုပစ်မှတ်သည် `*.car` ကို ချန်လှပ်ထားသောအခါတွင် အကွက်သည် နောက်ဆက်တွဲကို ထိန်းချုပ်သည်။ သတ်မှတ်
+  ကြိုတင်ချုံ့ထားသော `*.car.zst` ပေးချေမှုအား တိုက်ရိုက်ဝန်ဆောင်မှုပေးရန် `allow_zst = true`။
+- `kaigi_bridge` (ချန်လှပ်ထားနိုင်သည်) သည် ပရိုစီမှ Kaigi လမ်းကြောင်းများကို ဖော်ထုတ်ပေးသည်။ ဟိ
+  `room_policy` အကွက်သည် `public` တွင် တံတားလည်ပတ်သည်ဖြစ်စေ ကြော်ငြာသည်
+  `authenticated` မုဒ်ကြောင့် ဘရောက်ဆာ သုံးစွဲသူများသည် မှန်ကန်သော GAR အညွှန်းများကို ကြိုတင်ရွေးချယ်နိုင်ပါသည်။
+- `sorafs_cli fetch` သည် `--local-proxy-mode=bridge|metadata-only` နှင့်
+  `--local-proxy-norito-spool=PATH` သည် အော်ပရေတာများကို ခလုတ်ဖွင့်ခွင့်ပြုသည်။
+  runtime မုဒ် သို့မဟုတ် JSON မူဝါဒကို မွမ်းမံခြင်းမပြုဘဲ အလှည့်ကျအကွက်များတွင် ညွှန်ပါ။
+- `downgrade_remediation` (ချန်လှပ်ထားနိုင်သည်) အလိုအလျောက် အဆင့်နှိမ့်ချိတ်ကို စီစဉ်သတ်မှတ်ပေးသည်။
+  ဖွင့်ထားသောအခါတွင် သံစုံတီးဝိုင်းသည် အဆင့်နှိမ့်ချမှုများအတွက် relay telemetry ကို ကြည့်ရှုသည်။
+  `threshold` ကို `window_secs` အတွင်း ပြင်ဆင်သတ်မှတ်ပြီးနောက်၊ ဒေသခံအား အတင်းအကြပ်၊
+  `target_mode` (မူလ `metadata-only`) သို့ proxy ။ အဆင့်နှိမ့်ချပြီးတာနဲ့ ရပ်လိုက်ပါ။
+  proxy သည် `cooldown_secs` ပြီးနောက် `resume_mode` သို့ ပြန်သွားသည်။ `modes` ကိုသုံးပါ။
+  သတ်မှတ်ထားသော relay အခန်းကဏ္ဍများသို့ အစပျိုးခြင်းအား ကန့်သတ်ရန် array ( entry relay များဆီသို့ ပုံသေများ)။
 
-When the proxy runs in bridge mode it serves two application services:
+ပရောက်စီသည် တံတားမုဒ်တွင် အလုပ်လုပ်သောအခါ ၎င်းသည် အပလီကေးရှင်းဝန်ဆောင်မှုနှစ်ခုကို ဆောင်ရွက်ပေးသည်-
 
-- **`norito`** – the client’s stream target is resolved relative to
-  `norito_bridge.spool_dir`. Targets are sanitised (no traversal, no absolute
-  paths), and when the file lacks an extension the configured suffix is applied
-  before the payload is streamed verbatim to the browser.
-- **`car`** – stream targets resolve inside `car_bridge.cache_dir`, inherit the
-  configured default extension, and reject compressed payloads unless
-  `allow_zst` is set. Successful bridges reply with `STREAM_ACK_OK` before
-  transferring the archive bytes so clients can pipeline verification.
+- **`norito`** - ဖောက်သည်၏ တိုက်ရိုက်လွှင့်ပစ်မှတ်ကို ဖြေရှင်းထားသည်
+  `norito_bridge.spool_dir`။ ပစ်မှတ်များကို သန့်စင်ပြီးဖြစ်သည် (အသွားအပြန်မရှိ၊ လုံးဝမရှိပါ။
+  paths) နှင့် ဖိုင်သည် တိုးချဲ့မှုတစ်ခု ချို့တဲ့သောအခါတွင် configured suffix ကို အသုံးပြုသည်။
+  payload ကို browser သို့ verbatim လွှင့်မထားပါ။
+- **`car`** – `car_bridge.cache_dir` အတွင်းရှိ ထုတ်လွှင့်ပစ်မှတ်များကို ဖြေရှင်းရန်၊ အမွေဆက်ခံသည်
+  ပုံသေ တိုးချဲ့မှုကို စီစဉ်သတ်မှတ်ထားပြီး မဟုတ်လျှင် ချုံ့ထားသော payload များကို ငြင်းပယ်ပါ။
+  `allow_zst` ကို သတ်မှတ်ထားသည်။ အောင်မြင်သောတံတားများသည် `STREAM_ACK_OK` ဖြင့် စာမပြန်မီ
+  သုံးစွဲသူများသည် ပိုက်လိုင်းအတည်ပြုခြင်းကို ပြုလုပ်နိုင်စေရန် မော်ကွန်းဘိုဘိုက်များကို လွှဲပြောင်းခြင်း။
 
-In both cases the proxy supplies the cache-tag HMAC (when a guard cache key was
-present during the handshake) and records `norito_*` / `car_*` telemetry reason
-codes so dashboards can differentiate successes, missing files, and sanitisation
-failures at a glance.
+ဖြစ်ရပ်နှစ်ခုစလုံးတွင် proxy သည် cache-tag HMAC (guard cache key ဖြစ်ခဲ့သောအခါ
+လက်ဆွဲနှုတ်ဆက်စဉ်အတွင်း ရှိနေသည်) နှင့် `norito_*` / `car_*` တယ်လီမီတာအကြောင်း မှတ်တမ်းများ
+ဒက်ရှ်ဘုတ်များသည် အောင်မြင်မှုများ၊ ပျောက်ဆုံးနေသောဖိုင်များနှင့် သန့်ရှင်းမှုကို ခွဲခြားနိုင်သောကြောင့် ကုဒ်များ
+တစ်ချက်ကြည့်ရုံနဲ့ မအောင်မြင်ဘူး။
 
-`Orchestrator::local_proxy().await` exposes the running handle so callers can
-read the certificate PEM, fetch the browser manifest, or request a graceful
-shutdown when the application exits.
+`Orchestrator::local_proxy().await` သည် ဖုန်းခေါ်ဆိုသူများအတွက် လုပ်ဆောင်နေသော လက်ကိုင်ကို ဖော်ထုတ်ပေးပါသည်။
+လက်မှတ် PEM ကိုဖတ်ပါ၊ ဘရောက်ဆာ မန်နီးဖက်စ်ကို ယူပါ၊ သို့မဟုတ် နှစ်သက်ဖွယ်တစ်ခု တောင်းဆိုပါ။
+အပလီကေးရှင်းမှ ထွက်သည့်အခါ ပိတ်ပါ။
 
-When enabled, the proxy now serves **manifest v2** records. Besides the existing
-certificate and guard cache key, v2 adds:
+ဖွင့်ထားသောအခါ၊ ပရောက်စီသည် ယခုအခါ **manifest v2** မှတ်တမ်းများကို လုပ်ဆောင်ပေးပါသည်။ ရှိပြီးသားတွေအပြင်
+လက်မှတ်နှင့် guard cache key၊ v2 က ထပ်လောင်းသည်-
 
-- `alpn` (`"sorafs-proxy/1"`) and a `capabilities` array so clients can confirm
-  the stream protocol they should speak.
-- A per-handshake `session_id` and cache-tagging salt (`cache_tagging` block) to
-  derive per-session guard affinities and HMAC tags.
-- Circuit and guard-selection hints (`circuit`, `guard_selection`,
-  `route_hints`) so browser integrations can expose richer UI before streams are
-  opened.
-- `telemetry_v2` with sampling and privacy knobs for local instrumentation.
-- Each `STREAM_ACK_OK` includes `cache_tag_hex`. Clients mirror the value in
-  the `x-sorafs-cache-tag` header when issuing HTTP or TCP requests so cached
-  guard selections remain encrypted at rest.
+- `alpn` (`"sorafs-proxy/1"`) နှင့် `capabilities` ခင်းကျင်းခြင်းအား သုံးစွဲသူများ အတည်ပြုနိုင်စေရန်
+  သူတို့ပြောသင့်တဲ့ stream protocol ပါ။
+- တစ်ကြိမ် လက်ဆွဲနှုတ်ဆက်ခြင်း `session_id` နှင့် cache-taging salt (`cache_tagging` block) သို့
+  တစ်ဆက်ရှင်လျှင် အစောင့်အကြပ်များနှင့် HMAC တဂ်များကို ရယူပါ။
+- Circuit နှင့် guard-selection အရိပ်အမြွက်များ (`circuit`၊ `guard_selection`၊
+  `route_hints`) ထို့ကြောင့် ဘရောက်ဆာပေါင်းစည်းမှုများသည် ထုတ်လွှင့်မှုများမပြုလုပ်မီ ပိုမိုကြွယ်ဝသော UI ကို ဖော်ထုတ်နိုင်သည်
+  ဖွင့်လှစ်ခဲ့သည်။
+- ဒေသဆိုင်ရာကိရိယာများအတွက်နမူနာနှင့်ကိုယ်ရေးကိုယ်တာခလုတ်များပါရှိသော `telemetry_v2`။
+- `STREAM_ACK_OK` တစ်ခုစီတွင် `cache_tag_hex` ပါဝင်သည်။ ဖောက်သည်များသည် တန်ဖိုးကို ထင်ဟပ်စေသည်။
+  HTTP သို့မဟုတ် TCP တောင်းဆိုချက်များကို ထုတ်ပေးသောအခါ ကက်ရှ်လုပ်ထားသည့် `x-sorafs-cache-tag` ခေါင်းစီး
+  အစောင့်ရွေးချယ်မှုများကို အနားယူချိန်တွင် ကုဒ်ဝှက်ထားဆဲဖြစ်သည်။
 
-continue to rely on the v1 subset.
+v1 subset ကို ဆက်လက်အားကိုးပါ။
 
 ## 2. Failure Semantics
 
-The orchestrator enforces strict capability and budget checks before a single
-byte is transferred. Failures fall into three categories:
+သံစုံတီးဝိုင်းသည် တစ်ခုတည်းမလုပ်မီ တင်းကျပ်သောစွမ်းရည်နှင့် ဘတ်ဂျက်စစ်ဆေးမှုများကို တွန်းအားပေးသည်။
+byte ကို လွှဲပြောင်းပေးပါသည်။ မအောင်မြင်မှုများကို အမျိုးအစားသုံးမျိုး ခွဲခြားထားသည်။
 
-1. **Eligibility failures (pre-flight).** Providers missing range capability,
-   expired adverts, or stale telemetry are logged in the scoreboard artefact and
-   omitted from scheduling. CLI summaries populate the `ineligible_providers`
-   array with reasons so operators can inspect governance drift without scraping
-   logs.
-2. **Runtime exhaustion.** Each provider tracks consecutive failures. Once the
-   configured `provider_failure_threshold` is reached, the provider is marked
-   `disabled` for the remainder of the session. If every provider transitions to
-   `disabled`, the orchestrator returns
-   `MultiSourceError::NoHealthyProviders { last_error, chunk_index }`.
-3. **Deterministic aborts.** Hard limits surface as structured errors:
-   - `MultiSourceError::NoCompatibleProviders` — the manifest requires a chunk
-     span or alignment the remaining providers cannot honour.
-   - `MultiSourceError::ExhaustedRetries` — the per-chunk retry budget was
-     consumed.
-   - `MultiSourceError::ObserverFailed` — downstream observers (streaming hooks)
-     rejected a verified chunk.
+1. **အရည်အချင်းပြည့်မီမှု ချို့ယွင်းချက်များ (လေယာဉ်အကြို)။** ဝန်ဆောင်မှုပေးသူများသည် အကွာအဝေးစွမ်းရည် ပျောက်ဆုံးနေခြင်း၊
+   သက်တမ်းကုန်ဆုံးသွားသော ကြော်ငြာများ သို့မဟုတ် ဖောက်ပြန်သော တယ်လီမီတာကို အမှတ်စာရင်းဘုတ်တွင် မှတ်တမ်းတင်ထားပြီး၊
+   အစီအစဉ်ဆွဲခြင်းမှ ချန်လှပ်ထားသည်။ CLI အနှစ်ချုပ်များသည် `ineligible_providers` ကိုဖြည့်သွင်းသည်။
+   အော်ပရေတာများသည် အုပ်ချုပ်ရေးကို မခြစ်ဘဲ ဖြန့်ကျက်စစ်ဆေးနိုင်စေရန် အကြောင်းပြချက်များဖြင့် ခင်းကျင်းထားသည်။
+   သစ်လုံးများ
+2. **Runtime ပင်ပန်းနွမ်းနယ်ခြင်း။** ဝန်ဆောင်မှုပေးသူတိုင်းသည် ဆက်တိုက်မအောင်မြင်မှုများကို ခြေရာခံသည်။ ပြီးတာနဲ့
+   ပြင်ဆင်သတ်မှတ်ထားသော `provider_failure_threshold` သို့ရောက်ရှိပြီး ဝန်ဆောင်မှုပေးသူကို အမှတ်အသားပြုထားသည်။
+   စက်ရှင်၏လက်ကျန်အတွက် `disabled`။ ပံ့ပိုးသူတိုင်းမှ ကူးပြောင်းသွားလျှင်
+   `disabled`၊ တီးမှုတ်သူပြန်လာသည်။
+   `MultiSourceError::NoHealthyProviders { last_error, chunk_index }`။
+3. **Deterministic aborts.** ခက်ခဲသော ကန့်သတ်ချက်များသည် ဖွဲ့စည်းတည်ဆောက်ထားသော အမှားများအဖြစ် ပေါ်လာသည်-
+   - `MultiSourceError::NoCompatibleProviders` — မန်နီးဖက်စ်သည် အပိုင်းတစ်ခု လိုအပ်သည်။
+     span သို့မဟုတ် alignment ကိုကျန်ရှိသောပံ့ပိုးပေးသူကိုဂုဏ်အသရေမပြုနိုင်ပါ။
+   - `MultiSourceError::ExhaustedRetries` — အပိုင်းတစ်ပိုင်း ထပ်စမ်းကြည့်ရန် ဘတ်ဂျက်မှာ
+     လောင်တယ်။
+   - `MultiSourceError::ObserverFailed` — မြစ်အောက်ပိုင်း လေ့လာသူများ (လွှင့်ချိတ်များ)
+     စိစစ်ပြီးသောအပိုင်းကို ပယ်ချခဲ့သည်။
 
-Every error embeds the offending chunk index and, when available, the final
-provider failure reason. Treat these as release blockers—retries with the same
-input will reproduce the failure until the underlying advert, telemetry, or
-provider health changes.
+အမှားတိုင်းသည် မှားယွင်းသော အတုံးအခဲအညွှန်းကို မြှုပ်နှံထားပြီး ရနိုင်သည့်အခါတွင် နောက်ဆုံးဖြစ်သည်။
+ပံ့ပိုးပေးသူ ရှုံးနိမ့်ရခြင်း အကြောင်းအရင်း။ ၎င်းတို့ကို လွှတ်ပေးရန် ပိတ်ဆို့သူများအဖြစ် သဘောထားပါ—တူညီသော ကြိုးပမ်းမှုများ
+အရင်းခံကြော်ငြာ၊ တယ်လီမီတာ သို့မဟုတ် မအောင်မြင်မချင်း ထည့်သွင်းမှုသည် ပျက်ကွက်မှုကို ပြန်လည်ထုတ်ပေးမည်ဖြစ်သည်။
+ဝန်ဆောင်မှုပေးသူ၏ ကျန်းမာရေးပြောင်းလဲမှု။
 
-### 2.1 Scoreboard Persistence
+### 2.1 ရမှတ်ဘုတ် စွဲမြဲမှု
 
-When `persist_path` is configured, the orchestrator writes the final scoreboard
-after each run. The JSON document contains:
+`persist_path` ကို ပြင်ဆင်သတ်မှတ်သောအခါ၊ သံစုံတီးဝိုင်းသည် နောက်ဆုံးရမှတ်ဘုတ်ကို ရေးသည်
+ပြေးပြီးတိုင်း JSON စာရွက်စာတမ်းတွင်-
 
-- `eligibility` (`eligible` or `ineligible::<reason>`).
-- `weight` (normalised weight assigned for this run).
-- `provider` metadata (identifier, endpoints, concurrency budget).
+- `eligibility` (`eligible` သို့မဟုတ် `ineligible::<reason>`)။
+- `weight` (ဤအပြေးအတွက် ပုံမှန်သတ်မှတ်ထားသော ကိုယ်အလေးချိန်)။
+- `provider` မက်တာဒေတာ (သတ်မှတ်စနစ်၊ အဆုံးမှတ်များ၊ တွဲဖက်ဘတ်ဂျက်)။
 
-Archive scoreboard snapshots alongside release artefacts so blacklisting and
-rollout decisions remain auditable.
+မော်ကွန်းဝင် အမှတ်စာရင်း လျှပ်တစ်ပြက် လျှပ်တစ်ပြက် ပုံများ နှင့် အတူ ထွက်ရှိ ထားသော artefacts များကို အမည်ပျက် စာရင်း သွင်းခြင်း နှင့်
+ထွက်လာသည့် ဆုံးဖြတ်ချက်များသည် စာရင်းစစ်နိုင်ဆဲဖြစ်သည်။
 
 ## 3. Telemetry & Debugging
 
-### 3.1 Prometheus Metrics
+### 3.1 Prometheus မက်ထရစ်များ
 
-The orchestrator emits the following metrics via `iroha_telemetry`:
-
-| Metric | Labels | Description |
+သံစုံတီးဝိုင်းသည် `iroha_telemetry` မှတဆင့် အောက်ပါ မက်ထရစ်များကို ထုတ်လွှတ်သည်-| မက်ထရစ် | တံဆိပ်များ | ဖော်ပြချက် |
 |--------|--------|-------------|
-| `sorafs_orchestrator_active_fetches` | `manifest_id`, `region` | Gauge of in-flight orchestrated fetches. |
-| `sorafs_orchestrator_fetch_duration_ms` | `manifest_id`, `region` | Histogram recording end-to-end fetch latency. |
-| `sorafs_orchestrator_fetch_failures_total` | `manifest_id`, `region`, `reason` | Counter of terminal failures (retries exhausted, no providers, observer failure). |
-| `sorafs_orchestrator_retries_total` | `manifest_id`, `provider`, `reason` | Counter of retry attempts per provider. |
-| `sorafs_orchestrator_provider_failures_total` | `manifest_id`, `provider`, `reason` | Counter of session-level provider failures leading to disablement. |
-| `sorafs_orchestrator_policy_events_total` | `region`, `stage`, `outcome`, `reason` | Count of anonymity policy decisions (met vs. brownout) grouped by rollout stage and fallback reason. |
-| `sorafs_orchestrator_pq_ratio` | `region`, `stage` | Histogram of PQ relay share among the selected SoraNet set. |
-| `sorafs_orchestrator_pq_candidate_ratio` | `region`, `stage` | Histogram of PQ relay supply ratios in the scoreboard snapshot. |
-| `sorafs_orchestrator_pq_deficit_ratio` | `region`, `stage` | Histogram of the policy shortfall (gap between target and actual PQ share). |
-| `sorafs_orchestrator_classical_ratio` | `region`, `stage` | Histogram of classical relay share used in each session. |
-| `sorafs_orchestrator_classical_selected` | `region`, `stage` | Histogram of classical relay counts selected per session. |
+| `sorafs_orchestrator_active_fetches` | `manifest_id`, `region` | လေယာဉ်အတွင်း ကြိုးကိုင်ထားသော ထုတ်ယူမှုများ၏ အတိုင်းအတာ။ |
+| `sorafs_orchestrator_fetch_duration_ms` | `manifest_id`, `region` | အဆုံးမှ အဆုံးအထိ ဆွဲယူမှု ကြာမြင့်ချိန်ကို မှတ်တမ်းတင်သည့် ဟစ်စတိုဂရမ်။ |
+| `sorafs_orchestrator_fetch_failures_total` | `manifest_id`, `region`, `reason` | terminal ကျရှုံးမှု၏ကောင်တာ (ထပ်ခါတလဲလဲ ကုန်သွားပြီ၊ ပံ့ပိုးပေးသူမရှိ၊ စောင့်ကြည့်သူ ပျက်ကွက်)။ |
+| `sorafs_orchestrator_retries_total` | `manifest_id`, `provider`, `reason` | ဝန်ဆောင်မှုပေးသူ တစ်ဦးစီအတွက် ထပ်ကြိုးစားမှု အရေအတွက်။ |
+| `sorafs_orchestrator_provider_failures_total` | `manifest_id`, `provider`, `reason` | စက်ဆက်ရှင်အဆင့် ဝန်ဆောင်မှုပေးသူ ပျက်ကွက်မှု၏ Counter |
+| `sorafs_orchestrator_policy_events_total` | `region`, `stage`, `outcome`, `reason` | အမည်မဖော်လိုသည့်မူဝါဒဆိုင်ရာ ဆုံးဖြတ်ချက်များ အရေအတွက် (ကိုက်ညီမှု နှင့် အညိုရောင်ထွက်ခြင်း) တို့ကို စတင်ထုတ်သည့် အဆင့်နှင့် နောက်ပြန်ဆုတ်ရသည့် အကြောင်းအရင်းဖြင့် အုပ်စုဖွဲ့ထားသည်။ |
+| `sorafs_orchestrator_pq_ratio` | `region`, `stage` | ရွေးချယ်ထားသော SoraNet သတ်မှတ်မှုအတွင်း PQ ထပ်ဆင့်မျှဝေမှုမျှဝေမှု၏ Histogram။ |
+| `sorafs_orchestrator_pq_candidate_ratio` | `region`, `stage` | ရမှတ်ဘုတ်လျှပ်တစ်ပြက်ရှိ PQ relay ထောက်ပံ့မှုအချိုးများ၏ Histogram |
+| `sorafs_orchestrator_pq_deficit_ratio` | `region`, `stage` | မူဝါဒပြတ်တောက်မှု၏ ဟစ်စတိုဂရမ် (ပစ်မှတ်နှင့် အမှန်တကယ် PQ မျှဝေမှုကြား ကွာဟချက်)။ |
+| `sorafs_orchestrator_classical_ratio` | `region`, `stage` | စက်ရှင်တစ်ခုစီတွင် အသုံးပြုသည့် ရှေးရိုးဆင့်ကမ်းမျှဝေမှု၏ ဟစ်စတိုဂရမ်။ |
+| `sorafs_orchestrator_classical_selected` | `region`, `stage` | စက်ရှင်တစ်ခုစီတွင် ရွေးချယ်ထားသော ဂန္တဝင်ထပ်ဆင့်လွှင့်မှု၏ ဟစ်စတိုဂရမ်။ |
 
-Integrate the metrics into staging dashboards before flipping production knobs.
-The recommended layout mirrors the SF-6 observability plan:
+ထုတ်လုပ်မှုခလုတ်များကို မလှန်မီ အဆင့်သတ်မှတ်ထားသော ဒက်ရှ်ဘုတ်များတွင် မက်ထရစ်များကို ပေါင်းစပ်ပါ။
+အကြံပြုထားသော အပြင်အဆင်သည် SF-6 စောင့်ကြည့်နိုင်မှု အစီအစဉ်ကို ထင်ဟပ်စေသည်-
 
-1. **Active fetches** — alerts if the gauge climbs without matching completions.
-2. **Retry ratio** — warns when `retry` counters exceed historical baselines.
-3. **Provider failures** — triggers pager alerts when any provider crosses
-   `session_failure > 0` within 15 minutes.
+1. **Active fetches** — တူညီသောပြီးစီးမှုမရှိဘဲ gauge တက်လာပါက သတိပေးသည်။
+2. **ပြန်လည်ကြိုးစားမှုအချိုး** — `retry` ကောင်တာများသည် သမိုင်းအခြေခံမျဥ်းများထက် ကျော်လွန်သည့်အခါ သတိပေးသည်။
+3. **ပံ့ပိုးပေးသူ မအောင်မြင်မှုများ** — ဝန်ဆောင်မှုပေးသူ ဖြတ်သွားသည့်အခါ စာမျက်နှာဂျာ သတိပေးချက်များကို အစပျိုးပေးသည်။
+   `session_failure > 0` 15 မိနစ်အတွင်း။
 
 ### 3.2 Structured Log Targets
 
-The orchestrator publishes structured events to deterministic targets:
+တီးမှုတ်သူသည် အဆုံးအဖြတ်ပေးသော ပစ်မှတ်များကို ချမှတ်ရန်အတွက် ဖွဲ့စည်းထားသော အဖြစ်အပျက်များကို ထုတ်ဝေသည်-
 
-- `telemetry::sorafs.fetch.lifecycle` — `start` and `complete` lifecycle
-  markers with chunk counts, retries, and total duration.
-- `telemetry::sorafs.fetch.retry` — retry events (`provider`, `reason`,
-  `attempts`) for feeding into manual triage.
-- `telemetry::sorafs.fetch.provider_failure` — providers disabled due to
-  repeated errors.
-- `telemetry::sorafs.fetch.error` — terminal failures summarised with
-  `reason` and optional provider metadata.
+- `telemetry::sorafs.fetch.lifecycle` — `start` နှင့် `complete` ဘဝသံသရာ
+  အတုံးရေတွက်ခြင်း၊ ထပ်စမ်းခြင်းနှင့် စုစုပေါင်းကြာချိန်များပါရှိသော အမှတ်အသားများ။
+- `telemetry::sorafs.fetch.retry` — ထပ်စမ်းကြည့်ပါ ဖြစ်ရပ်များ (`provider`၊ `reason`၊
+  `attempts`) ကို manual triage သို့ ကျွေးမွေးရန်။
+- `telemetry::sorafs.fetch.provider_failure` — ဝန်ဆောင်မှုပေးသူများကို ပိတ်ထားသည်။
+  ထပ်ခါတလဲလဲအမှားများ။
+- `telemetry::sorafs.fetch.error` — terminal ကျရှုံးမှုများဖြင့် အကျဉ်းချုံးထားသည်။
+  `reason` နှင့် ရွေးချယ်နိုင်သော ဝန်ဆောင်မှုပေးသူ မက်တာဒေတာ။
 
-Forward these streams to the existing Norito log pipeline so incident response
-has a single source of truth. Lifecycle events expose the PQ/classical mix via
-`anonymity_effective_policy`, `anonymity_pq_ratio`,
-`anonymity_classical_ratio`, and their companion counters,
-making it straightforward to wire dashboards without scraping metrics. During
-GA rollouts, pin the log level to `info` for lifecycle/retry events and rely on
-`warn` for terminal errors.
+ဤစီးကြောင်းများကို လက်ရှိ Norito မှတ်တမ်း ပိုက်လိုင်းသို့ ထပ်ဆင့်ပို့ပါ၊ ထို့ကြောင့် အဖြစ်အပျက်ကို တုံ့ပြန်ပါ။
+အမှန်တရား၏ အရင်းအမြစ်တစ်ခုတည်းရှိသည်။ Lifecycle ဖြစ်ရပ်များက PQ/ classical ရောနှောမှုကို ဖော်ထုတ်သည်။
+`anonymity_effective_policy`, `anonymity_pq_ratio`၊
+`anonymity_classical_ratio` နှင့် ၎င်းတို့၏ အဖော်ကောင်တာများ၊
+မက်ထရစ်များကို မခြစ်ဘဲ ဝါယာကြိုးဒိုင်ခွက်များကို ရိုးရှင်းအောင်ပြုလုပ်ခြင်း။ ကာလအတွင်း
+GA စတင်ခြင်းများ၊ မှတ်တမ်းအဆင့်ကို `info` တွင် ဘဝသံသရာ/စမ်းသုံးခြင်းဖြစ်ရပ်များအတွက် မှတ်တမ်းတင်ပြီး အားကိုးပါ။
+Terminal အမှားများအတွက် `warn`။
 
-### 3.3 JSON Summaries
+### 3.3 JSON အနှစ်ချုပ်များ
 
-Both `sorafs_cli fetch` and the Rust SDK return a structured summary containing:
+`sorafs_cli fetch` နှင့် Rust SDK နှစ်ခုလုံး ပါဝင်သော ဖွဲ့စည်းပုံအကျဉ်းချုပ်ကို ပြန်ပေးသည်-
 
-- `provider_reports` with success/failure counts and whether a provider was
-  disabled.
-- `chunk_receipts` detailing which provider satisfied each chunk.
-- `retry_stats` and `ineligible_providers` arrays.
+- `provider_reports` သည် အောင်မြင်ခြင်း/ကျရှုံးမှု အရေအတွက်များနှင့် ပံ့ပိုးသူဟုတ်မဟုတ်၊
+  မသန်စွမ်း။
+- `chunk_receipts` သည် မည်သည့်ပံ့ပိုးသူမှ အပိုင်းတစ်ခုစီကို စိတ်ကျေနပ်မှုဖြစ်စေကြောင်း အသေးစိတ်ဖော်ပြထားသည်။
+- `retry_stats` နှင့် `ineligible_providers` အခင်းများ။
 
-Archive the summary file when debugging misbehaving providers—the receipts map
-directly to the log metadata above.
+မှားယွင်းနေသော ဝန်ဆောင်မှုပေးသူများကို အမှားရှာပြင်သည့်အခါ အကျဉ်းချုပ်ဖိုင်ကို သိမ်းဆည်းထားပါ—ပြေစာများမြေပုံ
+အပေါ်က log metadata ကို တိုက်ရိုက်
 
 ## 4. Operational Checklist
 
-1. **Stage configuration in CI.** Run `sorafs_fetch` with the target
-   configuration, pass `--scoreboard-out` to capture the eligibility view, and
-   diff against the previous release. Any unexpected ineligible provider halts
-   the promotion.
-2. **Validate telemetry.** Ensure the deployment exports `sorafs.fetch.*`
-   metrics and structured logs before enabling multi-source fetches for users.
-   The absence of metrics typically indicates the orchestrator facade was not
-   invoked.
-3. **Document overrides.** When applying emergency `--deny-provider` or
-   `--boost-provider` settings, commit the JSON (or CLI invocation) to your
-   change log. Rollbacks must revert the override and capture a new scoreboard
-   snapshot.
-4. **Re-run smoke tests.** After modifying retry budgets or provider caps,
-   re-fetch the canonical fixture (`fixtures/sorafs_manifest/ci_sample/`) and
-   verify chunk receipts remain deterministic.
+1. ** CI တွင် အဆင့်သတ်မှတ်ဖွဲ့စည်းမှု။** ပစ်မှတ်ဖြင့် `sorafs_fetch` ကို run
+   သတ်မှတ်ချက်ပြည့်မီသော မြင်ကွင်းကို ရိုက်ကူးရန် `--scoreboard-out` ကို ကျော်ဖြတ်ပြီး၊
+   ယခင်ထုတ်လွှတ်မှုနှင့် ကွာခြားချက်။ မမျှော်လင့်ထားသော အရည်အချင်းမပြည့်မီသော ဝန်ဆောင်မှုပေးသူတိုင်းကို ရပ်နားထားသည်။
+   ပရိုမိုးရှင်း။
+2. **တယ်လီမီတာကို မှန်ကန်ကြောင်း အတည်ပြုပါ။** ဖြန့်ကျက်တင်ပို့မှု `sorafs.fetch.*` ကို သေချာစစ်ဆေးပါ။
+   သုံးစွဲသူများအတွက် ရင်းမြစ်များစွာကို ရယူခြင်းများကို မဖွင့်မီ မက်ထရစ်များနှင့် ဖွဲ့စည်းပုံမှတ်တမ်းများ။
+   မက်ထရစ်များမရှိခြင်းသည် ပုံမှန်အားဖြင့် တီးမှုတ်သူမျက်နှာစာမဟုတ်ကြောင်း ဖော်ပြသည်။
+   ဖိတ်ခေါ်ခဲ့သည်။
+3. **စာရွက်စာတမ်းကို အစားထိုးခြင်းများ။** အရေးပေါ် `--deny-provider` ကို လျှောက်ထားသည့်အခါ သို့မဟုတ်
+   `--boost-provider` ဆက်တင်များ၊ JSON (သို့မဟုတ် CLI တောင်းခံမှု) ကို သင့်ထံ အပ်နှံပါ။
+   မှတ်တမ်းကိုပြောင်းပါ။ Rollbacks သည် override ကို ပြန်ပြောင်းပြီး အမှတ်ပေးဇယားအသစ်တစ်ခုကို ရယူရပါမည်။
+   လျှပ်တစ်ပြက်။
+4. **မီးခိုးစစ်ဆေးမှုများ ပြန်လည်လုပ်ဆောင်ပါ။** ထပ်စမ်းကြည့်ရန် ဘတ်ဂျက်များ သို့မဟုတ် ပံ့ပိုးပေးသူထုပ်များကို ပြုပြင်ပြီးနောက်၊
+   Canonical fixture (`fixtures/sorafs_manifest/ci_sample/`) ကို ပြန်လည်ရယူပါ။
+   အတုံးလိုက်ဖြတ်ပိုင်းများကို အဆုံးအဖြတ်အတိုင်း ဆက်လက်စစ်ဆေးပါ။
 
-Following the steps above keeps orchestrator behaviour reproducible across
-staged rollouts and provides the telemetry necessary for incident response.
+အထက်ဖော်ပြပါ အဆင့်များကို လိုက်နာခြင်းဖြင့် တီးမှုတ်သူ၏ အမူအကျင့်ကို အနှံ့အပြားတွင် မျိုးပွားစေပါသည်။
+အဆင့်လိုက်လုပ်ဆောင်မှုများနှင့် အဖြစ်အပျက်တုံ့ပြန်မှုအတွက် လိုအပ်သော တယ်လီမီတာကို ထောက်ပံ့ပေးသည်။
 
-### 4.1 Policy Overrides
+### 4.1 မူဝါဒကို အစားထိုးခြင်းများ
 
-Operators can pin the active transport/anonymity stage without editing the
-base configuration by setting `policy_override.transport_policy` and
-`policy_override.anonymity_policy` in their `orchestrator` JSON (or supplying
-`--transport-policy-override=` / `--anonymity-policy-override=` to
-`sorafs_cli fetch`). When either override is present the orchestrator skips the
-usual brownout fallback: if the requested PQ tier cannot be satisfied, the
-fetch fails with `no providers` instead of quietly downgrading. Rollback to the
-default behaviour is as simple as clearing the override fields.
+အော်ပရေတာများသည် လက်ရှိအသုံးပြုနေသော သယ်ယူပို့ဆောင်ရေး/အမည်ဝှက်အဆင့်ကို တည်းဖြတ်ခြင်းမပြုဘဲ ပင်ထိုးနိုင်ပါသည်။
+`policy_override.transport_policy` ကို သတ်မှတ်ခြင်းဖြင့် အခြေခံဖွဲ့စည်းမှုပုံစံ
+၎င်းတို့၏ `orchestrator` JSON တွင် `policy_override.anonymity_policy` (သို့မဟုတ် ထောက်ပံ့နေသည်
+`--transport-policy-override=` / `--anonymity-policy-override=` သို့
+`sorafs_cli fetch`)။ နှစ်ခုစလုံးကို ထပ်ရေးပြသည့်အခါ တီးမှုတ်သူက ကျော်သွားသည်။
+ပုံမှန်အတိုင်း brownout fallback- တောင်းဆိုထားသော PQ အဆင့်ကို မကျေနပ်ပါက၊
+တိတ်တဆိတ် အဆင့်နှိမ့်ချမည့်အစား `no providers` ဖြင့် ရယူ၍မရပါ။ နောက်ပြန်ဆုတ်ပါ။
+မူရင်းအပြုအမူသည် override အကွက်များကိုရှင်းလင်းခြင်းကဲ့သို့ရိုးရှင်းပါသည်။
 
-The standard `iroha_cli app sorafs fetch` command exposes the same override flags,
-forwarding them to the gateway client so ad-hoc fetches and automation scripts
-share the identical stage pinning behaviour.
+ပုံမှန် `iroha_cli app sorafs fetch` command သည် တူညီသော override အလံများကို ဖော်ထုတ်သည်၊
+၎င်းတို့ကို gateway client သို့ ထပ်ဆင့်ပို့ခြင်း ဖြစ်သောကြောင့် ad-hoc နှင့် automation scripts များကို ရယူပါ။
+ထပ်တူကျသော စင်မြင့်ကြိုးထိုးခြင်းအပြုအမူကို မျှဝေပါ။
 
-Cross-SDK fixtures live under `fixtures/sorafs_gateway/policy_override/`. The
-CLI, Rust client, JavaScript bindings, and Swift harness decode
-`override.json` in their parity suites so any change to the override payloads
-must update that fixture and re-run `cargo test -p iroha`, `npm test`, and
-`swift test` to keep the SDKs aligned. Always attach the regenerated fixture to
-change review so downstream consumers can diff the override contract.
+Cross-SDK ပွဲစဉ်များသည် `fixtures/sorafs_gateway/policy_override/` အောက်တွင် တိုက်ရိုက်နေပါသည်။ ဟိ
+CLI၊ Rust client၊ JavaScript bindings နှင့် Swift harness ကုဒ်
+၎င်းတို့၏ parity suites တွင် `override.json` ဖြစ်သောကြောင့် payloads override တွင်မဆိုပြောင်းလဲမှု၊
+အဆိုပါ fixture ကို update လုပ်ပြီး `cargo test -p iroha`၊ `npm test`၊
+SDK များကို ချိန်ညှိထားရန် `swift test`။ အသစ်ထုတ်ထားသော ကိရိယာကို အမြဲတမ်း ပူးတွဲပါ။
+ပြန်လည်သုံးသပ်ချက်ကို ပြောင်းလဲခြင်းဖြင့် ရေအောက်ပိုင်းစားသုံးသူများ၏ override စာချုပ်ကို ကွဲပြားနိုင်ပါသည်။
 
-Governance requires a runbook entry for every override. Record the reason,
-expected duration, and rollback trigger in your change log, notify the PQ
-ratchet rotation channel, and append the signed approval to the same artifact
-bundle that stores the scoreboard snapshot. Overrides are intended for short
-emergencies (e.g., PQ guard brownouts); long-running policy changes must go
-through the normal council vote so nodes converge on the new default.
+အုပ်ချုပ်မှုစနစ်သည် အစားထိုးမှုတိုင်းအတွက် runbook ထည့်သွင်းမှု လိုအပ်သည်။ အကျိုးအကြောင်း မှတ်တမ်းတင်၊
+မျှော်လင့်ထားသည့် ကြာချိန်နှင့် သင့်ပြောင်းလဲမှုမှတ်တမ်းတွင် ပြန်လှည့်ခြင်းအစပျိုး၊ PQ ကို အကြောင်းကြားပါ။
+ratchet လှည့်ခြင်းချန်နယ်၊ နှင့် တူညီသော ရှေးဟောင်းပစ္စည်းသို့ လက်မှတ်ရေးထိုးထားသော အတည်ပြုချက်ကို ပေါင်းထည့်ပါ။
+ရမှတ်ဘုတ်လျှပ်တစ်ပြက်ကို သိမ်းဆည်းထားသည့်အတွဲ။ Overrides များကို အတိုချုံး၍ ရည်ရွယ်ပါသည်။
+အရေးပေါ်အခြေအနေများ (ဥပမာ၊ PQ guard brownouts); ရေရှည်မူဝါဒ အပြောင်းအလဲတွေ လုပ်ရမယ်။
+သာမာန်ကောင်စီမဲများမှတဆင့် ဆုံမှတ်များသည် ပုံသေအသစ်တွင် ဆုံကြသည်။
 
 ### 4.2 PQ Ratchet Fire Drill
 
-- **Runbook:** Follow `docs/source/soranet/pq_ratchet_runbook.md` for the
-  promotion/demotion rehearsal, including guard-directory handling and rollback.
-- **Dashboard:** Import `dashboards/grafana/soranet_pq_ratchet.json` to monitor
-  `sorafs_orchestrator_policy_events_total`, brownout rate, and PQ ratio mean
-  during the drill.
-- **Automation:** `cargo test -p sorafs_orchestrator pq_ratchet_fire_drill_records_metrics`
-  exercises the same transitions and verifies that metrics increment as
-  expected before operators run the live drill.
+- **Runbook:** အတွက် `docs/source/soranet/pq_ratchet_runbook.md` ကို လိုက်နာပါ။
+  အစောင့်လမ်းညွှန် ကိုင်တွယ်ခြင်းနှင့် ပြန်လှည့်ခြင်း အပါအဝင် ပရိုမိုးရှင်း/နှိမ့်ချ အစမ်းလေ့ကျင့်မှု။
+- ** ဒက်ရှ်ဘုတ်-** စောင့်ကြည့်ရန် `dashboards/grafana/soranet_pq_ratchet.json` ကို တင်သွင်းပါ။
+  `sorafs_orchestrator_policy_events_total`၊ အညိုရောင်ထွက်နှုန်းနှင့် PQ အချိုးကို ဆိုလိုသည်။
+  လေ့ကျင့်နေစဉ်။
+- **အလိုအလျောက်စနစ်-** `cargo test -p sorafs_orchestrator pq_ratchet_fire_drill_records_metrics`
+  တူညီသော အကူးအပြောင်းများကို ကျင့်သုံးပြီး မက်ထရစ်များ တိုးလာကြောင်း အတည်ပြုသည်။
+  အော်ပရေတာများ တိုက်ရိုက်လေ့ကျင့်မှု မလုပ်ဆောင်မီ မျှော်လင့်ထားသည်။
 
-## 5. Rollout Playbooks
+## 5. Playbooks များ ထုတ်ပေးခြင်း။
 
-The SNNet-5 transport rollout introduces new guard selection, governance
-attestations, and policy fallbacks. The playbooks below codify the sequence to
-follow before enabling multi-source fetches for end users, plus the downgrade
-path back to direct mode.
+SNNet-5 သယ်ယူပို့ဆောင်ရေးအစီအစဉ်သည် အစောင့်အကြပ်ရွေးချယ်မှု၊ အုပ်ချုပ်မှုအသစ်ကို မိတ်ဆက်ပေးသည်။
+ထောက်ခံချက်များနှင့် မူဝါဒဆိုင်ရာ အားနည်းချက်များ။ အောက်ပါ playbooks များသည် sequence ကို ပေါင်းစပ်ထားသည်။
+သုံးစွဲသူများအတွက် ရင်းမြစ်ပေါင်းစုံ ထုတ်ယူမှုများကို မဖွင့်မီ လိုက်နာဆောင်ရွက်ခြင်း နှင့် အဆင့်နှိမ့်ချခြင်းများ ပြုလုပ်ပါ။
+တိုက်ရိုက်မုဒ်သို့ ပြန်သွားရန်။
 
-### 5.1 Developer Pre-Flight (CI / Staging)
+### 5.1 Developer အကြိုပျံသန်းမှု (CI / Staging)
 
-1. **Regenerate scoreboards in CI.** Run `sorafs_cli fetch` (or the SDK
-   equivalent) against the `fixtures/sorafs_manifest/ci_sample/` manifest with
-   the candidate configuration. Persist the scoreboard via
-   `--scoreboard-out=artifacts/sorafs/scoreboard.json` and assert:
-   - `anonymity_status=="met"` and the `anonymity_pq_ratio` meets the targeted
-     stage (`anon-guard-pq`, `anon-majority-pq`, or `anon-strict-pq`).
-   - The deterministic chunk receipts still match the golden set committed to
-     the repository.
-2. **Verify manifest governance.** Inspect the CLI / SDK summary and ensure the
-   newly surfaced `manifest_governance.council_signatures` array contains the
-   expected Council fingerprints. This confirms gateway responses ship the GAR
-   envelope and that `validate_manifest` accepted it.
-3. **Exercise compliance overrides.** Load each jurisdictional profile from
-   `docs/examples/sorafs_compliance_policy.json` and assert the orchestrator
-   emits the correct policy fallback (`compliance_jurisdiction_opt_out` or
-   `compliance_blinded_cid_opt_out`). Record the resulting fetch failure when no
-   compliant transports are available.
-4. **Simulate downgrade.** Flip `transport_policy` to `direct-only` in the
-   configuration under test and re-run the fetch to ensure the orchestrator
-   falls back to Torii/QUIC without touching SoraNet relays. Keep this JSON
-   variant under version control so it can be promoted rapidly during an
-   incident.
+1. ** CI တွင် ရမှတ်များကို ပြန်ထုတ်ပါ။** `sorafs_cli fetch` (သို့မဟုတ် SDK ကိုဖွင့်ပါ
+   ညီမျှသည်) `fixtures/sorafs_manifest/ci_sample/` နှင့် ဆန့်ကျင်ဘက်
+   ကိုယ်စားလှယ်လောင်းဖွဲ့စည်းမှု။ အမှတ်ပေးဇယားကို ဆက်လက်ရပ်တည်ပါ။
+   `--scoreboard-out=artifacts/sorafs/scoreboard.json` နှင့် အခိုင်အမာ-
+   - `anonymity_status=="met"` နှင့် `anonymity_pq_ratio` သည် ပစ်မှတ်နှင့်ကိုက်ညီသည်
+     အဆင့် (`anon-guard-pq`၊ `anon-majority-pq`၊ သို့မဟုတ် `anon-strict-pq`)။
+   - အဆုံးအဖြတ်ဖြတ်ပိုင်းဖြတ်ပိုင်းများသည် ကတိပြုထားသည့် ရွှေရောင်အစုံနှင့် ကိုက်ညီဆဲဖြစ်သည်။
+     သိုလှောင်မှု။
+2. **ထင်ရှားသော အုပ်ချုပ်မှုစနစ်ကို အတည်ပြုပါ။** CLI/SDK အနှစ်ချုပ်ကို စစ်ဆေးပြီး သေချာပါစေ။
+   အသစ်ပေါ်လာသော `manifest_governance.council_signatures` array တွင် ပါဝင်ပါသည်။
+   မျှော်လင့်ထားသည့် ကောင်စီ လက်ဗွေ။ ၎င်းသည် GAR ကို ဂိတ်ဝ တုံ့ပြန်မှုများ ပို့ဆောင်ကြောင်း အတည်ပြုသည်။
+   စာအိတ်နဲ့ `validate_manifest` က လက်ခံတယ်။
+3. **လိုက်နာမှု လေ့ကျင့်ခန်းကို အစားထိုးသည်။** တရားစီရင်ရေးဆိုင်ရာ ပရိုဖိုင်တစ်ခုစီကို တင်ပေးသည်။
+   `docs/examples/sorafs_compliance_policy.json` နှင့် သံစုံတီးဝိုင်းကို အခိုင်အမာ
+   မှန်ကန်သောမူဝါဒ ဆုတ်ယုတ်မှု (`compliance_jurisdiction_opt_out` သို့မဟုတ်
+   `compliance_blinded_cid_opt_out`)။ မရှိသည့်အခါ ထွက်ပေါ်လာသော အကျိူးကျေးဇူးကို မှတ်တမ်းတင်ပါ။
+   လိုက်လျောညီထွေရှိသော သယ်ယူပို့ဆောင်ရေးများ ရရှိနိုင်ပါသည်။
+4. **အဆင့်နှိမ့်မှုပုံစံတူလုပ်ပါ။** `transport_policy` ကို `direct-only` သို့ ပြောင်းပါ။
+   စမ်းသပ်မှုအောက်တွင် ဖွဲ့စည်းမှုပုံစံနှင့် တီးမှုတ်သူအား သေချာစေရန် ထုတ်ယူမှုကို ပြန်လည်လုပ်ဆောင်ပါ။
+   SoraNet relay များကို မထိဘဲ Torii/QUIC သို့ ပြန်ရောက်သွားသည်။ ဤ JSON ကိုထားပါ။
+   ဗားရှင်းထိန်းချုပ်မှုအောက်တွင် မူကွဲရှိသောကြောင့် ၎င်းကို ကာလတစ်ခုအတွင်း လျင်မြန်စွာ မြှင့်တင်နိုင်သည်။
+   အဖြစ်အပျက်။
 
-### 5.2 Operator Rollout (Production Waves)
+### 5.2 အော်ပရေတာ စတင်မှု (ထုတ်လုပ်မှုလှိုင်းများ)1. **`iroha_config` မှတစ်ဆင့် ဖွဲ့စည်းမှုပုံစံကို အဆင့်သတ်မှတ်ပါ။** အသုံးပြုထားသော JSON အတိအကျကို ထုတ်ဝေပါ။
+   CI တွင် `actual` အလွှာကို ထပ်ရေးသည်။ တီးမှုတ်သူ pod/binary ကို အတည်ပြုပါ။
+   စတင်ချိန်တွင် ဖွဲ့စည်းမှုပုံစံ hash အသစ်ကို မှတ်တမ်းတင်ပါ။
+2. **Prime guard caches.** `--guard-directory` မှတစ်ဆင့် relay directory ကို ပြန်လည်စတင်ပါ။
+   Norito guard cache ကို `--guard-cache` ဖြင့် ဆက်ထားပါ။ ကက်ရှ်ဖြစ်ကြောင်း အတည်ပြုပါ။
+   လက်မှတ်ထိုးပြီး (`--guard-cache-key` ကို configure လုပ်ထားလျှင်) ဗားရှင်းဖြင့် သိမ်းထားသည်
+   ထိန်းချုပ်မှုကိုပြောင်းလဲပါ။
+3. **တယ်လီမီတာ ဒက်ရှ်ဘုတ်များကို ဖွင့်ပါ။** သုံးစွဲသူအသွားအလာကို မဆောင်ရွက်ပေးမီ၊ သေချာပါစေ။
+   ပတ်ဝန်းကျင်သည် `sorafs.fetch.*`၊ `sorafs_orchestrator_policy_events_total` နှင့်
+   ပရောက်စီမက်ထရစ်များ (ဒေသခံ QUIC ပရောက်စီကို အသုံးပြုသောအခါ)။ နှိုးစက်များကို ချိတ်ထားသင့်သည်။
+   `anonymity_brownout_effective` နှင့် လိုက်လျောညီထွေရှိသော တုံ့ပြန်မှုကောင်တာများ။
+4. **တိုက်ရိုက်မီးခိုးစမ်းသပ်မှုများကို လုပ်ဆောင်ပါ။** တစ်ခုစီမှ တစ်ဆင့် အုပ်ချုပ်မှုမှ အတည်ပြုထားသော သရုပ်ကို ရယူပါ
+   ဝန်ဆောင်မှုပေးသူအစုအဝေး (PQ၊ ရှေးရိုးနှင့် တိုက်ရိုက်) နှင့် အတုံးလိုက်ဖြတ်ပိုင်းများကို အတည်ပြုခြင်း၊
+   CAR အချေအတင်များနှင့် ကောင်စီလက်မှတ်များသည် CI အခြေခံအချက်များကို ကိုက်ညီပါသည်။
+5. **အသက်သွင်းခြင်းကို ဆက်သွယ်ပါ။** ဖြန့်ချိသည့်ခြေရာခံကိရိယာကို အပ်ဒိတ်လုပ်ပါ။
+   `scoreboard.json` အနုပညာပစ္စည်း၊ guard cache လက်ဗွေနှင့် လင့်ခ်တစ်ခု၊
+   ပထမဆုံးထုတ်လုပ်မှု အကျိူးအတွက် ထင်ရှားသော အုပ်ချုပ်မှု အတည်ပြုခြင်းကို ပြသသည့် မှတ်တမ်းများ။
 
-1. **Stage the configuration via `iroha_config`.** Publish the exact JSON used
-   in CI as an `actual` layer override. Confirm the orchestrator pod / binary
-   logs the new configuration hash on startup.
-2. **Prime guard caches.** Refresh the relay directory via `--guard-directory`
-   and persist the Norito guard cache with `--guard-cache`. Verify the cache is
-   signed (if `--guard-cache-key` is configured) and stored under versioned
-   change control.
-3. **Enable telemetry dashboards.** Before serving user traffic, ensure the
-   environment publishes `sorafs.fetch.*`, `sorafs_orchestrator_policy_events_total`, and
-   the proxy metrics (when using the local QUIC proxy). Alarms should be tied to
-   `anonymity_brownout_effective` and compliance fallback counters.
-4. **Run live smoke tests.** Fetch a governance-approved manifest through each
-   provider cohort (PQ, classical, and direct) and confirm chunk receipts,
-   CAR digests, and council signatures match the CI baseline.
-5. **Communicate activation.** Update the rollout tracker with the
-   `scoreboard.json` artefact, the guard cache fingerprint, and a link to the
-   logs showing manifest governance verification for the first production fetch.
+### 5.3 Downgrade / Rollback လုပ်ထုံးလုပ်နည်း
 
-### 5.3 Downgrade / Rollback Procedure
+အဖြစ်အပျက်များ၊ PQ လိုငွေပြမှုများ သို့မဟုတ် စည်းမျဉ်းစည်းကမ်း တောင်းဆိုချက်များသည် နောက်ပြန်ဆုတ်ရန် တွန်းအားပေးသည့်အခါ လိုက်နာပါ။
+ဤအဆုံးအဖြတ်အစီအစဥ်-
 
-When incidents, PQ deficits, or regulatory requests force a rollback, follow
-this deterministic sequence:
-
-1. **Switch transport policy.** Apply `transport_policy=direct-only` (and, if
-   immediately halts new SoraNet circuit construction.
-2. **Flush guard state.** Delete or archive the guard cache file referenced by
-   `--guard-cache` so subsequent runs do not attempt to reuse pinned relays.
-   Skip this step only when a rapid re-enable is planned and the cache remains
-   valid.
-3. **Disable local proxies.** If the local QUIC proxy was in `bridge` mode,
-   restart the orchestrator with `proxy_mode="metadata-only"` or remove the
-   `local_proxy` block entirely. Document the port release so workstation and
-   browser integrations revert to direct Torii access.
-4. **Clear compliance overrides.** Append a jurisdictional opt-out entry (or a
-   blinded-CID entry) to the compliance policy for the affected payloads so
-   automation and dashboards reflect the intentional direct-mode operation.
-5. **Capture audit evidence.** Run a post-change fetch with `--scoreboard-out`
-   and store the CLI JSON summary (including `manifest_governance`) alongside
-   the incident ticket.
+1. ** သယ်ယူပို့ဆောင်ရေးမူဝါဒကို ပြောင်းပါ။** `transport_policy=direct-only` ကို အသုံးပြုပါ (နှင့်၊ အကယ်၍
+   SoraNet ဆားကစ်အသစ်တည်ဆောက်မှုကို ချက်ချင်းရပ်လိုက်သည်။
+2. **Flush guard state.** ရည်ညွှန်းထားသော guard cache ဖိုင်ကို ဖျက်ပါ သို့မဟုတ် သိမ်းဆည်းပါ။
+   `--guard-cache` ထို့ကြောင့် နောက်ဆက်တွဲလုပ်ဆောင်မှုများသည် pinned relays များကို ပြန်သုံးရန် မကြိုးစားပါ။
+   အမြန်ပြန်ဖွင့်ရန် စီစဉ်ထားပြီး ကက်ရှ်ကျန်ရှိမှသာ ဤအဆင့်ကို ကျော်လိုက်ပါ။
+   တရားဝင်
+3. **ဒေသခံ ပရောက်စီများကို ပိတ်ပါ။** ပြည်တွင်း QUIC ပရောက်စီသည် `bridge` မုဒ်တွင် ရှိနေပါက၊
+   သံစုံတီးဝိုင်းကို `proxy_mode="metadata-only"` ဖြင့် ပြန်လည်စတင်ပါ သို့မဟုတ် ဖယ်ရှားလိုက်ပါ။
+   `local_proxy` ဘလောက်လုံးဝ။ Document the port release ဒါကြောင့် workstation နဲ့
+   ဘရောက်ဆာပေါင်းစည်းမှုများသည် တိုက်ရိုက် Torii ဝင်ရောက်ခွင့်သို့ ပြန်သွားသည်။
+4. **ရှင်းလင်းသောလိုက်နာမှုအား အစားထိုးခြင်းများ။** တရားစီရင်ရေးဆိုင်ရာ ဖယ်ထုတ်ခြင်းဆိုင်ရာ ထည့်သွင်းမှု (သို့မဟုတ်)
+   blinded-CID entry) သက်ရောက်မှုရှိသော payloads များအတွက် လိုက်နာမှု မူဝါဒသို့
+   အလိုအလျောက်စနစ်နှင့် ဒက်ရှ်ဘုတ်များသည် ရည်ရွယ်ချက်ရှိရှိ တိုက်ရိုက်မုဒ်လုပ်ဆောင်မှုကို ထင်ဟပ်စေသည်။
+5. **စာရင်းစစ်အထောက်အထားများကို ဖမ်းယူပါ။** `--scoreboard-out` ဖြင့် ပြောင်းလဲမှုလွန်ဆွဲယူမှုကို လုပ်ဆောင်ပါ။
+   နှင့် CLI JSON အနှစ်ချုပ် (`manifest_governance` အပါအဝင်) နှင့်အတူ သိမ်းဆည်းပါ
+   အဖြစ်အပျက်လက်မှတ်။
 
 ### 5.4 Regulated Deployment Checklist
 
-| Checkpoint | Purpose | Recommended Evidence |
-|------------|---------|----------------------|
-| Compliance policy staged | Confirms the jurisdictional carve-out aligns with GAR filings. | Signed `soranet_opt_outs.json` snapshot + orchestrator config diff. |
-| Manifest governance recorded | Proves Council signatures accompany every gateway manifest. | `sorafs_cli fetch ... --output /dev/null --summary out.json` with `manifest_governance.council_signatures` archived. |
-| Attestation inventory | Tracks the documents referenced in `compliance.attestations`. | Store PDFs/JSON artefacts alongside the attestation digest and expiry. |
-| Downgrade drill logged | Ensures rollback remains deterministic. | Quarterly dry-run record showing direct-only policy applied and guard cache cleared. |
-| Telemetry retention | Provides forensic data for regulators. | Dashboard export or OTEL snapshot confirming `sorafs.fetch.*` and compliance fallbacks are being retained per policy. |
+| စစ်ဆေးရေးဂိတ် | ရည်ရွယ်ချက် | သက်သေအထောက်အထား |
+|--------------------|---------|---------------------|
+| စည်းမျဥ်းစည်းကမ်း | GAR ဖိုင်တွဲများနှင့် ကိုက်ညီသော တရားစီရင်ပိုင်ခွင့်ဆိုင်ရာ ထွင်းထုမှုများကို အတည်ပြုသည်။ | `soranet_opt_outs.json` snapshot + orchestrator config diff ကို လက်မှတ်ရေးထိုးခဲ့သည်။ |
+| Manifest အုပ်ချုပ်မှုမှတ်တမ်း | ကောင်စီ၏ လက်မှတ်များသည် တံခါးပေါက်တိုင်းတွင် ထင်ရှားပေါ်လွင်နေပါသည်။ | `sorafs_cli fetch ... --output /dev/null --summary out.json` နှင့် `manifest_governance.council_signatures` တို့ကို သိမ်းဆည်းထားသည်။ |
+| ထောက်ခံချက်စာရင်း | `compliance.attestations` တွင် ကိုးကားထားသော စာရွက်စာတမ်းများကို ခြေရာခံသည်။ | သက်သေခံချက်အညွှန်းနှင့် သက်တမ်းကုန်ဆုံးချိန်တို့နှင့်အတူ PDFs/JSON အနုပညာပစ္စည်းများကို သိမ်းဆည်းပါ။ |
+| တူးခြင်းကို အဆင့်နှိမ့်ချထားခြင်း | နောက်ကြောင်းပြန်လှည့်မှုသည် အဆုံးအဖြတ်ရှိနေဆဲဖြစ်ကြောင်း သေချာစေသည်။ | သုံးလတစ်ကြိမ် ခြောက်သွေ့မှုမှတ်တမ်းကို တိုက်ရိုက်သီးသန့်အသုံးပြုထားသည့်မူဝါဒကိုပြသပြီး guard cache ကိုရှင်းလင်းထားသည်။ |
+| Telemetry ထိန်းထား | စည်းကမ်းထိန်းသိမ်းရေးအဖွဲ့များအတွက် မှုခင်းဆိုင်ရာအချက်အလက်များကို ပံ့ပိုးပေးသည်။ | `sorafs.fetch.*` ကို အတည်ပြုသည့် ဒက်ရှ်ဘုတ် တင်ပို့ခြင်း သို့မဟုတ် OTEL လျှပ်တစ်ပြက် လျှပ်တစ်ပြက် နှင့် လိုက်နာမှု မှားယွင်းမှုများကို မူဝါဒအလိုက် ထိန်းသိမ်းထားသည်။ |
 
-Operators should review the checklist prior to each rollout window and furnish
-the evidence pack to governance or regulators on request. Developers can reuse
-the same artefacts for postmortem packets when brownouts or compliance overrides
-are triggered during testing.
+အော်ပရေတာများသည် စတင်ရောင်းချသည့် ဝင်းဒိုးတစ်ခုစီမတိုင်မီ စစ်ဆေးချက်စာရင်းကို ပြန်လည်သုံးသပ်သင့်သည်။
+တောင်းဆိုချက်အရ အုပ်ချုပ်ရေး သို့မဟုတ် စည်းကမ်းထိန်းသိမ်းရေးအဖွဲ့ထံ အထောက်အထားထုပ်ပိုးပါ။ Developer တွေက ပြန်သုံးလို့ရတယ်။
+အညိုရောင်ထွက်ခြင်း သို့မဟုတ် လိုက်နာမှုကို အစားထိုးသည့်အခါ အလောင်းပြန်ချခြင်းပက်ကတ်များအတွက် တူညီသောပစ္စည်းများ
+စမ်းသပ်နေစဉ်အတွင်း အစပျိုးသည်။

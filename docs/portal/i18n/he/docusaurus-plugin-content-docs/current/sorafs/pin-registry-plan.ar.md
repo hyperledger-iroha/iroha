@@ -4,6 +4,8 @@ direction: rtl
 source: docs/portal/docs/sorafs/pin-registry-plan.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
@@ -24,12 +26,12 @@ description: خطة تنفيذ SF-4 التي تغطي آلة الحالات لل
 يوسّع هذا المستند خطة التحقق بمهام تنفيذية ملموسة تغطي المنطق on-chain،
 وخدمات المضيف، والـ fixtures، والمتطلبات التشغيلية.
 
-## النطاق
+## אלנקה
 
 1. **آلة حالات registry**: سجلات Norito للـ manifests والـ aliases وسلاسل الخلفاء
    وعصور الاحتفاظ وبيانات الحوكمة الوصفية.
 2. **تنفيذ العقد**: عمليات CRUD حتمية لدورة حياة pin (`ReplicationOrder`, `Precommit`,
-   `Completion`, eviction).
+   `Completion`, פינוי).
 3. **واجهة الخدمة**: نقاط نهاية gRPC/REST مدعومة بالـ registry تستهلكها Torii وSDKs،
    وتشمل الترقيم والاتستاشن.
 4. **التولنغ والـ fixtures**: مساعدات CLI ومتجهات اختبار ووثائق تحافظ على تزامن
@@ -40,9 +42,9 @@ description: خطة تنفيذ SF-4 التي تغطي آلة الحالات لل
 
 ### السجلات الاساسية (Norito)
 
-| البنية | الوصف | الحقول |
-|--------|-------|--------|
-| `PinRecordV1` | مدخل manifest كنسي. | `manifest_cid`, `chunk_plan_digest`, `por_root`, `profile_handle`, `approved_at`, `retention_epoch`, `pin_policy`, `successor_of`, `governance_envelope_hash`. |
+| البنية | אוטו | الحقول |
+|--------|--------|--------|
+| `PinRecordV1` | مدخل manifest كنسي. | I18NIS `governance_envelope_hash`. |
 | `AliasBindingV1` | ربط alias -> CID الخاص بالـ manifest. | `alias`, `manifest_cid`, `bound_at`, `expiry_epoch`. |
 | `ReplicationOrderV1` | تعليمات للمزوّدين لتثبيت manifest. | `order_id`, `manifest_cid`, `providers`, `redundancy`, `deadline`, `policy_hash`. |
 | `ReplicationReceiptV1` | اقرار المزوّد. | `order_id`, `provider_id`, `status`, `timestamp`, `por_sample_digest`. |
@@ -58,15 +60,13 @@ description: خطة تنفيذ SF-4 التي تغطي آلة الحالات لل
 - توليد الشفرة (Rust + SDKs اخرى) باستخدام ماكرو Norito.
 - تحديث الوثائق (`sorafs_architecture_rfc.md`) بعد تثبيت المخططات.
 
-## تنفيذ العقد
-
-| المهمة | المالك/المالكون | الملاحظات |
-|--------|------------------|-----------|
-| تنفيذ تخزين registry (sled/sqlite/off-chain) او وحدة smart contract. | Core Infra / Smart Contract Team | توفير hashing حتمي وتجنب الفاصلة العائمة. |
-| نقاط الدخول: `submit_manifest`, `approve_manifest`, `bind_alias`, `issue_replication_order`, `complete_replication`, `evict_manifest`. | Core Infra | استخدام `ManifestValidator` من خطة التحقق. ربط alias يمر الان عبر `RegisterPinManifest` (DTO من Torii) بينما يبقى `bind_alias` المخصص مخططا لتحديثات لاحقة. |
-| انتقالات الحالة: فرض التعاقب (manifest A -> B)، عصور الاحتفاظ، تفرد alias. | Governance Council / Core Infra | تفرد alias وحدود الاحتفاظ وفحوصات اعتماد/سحب السلف موجودة في `crates/iroha_core/src/smartcontracts/isi/sorafs.rs`؛ كشف التعاقب متعدد القفزات ودفاتر التكرار ما زالت مفتوحة. |
-| المعلمات المحكومة: تحميل `ManifestPolicyV1` من config/حالة الحوكمة؛ السماح بالتحديث عبر احداث الحوكمة. | Governance Council | توفير CLI لتحديثات السياسة. |
-| اصدار الاحداث: اصدار احداث Norito للتليمتري (`ManifestApproved`, `ReplicationOrderIssued`, `AliasBound`). | Observability | تعريف مخطط الاحداث + التسجيل. |
+## تنفيذ العقد| المهمة | المالك/المالكون | الملاحظات |
+|--------|----------------|--------|
+| تنفيذ تخزين registry (sled/sqlite/off-chain) او وحدة smart contract. | Core Infra / צוות חוזה חכם | توفير hashing حتمي وتجنب الفاصلة العائمة. |
+| מקור: `submit_manifest`, `approve_manifest`, `bind_alias`, `issue_replication_order`, `complete_replication`, Prometheus000068. | אינפרא ליבה | استخدام `ManifestValidator` من خطة التحقق. ربط alias يمر الان عبر `RegisterPinManifest` (DTO من Torii) بينما يبقى `bind_alias` المخصص مخططا لتحديثات لاحقة. |
+| انتقالات الحالة: فرض التعاقب (manifest A -> B)، عصور الاحتفاظ، تفرد alias. | מועצת ממשל / Infra Core | تفرد alias وحدود الاحتفاظ وفحوصات اعتماد/سحب السلف موجودة في `crates/iroha_core/src/smartcontracts/isi/sorafs.rs`؛ كشف التعاقب متعدد القفزات ودفاتر التكرار ما زالت مفتوحة. |
+| المعلمات المحكومة: تحميل `ManifestPolicyV1` من config/حالة الحوكمة؛ السماح بالتحديث عبر احداث الحوكمة. | מועצת ממשל | توفير CLI لتحديثات السياسة. |
+| اصدار الاحداث: اصدار احداث Norito للتليمتري (`ManifestApproved`, `ReplicationOrderIssued`, `AliasBound`). | צפייה | تعريف مخطط الاحداث + التسجيل. |
 
 الاختبارات:
 - اختبارات وحدة لكل نقطة دخول (ايجابي + رفض).
@@ -76,17 +76,17 @@ description: خطة تنفيذ SF-4 التي تغطي آلة الحالات لل
 ## واجهة الخدمة (تكامل Torii/SDK)
 
 | المكون | المهمة | المالك/المالكون |
-|--------|--------|------------------|
+|--------|--------|----------------|
 | خدمة Torii | كشف `/v1/sorafs/pin` (submit)، `/v1/sorafs/pin/{cid}` (lookup)، `/v1/sorafs/aliases` (list/bind)، `/v1/sorafs/replication` (orders/receipts). توفير ترقيم + ترشيح. | Networking TL / Core Infra |
-| الاتستاشن | تضمين ارتفاع/هاش registry في الاستجابات؛ اضافة بنية Norito للاتستاشن تستهلكها SDKs. | Core Infra |
+| الاتستاشن | تضمين ارتفاع/هاش registry في الاستجابات؛ اضافة بنية Norito للاتستاشن تستهلكها SDKs. | אינפרא ליבה |
 | CLI | توسيع `sorafs_manifest_stub` او CLI جديد `sorafs_pin` مع `pin submit`, `alias bind`, `order issue`, `registry export`. | Tooling WG |
-| SDK | توليد bindings للعميل (Rust/Go/TS) من مخطط Norito؛ اضافة اختبارات تكامل. | SDK Teams |
+| SDK | توليد bindings للعميل (Rust/Go/TS) من مخطط Norito؛ اضافة اختبارات تكامل. | צוותי SDK |
 
 العمليات:
 - اضافة طبقة cache/ETag لنقاط نهاية GET.
 - توفير rate limiting / auth بما يتوافق مع سياسات Torii.
 
-## Fixtures و CI
+## מתקנים ו-CI
 
 - دليل fixtures: `crates/iroha_core/tests/fixtures/sorafs_pin_registry/` يخزن لقطات موقعة لـ manifest/alias/order يعاد توليدها عبر `cargo run -p iroha_core --example gen_pin_snapshot`.
 - خطوة CI: `ci/check_sorafs_fixtures.sh` تعيد توليد اللقطة وتفشل عند وجود اختلافات، لتحافظ على تماهي fixtures الخاصة بـ CI.
@@ -103,9 +103,7 @@ description: خطة تنفيذ SF-4 التي تغطي آلة الحالات لل
 - `torii_sorafs_replication_sla_total{outcome="met|missed|pending"}`
 - `torii_sorafs_replication_completion_latency_epochs{stat="avg|p95|max|count"}`
 - `torii_sorafs_replication_deadline_slack_epochs{stat="avg|p95|max|count"}`
-- تليمتري المزود الحالي (`torii_sorafs_capacity_*`, `torii_sorafs_fee_projection_nanos`) تبقى ضمن النطاق للوحـات end-to-end.
-
-السجلات:
+- تليمتري المزود الحالي (`torii_sorafs_capacity_*`, `torii_sorafs_fee_projection_nanos`) تبقى ضمن النطاق للوحـات end-to-end.السجلات:
 - تيار احداث Norito منظم لتدقيقات الحوكمة (موقع؟).
 
 التنبيهات:

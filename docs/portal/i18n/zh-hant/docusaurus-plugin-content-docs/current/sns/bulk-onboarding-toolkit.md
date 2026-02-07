@@ -4,60 +4,62 @@ direction: ltr
 source: docs/portal/docs/sns/bulk-onboarding-toolkit.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 ---
-id: bulk-onboarding-toolkit
-title: SNS Bulk Onboarding Toolkit
-sidebar_label: Bulk onboarding toolkit
-description: CSV to RegisterNameRequestV1 automation for SN-3b registrar runs.
+id：批量入門工具包
+標題：SNS 批量入職工具包
+sidebar_label：批量入門工具包
+描述：用於 SN-3b 註冊器運行的 CSV 到 RegisterNameRequestV1 自動化。
 ---
 
-:::note Canonical Source
-Mirrors `docs/source/sns/bulk_onboarding_toolkit.md` so external operators see
-the same SN-3b guidance without cloning the repository.
+:::注意規範來源
+鏡像 `docs/source/sns/bulk_onboarding_toolkit.md`，以便外部操作員看到
+相同的 SN-3b 指南，無需克隆存儲庫。
 :::
 
-# SNS Bulk Onboarding Toolkit (SN-3b)
+# SNS 批量入門工具包 (SN-3b)
 
-**Roadmap reference:** SN-3b "Bulk onboarding tooling"  
-**Artifacts:** `scripts/sns_bulk_onboard.py`, `scripts/tests/test_sns_bulk_onboard.py`,
+**路線圖參考：** SN-3b“批量入職工具”  
+**文物：** `scripts/sns_bulk_onboard.py`、`scripts/tests/test_sns_bulk_onboard.py`、
 `docs/portal/scripts/sns_bulk_release.sh`
 
-Large registrars often pre-stage hundreds of `.sora` or `.nexus` registrations
-with the same governance approvals and settlement rails. Manually crafting JSON
-payloads or re-running the CLI does not scale, so SN-3b ships a deterministic
-CSV to Norito builder that prepares `RegisterNameRequestV1` structures for
-Torii or the CLI. The helper validates every row up front, emits both an
-aggregated manifest and optional newline-delimited JSON, and can submit the
-payloads automatically while recording structured receipts for audits.
+大型註冊商通常會預先準備數百個 `.sora` 或 `.nexus` 註冊
+具有相同的治理批准和結算規則。手動製作 JSON
+負載或重新運行 CLI 無法擴展，因此 SN-3b 提供了確定性
+CSV 到 Norito 構建器，用於準備 `RegisterNameRequestV1` 結構
+Torii 或 CLI。助手驗證前面的每一行，發出兩個
+聚合清單和可選的換行符分隔的 JSON，並且可以提交
+自動有效負載，同時記錄結構化收據以供審計。
 
-## 1. CSV schema
+## 1. CSV 架構
 
-The parser requires the following header row (order is flexible):
+解析器需要以下標題行（順序靈活）：
 
-| Column | Required | Description |
+|專欄 |必填 |描述 |
 |--------|----------|-------------|
-| `label` | Yes | Requested label (mixed case accepted; tool normalises per Norm v1 and UTS-46). |
-| `suffix_id` | Yes | Numeric suffix identifier (decimal or `0x` hex). |
-| `owner` | Yes | AccountId string (IH58 literal; optional @domain hint) for the registration owner. |
-| `term_years` | Yes | Integer `1..=255`. |
-| `payment_asset_id` | Yes | Settlement asset (for example `xor#sora`). |
-| `payment_gross` / `payment_net` | Yes | Unsigned integers representing asset-native units. |
-| `settlement_tx` | Yes | JSON value or literal string describing the payment transaction or hash. |
-| `payment_payer` | Yes | AccountId that authorised the payment. |
-| `payment_signature` | Yes | JSON or literal string containing the steward or treasury signature proof. |
-| `controllers` | Optional | Semicolon- or comma-separated list of controller account addresses. Defaults to `[owner]` when omitted. |
-| `metadata` | Optional | Inline JSON or `@path/to/file.json` providing resolver hints, TXT records, etc. Defaults to `{}`. |
-| `governance` | Optional | Inline JSON or `@path` pointing at a `GovernanceHookV1`. `--require-governance` enforces this column. |
+| `label` |是的 |請求的標籤（接受混合大小寫；工具根據 Norm v1 和 UTS-46 進行標準化）。 |
+| `suffix_id` |是的 |數字後綴標識符（十進製或 `0x` 十六進制）。 |
+| `owner` |是的 |註冊所有者的 AccountId 字符串（IH58 文字；可選@domain 提示）。 |
+| `term_years` |是的 |整數 `1..=255`。 |
+| `payment_asset_id` |是的 |結算資產（例如 `xor#sora`）。 |
+| `payment_gross` / `payment_net` |是的 |表示資產本機單位的無符號整數。 |
+| `settlement_tx` |是的 |描述支付交易或哈希的 JSON 值或文字字符串。 |
+| `payment_payer` |是的 |授權付款的AccountId。 |
+| `payment_signature` |是的 |包含管理員或財務簽名證明的 JSON 或文字字符串。 |
+| `controllers` |可選|以分號或逗號分隔的控制者帳戶地址列表。省略時默認為 `[owner]`。 |
+| `metadata` |可選|內聯 JSON 或 `@path/to/file.json` 提供解析器提示、TXT 記錄等。默認為 `{}`。 |
+| `governance` |可選|內聯 JSON 或 `@path` 指向 `GovernanceHookV1`。 `--require-governance` 強制執行此列。 |
 
-Any column may reference an external file by prefixing the cell value with `@`.
-Paths are resolved relative to the CSV file.
+任何列都可以通過在單元格值前添加 `@` 來引用外部文件。
+路徑是相對於 CSV 文件解析的。
 
-## 2. Running the helper
+## 2. 運行助手
 
 ```bash
 python3 scripts/sns_bulk_onboard.py registrations.csv \
@@ -65,16 +67,16 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   --ndjson artifacts/sns_bulk_requests.ndjson
 ```
 
-Key options:
+關鍵選項：
 
-- `--require-governance` rejects rows without a governance hook (useful for
-  premium auctions or reserved assignments).
-- `--default-controllers {owner,none}` decides whether empty controller cells
-  fall back to the owner account.
-- `--controllers-column`, `--metadata-column`, and `--governance-column` rename
-  optional columns when working with upstream exports.
+- `--require-governance` 拒絕沒有治理掛鉤的行（對於
+  優質拍賣或保留轉讓）。
+- `--default-controllers {owner,none}` 決定控制器單元是否為空
+  回退到所有者帳戶。
+- `--controllers-column`、`--metadata-column` 和 `--governance-column` 重命名
+  使用上游導出時的可選列。
 
-On success the script writes an aggregated manifest:
+成功後，腳本會寫入聚合清單：
 
 ```json
 {
@@ -111,9 +113,9 @@ On success the script writes an aggregated manifest:
 }
 ```
 
-If `--ndjson` is provided, each `RegisterNameRequestV1` is also written as a
-single-line JSON document so automations can stream requests directly into
-Torii:
+如果提供了 `--ndjson`，則每個 `RegisterNameRequestV1` 也被寫為
+單行 JSON 文檔，因此自動化可以將請求直接流式傳輸到
+Torii：
 
 ```bash
 jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
@@ -125,12 +127,12 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
   done
 ```
 
-## 3. Automated submissions
+## 3. 自動提交
 
-### 3.1 Torii REST mode
+### 3.1 Torii 休息模式
 
-Specify `--submit-torii-url` plus either `--submit-token` or
-`--submit-token-file` to push every manifest entry directly into Torii:
+指定 `--submit-torii-url` 加 `--submit-token` 或
+`--submit-token-file` 將每個清單條目直接推送到 Torii：
 
 ```bash
 python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json \
@@ -141,18 +143,18 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- The helper issues one `POST /v1/sns/registrations` per request and aborts on
-  the first HTTP error. Responses are appended to the log path as NDJSON
-  records.
-- `--poll-status` re-queries `/v1/sns/registrations/{selector}` after each
-  submission (up to `--poll-attempts`, default 5) to confirm that the record is
-  visible. Provide `--suffix-map` (JSON of `suffix_id` to `"suffix"` values) so
-  the tool can derive `{label}.{suffix}` literals for polling.
-- Tunables: `--submit-timeout`, `--poll-attempts`, and `--poll-interval`.
+- 幫助程序針對每個請求發出一個 `POST /v1/sns/registrations` 併中止
+  第一個 HTTP 錯誤。響應以 NDJSON 形式附加到日誌路徑
+  記錄。
+- `--poll-status` 在每次之後重新查詢 `/v1/sns/registrations/{selector}`
+  提交（最多`--poll-attempts`，默認5）以確認該記錄
+  可見。提供 `--suffix-map` （`suffix_id` 到 `"suffix"` 值的 JSON）
+  該工具可以派生 `{label}.{suffix}` 文字進行輪詢。
+- 可調參數：`--submit-timeout`、`--poll-attempts` 和 `--poll-interval`。
 
-### 3.2 iroha CLI mode
+### 3.2 iroha CLI 模式
 
-To route each manifest entry through the CLI, supply the binary path:
+要通過 CLI 路由每個清單條目，請提供二進制路徑：
 
 ```bash
 python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json \
@@ -162,20 +164,20 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- Controllers must be `Account` entries (`controller_type.kind = "Account"`)
-  because the CLI currently exposes only account-based controllers.
-- Metadata and governance blobs are written to temporary files per request and
-  forwarded to `iroha sns register --metadata-json ... --governance-json ...`.
-- CLI stdout and stderr plus exit codes are logged; non-zero exit codes abort
-  the run.
+- 控制器必須是 `Account` 條目 (`controller_type.kind = "Account"`)
+  因為 CLI 目前僅公開基於帳戶的控制器。
+- 元數據和治理 blob 根據請求寫入臨時文件，
+  轉發至 `iroha sns register --metadata-json ... --governance-json ...`。
+- 記錄 CLI stdout 和 stderr 以及退出代碼；非零退出代碼中止
+  奔跑。
 
-Both submission modes can run together (Torii and CLI) to cross-check registrar
-deployments or rehearse fallbacks.
+兩種提交模式可以一起運行（Torii 和 CLI）以交叉檢查註冊商
+部署或演練後備方案。
 
-### 3.3 Submission receipts
+### 3.3 提交回執
 
-When `--submission-log <path>` is provided, the script appends NDJSON entries
-capturing:
+當提供 `--submission-log <path>` 時，腳本會附加 NDJSON 條目
+捕獲：
 
 ```json
 {"timestamp":"2026-03-30T07:22:04.123Z","mode":"torii","index":12,"selector":"1:alpha","status":200,"success":true,"detail":"..."}
@@ -183,17 +185,17 @@ capturing:
 {"timestamp":"2026-03-30T07:22:06.789Z","mode":"cli","index":12,"selector":"1:alpha","status":0,"success":true,"detail":"Registration accepted"}
 ```
 
-Successful Torii responses include structured fields extracted from
-`NameRecordV1` or `RegisterNameResponseV1` (for example `record_status`,
-`record_pricing_class`, `record_owner`, `record_expires_at_ms`,
-`registry_event_version`, `suffix_id`, `label`) so dashboards and governance
-reports can parse the log without inspecting free-form text. Attach this log to
-registrar tickets alongside the manifest for reproducible evidence.
+成功的 Torii 響應包括從以下位置提取的結構化字段
+`NameRecordV1` 或 `RegisterNameResponseV1`（例如 `record_status`，
+`record_pricing_class`、`record_owner`、`record_expires_at_ms`、
+`registry_event_version`、`suffix_id`、`label`）等儀表板和治理
+報告可以解析日誌而無需檢查自由格式文本。將此日誌附加到
+登記員票據與清單一起提供可複制的證據。
 
-## 4. Docs portal release automation
+## 4. 文檔門戶發布自動化
 
-CI and portal jobs call `docs/portal/scripts/sns_bulk_release.sh`, which wraps
-the helper and stores artefacts under `artifacts/sns/releases/<timestamp>/`:
+CI 和門戶作業調用 `docs/portal/scripts/sns_bulk_release.sh`，它包含
+幫助程序並將工件存儲在 `artifacts/sns/releases/<timestamp>/` 下：
 
 ```bash
 docs/portal/scripts/sns_bulk_release.sh \
@@ -206,25 +208,25 @@ docs/portal/scripts/sns_bulk_release.sh \
   --cli-config configs/registrar.toml
 ```
 
-The script:
+腳本：
 
-1. Builds `registrations.manifest.json`, `registrations.ndjson`, and copies the
-   original CSV into the release directory.
-2. Submits the manifest using Torii and/or the CLI (when configured), writing
-   `submissions.log` with the structured receipts above.
-3. Emits `summary.json` describing the release (paths, Torii URL, CLI path,
-   timestamp) so portal automation can upload the bundle to artefact storage.
-4. Produces `metrics.prom` (override via `--metrics`) containing
-   Prometheus-format counters for total requests, suffix distribution,
-   asset totals, and submission outcomes. The summary JSON links to this file.
+1. 構建 `registrations.manifest.json`、`registrations.ndjson`，並複制
+   將原始 CSV 複製到發布目錄中。
+2. 使用 Torii 和/或 CLI（配置後）提交清單，寫入
+   `submissions.log` 以及上述結構化收據。
+3. 發出 `summary.json` 描述該版本（路徑、Torii URL、CLI 路徑、
+   時間戳），以便門戶自動化可以將包上傳到工件存儲。
+4. 生成 `metrics.prom`（通過 `--metrics` 覆蓋），其中包含
+   Prometheus-格式計數器，用於總請求、後綴分佈、
+   資產總額和提交結果。摘要 JSON 鏈接到此文件。
 
-Workflows simply archive the release directory as a single artefact, which now
-contains everything governance needs for auditing.
+工作流程只是將發布目錄歸檔為單個工件，現在
+包含審計治理所需的一切。
 
-## 5. Telemetry & dashboards
+## 5. 遙測和儀表板
 
-The metrics file generated by `sns_bulk_release.sh` exposes the following
-series:
+`sns_bulk_release.sh` 生成的指標文件公開了以下內容
+系列：
 
 ```
 # HELP sns_bulk_release_requests_total Number of registration requests per release and suffix.
@@ -235,41 +237,41 @@ sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="xor#sora"} 
 sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",success="true"} 118
 ```
 
-Feed `metrics.prom` into your Prometheus sidecar (for example via Promtail or a
-batch importer) to keep registrars, stewards, and governance peers aligned on
-bulk progress. Grafana board
-`dashboards/grafana/sns_bulk_release.json` visualises the same data with panels
-for per-suffix counts, payment volume, and submission success/failure ratios.
-The board filters by `release` so auditors can drill into a single CSV run.
+將 `metrics.prom` 餵入您的 Prometheus sidecar（例如通過 Promtail 或
+批量導入程序）以使註冊商、管理員和治理同行保持一致
+批量進展。 Grafana板
+`dashboards/grafana/sns_bulk_release.json` 使用面板可視化相同的數據
+每個後綴計數、付款量和提交成功/失敗比率。
+該委員會按 `release` 進行篩選，因此審核員可以深入了解單個 CSV 運行。
 
-## 6. Validation and failure modes
+## 6. 驗證和失敗模式
 
-- **Label canonicalisation:** inputs are normalised with Python IDNA plus
-  lowercase and Norm v1 character filters. Invalid labels fail fast before any
-  network calls.
-- **Numeric guardrails:** suffix ids, term years, and pricing hints must fall
-  within `u16` and `u8` bounds. Payment fields accept decimal or hex integers
-  up to `i64::MAX`.
-- **Metadata or governance parsing:** inline JSON is parsed directly; file
-  references are resolved relative to the CSV location. Non-object metadata
-  produces a validation error.
-- **Controllers:** blank cells honour `--default-controllers`. Provide explicit
-  controller lists (for example `ih58...;ih58...`) when delegating to non-owner
-  actors.
+- **標籤規範化：** 輸入使用 Python IDNA plus 進行規範化
+  小寫和 Norm v1 字符過濾器。無效標籤在任何標籤之前都會快速失敗
+  網絡通話。
+- **數字護欄：** 後綴 ID、學期年份和定價提示必須下降
+  在 `u16` 和 `u8` 範圍內。付款字段接受十進製或十六進制整數
+  高達 `i64::MAX`。
+- **元數據或治理解析：**直接解析內聯JSON；文件
+  引用是相對於 CSV 位置解析的。非對像元數據
+  產生驗證錯誤。
+- **控制器：** 空白單元符合 `--default-controllers`。提供明確的
+  委派給非所有者時的控制器列表（例如 `ih58...;ih58...`）
+  演員。
 
-Failures are reported with contextual row numbers (for example
-`error: row 12 term_years must be between 1 and 255`). The script exits with
-code `1` on validation errors and `2` when the CSV path is missing.
+使用上下文行號報告失敗（例如
+`error: row 12 term_years must be between 1 and 255`）。腳本退出時顯示
+驗證錯誤時代碼為 `1`，CSV 路徑丟失時代碼為 `2`。
 
-## 7. Testing and provenance
+## 7. 測試和出處
 
-- `python3 -m pytest scripts/tests/test_sns_bulk_onboard.py` covers CSV parsing,
-  NDJSON emission, governance enforcement, and the CLI or Torii submission
-  paths.
-- The helper is pure Python (no additional dependencies) and runs anywhere
-  `python3` is available. Commit history is tracked alongside the CLI in the
-  main repository for reproducibility.
+- `python3 -m pytest scripts/tests/test_sns_bulk_onboard.py` 涵蓋 CSV 解析，
+  NDJSON 發射、治理執行和 CLI 或 Torii 提交
+  路徑。
+- 助手是純Python（沒有額外的依賴）並且可以在任何地方運行
+  `python3` 可用。提交歷史記錄與 CLI 一起跟踪
+  可重複性的主存儲庫。
 
-For production runs, attach the generated manifest and NDJSON bundle to the
-registrar ticket so stewards can replay the exact payloads that were submitted
-to Torii.
+對於生產運行，請將生成的清單和 NDJSON 捆綁包附加到
+註冊商票證，以便管理員可以重放已提交的確切有效負載
+至 Torii。

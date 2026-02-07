@@ -8,97 +8,99 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Orchestrator Rollout & Tuning
 sidebar_label: Orchestrator Tuning
 description: Practical defaults, tuning guidance, and audit checkpoints for taking the multi-source orchestrator to GA.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
+:::note Կանոնական աղբյուր
 :::
 
-# Orchestrator Rollout & Tuning Guide
+# Նվագախմբի տարածման և թյունինգի ուղեցույց
 
-This guide builds on the [configuration reference](orchestrator-config.md) and the
-[multi-source rollout runbook](multi-source-rollout.md). It explains
-how to tune the orchestrator for each rollout phase, how to interpret the
-scoreboard artefacts, and which telemetry signals must be in place before
-expanding traffic. Apply the recommendations consistently across CLI, SDKs, and
-automation so every node follows the same deterministic fetch policy.
+Այս ուղեցույցը հիմնված է [կազմաձեւման հղում] (orchestrator-config.md) և
+[բազմաղբյուրի տեղադրման աշխատագիրք] (multi-source-rollout.md): Այն բացատրում է
+ինչպես կարգավորել նվագախմբին յուրաքանչյուր ներկայացման փուլի համար, ինչպես մեկնաբանել
+ցուցատախտակի արտեֆակտներ, և թե որ հեռաչափության ազդանշանները պետք է լինեն նախկինում
+ընդլայնելով երթևեկությունը: Հետևողականորեն կիրառեք առաջարկությունները CLI-ում, SDK-ներում և
+ավտոմատացում, այնպես որ յուրաքանչյուր հանգույց հետևում է նույն դետերմինիստական առբերման քաղաքականությանը:
 
-## 1. Baseline Parameter Sets
+## 1. Հիմնական պարամետրերի հավաքածուներ
 
-Start from a shared configuration template and adjust a small set of knobs as
-the rollout progresses. The table below captures the recommended values for the
-most common phases; values not listed fall back to the defaults in
-`OrchestratorConfig::default()` and `FetchOptions::default()`.
+Սկսեք ընդհանուր կազմաձևման ձևանմուշից և կարգավորեք կոճակների փոքր հավաքածուն որպես
+տեղակայումն առաջ է ընթանում: Ստորև բերված աղյուսակը ցույց է տալիս առաջարկվող արժեքները
+ամենատարածված փուլերը; չնշված արժեքները վերադառնում են լռելյայն
+`OrchestratorConfig::default()` և `FetchOptions::default()`:
 
-| Phase | `max_providers` | `fetch.per_chunk_retry_limit` | `fetch.provider_failure_threshold` | `scoreboard.latency_cap_ms` | `scoreboard.telemetry_grace_secs` | Notes |
-|-------|-----------------|-------------------------------|------------------------------------|-----------------------------|------------------------------------|-------|
-| **Lab / CI** | `3` | `2` | `2` | `2500` | `300` | Tight latency cap and grace window surface noisy telemetry quickly. Keep retries low to expose invalid manifests sooner. |
-| **Staging** | `4` | `3` | `3` | `4000` | `600` | Mirrors production defaults while leaving headroom for exploratory peers. |
-| **Canary** | `6` | `3` | `3` | `5000` | `900` | Matches defaults; set `telemetry_region` so dashboards can pivot on canary traffic. |
-| **General Availability** | `None` (use all eligible) | `4` | `4` | `5000` | `900` | Increase retry and failure thresholds to absorb transient faults while audits continue to enforce determinism. |
+| Փուլ | `max_providers` | `fetch.per_chunk_retry_limit` | `fetch.provider_failure_threshold` | `scoreboard.latency_cap_ms` | `scoreboard.telemetry_grace_secs` | Ծանոթագրություններ |
+|-------|------------------------------------------------|-------------------------- ----------|-----------------------------------------------------------------|
+| **Լաբորատորիա / CI** | `3` | `2` | `2` | `2500` | `300` | Խիտ հետաձգման գլխարկ և շնորհալի պատուհանի մակերեսի աղմկոտ հեռաչափություն արագ: Կրկնվող փորձերը ցածր պահեք՝ անվավեր մանիֆեստներն ավելի շուտ բացահայտելու համար: |
+| **Բեմադրում** | `4` | `3` | `3` | `4000` | `600` | Հայելիների արտադրությունը լռելյայն է, իսկ հետախուզական հասակակիցների համար ազատ տեղ է թողնում: |
+| **Կանարին** | `6` | `3` | `3` | `5000` | `900` | Համապատասխանում է կանխադրվածներին; սահմանեք `telemetry_region`, որպեսզի վահանակները կարողանան առանցքային տեղաշարժվել դեղձանիկների երթևեկության վրա: |
+| **Ընդհանուր հասանելիություն** | `None` (օգտագործել բոլոր իրավասուները) | `4` | `4` | `5000` | `900` | Բարձրացրեք կրկնակի և ձախողման շեմերը՝ անցողիկ անսարքությունները կլանելու համար, մինչ աուդիտները շարունակում են պարտադրել դետերմինիզմը: |
 
-- `scoreboard.weight_scale` remains at the default `10_000` unless a downstream
-  system requires a different integer resolution. Increasing the scale does not
-  change provider ordering; it only emits a denser credit distribution.
-- When migrating between phases, persist the JSON bundle and use
-  `--scoreboard-out` so the audit trail records the exact parameter set.
+- `scoreboard.weight_scale`-ը մնում է լռելյայն `10_000`-ում, եթե հոսանքն ի վար
+  Համակարգը պահանջում է մեկ այլ ամբողջական լուծում: Սանդղակի մեծացումը չի նշանակում
+  փոխել մատակարարի պատվերը; այն միայն ավելի խիտ վարկային բաշխում է հաղորդում:
+- Փուլերի միջև տեղափոխելիս պահպանեք JSON փաթեթը և օգտագործեք
+  `--scoreboard-out` այնպես որ աուդիտի հետքը գրանցում է ճշգրիտ պարամետրերի հավաքածուն:
 
-## 2. Scoreboard Hygiene
+## 2. Ցուցատախտակի հիգիենա
 
-The scoreboard combines manifest requirements, provider adverts, and telemetry.
-Before rolling forward:
+Ցուցատախտակը միավորում է մանիֆեստի պահանջները, մատակարարի գովազդները և հեռաչափությունը:
+Առաջ գլորվելուց առաջ.
 
-1. **Validate telemetry freshness.** Ensure the snapshots referenced by
-   `--telemetry-json` were captured within the configured grace window. Entries
-   older than the configured `telemetry_grace_secs` fail with
-   `TelemetryStale { last_updated }`. Treat this as a hard stop and refresh the
-   telemetry export before continuing.
-2. **Inspect eligibility reasons.** Persist artefacts via
-   `--scoreboard-out=/var/lib/sorafs/scoreboards/preflight.json`. Each entry
-   carries an `eligibility` block with the exact failure cause. Do not override
-   capability mismatches or expired adverts; fix the upstream payload.
-3. **Review weight deltas.** Compare the `normalised_weight` field against the
-   previous release. Weight shifts >10 % should correlate with deliberate advert
-   or telemetry changes and must be acknowledged in the rollout log.
-4. **Archive artefacts.** Configure `scoreboard.persist_path` so every run emits
-   the final scoreboard snapshot. Attach the artefact to the release record
-   alongside the manifest and telemetry bundle.
-5. **Record provider mix evidence.** `scoreboard.json` metadata _and_ the
-   matching `summary.json` must expose `provider_count`,
-   `gateway_provider_count`, and the derived `provider_mix` label so reviewers
-   can prove whether the run was `direct-only`, `gateway-only`, or `mixed`.
-   Gateway captures therefore report `provider_count=0` plus
-   `provider_mix="gateway-only"`, while mixed runs require non-zero counts for
-   both sources. `cargo xtask sorafs-adoption-check` enforces these fields (and
-   fails when the counts/labels disagree), so always run it alongside
-   `ci/check_sorafs_orchestrator_adoption.sh` or your bespoke capture script to
-   produce the `adoption_report.json` evidence bundle. When Torii gateways are
-   involved, keep `gateway_manifest_id`/`gateway_manifest_cid` in the scoreboard
-   metadata so the adoption gate can correlate the manifest envelope with the
-   captured provider mix.
+1. **Հաստատեք հեռաչափության թարմությունը:** Համոզվեք, որ ակնարկները, որոնք հղում են կատարում
+   `--telemetry-json`-ը գրավվել է կազմաձևված շնորհի պատուհանում: Գրառումներ
+   ավելի հին, քան կազմաձևված `telemetry_grace_secs` ձախողումը
+   `TelemetryStale { last_updated }`. Վերաբերվեք սա որպես կոշտ կանգառ և թարմացրեք
+   հեռաչափության արտահանում մինչ շարունակելը:
+2. **Ստուգեք իրավասության պատճառները:** Պահպանեք արտեֆակտները միջոցով
+   `--scoreboard-out=/var/lib/sorafs/scoreboards/preflight.json`. Յուրաքանչյուր մուտք
+   կրում է `eligibility` բլոկ՝ անսարքության ճշգրիտ պատճառով: Մի անտեսեք
+   հնարավորությունների անհամապատասխանություններ կամ ժամկետանց գովազդներ. ուղղել վերին հոսքի օգտակար բեռը:
+3. **Դիտեք քաշի դելտաները։** Համեմատեք `normalised_weight` դաշտը
+   նախորդ թողարկումը. Քաշի տեղաշարժերը >10% պետք է կապված լինեն կանխամտածված գովազդի հետ
+   կամ հեռաչափության փոփոխությունները և պետք է ճանաչվեն գործարկման մատյանում:
+4. **Արխիվացրեք արտեֆակտները։** Կարգավորեք `scoreboard.persist_path`, որպեսզի յուրաքանչյուր գործարկում թողարկվի
+   ցուցատախտակի վերջնական նկարը: Կցեք արտեֆակտը թողարկման ձայնագրությանը
+   մանիֆեստի և հեռաչափության փաթեթի կողքին:
+5. **Գրառեք մատակարարի խառնուրդի ապացույցները։** `scoreboard.json` մետատվյալներ _and_ the
+   համապատասխանող `summary.json` պետք է բացահայտի `provider_count`,
+   `gateway_provider_count` և ստացված `provider_mix` պիտակը, որպեսզի գրախոսներ
+   կարող է ապացուցել՝ վազքը եղել է `direct-only`, `gateway-only`, թե `mixed`:
+   Gateway-ը գրավում է, հետևաբար, հաղորդում է `provider_count=0` plus
+   `provider_mix="gateway-only"`, մինչդեռ խառը գործարկումները պահանջում են ոչ զրոյական հաշվարկներ
+   երկու աղբյուրներն էլ։ `cargo xtask sorafs-adoption-check`-ը պարտադրում է այս դաշտերը (և
+   ձախողվում է, երբ հաշվարկները/պիտակները համաձայն չեն), այնպես որ միշտ գործարկեք այն կողքին
+   `ci/check_sorafs_orchestrator_adoption.sh` կամ ձեր պատվերով նկարահանման սցենարը
+   արտադրեք `adoption_report.json` ապացույցների փաթեթը: Երբ Torii դարպասներն են
+   ներգրավված, պահեք `gateway_manifest_id`/`gateway_manifest_cid` ցուցատախտակում
+   մետատվյալներ, որպեսզի որդեգրման դարպասը կարողանա կապել մանիֆեստի ծրարը
+   գրավված մատակարարի խառնուրդ:
 
-For detailed field definitions see
-`crates/sorafs_car/src/scoreboard.rs` and the CLI summary structure exposed by
+Դաշտի մանրամասն սահմանումների համար տե՛ս
+`crates/sorafs_car/src/scoreboard.rs` և CLI ամփոփ կառուցվածքը, որը ենթարկվում է
 `sorafs_cli fetch --json-out`.
 
-## CLI & SDK Flag Reference
+## CLI & SDK դրոշի հղում
 
-`sorafs_cli fetch` (see `crates/sorafs_car/src/bin/sorafs_cli.rs`) and the
-`iroha_cli app sorafs fetch` wrapper (`crates/iroha_cli/src/commands/sorafs.rs`)
-share the same orchestrator configuration surface. Use the following flags when
-capturing rollout evidence or replaying the canonical fixtures:
+`sorafs_cli fetch` (տես `crates/sorafs_car/src/bin/sorafs_cli.rs`) և
+`iroha_cli app sorafs fetch` փաթաթան (`crates/iroha_cli/src/commands/sorafs.rs`)
+կիսում են նվագախմբի կազմաձևման նույն մակերեսը: Օգտագործեք հետևյալ դրոշները, երբ
+ներկայացման ապացույցների գրավում կամ կանոնական սարքերի վերարտադրում.
 
-Shared multi-source flag reference (keep CLI help and docs in sync by editing this file only):
+Համօգտագործվող բազմաղբյուր դրոշի հղում (CLI օգնությունը և փաստաթղթերը համաժամեցված պահեք՝ խմբագրելով միայն այս ֆայլը).
 
-- `--max-peers=<count>` limits how many eligible providers survive the scoreboard filter. Leave unset to stream from every eligible provider, set to `1` only when intentionally exercising the single-source fallback. Mirrors the `maxPeers` knob in SDKs (`SorafsGatewayFetchOptions.maxPeers`, `SorafsGatewayFetchOptions.max_peers`).
-- `--retry-budget=<count>` forwards to the per-chunk retry limit enforced by `FetchOptions`. Use the rollout table in the tuning guide for recommended values; CLI runs that collect evidence must match SDK defaults to keep parity.
-- `--telemetry-region=<label>` tags `sorafs_orchestrator_*` Prometheus series (and OTLP relays) with a region/env label so dashboards can separate lab, staging, canary, and GA traffic.
-- `--telemetry-json=<path>` injects the snapshot referenced by the scoreboard. Persist the JSON next to the scoreboard so auditors can replay the run (and so `cargo xtask sorafs-adoption-check --require-telemetry` can prove which OTLP stream fed the capture).
-- `--local-proxy-*` (`--local-proxy-mode`, `--local-proxy-norito-spool`, `--local-proxy-kaigi-spool`, `--local-proxy-kaigi-policy`) enable the bridge observer hooks. When set, the orchestrator streams chunks through the local Norito/Kaigi proxy so browser clients, guard caches, and Kaigi rooms receive the same receipts emitted by Rust.
-- `--scoreboard-out=<path>` (optionally paired with `--scoreboard-now=<unix_secs>`) persists the eligibility snapshot for auditors. Always pair the persisted JSON with the telemetry and manifest artefacts referenced in the release ticket.
-- `--deny-provider name=ALIAS` / `--boost-provider name=ALIAS:delta` apply deterministic adjustments on top of the advert metadata. Use these flags only for rehearsals; production downgrades must flow through governance artefacts so every node applies the same policy bundle.
-- `--provider-metrics-out` / `--chunk-receipts-out` retain the per-provider health metrics and chunk receipts referenced by the rollout checklist; attach both artefacts when filing adoption evidence.
+- `--max-peers=<count>`-ը սահմանափակում է, թե քանի իրավասու մատակարար է գոյատևում ցուցատախտակի ֆիլտրից: Թողեք չկարգավորված՝ յուրաքանչյուր իրավասու մատակարարից հեռարձակելու համար, սահմանեք `1` միայն այն դեպքում, երբ դիտավորյալ օգտագործում եք մեկ աղբյուրի հետադարձ կապը: Հայելի է `maxPeers` կոճակը SDK-ներում (`SorafsGatewayFetchOptions.maxPeers`, `SorafsGatewayFetchOptions.max_peers`):
+- `--retry-budget=<count>`-ը փոխանցվում է `FetchOptions`-ի կողմից պարտադրված մեկ կտոր կրկնակի փորձի սահմանաչափին: Առաջարկվող արժեքների համար օգտագործեք տեղադրման աղյուսակը թյունինգի ուղեցույցում. CLI-ի գործարկումները, որոնք ապացույցներ են հավաքում, պետք է համապատասխանեն SDK-ի լռելյայններին՝ հավասարությունը պահպանելու համար:
+- `--telemetry-region=<label>` պիտակավորում է `sorafs_orchestrator_*` Prometheus շարքը (և OTLP ռելեներ) տարածաշրջանի/env պիտակով, որպեսզի վահանակները կարողանան առանձնացնել լաբորատոր, բեմական, դեղձանիկ և GA երթևեկությունը:
+- `--telemetry-json=<path>`-ը ներարկում է ցուցատախտակի վրա նշված պատկերը: Պահեք JSON-ը ցուցատախտակի կողքին, որպեսզի աուդիտորները կարողանան կրկնել վազքը (և այսպես, `cargo xtask sorafs-adoption-check --require-telemetry`-ը կարողանա ապացուցել, թե որ OTLP հոսքն է սնուցել նկարահանումը):
+- `--local-proxy-*` (`--local-proxy-mode`, `--local-proxy-norito-spool`, `--local-proxy-kaigi-spool`, `--local-proxy-kaigi-policy`) միացնում են կամրջի դիտորդի կեռիկները: Երբ կարգաբերվում է, նվագախումբը հատվածներ է փոխանցում տեղական Norito/Kaigi վստահված անձի միջոցով, որպեսզի դիտարկիչի հաճախորդները, պահակային պահոցները և Kaigi սենյակները ստանան Rust-ի կողմից թողարկված նույն անդորրագրերը:
+- `--scoreboard-out=<path>` (ըստ ցանկության զուգակցված `--scoreboard-now=<unix_secs>`-ի հետ) պահպանում է իրավասության պատկերը աուդիտորների համար: Միշտ զուգակցեք պահպանված JSON-ը հեռաչափության և ցուցադրվող արտեֆակտների հետ, որոնք հիշատակվում են թողարկման տոմսում:
+- `--deny-provider name=ALIAS` / `--boost-provider name=ALIAS:delta` կիրառել դետերմինիստական ​​ճշգրտումներ գովազդի մետատվյալների վերևում: Օգտագործեք այս դրոշները միայն փորձերի համար; արտադրության իջեցումները պետք է հոսեն կառավարման արտեֆակտների միջոցով, որպեսզի յուրաքանչյուր հանգույց կիրառի նույն քաղաքականության փաթեթը:
+- `--provider-metrics-out` / `--chunk-receipts-out` պահպանում են յուրաքանչյուր մատակարարի առողջության ցուցանիշները և անդորրագրերը, որոնք վկայակոչված են թողարկման ստուգաթերթում. կցել երկու արտեֆակտները որդեգրման ապացույցներ ներկայացնելիս:
 
-Example (using the published fixture):
+Օրինակ (օգտագործելով հրապարակված հարմարանքը).
 
 ```bash
 sorafs_cli fetch \
@@ -115,110 +117,108 @@ cargo xtask sorafs-adoption-check \
   --summary artifacts/sorafs_orchestrator/latest/summary.json
 ```
 
-SDKs consume the same configuration via `SorafsGatewayFetchOptions` in the Rust
-client (`crates/iroha/src/client.rs`), the JS bindings
-(`javascript/iroha_js/src/sorafs.js`), and the Swift SDK
-(`IrohaSwift/Sources/IrohaSwift/SorafsOptions.swift`). Keep those helpers in
-lock-step with the CLI defaults so operators can copy policies across automation
-without bespoke translation layers.
+SDK-ները օգտագործում են նույն կոնֆիգուրացիան Rust-ում `SorafsGatewayFetchOptions`-ի միջոցով
+հաճախորդը (`crates/iroha/src/client.rs`), JS կապերը
+(`javascript/iroha_js/src/sorafs.js`) և Swift SDK
+(`IrohaSwift/Sources/IrohaSwift/SorafsOptions.swift`): Ներս պահեք այդ օգնականներին
+կողպեք-քայլ CLI լռելյայններով, որպեսզի օպերատորները կարողանան պատճենել քաղաքականությունը ավտոմատացման մեջ
+առանց պատվերով թարգմանության շերտերի:
 
-## 3. Fetch Policy Tuning
+## 3. Ստացեք քաղաքականության կարգավորում
 
-`FetchOptions` controls retry behaviour, concurrency, and verification. When
-tuning:
+`FetchOptions`-ը վերահսկում է նորից փորձելու վարքագիծը, միաժամանակությունը և ստուգումը: Երբ
+թյունինգ:
 
-- **Retries:** Raising `per_chunk_retry_limit` beyond `4` increases recovery
-  time but risks masking provider faults. Prefer keeping `4` as the ceiling and
-  relying on the provider rotation to surface poor performers.
-- **Failure threshold:** The `provider_failure_threshold` governs when a
-  provider is disabled for the remainder of the session. Align this value with
-  retry policy: a threshold lower than the retry budget forces the orchestrator
-  to eject a peer before all retries are exhausted.
-- **Concurrency:** Leave `global_parallel_limit` unset (`None`) unless a
-  specific environment cannot saturate the advertised ranges. When set, ensure
-  the value is ≤ the sum of provider stream budgets to avoid starvation.
-- **Verification toggles:** `verify_lengths` and `verify_digests` must remain
-  enabled in production. They guarantee determinism when mixed provider fleets
-  are in play; only disable them in isolated fuzzing environments.
+- **Նորից փորձեր.** `per_chunk_retry_limit`-ի բարձրացումը `4`-ից ավելի մեծացնում է վերականգնումը
+  ժամանակ, բայց ռիսկերը քողարկում են մատակարարի սխալները: Նախընտրում են `4` պահել որպես առաստաղ և
+  հենվելով մատակարարի ռոտացիայի վրա՝ մակերեսային վատ կատարողներին:
+- **Ձախողման շեմ.** `provider_failure_threshold`-ը կառավարում է, երբ
+  մատակարարն անջատված է նիստի մնացած ժամանակահատվածի համար: Հավասարեցնել այս արժեքը
+  կրկնելու քաղաքականություն. կրկնակի բյուջեից ցածր շեմը ստիպում է նվագախմբին
+  հեռացնել հասակակիցին մինչև բոլոր կրկնվող փորձերը սպառվել են:
+- **Միաժամանակ.** Թողեք `global_parallel_limit` չկարգավորված (`None`), եթե
+  կոնկրետ միջավայրը չի կարող հագեցնել գովազդվող միջակայքերը: Երբ սահմանված է, ապահովեք
+  արժեքը ≤ մատակարարի հոսքային բյուջեների գումարն է՝ սովից խուսափելու համար:
+- **Ստուգման անջատիչներ.** `verify_lengths` և `verify_digests` պետք է մնան
+  միացված է արտադրության մեջ: Նրանք երաշխավորում են դետերմինիզմ, երբ խառը մատակարարների նավատորմը
+  խաղում են; անջատել դրանք միայն մեկուսացված աղոտ միջավայրերում:
 
-## 4. Transport & Anonymity Staging
+## 4. Տրանսպորտ և անանունության բեմականացում
 
-Use the `rollout_phase`, `anonymity_policy`, and `transport_policy` fields to
-represent the privacy posture:
+Օգտագործեք `rollout_phase`, `anonymity_policy` և `transport_policy` դաշտերը՝
+ներկայացնում է գաղտնիության կեցվածքը.- Նախընտրեք `rollout_phase="snnet-5"` և թույլ տվեք կանխադրված անանունության քաղաքականությունը
+  հետևել SNNet-5-ի հանգուցալուծմանը: Չեղարկել միայն `anonymity_policy_override`-ի միջոցով
+  երբ կառավարությունը ստորագրված հրահանգ է տալիս:
+- Պահպանեք `transport_policy="soranet-first"` որպես ելակետ, մինչդեռ SNNet-4/5/5a/5b/6a/7/8/12/13 են 🈺
+  (տես `roadmap.md`): Օգտագործեք `transport_policy="direct-only"` միայն փաստաթղթերի համար
+  նվազեցնում/համապատասխանության վարժանքներ, և մինչ այդ սպասեք PQ ծածկույթի վերանայմանը
+  առաջխաղացում դեպի `transport_policy="soranet-strict"`—այդ մակարդակը արագ կտապալվի, եթե
+  մնացել են միայն դասական ռելեներ:
+- `write_mode="pq-only"`-ը պետք է գործադրվի միայն այն դեպքում, երբ գրելու յուրաքանչյուր ուղի (SDK,
+  նվագախումբ, կառավարման գործիքակազմ) կարող է բավարարել PQ պահանջները: ընթացքում
+  Տարածումները պահպանում են `write_mode="allow-downgrade"`-ը, որպեսզի հնարավոր լինի ապավինել արտակարգ իրավիճակների արձագանքներին
+  ուղիղ երթուղիներում, մինչդեռ հեռաչափությունը նշում է վարկանիշի իջեցումը:
+- Պահակների ընտրությունը և շրջանի բեմադրությունը հիմնված են SoraNet գրացուցակի վրա: Մատակարարել
+  ստորագրված `relay_directory` լուսանկարը և պահպանեք `guard_set` քեշը, այնպես որ պահպանեք
+  Churn մնում է համաձայնեցված պահպանման պատուհանում: Քեշի մատնահետքը գրանցված է
+  կողմից `sorafs_cli fetch`-ը կազմում է շրջանառության ապացույցների մի մասը:
 
-- Prefer `rollout_phase="snnet-5"` and allow the default anonymity policy to
-  track the SNNet-5 milestones. Override via `anonymity_policy_override` only
-  when governance issues a signed directive.
-- Keep `transport_policy="soranet-first"` as the baseline while SNNet-4/5/5a/5b/6a/7/8/12/13 are 🈺
-  (see `roadmap.md`). Use `transport_policy="direct-only"` only for documented
-  downgrades/compliance drills, and wait for the PQ coverage review before
-  promoting to `transport_policy="soranet-strict"`—that tier will fail fast if
-  only classical relays remain.
-- `write_mode="pq-only"` should only be enforced when every write path (SDK,
-  orchestrator, governance tooling) can satisfy PQ requirements. During
-  rollouts keep `write_mode="allow-downgrade"` so emergency responses can rely
-  on direct routes while telemetry flags the downgrade.
-- Guard selection and circuit staging rely on the SoraNet directory. Supply the
-  signed `relay_directory` snapshot and persist the `guard_set` cache so guard
-  churn stays within the agreed retention window. The cache fingerprint logged
-  by `sorafs_cli fetch` forms part of the rollout evidence.
+## 5. Նվազեցում և համապատասխանության կեռիկներ
 
-## 5. Downgrade & Compliance Hooks
+Նվագախմբի երկու ենթահամակարգերը օգնում են կիրառել քաղաքականությունը առանց ձեռքի միջամտության.
 
-Two orchestrator subsystems help enforce policy without manual intervention:
-
-- **Downgrade remediation** (`downgrade_remediation`): monitors
-  `handshake_downgrade_total` events and, after the configured `threshold` is
-  exceeded within `window_secs`, forces the local proxy into the `target_mode`
-  (metadata-only by default). Keep the defaults (`threshold=3`, `window=300`,
-  `cooldown=900`) unless incident reviews show a different pattern. Document any
-  override in the rollout log and ensure dashboards track
+- **Վերջին աստիճանի վերականգնում** (`downgrade_remediation`): մոնիտորներ
+  `handshake_downgrade_total` իրադարձությունները և կազմաձևված `threshold`-ից հետո
+  գերազանցել է `window_secs`-ի սահմաններում, ստիպում է տեղական վստահված անձին մտնել `target_mode`
+  (մետատվյալները՝ միայն լռելյայն): Պահպանեք կանխադրվածները (`threshold=3`, `window=300`,
+  `cooldown=900`) բացառությամբ այն դեպքերի, երբ միջադեպերի ակնարկները ցույց չեն տալիս այլ օրինաչափություն: Փաստաթղթեր ցանկացած
+  անտեսել տեղադրման մատյանում և ապահովել վահանակների հետևում
   `sorafs_proxy_downgrade_state`.
-- **Compliance policy** (`compliance`): jurisdiction and manifest carve-outs
-  flow through governance-managed opt-out lists. Never inline ad-hoc overrides
-  in the configuration bundle; instead, request a signed update to
-  `governance/compliance/soranet_opt_outs.json` and redeploy the generated JSON.
+- **Համապատասխանության քաղաքականություն** (`compliance`). իրավասություն և դրսևորումներ
+  հոսում է կառավարման կողմից կառավարվող անջատման ցուցակների միջոցով: Երբեք մի ներկառուցված ժամանակավոր անտեսում
+  կազմաձևման փաթեթում; փոխարենը ստորագրված թարմացում խնդրեք
+  `governance/compliance/soranet_opt_outs.json` և վերաբաշխել ստեղծված JSON-ը:
 
-For both systems, persist the resulting configuration bundle and include it in
-release evidences so auditors can trace how downshifts were triggered.
+Երկու համակարգերի համար էլ պահպանեք ստացված կազմաձևման փաթեթը և ներառեք այն
+թողարկեք ապացույցներ, որպեսզի աուդիտորները կարողանան հետևել, թե ինչպես են առաջացել անկումները:
 
-## 6. Telemetry & Dashboards
+## 6. Հեռաչափություն և վահանակներ
 
-Before widening the rollout, confirm that the following signals are live in the
-target environment:
+Նախքան տարածումը ընդլայնելը, հաստատեք, որ հետևյալ ազդանշաններն ակտիվ են
+թիրախային միջավայր.
 
 - `sorafs_orchestrator_fetch_failures_total{reason="no_healthy_providers"}` —
-  should be zero after the canary completes.
-- `sorafs_orchestrator_retries_total` and
-  `sorafs_orchestrator_retry_ratio` — should stabilise below 10 % during the
-  canary and stay below 5 % after GA.
-- `sorafs_orchestrator_policy_events_total` — validates that the expected
-  rollout stage is active (`stage` label) and records brownouts via `outcome`.
+  դեղձանիկի ավարտից հետո պետք է լինի զրո:
+- `sorafs_orchestrator_retries_total` և
+  `sorafs_orchestrator_retry_ratio` — պետք է կայունանա 10%-ից ցածր այս ընթացքում
+  դեղձանիկ և GA-ից հետո մնալ 5%-ից ցածր:
+- `sorafs_orchestrator_policy_events_total` — հաստատում է, որ ակնկալվում է
+  շրջանառության փուլն ակտիվ է (`stage` պիտակ) և գրանցում է շեղումները `outcome`-ի միջոցով:
 - `sorafs_orchestrator_pq_candidate_ratio` /
-  `sorafs_orchestrator_pq_deficit_ratio` — track PQ relay supply against
-  policy expectations.
-- `telemetry::sorafs.fetch.*` log targets — must be streamed to the shared log
-  aggregator with saved searches for `status=failed`.
+  `sorafs_orchestrator_pq_deficit_ratio` — հետևել PQ ռելեի մատակարարման դեմ
+  քաղաքականության ակնկալիքները։
+- `telemetry::sorafs.fetch.*` մատյան թիրախներ — պետք է փոխանցվեն ընդհանուր մատյան
+  ագրեգատոր՝ `status=failed`-ի պահպանված որոնումներով:
 
-Load the canonical Grafana dashboard from
-`dashboards/grafana/sorafs_fetch_observability.json` (exported in the portal
-under **SoraFS → Fetch Observability**) so the region/manifest selectors,
-provider retry heatmap, chunk latency histograms, and stall counters match
-what SRE reviews during burn-ins. Wire the Alertmanager rules in
-`dashboards/alerts/sorafs_fetch_rules.yml` and validate the Prometheus syntax
-with `scripts/telemetry/test_sorafs_fetch_alerts.sh` (the helper automatically
-runs `promtool test rules` locally or in Docker). Alert hand-offs require the
-same routing block that the script prints so operators can pin the evidence to
-the rollout ticket.
+Ներբեռնեք կանոնական Grafana վահանակը
+`dashboards/grafana/sorafs_fetch_observability.json` (արտահանված է պորտալում
+**SoraFS-ի տակ → Վերցրեք դիտարկելիությունը**), այնպես որ տարածաշրջանի/մանիֆեստի ընտրիչները,
+մատակարարը նորից փորձեք ջերմային քարտեզը, հապաղման հիստոգրամները և փակագծերի հաշվիչները համընկնում են
+ինչ է վերանայում SRE-ն այրման ժամանակ: Միացրեք Alertmanager-ի կանոնները
+`dashboards/alerts/sorafs_fetch_rules.yml` և հաստատեք Prometheus շարահյուսությունը
+`scripts/telemetry/test_sorafs_fetch_alerts.sh`-ով (օգնականը ավտոմատ կերպով
+աշխատում է `promtool test rules` տեղական կամ Docker-ում): Զգուշացումների հանձնումը պահանջում է
+նույն երթուղային բլոկը, որը տպում է սցենարը, որպեսզի օպերատորները կարողանան կապել ապացույցները
+թողարկման տոմսը:
 
-### Telemetry burn-in workflow
+### Հեռուստաչափության այրման աշխատանքային հոսք
 
-Roadmap item **SF-6e** requires a 30-day telemetry burn-in before flipping the
-multi-source orchestrator to its GA defaults. Use the repository scripts to
-capture a reproducible artefact bundle for every day in the window:
+Ճանապարհային քարտեզի **SF-6e** կետը պահանջում է 30-օրյա հեռաչափության այրում՝ նախքան շրջելը
+Բազմաղբյուրի նվագախումբն իր GA-ի լռելյայններով: Օգտագործեք պահեստի սկրիպտները, որպեսզի
+պատուհանում ամեն օրվա համար վերարտադրվող արտեֆակտների փաթեթ գրավեք.
 
-1. Run `ci/check_sorafs_orchestrator_adoption.sh` with the burn-in environment
-   knobs set. Example:
+1. Գործարկեք `ci/check_sorafs_orchestrator_adoption.sh`-ը այրված միջավայրով
+   կոճակների հավաքածու: Օրինակ՝
 
    ```bash
    SORAFS_BURN_IN_LABEL=canary-week-1 \
@@ -229,40 +229,40 @@ capture a reproducible artefact bundle for every day in the window:
    ci/check_sorafs_orchestrator_adoption.sh
    ```
 
-   The helper replays `fixtures/sorafs_orchestrator/multi_peer_parity_v1`,
-   writes `scoreboard.json`, `summary.json`, `provider_metrics.json`,
-   `chunk_receipts.json`, and `adoption_report.json` under
-   `artifacts/sorafs_orchestrator/<timestamp>/`, and enforces a minimum number
-   of eligible providers via `cargo xtask sorafs-adoption-check`.
-2. When the burn-in variables are present the script also emits
-   `burn_in_note.json`, capturing the label, day index, manifest id, telemetry
-   source, and artefact digests. Attach this JSON to the rollout log so it is
-   obvious which capture satisfied each day in the 30-day window.
-3. Import the updated Grafana board (`dashboards/grafana/sorafs_fetch_observability.json`)
-   into the staging/production workspace, tag it with the burn-in label, and
-   confirm that every panel shows samples for the manifest/region under test.
-4. Run `scripts/telemetry/test_sorafs_fetch_alerts.sh` (or `promtool test rules …`)
-   whenever `dashboards/alerts/sorafs_fetch_rules.yml` changes to document that
-   alert routing matches the metrics exported during the burn-in.
-5. Archive the resulting dashboard snapshot, alert test output, and log tail
-   from the `telemetry::sorafs.fetch.*` searches alongside the orchestrator
-   artefacts so governance can replay the evidence without pulling metrics from
-   live systems.
+   Օգնականը կրկնում է `fixtures/sorafs_orchestrator/multi_peer_parity_v1`,
+   գրում է `scoreboard.json`, `summary.json`, `provider_metrics.json`,
+   `chunk_receipts.json` և `adoption_report.json` տակ
+   `artifacts/sorafs_orchestrator/<timestamp>/` և ապահովում է նվազագույն թիվը
+   իրավասու մատակարարների `cargo xtask sorafs-adoption-check`-ի միջոցով:
+2. Երբ առկա են «burn-in» փոփոխականները, սցենարը նույնպես թողարկվում է
+   `burn_in_note.json`, պիտակի ֆիքսում, օրվա ինդեքս, մանիֆեստի id, հեռաչափություն
+   աղբյուրը և արտեֆակտը մարսվում է: Կցեք այս JSON-ը տեղադրման մատյանին, այդպես է
+   ակնհայտ է, թե որ գրավումն է բավարարվում ամեն օր 30-օրյա պատուհանում:
+3. Ներմուծեք թարմացված Grafana տախտակը (`dashboards/grafana/sorafs_fetch_observability.json`)
+   բեմականացման/արտադրության աշխատանքային տարածքի մեջ, նշեք այն «burn-in» պիտակով և
+   հաստատեք, որ յուրաքանչյուր վահանակ ցուցադրում է նմուշներ փորձարկվող մանիֆեստի/տարածաշրջանի համար:
+4. Գործարկեք `scripts/telemetry/test_sorafs_fetch_alerts.sh` (կամ `promtool test rules …`)
+   ամեն անգամ, երբ `dashboards/alerts/sorafs_fetch_rules.yml`-ը փոխում է այդ փաստը
+   Զգուշացման երթուղին համընկնում է այրման ընթացքում արտահանվող ցուցանիշներին:
+5. Արխիվացրեք ստացված վահանակի նկարը, զգուշացման թեստի արդյունքը և գրանցամատյանի պոչը
+   նվագախմբի կողքին `telemetry::sorafs.fetch.*` որոնումներից
+   արտեֆակտներ, որպեսզի կառավարումը կարողանա վերարտադրել ապացույցները՝ առանց հաշվիչ չափումների
+   կենդանի համակարգեր.
 
-## 7. Rollout Checklist
+## 7. Տեղադրման ստուգաթերթ
 
-1. Regenerate scoreboards in CI using the candidate configuration and capture
-   artefacts under version control.
-2. Run the deterministic fixture fetch in each environment (lab, staging,
-   canary, production) and attach the `--scoreboard-out` and `--json-out`
-   artefacts to the rollout record.
-3. Review telemetry dashboards with the on-call engineer, ensuring all metrics
-   above have live samples.
-4. Record the final configuration path (usually via `iroha_config`) and the
-   git commit of the governance registry used for adverts and compliance.
-5. Update the rollout tracker and notify SDK teams of new defaults so client
-   integrations stay aligned.
+1. Վերականգնեք ցուցատախտակները CI-ում՝ օգտագործելով թեկնածուի կոնֆիգուրացիան և գրավումը
+   արտեֆակտները տարբերակների հսկողության տակ:
+2. Գործարկեք դետերմինիստական հարմարանքների բեռնումը յուրաքանչյուր միջավայրում (լաբորատորիա, բեմադրություն,
+   դեղձանիկ, արտադրություն) և կցեք `--scoreboard-out` և `--json-out`
+   արտեֆակտներ շրջանառության ռեկորդում:
+3. Վերանայեք հեռաչափության վահանակները սպասարկող ինժեների հետ՝ ապահովելով բոլոր չափումները
+   վերևում առկա են կենդանի նմուշներ:
+4. Գրանցեք վերջնական կազմաձևման ուղին (սովորաբար `iroha_config`-ի միջոցով) և
+   git commit կառավարման ռեգիստրի, որն օգտագործվում է գովազդի և համապատասխանության համար:
+5. Թարմացրեք rollout tracker-ը և տեղեկացրեք SDK թիմերին նոր կանխադրվածների մասին, որպեսզի հաճախորդը լինի
+   ինտեգրումները մնում են համահունչ:
 
-Following this guide keeps orchestrator deployments deterministic and auditable
-while providing clear feedback loops for tuning retry budgets, provider
-capacity, and privacy posture.
+Այս ուղեցույցին հետևելը թույլ է տալիս նվագախմբի տեղակայումը որոշիչ և ստուգելի
+միևնույն ժամանակ ապահովելով հետադարձ կապի հստակ օղակներ՝ կրկին փորձելու բյուջեները կարգավորելու համար, մատակարար
+կարողություն և գաղտնիության կեցվածք:

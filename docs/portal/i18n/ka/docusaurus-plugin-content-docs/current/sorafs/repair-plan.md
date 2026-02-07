@@ -8,29 +8,31 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraFS Repair Automation & Auditor API
 sidebar_label: Repair Automation
 description: Governance policy, escalation lifecycle, and API expectations for SoraFS repair automation.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
-Mirrors `docs/source/sorafs_repair_plan.md`. Keep both versions in sync until the Sphinx set is retired.
+:::შენიშვნა კანონიკური წყარო
+სარკეები `docs/source/sorafs_repair_plan.md`. შეინახეთ ორივე ვერსია სინქრონიზებული სფინქსის ნაკრების ამოღებამდე.
 :::
 
-## Governance Decision Lifecycle
-1. Escalated repairs create a slash proposal draft and open the dispute window.
-2. Governance voters submit approve/reject votes during the dispute window.
-3. At `escalated_at_unix + dispute_window_secs` the decision is computed deterministically: minimum voters, approvals exceed rejections, and the approval ratio meets the quorum threshold.
-4. Approved decisions open an appeal window; appeals recorded before `approved_at_unix + appeal_window_secs` mark the decision as appealed.
-5. Penalty caps apply to all proposals; submissions above the cap are rejected.
+## მმართველობითი გადაწყვეტილების სასიცოცხლო ციკლი
+1. დაჩქარებული რემონტი ქმნის წინადადების სლეშ პროექტს და გახსენით დავის ფანჯარა.
+2. მმართველობის ამომრჩევლები დავის ფანჯრის დროს წარუდგენენ მოწონებას/უარს.
+3. `escalated_at_unix + dispute_window_secs`-ზე გადაწყვეტილება გამოითვლება დეტერმინისტულად: ამომრჩევლების მინიმალური რაოდენობა, დამტკიცებები აღემატება უარყოფებს და დამტკიცების კოეფიციენტი აკმაყოფილებს კვორუმის ზღვარს.
+4. დამტკიცებული გადაწყვეტილებები ხსნის გასაჩივრების ფანჯარას; `approved_at_unix + appeal_window_secs`-მდე დაფიქსირებული აპელაციები მონიშნეთ გადაწყვეტილება გასაჩივრებულად.
+5. საჯარიმო ლიმიტები ვრცელდება ყველა წინადადებაზე; ზღვრამდე ზემოთ წარდგენილი წარდგენები უარყოფილია.
 
-## Governance Escalation Policy
-The escalation policy is sourced from `governance.sorafs_repair_escalation` in `iroha_config` and is enforced for every repair slash proposal.
+## მმართველობის ესკალაციის პოლიტიკა
+ესკალაციის პოლიტიკა მომდინარეობს `governance.sorafs_repair_escalation`-დან `iroha_config`-დან და ამოქმედდება ყოველი სარემონტო ხაზის შეთავაზებისთვის.
 
-| Setting | Default | Meaning |
+| დაყენება | ნაგულისხმევი | მნიშვნელობა |
 |---------|---------|---------|
-| `quorum_bps` | 6667 | Minimum approval ratio (basis points) among counted votes. |
-| `minimum_voters` | 3 | Minimum number of distinct voters required to resolve a decision. |
-| `dispute_window_secs` | 86400 | Time after escalation before votes are finalized (seconds). |
-| `appeal_window_secs` | 604800 | Time after approval during which appeals are accepted (seconds). |
-| `max_penalty_nano` | 1,000,000,000 | Maximum slash penalty allowed for repair escalations (nano-XOR). |
+| `quorum_bps` | 6667 | დათვლილ ხმებს შორის დამტკიცების მინიმალური თანაფარდობა (საბაზისო ქულები). |
+| `minimum_voters` | 3 | გადაწყვეტილების გადასაწყვეტად საჭირო ამომრჩეველთა მინიმალური რაოდენობა. |
+| `dispute_window_secs` | 86400 | ესკალაციის შემდეგ დრო კენჭისყრის დასრულებამდე (წამები). |
+| `appeal_window_secs` | 604800 | დამტკიცების შემდეგ დრო, რომლის დროსაც საჩივრები მიიღება (წამები). |
+| `max_penalty_nano` | 1 000 000 000 | სარემონტო ესკალაციებისთვის დაშვებული მაქსიმალური დახრილობის ჯარიმა (ნანო-XOR). |
 
-- Scheduler-generated proposals are capped at `max_penalty_nano`; auditor submissions above the cap are rejected.
-- Vote records are stored in `repair_state.to` with deterministic ordering (`voter_id` sorting) so all nodes derive the same decision timestamp and outcome.
+- გრაფიკის მიერ გენერირებული წინადადებები შეზღუდულია `max_penalty_nano`-ით; აუდიტორის წარდგინებები ზღვრულ ზღვრულზე მაღლა უარყოფილია.
+- ხმის მიცემის ჩანაწერები ინახება `repair_state.to`-ში დეტერმინისტული თანმიმდევრობით (`voter_id` დახარისხება), ასე რომ ყველა კვანძი იღებს ერთსა და იმავე გადაწყვეტილების ვადას და შედეგს.

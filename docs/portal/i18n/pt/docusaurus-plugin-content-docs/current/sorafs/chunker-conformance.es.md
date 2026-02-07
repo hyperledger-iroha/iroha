@@ -4,61 +4,63 @@ direction: ltr
 source: docs/portal/docs/sorafs/chunker-conformance.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: chunker-conformance
-title: Guía de conformidad del chunker de SoraFS
-sidebar_label: Conformidad de chunker
-description: Requisitos y flujos para preservar el perfil determinista de chunker SF1 en fixtures y SDKs.
+id: conformidade com chunker
+título: Guia de conformidade do bloco SoraFS
+sidebar_label: Conformidade do chunker
+description: Requisitos e recursos para preservar o perfil determinista do chunker SF1 em fixtures e SDKs.
 ---
 
-:::note Fuente canónica
-Esta página refleja `docs/source/sorafs/chunker_conformance.md`. Mantén ambas versiones sincronizadas hasta que se retiren los docs heredados.
+:::nota Fonte canônica
+Esta página reflete `docs/source/sorafs/chunker_conformance.md`. Mantenha ambas as versões sincronizadas até que os documentos herdados sejam retirados.
 :::
 
-Esta guía codifica los requisitos que toda implementación debe seguir para mantenerse
-alineada con el perfil determinista de chunker de SoraFS (SF1). También
-documenta el flujo de regeneración, la política de firmas y los pasos de verificación para que
-los consumidores de fixtures en los SDKs permanezcan sincronizados.
+Este guia codifica os requisitos que toda implementação deve seguir para mantê-lo
+alineada com o perfil determinista de chunker de SoraFS (SF1). Também
+documenta o fluxo de regeneração, a política de firmas e os passos de verificação para que
+os consumidores de luminárias nos SDKs permanecem sincronizados.
 
-## Perfil canónico
+## Perfil canônico
 
-- Handle del perfil: `sorafs.sf1@1.0.0` (alias heredado `sorafs.sf1@1.0.0`)
-- Seed de entrada (hex): `0000000000dec0ded`
-- Tamaño objetivo: 262144 bytes (256 KiB)
-- Tamaño mínimo: 65536 bytes (64 KiB)
-- Tamaño máximo: 524288 bytes (512 KiB)
-- Polinomio de rolling: `0x3DA3358B4DC173`
-- Seed de la tabla gear: `sorafs-v1-gear`
-- Break mask: `0x0000FFFF`
+- Alça do perfil: `sorafs.sf1@1.0.0` (também conhecido como heredado `sorafs.sf1@1.0.0`)
+- Semente de entrada (hex): `0000000000dec0ded`
+- Tamanho objetivo: 262144 bytes (256 KiB)
+- Tamanho mínimo: 65536 bytes (64 KiB)
+- Tamanho máximo: 524288 bytes (512 KiB)
+- Polinômio de rolamento: `0x3DA3358B4DC173`
+- Semente da engrenagem da tabela: `sorafs-v1-gear`
+Máscara de quebra: `0x0000FFFF`
 
-Implementación de referencia: `sorafs_chunker::chunk_bytes_with_digests_profile`.
-Cualquier aceleración SIMD debe producir límites y digests idénticos.
+Implementação de referência: `sorafs_chunker::chunk_bytes_with_digests_profile`.
+Qualquer aceleração SIMD deve produzir limites e digestões idênticas.
 
-## Bundle de fixtures
+## Pacote de luminárias
 
-`cargo run --locked -p sorafs_chunker --bin export_vectors` regenera los
-fixtures y emite los siguientes archivos bajo `fixtures/sorafs_chunker/`:
+`cargo run --locked -p sorafs_chunker --bin export_vectors` regenera perda
+fixtures e emite os seguintes arquivos abaixo de `fixtures/sorafs_chunker/`:
 
-- `sf1_profile_v1.{json,rs,ts,go}` — límites de chunk canónicos para consumidores
-  Rust, TypeScript y Go. Cada archivo anuncia el handle canónico como la primera
-  entrada en `profile_aliases`, seguido por cualquier alias heredado (p. ej.,
-  `sorafs.sf1@1.0.0`, luego `sorafs.sf1@1.0.0`). El orden se impone por
-  `ensure_charter_compliance` y NO DEBE alterarse.
-- `manifest_blake3.json` — manifest verificado con BLAKE3 que cubre cada archivo de fixtures.
-- `manifest_signatures.json` — firmas del consejo (Ed25519) sobre el digest del manifest.
-- `sf1_profile_v1_backpressure.json` y corpora en bruto dentro de `fuzz/` —
-  escenarios deterministas de streaming usados por pruebas de back-pressure del chunker.
+- `sf1_profile_v1.{json,rs,ts,go}` — limites de pedaços canônicos para consumidores
+  Rust, TypeScript e Go. Cada arquivo anuncia o identificador canônico como a primeira
+  entrada em `profile_aliases`, seguida por qualquer alias herdado (p. ej.,
+  `sorafs.sf1@1.0.0`, depois `sorafs.sf1@1.0.0`). A ordem é imposta por
+  `ensure_charter_compliance` e NÃO DEBE alterado.
+- `manifest_blake3.json` — manifesto selecionado com BLAKE3 que contém cada arquivo de fixtures.
+- `manifest_signatures.json` — firmas del consejo (Ed25519) sobre o resumo do manifesto.
+- `sf1_profile_v1_backpressure.json` e corpo em bruto dentro de `fuzz/` —
+  cenários deterministas de streaming usados por testes de contrapressão do chunker.
 
 ### Política de firmas
 
-La regeneración de fixtures **debe** incluir una firma válida del consejo. El generador
-rechaza la salida sin firmar a menos que se pase explícitamente `--allow-unsigned` (pensado
-solo para experimentación local). Los sobres de firma son append-only y se
-deduplican por firmante.
+A regeneração de equipamentos **deve** incluir uma firma válida do consejo. O gerador
+rechaza la salida sin firmar a menos que se passe explicitamente `--allow-unsigned` (pensado
+solo para experimentação local). Os sobres de firma são apenas anexos e se
+desduplicado por firmante.
 
-Para agregar una firma del consejo:
+Para adicionar uma firma de conselho:
 
 ```bash
 cargo run --locked -p sorafs_chunker --bin export_vectors \
@@ -66,33 +68,31 @@ cargo run --locked -p sorafs_chunker --bin export_vectors \
   --signature-out=fixtures/sorafs_chunker/manifest_signatures.json
 ```
 
-## Verificación
+## Verificação
 
-El helper de CI `ci/check_sorafs_fixtures.sh` reejecuta el generador con
-`--locked`. Si los fixtures divergen o faltan firmas, el job falla. Usa
-este script en workflows nocturnos y antes de enviar cambios de fixtures.
+El ajudante de CI `ci/check_sorafs_fixtures.sh` reejecuta o gerador com
+`--locked`. Se os jogos divergirem ou faltarem firmas, o trabalho falhará. EUA
+este script em fluxos de trabalho noturnos e antes de enviar mudanças de equipamentos.
 
-Pasos de verificación manual:
+Passos de verificação manual:
 
 1. Ejecuta `cargo test -p sorafs_chunker`.
-2. Invoca `ci/check_sorafs_fixtures.sh` localmente.
-3. Confirma que `git status -- fixtures/sorafs_chunker` esté limpio.
+2. Invoque `ci/check_sorafs_fixtures.sh` localmente.
+3. Confirme que `git status -- fixtures/sorafs_chunker` está limpo.
 
-## Playbook de actualización
+## Manual de atualização
 
-Cuando propongas un nuevo perfil de chunker o actualices SF1:
+Ao propor um novo perfil de chunker ou atualizações SF1:
 
-Ver también: [`docs/source/sorafs/chunker_profile_authoring.md`](./chunker-profile-authoring.md) para
-requisitos de metadatos, plantillas de propuesta y checklists de validación.
+Veja também: [`docs/source/sorafs/chunker_profile_authoring.md`](./chunker-profile-authoring.md) para
+requisitos de metadados, padrões de proposta e listas de verificação de validação.1. Redija um `ChunkProfileUpgradeProposalV1` (ver RFC SF-1) com novos parâmetros.
+2. Regenerar fixtures via `export_vectors` e registrar o novo resumo do manifesto.
+3. Firme o manifesto com o quórum do conselho necessário. Todas as firmas devem
+   anexar a `manifest_signatures.json`.
+4. Atualize os equipamentos do SDK afetados (Rust/Go/TS) e garanta paridade entre tempo de execução.
+5. Regenera os corpos fuzz e altera os parâmetros.
+6. Atualize este guia com o novo identificador de perfil, sementes e resumo.
+7. Envie a mudança junto com testes atualizados e atualizações do roteiro.
 
-1. Redacta un `ChunkProfileUpgradeProposalV1` (ver RFC SF-1) con nuevos parámetros.
-2. Regenera fixtures vía `export_vectors` y registra el nuevo digest del manifest.
-3. Firma el manifest con el quórum del consejo requerido. Todas las firmas deben
-   anexarse a `manifest_signatures.json`.
-4. Actualiza las fixtures de SDK afectadas (Rust/Go/TS) y asegura paridad cross-runtime.
-5. Regenera corpora fuzz si cambian los parámetros.
-6. Actualiza esta guía con el nuevo handle de perfil, seeds y digest.
-7. Envía el cambio junto con pruebas actualizadas y actualizaciones del roadmap.
-
-Los cambios que afecten los límites de chunk o los digests sin seguir este proceso
-son inválidos y no deben fusionarse.
+As mudanças que afetam os limites de pedaços ou os resumos sem seguir este processo
+filhos inválidos e não deben fusionarse.

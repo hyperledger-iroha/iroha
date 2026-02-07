@@ -4,55 +4,57 @@ direction: ltr
 source: docs/portal/docs/api/overview.mdx
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-import TryItConsole from '@site/src/components/TryItConsole.jsx';
+從 '@site/src/components/TryItConsole.jsx' 導入 TryItConsole；
 
-# Torii API Overview
+# Torii API 概述
 
-The Torii gateway exposes a REST + WebSocket surface for interacting with Iroha
-nodes. The canonical OpenAPI document is generated via:
+Torii 網關公開 REST + WebSocket 表面，用於與 Iroha 交互
+節點。規範的 OpenAPI 文檔是通過以下方式生成的：
 
 ```bash
 cargo xtask openapi
 ```
 
-Running the command above writes `docs/portal/static/openapi/torii.json` and
-feeds the `docusaurus-plugin-openapi-docs` integration so this section updates
-automatically. The generator spins up an in-memory Torii router and attempts to
-query its OpenAPI endpoint; if that fails (for example, router initialization
-errors) a deterministic placeholder spec is emitted instead.
+運行上面的命令會寫入 `docs/portal/static/openapi/torii.json` 和
+提供 `docusaurus-plugin-openapi-docs` 集成，因此本節更新
+自動。生成器啟動內存中的 Torii 路由器並嘗試
+查詢其OpenAPI端點；如果失敗（例如，路由器初始化
+錯誤）而是發出確定性佔位符規範。
 
-## Current status
+## 當前狀態
 
-- **Spec source:** `cargo xtask openapi` queries the Torii router directly; the
-  fallback stub is only emitted when the router fails to expose an OpenAPI
-  document.
-- **Determinism:** JSON output is canonicalised to ensure stable diffing in CI.
-- **Authentication:** The “Try it” sandbox now forwards requests through a
-  constrained staging proxy. Operators must supply a Torii endpoint and bearer
-  token before issuing calls.
-- **Version selector:** Swagger UI, RapiDoc, and the full Torii OpenAPI page
-  expose a dropdown that reads `openapi/versions.json` so you can compare
-  historical snapshots. The `Latest (tracked)` option points to
-  `/openapi/torii.json`, while all other entries load the corresponding
-  `openapi/versions/<version>/torii.json` artifact.
-- **Snapshot workflow:** After running `npm run docs:version -- <label>`, refresh
-  the matching OpenAPI file with `npm run sync-openapi -- --version=<label> --latest`
-  so the dropdown can load both the frozen snapshot and the rolling “Latest” build.
+- **規格來源：** `cargo xtask openapi`直接查詢Torii路由器；的
+  僅當路由器無法公開 OpenAPI 時才會發出後備存根
+  文檔。
+- **確定性：** JSON 輸出被規範化，以確保 CI 中的穩定差異。
+- **身份驗證：** “嘗試一下”沙箱現在通過
+  受約束的暫存代理。運營商必須提供 Torii 端點和承載
+  發出調用之前的令牌。
+- **版本選擇器：** Swagger UI、RapiDoc 和完整的 Torii OpenAPI 頁面
+  公開一個顯示 `openapi/versions.json` 的下拉菜單，以便您可以進行比較
+  歷史快照。 `Latest (tracked)` 選項指向
+  `/openapi/torii.json`，而所有其他條目加載相應的
+  `openapi/versions/<version>/torii.json`神器。
+- **快照工作流程：** 運行 `npm run docs:version -- <label>` 後，刷新
+  與 `npm run sync-openapi -- --version=<label> --latest` 匹配的 OpenAPI 文件
+  因此下拉菜單可以加載凍結快照和滾動的“最新”版本。
 
-The router-backed extractor now emits the full Torii surface. If you see the
-placeholder stub, treat it as a build-time failure and inspect the Torii
-router startup logs.
+支持路由器的提取器現在發出完整的 Torii 表面。如果您看到
+佔位符存根，將其視為構建時失敗並檢查 Torii
+路由器啟動日誌。
 
-## Try it sandbox (DOCS-3)
+## 嘗試沙盒 (DOCS-3)
 
-The developer portal embeds a small console that relays REST requests through a
-Node-based proxy. The proxy enforces CORS, rate limits, and optional bearer
-tokens so the widget can talk to staging gateways without exposing credentials.
-See `docs/devportal/try-it.md` for the full operator checklist.
+開發人員門戶嵌入了一個小型控制台，可通過
+基於節點的代理。代理強制實施 CORS、速率限制和可選承載
+令牌，以便小部件可以與臨時網關通信而無需暴露憑據。
+有關完整的操作員清單，請參閱 `docs/devportal/try-it.md`。
 
-Start the proxy alongside the Docusaurus dev server:
+與 Docusaurus 開發服務器一起啟動代理：
 
 ```bash
 cd docs/portal
@@ -68,15 +70,14 @@ npm run tryit-proxy
 npm run start
 ```
 
-- The proxy listens on `TRYIT_PROXY_LISTEN` (default `127.0.0.1:8787`) and
-  forwards any `/proxy/...` requests to `TRYIT_PROXY_TARGET`.
-- Supply `TRYIT_PROXY_BEARER` for static bearer tokens or let callers provide
-  one per request via the “Bearer token” field.
-- Rate limits default to 60 requests per minute and can be tuned through
-  `TRYIT_PROXY_RATE_LIMIT` / `TRYIT_PROXY_RATE_WINDOW_MS`.
+- 代理偵聽 `TRYIT_PROXY_LISTEN`（默認 `127.0.0.1:8787`）並且
+  將任何 `/proxy/...` 請求轉發到 `TRYIT_PROXY_TARGET`。
+- 為靜態不記名令牌提供 `TRYIT_PROXY_BEARER` 或讓調用者提供
+  每個請求通過“承載令牌”字段發送一個。
+- 速率限制默認為每分鐘 60 個請求，可以通過調整
+  `TRYIT_PROXY_RATE_LIMIT` / `TRYIT_PROXY_RATE_WINDOW_MS`。
 
-> ⚠️ The proxy is intended for staging/demo access. Production deployments
-> should run behind hardened ingress and reuse the same rate limiting policy in
-> front of Torii.
+> ⚠️ 代理用於暫存/演示訪問。生產部署
+> 應該運行在強化的入口後面，並在中重用相同的速率限制策略
+> Torii 正面。
 
-<TryItConsole />

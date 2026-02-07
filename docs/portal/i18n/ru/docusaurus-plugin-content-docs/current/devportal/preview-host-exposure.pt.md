@@ -4,20 +4,22 @@ direction: ltr
 source: docs/portal/docs/devportal/preview-host-exposure.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Guia de exposicao do host de preview
+# Инструкция по открытию хоста предварительного просмотра
 
-O roadmap DOCS-SORA exige que todo preview publico use o mesmo bundle verificado por checksum que os revisores exercitam localmente. Use este runbook apos o onboarding de revisores (e o ticket de aprovacao de convites) estarem completos para colocar o host beta online.
+В дорожной карте DOCS-SORA указано, что все публичные предварительные просмотры можно использовать, или пакет, проверенный по контрольной сумме, который можно изменить, выполняя локальные действия. Используйте этот Runbook после регистрации ревизоров (или билета подтверждения согласия) и завершите его для размещения или бета-тестирования хоста в Интернете.
 
-## Pre-requisitos
+## Предварительные требования
 
-- Onda de onboarding de revisores aprovada e registrada no tracker de preview.
-- Ultimo build do portal presente em `docs/portal/build/` e checksum verificado (`build/checksums.sha256`).
-- Credenciais de preview SoraFS (URL Torii, autoridade, chave privada, epoch enviado) armazenadas em variaveis de ambiente ou em um config JSON como [`docs/examples/sorafs_preview_publish.json`](../../../examples/sorafs_preview_publish.json).
-- Ticket de mudanca DNS aberto com o hostname desejado (`docs-preview.sora.link`, `docs.iroha.tech`, etc.) mais contatos on-call.
+- Проверка и регистрация обновлений без отслеживания предварительного просмотра.
+- Последняя сборка портала представляет `docs/portal/build/` и проверенную контрольную сумму (`build/checksums.sha256`).
+- Credenciais предварительного просмотра SoraFS (URL Torii, autoridade, chave privada, epoch enviado) вооружены различными вариантами окружения или конфигурацией JSON в виде [`docs/examples/sorafs_preview_publish.json`](../../../examples/sorafs_preview_publish.json).
+- Запрос на изменение DNS с использованием требуемого имени хоста (`docs-preview.sora.link`, `docs.iroha.tech` и т. д.) при вызове.
 
-## Passo 1 - Construir e verificar o bundle
+## Шаг 1 — Создание и проверка пакета
 
 ```bash
 cd docs/portal
@@ -27,11 +29,11 @@ npm run build
 ./scripts/preview_verify.sh --build-dir build
 ```
 
-O script de verificacao se recusa a continuar quando o manifesto de checksum esta ausente ou adulterado, mantendo cada artefato de preview auditado.
+Если сценарий проверки требует продолжения, когда манифест контрольной суммы утрачен или подделан, происходит каждый раз артефакт предварительного просмотра.
 
 ## Passo 2 - Empacotar os artefatos SoraFS
 
-Converta o site estatico em um par CAR/manifest deterministico. `ARTIFACT_DIR` padrao e `docs/portal/artifacts/`.
+Преобразование статичного сайта в детерминированный CAR/манифест. `ARTIFACT_DIR` Padrao и `docs/portal/artifacts/`.
 
 ```bash
 ./scripts/sorafs-pin-release.sh       --alias docs-preview.sora       --alias-namespace docs       --alias-name preview       --pin-label docs-preview       --skip-submit
@@ -39,43 +41,43 @@ Converta o site estatico em um par CAR/manifest deterministico. `ARTIFACT_DIR` p
 node scripts/generate-preview-descriptor.mjs       --manifest artifacts/checksums.sha256       --archive artifacts/sorafs/portal.tar.gz       --out artifacts/sorafs/preview-descriptor.json
 ```
 
-Anexe `portal.car`, `portal.manifest.*`, o descriptor e o manifesto de checksum ao ticket da onda de preview.
+Anexe `portal.car`, `portal.manifest.*`, дескриптор и манифест контрольной суммы или билет для просмотра.
 
-## Passo 3 - Publicar o alias de preview
+## Шаг 3 — Публикация или псевдоним предварительного просмотра
 
-Reexecute o helper de pin **sem** `--skip-submit` quando estiver pronto para expor o host. Forneca o config JSON ou flags CLI explicitos:
+Повторно выполните помощник по выводу **sem** `--skip-submit`, когда это произойдет быстро для экспорта на хост. Примеры конфигурации JSON или явные флаги CLI:
 
 ```bash
 ./scripts/sorafs-pin-release.sh       --alias docs-preview.sora       --alias-namespace docs       --alias-name preview       --pin-label docs-preview       --config ~/secrets/sorafs_preview_publish.json
 ```
 
-O comando grava `portal.pin.report.json`, `portal.manifest.submit.summary.json` e `portal.submit.response.json`, que devem acompanhar o bundle de evidencia de convites.
+О командах `portal.pin.report.json`, `portal.manifest.submit.summary.json` и `portal.submit.response.json`, которые мы разработаем вместе с пакетом доказательств осуждения.
 
-## Passo 4 - Gerar o plano de corte DNS
+## Passo 4 — Герар или план корте DNS
 
 ```bash
 node scripts/generate-dns-cutover-plan.mjs       --dns-hostname docs.iroha.tech       --dns-zone sora.link       --dns-change-ticket DOCS-SORA-Preview       --dns-cutover-window "2026-03-05 18:00Z"       --dns-ops-contact "pagerduty:sre-docs"       --manifest artifacts/sorafs/portal.manifest.to       --cache-purge-endpoint https://cache.api/purge       --cache-purge-auth-env CACHE_PURGE_TOKEN       --out artifacts/sorafs/portal.dns-cutover.json
 ```
 
-Compartilhe o JSON resultante com Ops para que a mudanca DNS referencie o digest exato do manifesto. Ao reutilizar um descriptor anterior como origem de rollback, adicione `--previous-dns-plan path/to/previous.json`.
+Сравнивайте результаты JSON с операциями, чтобы получить нужную DNS-ссылку или дайджест exato в манифесте. Чтобы повторно использовать передний дескриптор как исходный откат, добавьте `--previous-dns-plan path/to/previous.json`.
 
-## Passo 5 - Testar o host implantado
+## Шаг 5 - Тест или имплантат хоста
 
 ```bash
 npm run probe:portal --       --base-url=https://docs-preview.sora.link       --expect-release="$DOCS_RELEASE_TAG"
 ```
 
-O probe confirma o tag de release servido, headers CSP e metadados de assinatura. Repita o comando a partir de duas regioes (ou anexe a saida de curl) para que auditores vejam que o edge cache esta quente.
+Проверка подтверждения или тега выпуска сервера, заголовков CSP и метаданных уничтожения. Повторите команду двух областей (или приложение к локну) для того, чтобы аудиторы увидели, что крайний кеш находится там.
 
-## Bundle de evidencia
+## Пакет доказательств
 
-Inclua os seguintes artefatos no ticket da onda de preview e referencie-os no email de convite:
+Включите следующие артефаты без билета для предварительного просмотра и ссылок без электронного письма для приглашения:
 
-| Artefato | Proposito |
+| Артефато | Предложение |
 |----------|-----------|
-| `build/checksums.sha256` | Prova que o bundle corresponde ao build de CI. |
-| `artifacts/sorafs/portal.tar.gz` + `portal.manifest.to` | Payload canonico SoraFS + manifesto. |
-| `portal.pin.report.json`, `portal.manifest.submit.summary.json`, `portal.submit.response.json` | Mostra que o envio do manifesto + o alias binding foram concluidos. |
-| `artifacts/sorafs/portal.dns-cutover.json` | Metadados DNS (ticket, janela, contatos), resumo de promocao de rota (`Sora-Route-Binding`), ponteiro `route_plan` (plano JSON + templates de header), info de purge de cache e instrucoes de rollback para Ops. |
-| `artifacts/sorafs/preview-descriptor.json` | Descriptor assinado que liga o archive + checksum. |
-| Saida do `probe` | Confirma que o host ao vivo anuncia o tag de release esperado. |
+| `build/checksums.sha256` | Проверьте, какой пакет соответствует сборке CI. |
+| `artifacts/sorafs/portal.tar.gz` + `portal.manifest.to` | Полезная нагрузка canonico SoraFS + манифест. |
+| `portal.pin.report.json`, `portal.manifest.submit.summary.json`, `portal.submit.response.json` | Большинство из них отправят манифест + псевдоним, привязывающийся к заключению. |
+| `artifacts/sorafs/portal.dns-cutover.json` | Метададо DNS (билет, сообщение, контакты), резюме ротационного обновления (`Sora-Route-Binding`), сообщение `route_plan` (план JSON + шаблоны заголовка), информация об очистке кеша и инструкции по откату для операций. |
+| `artifacts/sorafs/preview-descriptor.json` | Дескриптор, присвоенный строке или архиву + контрольная сумма. |
+| Саида до `probe` | Подтвердите, что хост опубликовал живое объявление или тег выпуска. |

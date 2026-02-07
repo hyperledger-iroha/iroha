@@ -6,55 +6,56 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 8bb3e19ca5eb661d202b5e3b9cd118207ded277e8ff717e16a342b71e7a67857
 source_last_modified: "2026-01-03T18:07:59.200257+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# AND6 EU Legal Sign-off Memo Template
+# AND6 EU 法的承認メモのテンプレート
 
-This memo records the legal review required by roadmap item **AND6** before the
-EU (ETSI/GDPR) artefact packet is submitted to regulators. Counsel should clone
-this template per release, populate the fields below, and store the signed copy
-alongside the immutable artefacts referenced in the memo.
+このメモは、ロードマップ項目 **AND6** によって要求される法的レビューを記録します。
+EU (ETSI/GDPR) アーティファクト パケットが規制当局に提出されます。弁護士はクローンを作成する必要があります
+リリースごとにこのテンプレートを作成し、以下のフィールドに値を入力し、署名されたコピーを保存します
+メモで参照されている不変のアーティファクトと一緒に。
 
-## Summary
+## 概要
 
-- **Release / Train:** `<e.g., 2026.1 GA>`
-- **Review date:** `<YYYY-MM-DD>`
-- **Counsel / Reviewer:** `<name + organisation>`
-- **Scope:** `ETSI EN 319 401 security target, GDPR DPIA summary, SBOM attestation`
-- **Associated tickets:** `<governance or legal issue IDs>`
+- **リリース/トレイン:** `<e.g., 2026.1 GA>`
+- **レビュー日:** `<YYYY-MM-DD>`
+- **顧問/査読者:** `<name + organisation>`
+- **範囲:** `ETSI EN 319 401 security target, GDPR DPIA summary, SBOM attestation`
+- **関連チケット:** `<governance or legal issue IDs>`
 
-## Artefact Checklist
+## アーティファクトチェックリスト
 
-| Artefact | SHA-256 | Location / Link | Notes |
-|----------|---------|-----------------|-------|
-| `security_target.md` | `<hash>` | `docs/source/compliance/android/eu/security_target.md` + governance archive | Confirm release identifiers & threat model adjustments. |
-| `gdpr_dpia_summary.md` | `<hash>` | Same directory / localization mirrors | Ensure redaction policy references match `sdk/android/telemetry_redaction.md`. |
-| `sbom_attestation.md` | `<hash>` | Same directory + cosign bundle in evidence bucket | Verify CycloneDX + provenance signatures. |
-| Evidence log row | `<hash>` | `docs/source/compliance/android/evidence_log.csv` | Row number `<n>` |
-| Device-lab contingency bundle | `<hash>` | `artifacts/android/device_lab_contingency/<YYYYMMDD>/*.tgz` | Confirms failover rehearsal tied to this release. |
+|アーティファクト | SHA-256 |場所/リンク |メモ |
+|----------|-----------|------|------|
+| `security_target.md` | `<hash>` | `docs/source/compliance/android/eu/security_target.md` + ガバナンス アーカイブ |リリース識別子と脅威モデルの調整を確認します。 |
+| `gdpr_dpia_summary.md` | `<hash>` |同じディレクトリ/ローカリゼーションミラー |リダクションポリシー参照が `sdk/android/telemetry_redaction.md` と一致することを確認します。 |
+| `sbom_attestation.md` | `<hash>` |証拠バケット内の同じディレクトリ + 署名バンドル | CycloneDX + 来歴署名を検証します。 |
+|証拠ログ行 | `<hash>` | `docs/source/compliance/android/evidence_log.csv` |行番号 `<n>` |
+|デバイスラボの緊急事態バンドル | `<hash>` | `artifacts/android/device_lab_contingency/<YYYYMMDD>/*.tgz` |このリリースに関連付けられたフェイルオーバーのリハーサルを確認します。 |
 
-> Attach additional rows if the packet contains more files (for example, privacy
-> appendices or DPIA translations). Every artefact must reference its immutable
-> upload target and the Buildkite job that produced it.
+> パケットにさらに多くのファイル（プライバシーなど）が含まれる場合は、追加の行を添付します。
+> 付録または DPIA 翻訳)。すべてのアーティファクトはその不変を参照する必要があります
+> ターゲットとそれを生成した Buildkite ジョブをアップロードします。
 
-## Findings & Exceptions
+## 調査結果と例外
 
-- `None.` *(Replace with bullet list covering residual risks, compensating
-  controls, or required follow-up actions.)*
+- `None.` *(残留リスクをカバーし、補償する箇条書きリストに置き換えます)
+  コントロール、または必要なフォローアップアクション。)*
 
-## Approval
+## 承認
 
-- **Decision:** `<Approved / Approved with conditions / Blocked>`
-- **Signature / Timestamp:** `<digital signature or email reference>`
-- **Follow-up owners:** `<team + due date for any conditions>`
+- **決定:** `<Approved / Approved with conditions / Blocked>`
+- **署名/タイムスタンプ:** `<digital signature or email reference>`
+- **フォローアップ所有者:** `<team + due date for any conditions>`
 
-Upload the final memo to the governance evidence bucket, copy the SHA-256 into
-`docs/source/compliance/android/evidence_log.csv`, and link the upload path in
-`status.md`. If the decision is “Blocked,” escalate to the AND6 steering
-committee and document remediation steps in both the roadmap hot-list and the
-device-lab contingency log.
+最終メモをガバナンス証拠バケットにアップロードし、SHA-256 を
+`docs/source/compliance/android/evidence_log.csv` にアップロード パスをリンクします。
+`status.md`。決定が「ブロック」の場合は、AND6 ステアリングにエスカレーションします。
+ロードマップのホットリストと
+デバイスラボの緊急事態ログ。

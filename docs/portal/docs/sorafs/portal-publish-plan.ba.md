@@ -11,21 +11,22 @@ id: portal-publish-plan
 title: Docs Portal → SoraFS Publish Plan
 sidebar_label: Portal Publish Plan
 description: Step-by-step checklist for shipping the docs portal, OpenAPI, and SBOM bundles via SoraFS.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
-Mirrors `docs/source/sorafs/portal_publish_plan.md`. Update both copies when the workflow changes.
-:::
+:::иҫкәртергә канонлы сығанаҡ
+Көҙгөләр `docs/source/sorafs/portal_publish_plan.md`. Эш ағымы үҙгәргәндә ике күсермәһен дә яңыртығыҙ.
+::: 1990 й.
 
-Roadmap item DOCS-7 requires every docs artefact (portal build, OpenAPI spec,
-SBOMs) to flow through the SoraFS manifest pipeline and serve via `docs.sora`
-with `Sora-Proof` headers. This checklist stitches the existing helpers together
-so Docs/DevRel, Storage, and Ops can run the release without hunting through
-multiple runbooks.
+Юл картаһы пункты DOCS-7 һәр docs артефакт талап итә (порталь төҙөү, I18NT000000002X спец.
+SBOMs) аша ағым I18NT000000000004X манифест торбаһы һәм хеҙмәт итеү аша I18NI000000013X .
+менән `Sora-Proof` башлыҡтары. Был тикшерелгән исемлектә булған ярҙамсыларҙы бергә һыҙып .
+Шулай итеп, Docs/DevRel, Һаҡлау, һәм Ops аша һунар итеүһеҙ релиз йүгерә ала
+бер нисә runbooks.
 
-## 1. Build & Package Payloads
+## 1. Төҙөү & Пакет Түләүҙәр
 
-Run the packaging helper (skip options are available for dry-runs):
+Ҡаплау ярҙамсыһын эшләгеҙ (киҫеп варианттары ҡоро-йүгерә өсөн мөмкин):
 
 ```bash
 ./ci/package_docs_portal_sorafs.sh \
@@ -36,12 +37,12 @@ Run the packaging helper (skip options are available for dry-runs):
   --proof
 ```
 
-- `--skip-build` reuses `docs/portal/build` if CI already produced it.
-- Add `--skip-sbom` when `syft` is unavailable (e.g., air-gapped rehearsal).
-- The script runs the portal tests, emits CAR + manifest pairs for `portal`,
-  `openapi`, `portal-sbom`, and `openapi-sbom`, verifies each CAR when
-  `--proof` is set, and drops Sigstore bundles when `--sign` is set.
-- Output structure:
+- `--skip-build` ҡабаттан ҡулланыла I18NI0000000016X, әгәр CI инде уны етештерә.
+- `--skip-sbom` өҫтәү ҡасан I18NI000000018X юҡ (мәҫәлән, һауа-гапп репетицияһы).
+- Сценарий портал һынауҙарын үткәрә, I18NI000000019X өсөн CAR + манифест парҙарын сығара,
+  I18NI000000020X, `portal-sbom`, һәм `openapi-sbom`, һәр CAR раҫлай, ҡасан .
+  `--proof` ҡуйылған, һәм I18NI00000000024ХХХ ҡасан ҡуйылған I18NT00000000000000000000000000000000023.
+- Сығыш структураһы:
 
 ```json
 {
@@ -63,14 +64,14 @@ Run the packaging helper (skip options are available for dry-runs):
 }
 ```
 
-Keep the entire folder (or symlink via `artifacts/devportal/sorafs/latest`) so
-governance reviewers can trace build artifacts.
+Бөтә папканы (йәки I18NI000000025X аша симлинк) шулай тотоғоҙ
+идара итеү рецензиялары артефакттар төҙөү эҙләй ала.
 
-## 2. Pin Manifests + Aliases
+## 2. Пин-Кинифестәр + псевдоним
 
-Use `sorafs_cli manifest submit` to push manifests into Torii and bind aliases.
-Set `${SUBMITTED_EPOCH}` to the latest consensus epoch (from
-`curl -s "${TORII_URL}/v1/status" | jq '.sumeragi.epoch'` or your dashboard).
+Ҡулланыу I18NI000000026X өсөн этәрергә манифесттар I18NT000000005X һәм псевдонимдарҙы бәйләү.
+I18NI000000027X комплекты һуңғы консенсус эпохаһына (1000).
+`curl -s "${TORII_URL}/v1/status" | jq '.sumeragi.epoch'` йәки һеҙҙең приборҙар таҡтаһы).
 
 ```bash
 OUT="artifacts/devportal/sorafs/20260219T130012Z"
@@ -95,18 +96,18 @@ cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
   --response-out "${OUT}/portal.manifest.response.json"
 ```
 
-- Repeat for `openapi.manifest.to` and the SBOM manifests (omit alias flags for
-  SBOM bundles unless governance assigns a namespace).
-- Alternative: `iroha app sorafs pin register` works with the digest from the submit
-  summary if the binary is already installed.
-- Verify registry state with
+- I18NI000000029X һәм SBOM өсөн ҡабатлау өсөн ҡабатлауҙар (2012 йыл өсөн псевдонимдар флагтары иҙеүсе.
+  SBOM өйөмдәре, әгәр идара итеү исемдәр киңлеген бирмәһә).
+- Альтернатива: I18NI00000000030X тапшырыуҙан дайджест менән эшләй
+  резюме, әгәр бинар инде ҡуйылған.
+- ЗАГС-тың 2012 йыл менән тикшерергә.
   `iroha app sorafs pin list --alias docs:portal --format json | jq`.
-- Dashboards to watch: `sorafs_pin_registry.json` (`torii_sorafs_replication_*`
-  metrics).
+- Ҡарау өсөн приборҙар таҡтаһы: I18NI0000000032X (I18NI000000033X
+  метрикаһы).
 
-## 3. Gateway Headers & Proofs
+## 3. Ҡапҡа башлыҡтары һәм дәлилдәре
 
-Generate the HTTP header block + binding metadata:
+HTTP башлыҡ блогын генерациялау + бәйләүсе метамағлүмәттәр:
 
 ```bash
 iroha app sorafs gateway route-plan \
@@ -117,13 +118,13 @@ iroha app sorafs gateway route-plan \
   --proof-status ok \
   --headers-out "${OUT}/portal.gateway.headers.txt" \
   --out "${OUT}/portal.gateway.plan.json"
-```
+``` X
 
-- The template includes `Sora-Name`, `Sora-CID`, `Sora-Proof`, and
-  `Sora-Proof-Status` headers plus the default CSP/HSTS/Permissions-Policy.
-- Use `--rollback-manifest-json` to render a paired rollback header set.
+- Шаблон I18NI000000034X, I18NI000000035X, I18NI000000036X, һәм
+  I18NI000000037X башлыҡтары плюс ғәҙәттәгесә CSP/HSTS/Рөхсәт-сәйәси.
+- I18NI000000038X Xҡ ҡулланыу, парлы кире ҡайтарыу өсөн башлыҡ комплектын күрһәтеү өсөн.
 
-Before exposing traffic, run:
+Трафикты фашлағансы, йүгерергә:
 
 ```bash
 ./ci/check_sorafs_gateway_probe.sh -- \
@@ -136,14 +137,14 @@ scripts/sorafs_gateway_self_cert.sh \
   --output artifacts/sorafs_gateway_self_cert/docs
 ```
 
-- The probe enforces GAR signature freshness, alias policy, and TLS cert
-  fingerprints.
-- The self-cert harness downloads the manifest with `sorafs_fetch` and stores
-  CAR replay logs; keep the outputs for audit evidence.
+- зонд GAR ҡултамғаһы яңылыҡ, псевдоним сәйәсәте, һәм TLS cert .
+  бармаҡ эҙҙәре.
+- Үҙ-үҙеңде сертификат жгут скачать манифест менән I18NI0000000039X һәм магазиндар .
+  CAR реплей журналдары; аудит дәлилдәре өсөн сығыштарҙы һаҡларға.
 
-## 4. DNS & Telemetry Guardrails
+## 4. DNS & Телеметрия гвардияһы
 
-1. Refresh the DNS skeleton so governance can prove the binding:
+1. DNS скелетын яңыртыу, шулай итеп, идара итеү мотлаҡ иҫбатлай ала:
 
    ```bash
    scripts/sns_zonefile_skeleton.py \
@@ -151,32 +152,32 @@ scripts/sorafs_gateway_self_cert.sh \
      --out artifacts/sorafs/portal.dns-cutover.json
    ```
 
-2. Monitor during rollout:
+2. Прокат ваҡытында монитор:
 
-   - `torii_sorafs_alias_cache_refresh_total`
-   - `torii_sorafs_gateway_refusals_total{profile="docs"}`
+   - I18NI000000040X
+   - I18NI000000041X
    - `torii_sorafs_fetch_duration_ms` / `_failures_total`
 
-   Dashboards: `sorafs_gateway_observability.json`,
-   `sorafs_fetch_observability.json`, and the pin registry board.
+   Приборҙар таҡталары: `sorafs_gateway_observability.json`, .
+   I18NI000000045X, ә булавка реестры таҡтаһы.
 
-3. Smoke the alert rules (`scripts/telemetry/test_sorafs_fetch_alerts.sh`) and
-   capture logs/screenshots for the release archive.
+3. Уяулыҡ ҡағиҙәләрен төтөн (I18NI000000046X) һәм
+   алыу журналдары/скриншоттар өсөн сығарыу архивы.
 
-## 5. Evidence Bundle
+## 5. Дәлилдәр йыйылмаһы
 
-Include the following in the release ticket or governance package:
+Түбәндәгеләрҙе индереү билет йәки идара итеү пакеты:
 
-- `artifacts/devportal/sorafs/<stamp>/` (CARs, manifests, SBOMs, proofs,
-  Sigstore bundles, submit summaries).
-- Gateway probe + self-cert outputs
-  (`artifacts/sorafs_gateway_probe/<stamp>/`,
-  `artifacts/sorafs_gateway_self_cert/<stamp>/`).
-- DNS skeleton + header templates (`portal.gateway.headers.txt`,
-  `portal.gateway.plan.json`, `portal.dns-cutover.json`).
-- Dashboard screenshots + alert acknowledgements.
-- `status.md` update referencing the manifest digest and alias binding time.
+- I18NI000000047X (CARs, манифестар, SBOMs, дәлилдәр,
+  Sigstore өйөмдәр, тапшырыу резюме).
+- Ҡапҡа зонд + үҙ-үҙен сертификат сығыштары
+  (I18NI000000048X,
+  `artifacts/sorafs_gateway_self_cert/<stamp>/` X).
+- DNS скелеты + баш ҡалыптары (I18NI000000050X,
+  `portal.gateway.plan.json`, I18NI000000052X).
+- Приборҙар таҡтаһы скриншоттар + иҫкәртмә таныуҙары.
+- `status.md` яңыртыу һылтанма буйынса асыҡ һеңдерелгән һәм псевдоним бәйләү ваҡыты.
 
-Following this checklist delivers DOCS-7: the portal/OpenAPI/SBOM payloads are
-packaged deterministically, pinned with aliases, guarded by `Sora-Proof`
-headers, and monitored end-to-end through the existing observability stack.
+Был тикшерелгән исемлектән һуң DOCS-7 тапшыра: портал/I18NT00000000003X/SBOM файҙалы йөкләмәләр .
+ҡапланған детерминистик, псевдонимдар менән ҡыҫтырылған, һаҡланған I18NI000000054X
+башлыҡтары, һәм күҙәтеү осона тиклем аша ғәмәлдәге күҙәтеү стека.

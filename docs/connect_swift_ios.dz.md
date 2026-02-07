@@ -7,31 +7,32 @@ generator: scripts/sync_docs_i18n.py
 source_hash: e3f492c3253124b1066f1ca4389c5ccf4b96a723a2cd9c30ca28ec92775eeaf4
 source_last_modified: "2026-01-05T18:22:23.396018+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-## Recommended SDK Flow (ConnectClient + Norito bridge)
+## གྲོས་འཆར་ཨེསི་ཌི་ཀེ་ ཕོལོ་ (མཐུད་ལམ་ + Norito ཟམ་)
 
-Need a full Xcode integration walkthrough (SPM/CocoaPods, XCFramework wiring, ChaChaPoly helpers)?
-See `docs/connect_swift_integration.md` for the end-to-end packaging guide.
+ཨེགསི་ཀོཌི་མཉམ་བསྡོམས་འབད་སའི་ལམ་ཐིག་ཆ་ཚང་དགོཔ་ཨིན་ (SPM/CocoaPods, XCFramework whering, ChaChaPoly གྲོགས་རམ་པ་)?
+མཇུག་ལས་མཇུག་ཚུན་ཚོད་ ཐུམ་སྒྲིལ་ལམ་སྟོན་གྱི་དོན་ལུ་ `docs/connect_swift_integration.md` ལུ་བལྟ།
 
-The Swift SDK ships a Norito-backed Connect stack:
+སུའིཕཊི་ཨེསི་ཌི་ཀེ་གིས་ Norito-backed Connect stack:
 
-- `ConnectClient` maintains the WebSocket (`/v1/connect/ws?...`) transport on top of
+- I18NI000000011X གིས་ ཝེབ་སོ་ཀེཊི་ (`/v1/connect/ws?...`) འདི་ གུར་ སྐྱེལ་འདྲེན་འབདཝ་ཨིན།
   `URLSessionWebSocketTask`.
-- `ConnectSession` orchestrates the lifecycle (open → approve/reject → sign → close) and
-  decrypts ciphertext frames once direction keys are installed.
-- `ConnectCrypto` exposes X25519 key generation plus Norito-compliant direction-key
-  derivation so apps never have to implement HKDF/HMAC plumbing manually.
-- `ConnectEnvelope`/`ConnectControl` represent the typed Norito frames emitted by the
-  Rust bridge (`connect_norito_bridge`); ciphertext envelopes are decrypted via the
-  same FFI helpers used on Android/Rust, guaranteeing parity.
+- I18NI000000014X གིས་ མི་ཚེ་འཁོར་རིམ་ (ཁ་ཕྱེཔ་ → ཆ་འཇོག་/བཀག་ཆ་ → རྟགས་ → ཉེ་འདབས་) དང་།
+  ཁ་ཕྱོགས་ལྡེ་མིག་ཚུ་གཞི་བཙུགས་འབད་ཚར་བའི་ཤུལ་ལས་ སི་ཕར་ཊེགསི་གཞི་ཁྲམ་ཚུ་ གསང་བཟོ་འབདཝ་ཨིན།
+- I18NI0000000015X X25519 ལྡེ་མིག་མི་རབས་དང་ Norito-མཐུན་སྒྲིག་ཅན་གྱི་ཁ་ཕྱོགས་ལྡེ་མིག་ཚུ་ ཕྱིར་བཏོན་འབདཝ་ཨིན།
+  devation དེ་འབདཝ་ལས་ གློག་རིམ་ཚུ་གིས་ ཨེཆ་ཀེ་ཌི་ཨེཕ་/ཨེཆ་ཨེམ་ཨེ་སི་ཆུ་གཡུར་འདི་ ལག་ཐོག་ལས་ ལག་ལེན་འཐབ་དགོཔ་མེད།
+- I18NI0000000016X/`ConnectControl` གིས་བཏོན་མི་ཡིག་དཔར་རྐྱབས་ཡོད་པའི་ I18NT000000003X གིས་ བཏོན་མི་ ཡིག་དཔར་ཅན་གྱི་གཞི་ཁྲམ་ཚུ་ ངོས་འཛིན་འབདཝ་ཨིན།
+  རཱསི་ཊི་ཟམ་ (`connect_norito_bridge`); ciphertext ཡིག་ཤུབས་ཚུ་ ༡ ༡ བརྒྱུད་དེ་ གསང་བཟོ་འབདཝ་ཨིན།
+  འདྲ་མཚུངས་ FFI གྲོགས་རམ་པ་ Android/Rust, ཆ་སྙོམས་འགན་ལེན་བྱེད་པ།
 
-Before starting a session:
-1. Derive the 32-byte session identifier (`sid`) using the same BLAKE2b recipe as other
-   SDKs (`"iroha-connect|sid|" || chain_id || app_pk || nonce16`).
-2. Generate a Connect key pair via `ConnectCrypto.generateKeyPair()` or reuse a stored
-   private key (public keys can be recomputed with `ConnectCrypto.publicKey(fromPrivateKey:)`).
-3. Create the WebSocket client and start it inside an async context.
+ལཱ་ཡུན་འགོ་མ་བཙུགས་པའི་ཧེ་མ་:
+1. 32-བཱའིཊི་ལཱ་ཡུན་ངོས་འཛིན་པ་ (`sid`) འདི་ BLAKE2b གི་ཐབས་ཤེས་གཅིག་པ་གཞན་བཟུམ་སྦེ་ལག་ལེན་འཐབ་སྟེ་ བཏོན་དགོ།
+   ཨེསི་ཌི་ཀེ་ (`"iroha-connect|sid|" || chain_id || app_pk || nonce16`).
+2. `ConnectCrypto.generateKeyPair()` བརྒྱུད་དེ་ མཐུད་བྱེད་ལྡེ་མིག་ཆ་གཅིག་བཟོ་བཏོན་འབད་ ཡང་ན་ གསོག་འཇོག་འབད་ཡོད་པའི་ལོག་སྟེ་ལག་ལེན་འཐབ།
+   སྒེར་གྱི་ལྡེ་མིག་ (མི་མང་ལྡེ་མིག་ཚུ་ `ConnectCrypto.publicKey(fromPrivateKey:)` དང་གཅིག་ཁར་ ལོག་རྩིས་རྐྱབ་ཚུགས།)
+༣ ཝེབ་སོ་ཀེཊི་མཁོ་སྤྲོད་པ་གསར་བསྐྲུན་འབད་ཞིནམ་ལས་ ཨེ་སིན་སྐབས་དོན་ནང་ལུ་འགོ་བཙུགས།
 
 ```swift
 import IrohaSwift
@@ -79,15 +80,15 @@ Task {
 }
 ```
 
-`ConnectSession` throws `ConnectSessionError.missingDecryptionKeys` if ciphertext frames
-arrive before direction keys are installed; derive them immediately after processing an
-`Approve` control (wallet public key is included in the payload). To inspect ciphertext
-frames manually, call `ConnectEnvelope.decrypt(frame:symmetricKey:)` with the directional
-key that matches the frame’s direction.
+`ConnectSession` གིས་ `ConnectSessionError.missingDecryptionKeys` གིས་ སི་ཕར་ཊེགསི་གཞི་ཁྲམ་ཚུ་ བཀོདཔ་ཨིན།
+ཁ་ཕྱོགས་ལྡེ་མིག་ཚུ་གཞི་བཙུགས་མ་འབད་བའི་ཧེ་མ་ལས་ལྷོདཔ་ཨིན། ལས་སྦྱོར་འབད་བའི་ཤུལ་ལས་ དེ་འཕྲོ་ལས་ དེ་ཚུ་བཏོན་ནི།
+`Approve` ཚད་འཛིན་ (དངུལ་གྱི་མི་མང་ལྡེ་མིག་འདི་ པེ་ལོཌི་ནང་ཚུད་ཡོདཔ་ཨིན།) ཚིག་མཛོད་ཞིབ་དཔྱད་འབད་ནི།
+གཞི་ཁྲམ་ཚུ་ ལག་ཐོག་ལས་ འབོད་བརྡ་འབད་དེ་ ཕྱོགས་སྟོན་འབདཝ་ཨིན།
+ལྡེ་མིག་འདི་ གཞི་ཁྲམ་གྱི་ཕྱོགས་དང་མཐུན་སྒྲིག་འབདཝ་ཨིན།
 
-> **Tip:** When the Norito bridge is missing (e.g., Swift Package Manager builds without
-> the XCFramework), the SDK automatically falls back to a JSON shim. Encryption helpers
-> (`ConnectCrypto.*`) require the bridge, so link the XCFramework in production apps.
+> **Tip:** Norito ཟམ་འདི་མེད་པའི་སྐབས་ (དཔེར་ན་ སུའིཕཊི་ཐུམ་སྒྲིལ་འཛིན་སྐྱོང་པ་གིས་ མེད་པར་བཟོ་བསྐྲུན་འབདཝ་ཨིན།
+> ཨེགསི་སི་ཕེརེམ་ལཱས), ཨེསི་ཌི་ཀེ་འདི་ རང་བཞིན་གྱིས་ ཇེ་ཨེསི་ཨོ་ཨེན་ ཤིམ་ལུ་ལོག་འགྱོཝ་ཨིན། གསང་བཟོའི་གྲོགས་རམ་པ།
+> (`ConnectCrypto.*`) ཟམ་འདི་དགོཔ་ལས་ ཐོན་སྐྱེད་གློག་རིམ་ཚུ་ནང་ XCFramework འདི་འབྲེལ་མཐུད་འབད།
 
 ```swift
 import Foundation
@@ -257,49 +258,18 @@ func parseCiphertextV1Demo(_ data: Data) -> ParsedCiphertextV1Demo? {
 // Example usage: receive
 // case .data(let d): if let f = parseCiphertextV1Demo(d) { let pt = openEnvelopeV1(key: kWallet, sid: f.sid, dir: f.dir, seq: f.seq, combined: f.aead) }
 ```
-```swift
-// Send encrypted Close (wallet → app) at seq=1
-let closePayload = try! JSONSerialization.data(withJSONObject: [
-  "Control": [
-    "Close": [
-      "who": "Wallet", // for demo logging only
-      "code": 1000,
-      "reason": "done",
-      "retryable": false
-    ]
-  ]
-], options: [])
-let ctClose = sealEnvelopeV1(key: kWallet, sid: sid, dir: 1, seq: 1, payload: closePayload)
-let frameClose = frameCiphertextV1Demo(sid: sid, dir: 1, seq: 1, aead: ctClose)
-ws.send(.data(frameClose)) { err in if let err = err { print("ws send close:", err) } }
+I18NF0000008X
+## CI བདེན་དཔང་།
 
-// Send encrypted Reject (wallet → app) at seq=2
-let rejectPayload = try! JSONSerialization.data(withJSONObject: [
-  "Control": [
-    "Reject": [
-      "code": 401,
-      "code_id": "UNAUTHORIZED",
-      "reason": "user denied"
-    ]
-  ]
-], options: [])
-let ctReject = sealEnvelopeV1(key: kWallet, sid: sid, dir: 1, seq: 2, payload: rejectPayload)
-let frameReject = frameCiphertextV1Demo(sid: sid, dir: 1, seq: 2, aead: ctReject)
-ws.send(.data(frameReject)) { err in if let err = err { print("ws send reject:", err) } }
-```
-## CI validation
+- མཐུད་སྦྲེལ་ཡང་ན་ཟམ་མཉམ་བསྡོམས་བསྒྱུར་བཅོས་མ་འབད་བའི་ཧེ་མ་ གཡོག་བཀོལ།
 
-- Before making Connect or bridge integration changes, run:
+  I18NF0000009X
 
-  ```bash
-  make swift-ci
-  ```
-
-  The command validates Swift fixtures, checks the dashboard feeds, and renders the CLI
-  summaries. The CI workflow relies on Buildkite metadata
-  (`ci/xcframework-smoke:<lane>:device_tag`) to map results back to the simulator or
-  StrongBox lanes—after changing pipelines or agent tags, confirm the metadata still
-  appears in the logs.
-- If the run fails, follow `docs/source/swift_parity_triage.md` and inspect the
-  `mobile_ci` output to determine which lane needs regeneration or further incident
-  handling.
+  བརྡ་བཀོད་འདི་གིས་ སུའིཕཊི་སྒྲིག་ཆས་ཚུ་བདེན་དཔྱད་འབདཝ་ཨིནམ་དང་ ཌེཤ་བོརཌི་ཕིཌི་ཚུ་ཞིབ་དཔྱད་འབདཝ་ཨིནམ་དང་ སི་ཨེལ་ཨའི་འདི་བཀྲམ་སྟོན་འབདཝ་ཨིན།
+  བཅུད་བསྡུས། CI ལཱ་གི་རྒྱུན་རིམ་འདི་ Buildkite མེ་ཊ་ཌེ་ཊ་ལུ་ བརྟེན་དོ་ཡོདཔ་ཨིན།
+  (`ci/xcframework-smoke:<lane>:device_tag`) ས་ཁྲ་བཟོ་ནི་གི་དོན་ལུ་ དཔེ་སྟོན་འབད་མི་ཡང་ན་ ས་ཁྲ་བཟོ་ནི།
+  StrongBox ལམ་ཚུ་—མདོང་ལམ་ཡང་ན་ ལས་ཚབ་ཀྱི་ངོ་རྟགས་ཚུ་བསྒྱུར་བཅོས་འབད་བའི་ཤུལ་ལས་ མེ་ཊ་ཌེ་ཊ་འདི་ད་ལྟོ་ཡང་ ངེས་གཏན་བཟོ།
+  དྲན་ཐོ་ཚུ་ནང་འབྱུངམ་ཨིན།
+- གཡོག་བཀོལ་མི་འདི་འཐུས་ཤོར་བྱུང་པ་ཅིན་ `docs/source/swift_parity_triage.md` ལུ་རྗེས་སུ་འབྲང་ཞིནམ་ལས་ བརྟག་ཞིབ་འབད།
+  I18NI000000030X ཐོན་འབྲས་འདི་ ལམ་གང་བསྐྱར་བཟོ་དགོཔ་ཨིན་ན་ ཡང་ན་ བྱུང་རྐྱེན་གཞན་དགོཔ་ཨིན་ན་ ཤེས་ཚུགས།
+  འཛིན་སྐྱོང་པ།

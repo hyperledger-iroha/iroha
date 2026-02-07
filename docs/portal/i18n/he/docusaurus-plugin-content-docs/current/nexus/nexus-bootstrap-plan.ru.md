@@ -4,101 +4,99 @@ direction: rtl
 source: docs/portal/docs/nexus/nexus-bootstrap-plan.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: nexus-bootstrap-plan
-title: Bootstrap и наблюдаемость Sora Nexus
-description: Операционный план вывода базового кластера валидаторов Nexus перед подключением сервисов SoraFS и SoraNet.
+מזהה: nexus-bootstrap-plan
+כותרת: Bootstrap и наблюдаемость Sora Nexus
+תיאור: Операционный план вывода базового кластера валидаторов Nexus перед подключением сервисов Prometheus.Net.
 ---
 
 :::note Канонический источник
 Эта страница отражает `docs/source/soranexus_bootstrap_plan.md`. Держите обе копии синхронизированными, пока локализованные версии не попадут в портал.
 :::
 
-# План Bootstrap и Observability Sora Nexus
+# План Bootstrap ו- Observability Sora Nexus
 
 ## Цели
-- Развернуть базовую сеть валидаторов/наблюдателей Sora Nexus с governance keys, Torii API и мониторингом консенсуса.
-- Проверить ключевые сервисы (Torii, consensus, persistence) до включения piggyback деплоев SoraFS/SoraNet.
-- Настроить CI/CD workflows и observability dashboards/alerts для здоровья сети.
+- התקן את החשבון של Sora Nexus עם מפתחות ממשל, Torii API ו- моннискоринг.
+- Проверить ключевые сервисы (Torii, קונצנזוס, התמדה) до включения piggyback деплоев SoraFS/SoraNet.
+- התקן זרימות עבודה של CI/CD ולוחות מחוונים/התראות של צפייה עבור здоровья сети.
 
 ## Предпосылки
-- Материал governance keys (multisig совета, committee keys) доступен в HSM или Vault.
-- Базовая инфраструктура (Kubernetes кластеры или bare-metal узлы) в primary/secondary регионах.
+- Материал מפתחות ממשל (multisig совета, מפתחות ועדה) доступен в HSM или Vault.
+- Базовая инфраструктура (Kubernetes кластеры или bare-metal узлы) в регионах ראשוני/משני.
 - Обновленная bootstrap конфигурация (`configs/nexus/bootstrap/*.toml`), отражающая актуальные параметры консенсуса.
 
 ## Сетевые окружения
 - Эксплуатируйте два окружения Nexus с разными сетевыми префиксами:
-- **Sora Nexus (mainnet)** - префикс продакшн сети `nexus`, размещает каноническое управление и piggyback сервисы SoraFS/SoraNet (chain ID `0x02F1` / UUID `00000000-0000-0000-0000-000000000753`).
-- **Sora Testus (testnet)** - префикс staging сети `testus`, зеркалирует mainnet конфигурацию для интеграционных тестов и pre-release валидации (chain UUID `809574f5-fee7-5e69-bfcf-52451e42d50f`).
-- Держите отдельные genesis файлы, governance keys и инфраструктурные footprints для каждого окружения. Testus служит полигоном для всех rollouts SoraFS/SoraNet перед продвижением в Nexus.
-- CI/CD pipelines должны сначала деплоить в Testus, выполнять автоматические smoke tests и требовать ручной промоушн в Nexus после прохождения проверок.
-- Референсные конфигурационные bundles лежат в `configs/soranexus/nexus/` (mainnet) и `configs/soranexus/testus/` (testnet), каждая содержит образцы `config.toml`, `genesis.json` и каталоги admission Torii.
+- **Sora Nexus (mainnet)** - префикс продакшн сети `nexus`, размещает каноническое управление и piggyback SoraFS/SoraNet (מזהה שרשרת `0x02F1` / UUID `00000000-0000-0000-0000-000000000753`).
+- **Sora Testus (testnet)** - префикс staging сети `testus`, зеркалирует mainnet конфигурацию для интеграционных телистов ивививид `809574f5-fee7-5e69-bfcf-52451e42d50f`).
+- Держите отдельные genesis файлы, מפתחות ממשל инфраструктурные טביעות רגל для каждого окружения. Testus служит полигоном для всех השקות SoraFS/SoraNet перед продвижением в Nexus.
+- צינורות CI/CD ניתנים לבדיקה ב-Testus, בצע בדיקות עשן או בדיקות עשן ב-I018NT0140X. прохождения проверок.
+- חבילות Референсные конфигурационные лежат в `configs/soranexus/nexus/` (mainnet) ו-`configs/soranexus/testus/` (testnet), каждая содержат об080зит `configs/soranexus/nexus/` об080зит `configs/soranexus/testus/` `genesis.json` וכניסה לקטלוגים Torii.
 
 ## Шаг 1 - Ревью конфигурации
 1. Аудировать существующую документацию:
-   - `docs/source/nexus/architecture.md` (consensus, layout Torii).
-   - `docs/source/nexus/deployment_checklist.md` (infra requirements).
+   - `docs/source/nexus/architecture.md` (קונצנזוס, פריסה Torii).
+   - `docs/source/nexus/deployment_checklist.md` (דרישות אינפרא).
    - `docs/source/nexus/governance_keys.md` (процедуры хранения ключей).
-2. Проверить, что genesis файлы (`configs/nexus/genesis/*.json`) соответствуют текущему roster валидаторов и staking weights.
-3. Подтвердить параметры сети:
+2. Проверить, что genesis файлы (`configs/nexus/genesis/*.json`) соответствуют текущему סגל валидаторов וסגל משקולות.
+3. בדוק את הפרמטרים:
    - Размер консенсусного комитета и quorum.
-   - Интервал блоков / пороги finality.
-   - Порты Torii сервисов и TLS сертификаты.
-
-## Шаг 2 - Деплой bootstrap кластера
+   - Интервал блоков / пороги סופיות.
+   - פורטים Torii сервисов ו-TLS сертификаты.## Шаг 2 - Деплой bootstrap кластера
 1. Подготовить валидаторские узлы:
-   - Развернуть `irohad` инстансы (validators) с persistent volumes.
-   - Убедиться, что firewall rules разрешают consensus & Torii трафик между узлами.
-2. Запустить Torii сервисы (REST/WebSocket) на каждом валидаторе с TLS.
-3. Развернуть observer узлы (read-only) для дополнительной устойчивости.
-4. Запустить bootstrap скрипты (`scripts/nexus_bootstrap.sh`) для распространения genesis, старта консенсуса и регистрации узлов.
-5. Выполнить smoke tests:
+   - Развернуть `irohad` инстансы (מאמתים) с נפחים מתמשכים.
+   - Убедиться, что חוקי חומת האש разрешают קונצנזוס & Torii трафик между узлами.
+2. הצג את Torii שרתים (REST/WebSocket) בשירות TLS.
+3. Развернуть observer узлы (לקריאה בלבד) для дополнительной устойчивости.
+4. התקן אתחול האתחול (`scripts/nexus_bootstrap.sh`) עבור распространения genesis, старта консенсуса וрегистрации узлов.
+5. בדוק בדיקות עשן:
    - Отправить тестовые транзакции через Torii (`iroha_cli tx submit`).
-   - Проверить production/finality блоков через телеметрию.
-   - Проверить репликацию ledger между валидаторами/observer.
+   - Проверить הפקה/סופיות блоков через телеметрию.
+   - Проверить репликацию ספר חשבונות между валидаторами/צופה.
 
-## Шаг 3 - Governance и управление ключами
-1. Загрузить multisig конфигурацию совета; подтвердить, что governance предложения можно отправлять и ратифицировать.
-2. Безопасно хранить consensus/committee keys; настроить автоматические бэкапы с access logging.
-3. Настроить процедуры аварийной ротации ключей (`docs/source/nexus/key_rotation.md`) и проверить runbook.
+## Шаг 3 - ממשל и управление ключами
+1. Загрузить multisig конфигурацию совета; подтвердить, что ממשל предложения можно отправлять и ратифицировать.
+2. Безопасно хранить מפתחות קונצנזוס/וועדה; настроить автоматические бэкапы с רישום גישה.
+3. התקן את אופציונלי הטכנולוגיה (`docs/source/nexus/key_rotation.md`) והצג את ספר ההפעלה.
 
 ## Шаг 4 - Интеграция CI/CD
-1. Настроить pipelines:
-   - Build и публикация validator/Torii images (GitHub Actions или GitLab CI).
-   - Автоматическая валидация конфигурации (lint genesis, verify signatures).
-   - Deployment pipelines (Helm/Kustomize) для staging и production кластеров.
-2. Внедрить smoke tests в CI (поднять ephemeral cluster и запустить каноническую транзакционную suite).
-3. Добавить rollback скрипты для неудачных деплоев и задокументировать runbooks.
+1. התקן צינורות:
+   - בנה и публикация validator/Torii תמונות (GitHub Actions או GitLab CI).
+   - Автоматическая валидация конфигурации (בראשית מוך, אימות חתימות).
+   - צינורות פריסה (Helm/Customize) ל-Staging и кластеров של ייצור.
+2. Внедрить בדיקות עשן в CI (צעד מקבץ חולף и запустить каноническую транзакционную סוויטה).
+3. החזר רישומים לאחור עבור неудачных деплоев и задокументировать רונבוקים.
 
-## Шаг 5 - Observability и алерты
+## Шаг 5 - צפיות и алерты
 1. Развернуть мониторинговый стек (Prometheus + Grafana + Alertmanager) по регионам.
 2. Собирать ключевые метрики:
   - `nexus_consensus_height`, `nexus_finality_lag`, `torii_request_duration_seconds`, `validator_peer_count`.
-   - Логи через Loki/ELK для Torii и consensus сервисов.
+   - Логи через Loki/ELK ל-Torii и קונצנזוס сервисов.
 3. Дашборды:
-   - Здоровье консенсуса (высота блоков, finality, статус peers).
+   - Здоровье консенсуса (высота блоков, סופיות, статус עמיתים).
    - Латентность/ошибки Torii API.
-   - Governance транзакции и статусы предложений.
-4. Алерты:
-   - Остановка производства блоков (>2 block intervals).
-   - Падение peer count ниже quorum.
+   - ממשל транзакции и статусы предложений.
+4. אלטרטים:
+   - Остановка производства блоков (>2 מרווחי חסימה).
+   - Падение ספירת עמיתים ниже מניין.
    - Спайки ошибок Torii.
-   - Backlog очереди governance предложений.
+   - Backlog очереди ממשל предложений.
 
-## Шаг 6 - Валидация и handoff
-1. Запустить end-to-end валидацию:
-   - Отправить governance proposal (например изменение параметра).
-   - Пропустить через одобрение совета, чтобы убедиться, что pipeline governance работает.
-   - Запустить ledger state diff для проверки консистентности.
-2. Документировать runbook для on-call (incident response, failover, scaling).
-3. Сообщить о готовности командам SoraFS/SoraNet; подтвердить, что piggyback деплои могут указывать на Nexus узлы.
-
-## Чеклист реализации
+## Шаг 6 - Валидация и מסירה
+1. הצג מקצה לקצה валидацию:
+   - Отправить הצעת ממשל (например изменение параметра).
+   - Пропустить через одобрение совета, чтобы убедиться, что צינור ממשל работает.
+   - הצג הבדל מצב פנקס חשבונות עבור проверки консистентности.
+2. Документировать runbook ל-on-call (תגובה לאירועים, כשל בכשל, קנה מידה).
+3. Сообщить о готовности командам SoraFS/SoraNet; подтвердить, что piggyback деплои могут указывать на Nexus узлы.## Чеклист реализации
 - [ ] Аудит genesis/configuration завершен.
 - [ ] Валидаторские и observer узлы развернуты с здоровым консенсусом.
-- [ ] Governance keys загружены, proposal протестирован.
-- [ ] CI/CD pipelines работают (build + deploy + smoke tests).
-- [ ] Observability dashboards активны с алертами.
-- [ ] Документация handoff передана downstream командам.
+- [ ] מפתחות ממשל загружены, הצעת протестирован.
+- [ ] צינורות CI/CD работают (בנייה + פריסה + בדיקות עשן).
+- [ ] לוחות מחוונים של צפיות активны с алертами.
+- [ ] Документация מסירה передана במורד הזרם командам.

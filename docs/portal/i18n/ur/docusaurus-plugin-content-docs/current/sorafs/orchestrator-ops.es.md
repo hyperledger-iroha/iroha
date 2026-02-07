@@ -4,29 +4,31 @@ direction: rtl
 source: docs/portal/docs/sorafs/orchestrator-ops.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: orchestrator-ops
-title: Runbook de operaciones del orquestador de SoraFS
-sidebar_label: Runbook del orquestador
-description: Guía operativa paso a paso para desplegar, supervisar y revertir el orquestador multi-origen.
+ID: آرکسٹریٹر-او پی ایس
+عنوان: SoraFS آرکسٹریٹر آپریشنز رن بک
+سائڈبار_لیبل: آرکسٹریٹر رن بک
+تفصیل: ملٹی ارگین آرکسٹریٹر کی تعیناتی ، نگرانی اور رول کرنے کے لئے مرحلہ وار آپریشنل گائیڈ۔
 ---
 
-:::note Fuente canónica
-Esta página refleja `docs/source/sorafs/runbooks/sorafs_orchestrator_ops.md`. Mantén ambas copias sincronizadas hasta que el conjunto de documentación Sphinx heredado se haya migrado por completo.
+::: نوٹ کینونیکل ماخذ
+یہ صفحہ `docs/source/sorafs/runbooks/sorafs_orchestrator_ops.md` کی عکاسی کرتا ہے۔ دونوں کاپیاں مطابقت پذیری میں رکھیں جب تک کہ میراثی اسفنکس دستاویزات کا سیٹ مکمل طور پر ہجرت نہ ہوجائے۔
 :::
 
-Este runbook guía a los SRE en la preparación, el despliegue y la operación del orquestador de fetch multi-origen. Complementa la guía de desarrollo con procedimientos ajustados a despliegues de producción, incluida la habilitación por etapas y el bloqueo de peers.
+یہ رن بک سریوں کو ملٹی ارگین بازیافت آرکسٹریٹر کی تیاری ، تعیناتی اور چلانے میں رہنمائی کرتی ہے۔ پیداوار کی تعیناتیوں کے مطابق طریقہ کار کے ساتھ ترقیاتی گائیڈ کی تکمیل کرتے ہیں ، بشمول اسٹیجنگ اور ہم مرتبہ مسدود کرنا۔
 
-> **Ver también:** El [Runbook de despliegue multi-origen](./multi-source-rollout.md) se centra en oleadas de despliegue a nivel de flota y en la denegación de proveedores en emergencias. Consúltalo para la coordinación de gobernanza / staging mientras usas este documento para las operaciones diarias del orquestador.
+> ** یہ بھی ملاحظہ کریں: ** [ملٹی سورس تعیناتی رن بک] (./multi-source-rollout.md) ہنگامی صورتحال میں بیڑے کی سطح کی تعیناتی لہروں اور سپلائر سے انکار پر مرکوز ہے۔ روزانہ آرکسٹریٹر آپریشنز کے ل this اس دستاویز کو استعمال کرتے ہوئے گورننس/اسٹیجنگ کوآرڈینیشن کے لئے اس کا حوالہ دیں۔
 
-## 1. Lista de verificación previa
+## 1. پری چیک لسٹ
 
-1. **Recopilar entradas de proveedores**
-   - Los últimos anuncios de proveedores (`ProviderAdvertV1`) y la instantánea de telemetría de la flota objetivo.
-   - El plan de payload (`plan.json`) derivado del manifiesto bajo prueba.
-2. **Generar un scoreboard determinista**
+1. ** سپلائرز سے ان پٹ اکٹھا کریں **
+   - تازہ ترین سپلائر اعلانات (`ProviderAdvertV1`) اور ہدف کے بیڑے کے ٹیلی میٹری اسنیپ شاٹ۔
+   - پے لوڈ پلان (`plan.json`) ٹیسٹ کے تحت منشور سے ماخوذ ہے۔
+2. ** ایک جینیاتی اسکور بورڈ پیدا کریں **
 
    ```bash
    sorafs_fetch \
@@ -39,30 +41,28 @@ Este runbook guía a los SRE en la preparación, el despliegue y la operación d
      --json-out artifacts/session.summary.json
    ```
 
-   - Valida que `artifacts/scoreboard.json` liste a cada proveedor de producción como `eligible`.
-   - Archiva el JSON de resumen junto al scoreboard; los auditores se apoyan en los contadores de reintentos de chunks al certificar la solicitud de cambio.
-3. **Dry-run con fixtures** — Ejecuta el mismo comando contra los fixtures públicos en `docs/examples/sorafs_ci_sample/` para garantizar que el binario del orquestador coincide con la versión esperada antes de tocar payloads de producción.
+   - توثیق کرتا ہے کہ `artifacts/scoreboard.json` ہر پروڈکشن سپلائر کو `eligible` کے بطور فہرست دیتا ہے۔
+   - اسکور بورڈ کے ساتھ ہی خلاصہ JSON محفوظ شدہ دستاویزات ؛ جب تبدیلی کی درخواست کی تصدیق کرتے ہو تو آڈیٹر CHUNK دوبارہ کوشش کرنے والے کاؤنٹرز پر انحصار کرتے ہیں۔
+3.
 
-## 2. Procedimiento de despliegue por etapas
+## 2. تعی .ن کا طریقہ کار
 
-1. **Etapa canaria (≤2 proveedores)**
-   - Reconstruye el scoreboard y ejecuta con `--max-peers=2` para limitar el orquestador a un subconjunto pequeño.
-   - Supervisa:
+1. ** کینری اسٹیج (≤2 سپلائرز) **
+   - اسکور بورڈ کو دوبارہ تعمیر کریں اور آرکسٹریٹر کو ایک چھوٹے سے سبسیٹ تک محدود کرنے کے لئے `--max-peers=2` کے ساتھ چلائیں۔
+   - نگرانی:
      - `sorafs_orchestrator_active_fetches`
      - `sorafs_orchestrator_fetch_failures_total{reason!="retry"}`
      - `sorafs_orchestrator_retries_total`
-   - Continúa cuando las tasas de reintentos se mantengan por debajo del 1% para un fetch completo del manifiesto y ningún proveedor acumule fallos.
-2. **Etapa de rampa (50% de proveedores)**
-   - Incrementa `--max-peers` y vuelve a ejecutar con una instantánea de telemetría reciente.
-   - Persiste cada ejecución con `--provider-metrics-out` y `--chunk-receipts-out`. Conserva los artefactos durante ≥7 días.
-3. **Despliegue completo**
-   - Elimina `--max-peers` (o configúralo al recuento completo de elegibles).
-   - Habilita el modo orquestador en los despliegues cliente: distribuye el scoreboard persistido y el JSON de configuración mediante tu sistema de gestión de configuración.
-   - Actualiza los dashboards para mostrar `sorafs_orchestrator_fetch_duration_ms` p95/p99 y los histogramas de reintentos por región.
+   - جاری رہتا ہے جب دوبارہ کوشش کرنے کی شرحیں مکمل منشور بازیافت کے لئے 1 ٪ سے کم رہیں اور کوئی فراہم کنندہ ناکامیوں کو جمع نہیں کرتا ہے۔
+2. ** ریمپ اسٹیج (50 ٪ سپلائرز) **
+   - انکریمنٹ `--max-peers` اور حالیہ ٹیلی میٹری اسنیپ شاٹ کے ساتھ دوبارہ کام کریں۔
+   - `--provider-metrics-out` اور `--chunk-receipts-out` کے ساتھ ہر رن پر برقرار رہتا ہے۔ نمونے ≥7 دن رکھیں۔
+3. ** مکمل تعیناتی **
+   - `--max-peers` (یا اسے مکمل اہل گنتی پر سیٹ کریں) کو ہٹا دیں۔
+   - کلائنٹ کی تعیناتیوں پر آرکسٹریٹر وضع کو فعال کریں: اپنے کنفیگریشن مینجمنٹ سسٹم کے ذریعہ مستقل اسکور بورڈ اور کنفیگریشن JSON تقسیم کریں۔
+   - `sorafs_orchestrator_fetch_duration_ms` P95/P99 کو ظاہر کرنے کے لئے ڈیش بورڈز کو اپ ڈیٹ کریں اور خطے کے لحاظ سے ہسٹگرام کو دوبارہ زندہ کریں۔
 
-## 3. Bloqueo y refuerzo de peers
-
-Usa las anulaciones de la política de puntuación del CLI para clasificar proveedores no saludables sin esperar actualizaciones de gobernanza.
+## 3. ہم مرتبہ مسدود اور کمکغیر صحتمند سپلائرز کو گورننس اپڈیٹس کا انتظار کیے بغیر درجہ بندی کرنے کے لئے سی ایل آئی اسکورنگ پالیسی اوور رائڈس کا استعمال کریں۔
 
 ```bash
 sorafs_fetch \
@@ -76,34 +76,34 @@ sorafs_fetch \
   --json-out artifacts/override.summary.json
 ```
 
-- `--deny-provider` elimina el alias indicado de la consideración en la sesión actual.
-- `--boost-provider=<alias>=<weight>` aumenta el peso del planificador del proveedor. Los valores se suman al peso normalizado del scoreboard y solo se aplican a la ejecución local.
-- Registra las anulaciones en el ticket de incidente y adjunta las salidas JSON para que el equipo responsable pueda reconciliar el estado una vez que se corrija el problema subyacente.
+- `--deny-provider` موجودہ سیشن میں اشارے والے عرف کو غور سے دور کرتا ہے۔
+- `--boost-provider=<alias>=<weight>` سپلائر شیڈولر کا وزن بڑھاتا ہے۔ اقدار کو اسکور بورڈ کے معمول کے وزن میں شامل کیا جاتا ہے اور صرف مقامی پھانسی پر لاگو ہوتا ہے۔
+- لاگ ان واقعے کے ٹکٹ پر اوور رائڈز اور JSON آؤٹ پٹ منسلک کریں تاکہ ذمہ دار ٹیم بنیادی مسئلہ طے ہونے کے بعد اس حیثیت میں صلح کر سکے۔
 
-Para cambios permanentes, modifica la telemetría de origen (marca al infractor como penalizado) o actualiza el anuncio con presupuestos de flujo actualizados antes de limpiar las anulaciones del CLI.
+مستقل تبدیلیوں کے ل source ، ماخذ ٹیلی میٹری میں ترمیم کریں (مجرم کو سزا کے طور پر نشان زد کریں) یا سی ایل آئی اوور رائڈس کو صاف کرنے سے پہلے تازہ ترین بہاؤ کے بجٹ کے ساتھ اشتہار کو اپ ڈیٹ کریں۔
 
-## 4. Diagnóstico de fallos
+## 4. غلطی کی تشخیص
 
-Cuando un fetch falla:
+جب بازیافت ناکام ہوجاتی ہے:
 
-1. Captura los siguientes artefactos antes de volver a ejecutar:
+1. دوبارہ چلانے سے پہلے درج ذیل نمونے پر قبضہ کریں:
    - `scoreboard.json`
    - `session.summary.json`
    - `chunk_receipts.json`
    - `provider_metrics.json`
-2. Inspecciona `session.summary.json` para ver la cadena de error legible:
-   - `no providers were supplied` → verifica las rutas de los proveedores y los anuncios.
-   - `retry budget exhausted ...` → incrementa `--retry-budget` o elimina peers inestables.
-   - `no compatible providers available ...` → audita la metainformación de capacidad de rango del proveedor infractor.
-3. Correlaciona el nombre del proveedor con `sorafs_orchestrator_provider_failures_total` y crea un ticket de seguimiento si la métrica se dispara.
-4. Reproduce la obtención sin conexión con `--scoreboard-json` y la telemetría capturada para reproducir el fallo de forma determinista.
+پڑھنے کے قابل غلطی کے تار کے لئے 2. `session.summary.json` کا معائنہ کریں:
+   - `no providers were supplied` supp سپلائر کے راستوں اور اشتہارات کی جانچ کریں۔
+   - `retry budget exhausted ...` → `--retry-budget` میں اضافہ کریں یا غیر مستحکم ساتھیوں کو ختم کریں۔
+   - `no compatible providers available ...` → آڈٹ آڈٹ آف رینج کی اہلیت میٹا معلومات کو مجرم فراہم کرنے والے کی معلومات۔
+3. وینڈر کا نام `sorafs_orchestrator_provider_failures_total` پر نقشہ بنائیں اور اگر میٹرک اسپائکس ہوں تو فالو اپ ٹکٹ بنائیں۔
+4. `--scoreboard-json` اور پکڑے گئے ٹیلی میٹری کے ساتھ آف لائن بازیافت کو دوبارہ پیش کریں تاکہ ناکامی کو دوبارہ پیش کریں۔
 
-## 5. Reversión
+## 5. الٹ
 
-Para revertir un despliegue del orquestador:
+آرکسٹریٹر کی تعیناتی کو واپس کرنے کے لئے:
 
-1. Distribuye una configuración que establezca `--max-peers=1` (deshabilita de hecho la planificación multi-origen) o vuelve a los clientes a la ruta de fetch heredada de un solo origen.
-2. Elimina cualquier anulación `--boost-provider` para que el scoreboard vuelva a un peso neutral.
-3. Continúa recolectando las métricas del orquestador durante al menos un día para confirmar que no queden fetches en vuelo.
+1. ایک ایسی ترتیب تقسیم کریں جو `--max-peers=1` (مؤثر طریقے سے ملٹی ارگین شیڈولنگ کو غیر فعال) سیٹ کرتا ہے یا مؤکلوں کو وراثت میں ملنے والے سنگل اوریگین بازیافت کے راستے پر واپس کرتا ہے۔
+2. اسکور بورڈ کو غیر جانبدار وزن میں واپس کرنے کے لئے کسی بھی `--boost-provider` اوور رائڈس کو ہٹا دیں۔
+3. کم از کم ایک دن کے لئے آرکسٹریٹر میٹرکس جمع کرنا جاری رکھیں تاکہ اس بات کی تصدیق کی جاسکے کہ پرواز میں کوئی بازیافت باقی نہیں ہے۔
 
-Mantener una captura disciplinada de artefactos y despliegues por etapas garantiza que el orquestador multi-origen pueda operarse de forma segura en flotas heterogéneas de proveedores mientras se mantienen los requisitos de observabilidad y auditoría.
+نظم و ضبطی نمونے کی گرفتاری اور اسٹیجڈ تعیناتیوں کو برقرار رکھنا اس بات کو یقینی بناتا ہے کہ ملٹی سورس آرکیسٹریٹر کو مشاہدہ کرنے اور آڈیٹنگ کی ضروریات کو برقرار رکھتے ہوئے دکانداروں کے متفاوت بیڑے میں محفوظ طریقے سے چلایا جاسکتا ہے۔

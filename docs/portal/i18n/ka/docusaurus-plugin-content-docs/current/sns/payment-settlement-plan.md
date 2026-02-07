@@ -8,35 +8,37 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SNS Payment & Settlement Plan
 sidebar_label: Payment & settlement plan
 description: Playbook for routing SNS registrar revenue, reconciling steward/treasury splits, and producing evidence bundles.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-> Canonical source: [`docs/source/sns/payment_settlement_plan.md`](../../../source/sns/payment_settlement_plan.md).
+> კანონიკური წყარო: [`docs/source/sns/payment_settlement_plan.md`](../../../source/sns/payment_settlement_plan.md).
 
-Roadmap task **SN-5 — Payment & Settlement Service** introduces a deterministic
-payment layer for the Sora Name Service. Every registration, renewal, or refund
-must emit a structured Norito payload so treasury, stewards, and governance can
-replay the financial flows without spreadsheets. This page distills the spec
-for portal audiences.
+საგზაო რუკის ამოცანა **SN-5 — გადახდის და ანგარიშსწორების სერვისი** შემოაქვს დეტერმინისტიკას
+გადახდის ფენა Sora Name Service-ისთვის. ყოველი რეგისტრაცია, განახლება ან თანხის დაბრუნება
+უნდა ასხივოს სტრუქტურირებული Norito დატვირთვა, რათა ხაზინას, სტიუარდებმა და მმართველობამ შეძლონ
+გაიმეორეთ ფინანსური ნაკადები ცხრილების გარეშე. ეს გვერდი ასუფთავებს სპეციფიკას
+პორტალის აუდიტორიისთვის.
 
-## Revenue model
+## შემოსავლის მოდელი
 
-- Base fee (`gross_fee`) derives from the registrar pricing matrix.  
-- Treasury receives `gross_fee × 0.70`, stewards receive the remainder minus
-  referral bonuses (capped at 10 %).  
-- Optional holdbacks allow governance to pause steward payouts during disputes.  
-- Settlement bundles expose a `ledger_projection` block with the concrete
-  `Transfer` ISIs so automation can post XOR movements straight into Torii.
+- საბაზისო გადასახადი (`gross_fee`) გამომდინარეობს რეგისტრატორის ფასების მატრიციდან.  
+- ხაზინა იღებს `gross_fee × 0.70`, სტიუარდები იღებენ დარჩენილ მინუსს
+  რეფერალური ბონუსები (10%).  
+- არჩევითი შეფერხებები საშუალებას აძლევს მმართველობას შეაჩეროს სტიუარდის გადახდა დავების დროს.  
+- დასახლების შეკვრა ავლენს `ledger_projection` ბლოკს ბეტონთან
+  `Transfer` ISI-ები, რათა ავტომატიზაციამ შეძლოს XOR მოძრაობების განთავსება პირდაპირ Torii-ში.
 
-## Services & automation
+## სერვისები და ავტომატიზაცია
 
-| Component | Purpose | Evidence |
+| კომპონენტი | დანიშნულება | მტკიცებულება |
 |-----------|---------|----------|
-| `sns_settlementd` | Applies policy, signs bundles, surfaces `/v1/sns/settlements`. | JSON bundle + hash. |
-| Settlement queue & writer | Idempotent queue + ledger submitter driven by `iroha_cli app sns settlement ledger`. | Bundle hash ↔ tx hash manifest. |
-| Reconciliation job | Daily diff + monthly statement under `docs/source/sns/reports/`. | Markdown + JSON digest. |
-| Refund desk | Governance-approved refunds via `/settlements/{id}/refund`. | `RefundRecordV1` + ticket. |
+| `sns_settlementd` | ვრცელდება პოლიტიკა, ხელს აწერს პაკეტებს, ზედაპირებს `/v1/sns/settlements`. | JSON პაკეტი + ჰეში. |
+| ანგარიშსწორების რიგი & მწერალი | Idempotent queue + ledger წარმდგენი, რომელსაც მართავს `iroha_cli app sns settlement ledger`. | შეფუთვის ჰეში ↔ tx ჰეშის მანიფესტი. |
+| შერიგების სამუშაო | ყოველდღიური განსხვავება + ყოველთვიური ამონაწერი `docs/source/sns/reports/`-ის ქვეშ. | Markdown + JSON დაიჯესტი. |
+| თანხის დაბრუნების მაგიდა | მთავრობის მიერ დამტკიცებული თანხის დაბრუნება `/settlements/{id}/refund`-ის მეშვეობით. | `RefundRecordV1` + ბილეთი. |
 
-CI helpers mirror these flows:
+CI დამხმარეები ასახავს ამ ნაკადებს:
 
 ```bash
 # Quote & ledger projection
@@ -49,27 +51,27 @@ iroha_cli app sns settlement ledger --bundle artifacts/sns/settlements/2026-05/m
 iroha_cli app sns settlement reconcile --period 2026-05 --out docs/source/sns/reports/settlement_202605.md
 ```
 
-## Observability & reporting
+## დაკვირვება და მოხსენება
 
-- Dashboards: `dashboards/grafana/sns_payment_settlement.json` for treasury vs
-  steward totals, referral payouts, queue depth, and refund latency.
-- Alerts: `dashboards/alerts/sns_payment_settlement_rules.yml` monitors pending
-  age, reconciliation failures, and ledger drift.
-- Statements: daily digests (`settlement_YYYYMMDD.{json,md}`) roll into monthly
-  reports (`settlement_YYYYMM.md`) which are uploaded both to Git and the
-  governance object store (`s3://sora-governance/sns/settlements/<period>/`).
-- Governance packets bundle dashboards, CLI logs, and approvals before council
-  sign-off.
+- დაფები: `dashboards/grafana/sns_payment_settlement.json` სახაზინო vs
+  სტიუარდის ჯამები, რეფერალური გადახდები, რიგის სიღრმე და თანხის დაბრუნების შეყოვნება.
+- გაფრთხილებები: `dashboards/alerts/sns_payment_settlement_rules.yml` მონიტორები მოლოდინშია
+  ასაკი, შერიგების წარუმატებლობა და წიგნის დრიფტი.
+- განცხადებები: ყოველდღიური დაიჯესტები (`settlement_YYYYMMDD.{json,md}`) გადადის ყოველთვიურად
+  ანგარიშები (`settlement_YYYYMM.md`), რომლებიც აიტვირთება როგორც Git-ში, ასევე The
+  მართვის ობიექტების მაღაზია (`s3://sora-governance/sns/settlements/<period>/`).
+- მმართველობის პაკეტები აერთიანებს საინფორმაციო დაფებს, CLI ჟურნალებს და დამტკიცებებს საბჭოს წინაშე
+  ხელმოწერა.
 
-## Rollout checklist
+## გაშვების ჩამონათვალი
 
-1. Prototype quote + ledger helpers and capture a staging bundle.
-2. Launch `sns_settlementd` with queue + writer, wire dashboards, and exercise
-   alert tests (`promtool test rules ...`).
-3. Deliver refund helper plus monthly statement template; mirror artefacts into
+1. ციტატის პროტოტიპი + წიგნის დამხმარეები და გადაიღეთ დადგმის ნაკრები.
+2. გაუშვით `sns_settlementd` რიგით + ჩაწერით, მავთულის დაფებით და ვარჯიშით
+   გაფრთხილების ტესტები (`promtool test rules ...`).
+3. მიწოდება თანხის დაბრუნების დამხმარე პლუს ყოველთვიური ამონაწერის შაბლონი; სარკეში არტეფაქტები
    `docs/portal/docs/sns/reports/`.
-4. Run a partner rehearsal (full month of settlements) and capture the
-   governance vote marking SN-5 as complete.
+4. ჩაატარეთ პარტნიორის რეპეტიცია (დასახლებების მთელი თვე) და დაიჭირეთ
+   მმართველობის ხმის მონიშვნა SN-5 დასრულებულად.
 
-Refer back to the source document for the exact schema definitions, open
-questions, and future amendments.
+სქემის ზუსტი განმარტებებისთვის მიმართეთ წყაროს დოკუმენტს, ღია
+კითხვები და მომავალი ცვლილებები.

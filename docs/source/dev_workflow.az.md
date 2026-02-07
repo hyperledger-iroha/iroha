@@ -7,107 +7,105 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 3be11bea2cb39520bc3c09f4614555d4ac97760e3590609e2f8df27bf28d1a1a
 source_last_modified: "2026-01-19T07:43:34.047491+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# AGENTS Development Workflow
+# Agentlərin İnkişafı İş Akışı
 
-This runbook consolidates the contributor guardrails from the AGENTS roadmap so
-new patches follow the same default gates.
+Bu runbook AGENTS yol xəritəsindəki töhfəçi qoruyucularını birləşdirir
+yeni yamalar eyni standart qapıları izləyir.
 
-## Quickstart targets
+## Sürətli başlanğıc hədəfləri
 
-- Run `make dev-workflow` (wrapper around `scripts/dev_workflow.sh`) to execute:
+- İcra etmək üçün `make dev-workflow` (`scripts/dev_workflow.sh` ətrafındakı sarğı) işə salın:
   1. `cargo fmt --all`
   2. `cargo clippy --workspace --all-targets --locked -- -D warnings`
   3. `cargo build --workspace --locked`
   4. `cargo test --workspace --locked`
-  5. `swift test` from `IrohaSwift/`
-- `cargo test --workspace` is long-running (often hours). For quick iterations,
-  use `scripts/dev_workflow.sh --skip-tests` or `--skip-swift`, then run the full
-  sequence before shipping.
-- If `cargo test --workspace` stalls on build directory locks, rerun with
-  `scripts/dev_workflow.sh --target-dir target/codex-tests` (or set
-  `CARGO_TARGET_DIR` to an isolated path) to avoid contention.
-- All cargo steps use `--locked` to respect the repository policy of keeping
-  `Cargo.lock` untouched. Prefer extending existing crates rather than adding
-  new workspace members; seek approval before introducing a new crate.
+  5. `swift test`, `IrohaSwift/`
+- `cargo test --workspace` uzun müddət işləyir (tez-tez saat). Sürətli təkrarlamalar üçün,
+  `scripts/dev_workflow.sh --skip-tests` və ya `--skip-swift` istifadə edin, sonra tam
+  göndərilmədən əvvəl ardıcıllıqla.
+- `cargo test --workspace` quraşdırma kataloq kilidlərində dayanırsa, yenidən işə salın
+  `scripts/dev_workflow.sh --target-dir target/codex-tests` (və ya set
+  `CARGO_TARGET_DIR` təcrid olunmuş yola) mübahisə etməmək üçün.
+- Bütün yük mərhələləri saxlama anbar siyasətinə hörmət etmək üçün `--locked` istifadə edir.
+  `Cargo.lock` toxunulmayıb. Əlavə etməkdənsə, mövcud qutuları genişləndirməyə üstünlük verin
+  yeni iş sahəsi üzvləri; yeni bir qutu təqdim etməzdən əvvəl təsdiq axtarın.
 
-## Guardrails
-
-- `make check-agents-guardrails` (or `ci/check_agents_guardrails.sh`) fails if a
-  branch modifies `Cargo.lock`, introduces new workspace members, or adds new
-  dependencies. The script compares the working tree and `HEAD` against
-  `origin/main` by default; set `AGENTS_BASE_REF=<ref>` to override the base.
-- `make check-dependency-discipline` (or `ci/check_dependency_discipline.sh`)
-  diffs `Cargo.toml` dependencies against the base and fails on new crates; set
-  `DEPENDENCY_DISCIPLINE_ALLOW=<dep1,dep2>` to acknowledge intentional
-  additions.
-- `make check-missing-docs` (or `ci/check_missing_docs_guard.sh`) blocks new
-  `#[allow(missing_docs)]` entries, flags touched crates (nearest `Cargo.toml`)
-  whose `src/lib.rs`/`src/main.rs` lack crate-level `//!` docs, and rejects new
-  public items without `///` docs relative to the base ref; set
-  `MISSING_DOCS_GUARD_ALLOW=1` only with reviewer approval. The guard also
-  verifies that `docs/source/agents/missing_docs_inventory.{json,md}` are fresh;
-  regenerate with `python3 scripts/inventory_missing_docs.py`.
-- `make check-tests-guard` (or `ci/check_tests_guard.sh`) flags crates whose
-  changed Rust functions lack unit-test evidence. The guard maps changed lines
-  to functions, passes if crate tests changed in the diff, and otherwise scans
-  existing test files for matching function calls so pre-existing coverage
-  counts; crates without any matching tests will fail. Set `TEST_GUARD_ALLOW=1`
-  only when changes are truly test-neutral and the reviewer agrees.
-- `make check-docs-tests-metrics` (or `ci/check_docs_tests_metrics_guard.sh`)
-  enforces the roadmap policy that milestones move alongside documentation,
-  tests, and metrics/dashboards. When `roadmap.md` changes relative to
-  `AGENTS_BASE_REF`, the guard expects at least one doc change, one test change,
-  and one metrics/telemetry/dashboard change. Set `DOC_TEST_METRIC_GUARD_ALLOW=1`
-  only with reviewer approval.
-- `make check-todo-guard` (or `ci/check_todo_guard.sh`) fails when TODO markers
-  disappear without accompanying docs/tests changes. Add or update coverage
-  when resolving a TODO, or set `TODO_GUARD_ALLOW=1` for intentional removals.
-- `make check-std-only` (or `ci/check_std_only.sh`) blocks `no_std`/`wasm32`
-  cfgs so the workspace stays `std`-only. Set `STD_ONLY_GUARD_ALLOW=1` only for
-  sanctioned CI experiments.
-- `make check-status-sync` (or `ci/check_status_sync.sh`) keeps the roadmap open
-  section free of completed items and requires `roadmap.md`/`status.md` to
-  change together so plan/status stay aligned; set
-  `STATUS_SYNC_ALLOW_UNPAIRED=1` only for rare status-only typo fixes after
-  pinning `AGENTS_BASE_REF`.
-- `make check-proc-macro-ui` (or `ci/check_proc_macro_ui.sh`) runs the trybuild
-  UI suites for derive/proc-macro crates. Run it when touching proc-macros to
-  keep `.stderr` diagnostics stable and catch panicking UI regressions; set
-  `PROC_MACRO_UI_CRATES="crate1 crate2"` to focus on specific crates.
-- `make check-env-config-surface` (or `ci/check_env_config_surface.sh`) rebuilds
-  the env-toggle inventory (`docs/source/agents/env_var_inventory.{json,md}`),
-  fails if it is stale, **and** fails when new production env shims appear
-  relative to `AGENTS_BASE_REF` (auto-detected; set explicitly when needed).
-  Refresh the tracker after adding/removing env lookups via
+## Korkuluklar- `make check-agents-guardrails` (və ya `ci/check_agents_guardrails.sh`) uğursuz olarsa
+  filial `Cargo.lock`-i dəyişdirir, yeni iş sahəsi üzvləri təqdim edir və ya yeniləri əlavə edir
+  asılılıqlar. Skript işləyən ağac və `HEAD` ilə müqayisə edir
+  Defolt olaraq `origin/main`; bazanı ləğv etmək üçün `AGENTS_BASE_REF=<ref>` təyin edin.
+- `make check-dependency-discipline` (və ya `ci/check_dependency_discipline.sh`)
+  `Cargo.toml` asılılıqlarını bazadan fərqləndirir və yeni qutularda uğursuz olur; təyin edin
+  qəsdən olduğunu etiraf etmək üçün `DEPENDENCY_DISCIPLINE_ALLOW=<dep1,dep2>`
+  əlavələr.
+- `make check-missing-docs` (və ya `ci/check_missing_docs_guard.sh`) yeni bloklar
+  `#[allow(missing_docs)]` girişləri, bayraqlara toxunan qutular (ən yaxın `Cargo.toml`)
+  `src/lib.rs`/`src/main.rs`-də sandıq səviyyəli `//!` sənədləri yoxdur və yenisini rədd edir
+  əsas referata nisbətən `///` sənədləri olmayan ictimai əşyalar; təyin edin
+  `MISSING_DOCS_GUARD_ALLOW=1` yalnız rəyçinin təsdiqi ilə. Mühafizəçi də
+  `docs/source/agents/missing_docs_inventory.{json,md}` təzə olduğunu yoxlayır;
+  `python3 scripts/inventory_missing_docs.py` ilə bərpa edin.
+- `make check-tests-guard` (və ya `ci/check_tests_guard.sh`) bayraqları olan qutular
+  dəyişdirilmiş Rust funksiyalarında vahid test sübutu yoxdur. Mühafizə xəritələri xətləri dəyişdirdi
+  funksiyalara, diff-də qutu testləri dəyişdikdə keçir və əks halda skan edir
+  uyğun funksiya çağırışları üçün mövcud test faylları belə ki, əvvəlcədən mövcud əhatə
+  sayır; heç bir uyğun testi olmayan qutular uğursuz olacaq. `TEST_GUARD_ALLOW=1` seçin
+  yalnız dəyişikliklər həqiqətən sınaq üçün neytral olduqda və rəyçi razılaşdıqda.
+- `make check-docs-tests-metrics` (və ya `ci/check_docs_tests_metrics_guard.sh`)
+  mərhələlərin sənədlərlə yanaşı hərəkət etdiyi yol xəritəsi siyasətini tətbiq edir,
+  testlər və ölçülər/iş panelləri. `roadmap.md` nisbətən dəyişdikdə
+  `AGENTS_BASE_REF`, mühafizəçi ən azı bir sənəd dəyişikliyi, bir sınaq dəyişikliyi gözləyir,
+  və bir ölçü/telemetri/ana panel dəyişikliyi. `DOC_TEST_METRIC_GUARD_ALLOW=1` seçin
+  yalnız rəyçinin razılığı ilə.
+- TODO markerləri uğursuz olduqda `make check-todo-guard` (və ya `ci/check_todo_guard.sh`)
+  sənədləri/test dəyişikliklərini müşayiət etmədən yox. Əhatə dairəsini əlavə edin və ya yeniləyin
+  TODO həll edərkən və ya qəsdən silmələr üçün `TODO_GUARD_ALLOW=1` təyin edin.
+- `make check-std-only` (və ya `ci/check_std_only.sh`) blokları `no_std`/`wasm32`
+  cfgs belə iş sahəsi yalnız `std`-də qalır. Yalnız `STD_ONLY_GUARD_ALLOW=1` üçün təyin edin
+  sanksiyalaşdırılmış CI təcrübələri.
+- `make check-status-sync` (və ya `ci/check_status_sync.sh`) yol xəritəsini açıq saxlayır
+  bölmə tamamlanmış elementlərdən azaddır və `roadmap.md`/`status.md` tələb edir
+  birlikdə dəyişdirin ki, plan/status uyğun olsun; təyin edin
+  `STATUS_SYNC_ALLOW_UNPAIRED=1` yalnız nadir statuslu yazı xətalarını aradan qaldırdıqdan sonra
+  sancma `AGENTS_BASE_REF`.
+- `make check-proc-macro-ui` (və ya `ci/check_proc_macro_ui.sh`) trybuild-i idarə edir
+  Alma/proc-makro qutular üçün UI dəstləri. Proc-makroslara toxunduqda onu işə salın
+  `.stderr` diaqnostikasını sabit saxlamaq və UI reqressiyalarını təqib etmək; təyin edin
+  Xüsusi qutulara diqqət yetirmək üçün `PROC_MACRO_UI_CRATES="crate1 crate2"`.
+- `make check-env-config-surface` (və ya `ci/check_env_config_surface.sh`) yenidən qurur
+  env-keçid inventar (`docs/source/agents/env_var_inventory.{json,md}`),
+  köhnəldikdə uğursuz olur, **və** yeni istehsal env şimləri görünəndə uğursuz olur
+  `AGENTS_BASE_REF`-ə nisbətən (avtomatik aşkarlanır; lazım olduqda açıq şəkildə təyin olunur).
+  vasitəsilə env axtarışlarını əlavə etdikdən/çıxardıqdan sonra izləyicini yeniləyin
   `python3 scripts/inventory_env_toggles.py --json docs/source/agents/env_var_inventory.json --md docs/source/agents/env_var_inventory.md`;
-  use `ENV_CONFIG_GUARD_ALLOW=1` only after documenting intentional env knobs
-  in the migration tracker.
-- `make check-serde-guard` (or `ci/check_serde_guard.sh`) regenerates the serde
-  usage inventory (`docs/source/norito_json_inventory.{json,md}`) into a temp
-  location, fails if the committed inventory is stale, and rejects any new
-  production `serde`/`serde_json` hits relative to `AGENTS_BASE_REF`. Set
-  `SERDE_GUARD_ALLOW=1` only for CI experiments after filing a migration plan.
-- `make guards` enforces the Norito serialization policy: it denies new
-  `serde`/`serde_json` usage, ad-hoc AoS helpers, and SCALE dependencies outside
-  the Norito benches (`scripts/deny_serde_json.sh`,
+  `ENV_CONFIG_GUARD_ALLOW=1`-i yalnız qəsdən env düymələrini sənədləşdirdikdən sonra istifadə edinmiqrasiya izləyicisində.
+- `make check-serde-guard` (və ya `ci/check_serde_guard.sh`) serdeni bərpa edir
+  İstifadə inventarını (`docs/source/norito_json_inventory.{json,md}`) temp
+  yer, qəbul edilmiş inventar köhnədirsə uğursuz olur və hər hansı yenisini rədd edir
+  istehsal `serde`/`serde_json`, `AGENTS_BASE_REF`-ə nisbətdə vurur. Set
+  `SERDE_GUARD_ALLOW=1` yalnız miqrasiya planını təqdim etdikdən sonra CI təcrübələri üçün.
+- `make guards` Norito seriallaşdırma siyasətini tətbiq edir: yenisini rədd edir
+  `serde`/`serde_json` istifadəsi, ad-hoc AoS köməkçiləri və xaricində SCALE asılılıqları
+  Norito skamyalar (`scripts/deny_serde_json.sh`,
   `scripts/check_no_direct_serde.sh`, `scripts/deny_handrolled_aos.sh`,
   `scripts/check_no_scale.sh`).
-- **Proc-macro UI policy:** every proc-macro crate must ship a `trybuild`
-  harness (`tests/ui.rs` with pass/fail globs) behind the `trybuild-tests`
-  feature. Place happy-path samples under `tests/ui/pass`, rejection cases under
-  `tests/ui/fail` with committed `.stderr` outputs, and keep diagnostics
-  non-panicking and stable. Refresh fixtures with
-  `TRYBUILD=overwrite cargo test -p <crate> -F trybuild-tests` (optionally with
-  `CARGO_TARGET_DIR=target-codex` to avoid clobbering existing builds) and
-  avoid relying on coverage builds (`cfg(not(coverage))` guards are expected).
-  For macros that do not emit a binary entrypoint, prefer
-  `// compile-flags: --crate-type lib` in fixtures to keep errors focused. Add
-  new negative cases whenever diagnostics change.
-- CI runs the guardrail scripts via `.github/workflows/agents-guardrails.yml`
-  so pull requests fail fast when the policies are violated.
-- The sample git hook (`hooks/pre-commit.sample`) runs guardrail, dependency,
-  missing-docs, std-only, env-config, and status-sync scripts so contributors
-  catch policy violations before CI. Keep TODO breadcrumbs for any intentional
-  follow-ups instead of deferring large changes silently.
+- **Proc-makro UI siyasəti:** hər bir proc-makro qutusu `trybuild` göndərməlidir
+  `trybuild-tests` arxasında qoşqu (keçmə/uğursuz qlobus ilə `tests/ui.rs`)
+  xüsusiyyət. Xoşbəxt yol nümunələrini `tests/ui/pass` altına, rədd hallarını isə altına qoyun
+  Sadiq `.stderr` çıxışları ilə `tests/ui/fail` və diaqnostikaya davam edin
+  paniksiz və sabitdir. ilə armaturları yeniləyin
+  `TRYBUILD=overwrite cargo test -p <crate> -F trybuild-tests` (isteğe bağlı olaraq
+  `CARGO_TARGET_DIR=target-codex` mövcud konstruksiyaların tıxanmasının qarşısını almaq üçün) və
+  əhatə dairəsi quruluşlarına etibar etməyin (`cfg(not(coverage))` mühafizəçiləri gözlənilir).
+  İkili giriş nöqtəsi buraxmayan makrolar üçün üstünlük verin
+  Səhvləri diqqət mərkəzində saxlamaq üçün qurğularda `// compile-flags: --crate-type lib`. əlavə et
+  diaqnostika dəyişdikdə yeni neqativ hallar.
+- CI qoruyucu skriptləri `.github/workflows/agents-guardrails.yml` vasitəsilə idarə edir
+  beləliklə, siyasətlər pozulduqda pull sorğuları sürətlə uğursuz olur.
+- Nümunə git çəngəl (`hooks/pre-commit.sample`) qoruyucu, asılılıq,
+  əskik sənədlər, yalnız std, env-config və status-sinxronizasiya skriptləri
+  CI-dən əvvəl siyasət pozuntularını tutun. İstənilən qəsdən TODO çörək qırıntılarını saxlayın
+  böyük dəyişiklikləri səssizcə təxirə salmaq yerinə təqiblər.

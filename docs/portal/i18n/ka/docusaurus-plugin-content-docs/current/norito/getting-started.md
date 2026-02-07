@@ -4,38 +4,40 @@ direction: ltr
 source: docs/portal/docs/norito/getting-started.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Norito Getting Started
+# Norito დაწყება
 
-This quick guide shows the minimal workflow for compiling a Kotodama contract,
-inspecting the generated Norito bytecode, running it locally, and deploying it
-to an Iroha node.
+ეს სწრაფი სახელმძღვანელო აჩვენებს მინიმალურ სამუშაო პროცესს Kotodama კონტრაქტის შედგენისთვის,
+გენერირებული Norito ბაიტეკოდის შემოწმება, ლოკალურად გაშვება და დანერგვა
+Iroha კვანძზე.
 
-## Prerequisites
+## წინაპირობები
 
-1. Install the Rust toolchain (1.76 or newer) and check out this repository.
-2. Build or download the supporting binaries:
-   - `koto_compile` – Kotodama compiler that emits IVM/Norito bytecode
-   - `ivm_run` and `ivm_tool` – local execution and inspection utilities
-   - `iroha_cli` – used for contract deployment via Torii
+1. დააინსტალირეთ Rust toolchain (1.76 ან უფრო ახალი) და შეამოწმეთ ეს საცავი.
+2. შექმენით ან ჩამოტვირთეთ დამხმარე ორობითი ფაილები:
+   - `koto_compile` – Kotodama შემდგენელი, რომელიც გამოსცემს IVM/Norito ბაიტიკოდს
+   - `ivm_run` და `ivm_tool` - ადგილობრივი აღსრულებისა და ინსპექტირების კომუნალური საშუალებები
+   - `iroha_cli` - გამოიყენება კონტრაქტის განსათავსებლად Torii-ის საშუალებით
 
-   The repository Makefile expects these binaries on `PATH`. You can either
-   download prebuilt artifacts or build them from source. If you compile the
-   toolchain locally, point the Makefile helpers at the binaries:
+   საცავი Makefile ელის ამ ბინარებს `PATH`-ზე. შენც შეგიძლია
+   ჩამოტვირთეთ წინასწარ აშენებული არტეფაქტები ან შექმენით ისინი წყაროდან. თუ შეადგენთ
+   Toolchain ადგილობრივად, მიუთითეთ Makefile დამხმარეები ბინარებზე:
 
    ```sh
    KOTO=./target/debug/koto_compile IVM=./target/debug/ivm_run make examples-run
    ```
 
-3. Ensure an Iroha node is running when you reach the deployment step. The
-   examples below assume Torii is reachable at the URL configured in your
-   `iroha_cli` profile (`~/.config/iroha/cli.toml`).
+3. დარწმუნდით, რომ Iroha კვანძი მუშაობს, როდესაც მიაღწევთ განლაგების საფეხურს. The
+   ქვემოთ მოყვანილი მაგალითები ვივარაუდოთ, რომ Torii ხელმისაწვდომია თქვენს მიერ კონფიგურირებული URL-ით
+   `iroha_cli` პროფილი (`~/.config/iroha/cli.toml`).
 
-## 1. Compile a Kotodama contract
+## 1. შეადგინეთ Kotodama კონტრაქტი
 
-The repository ships a minimal “hello world” contract in
-`examples/hello/hello.ko`. Compile it to Norito/IVM bytecode (`.to`):
+საცავი აგზავნის მინიმალურ „hello world“ კონტრაქტს
+`examples/hello/hello.ko`. შეადგინეთ იგი Norito/IVM ბაიტიკოდზე (`.to`):
 
 ```sh
 mkdir -p target/examples
@@ -45,42 +47,42 @@ koto_compile examples/hello/hello.ko \
   -o target/examples/hello.to
 ```
 
-Key flags:
+ძირითადი დროშები:
 
-- `--abi 1` locks the contract to ABI version 1 (the only supported version at
-  the time of writing).
-- `--max-cycles 0` requests unbounded execution; set a positive number to bound
-  cycle padding for zero-knowledge proofs.
+- `--abi 1` ბლოკავს კონტრაქტს ABI 1 ვერსიაზე (ერთადერთი მხარდაჭერილი ვერსია:
+  წერის დრო).
+- `--max-cycles 0` ითხოვს შეუზღუდავ შესრულებას; დააყენეთ დადებითი რიცხვი შეკრული
+  ციკლის ბალიშები ნულოვანი ცოდნის მტკიცებულებისთვის.
 
-## 2. Inspect the Norito artifact (optional)
+## 2. შეამოწმეთ Norito არტეფაქტი (არასავალდებულო)
 
-Use `ivm_tool` to verify the header and embedded metadata:
+გამოიყენეთ `ivm_tool` სათაურის და ჩაშენებული მეტამონაცემების დასადასტურებლად:
 
 ```sh
 ivm_tool inspect target/examples/hello.to
 ```
 
-You should see the ABI version, enabled feature flags, and the exported entry
-points. This is a quick sanity check before deployment.
+თქვენ უნდა ნახოთ ABI ვერსია, ჩართული ფუნქციების დროშები და ექსპორტირებული ჩანაწერი
+ქულები. ეს არის სწრაფი სიჯანსაღის შემოწმება განლაგებამდე.
 
-## 3. Run the contract locally
+## 3. გააფორმეთ კონტრაქტი ადგილობრივად
 
-Execute the bytecode with `ivm_run` to confirm behaviour without touching a
-node:
+შეასრულეთ ბაიტიკოდი `ivm_run`-ით, რათა დაადასტუროთ ქცევა შეხების გარეშე
+კვანძი:
 
 ```sh
 ivm_run target/examples/hello.to --args '{}'
 ```
 
-The `hello` example logs a greeting and issues a `SET_ACCOUNT_DETAIL` syscall.
-Running locally is useful while iterating on contract logic before publishing
-it on-chain.
+`hello` მაგალითი აღრიცხავს მისალმებას და გამოსცემს `SET_ACCOUNT_DETAIL` syscall-ს.
+ადგილობრივად გაშვება სასარგებლოა გამოქვეყნებამდე კონტრაქტის ლოგიკის გამეორებისას
+ის ჯაჭვზე.
 
-## 4. Deploy via `iroha_cli`
+## 4. განლაგება `iroha_cli`-ის საშუალებით
 
-When you are satisfied with the contract, deploy it to a node using the CLI.
-Provide an authority account, its signing key, and either a `.to` file or
-Base64 payload:
+როდესაც კმაყოფილი ხართ კონტრაქტით, განათავსეთ იგი კვანძში CLI-ის გამოყენებით.
+მიაწოდეთ ავტორიტეტული ანგარიში, მისი ხელმოწერის გასაღები და ან `.to` ფაილი ან
+Base64 დატვირთვა:
 
 ```sh
 iroha_cli app contracts deploy \
@@ -89,37 +91,37 @@ iroha_cli app contracts deploy \
   --code-file target/examples/hello.to
 ```
 
-The command submits a Norito manifest + bytecode bundle over Torii and prints
-the resulting transaction status. Once the transaction is committed, the code
-hash shown in the response can be used to retrieve manifests or list instances:
+ბრძანება წარუდგენს Norito მანიფესტს + ბაიტეკოდის პაკეტს Torii-ზე და ბეჭდავს
+შედეგად მიღებული ტრანზაქციის სტატუსი. ტრანზაქციის შესრულების შემდეგ, კოდი
+პასუხში ნაჩვენები ჰეში შეიძლება გამოყენებულ იქნას მანიფესტების ან ინსტანციების სიაში მოსაძებნად:
 
 ```sh
 iroha_cli app contracts manifest get --code-hash 0x<hash>
 iroha_cli app contracts instances --namespace apps --table
 ```
 
-## 5. Run against Torii
+## 5. გაუშვით Torii-ის წინააღმდეგ
 
-With the bytecode registered, you can invoke it by submitting an instruction
-that references the stored code (e.g., through `iroha_cli ledger transaction submit`
-or your application client). Ensure the account permissions allow the desired
-syscalls (`set_account_detail`, `transfer_asset`, etc.).
+რეგისტრირებული ბაიტიკოდის შემთხვევაში, შეგიძლიათ გამოიძახოთ იგი ინსტრუქციის წარდგენით
+რომელიც მიუთითებს შენახულ კოდზე (მაგ., `iroha_cli ledger transaction submit`-ის მეშვეობით
+ან თქვენი განაცხადის კლიენტი). დარწმუნდით, რომ ანგარიშის ნებართვები იძლევა სასურველს
+syscalls (`set_account_detail`, `transfer_asset` და ა.შ.).
 
-## Tips & troubleshooting
+## რჩევები და პრობლემების მოგვარება
 
-- Use `make examples-run` to compile and execute the provided examples in one
-  shot. Override `KOTO`/`IVM` environment variables if the binaries are not on
+- გამოიყენეთ `make examples-run` მოწოდებული მაგალითების შედგენისა და ერთში შესასრულებლად
+  დახვრიტეს. `KOTO`/`IVM` გარემოს ცვლადების უგულებელყოფა, თუ ბინარები ჩართული არ არის
   `PATH`.
-- If `koto_compile` rejects the ABI version, verify that the compiler and node
-  both target ABI v1 (run `koto_compile --abi` without arguments to list
-  support).
-- The CLI accepts either hex or Base64 signing keys. For testing, you can use
-  keys emitted by `iroha_cli tools crypto keypair`.
-- When debugging Norito payloads, the `ivm_tool disassemble` subcommand helps
-  correlate instructions with Kotodama source.
+- თუ `koto_compile` უარყოფს ABI ვერსიას, შეამოწმეთ, რომ შემდგენელი და კვანძი
+  ორივე სამიზნე ABI v1 (გაუშვით `koto_compile --abi` სიაში არგუმენტების გარეშე
+  მხარდაჭერა).
+- CLI იღებს ექვსკუთხა ან Base64 ხელმოწერის გასაღებებს. ტესტირებისთვის შეგიძლიათ გამოიყენოთ
+  `iroha_cli tools crypto keypair`-ის მიერ გამოშვებული გასაღებები.
+- Norito დატვირთვის გამართვისას, `ivm_tool disassemble` ქვებრძანება ეხმარება
+  დააკავშირეთ ინსტრუქციები Kotodama წყაროსთან.
 
-This flow mirrors the steps used in CI and the integration tests. For a deeper
-dive into Kotodama grammar, syscall mappings, and Norito internals, see:
+ეს ნაკადი ასახავს CI-ში გამოყენებულ ნაბიჯებს და ინტეგრაციის ტესტებს. უფრო ღრმად
+გადახედეთ Kotodama გრამატიკას, syscall-ის რუკებს და Norito ინტერიერს, იხილეთ:
 
 - `docs/source/kotodama_grammar.md`
 - `docs/source/kotodama_examples.md`

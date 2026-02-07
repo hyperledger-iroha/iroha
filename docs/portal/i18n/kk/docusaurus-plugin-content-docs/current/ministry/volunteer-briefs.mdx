@@ -6,40 +6,42 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Volunteer Briefs
 description: Submit, lint, and publish citizen briefs for Ministry blacklist reviews.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-import VolunteerLintStatusTable from '@site/src/components/VolunteerLintStatusTable';
+'@site/src/components/VolunteerLintStatusTable' ішінен VolunteerLintStatusTable импорттау;
 
-## Overview
+## Шолу
 
-Volunteer briefs capture the support/oppose/context viewpoints that the Ministry of Information reviews whenever blacklist or policy changes are proposed. Every submission must follow the canonical schema implemented by `iroha_data_model::ministry::VolunteerBriefV1` (version `1`) so that:
+Еріктілердің брифтері қара тізімге немесе саясатқа өзгертулер ұсынылған кезде Ақпарат министрлігі қарастыратын қолдау/қарсы/контекстік көзқарастарды қамтиды. Әрбір жіберу `iroha_data_model::ministry::VolunteerBriefV1` (`1` нұсқасы) арқылы жүзеге асырылған канондық схемаға сәйкес болуы керек, осылайша:
 
-1. Governance dashboards can compare fact tables deterministically.
-2. Conflict-of-interest disclosures are enforced before publication.
-3. Off-topic or astroturfed submissions are suppressed without removing them from the audit trail.
+1. Басқару тақталары фактілер кестелерін анықтаушы түрде салыстыра алады.
+2. Мүдделер қақтығысы туралы ақпаратты жариялау жарияланғанға дейін күшіне енеді.
+3. Тақырыптан тыс немесе астротурфты хабарлар аудит ізінен жойылмай жабылады.
 
-Use the template in `docs/source/ministry/volunteer_brief_template.md` or the `cargo xtask ministry-transparency ingest` helper to build a payload. The CLI validates the Norito struct, lints moderation tags, and emits a summary showing how many fact rows, citations, and disclosures were accepted.
+Пайдалы жүктемені құру үшін `docs/source/ministry/volunteer_brief_template.md` үлгісін немесе `cargo xtask ministry-transparency ingest` көмекшісін пайдаланыңыз. CLI Norito құрылымын тексереді, модерация тегтерін сызады және қанша факт жолы, дәйексөз және ашу қабылданғанын көрсететін қорытынды шығарады.
 
-## Publication pipeline & SLA
+## Жарияланым жүйесі және SLA
 
-| Stage | Window | Details |
+| Кезең | Терезе | Мәліметтер |
 |-------|--------|---------|
-| Intake & validation | T+0 to 6 hours | Payloads are uploaded through the volunteer form or the CLI. `VolunteerBriefV1::validate` enforces the schema (version, RFC 3339 timestamp, disclosure policy, digest formatting). Failures are rejected immediately with actionable error codes. |
-| Translation & moderation | T+6 to 24 hours | Reviewers apply moderation tags (`needs-translation`, `duplicate`, `policy-escalation`, etc.), redact contacts, and flag off-topic entries. Tags are stored in the Norito payload so downstream automation can suppress or highlight entries. |
-| Portal publication | T+24 to 48 hours | Valid briefs are published alongside the corresponding proposal page under **Volunteer Opinions**. Off-topic entries remain in the raw archive but are excluded from aggregate stance counts. |
+| Қабылдау және валидация | T+0-ден 6 сағатқа дейін | Пайдалы жүктер волонтер пішіні немесе CLI арқылы жүктеледі. `VolunteerBriefV1::validate` схеманы (нұсқа, RFC3339 уақыт белгісі, ашып көрсету саясаты, дайджест пішімі) мәжбүрлейді. Сәтсіздіктер әрекет ететін қате кодтарымен дереу қабылданбайды. |
+| Аударма және модерация | T+6-дан 24 сағатқа дейін | Тексерушілер модерация тегтерін қолданады (`needs-translation`, `duplicate`, `policy-escalation`, т.б.), контактілерді өңдейді және тақырыптан тыс жазбаларды белгілейді. Тегтер Norito пайдалы жүктемесінде сақталады, сондықтан төменгі ағындағы автоматтандыру жазбаларды басуы немесе ерекшелеуі мүмкін. |
+| Портал жарияланымы | T+24-тен 48 сағатқа дейін | Жарамды қысқаша ақпарат **Еріктілердің пікірлері** астында тиісті ұсыныс бетімен бірге жарияланады. Тақырыптан тыс жазбалар өңделмеген мұрағатта қалады, бірақ жиынтық позиция есептерінен шығарылады. |
 
-Expedited handling (≤12 hours) is triggered automatically when the `policy-escalation` or `astroturf` tags are present. Operators can audit compliance via the Volunteer Briefs Grafana panel, which tracks the time between `submitted_at` and portal publication.
+`policy-escalation` немесе `astroturf` тегтері болған кезде жылдам өңдеу (≤12 сағат) автоматты түрде іске қосылады. Операторлар `submitted_at` және порталды жариялау арасындағы уақытты қадағалайтын еріктілер туралы ақпарат Grafana тақтасы арқылы сәйкестікті тексере алады.
 
-## Deliverables
+## Жеткізу мүмкіндігі
 
-- **Schema & docs:** `VolunteerBriefV1` lives in the shared data model, and the detailed field guide plus example payload reside in `docs/source/ministry/volunteer_brief_template.md` and `docs/examples/ministry/volunteer_brief_template.json`.
-- **Validation tooling:** `cargo xtask ministry-transparency volunteer-validate --input <file> [--json-output artifacts/ministry/volunteer-lint.json]` runs the same lints used by the portal build; `ingest --volunteer <file>` remains available when you want to stage an entire bundle for publication.
-- **Portal surfacing:** Each proposal page links to the decoded support/oppose/context briefs, making citizen opinions visible without downloading raw JSON. Moderation metadata is rendered alongside the brief so jurors understand why an entry may have been delayed or excluded.
+- **Схема және құжаттар:** `VolunteerBriefV1` ортақ деректер үлгісінде өмір сүреді, ал егжей-тегжейлі өріс нұсқаулығы және пайдалы жүктеме мысалы `docs/source/ministry/volunteer_brief_template.md` және `docs/examples/ministry/volunteer_brief_template.json` ішінде орналасқан.
+- **Тексеру құралы:** `cargo xtask ministry-transparency volunteer-validate --input <file> [--json-output artifacts/ministry/volunteer-lint.json]` портал құрастыруында пайдаланылатын бірдей линттерді іске қосады; `ingest --volunteer <file>` бүкіл буманы жариялау үшін дайындағыңыз келгенде қолжетімді болып қалады.
+- **Портал беті:** Әрбір ұсыныс беті шифрланған қолдау/қарсы/мәтіндік қысқаша ақпараттарға сілтеме жасап, азаматтардың пікірлерін өңделмеген JSON жүктеп алмай-ақ көрсетеді. Модерация метадеректері қысқаша мәтінмен бірге көрсетіледі, сондықтан алқабилер жазбаның неге кешіктірілгенін немесе алынып тасталғанын түсінуі үшін.
 
-Refer to the roadmap item **MINFO-3 — Volunteer interest panel infrastructure** if additional automation (e.g., bulk import APIs or extended analytics) is required.
+Қосымша автоматтандыру (мысалы, жаппай импорттық API интерфейстері немесе кеңейтілген аналитика) қажет болса, жол картасының **MINFO-3 — Ерікті қызығушылық панелінің инфрақұрылымы** тармағын қараңыз.
 
-## Lint status dashboard
+## Lint күйінің бақылау тақтасы
 
-The portal build now runs `npm run generate:volunteer-lint`, which invokes `cargo xtask ministry-transparency volunteer-validate --json-output …` across every checked-in volunteer brief. The resulting manifest is rendered below so reviewers can confirm each proposal’s lint status before publishing.
+Портал құрастыру қазір `npm run generate:volunteer-lint` іске қосылады, ол әрбір тіркелген ерікті қысқаша ақпаратында `cargo xtask ministry-transparency volunteer-validate --json-output …` шақырады. Нәтижедегі манифест төменде көрсетілген, сондықтан рецензенттер жарияламас бұрын әрбір ұсыныстың линт күйін растай алады.
 
 <VolunteerLintStatusTable />

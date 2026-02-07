@@ -4,46 +4,46 @@ direction: rtl
 source: docs/portal/docs/sdks/javascript-governance-iso.ja.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: Governance & ISO bridge examples
-description: Drive advanced Torii workflows with `@iroha/iroha-js`.
-slug: /sdks/javascript/governance-iso-examples
+العنوان: أمثلة على الحوكمة وجسر ISO
+الوصف: قم بقيادة مسارات عمل Torii المتقدمة باستخدام `@iroha/iroha-js`.
+سبيكة: /sdks/javascript/governance-iso-examples
 ---
 
-This field guide expands on the quickstart by demonstrating governance and
-ISO&nbsp;20022 bridge flows with `@iroha/iroha-js`. The snippets reuse the same
-runtime helpers that ship with `ToriiClient`, so you can copy them directly into
-CLI tooling, CI harnesses, or long-running services.
+يتوسع هذا الدليل الميداني في البداية السريعة من خلال إظهار الحوكمة و
+يتدفق جسر ISO&nbsp;20022 مع `@iroha/iroha-js`. المقتطفات تعيد استخدام نفس الشيء
+مساعدات وقت التشغيل التي تأتي مع `ToriiClient`، بحيث يمكنك نسخها مباشرة إلى
+أدوات CLI، أو أدوات CI، أو الخدمات طويلة الأمد.
 
-Additional resources:
+موارد إضافية:
 
-- `javascript/iroha_js/recipes/governance.mjs` — runnable end-to-end script for
-  proposals, ballots, and council rotations.
-- `javascript/iroha_js/recipes/iso_bridge.mjs` — CLI helper for submitting
-  pacs.008/pacs.009 payloads and polling deterministic status.
-- `docs/source/finance/settlement_iso_mapping.md` — canonical ISO field mapping.
+- `javascript/iroha_js/recipes/governance.mjs` — برنامج نصي شامل قابل للتشغيل لـ
+  المقترحات والاقتراع وتناوب المجالس.
+- `javascript/iroha_js/recipes/iso_bridge.mjs` — مساعد CLI للإرسال
+  pacs.008/pacs.009 الحمولات والحالة الحتمية للاقتراع.
+- `docs/source/finance/settlement_iso_mapping.md` - رسم خرائط مجال ISO الأساسي.
 
-## Running the bundled recipes
+## تشغيل الوصفات المجمعة
 
-These examples depend on the scripts in `javascript/iroha_js/recipes/`. Run
-`npm install && npm run build:native` beforehand so the generated bindings are
-available.
+تعتمد هذه الأمثلة على البرامج النصية الموجودة في `javascript/iroha_js/recipes/`. تشغيل
+`npm install && npm run build:native` مسبقًا لذا فإن الارتباطات التي تم إنشاؤها هي
+متاح.
 
-### Governance helper walkthrough
+### الإرشادات التفصيلية لمساعد الحوكمة
 
-Configure the following environment variables before invoking
-`recipes/governance.mjs`:
-
-- `TORII_URL` — Torii endpoint.
-- `AUTHORITY` / `PRIVATE_KEY_HEX` — signer account and key (hex). Keep keys in a
-  secure secret store.
-- `CHAIN_ID` — optional network identifier.
-- `GOV_SUBMIT=1` — push the generated transactions to Torii.
-- `GOV_FETCH=1` — fetch proposals/locks after submission.
-- `GOV_PROPOSAL_ID`, `GOV_REFERENDUM_ID`, `GOV_LOCKS_ID` — optional lookups used
-  when `GOV_FETCH=1`.
+قم بتكوين متغيرات البيئة التالية قبل الاستدعاء
+`recipes/governance.mjs`:- `TORII_URL` — نقطة النهاية Torii.
+- `AUTHORITY` / `PRIVATE_KEY_HEX` — حساب المُوقع والمفتاح (ست عشري). احتفظ بالمفاتيح في أ
+  مخزن سري آمن.
+- `CHAIN_ID` - معرف الشبكة الاختياري.
+- `GOV_SUBMIT=1` - ادفع المعاملات التي تم إنشاؤها إلى Torii.
+- `GOV_FETCH=1` — جلب المقترحات/الأقفال بعد الإرسال.
+- `GOV_PROPOSAL_ID`، `GOV_REFERENDUM_ID`، `GOV_LOCKS_ID` — عمليات البحث الاختيارية المستخدمة
+  عندما `GOV_FETCH=1`.
 
 ```bash
 npm run build:native
@@ -62,30 +62,28 @@ GOV_PROPOSAL_ID=calc.v1 \
 node javascript/iroha_js/recipes/governance.mjs
 ```
 
-Hashes are logged for every step, and Torii responses are surfaced when
-`GOV_SUBMIT=1` so CI jobs can fail fast on submission errors.
+يتم تسجيل التجزئة لكل خطوة، وتظهر استجابات Torii عندما
+`GOV_SUBMIT=1` لذلك يمكن أن تفشل مهام CI بسرعة عند حدوث أخطاء في الإرسال.
 
-### ISO bridge helper
+### مساعد جسر ISO
 
-`recipes/iso_bridge.mjs` submits either a pacs.008 or pacs.009 message and polls
-the ISO bridge until the status settles. Configure it with:
-
-- `TORII_URL` — Torii endpoint exposing the ISO bridge APIs.
-- `ISO_MESSAGE_KIND` — `pacs.008` (default) or `pacs.009`. The helper uses the
-  matching sample builder (`buildSamplePacs008Message` / `buildSamplePacs009Message`)
-  when you do not supply your own XML.
-- `ISO_MESSAGE_SUFFIX` — optional suffix appended to the sample payload IDs to
-  keep repeated rehearsals unique (defaults to the current epoch seconds in hex).
-- `ISO_CONTENT_TYPE` — override the `Content-Type` header for submissions
-  (for example `application/pacs009+xml`); ignored when you only poll an
-  existing message id.
-- `ISO_MESSAGE_ID` — skip submission altogether and only poll the supplied
-  identifier via `waitForIsoMessageStatus`.
-- `ISO_POLL_ATTEMPTS` / `ISO_POLL_INTERVAL_MS` — tune the wait strategy for
-  noisy or slow bridge deployments.
-- `ISO_RESOLVE_ON_ACCEPTED=1` — exit as soon as Torii returns `Accepted`,
-  even if the transaction hash is still pending (handy during bridge maintenance
-  when the ledger commit is delayed).
+يقوم `recipes/iso_bridge.mjs` بإرسال رسالة واستطلاعات رأي pacs.008 أو pacs.009
+جسر ISO حتى تستقر الحالة. قم بتكوينه باستخدام:- `TORII_URL` — نقطة النهاية Torii التي تعرض واجهات برمجة تطبيقات جسر ISO.
+- `ISO_MESSAGE_KIND` — `pacs.008` (افتراضي) أو `pacs.009`. يستخدم المساعد
+  منشئ العينات المطابق (`buildSamplePacs008Message` / `buildSamplePacs009Message`)
+  عندما لا تقوم بتوفير XML الخاص بك.
+- `ISO_MESSAGE_SUFFIX` — لاحقة اختيارية ملحقة بمعرفات الحمولة الصافية النموذجية
+  احتفظ بالتدريبات المتكررة فريدة من نوعها (الإعدادات الافتراضية للثواني الحالية بالنظام السداسي).
+- `ISO_CONTENT_TYPE` - تجاوز رأس `Content-Type` لعمليات الإرسال
+  (على سبيل المثال `application/pacs009+xml`)؛ يتم تجاهله عند إجراء استطلاع للرأي فقط
+  معرف الرسالة الموجودة
+- `ISO_MESSAGE_ID` - تخطي الإرسال تمامًا واستقصاء ما تم توفيره فقط
+  المعرف عبر `waitForIsoMessageStatus`.
+- `ISO_POLL_ATTEMPTS` / `ISO_POLL_INTERVAL_MS` — ضبط استراتيجية الانتظار لـ
+  عمليات نشر الجسر الصاخبة أو البطيئة.
+- `ISO_RESOLVE_ON_ACCEPTED=1` — الخروج بمجرد إرجاع Torii إلى `Accepted`،
+  حتى لو كانت تجزئة المعاملة لا تزال معلقة (مفيدة أثناء صيانة الجسر
+  عندما يتأخر التزام دفتر الأستاذ).
 
 ```bash
 # Submit a pacs.009 message and wait for completion.
@@ -101,25 +99,23 @@ ISO_MESSAGE_ID=iso-demo-1 \
 node javascript/iroha_js/recipes/iso_bridge.mjs
 ```
 
-Both scripts exit with status code `1` if Torii never reports a terminal
-transition, making them suitable for CI gate jobs.
+يتم إنهاء كلا البرنامجين النصيين برمز الحالة `1` إذا لم يبلغ Torii عن أي محطة طرفية مطلقًا
+الانتقال، مما يجعلها مناسبة لوظائف بوابة CI.
 
-### ISO alias helper
+### مساعد الاسم المستعار ISOيستهدف `recipes/iso_alias.mjs` نقاط نهاية الاسم المستعار ISO حتى يمكن تغطية التدريبات
+تجزئة العناصر العمياء وعمليات البحث عن الأسماء المستعارة دون كتابة أدوات مخصصة. ذلك
+يستدعي `ToriiClient.evaluateAliasVoprf` بالإضافة إلى `resolveAlias` / `resolveAliasByIndex`
+ويطبع الواجهة الخلفية والملخص وربط الحساب والمصدر والفهرس الحتمي
+تم إرجاعها بواسطة Torii.
 
-`recipes/iso_alias.mjs` targets the ISO alias endpoints so rehearsals can cover
-blinded-element hashing and alias lookups without writing bespoke tooling. It
-calls `ToriiClient.evaluateAliasVoprf` plus `resolveAlias` / `resolveAliasByIndex`
-and prints the backend, digest, account binding, source, and deterministic index
-returned by Torii.
+متغيرات البيئة:
 
-Environment variables:
-
-- `TORII_URL` — Torii endpoint exposing the alias helpers.
-- `ISO_VOPRF_INPUT` — hex-encoded blinded element (defaults to `deadbeef`).
-- `ISO_SKIP_VOPRF=1` — skip the VOPRF call when only testing lookups.
-- `ISO_ALIAS_LABEL` — literal alias to resolve (e.g., IBAN-style strings).
-- `ISO_ALIAS_INDEX` — decimal or `0x`-prefixed index passed to `resolveAliasByIndex`.
-- `TORII_AUTH_TOKEN` / `TORII_API_TOKEN` — optional headers for secured Torii deployments.
+- `TORII_URL` — نقطة النهاية Torii تكشف عن الأسماء المستعارة للمساعدين.
+- `ISO_VOPRF_INPUT` - عنصر أعمى بتشفير سداسي عشري (الإعداد الافتراضي هو `deadbeef`).
+- `ISO_SKIP_VOPRF=1` - تخطي استدعاء VOPRF عند اختبار عمليات البحث فقط.
+- `ISO_ALIAS_LABEL` - الاسم المستعار الحرفي المطلوب حله (على سبيل المثال، سلاسل بنمط IBAN).
+- `ISO_ALIAS_INDEX` - تم تمرير الفهرس العشري أو البادئة `0x` إلى `resolveAliasByIndex`.
+- `TORII_AUTH_TOKEN` / `TORII_API_TOKEN` — رؤوس اختيارية لعمليات نشر Torii الآمنة.
 
 ```bash
 # Evaluate a blinded element and resolve an alias literal + deterministic index.
@@ -136,13 +132,13 @@ ISO_ALIAS_LABEL="iso:demo:alpha" \
 node javascript/iroha_js/recipes/iso_alias.mjs
 ```
 
-The helper mirrors Torii’s behaviour: it surfaces 404s when aliases are missing
-and treats runtime-disabled errors as soft skips so CI flows can tolerate bridge
-maintenance windows.
+يعكس المساعد سلوك Torii: فهو يظهر 404s عندما تكون الأسماء المستعارة مفقودة
+ويتعامل مع أخطاء تعطيل وقت التشغيل على أنها تخطيات بسيطة حتى تتمكن تدفقات CI من تحمل الجسر
+نوافذ الصيانة.
 
-## Governance workflows
+## سير عمل الحوكمة
 
-### Inspect contract instances and proposals
+### فحص مثيلات العقد والمقترحات
 
 ```ts
 import { ToriiClient } from "@iroha/iroha-js";
@@ -166,10 +162,10 @@ const proposal = await torii.getGovernanceProposal("proposal-001", {
 console.log(proposal?.kind, proposal?.status);
 ```
 
-### Submit proposals and ballots
+### تقديم المقترحات وصناديق الاقتراع
 
-Use an `AbortController` when you need to cancel or time-bound governance submissions—the SDK
-accepts an optional `{ signal }` object for every POST helper shown below.
+استخدم `AbortController` عندما تحتاج إلى الإلغاء أو عمليات إرسال الإدارة المقيدة بفترة زمنية — SDK
+يقبل كائن `{ signal }` اختياري لكل مساعد POST الموضح أدناه.
 
 ```ts
 const authority = "ih58...";
@@ -216,7 +212,7 @@ await torii.governanceSubmitZkBallot({
 }, { signal: writeController.signal });
 ```
 
-### Council VRF and enactment
+### مجلس VRF وسنه
 
 ```ts
 const validatorPk = Buffer.alloc(48, 0xdd);
@@ -261,9 +257,7 @@ const enactDraft = await torii.governanceEnactProposalTyped({
 console.log("enact tx count", enactDraft.tx_instructions.length);
 ```
 
-## ISO&nbsp;20022 bridge recipes
-
-### Build pacs.008 / pacs.009 payloads
+## وصفات الجسر ISO&nbsp;20022### بناء الحمولات pacs.008 / pacs.009
 
 ```ts
 import { buildPacs008Message } from "@iroha/iroha-js";
@@ -282,11 +276,11 @@ const settlement = buildPacs008Message({
 });
 ```
 
-All identifiers (BIC, LEI, IBAN, ISO amount) are validated before XML is
-generated. Swap `buildPacs008Message` for `buildPacs009Message` to emit PvP
-funding payloads.
+يتم التحقق من صحة جميع المعرفات (BIC، وLEI، وIBAN، ومبلغ ISO) قبل التحقق من XML
+ولدت. قم بتبديل `buildPacs008Message` بـ `buildPacs009Message` لإصدار حماية الأصناف النباتية
+حمولات التمويل.
 
-### Submit and poll ISO messages
+### إرسال واستطلاع رسائل ISO
 
 ```ts
 import { ToriiClient } from "@iroha/iroha-js";
@@ -325,17 +319,17 @@ await torii.submitIsoMessage(
 );
 ```
 
-Both `resolveOnAccepted` and `resolveOnAcceptedWithoutTransaction` are valid; use either flag
-to treat `Accepted` statuses (without a transaction hash) as terminal when orchestrating polls.
+كل من `resolveOnAccepted` و`resolveOnAcceptedWithoutTransaction` صالحان؛ استخدم أيًا من العلمين
+للتعامل مع حالات `Accepted` (بدون تجزئة المعاملة) كمحطة طرفية عند تنسيق الاستقصاءات.
 
-The helpers throw `IsoMessageTimeoutError` if the bridge never reports a
-terminal state. Use the lower-level `submitIsoPacs008` / `submitIsoPacs009`
-calls when you need to orchestrate custom polling logic; `getIsoMessageStatus`
-exposes a single-shot lookup.
+يقوم المساعدون بإلقاء `IsoMessageTimeoutError` إذا لم يبلغ الجسر أبدًا عن
+الحالة النهائية. استخدم المستوى الأدنى `submitIsoPacs008` / `submitIsoPacs009`
+المكالمات عندما تحتاج إلى تنسيق منطق الاقتراع المخصص؛ `getIsoMessageStatus`
+يكشف عن بحث طلقة واحدة.
 
-### Related surfaces
+### الأسطح ذات الصلة
 
-- `torii.getSorafsPorWeeklyReport("2026-W05")` fetches the ISO-week PoR bundle
-  referenced in the roadmap and can reuse the wait helpers for alerts.
-- `resolveAlias` / `resolveAliasByIndex` expose ISO bridge alias bindings so
-  reconciliation tools can prove account ownership before issuing a payment.
+- `torii.getSorafsPorWeeklyReport("2026-W05")` يجلب حزمة ISO-week PoR
+  المشار إليها في خريطة الطريق ويمكن إعادة استخدام مساعدي الانتظار للتنبيهات.
+- يعرض `resolveAlias` / `resolveAliasByIndex` روابط الاسم المستعار لجسر ISO لذلك
+  يمكن لأدوات التسوية إثبات ملكية الحساب قبل إصدار الدفع.

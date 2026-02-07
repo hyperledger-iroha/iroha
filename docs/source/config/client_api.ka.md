@@ -7,25 +7,26 @@ generator: scripts/sync_docs_i18n.py
 source_hash: fa548ec31fe928decc5c23719472618ff97f4eb45b084f9f9084df82b96cfac6
 source_last_modified: "2025-12-29T18:16:35.933651+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-## Client API Configuration Reference
+## კლიენტის API კონფიგურაციის მითითება
 
-This document tracks the Torii client-facing configuration knobs that are
-surfaces through `iroha_config::parameters::user::Torii`. The section below
-focuses on the Norito-RPC transport controls introduced for NRPC-1; future
-client API settings should extend this file.
+ეს დოკუმენტი თვალყურს ადევნებს Torii კლიენტის მიმართულ კონფიგურაციის ღილაკებს, რომლებიც
+ზედაპირები `iroha_config::parameters::user::Torii`-ით. განყოფილება ქვემოთ
+ფოკუსირებულია Norito-RPC სატრანსპორტო სამართავებზე, რომლებიც დანერგილია NRPC-1-ისთვის; მომავალი
+კლიენტის API პარამეტრები უნდა გააფართოვოს ეს ფაილი.
 
 ### `torii.transport.norito_rpc`
 
-| Key | Type | Default | Description |
+| გასაღები | ტიპი | ნაგულისხმევი | აღწერა |
 |-----|------|---------|-------------|
-| `enabled` | `bool` | `true` | Master switch that enables binary Norito decoding. When `false`, Torii rejects every Norito-RPC request with `403 norito_rpc_disabled`. |
-| `stage` | `string` | `"disabled"` | Rollout tier: `disabled`, `canary`, or `ga`. Stages drive admission decisions and `/rpc/capabilities` output. |
-| `require_mtls` | `bool` | `false` | Enforces mTLS for Norito-RPC transport: when `true`, Torii rejects Norito-RPC requests that do not carry an mTLS marker header (e.g. `X-Forwarded-Client-Cert`). The flag is surfaced via `/rpc/capabilities` so SDKs can warn on misconfigured environments. |
-| `allowed_clients` | `array<string>` | `[]` | Canary allowlist. When `stage = "canary"`, only requests carrying an `X-API-Token` header present in this list are accepted. |
+| `enabled` | `bool` | `true` | ძირითადი გადამრთველი, რომელიც იძლევა ორობითი Norito დეკოდირების საშუალებას. როდესაც `false`, Torii უარყოფს ყოველ Norito-RPC მოთხოვნას `403 norito_rpc_disabled`-ით. |
+| `stage` | `string` | `"disabled"` | გაშვების დონე: `disabled`, `canary`, ან `ga`. ეტაპები განაპირობებს დაშვების გადაწყვეტილებებს და `/rpc/capabilities` გამომავალს. |
+| `require_mtls` | `bool` | `false` | ახორციელებს mTLS Norito-RPC ტრანსპორტისთვის: როდესაც `true`, Torii უარყოფს Norito-RPC მოთხოვნებს, რომლებიც არ შეიცავს mTLS მარკერის სათაურს (მაგ. I1800300). დროშა გამოჩნდება `/rpc/capabilities`-ის მეშვეობით, რათა SDK-ებმა გააფრთხილონ არასწორ კონფიგურაციულ გარემოში. |
+| `allowed_clients` | `array<string>` | `[]` | კანარის ნებადართული სია. როდესაც `stage = "canary"`, მიიღება მხოლოდ მოთხოვნები ამ სიაში არსებული `X-API-Token` სათაურის შემცველობით. |
 
-Example configuration:
+კონფიგურაციის მაგალითი:
 
 ```toml
 [torii.transport.norito_rpc]
@@ -35,16 +36,16 @@ stage = "canary"
 allowed_clients = ["alpha-canary-token", "beta-canary-token"]
 ```
 
-Stage semantics:
+ეტაპის სემანტიკა:
 
-- **disabled** — Norito-RPC is unavailable even if `enabled = true`. Clients
-  receive `403 norito_rpc_disabled`.
-- **canary** — Requests must include an `X-API-Token` header that matches one
-  of the `allowed_clients`. All other requests receive `403
-  norito_rpc_canary_denied`.
-- **ga** — Norito-RPC is available to every authenticated caller (subject to the
-  usual rate and pre-auth limits).
+- **გამორთულია** — Norito-RPC მიუწვდომელია მაშინაც კი, თუ `enabled = true`. კლიენტები
+  მიიღეთ `403 norito_rpc_disabled`.
+- **კანარი** — მოთხოვნები უნდა შეიცავდეს `X-API-Token` სათაურს, რომელიც ემთხვევა ერთს
+  `allowed_clients`-ის. ყველა სხვა მოთხოვნა მიიღება `403
+  norito_rpc_canary_nnied`.
+- **ga** — Norito-RPC ხელმისაწვდომია ყველა ავტორიზებული აბონენტისთვის (ექვემდებარება
+  ჩვეულებრივი მაჩვენებელი და წინასწარი ავტორიზაციის ლიმიტები).
 
-Operators can update these values dynamically through `/v1/config`. Each change
-is reflected immediately in `/rpc/capabilities`, allowing SDKs and observability
-dashboards to show the live transport posture.
+ოპერატორებს შეუძლიათ ამ მნიშვნელობების დინამიურად განახლება `/v1/config`-ის საშუალებით. ყოველი ცვლილება
+დაუყოვნებლივ აისახება `/rpc/capabilities`-ში, რაც საშუალებას აძლევს SDK-ებს და დაკვირვებას
+დაფები ცოცხალი ტრანსპორტის პოზის საჩვენებლად.

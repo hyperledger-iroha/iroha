@@ -4,60 +4,62 @@ direction: ltr
 source: docs/portal/docs/devportal/try-it.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Try It sandbox
+# དཔྱད་གཞིའི་བྱེམ་སྒམ་།
 
-The developer portal ships an optional “Try it” console so you can call Torii
-endpoints without leaving the documentation. The console relays requests
-through the bundled proxy so browsers can bypass CORS limits while still
-enforcing rate limits and authentication.
+གོང་འཕེལ་གཏང་མི་ དྲྭ་ཚིགས་འདི་གིས་ གདམ་ཁ་ཅན་གྱི་ “Try it” ཀོན་སོལ་ཅིག་ བཏངམ་ཨིན།
+ཡིག་ཆ་བཞག་མ་བཞག་པར་མཐའ་ཐིག་ཚུ། ཀོན་སོལ་ བརྒྱུད་འཕྲིན་གྱི་ཞུ་བ་ཚུ།
+བརྡ་འཚོལ་ཚུ་གིས་ CORS གི་ཚད་གཞི་ཚུ་ བརྒལ་ཚུགས་པའི་སྐབས་ བརྡ་འཚོལ་གྱི་ ངོ་ཚབ་བརྒྱུད་དེ་ཨིན།
+ཚད་གཞི་ཚད་གཞི་དང་བདེན་བཤད་བསྟར་སྤྱོད་འབད་ནི།
 
-## Prerequisites
+## སྔོན་འགྲོའི་ཆ་རྐྱེན།
 
-- Node.js 18.18 or newer (matches the portal build requirements)
-- Network access to a Torii staging environment
-- A bearer token that can call the Torii routes you plan to exercise
+- Node.js 18.18 ཡང་ན་ གསརཔ་ (ཡོངས་འབྲེལ་གྱི་དགོས་མཁོ་ཚུ་དང་མཐུན་སྒྲིག་འབད།)
+- Torii རྒྱུན་རིམ་གྱི་མཐའ་འཁོར་གནས་སྟངས་ལུ་ཡོངས་འབྲེལ་འཛུལ་སྤྱོད་འབད་ནི།
+- ཁྱོད་ཀྱིས་ལག་ལེན་འཐབ་ནིའི་འཆར་གཞི་ཡོད་མི་ I18NT0000013X གི་ལམ་ཚུ་ལུ་ བེ་ཡར་ཊོ་ཀེན་ཅིག།
 
-All proxy configuration is done through environment variables. The table below
-lists the most important knobs:
+པོརོག་སི་རིམ་སྒྲིག་ཆ་མཉམ་མཐའ་འཁོར་འགྱུར་ཅན་ཚུ་བརྒྱུད་དེ་འབདཝ་ཨིན། འོག་གི་ཐིག་ཁྲམ་
+གལ་ཆེ་ཤོས་ཀྱི་ མཛུབ་མོ་ཚུ་ ཐོ་བཀོད་འབདཝ་ཨིན།
 
-| Variable | Purpose | Default |
+| འགྱུར་ཅན་ | དམིགས་ཡུལ། | སྔོན་སྒྲིག་ |
 | --- | --- | --- |
-| `TRYIT_PROXY_TARGET` | Base Torii URL that the proxy forwards requests to | **Required** |
-| `TRYIT_PROXY_LISTEN` | Listen address for local development (format `host:port` or `[ipv6]:port`) | `127.0.0.1:8787` |
-| `TRYIT_PROXY_ALLOWED_ORIGINS` | Comma-separated list of origins that may call the proxy | `http://localhost:3000` |
-| `TRYIT_PROXY_CLIENT_ID` | Identifier placed in `X-TryIt-Client` for every upstream request | `docs-portal` |
-| `TRYIT_PROXY_BEARER` | Default bearer token forwarded to Torii | _empty_ |
-| `TRYIT_PROXY_ALLOW_CLIENT_AUTH` | Allow end users to supply their own token via `X-TryIt-Auth` | `0` |
-| `TRYIT_PROXY_MAX_BODY` | Maximum request body size (bytes) | `1048576` |
-| `TRYIT_PROXY_TIMEOUT_MS` | Upstream timeout in milliseconds | `10000` |
-| `TRYIT_PROXY_RATE_LIMIT` | Requests allowed per rate window per client IP | `60` |
-| `TRYIT_PROXY_RATE_WINDOW_MS` | Sliding window for rate limiting (ms) | `60000` |
-| `TRYIT_PROXY_METRICS_LISTEN` | Optional listen address for the Prometheus-style metrics endpoint (`host:port` or `[ipv6]:port`) | _empty (disabled)_ |
-| `TRYIT_PROXY_METRICS_PATH` | HTTP path served by the metrics endpoint | `/metrics` |
+| I18NI0000040X | གཞི་རྟེན་ I18NT000000014 X ཡུ་ཨར་ཨེལ། *དགོས་མཁོ།** |
+| I18NI0000041X | ས་གནས་གོང་འཕེལ་གྱི་དོན་ལུ་ཁ་བྱང་ཉན་ (རྩ་སྒྲིག་ `host:port` ཡང་ན་ `[ipv6]:port`) | I18NI0000044X |
+| `TRYIT_PROXY_ALLOWED_ORIGINS` | ངོ་ཚབ་ཟེར་སླབ་མི་ འབྱུང་ཁུངས་ཐོ་ཡིག་ | I18NI0000046X |
+| I18NI0000047X | ངོས་འཛིན་འབད་མི་འདི་ ཡར་འཕེལ་གྱི་ཞུ་བ་རེ་རེ་གི་དོན་ལུ་ `X-TryIt-Client` ནང་ལུ་བཙུགས་ཡོདཔ་ཨིན། | I18NI0000049X |
+| `TRYIT_PROXY_BEARER` | སྔོན་སྒྲིག་འབག་མི་ཊོ་ཀེན་འདི་ I18NT0000015X ལུ་སྤོ་བཤུད་འབདཝ་ཨིན། | _སྟོང་པ་_ |
+| `TRYIT_PROXY_ALLOW_CLIENT_AUTH` | མཐའ་མཇུག་ལག་ལེན་པ་ཚུ་གིས་ `X-TryIt-Auth` བརྒྱུད་དེ་ རང་སོའི་རྟགས་མཚན་བཀྲམ་སྤེལ་འབད་བཅུག། | I18NI0000003X |
+| `TRYIT_PROXY_MAX_BODY` | མཐོ་ཤོས་ཞུ་བ་གཟུགས་ཚད་ (bytes) | I18NI0000005X |
+| I18NI0000005X | མི་ལི་སྐར་ཆ་ནང་ ཡར་འཕེལ་གྱི་དུས་ཚོད་བཏོན་ནི། | I18NI0000007X |
+| I18NI0000008X | མཁོ་སྤྲོད་པ་རེ་ལུ་ ཆོག་ཐམ་བྱིན་ཆོག་པའི་ཞུ་བ་ཚུ་ IP | `60` |
+| `TRYIT_PROXY_RATE_WINDOW_MS` | ཚད་གཞི་ (ms) གི་དོན་ལུ་ བཤུད་སྒོ་སྒྲིག་ (ms) | `60000` |
+| `TRYIT_PROXY_METRICS_LISTEN` | I18NT000000000X-styles metrics མཐའ་མཚམས་ (I18NI000000063X ཡང་ན་ I18NI0000000064X) གི་དོན་ལུ་གདམ་ཁ་ཅན་གྱི་ཉན་ཁ་བྱང་། _སྟོངམ་ (ལྕོགས་མིན་)_ |
+| `TRYIT_PROXY_METRICS_PATH` | མེ་ཊིགསི་མཐའ་མཚམས་ཀྱིས་ ཞབས་ཏོག་ཕུལ་མི་ ཨེཆ་ཊི་ཊི་པི་ འགྲུལ་ལམ་ | I18NI0000006X |
 
-The proxy also exposes `GET /healthz`, returns structured JSON errors, and
-redacts bearer tokens from log output.
+ངོ་ཚབ་འདི་གིས་ I18NI0000000067X གིས་ བཀོད་སྒྲིག་འབད་ཡོད་པའི་ JSON འཛོལ་བ་ཚུ་སླར་ལོག་འབདཝ་ཨིནམ་དང་ དེ་ལས་ དང་ དེ་ལས་ གསལ་སྟོན་འབདཝ་ཨིན།
+དྲན་ཐོ་ཨའུཊི་པུཊི་ལས་ རྡུལ་ཕྲན་བེ་ཊོ་ཀེན་ཚུ།
 
-Enable `TRYIT_PROXY_ALLOW_CLIENT_AUTH=1` when exposing the proxy to docs users so the Swagger and
-RapiDoc panels can forward user-supplied bearer tokens. The proxy still enforces rate limits,
-redacts credentials, and records whether a request used the default token or a per-request override.
-Set `TRYIT_PROXY_CLIENT_ID` to the label you want sent as `X-TryIt-Client`
-(defaults to `docs-portal`). The proxy trims and validates caller-supplied
-`X-TryIt-Client` values, falling back to this default so staging gateways can
-audit provenance without correlating browser metadata.
+པོརོག་སི་འདི་ ཌོཀ་ལག་ལེན་འཐབ་མི་ཚུ་ལུ་ གསལ་སྟོན་འབད་བའི་སྐབས་ I18NI000000068X ལྕོགས་ཅན་བཟོ།
+RapiDoc གི་པེ་ནཱལ་ཚུ་གིས་ ལག་ལེན་པ་གིས་ བཀྲམ་སྤེལ་འབད་མི་ བེ་ཊོ་ཀེན་ཚུ་ གདོང་བསྐྱོད་འབད་ཚུགས། ངོ་ཚབ་འདི་གིས་ ད་ལྟོ་ཡང་ གོང་ཚད་ཚད་གཞི་ཚུ་ བསྟར་སྤྱོད་འབདཝ་ཨིན།
+བདེན་བཤད་ཚུ་ བསྒྱུར་བཅོས་འབད་དེ་ ཞུ་བ་ཅིག་གིས་ སྔོན་སྒྲིག་ཊོ་ཀེན་དང་ ཡང་ན་ ཞུ་བ་རེ་ལུ་ བཀག་ཆ་འབད་མི་ཅིག་ ལག་ལེན་འཐབ་ཡོདཔ་ཨིན་ན་ ཐོ་བཀོད་འབདཝ་ཨིན།
+ཁྱོད་ཀྱིས་ `X-TryIt-Client` གཏང་དགོ་པའི་ ཁ་ཡིག་ལུ་ I18NI000000069X གཞི་སྒྲིག་འབད།
+(`docs-portal` ལུ་སྔོན་སྒྲིག་འབད།) ངོ་ཚབ་ཀྱི་ ཊིམ་དང་ བདེན་དཔྱད་ཚུ་གིས་ ཁ་པར་བཏང་མི་གིས་ བཀྲམ་སྤེལ་འབད་ཡོདཔ།
+`X-TryIt-Client` གནས་གོང་ཚུ་ སྔོན་སྒྲིག་འདི་ལུ་ལོག་འགྱོ་སྟེ་ staging gatewes འབད་ཚུགས།
+བརྡ་འཚོལ་གྱི་མེ་ཊ་ཌེ་ཊ་དང་ འབྲེལ་བ་མེད་པའི་ རྩིས་ཞིབ་འབྱུང་ཁུངས།
 
-## Start the proxy locally
+## ས་གནས་ནང་ ངོ་ཚབ་འགོ་བཙུགས།
 
-Install dependencies the first time you set up the portal:
+ཁྱོད་ཀྱིས་ དྲྭ་ཚིགས་འདི་གཞི་སྒྲིག་འབད་བའི་སྐབས་ བརྟེན་པ་གཞི་བཙུགས་འབད་ནི།
 
 ```bash
 cd docs/portal
 npm install
 ```
 
-Run the proxy and point it at your Torii instance:
+ངོ་ཚབ་འདི་གཡོག་བཀོལ་ཞིནམ་ལས་ ཁྱོད་རའི་ Torii ལུ་སྟོན་དགོ།
 
 ```bash
 export TRYIT_PROXY_TARGET="https://torii.devnet.sora.example"
@@ -67,20 +69,20 @@ export TRYIT_PROXY_BEARER="Bearer eyJhbGciOi..."
 npm run tryit-proxy
 ```
 
-The script logs the bound address and forwards requests from `/proxy/*` to the
-configured Torii origin.
+ཡིག་ཆ་འདི་གིས་ མཐའ་མཚམས་ཁ་བྱང་དང་ གདོང་ཕྱོགས་ཀྱི་ཞུ་བ་ཚུ་ I18NI000000073X ལས་ ནང་བསྐྱོད་འབདཝ་ཨིན།
+རིམ་སྒྲིག་འབད་ཡོད་པའི་ Torii འབྱུང་ཁུངས་།
 
-Before binding the socket the script validates that
-`static/openapi/torii.json` matches the digest recorded in
-`static/openapi/manifest.json`. If the files drift, the command exits with an
-error and instructs you to run `npm run sync-openapi -- --latest`. Export
-`TRYIT_PROXY_ALLOW_STALE_SPEC=1` only for emergency overrides; the proxy will
-log a warning and continue so you can recover during maintenance windows.
+སོ་ཀེཊི་བསྡམ་པའི་ཧེ་མ་ ཡིག་ཚུགས་འདི་གིས་ དེ་བདེན་དཔྱད་འབདཝ་ཨིན།
+I18NI000000074X གིས་ ༢༠༠༨ ལུ་ཐོ་བཀོད་འབད་ཡོད་པའི་ བཞུ་བཅུད་དང་མཐུན་སྒྲིག་འབདཝ་ཨིན།
+`static/openapi/manifest.json`. ཡིག་སྣོད་ཚུ་འཕྱར་ཏེ་ཡོད་པ་ཅིན་ བརྡ་བཀོད་འདི་ ཅིག་དང་བཅས་ ཕྱིར་འཐོན་འབདཝ་ཨིན།
+འཛོལ་བ་དང་ ཁྱོད་ལུ་ `npm run sync-openapi -- --latest` གཡོག་བཀོལ་དགོ་པའི་ བརྡ་སྟོནམ་ཨིན། ཕྱིར་བཙོང
+Norito གློ་བུར་གྱི་བཀག་ཆ་ཚུ་གི་དོན་ལུ་རྐྱངམ་ཅིག་ཨིན། ངོ་ཚབ་འདི་འོང་ནི་ཨིན།
+ཉེན་བརྡ་ཅིག་ ནང་བསྐྱོད་འབད་ཞིནམ་ལས་ རྒྱུན་སྐྱོང་སྒོ་སྒྲིག་ཚུ་གི་སྐབས་ལུ་ ལོག་ཐོབ་ཚུགས་ནིའི་དོན་ལུ་ འཕྲོ་མཐུད་འབད།
 
-## Wire the portal widgets
+## དྲྭ་ཐག་ཝིཌི་གེཊསི།
 
-When you build or serve the developer portal, set the URL that the widgets
-should use for the proxy:
+ཁྱོད་ཀྱིས་ གོང་འཕེལ་གཏང་མི་ དྲྭ་ཚིགས་འདི་ བཟོ་བསྐྲུན་ ཡང་ན་ ཕྱག་ཞུ་བའི་སྐབས་ ཝིཌི་གེཊི་ཚུ་ལུ་ ཡུ་ཨར་ཨེལ་ གཞི་སྒྲིག་འབད།
+པོརོག་སི་གི་དོན་ལུ་ལག་ལེན་འཐབ་དགོཔ་::
 
 ```bash
 export TRYIT_PROXY_PUBLIC_URL="http://localhost:8787"
@@ -88,141 +90,123 @@ export TRYIT_PROXY_DEFAULT_BEARER="Bearer eyJhbGciOi..." # Optional
 npm run start
 ```
 
-The following components read these values from `docusaurus.config.js`:
+འོག་གི་ཆ་ཤས་ཚུ་གིས་ `docusaurus.config.js` ལས་ གནས་གོང་འདི་ཚུ་ལྷག་ཡོདཔ་ཨིན།
 
-- **Swagger UI** — rendered at `/reference/torii-swagger`; pre-authorises the
-  bearer scheme when a token is present, tags requests with `X-TryIt-Client`,
-  injects `X-TryIt-Auth`, and rewrites calls through the proxy when
-  `TRYIT_PROXY_PUBLIC_URL` is set.
-- **RapiDoc** — rendered at `/reference/torii-rapidoc`; mirrors the token field,
-  reuses the same headers as the Swagger panel, and targets the proxy
-  automatically when the URL is configured.
-- **Try it console** — embedded on the API overview page; lets you send custom
-  requests, view headers, and inspect response bodies.
+- **Swagger UI*** — `/reference/torii-swagger` ལུ་བཀོད་ཡོདཔ། སྔོན་བཤད་ འབད་ནི།
+  བརྡ་མཚོན་ཅིག་ཡོད་པའི་སྐབས་ འབག་མི་འཆར་གཞི་ I18NI0000080X དང་གཅིག་ཁར་ ངོ་རྟགས་ཚུ་ཞུ་བ་འབདཝ་ཨིན།
+  `X-TryIt-Auth` བཙུགས་ཞིནམ་ལས་ བསྐྱར་འབྲི་འབད་དེ་ ངོ་ཚབ་བརྒྱུད་དེ་ ག་དེམ་ཅིག་སྦེ་ འབོད་བརྡ་འབདཝ་ཨིན།
+  `TRYIT_PROXY_PUBLIC_URL` གཞི་སྒྲིག་འབད་ཡོདཔ་ཨིན།
+- **RapiDoc** — I18NI0000083X ལུ་བཀོད་ཡོདཔ། མེ་ལོང་གིས་ ཊོ་ཀེན་ཞིང་འདི་ དང་།
+  སཝ་ཇར་པེ་ནཱལ་དང་གཅིག་ཁར་མགོ་ཡིག་ཚུ་སླར་ལོག་འབདཝ་ཨིནམ་དང་ པོརོག་སི་ལུ་དམིགས་གཏད་བསྐྱེདཔ་ཨིན།
+  ཡུ་ཨར་ཨེལ་འདི་རིམ་སྒྲིག་འབད་བའི་སྐབས་ རང་བཞིན་གྱིས་ཨིན།
+- **དེ་ མཉམ་བསྡོམས་** — ཨེ་པི་ཨའི་ སྤྱི་མཐོང་ཤོག་ལེབ་གུ་བཙུགས་ཡོདཔ་ཨིན། ཁྱོད་ཀྱིས་ སྲོལ་སྒྲིག་གཏངམ་ཨིན།
+  ཞུ་བ་དང་ མགོ་ཡིག་བལྟ་ནི་ དེ་ལས་ ལན་འདེབས་ཚོགས་སྡེ་ཚུ་ བརྟག་དཔྱད་འབད།
 
-Both panels surface a **snapshot selector** that reads
-`docs/portal/static/openapi/versions.json`. Populate that index with
-`npm run sync-openapi -- --version=<label> --mirror=current --latest` so
-reviewers can jump between historical specs, see the recorded SHA-256 digest,
-and confirm whether a release snapshot carries a signed manifest before using
-the interactive widgets.
+པེ་ནཱལ་གཉིས་ཆ་རང་གིས་ **snapshot elector** ལྷག་མི་ ཁ་ཐོག་ལུ་ ཁ་ཐོག་ལུ་ ཁ་ཐོག་ལུ།
+`docs/portal/static/openapi/versions.json`. ཟུར་ཐོ་དེ་དང་གཅིག་ཁར་ མི་རློབས་བཏབ།
+`npm run sync-openapi -- --version=<label> --mirror=current --latest` སོ།
+བསྐྱར་ཞིབ་པ་ཚུ་གིས་ བྱུང་རབས་ཀྱི་ ཁྱད་ཚད་ཀྱི་བར་ན་ མཆོང་ཚུགས།
+དང་ གསར་བཏོན་པར་ཆས་ཅིག་གིས་ ལག་ལེན་འཐབ་པའི་ཧེ་མ་ མཚན་རྟགས་བཀོད་ཡོད་པའི་ གསལ་སྟོན་ཅིག་ འབག་འོང་ག་མི་ཚུགས་ག་ ངེས་གཏན་བཟོ།
+འབྲེལ་མཐུད་ཅན་གྱི་ཝིཌི་གེཊསི།
 
-Changing the token in any widget only affects the current browser session; the
-proxy never persists or logs the supplied token.
+ཝིཌི་གེཊི་གང་རུང་ཅིག་ནང་ ཊོ་ཀེན་འདི་བསྒྱུར་བཅོས་འབད་མི་འདི་གིས་ ད་ལྟོའི་བརྡ་འཚོལ་ལཱ་ཡུན་ལུ་རྐྱངམ་ཅིག་ ཕན་གནོད་ཡོདཔ་ཨིན། ཚིག༌ཕྲད
+པོརོག་སི་ནམ་ཡང་མ་གནས་པ་ ཡང་ན་ བཀྲམ་སྤེལ་འབད་ཡོད་པའི་བརྡ་མཚོན་འདི་ དྲན་ཐོ་བཀོད།
 
-## Short-lived OAuth tokens
+## ཐུང་ཐུང་ OAuth ཊོ་ཀེན་ཚུ།
 
-To avoid distributing long-lived Torii tokens to reviewers, wire the Try it
-console to your OAuth server. When the environment variables below are present
-the portal renders a device-code login widget, mints short-lived bearer tokens,
-and automatically injects them into the console form.
+བསྐྱར་ཞིབ་འབད་མི་ཚུ་ལུ་ I18NT0000018X ཊོ་ཀེན་ཚུ་ བཀྲམ་སྤེལ་འབད་ནི་ལས་ བཀག་ཐབས་ལུ་ འདི་ཚོད་བལྟ་འབད་དགོ།
+ཁྱོད་ཀྱི་ཨོ་ཨའུ་སར་བར་ལུ་ མཐུད་མཚམས་ལུ། འོག་གི་མཐའ་འཁོར་འགྱུར་ཅན་ཚུ་ཡོད་པའི་སྐབས་ལུ།
+དྲྭ་ཚིགས་འདི་གིས་ ཐབས་འཕྲུལ་ཨང་རྟགས་ནང་བསྐྱོད་ཝིཌི་གེཊི་དང་ ཐུང་ཀུ་སྦེ་སྡོད་མི་ བེ་ཡར་ཊོ་ཀེན་ཚུ་ བརྡ་སྟོནམ་ཨིན།
+དེ་ལས་ རང་བཞིན་གྱིས་ དེ་ཚུ་ ཀོན་སོལ་འབྲི་ཤོག་ནང་ བཙུགསཔ་ཨིན།
 
-| Variable | Purpose | Default |
+| འགྱུར་ཅན་ | དམིགས་ཡུལ། | སྔོན་སྒྲིག་ |
 | --- | --- | --- |
-| `DOCS_OAUTH_DEVICE_CODE_URL` | OAuth Device Authorization endpoint (`/oauth/device/code`) | _empty (disabled)_ |
-| `DOCS_OAUTH_TOKEN_URL` | Token endpoint that accepts `grant_type=urn:ietf:params:oauth:grant-type:device_code` | _empty_ |
-| `DOCS_OAUTH_CLIENT_ID` | OAuth client identifier registered for the docs preview | _empty_ |
-| `DOCS_OAUTH_SCOPE` | Space-delimited scopes requested during sign-in | `openid profile offline_access` |
-| `DOCS_OAUTH_AUDIENCE` | Optional API audience to bind the token to | _empty_ |
-| `DOCS_OAUTH_POLL_INTERVAL_MS` | Minimum poll interval when waiting for approval (ms) | `5000` (values < 5000 ms are rejected) |
-| `DOCS_OAUTH_DEVICE_CODE_TTL_SECONDS` | Fallback device-code expiration window (seconds) | `600` (must remain between 300 s and 900 s) |
-| `DOCS_OAUTH_TOKEN_TTL_SECONDS` | Fallback access-token lifetime (seconds) | `900` (must remain between 300 s and 900 s) |
-| `DOCS_OAUTH_ALLOW_INSECURE` | Set to `1` for local previews that intentionally skip OAuth enforcement | _unset_ |
+| I18NI0000086X | OAuth ཐབས་འཕྲུལ་གྱི་དབང་ཆ་མཐའ་མཚམས་ (I18NI0000087X) | _སྟོངམ་ (ལྕོགས་མིན་)_ |
+| I18NI0000008X | `grant_type=urn:ietf:params:oauth:grant-type:device_code` དང་ལེན་པའི་ཊོ་ཀེན་མཐའ་ཐིག་། | _སྟོང་པ་_ |
+| `DOCS_OAUTH_CLIENT_ID` | ཡིག་ཆ་ཚུ་སྔོན་ལྟའི་དོན་ལུ་ཐོ་བཀོད་འབད་ཡོད་པའི་ OAuth མཁོ་སྤྲོད་པ་ངོས་འཛིན་པ་ | _སྟོང་པ་_ |
+| I18NI0000091X | མཚན་རྟགས་བཀོད་པའི་སྐབས་ཞུ་བ་འབད་མི་ གནམ་སྟོང་གིས་ བཀོད་སྒྲིག་འབད་ཡོད་པའི་གོ་སྐབས་ཚུ། | I18NI0000092X |
+| `DOCS_OAUTH_AUDIENCE` | གདམ་ཁ་ཅན་གྱི་ཨེ་པི་ཨའི་ ལྟདམོ་ལྟ་མི་ཚུ་ ཊོ་ཀེན་འདི་ | _སྟོང་པ་_ |
+| I18NI0000094X | ཆ་འཇོག་ལུ་བསྒུག་པའི་སྐབས་ འོས་བསྡུའི་བར་མཚམས་ | `5000` (གནས་གོང་ཚུ་ <5000ms འདི་བཀག་ཆ་འབད་ཡོདཔ་) |
+| I18NI0000096X | ཕོལ་བེག་ཐབས་འཕྲུལ་-ཨང་རྟགས་ དུས་ཡོལ་སྒོ་སྒྲིག་ (སྐར་ཆ) | `600` (300s དང་ 900s བར་དུ་གནས་དགོ) |
+| I18NI0000098X | ཕོལ་བེག་འཛུལ་སྤྱོད་-ཊོ་ཀེན་གྱི་ཚེ་སྲོག་ (སྐར་ཆ) | I18NI0000009X (300s དང་ 900s བར་དུ་གནས་དགོ) |
+| `DOCS_OAUTH_ALLOW_INSECURE` | OAuth བཀོལ་བཀོལ་འདི་ བསམ་ཞིབ་འབད་དེ་ མཆོང་མི་ ས་གནས་ཀྱི་སྔོན་ལྟ་ཚུ་གི་དོན་ལུ་ I18NI00000101010 ལུ་གཞི་སྒྲིག་འབད། | _unset_ |
 
-Example configuration:
+དཔེར་ན་ རིམ་སྒྲིག་:
 
-```bash
-export DOCS_OAUTH_DEVICE_CODE_URL="https://auth.dev.sora.example/oauth/device/code"
-export DOCS_OAUTH_TOKEN_URL="https://auth.dev.sora.example/oauth/token"
-export DOCS_OAUTH_CLIENT_ID="docs-preview"
-export DOCS_OAUTH_SCOPE="torii openid offline_access"
-# Optional audience and polling tweaks
-export DOCS_OAUTH_AUDIENCE="https://torii.devnet.sora.example"
-export DOCS_OAUTH_POLL_INTERVAL_MS="6000"
-```
+I18NF0000028X
 
-When you run `npm run start` or `npm run build`, the portal embeds these values
-in `docusaurus.config.js`. During local preview the Try it card shows a
-“Sign in with device code” button. Users enter the displayed code on your OAuth
-verification page; once the device flow succeeds the widget:
+ཁྱོད་ཀྱིས་ `npm run start` ཡང་ན་ I18NI000000103X གཡོག་བཀོལ་བའི་སྐབས་ དྲྭ་ཚིགས་འདི་གིས་ གནས་གོང་འདི་ཚུ་ བཙུགསཔ་ཨིན།
+in `docusaurus.config.js`. ཉེ་གནས་སྔོན་ལྟ་སྐབས་ ཚོད་བལྟ་ཤོག་བྱང་གིས་ ༡ སྟོནམ་ཨིན།
+“ཐབས་འཕྲུལ་ཨང་རྟགས་དང་གཅིག་ཁར་ ནང་བསྐྱོད་འབད་” ཨེབ་རྟ་། ལག་ལེན་པ་ཚུ་གིས་ ཁྱོད་རའི་ཨོ་ཨའུ་གུ་བཀྲམ་སྟོན་འབད་ཡོད་པའི་ཨང་རྟགས་འདི་བཙུགས།
+བདེན་དཔྱད་ཤོག་ལེབ་; ཐབས་འཕྲུལ་གྱི་རྒྱུན་འགྲུལ་འདི་ ཝིཌི་གེཊི་འདི་ མཐར་འཁྱོལ་ཚརཝ་ཅིག་:
 
-- injects the issued bearer token into the Try it console field,
-- tags requests with the existing `X-TryIt-Client` and `X-TryIt-Auth` headers,
-- displays the remaining lifetime, and
-- automatically clears the token when it expires.
+- བཏོན་ཡོད་པའི་ བེ་ཡར་ཊོ་ཀེན་འདི་ ཀོན་སོལ་ས་སྒོ་ནང་ ཚོད་བལྟ་འབད་དོ་ཡོདཔ།
+- ད་ལྟོ་ཡོད་པའི་ `X-TryIt-Client` དང་ `X-TryIt-Auth` གི་མགོ་ཡིག་ཚུ་དང་གཅིག་ཁར་ ངོ་རྟགས་ཚུ་ཡོདཔ་ཨིན།
+- ལྷག་ལུས་ཚེ་སྲོག་འདི་བཀྲམ་སྟོན་འབདཝ་ཨིན།
+- དུས་ཚོད་རྫོགས་པའི་སྐབས་ ཊོ་ཀེན་འདི་ རང་བཞིན་གྱིས་ བཏོནམ་ཨིན།
 
-The manual Bearer input remains available—omit the OAuth variables whenever you
-want to force reviewers to paste a temporary token themselves, or export
-`DOCS_OAUTH_ALLOW_INSECURE=1` for isolated local previews where anonymous access
-is acceptable. Builds without OAuth configured now fail fast to satisfy the
-DOCS-1b roadmap gate.
+ལག་དེབ་འབག་མི་ཨིན་པུཊི་འདི་ འཐོབ་ཚུགསཔ་ཨིན་—ཁྱོད་རའི་སྐབས་ལུ་ ཨོ་ཨའུཊི་འགྱུར་ཅན་ཚུ་ གལ་ཆེ།
+བསྐྱར་ཞིབ་འབད་མི་ཚུ་ལུ་ གནས་སྐབས་ཀྱི་རྟགས་མཚན་ཅིག་ རང་གིས་སྦེ་ སྦྱར་དགོཔ་ ཡང་ན་ ཕྱིར་ཚོང་འཐབ་དགོ་མནོཝ་ཨིན།
+མིང་མེད་འཛུལ་སྤྱོད་འབད་སའི་ རང་རྐྱང་སྦེ་ཡོད་པའི་ ཉེ་གནས་སྔོན་ལྟ་ཚུ་གི་དོན་ལུ་ `DOCS_OAUTH_ALLOW_INSECURE=1` ཨིན།
+འདི་ངོས་ལེན་འབད་ཚུགས། OAuth རིམ་སྒྲིག་འབད་ཡོད་པའི་བཟོ་བསྐྲུན་ཚུ་གིས་ ད་ལྟོ་ མགྱོགས་པ་རང་ ཡིད་ཚིམས་ཚུགསཔ་ཨིན།
+DOCS-1b ལམ་གྱི་ས་ཁྲ།
 
-📌 Review the [Security hardening & pen-test checklist](./security-hardening.md)
-before exposing the portal outside the lab; it documents the threat model,
-CSP/Trusted Types profile, and the penetration-test steps that now gate DOCS-1b.
+📌 བསྐྱར་ཞིབ། [ཉེན་སྲུང་བརྟན་ཏོག་ཏོ་དང་ བརྟག་ཞིབ་ཐོ་ཡིག་](./security-hardening.md)
+བརྟག་དཔྱད་ཁང་གི་ཕྱི་ཁར་ དྲྭ་ཚིགས་འདི་ ཕྱིར་བཏོན་མ་འབད་བའི་ཧེ་མ་; འདི་གིས་ ཉེན་ཁ་གི་དཔེ་སྟོན་འདི་ ཡིག་ཐོག་ལུ་བཀོད་དེ་ཡོདཔ་ཨིན།
+CSP/Trused Type གསལ་སྡུད་དང་ ད་ལྟོ་ DOCS-1b གི་སྒོ་བསྡམ་མི་ འཛུལ་ཞུགས་བརྟག་དཔྱད་ཀྱི་གོ་རིམ་ཚུ།
 
-## Norito-RPC samples
+## Norito-RPC དཔེ་ཚད་
 
-Norito-RPC requests share the same proxy and OAuth plumbing as the JSON routes,
-they simply set `Content-Type: application/x-norito` and send the
-pre-encoded Norito payload described in the NRPC specification
-(`docs/source/torii/nrpc_spec.md`).
-The repository ships canonical payloads under `fixtures/norito_rpc/` so portal
-authors, SDK owners, and reviewers can replay the exact bytes that CI uses.
+I18NT000000006X-RPC གིས་ JSON འགྲུལ་ལམ་ཚུ་བཟུམ་སྦེ་ ངོ་ཚབ་དང་ OAuth ཆུ་གཡུར་གྱི་ཆུ་གཡུར་གཅིག་མཚུངས་སྦེ་ བརྗེ་སོར་འབདཝ་ཨིན།
+ཁོང་ཚོས་ `Content-Type: application/x-norito` གཞི་སྒྲིག་འབད་དེ་ གཏང་ཡོད།
+སྔོན་སྒྲིག་ I18NT000000007X གིས་ NRPC གི་ཁྱད་ཚད་ནང་གསལ་བཀོད་འབད་ཡོདཔ།
+(I 18NI00000109X).
+མཛོད་ཁང་གི་གྲུ་གཟིངས་ཚུ་གིས་ `fixtures/norito_rpc/` འོག་ལུ་ཡོད་པའི་ ཁྲལ་གྱི་འཐུས་ཚུ་ དེ་སྦེ་ དྲྭ་ཚིགས་ནང་ཡོདཔ་ཨིན།
+རྩོམ་པ་པོ་དང་ ཨེསི་ཌི་ཀེ་གི་ཇོ་བདག་ དེ་ལས་ བསྐྱར་ཞིབ་འབད་མི་ཚུ་གིས་ སི་ཨའི་ལག་ལེན་འཐབ་མི་ བཱའིཊི་ཚུ་ ངེས་བདེན་སྦེ་ ལོག་རྩེད་ཚུགས།
 
-### Send a Norito payload from the Try It console
+###
 
-1. Pick a fixture such as `fixtures/norito_rpc/transfer_asset.norito`. These
-   files are raw Norito envelopes; do **not** base64-encode them.
-2. In Swagger or RapiDoc, locate the NRPC endpoint (for example
-   `POST /v1/pipeline/submit`) and switch the **Content-Type** selector to
+1. `fixtures/norito_rpc/transfer_asset.norito` བཟུམ། འ་ནཱི་འདི་ཚུ
+   ཡིག་སྣོད་ཚུ་ Norito ཡིག་ཤུབས་ཚུ་ཨིན། do **not** base64-encode .
+༢ སཝ་གར་ཡང་ན་ རེ་པི་ཌོག་ནང་ ཨེན་ཨར་པི་སི་མཐའ་ཐིག་འདི་ འཚོལ་ཞིབ་འབད།(དཔེར་ན་ དཔེར་ན།
+   `POST /v1/pipeline/submit`) དེ་ལས་ **Content-Type** སེལ་འཐུ་འབད་མི་འདི་ ལུ་སོར་བསྒྱུར་འབད།
    `application/x-norito`.
-3. Toggle the request body editor to **binary** (Swagger's "File" mode or
-   RapiDoc's "Binary/File" selector) and upload the `.norito` file. The widget
-   streams the bytes through the proxy without alteration.
-4. Submit the request. If Torii returns `X-Iroha-Error-Code: schema_mismatch`,
-   verify that you are calling an endpoint that accepts binary payloads and
-   confirm that the schema hash recorded in `fixtures/norito_rpc/schema_hashes.json`
-   matches the Torii build you are hitting.
+3. **གཉིས་ལྡན་** ལུ་ ཞུ་བ་གཟུགས་ཀྱི་ཞུན་དག་པ་འདི་ སོར་བསྒྱུར་འབད།
+   RapiDoc གི་ "Binary/File" སེལ་འཐུ་འབད་མི་) དང་ `.norito` ཡིག་སྣོད་སྐྱེལ་བཙུགས་འབད། ཝིཌི་གེཊ།
+   བསྒྱུར་བཅོས་མེད་པར་ ངོ་ཚབ་བརྒྱུད་དེ་ བཱའིཊི་ཚུ་ རྒྱུན་སྤེལ་འབདཝ་ཨིན།
+4. ཞུ་བ་ཕུལ་བ། Torii གིས་ `X-Iroha-Error-Code: schema_mismatch` སླར་ལོག་འབདཝ་ཨིན།
+   ཁྱོད་ཀྱིས་ གཉིས་ལྡན་གྱི་པེ་ལོཌ་ཚུ་ ངོས་ལེན་འབད་མི་ མཇུག་སྣོད་ཅིག་ འབོ་དོ་ཡོདཔ་ཨིན་ན་ བདེན་དཔྱད་འབད།
+   `fixtures/norito_rpc/schema_hashes.json` ནང་ཐོ་བཀོད་འབད་ཡོདཔ་ངེས་གཏན་བཟོ།
+   ཁྱོད་ཀྱིས་ བརྡུངམ་ད་ Torii བཟོ་བསྐྲུན་འདི་ཨིན།
 
-The console keeps the most recent file in memory so you can resubmit the same
-payload while exercising different authorisation tokens or Torii hosts. Adding
-`scripts/run_norito_rpc_fixtures.sh --note "<ticket>"` to your workflow produces
-the evidence bundle referenced in the NRPC-4 adoption plan (log + JSON summary),
-which pairs nicely with screenshotting the Try It response during reviews.
+ཀོན་སོལ་དེ་གིས་ འཕྲལ་གྱི་ཡིག་སྣོད་འདི་ དྲན་ཚད་ནང་ བཞགཔ་ཨིན་ དེ་འབདཝ་ལས་ ཁྱོད་ཀྱིས་ ཅོག་འཐདཔ་འདི་ ལོག་བཙུགས་ཚུགས།
+གནང་བ་སོ་སོ་ཚུ་ ཡང་ན་ I18NT0000021X ཧོསིཊི་ཚུ་ ལག་ལེན་འཐབ་པའི་སྐབས་ པེ་ལོསི། ཁ་སྐོང་འབད་དོ།
+`scripts/run_norito_rpc_fixtures.sh --note "<ticket>"` ཁྱོད་ཀྱི་ལཱ་གི་རྒྱུན་རིམ་ལུ་ཐོན་སྐྱེད་འབདཝ་ཨིན།
+NRPC-4 ཆ་འཇོག་འཆར་གཞི་ནང་ གཞི་བསྟུན་འབད་ཡོད་པའི་ སྒྲུབ་བྱེད་བསྡོམས་རྩིས་ (log + JSON བཅུད་དོན)།
+བསྐྱར་ཞིབ་ཀྱི་སྐབས་ལུ་ ལན་འདེབས་འབད་རྩོལ་བསྐྱེད་མི་འདི་ གསལ་གཞི་གི་པར་བཏབ་མི་དང་གཅིག་ཁར་ ལེགས་ཤོམ་སྦེ་ཆ་སྒྲིག་འབདཝ་ཨིན།
 
-### CLI example (curl)
+### CLI དཔེར་བརྗོད།(curl)
 
-The same fixtures can be replayed outside the portal via `curl`, which is useful
-when validating the proxy or debugging gateway responses:
+དེ་བཟུམ་མའི་སྒྲིག་སྟངས་ཚུ་ `curl` བརྒྱུད་དེ་ དྲྭ་ཐོག་གི་ཕྱི་ཁར་ བསྐྱར་རྩེད་འབད་ཚུགས།
+ངོ་ཚབ་ཡང་ན་ རྐྱེན་སེལ་འབད་སའི་ འཛུལ་སྒོ་གི་ལན་ཚུ་ བདེན་དཔྱད་འབད་བའི་སྐབས།
 
-```bash
-TORII="https://torii.devnet.sora.example"
-TOKEN="Bearer $(cat ~/.config/torii/devnet.token)"
-curl \
-  -H "Content-Type: application/x-norito" \
-  -H "Authorization: ${TOKEN}" \
-  --data-binary @fixtures/norito_rpc/transfer_asset.norito \
-  "${TORII}/v1/pipeline/submit"
-```
+I18NF0000029X
 
-Swap the fixture for any entry listed in `transaction_fixtures.manifest.json`
-or encode your own payload with `cargo xtask norito-rpc-fixtures`. When Torii
-is in canary mode you can point `curl` at the try-it proxy
-(`https://docs.sora.example/proxy/v1/pipeline/submit`) to exercise the same
-infrastructure that the portal widgets use.
+`transaction_fixtures.manifest.json` ནང་ཐོ་བཀོད་འབད་ཡོད་པའི་ཐོ་བཀོད་གང་རུང་ཅིག་གི་དོན་ལུ་ སྒྲིག་བཀོད་འདི་བརྗེ་སོར་འབད།
+ཡང་ན་ ཁྱོད་རའི་ པེ་ལོཌ་ `cargo xtask norito-rpc-fixtures` དང་མཉམ་དུ་ བཀོད་སྒྲིག་འབད། Torii སྐབས།
+འདི་ ཀ་ནཱར་ཐབས་ལམ་ནང་ ཁྱོད་ཀྱིས་ འབད་རྩོལ་ཅན་གྱི་ པོརོག་སི་ལུ་ `curl` འདི་ བསྟན་ཚུགས།
+(`https://docs.sora.example/proxy/v1/pipeline/submit`) དེ་འདྲའི་ལག་ལེན།
+དྲྭ་ཚིགས་ཀྱི་ཝིཌི་གེཊི་གིས་ལག་ལེན་འཐབ་མི་ གཞི་རྟེན་མཐུན་རྐྱེན་ཚུ།
 
-## Observability & operations
+## བལྟ་རྟོག་དང་བཀོལ་སྤྱོད།ཞུ་བ་རེ་རེ་བཞིན་དུ་ ཐབས་ལམ་དང་ འགྲུལ་ལམ་ འབྱུང་ཁུངས་ ཡར་འགྲོས་གནས་རིམ་ དེ་ལས་ ནང་བསྐྱོད་འབད་ཡོདཔ་ཨིན།
+བདེན་བཤད་འབྱུང་ཁུངས་ (`override`, I18NI000000124X, ཡང་ན་ `client`). ཊོ་ཀེན་ཚུ་ནམ་ཡང་མེན།
+གསོག་འཇོག་འབད་ཡོདཔ་—བེ་ཡར་མགོ་ཡིག་དང་ `X-TryIt-Auth` གནས་གོང་ཚུ་ ཧེ་མ་གི་ཧེ་མ་ལས་ བསྒྱུར་བཅོས་འབདཝ་ཨིན།
+ནང་བསྐྱོད་—དེ་ལས་ ཁྱོད་ཀྱིས་ stdout འདི་ ཚ་གྱང་མ་ལང་པར་ ལྟེ་བ་བསྡུ་གསོག་འབད་མི་ཅིག་ལུ་ གདོང་བསྐྱོད་འབད་ཚུགས།
+།གསང་བ་འཛེགས་པ།
 
-Every request is logged once with method, path, origin, upstream status, and the
-authentication source (`override`, `default`, or `client`). Tokens are never
-stored—both bearer headers and `X-TryIt-Auth` values are redacted before
-logging—so you can forward stdout to a central collector without worrying about
-secrets leaking.
+### གསོ་བའི་ཞིབ་དཔྱད་དང་ཉེན་བརྡ།
 
-### Health probes & alerting
-
-Run the bundled probe during deployments or on a schedule:
+བཀྲམ་སྤེལ་འབད་བའི་སྐབས་ ཡང་ན་ ལས་རིམ་ཅིག་གུ་ ཡང་ན་ ལས་རིམ་ཅིག་གུ་ བསྡུ་སྒྲིག་འབད་ཡོད་པའི་ འཚོལ་ཞིབ་འདི་ གཡོག་བཀོལ།
 
 ```bash
 # Ensure the proxy responds to /healthz and forwards a sample request.
@@ -231,19 +215,19 @@ TRYIT_PROXY_SAMPLE_PATH="/v1/status" \
 npm run probe:tryit-proxy
 ```
 
-Environment knobs:
+ཁོར་ཡུག་གི་མཛུབ་མོ་།
 
-- `TRYIT_PROXY_SAMPLE_PATH` — optional Torii route (without `/proxy`) to exercise.
-- `TRYIT_PROXY_SAMPLE_METHOD` — defaults to `GET`; set to `POST` for write routes.
-- `TRYIT_PROXY_PROBE_TOKEN` — injects a temporary bearer token for the sample call.
-- `TRYIT_PROXY_PROBE_TIMEOUT_MS` — overrides the default 5 s timeout.
-- `TRYIT_PROXY_PROBE_METRICS_FILE` — optional Prometheus textfile destination for `probe_success`/`probe_duration_seconds`.
-- `TRYIT_PROXY_PROBE_LABELS` — comma-separated `key=value` pairs appended to the metrics (defaults to `job=tryit-proxy` and `instance=<proxy URL>`).
-- `TRYIT_PROXY_PROBE_METRICS_URL` — optional metrics endpoint URL (for example, `http://localhost:9798/metrics`) that must respond successfully when `TRYIT_PROXY_METRICS_LISTEN` is enabled.
+- I18NI00000000127X — གདམ་ཁའི་ Torii གི་ལམ་ (I18NI000000128X མེད་པར་) ལུས་སྦྱོང་འབད་ནིའི་དོན་ལུ་ཨིན།
+- `TRYIT_PROXY_SAMPLE_METHOD` — I18NI000000130X ལུ་སྔོན་སྒྲིག་འབདཝ་ཨིན། འབྲི་ནིའི་ལམ་ཚུ་གི་དོན་ལུ་ `POST` ལུ་གཞི་སྒྲིག་འབད་ཡོདཔ།
+- I18NI000000132X — དཔེ་ཚད་འབོད་བརྡ་གི་དོན་ལུ་ གནས་སྐབས་ཀྱི་ འབག་མི་ཊོ་ཀེན་ཅིག་ བཙུགསཔ་ཨིན།
+- I18NI000000133X — སྔོན་སྒྲིག་ ༥ཨེསི་དུས་ཚོད་རྫོགས་ནི་ ཚད་བཀག་འབདཝ་ཨིན།
+- I18NI00000000134X — གདམ་ཁའི་ Prometheus I18NI000000135X/`probe_duration_seconds`.
+- I18NI0000000000137X — ལྷོད་རྟགས་དབྱེ་བ་ཕྱེ་ཡོད་པའི་ `key=value` ཆ་ཚུ་ མེ་ཊིག་ཚུ་ལུ་ མཐུད་ཡོདཔ་ཨིན། (`job=tryit-proxy` དང་ I18NI0000000140X ལུ་སྔོན་སྒྲིག་ཚུ་)
+- I18NI000000000141X — གདམ་ཁ་ཅན་གྱི་མེ་ཊིགསི་མཇུག་སྣོད་ཡུ་ཨར་ཨེལ་ (དཔེར་ན་ `http://localhost:9798/metrics`) འདི་ `TRYIT_PROXY_METRICS_LISTEN` ལྕོགས་ཅན་བཟོ་བའི་སྐབས་ མཐར་འཁྱོལ་ཅན་སྦེ་ལན་གསལ་འབད་དགོ།
 
-Feed the results into a textfile collector by pointing the probe at a writable
-path (for example, `/var/lib/node_exporter/textfile_collector/tryit.prom`) and
-adding any custom labels:
+གྲུབ་འབྲས་ཚུ་ ཡིག་ཐོག་ལུ་བཀོད་ཡོད་པའི་ ཞིབ་དཔྱད་འདི་ གསལ་བཏོན་འབད་དེ་ ཚིག་ཡིག་ཡིག་སྣོད་བསྡུ་སྒྲིག་འབད་མི་ཅིག་ལུ་ ལྟོ་བྱིན།
+ལམ་ (དཔེར་ན་ `/var/lib/node_exporter/textfile_collector/tryit.prom`) དང་།
+སྲོལ་སྒྲིག་ཁ་ཡིག་གང་རུང་ཅིག་ཁ་སྐོང་བརྐྱབ།
 
 ```bash
 TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" \
@@ -252,17 +236,17 @@ TRYIT_PROXY_PROBE_LABELS="job=tryit-proxy,cluster=prod" \
 npm run probe:tryit-proxy
 ```
 
-The script rewrites the metrics file atomically so your collector always reads a
-complete payload.
+ཡིག་ཚུགས་འདི་གིས་ མེ་ཊིགསི་ཡིག་སྣོད་ཚུ་ རྡུལ་ཕྲན་གྱི་ཐོག་ལས་ ལོག་བྲིས་དོ་ཡོདཔ་ལས་ ཁྱོད་རའི་བསྡུ་གསོག་པ་གིས་ ཨ་རྟག་ར་ a ལྷགཔ་ཨིན།
+ཆ་ཚང་སྤྲོད་ལེན་ཆ་ཚང་།
 
-When `TRYIT_PROXY_METRICS_LISTEN` is configured, set
-`TRYIT_PROXY_PROBE_METRICS_URL` to the metrics endpoint so the probe fails fast
-if the scrape surface disappears (for example, misconfigured ingress or missing
-firewall rules). A typical production setting is
+`TRYIT_PROXY_METRICS_LISTEN` རིམ་སྒྲིག་འབད་བའི་སྐབས་ གཞི་སྒྲིག་འབད།
+`TRYIT_PROXY_PROBE_METRICS_URL` མེ་ཊིགསི་མཇུག་བསྡུའི་ས་ཚིགས་ལུ་ འཚོལ་ཞིབ་འདི་མགྱོགས་པ་རང་ འཐུས་ཤོར་འབྱུང་འོང་།
+གཤག་ཆས་ཁ་ཐོག་འདི་མེདཔ་འགྱོ་བ་ཅིན་ (དཔེར་ན་ ནང་གཞིའི་གད་སྙིགས་འཛོལ་བ་ཡང་ན་ བརླག་སྟོར་ཞུགས་ཡོདཔ་ཨིན།
+ཕ་ར་ཝལ་ལམ་ལུགས།) སྤྱིར་བཏང་ཐོན་སྐྱེད་སྒྲིག་སྟངས་འདི་ནི།
 `TRYIT_PROXY_PROBE_METRICS_URL="http://127.0.0.1:9798/metrics"`.
 
-For lightweight alerting, wire the probe into your monitoring stack. A Prometheus
-example that pages after two consecutive failures:
+ལྗིད་ཚད་མར་ཕབ་ཀྱི་ཉེན་བརྡ་གི་དོན་ལུ་ ཁྱོད་རའི་ལྟ་རྟོག་བང་རིམ་ནང་ལུ་ འཚོལ་ཞིབ་འདི་ གློག་ཐག་འབད། A I 18NT00000002X
+དཔེ་འབད་བ་ཅིན་ རིམ་མཐུན་འཐུས་ཤོར་གཉིས་ཀྱི་ཤུལ་ལས་ ཤོག་ལེབ་ཚུ་:
 
 ```yaml
 groups:
@@ -279,14 +263,14 @@ groups:
             The try-it proxy at {{ $labels.instance }} is not responding to probe requests.
 ```
 
-### Metrics endpoint & dashboards
+### མེ་ཊིགསི་མཇུག་དང་ བརྡ་བཀོད་བཀོད་ཚོགས།
 
-Set `TRYIT_PROXY_METRICS_LISTEN=127.0.0.1:9798` (or any host/port pair) before
-starting the proxy to expose a Prometheus-formatted metrics endpoint. The path
-defaults to `/metrics` but can be overridden via
-`TRYIT_PROXY_METRICS_PATH=/custom`. Each scrape returns counters for per-method
-request totals, rate-limit rejections, upstream errors/timeouts, proxy outcomes,
-and latency summaries:
+ཧེ་མ་ `TRYIT_PROXY_METRICS_LISTEN=127.0.0.1:9798` གཞི་སྒྲིག་འབད་ (ཡང་ན་ ཧོསིཊི་/འདྲེན་ལམ་ཆ་གང་རུང་)
+ངོ་ཚབ་འགོ་བཙུགས། ངོ་ཚབ་འདི་ I18NT000000003X-formated metrics མཐའ་མཚམས་གསལ་སྟོན་འབད་ནི་ལུ་ཨིན། ལམ་འདི།
+སྔོན་སྒྲིག་ཚུ་ `/metrics` ལུ་ དེ་འབདཝ་ད་ བརྒྱུད་དེ་ བཀག་ཚུགས།
+`TRYIT_PROXY_METRICS_PATH=/custom`. ཐབས་ལམ་རེ་གི་དོན་ལུ་ བཤུད་བརྙན་རེ་རེ་བཞིན་གྱི་ གྱངས་ཁ་རེ་རེ་གིས་ འབདཝ་ཨིན།
+ཞུ་བ་བསྡོམས་རྩིས་ ཚད་ཚད་-ཚད་བཀག་བཀག་ཆ་ ཡར་འཕེལ་འཛོལ་བ་/དུས་ཚོད་ཨའུཊི་ཚུ་ པོརོག་སི་གྲུབ་འབྲས་ , ཚུ་ཨིན།
+དང་ འཕྲོ་མཐུད་དེ་ བཅུད་བསྡུས་ཚུ་:
 
 ```bash
 export TRYIT_PROXY_METRICS_LISTEN="127.0.0.1:9798"
@@ -297,16 +281,16 @@ tryit_proxy_requests_total{method="GET"} 12
 tryit_proxy_rate_limited_total 1
 ```
 
-Point your Prometheus/OTLP collectors at the metrics endpoint and reuse the
-existing `dashboards/grafana/docs_portal.json` panels so SRE can observe tail
-latencies and rejection spikes without parsing logs. The proxy automatically
-publishes `tryit_proxy_start_timestamp_ms` to help operators detect restarts.
+ཁྱོད་ཀྱི་ I18NT000000004X/OTLP བསྡུ་སྒྲིག་ཚུ་ མེ་ཊིགསི་མཇུག་སྣོད་དང་ ལོག་སྟེ་ལག་ལེན་འཐབ།
+ད་ལྟའི་`dashboards/grafana/docs_portal.json` པེ་ནཱལ་ཚུ་ དེ་འབདཝ་ལས་ ཨེསི་ཨར་ཨི་གིས་ མཇུག་མ་བལྟ་ཚུགས།
+ཕྱིར་འགྱངས་དང་ བཀག་ཆ་མེད་པའི་ མགུ་སྐོར་ཚུ་ དྲན་ཐོ་ཚུ་ མིང་དཔྱད་མ་འབད་བར་ འགྱོཝ་ཨིན། ངོ་ཚབ་འདི་ རང་བཞིན་གྱིས་
+བཀོལ་སྤྱོད་པ་ཚུ་གིས་ ལོག་འགོ་བཙུགས་མི་ཚུ་ ཤེས་རྟོགས་འབད་ནི་ལུ་ གྲོགས་རམ་འབད་ནི་ལུ་ `tryit_proxy_start_timestamp_ms` དཔར་བསྐྲུན་འབདཝ་ཨིན།
 
-### Rollback automation
+### བསྐོར་རྒྱབ་རང་འགུལ།
 
-Use the management helper to update or restore the target Torii URL. The script
-stores the previous configuration in `.env.tryit-proxy.bak` so rollbacks are a
-single command.
+དམིགས་གཏད་ I18NT0000024X URL དུས་མཐུན་བཟོ་ནིའི་དོན་ལུ་ འཛིན་སྐྱོང་གྲོགས་རམ་པ་ལག་ལེན་འཐབ། ༡ ཡིག་གཟུགས་འདི།
+ཧེ་མའི་རིམ་སྒྲིག་འདི་ `.env.tryit-proxy.bak` ནང་ལུ་གསོག་འཇོག་འབདཝ་ཨིན།
+བརྡ་བཀོད་རྐྱང་པ།
 
 ```bash
 # Update TRYIT_PROXY_TARGET and back up the previous config.
@@ -316,5 +300,5 @@ npm run manage:tryit-proxy -- update --target https://torii.devnet.sora.example
 npm run manage:tryit-proxy -- rollback
 ```
 
-Override the env file path with `--env` or `TRYIT_PROXY_ENV` if your deployment
-stores configuration elsewhere.
+ཁྱོད་ཀྱི་བཀྲམ་སྤེལ་འབད་བ་ཅིན་ `--env` ཡང་ན་ I18NI000000155X དང་ཅིག་ཁར་ env ཡིག་སྣོད་འགྲུལ་ལམ་འདི་བཀག་བཞག།
+རིམ་སྒྲིག་གཞན་ཁར་གསོག་འཇོག་འབདཝ་ཨིན།

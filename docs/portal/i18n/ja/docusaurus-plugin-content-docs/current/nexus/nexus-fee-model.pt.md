@@ -4,26 +4,28 @@ direction: ltr
 source: docs/portal/docs/nexus/nexus-fee-model.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
 id: nexus-fee-model
-title: Atualizacoes do modelo de taxas do Nexus
-description: Espelho de `docs/source/nexus_fee_model.md`, documentando recibos de liquidacao de lanes e superficies de conciliacao.
+タイトル: Nexus のモデルを作成する
+説明: Espelho de `docs/source/nexus_fee_model.md`、文書および液体の記録と会議の管理に関する文書。
 ---
 
-:::note Fonte canonica
-Esta pagina reflete `docs/source/nexus_fee_model.md`. Mantenha as duas copias alinhadas enquanto as traducoes japonesas, hebraicas, espanholas, portuguesas, francesas, russas, arabes e urdu migram.
+:::note フォンテ カノニカ
+エスタページナリフレテ`docs/source/nexus_fee_model.md`。マンテンハは、日本、ヘブライカ、エスパニョーラ、ポルトガル、フランス、ロシア、アラベス、ウルドゥー語の翻訳として、デュアス コピアス アリンハダス エンクアントとして使用されます。
 :::
 
-# Atualizacoes do modelo de taxas do Nexus
+# Atualizacos は Nexus をモデル化します
 
-O roteador de liquidacao unificado agora captura recibos deterministas por lane para que operadores possam conciliar debitos de gas com o modelo de taxas do Nexus.
+私は、Nexus を実行するために、オペラドールの大統領公会議官のデビトス デ ガス コンポジットを決定します。
 
-- Para a arquitetura completa do roteador, politica de buffer, matriz de telemetria e sequenciamento de rollout, veja `docs/settlement-router.md`. Esse guia explica como os parametros documentados aqui se conectam ao entregavel do roadmap NX-3 e como os SREs devem monitorar o roteador em producao.
-- A configuracao do ativo de gas (`pipeline.gas.units_per_gas`) inclui um decimal `twap_local_per_xor`, um `liquidity_profile` (`tier1`, `tier2`, ou `tier3`), e uma `volatility_class` (`stable`, `elevated`, `dislocated`). Esses sinalizadores alimentam o roteador de liquidacao para que a cotacao XOR resultante corresponda ao TWAP canonico e ao tier de haircut da lane.
-- Cada transacao que paga gas registra um `LaneSettlementReceipt`. Cada recibo armazena o identificador de origem fornecido pelo chamador, o micro-valor local, o XOR devido imediatamente, o XOR esperado apos o haircut, a variancia realizada (`xor_variance_micro`) e o timestamp do bloco em milissegundos.
-- A execucao de blocos agrega recibos por lane/dataspace e os publica via `lane_settlement_commitments` em `/v1/sumeragi/status`. Os totais mostram `total_local_micro`, `total_xor_due_micro` e `total_xor_after_haircut_micro` somados no bloco para exportacoes noturnas de conciliacao.
-- Um novo contador `total_xor_variance_micro` rastreia quanto de margem de seguranca foi consumida (diferenca entre o XOR devido e o esperado pos-haircut), e `swap_metadata` documenta os parametros de conversao deterministica (TWAP, epsilon, liquidity profile e volatility_class) para que auditores possam verificar as entradas da cotacao independentemente da configuracao em runtime.
+- ロテアドールの完全なアーキテクチャ、バッファーの政治、テレメトリーのマトリックスと展開のシーケンス、Veja `docs/settlement-router.md`。 Esse guia は、OS パラメータのドキュメントを詳細に説明し、ロードマップ NX-3 と COM OS SRE の開発、監視、開発を行っています。
+- 10 進数の `twap_local_per_xor`、`liquidity_profile` (`tier1`、`tier2`、ou `tier3`) を含むガス (`pipeline.gas.units_per_gas`) の設定`volatility_class` (`stable`、`elevated`、`dislocated`)。 Esses sinalizadores alimentam or roteador de liquidacao para que a cotacao XOR resultantecorrenda ao TWAP canonico e ao tier de Haircut daレーン。
+- Cada transacao que paga ガス登録 `LaneSettlementReceipt`。正確な情報、オリジェム フォルネシド ペロ シャマドールの識別子、マイクロ ヴァラー ローカル、XOR デビド イメディアタメンテ、XOR エスペラード アポス、ヘアカット、バリアント リアルリザダ (`xor_variance_micro`)、ミリセグンドスのタイムスタンプ。
+- `lane_settlement_commitments` または `/v1/sumeragi/status` を介して、レーン/データスペースの集合データを公開します。ほとんどの情報は `total_local_micro`、`total_xor_due_micro`、`total_xor_after_haircut_micro` であり、輸出に関する報告書は報告されません。
+- 新たなコンタドール `total_xor_variance_micro` ラストレイア クォント デ マージェム デ セグランカ フォイ コンスミダ (ディフェレンカ エントレ オ XOR デビド エ オ エスペラード pos-haircut)、`swap_metadata` ドキュメント オス パラメトロス デ コンバーサオ デターミニスティック (TWAP、イプシロン、流動性プロファイルvolatility_class) は、ランタイムの構成を独立して管理するための監査権限を持っています。
 
-Os consumidores podem acompanhar `lane_settlement_commitments` junto com os snapshots existentes de commitments de lane e dataspace para verificar que os buffers de taxas, os tiers de haircut e a execucao do swap correspondem ao modelo de taxas do Nexus configurado.
+OS コンスミドール `lane_settlement_commitments` は、OS バッファの検証、OS 層のヘアカットの実行、Nexus 設定のスワップ対応を実行し、コミットメントのレーンとデータスペースの存在を確認します。

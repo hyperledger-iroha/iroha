@@ -8,19 +8,21 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraFS CI Recipes
 sidebar_label: CI Recipes
 description: Run the SoraFS CLI inside GitHub and GitLab pipelines with keyless signing.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
+::: Canonical Source ကို သတိပြုပါ။
 :::
 
-# CI Recipes
+# CI ချက်ပြုတ်နည်းများ
 
-SoraFS pipelines benefit from deterministic chunking, manifest signing, and
-proof verification. The `sorafs_cli` command surface keeps those steps portable
-across CI providers. This page highlights the canonical recipes and points to
-ready-to-use templates.
+SoraFS ပိုက်လိုင်းများသည် အဆုံးအဖြတ်ဖြတ်တောက်ခြင်း၊ ထင်ရှားစွာ လက်မှတ်ရေးထိုးခြင်း၊ နှင့်
+အထောက်အထားစိစစ်ခြင်း။ `sorafs_cli` command မျက်နှာပြင်သည် ထိုခြေလှမ်းများကို သယ်ဆောင်ရလွယ်ကူစေသည်။
+CI ဝန်ဆောင်မှုပေးသူများ ဤစာမျက်နှာသည် Canonical ချက်ပြုတ်နည်းများကို မီးမောင်းထိုးပြပြီး ညွှန်ပြထားသည်။
+အဆင်သင့်သုံးနိုင်သော ပုံစံများ။
 
-## GitHub Actions (keyless)
+## GitHub လုပ်ဆောင်ချက်များ (သော့မရှိ)
 
 ```yaml
 name: sorafs-artifacts
@@ -93,11 +95,11 @@ jobs:
           path: artifacts/
 ```
 
-Key points:
+အဓိကအချက်များ-
 
-- No static signing keys are stored; OIDC tokens are fetched on-demand.
-- Artefacts (CAR, manifest, bundle, proof summaries) are uploaded for review.
-- The job reuses the same Norito schemas used in production rollouts.
+- တည်ငြိမ်သောလက်မှတ်ထိုးသော့များကိုသိမ်းဆည်းထားခြင်းမရှိပါ။ OIDC တိုကင်များကို လိုအပ်သလောက် ရယူထားပါသည်။
+- Artefacts (CAR၊ manifest၊ bundle၊ proof summaries) ကို ပြန်လည်သုံးသပ်ရန်အတွက် အပ်လုဒ်လုပ်ထားပါသည်။
+- အလုပ်သည် ထုတ်လုပ်မှုစတင်ခြင်းများတွင်အသုံးပြုသည့်တူညီသော Norito အစီအစဉ်များကို ပြန်လည်အသုံးပြုသည်။
 
 ## GitLab CI
 
@@ -133,15 +135,15 @@ sorafs:publish:
       - artifacts/
 ```
 
-- Provision `SIGSTORE_ID_TOKEN` via GitLab’s workload identity federation or a
-  sealed secret before executing the publish stage.
-- Failure of any CLI step causes the pipeline to halt, preserving consistent
-  artefacts.
+- GitLab ၏ workload အထောက်အထား အဖွဲ့ချုပ် သို့မဟုတ် တစ်ခုမှတစ်ဆင့် ပံ့ပိုးမှု `SIGSTORE_ID_TOKEN`
+  ထုတ်ဝေခြင်းအဆင့်ကို မလုပ်ဆောင်မီ လျှို့ဝှက်ပိတ်သိမ်းထားသည်။
+- မည်သည့် CLI အဆင့်မှ ပျက်ကွက်ပါက ပိုက်လိုင်းကို ရပ်တန့်စေပြီး တသမတ်တည်း ထိန်းသိမ်းထားသည်။
+  ရှေးဟောင်းပစ္စည်း။
 
-## Additional resources
+## နောက်ထပ်အရင်းအမြစ်များ
 
-- End-to-end templates (includes Bash helpers, federated identity configuration,
-  and clean-up steps): `docs/examples/sorafs_ci.md`
-- CLI reference covering every option: `docs/source/sorafs_cli.md`
-- Governance/alias requirements prior to submission:
+- အဆုံးမှအဆုံး နမူနာပုံစံများ (Bash ကူညီပေးသူများ၊ ဖက်ဒရယ်အထောက်အထားဖွဲ့စည်းပုံ၊
+  နှင့် ရှင်းလင်းရေး အဆင့်များ): `docs/examples/sorafs_ci.md`
+- ရွေးချယ်မှုတိုင်းအတွက် CLI ရည်ညွှန်းချက်- `docs/source/sorafs_cli.md`
+- တင်ပြခြင်းမပြုမီ အုပ်ချုပ်မှု/အမည်နာမ လိုအပ်ချက်များ-
   `docs/source/sorafs/provider_admission_policy.md`

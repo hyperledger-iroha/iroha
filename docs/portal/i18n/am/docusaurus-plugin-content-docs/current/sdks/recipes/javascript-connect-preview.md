@@ -7,24 +7,26 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: JavaScript Connect preview recipe
 description: Stage Connect preview sessions, emit queue telemetry, and dial the `/v1/connect/ws` socket with `@iroha/iroha-js`.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-import SampleDownload from '@site/src/components/SampleDownload';
+ናሙና አውርድን ከ'@site/src/components/SampleDownload' አስመጣ;
 
-This recipe shows how to combine `bootstrapConnectPreviewSession` with the
-WebSocket dialer exposed by `ToriiClient.openConnectWebSocket()`. The script
-mirrors the Connect section of the JS SDK roadmap: it mints deterministic
-preview URIs, records queue depth telemetry, and opens the canonical
-`/v1/connect/ws` endpoint using the `ws` package so Node.js apps can exercise the
-same flow as browsers.
+ይህ የምግብ አሰራር I18NI0000002X ከ ጋር እንዴት እንደሚዋሃድ ያሳያል
+የዌብሶኬት መደወያ በ`ToriiClient.openConnectWebSocket()` ተጋልጧል። ስክሪፕቱ
+የJS ኤስዲኬ ፍኖተ ካርታ የግንኙነት ክፍልን ያንጸባርቃል፡ ቆራጥ ነው።
+ዩአርአይዎችን አስቀድመው ይመልከቱ፣ የወረፋ ጥልቀት ቴሌሜትሪ ይመዘግባል፣ እና ቀኖናውን ይከፍታል።
+`/v1/connect/ws` የ `ws` ጥቅል በመጠቀም የ Node.js አፕሊኬሽኖች ይህንን መጠቀም ይችላሉ።
+እንደ አሳሾች ተመሳሳይ ፍሰት።
 
-<SampleDownload
+<ናሙና አውርድ
   href="/sdk-recipes/javascript/connect-preview.mjs"
   filename="connect-preview.mjs"
-  description="Download the runnable script referenced in this recipe."
+  description="በዚህ የምግብ አሰራር ውስጥ የተጠቀሰውን ሊሄድ የሚችል ስክሪፕት አውርድ።"
 />
 
-## Prerequisites
+## ቅድመ ሁኔታዎች
 
 ```bash
 npm install @iroha/iroha-js ws
@@ -37,10 +39,10 @@ export IROHA_TORII_API_TOKEN="sandbox-token"
 export CONNECT_REGISTRATION_NODE="https://torii.backup.example"
 ```
 
-Set `CONNECT_ROLE` to `app` when you need to dial the application side of the
-handshake. The default role is `wallet`.
+የመተግበሪያውን ጎን መደወል ሲፈልጉ `CONNECT_ROLE` ወደ I18NI0000007X ያቀናብሩ
+መጨባበጥ. ነባሪ ሚና `wallet` ነው።
 
-## Example script
+## ምሳሌ ስክሪፕት።
 
 ```ts title="connect-preview.mjs"
 #!/usr/bin/env node
@@ -135,21 +137,21 @@ main().catch((error) => {
 });
 ```
 
-## Run & monitor
+## አሂድ እና ተቆጣጠር
 
-- Execute the script with `node --env-file=.env connect-preview.mjs` (or export
-  the variables manually). The script logs the preview wallet URI, deeplink, and
-  queue depth before opening the WebSocket.
-- Feed telemetry dashboards by scraping the queue metrics the script prints for
-  overflow/expiry cases (`connect.queue_depth`, `connect.queue_overflow_total`,
-  `connect.queue_expired_total`). The `ConnectQueueError` helpers emit the
-  roadmap taxonomy (`queueOverflow`, `timeout`) so OTEL exporters can stay
-  consistent with Android/Swift clients.
-- Swap the role to `app` to inspect the application leg of the handshake. The
-  dialer automatically chooses the correct token (`token_app` vs. `token_wallet`)
-  and upgrades `http→ws`/`https→wss` so both roles share the same snippet.
+- ስክሪፕቱን በI18NI0000009X (ወይም ወደ ውጭ መላክ) ያስፈጽሙ
+  ተለዋዋጭዎቹ በእጅ)። ስክሪፕቱ የቅድመ እይታ የኪስ ቦርሳ ዩአርአይን፣ ጥልቅ ማገናኛን እና ይመዘግባል
+  ዌብሶኬትን ከመክፈትዎ በፊት የወረፋ ጥልቀት።
+- የስክሪፕት ህትመቶችን ወረፋ መለኪያዎችን በመቧጠጥ የቴሌሜትሪ ዳሽቦርዶችን ይመግቡ
+  የትርፍ/የሚያልቅባቸው ጉዳዮች (`connect.queue_depth`፣ `connect.queue_overflow_total`፣
+  `connect.queue_expired_total`). የ `ConnectQueueError` ረዳቶች ይለቃሉ
+  የመንገድ ካርታ ታክሶኖሚ (`queueOverflow`፣ `timeout`) የኦቲኤል ላኪዎች መቆየት ይችላሉ።
+  ከአንድሮይድ/ስዊፍት ደንበኞች ጋር የሚስማማ።
+- የእጅ መጨባበጥ የትግበራ እግርን ለመመርመር ሚናውን ወደ `app` ይቀይሩት። የ
+  መደወያ በራስ ሰር ትክክለኛውን ቶከን ይመርጣል (`token_app` vs. I18NI0000018X)
+  እና ማሻሻያዎች `http→ws`/I18NI0000020X ስለዚህ ሁለቱም ሚናዎች አንድ አይነት ቅንጣቢ ይጋራሉ።
 
-This recipe closes the remaining JS5 documentation gap for the Connect preview
-story called out in `roadmap.md`: the portal now ships a turnkey sample plus
-queue telemetry guidance, matching the roadmap requirement to document the
-WebSocket walkthrough alongside the Connect session helpers.
+ይህ የምግብ አሰራር ለግንኙነት ቅድመ እይታ የቀረውን የJS5 ሰነድ ክፍተት ይዘጋል።
+ታሪክ በ `roadmap.md` ውስጥ ተጠርቷል፡ ፖርታሉ አሁን የማዞሪያ ቁልፍ ናሙና ሲደመር ይልካል።
+ወረፋ የቴሌሜትሪ መመሪያ፣ ከሮድ ካርታው መስፈርት ጋር በማዛመድ ሰነዱን
+የዌብሶኬት መራመጃ ከConnect ክፍለ አጋሮች ጋር።

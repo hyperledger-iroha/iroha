@@ -11,80 +11,81 @@ id: preview-feedback-w1-log
 title: W1 feedback & telemetry log
 sidebar_label: W1 feedback log
 description: Aggregate roster, telemetry checkpoints, and reviewer notes for the first partner preview wave.
+translator: machine-google-reviewed
 ---
 
-This log keeps the invite roster, telemetry checkpoints, and reviewer feedback for the
-**W1 partner preview** that accompanies the acceptance tasks in
-[`preview-feedback/w1/plan.md`](./plan.md) and the wave tracker entry in
-[`../../preview-invite-tracker.md`](../../preview-invite-tracker.md). Update it whenever an invite
-is sent, telemetry snapshot recorded, or feedback item triaged so governance reviewers can replay
-the evidence without chasing external tickets.
+ይህ ምዝግብ ማስታወሻ የግብዣ ዝርዝርን፣ የቴሌሜትሪ ፍተሻ ነጥቦችን እና የግምገማ ግብረመልስን ለ
+** W1 የአጋር ቅድመ-እይታ** ከመቀበል ተግባራት ጋር አብሮ የሚሄድ
+[`preview-feedback/w1/plan.md`](./plan.md) እና የሞገድ መከታተያ መግቢያ
+[`../../preview-invite-tracker.md`](../../preview-invite-tracker.md)። በማንኛውም ግብዣ ጊዜ ያዘምኑት።
+ተልኳል፣ የቴሌሜትሪ ቅጽበታዊ ገጽ እይታ ተቀርጿል፣ ወይም የአስተዳዳሪ ገምጋሚዎች እንደገና መጫወት እንዲችሉ የግብረመልስ ንጥል ተስተካክሏል።
+የውጭ ትኬቶችን ሳያሳድዱ ማስረጃው.
 
-## Cohort roster
+## የቡድን ስም ዝርዝር
 
-| Partner ID | Request ticket | NDA received | Invite sent (UTC) | Ack/first login (UTC) | Status | Notes |
+| የአጋር መታወቂያ | ትኬት ጠይቅ | NDA ተቀብለዋል | ግብዣ ተልኳል (UTC) | Ack/የመጀመሪያ መግቢያ (UTC) | ሁኔታ | ማስታወሻ |
 | --- | --- | --- | --- | --- | --- | --- |
-| partner-w1-01 | `DOCS-SORA-Preview-REQ-P01` | ✅ 2025-04-03 | 2025-04-12 15:00 | 2025-04-12 15:11 | ✅ Completed 2025-04-26 | sorafs-op-01; focused on orchestrator doc parity evidence. |
-| partner-w1-02 | `DOCS-SORA-Preview-REQ-P02` | ✅ 2025-04-03 | 2025-04-12 15:03 | 2025-04-12 15:15 | ✅ Completed 2025-04-26 | sorafs-op-02; validated Norito/telemetry cross-links. |
-| partner-w1-03 | `DOCS-SORA-Preview-REQ-P03` | ✅ 2025-04-04 | 2025-04-12 15:06 | 2025-04-12 15:18 | ✅ Completed 2025-04-26 | sorafs-op-03; ran multi-source failover drills. |
-| partner-w1-04 | `DOCS-SORA-Preview-REQ-P04` | ✅ 2025-04-04 | 2025-04-12 15:09 | 2025-04-12 15:21 | ✅ Completed 2025-04-26 | torii-int-01; Torii `/v1/pipeline` + Try it cookbook review. |
-| partner-w1-05 | `DOCS-SORA-Preview-REQ-P05` | ✅ 2025-04-05 | 2025-04-12 15:12 | 2025-04-12 15:23 | ✅ Completed 2025-04-26 | torii-int-02; paired on Try it screenshot update (docs-preview/w1 #2). |
-| partner-w1-06 | `DOCS-SORA-Preview-REQ-P06` | ✅ 2025-04-05 | 2025-04-12 15:15 | 2025-04-12 15:26 | ✅ Completed 2025-04-26 | sdk-partner-01; JS/Swift cookbook feedback + ISO bridge sanity checks. |
-| partner-w1-07 | `DOCS-SORA-Preview-REQ-P07` | ✅ 2025-04-11 | 2025-04-12 15:18 | 2025-04-12 15:29 | ✅ Completed 2025-04-26 | sdk-partner-02; compliance cleared 2025-04-11, focused on Connect/telemetry notes. |
-| partner-w1-08 | `DOCS-SORA-Preview-REQ-P08` | ✅ 2025-04-11 | 2025-04-12 15:21 | 2025-04-12 15:33 | ✅ Completed 2025-04-26 | gateway-ops-01; audited gateway ops guide + anonymised Try it proxy flow. |
+| አጋር-w1-01 | `DOCS-SORA-Preview-REQ-P01` | ✅ 2025-04-03 | 2025-04-12 15:00 | 2025-04-12 15:11 | ✅ ተጠናቀቀ 2025-04-26 | sorafs-op-01; በኦርኬስትራ ዶክተሪ ማስረጃ ላይ ያተኮረ። |
+| አጋር-w1-02 | `DOCS-SORA-Preview-REQ-P02` | ✅ 2025-04-03 | 2025-04-12 15:03 | 2025-04-12 15:15 | ✅ ተጠናቀቀ 2025-04-26 | sorafs-op-02; የተረጋገጠ Norito/ቴሌሜትሪ መስቀለኛ መንገድ። |
+| አጋር-w1-03 | `DOCS-SORA-Preview-REQ-P03` | ✅ 2025-04-04 | 2025-04-12 15:06 | 2025-04-12 15:18 | ✅ ተጠናቀቀ 2025-04-26 | sorafs-op-03; ባለብዙ ምንጭ ውድቀት ልምምዶችን አካሄደ። |
+| አጋር-w1-04 | `DOCS-SORA-Preview-REQ-P04` | ✅ 2025-04-04 | 2025-04-12 15:09 | 2025-04-12 15:21 | ✅ ተጠናቀቀ 2025-04-26 | torii-int-01; Torii `/v1/pipeline` + ይሞክሩት የምግብ አዘገጃጀት መመሪያ። |
+| አጋር-w1-05 | `DOCS-SORA-Preview-REQ-P05` | ✅ 2025-04-05 | 2025-04-12 15:12 | 2025-04-12 15:23 | ✅ ተጠናቀቀ 2025-04-26 | torii-int-02; በ ላይ ተጣምሯል ቅጽበታዊ ገጽ እይታን ይሞክሩት (ሰነዶች-ቅድመ እይታ/w1 #2)። |
+| አጋር-w1-06 | `DOCS-SORA-Preview-REQ-P06` | ✅ 2025-04-05 | 2025-04-12 15:15 | 2025-04-12 15:26 | ✅ ተጠናቀቀ 2025-04-26 | sdk-አጋር-01; JS/Swift የምግብ አዘገጃጀት መመሪያ + የ ISO ድልድይ የንጽህና ፍተሻዎች። |
+| አጋር-w1-07 | `DOCS-SORA-Preview-REQ-P07` | ✅ 2025-04-11 | 2025-04-12 15:18 | 2025-04-12 15:29 | ✅ ተጠናቀቀ 2025-04-26 | sdk-አጋር-02; ተገዢነት ጸድቷል 2025-04-11፣ በ Connect/ቴሌሜትሪ ማስታወሻዎች ላይ ያተኮረ። |
+| አጋር-w1-08 | `DOCS-SORA-Preview-REQ-P08` | ✅ 2025-04-11 | 2025-04-12 15:21 | 2025-04-12 15:33 | ✅ ተጠናቀቀ 2025-04-26 | ጌትዌይ-ኦፕስ-01; ኦዲት የተደረገ ጌትዌይ ኦፕስ መመሪያ + ማንነቱ ያልታወቀ የፕሮክሲ ፍሰት ይሞክሩት። |
 
-Populate the **Invite sent** and **Ack** timestamps as soon as the outbound email is issued.
-Anchor the times to the UTC schedule defined in the W1 plan.
+የወጪ ኢሜል እንደወጣ **ግብዣ የተላከውን *** እና **አክ** ጊዜ ማህተሞችን ይሙሉ።
+ሰዓቶቹን በW1 እቅድ ውስጥ በተገለጸው የUTC መርሐግብር ላይ ያስይዙ።
 
-## Telemetry checkpoints
+## የቴሌሜትሪ ፍተሻዎች
 
-| Timestamp (UTC) | Dashboards / probes | Owner | Result | Artefact |
+| የጊዜ ማህተም (UTC) | ዳሽቦርዶች / መመርመሪያዎች | ባለቤት | ውጤት | Artefact |
 | --- | --- | --- | --- | --- |
-| 2025-04-06 18:05 | `docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals` | Docs/DevRel + Ops | ✅ All green | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250406` |
-| 2025-04-06 18:20 | `npm run manage:tryit-proxy -- --stage preview-w1` transcript | Ops | ✅ Staged | `artifacts/docs_preview/W1/preview-2025-04-12/tryit/OPS-TRYIT-147.log` |
-| 2025-04-12 14:45 | `docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals`, `probe:portal` | Docs/DevRel + Ops | ✅ Pre-invite snapshot, no regressions | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250412` |
-| 2025-04-19 17:55 | Dashboards above + Try it proxy latency diff | Docs/DevRel lead | ✅ Midpoint check passed (0 alerts; Try it latency p95=410 ms) | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250419` |
-| 2025-04-26 16:25 | Dashboards above + exit probe | Docs/DevRel + Governance liaison | ✅ Exit snapshot, zero outstanding alerts | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250426` |
+| 2025-04-06 18:05 | `docs.preview.integrity`፣ `TryItProxyErrors`፣ `DocsPortal/GatewayRefusals` | ሰነዶች/DevRel + Ops | ✅ ሁሉም አረንጓዴ | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250406` |
+| 2025-04-06 18:20 | `npm run manage:tryit-proxy -- --stage preview-w1` ግልባጭ | ኦፕስ | ✅ መድረክ | `artifacts/docs_preview/W1/preview-2025-04-12/tryit/OPS-TRYIT-147.log` |
+| 2025-04-12 14:45 | `docs.preview.integrity`፣ `TryItProxyErrors`፣ `DocsPortal/GatewayRefusals`፣ `probe:portal` | ሰነዶች/DevRel + Ops | ✅ ቅጽበታዊ ገጽ እይታን ቀድመው ይጋብዙ፣ ምንም ለውጥ የለም | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250412` |
+| 2025-04-19 17:55 | ከላይ ያሉት ዳሽቦርዶች + ይሞክሩት የተኪ መዘግየት ልዩነት | ሰነዶች/DevRel አመራር | ✅ የመሃል ነጥብ ቼክ አልፏል (0 ማንቂያዎች፤ ይሞክሩት መዘግየት p95=410ms) | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250419` |
+| 2025-04-26 16:25 | ዳሽቦርዶች ከላይ + መውጫ መፈተሻ | ሰነዶች/DevRel + የአስተዳደር ግንኙነት | ✅ ከቅጽበተ-ፎቶ ውጣ፣ ዜሮ አስደናቂ ማንቂያዎች | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250426` |
 
-Daily office-hour samples (2025-04-13 → 2025-04-25) are bundled as NDJSON + PNG exports under
-`artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/` with filenames
-`docs-preview-integrity-<date>.json` and corresponding screenshots.
+ዕለታዊ የቢሮ-ሰዓት ናሙናዎች (2025-04-13 → 2025-04-25) እንደ NDJSON + PNG ወደ ውጭ እንደሚላኩ ተጠቃለዋል።
+`artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/` ከፋይል ስሞች ጋር
+`docs-preview-integrity-<date>.json` እና ተዛማጅ ቅጽበታዊ ገጽ እይታዎች።
 
-## Feedback & issue log
+## ግብረ መልስ እና ጉዳይ ምዝግብ ማስታወሻ
 
-Use this table to summarise reviewer-submitted findings. Link each entry to the GitHub/discuss
-ticket plus the structured form captured via
-[`docs/examples/docs_preview_feedback_form.md`](../../../../../examples/docs_preview_feedback_form.md).
+በግምገማ የቀረቡ ግኝቶችን ለማጠቃለል ይህን ሰንጠረዥ ይጠቀሙ። እያንዳንዱን ግቤት ከ GitHub/ውይይት ጋር ያገናኙ
+ቲኬት እና የተዋቀረ ቅጽ በ በኩል ተያዘ
+[`docs/examples/docs_preview_feedback_form.md`](../../../../../examples/docs_preview_feedback_form.md)።
 
-| Reference | Severity | Owner | Status | Notes |
+| ዋቢ | ከባድነት | ባለቤት | ሁኔታ | ማስታወሻ |
 | --- | --- | --- | --- | --- |
-| `docs-preview/w1 #1` | Low | Docs-core-02 | ✅ Resolved 2025-04-18 | Clarified Try it nav wording + sidebar anchor (`docs/source/sorafs/tryit.md` updated with new label). |
-| `docs-preview/w1 #2` | Low | Docs-core-03 | ✅ Resolved 2025-04-19 | Refreshed Try it screenshot + caption per reviewer request; artefact `artifacts/docs_preview/W1/preview-2025-04-12/feedback/partner-w1-05/screenshot-diff.png`. |
-| — | Info | Docs/DevRel lead | 🟢 Closed | Remaining comments were Q&A-only; captured in each partner’s feedback form under `artifacts/docs_preview/W1/preview-2025-04-12/feedback/`. |
+| `docs-preview/w1 #1` | ዝቅተኛ | ሰነዶች-ኮር-02 | ✅ የተፈታ 2025-04-18 | ተብራርቷል የቃላት አወጣጥ + የጎን አሞሌ መልህቅን ይሞክሩ (`docs/source/sorafs/tryit.md` በአዲስ መለያ የዘመነ)። |
+| `docs-preview/w1 #2` | ዝቅተኛ | ሰነዶች-ኮር-03 | ✅ የተፈታ 2025-04-19 | ታድሷል ቅጽበታዊ ገጽ እይታን ይሞክሩት + መግለጫ ፅሁፍ በአንድ ገምጋሚ ​​ጥያቄ; artefact `artifacts/docs_preview/W1/preview-2025-04-12/feedback/partner-w1-05/screenshot-diff.png`. |
+| - | መረጃ | ሰነዶች/DevRel አመራር | 🟢 ተዘግቷል | ቀሪ አስተያየቶች ጥያቄ እና መልስ ብቻ ነበሩ; በእያንዳንዱ አጋር የግብረመልስ ቅጽ በ `artifacts/docs_preview/W1/preview-2025-04-12/feedback/` ስር ተይዟል። |
 
-## Knowledge check & survey tracking
+## የእውቀት ፍተሻ እና የዳሰሳ ጥናት ክትትል
 
-1. Record quiz scores (target ≥90 %) for every reviewer; attach the exported CSV alongside the
-   invite artefacts.
-2. Collect the qualitative survey answers captured with the feedback form template and mirror them
-   under `artifacts/docs_preview/W1/preview-2025-04-12/surveys/`.
-3. Schedule remediation calls for anyone scoring below threshold and log them in this file.
+1. ለእያንዳንዱ ገምጋሚ የፈተና ጥያቄዎችን ይመዝግቡ (ዒላማ ≥90%); ወደ ውጭ የተላከውን ሲኤስቪ ከ ጋር ያያይዙ
+   ቅርሶችን ይጋብዙ።
+2. በግብረመልስ ቅጽ አብነት የተያዙትን የጥራት ዳሰሳ መልሶች ይሰብስቡ እና ያንጸባርቁዋቸው
+   በ `artifacts/docs_preview/W1/preview-2025-04-12/surveys/`.
+3. ከመነሻው በታች ነጥብ ለሚያመጣ ማንኛውም ሰው መርሐግብር ያስይዙ እና በዚህ ፋይል ውስጥ ያስገቡት።
 
-All eight reviewers scored ≥94 % on the knowledge check (CSV:
-`artifacts/docs_preview/W1/preview-2025-04-12/feedback/w1-quiz-scores.csv`). No remediation calls
-were required; survey exports for each partner live under
+በእውቀት ቼክ ላይ ሁሉም ስምንቱ ገምጋሚዎች ≥94% አስመዝግበዋል (CSV፡
+`artifacts/docs_preview/W1/preview-2025-04-12/feedback/w1-quiz-scores.csv`)። ምንም የማስተካከያ ጥሪዎች የሉም
+ተፈላጊ ነበሩ; የዳሰሳ ጥናት ለእያንዳንዱ አጋር በቀጥታ ወደ ውጭ መላክ
 `artifacts/docs_preview/W1/preview-2025-04-12/surveys/<partner-id>/summary.json`.
 
-## Artefact inventory
+## የአርቴፍክት ክምችት
 
-- Preview descriptor/checksum bundle: `artifacts/docs_preview/W1/preview-2025-04-12/descriptor.json`
-- Probe + link-check summary: `artifacts/docs_preview/W1/preview-2025-04-12/preflight-summary.json`
-- Try it proxy change log: `artifacts/docs_preview/W1/preview-2025-04-12/tryit/OPS-TRYIT-147.log`
-- Telemetry exports: `artifacts/docs_preview/W1/preview-2025-04-12/grafana/<date>/`
-- Daily office-hour telemetry bundle: `artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/`
-- Feedback + survey exports: place reviewer-specific folders under
+- ገላጭ/የቼክ ጥቅል ቅድመ እይታ፡ `artifacts/docs_preview/W1/preview-2025-04-12/descriptor.json`
+- መመርመሪያ + አገናኝ-ቼክ ማጠቃለያ: `artifacts/docs_preview/W1/preview-2025-04-12/preflight-summary.json`
+- የተኪ ለውጥ መዝገብ ይሞክሩት፡ `artifacts/docs_preview/W1/preview-2025-04-12/tryit/OPS-TRYIT-147.log`
+- ቴሌሜትሪ ወደ ውጭ መላክ: `artifacts/docs_preview/W1/preview-2025-04-12/grafana/<date>/`
+- ዕለታዊ የቢሮ-ሰዓት ቴሌሜትሪ ጥቅል: `artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/`
+- ግብረ መልስ + የዳሰሳ ጥናት ወደ ውጭ መላክ፡ ገምጋሚ-ተኮር አቃፊዎችን ከስር አስቀምጣቸው
   `artifacts/docs_preview/W1/preview-2025-04-12/feedback/<partner-id>/`
-- Knowledge check CSV and summary: `artifacts/docs_preview/W1/preview-2025-04-12/feedback/w1-quiz-scores.csv`
+- የእውቀት ማረጋገጫ CSV እና ማጠቃለያ: `artifacts/docs_preview/W1/preview-2025-04-12/feedback/w1-quiz-scores.csv`
 
-Keep the inventory in sync with the tracker issue. Attach hashes when copying artefacts to the
-governance ticket so auditors can verify the files without shell access.
+ዕቃውን ከመከታተያ ችግር ጋር በማመሳሰል ያቆዩት። ቅርሶችን ወደ የ
+አስተዳደር ትኬት ስለዚህ ኦዲተሮች ሼል መዳረሻ ያለ ፋይሎቹን ማረጋገጥ ይችላሉ.

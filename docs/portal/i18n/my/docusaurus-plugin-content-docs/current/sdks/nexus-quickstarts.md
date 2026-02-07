@@ -7,13 +7,15 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Nexus SDK quickstarts
 description: Minimal steps for Rust/JS/Swift/Android/CLI SDKs to connect to Sora Nexus.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-The full quickstart lives at `docs/source/nexus_sdk_quickstarts.md`. This portal
-summary highlights the shared prerequisites and per-SDK commands so developers
-can verify their setup quickly.
+အမြန်စတင်မှု အပြည့်အစုံသည် `docs/source/nexus_sdk_quickstarts.md` တွင် တည်ရှိသည်။ အဲဒါပေါ်တယ်။
+အနှစ်ချုပ်သည် ဆော့ဖ်ဝဲရေးသားသူများအား မျှဝေထားသော ကြိုတင်လိုအပ်ချက်များနှင့် တစ်-SDK အမိန့်များကို မီးမောင်းထိုးပြထားသည်။
+၎င်းတို့၏ setup ကို လျှင်မြန်စွာ အတည်ပြုနိုင်သည်။
 
-## Shared setup
+## မျှဝေထားသော စနစ်ထည့်သွင်းမှု
 
 ```bash
 export NEXUS_TORII_URL="https://torii.nexus.sora.org"
@@ -22,11 +24,11 @@ export NEXUS_CHAIN_ID="iroha3"
 export NEXUS_TRUSTED_PUBKEY="<peer-public-key>"
 ```
 
-Download the Nexus config bundle, install each SDK’s dependencies, and ensure
-TLS certificates match the release profile (see
-`docs/source/sora_nexus_operator_onboarding.md`).
+Nexus config အတွဲကို ဒေါင်းလုဒ်လုပ်ပါ၊ SDK တစ်ခုစီ၏ မှီခိုမှုကို ထည့်သွင်းပြီး သေချာပါစေ။
+TLS လက်မှတ်များသည် ထုတ်ဝေမှုပရိုဖိုင်နှင့် ကိုက်ညီသည် (ကြည့်ရှုပါ။
+`docs/source/sora_nexus_operator_onboarding.md`)။
 
-## Rust
+## သံချေး
 
 ```bash
 cargo run --bin nexus_quickstart \
@@ -37,22 +39,22 @@ cargo run --bin nexus_quickstart \
 
 Refs: `docs/source/sdk/rust.md`
 
-## JavaScript / TypeScript
+## JavaScript/TypeScript
 
 ```bash
 npm run demo:nexus
 ```
 
-The script instantiates `ToriiClient` with the env vars above and prints the
-latest block.
+script သည် `ToriiClient` ကို အပေါ်က env vars ဖြင့် instantiates လုပ်ပြီး print ထုတ်သည် ။
+နောက်ဆုံးပိတ်။
 
-## Swift
+## လျင်မြန်ခြင်း။
 
 ```bash
 make swift-nexus-demo
 ```
 
-Uses `Torii.Client` from `IrohaSwift` to fetch `FindNetworkStatus`.
+`FindNetworkStatus` ကို ရယူရန် `IrohaSwift` မှ `Torii.Client` ကို အသုံးပြုသည်။
 
 ## Android
 
@@ -62,7 +64,7 @@ Uses `Torii.Client` from `IrohaSwift` to fetch `FindNetworkStatus`.
   -PNEXUS_PIPELINE_URL="${NEXUS_PIPELINE_URL}"
 ```
 
-Runs the managed-device test hitting the Nexus staging endpoint.
+Nexus အဆင့်သတ်မှတ်မှု အဆုံးမှတ်ကို နှိပ်၍ စီမံခန့်ခွဲထားသော စက်ပစ္စည်းစမ်းသပ်မှုကို လုပ်ဆောင်သည်။
 
 ## CLI
 
@@ -73,13 +75,13 @@ iroha_cli app nexus quickstart \
   --chain-id "${NEXUS_CHAIN_ID}"
 ```
 
-## Troubleshooting
+## ပြဿနာဖြေရှင်းခြင်း။
 
-- TLS failures → confirm the CA bundle from the Nexus release tarball.
-- `ERR_UNKNOWN_LANE` → pass `--lane-id`/`--dataspace-id` once multi-lane routing
-  is enforced.
-- `ERR_SETTLEMENT_PAUSED` → check [Nexus operations](../nexus/nexus-operations) for the
-  incident process; governance may have paused the lane.
+- TLS ကျရှုံးမှုများ → Nexus ထွက်ရှိသည့် tarball မှ CA အစုအဝေးကို အတည်ပြုပါ။
+- `ERR_UNKNOWN_LANE` → pass `--lane-id`/`--dataspace-id` တစ်ကြိမ် လမ်းသွားလမ်းကြောင်းပေါင်းစုံ
+  ပြဌာန်းထားသည်။
+- `ERR_SETTLEMENT_PAUSED` → [Nexus operations](../nexus/nexus-operations) အတွက် စစ်ဆေးပါ
+  အဖြစ်အပျက်ဖြစ်စဉ်; အုပ်ချုပ်ရေးက လမ်းကြောကို ခေတ္တရပ်ထားနိုင်တယ်။
 
-For deeper context and SDK-specific explanations see
-`docs/source/nexus_sdk_quickstarts.md`.
+ပိုမိုနက်နဲသော အကြောင်းအရာနှင့် SDK ဆိုင်ရာ ရှင်းလင်းချက်များအတွက် ကြည့်ပါ။
+`docs/source/nexus_sdk_quickstarts.md`။

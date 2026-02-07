@@ -6,95 +6,93 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: e7116d28e32d8bd77434edd6767427cc3d2ae0624f4de132b1d0cec3c7d44b86
 source_last_modified: "2026-01-03T18:07:57.069144+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% SM2/SM3/SM4 Product Filing (开发备案) Template
-% Hyperledger Iroha Compliance Working Group
+Modelo de arquivamento de produto % SM2/SM3/SM4 (开发备案)
+% Hyperledger Iroha Grupo de Trabalho de Conformidade
 % 2026-05-06
 
-# Instructions
+# Instruções
 
-Use this template when submitting a *product development filing* to a provincial
-or municipal State Cryptography Administration (SCA) office before distributing
-SM-enabled binaries or source artefacts from within mainland China. Replace the
-placeholders with project-specific details, export the completed form as PDF if
-required, and attach the artefacts referenced in the checklist.
+Use este modelo ao enviar um *arquivo de desenvolvimento de produto* para um departamento provincial
+ou escritório municipal da Administração de Criptografia do Estado (SCA) antes de distribuir
+Binários habilitados para SM ou artefatos de origem da China continental. Substitua o
+espaços reservados com detalhes específicos do projeto, exporte o formulário preenchido como PDF se
+necessário e anexe os artefatos mencionados na lista de verificação.
 
-# 1. Applicant & Product Summary
+Nº 1. Resumo do candidato e do produto
 
-| Field | Value |
+| Campo | Valor |
 |-------|-------|
-| Organisation name | {{ ORGANISATION }} |
-| Registered address | {{ ADDRESS }} |
-| Legal representative | {{ LEGAL_REP }} |
-| Primary contact (name / title / email / phone) | {{ CONTACT }} |
-| Product name | Hyperledger Iroha {{ RELEASE_NAME }} |
-| Product version / build ID | {{ VERSION }} |
-| Filing type | Product development (开发备案) |
-| Filing date | {{ YYYY-MM-DD }} |
+| Nome da organização | {{ ORGANIZAÇÃO }} |
+| Endereço registrado | {{ ENDEREÇO ​​}} |
+| Representante legal | {{ LEGAL_REP }} |
+| Contato principal (nome/cargo/e-mail/telefone) | {{ CONTATO }} |
+| Nome do produto | Hyperledger Iroha {{ RELEASE_NAME }} |
+| Versão do produto/ID de compilação | {{VERSÃO}} |
+| Tipo de arquivamento | Desenvolvimento de produto (开发备案) |
+| Data de depósito | {{AAAA-MM-DD }} |
 
-# 2. Cryptography Usage Overview
+# 2. Visão geral do uso de criptografia
 
-- Supported algorithms: `SM2`, `SM3`, `SM4` (provide usage matrix below).
-- Usage context:
-  | Algorithm | Component | Purpose | Deterministic safeguards |
+- Algoritmos suportados: `SM2`, `SM3`, `SM4` (forneça a matriz de uso abaixo).
+- Contexto de uso:
+  | Algoritmo | Componente | Finalidade | Salvaguardas determinísticas |
   |-----------|-----------|---------|--------------------------|
-  | SM2 | {{ COMPONENT }} | {{ PURPOSE }} | RFC6979 + canonical r∥s enforcement |
-  | SM3 | {{ COMPONENT }} | {{ PURPOSE }} | Deterministic hashing via `Sm3Digest` |
-  | SM4 | {{ COMPONENT }} | {{ PURPOSE }} | AEAD (GCM/CCM) with enforced nonce policy |
-- Non-SM algorithms in build: {{ OTHER_ALGORITHMS }} (for completeness).
+  | SM2 | {{ COMPONENTE }} | {{ OBJETIVO }} | RFC6979 + aplicação canônica de r∥s |
+  | SM3 | {{ COMPONENTE }} | {{ OBJETIVO }} | Hash determinístico via `Sm3Digest` |
+  | SM4 | {{ COMPONENTE }} | {{ OBJETIVO }} | AEAD (GCM/CCM) com política de nonce aplicada |
+- Algoritmos não SM na construção: {{ OTHER_ALGORITHMS }} (para integridade).
 
-# 3. Development & Supply Chain Controls
+# 3. Controles de desenvolvimento e cadeia de suprimentos
 
-- Source code repository: {{ REPOSITORY_URL }}
-- Deterministic build instructions:
-  1. `git clone {{ REPOSITORY_URL }} && git checkout {{ COMMIT_SHA }}`
-  2. `cargo build --workspace --locked --release --features "sm sm-ffi-openssl"` (adjust as needed).
-  3. SBOM generated via `cargo auditable` / CycloneDX (`{{ SBOM_PATH }}`).
-- Continuous integration environment summary:
-  | Item | Value |
+- Repositório de código-fonte: {{ REPOSITORY_URL }}
+- Instruções de construção determinísticas:
+  1.`git clone {{ REPOSITORY_URL }} && git checkout {{ COMMIT_SHA }}`
+  2. `cargo build --workspace --locked --release --features "sm sm-ffi-openssl"` (ajuste conforme necessário).
+  3. SBOM gerado via `cargo auditable` / CycloneDX (`{{ SBOM_PATH }}`).
+- Resumo do ambiente de integração contínua:
+  | Artigo | Valor |
   |------|-------|
-  | Build OS / version | {{ BUILD_OS }} |
-  | Compiler toolchain | {{ TOOLCHAIN }} |
-  | OpenSSL / Tongsuo source | {{ OPENSSL_SOURCE }} |
-  | Reproducibility checksum | {{ CHECKSUM }} |
+  | Construir SO/versão | {{BUILD_OS}} |
+  | Conjunto de ferramentas do compilador | {{ CADEIA DE FERRAMENTAS }} |
+  | Fonte OpenSSL / Tongsuo | {{ OPENSSL_SOURCE }} |
+  | Soma de verificação de reprodutibilidade | {{ CHECKSUM }} |
 
-# 4. Key Management & Security
+# 4. Gerenciamento e segurança de chaves
 
-- Default enabled SM features: {{ DEFAULTS }} (e.g., verify-only).
-- Configuration flags required for signing: {{ CONFIG_FLAGS }}.
-- Key custody approach:
-  | Item | Details |
+- Recursos SM habilitados por padrão: {{ DEFAULTS }} (por exemplo, somente verificação).
+- Sinalizadores de configuração necessários para assinatura: {{ CONFIG_FLAGS }}.
+- Abordagem de custódia de chaves:
+  | Artigo | Detalhes |
   |------|---------|
-  | Key generation tool | {{ KEY_TOOL }} |
-  | Storage medium | {{ STORAGE_MEDIUM }} |
-  | Backup policy | {{ BACKUP_POLICY }} |
-  | Access controls | {{ ACCESS_CONTROLS }} |
-- Incident response contacts (24/7):
-  | Role | Name | Phone | Email |
+  | Ferramenta de geração de chaves | {{KEY_TOOL}} |
+  | Meio de armazenamento | {{STORAGE_MEDIUM}} |
+  | Política de backup | {{ BACKUP_POLICY }} |
+  | Controles de acesso | {{ ACCESS_CONTROLS }} |
+- Contatos de resposta a incidentes (24 horas por dia, 7 dias por semana):
+  | Função | Nome | Telefone | E-mail |
   |------|------|-------|-------|
-  | Crypto lead | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} |
-  | Platform ops | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} |
-  | Legal liaison | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} |
+  | Liderança criptográfica | {{ NOME }} | {{ TELEFONE }} | {{ E-MAIL }} |
+  | Operações de plataforma | {{ NOME }} | {{ TELEFONE }} | {{ E-MAIL }} |
+  | Contato jurídico | {{ NOME }} | {{ TELEFONE }} | {{ E-MAIL }} |
 
-# 5. Attachments Checklist
+# 5. Lista de verificação de anexos- [] Instantâneo do código-fonte (`{{ SOURCE_ARCHIVE }}`) e hash.
+- [] Script de construção determinístico/notas de reprodutibilidade.
+- [ ] SBOM (`{{ SBOM_PATH }}`) e manifesto de dependência (impressão digital `Cargo.lock`).
+- [ ] Transcrições de testes determinísticos (`scripts/sm_openssl_smoke.sh`, `cargo test -p iroha_crypto sm`).
+- [] Exportação do painel de telemetria demonstrando a observabilidade do SM.
+- [ ] Instrução de controle de exportação (consulte o modelo separado).
+- [ ] Relatórios de auditoria ou avaliações de terceiros (se já concluídos).
 
-- [ ] Source code snapshot (`{{ SOURCE_ARCHIVE }}`) and hash.
-- [ ] Deterministic build script / reproducibility notes.
-- [ ] SBOM (`{{ SBOM_PATH }}`) and dependency manifest (`Cargo.lock` fingerprint).
-- [ ] Deterministic test transcripts (`scripts/sm_openssl_smoke.sh`, `cargo test -p iroha_crypto sm`).
-- [ ] Telemetry dashboard export demonstrating SM observability.
-- [ ] Export-control statement (see separate template).
-- [ ] Audit reports or third-party assessments (if already completed).
+# 6. Declaração do Requerente
 
-# 6. Applicant Declaration
+> Confirmo que as informações acima são precisas, que as informações divulgadas
+> a funcionalidade criptográfica está em conformidade com as leis e regulamentos aplicáveis da RPC,
+> e que a organização manterá os artefactos submetidos durante pelo menos
+> três anos.
 
-> I confirm that the above information is accurate, that the disclosed
-> cryptographic functionality complies with applicable PRC laws and regulations,
-> and that the organisation will maintain the submitted artefacts for at least
-> three years.
-
-- Signature (legal representative): ________________________
-- Date: ________________________
-
+- Assinatura (representante legal): ________________________
+- Data: ________________________

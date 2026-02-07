@@ -4,10 +4,12 @@ direction: rtl
 source: docs/portal/docs/sorafs/deal-engine.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: deal-engine
+מזהה: מנוע עסקה
 title: محرك الصفقات في SoraFS
 sidebar_label: محرك الصفقات
 description: نظرة عامة على محرك الصفقات SF-8 وتكامل Torii وسطح التليمترية.
@@ -31,10 +33,10 @@ description: نظرة عامة على محرك الصفقات SF-8 وتكامل 
 - يتحقق من الصفقات ويسجلها باستخدام `DealTermsV1`؛
 - يراكم رسومًا مقومة بـ XOR عند الإبلاغ عن استخدام النسخ المتماثل؛
 - يقيّم نوافذ المدفوعات المصغرة الاحتمالية باستخدام أخذ عينات حتمية
-  قائمة على BLAKE3؛ و
+  قائمة على BLAKE3؛ ו
 - ينتج لقطات ledger وحمولات تسوية مناسبة للنشر الحوكمـي.
 
-تغطي الاختبارات الوحدوية التحقق، واختيار المدفوعات المصغرة، وتدفقات التسوية ليتمكن
+מידע נוסף
 المشغّلون من ممارسة واجهات API بثقة. تبعث التسويات الآن حمولات حوكمة `DealSettlementV1`،
 وترتبط مباشرةً بخط نشر SF-12، كما تُحدّث سلسلة OpenTelemetry `sorafs.node.deal_*`
 (`deal_settlements_total`, `deal_expected_charge_nano`, `deal_client_debit_nano`,
@@ -49,9 +51,9 @@ description: نظرة عامة على محرك الصفقات SF-8 وتكامل 
 (`micropayment_tickets_processed_total`, `micropayment_tickets_won_total`,
 `micropayment_tickets_duplicate_total`). تكشف هذه الإجماليات عن تدفق اليانصيب
 الاحتمالي لتمكين المشغّلين من ربط مكاسب المدفوعات المصغرة وترحيل الرصيد
-بنتائج التسوية.
+‏
 
-## تكامل Torii
+## קוד Torii
 
 تعرض Torii نقاط نهاية مخصصة كي يتمكن المزوّدون من الإبلاغ عن الاستخدام وتحريك
 دورة حياة الصفقة بدون wiring مخصص:

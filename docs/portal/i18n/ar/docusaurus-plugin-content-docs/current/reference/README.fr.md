@@ -4,18 +4,20 @@ direction: rtl
 source: docs/portal/docs/reference/README.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: Index de reference
-slug: /reference
+العنوان: الفهرس المرجعي
+سبيكة: / مرجع
 ---
 
-Cette section regroupe le materiel  a lire comme une specification  pour Iroha. Ces pages restent stables meme lorsque les guides et tutoriels evoluent.
+يقوم هذا القسم بإعادة تجميع المواد إلى مواصفات خاصة بـ Iroha. هذه الصفحات موجودة في الاسطبلات عندما تتطور الأدلة والبرامج التعليمية.
 
-## Disponible aujourd'hui
+## متاح في aujourd'hui
 
-- **Apercu du codec Norito** - `reference/norito-codec.md` renvoie directement a la specification autoritative `norito.md` pendant que la table du portail est en cours de remplissage.
-- **Torii OpenAPI** - `/reference/torii-openapi` rend la derniere specification REST de Torii avec Redoc. Regenerez la spec via `npm run sync-openapi -- --version=current --latest` (ajoutez `--mirror=<label>` pour copier le snapshot dans des versions historiques supplementaires).
-- **Tables de configuration** - Le catalogue complet des parametres se trouve dans `docs/source/references/configuration.md`. Tant que le portail ne propose pas d'auto-import, referez-vous a ce fichier Markdown pour les valeurs par defaut exactes et les surcharges d'environnement.
-- **Versionnement des docs** - Le menu de version dans la barre de navigation expose des snapshots figes crees avec `npm run docs:version -- <label>`, ce qui facilite la comparaison des recommandations entre releases.
+- **التعرف على برنامج الترميز Norito** - `reference/norito-codec.md` راجع التوجيه المباشر للمواصفات الرسمية `norito.md` حتى يتم إعادة جدولة الشاشة.
+- **Torii OpenAPI** - `/reference/torii-openapi` rend la derniereمواصفات REST de Torii مع Redoc. قم بإعادة إنشاء المواصفات عبر `npm run sync-openapi -- --version=current --latest` (أضف `--mirror=<label>` لنسخ اللقطة في الإصدارات التاريخية الإضافية).
+- **جداول التكوين** - تم العثور على الكتالوج الكامل للمعلمات في `docs/source/references/configuration.md`. إذا لم يقترح الباب الاستيراد التلقائي، فارجع إلى ملف Markdown هذا للقيم الافتراضية الدقيقة والرسوم الإضافية للبيئة.
+- **إصدار المستندات** - تعرض قائمة الإصدار الموجودة في شريط التنقل لقطات تظهر مع `npm run docs:version -- <label>`، مما يسهل مقارنة التوصيات بين الإصدارات.

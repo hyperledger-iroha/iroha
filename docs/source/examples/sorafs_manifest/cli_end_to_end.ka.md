@@ -8,25 +8,26 @@ source_hash: a8209e602132efb6c29962bf09aea8cd74f972fa956ea8a7a1dbac08a7f6f00f
 source_last_modified: "2026-01-05T09:28:12.006380+00:00"
 translation_last_reviewed: 2026-02-07
 title: "SoraFS Manifest CLI End-to-End Example"
+translator: machine-google-reviewed
 ---
 
-# SoraFS Manifest CLI End-to-End Example
+# SoraFS მანიფესტის CLI ბოლოდან ბოლომდე მაგალითი
 
-This example walks through publishing a documentation build to SoraFS using the
-`sorafs_manifest_stub` CLI together with the deterministic chunking fixtures
-described in the SoraFS Architecture RFC. The flow covers manifest generation,
-expectation checks, fetch-plan validation, and proof-of-retrieval rehearsal so
-teams can embed the same steps in CI.
+ეს მაგალითი განიხილავს დოკუმენტაციის build-ის გამოქვეყნებას SoraFS-ზე, გამოყენებით
+`sorafs_manifest_stub` CLI განმსაზღვრელ სქელ დანამატებთან ერთად
+აღწერილია SoraFS Architecture RFC-ში. ნაკადი მოიცავს მანიფესტ თაობას,
+მოლოდინების შემოწმება, მოპოვების გეგმის ვალიდაცია და დადასტურების მოძიების რეპეტიცია
+გუნდებს შეუძლიათ იგივე ნაბიჯების ჩასმა CI-ში.
 
-## Prerequisites
+## წინაპირობები
 
-- Workspace cloned and toolchain ready (`cargo`, `rustc`).
-- Fixtures from `fixtures/sorafs_chunker` available so expectation values can be
-  derived (for production runs, pull the values from the migration ledger entry
-  associated with the artifact).
-- Sample payload directory to publish (this example uses `docs/book`).
+- სამუშაო სივრცე კლონირებული და ხელსაწყოების ჯაჭვის მზადყოფნა (`cargo`, `rustc`).
+- მოწყობილობები `fixtures/sorafs_chunker`-დან ხელმისაწვდომია, რათა მოლოდინის მნიშვნელობები იყოს
+  მიღებული (წარმოების გაშვებებისთვის, ამოიღეთ მნიშვნელობები მიგრაციის წიგნის ჩანაწერიდან
+  ასოცირდება არტეფაქტთან).
+- სანიმუშო payload დირექტორია გამოქვეყნებისთვის (ეს მაგალითი იყენებს `docs/book`).
 
-## Step 1 — Generate manifest, CAR, signatures, and fetch plan
+## ნაბიჯი 1 - შექმენით მანიფესტი, CAR, ხელმოწერები და მიიღეთ გეგმა
 
 ```bash
 cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
@@ -41,15 +42,15 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
   --chunker-profile=sorafs.sf1@1.0.0
 ```
 
-The command:
+ბრძანება:
 
-- Streams the payload through `ChunkProfile::DEFAULT`.
-- Emits a CARv2 archive plus chunk-fetch plan.
-- Builds a `ManifestV1` record, verifies manifest signatures (if provided), and
-  writes the envelope.
-- Enforces expectation flags so the run fails if bytes drift.
+- გადასცემს დატვირთვას `ChunkProfile::DEFAULT`-ის მეშვეობით.
+- ავრცელებს CARv2 არქივს, პლუს ამოღების გეგმას.
+- აშენებს `ManifestV1` ჩანაწერს, ამოწმებს მანიფესტის ხელმოწერებს (თუ მოწოდებულია) და
+  წერს კონვერტში.
+- ახორციელებს მოლოდინის დროშებს ისე, რომ გაშვება ჩავარდება, თუ ბაიტები გადაინაცვლებს.
 
-## Step 2 — Verify outputs with chunk store + PoR rehearsal
+## ნაბიჯი 2 - გადაამოწმეთ შედეგები chunk store + PoR რეპეტიციით
 
 ```bash
 cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
@@ -59,11 +60,11 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
   --por-json-out target/sorafs/docs.por.json
 ```
 
-This replays the CAR through the deterministic chunk store, derives the
-Proof-of-Retrievability sampling tree, and emits a manifest report suitable for
-governance review.
+ეს იმეორებს CAR-ს დეტერმინისტული ბლოკის მაღაზიის მეშვეობით, გამომდინარეობს
+აღდგენის დამადასტურებელი ნიმუშის ხე და ავრცელებს მანიფესტ ანგარიშს, რომელიც შესაფერისია
+მმართველობის მიმოხილვა.
 
-## Step 3 — Simulate multi-provider retrieval
+## ნაბიჯი 3 - მრავალპროვაიდერის მოძიების სიმულაცია
 
 ```bash
 cargo run -p sorafs_car --bin sorafs_fetch -- \
@@ -73,21 +74,21 @@ cargo run -p sorafs_car --bin sorafs_fetch -- \
   --json-out=target/sorafs/docs.fetch_report.json
 ```
 
-For CI environments, provide separate payload paths per provider (e.g., mounted
-fixtures) to exercise range scheduling and failure handling.
+CI გარემოებისთვის, მიაწოდეთ ცალკეული დატვირთვის ბილიკები თითო პროვაიდერზე (მაგ., დამონტაჟებული
+მოწყობილობები) სავარჯიშო დიაპაზონის დაგეგმვა და წარუმატებლობის დამუშავება.
 
-## Step 4 — Record ledger entry
+## ნაბიჯი 4 - ჩაწერეთ წიგნის ჩანაწერი
 
-Log the publication in `docs/source/sorafs/migration_ledger.md`, capturing:
+ჩაწერეთ პუბლიკაცია `docs/source/sorafs/migration_ledger.md`-ში, აღბეჭდეთ:
 
-- Manifest CID, CAR digest, and council signature hash.
-- Status (`Draft`, `Staging`, `Pinned`).
-- Links to CI runs or governance tickets.
+- მანიფესტი CID, CAR დაიჯესტი და საბჭოს ხელმოწერების ჰეში.
+- სტატუსი (`Draft`, `Staging`, `Pinned`).
+- CI გაშვებების ან მმართველობის ბილეთების ბმულები.
 
-## Step 5 — Pin via governance tooling (when registry is live)
+## ნაბიჯი 5 - ჩამაგრება მართვის ინსტრუმენტების მეშვეობით (როდესაც რეესტრი ცოცხალია)
 
-Once the Pin Registry is deployed (Milestone M2 in the migration roadmap),
-submit the manifest through the CLI:
+პინის რეესტრის განლაგების შემდეგ (მიგრაციის საგზაო რუკაში Milestone M2),
+გაგზავნეთ მანიფესტი CLI-ის მეშვეობით:
 
 ```bash
 cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
@@ -102,11 +103,11 @@ cargo run -p sorafs_cli --bin sorafs_pin -- propose \
   --manifest-signatures target/sorafs/docs.manifest_signatures.json
 ```
 
-The proposal identifier and subsequent approval transaction hashes should be
-captured in the migration ledger entry for auditability.
+წინადადების იდენტიფიკატორი და შემდგომი დამტკიცების ტრანზაქციის ჰეშები უნდა იყოს
+აღბეჭდილია მიგრაციის წიგნის ჩანაწერში აუდიტის შესამოწმებლად.
 
-## Cleanup
+## დასუფთავება
 
-Artifacts under `target/sorafs/` can be archived or uploaded to staging nodes.
-Keep the manifest, signatures, CAR, and fetch plan together so downstream
-operators and SDK teams can validate the deployment deterministically.
+`target/sorafs/` ქვეშ არსებული არტეფაქტები შეიძლება დაარქივდეს ან აიტვირთოს დადგმულ კვანძებში.
+შეინახეთ მანიფესტი, ხელმოწერები, CAR და ამოღების გეგმა ერთად ასე ქვემოთ
+ოპერატორებს და SDK გუნდებს შეუძლიათ დაადასტურონ განლაგება დეტერმინისტულად.

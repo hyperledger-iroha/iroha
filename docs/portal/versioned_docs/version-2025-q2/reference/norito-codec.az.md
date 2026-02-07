@@ -7,60 +7,61 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 38c0cedd4858656db8562c6612f9981df11a1b2292c05908c3671402ee96be9d
 source_last_modified: "2026-01-16T16:25:53.031576+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Norito Codec Reference
+# Norito Codec Referansı
 
-Norito is Iroha’s canonical serialization layer. Every on-wire message, on-disk
-payload, and cross-component API uses Norito so nodes agree on identical bytes
-even when they run on different hardware. This page summarises the moving parts
-and points to the full specification in `norito.md`.
+Norito, Iroha-in kanonik serializasiya qatıdır. Hər bir tel mesajı, diskdə
+faydalı yük və çarpaz komponent API Norito istifadə edir, beləliklə qovşaqlar eyni baytlarda razılaşır
+hətta müxtəlif aparatlarda işləyərkən belə. Bu səhifə hərəkət edən hissələri ümumiləşdirir
+və `norito.md`-də tam spesifikasiyaya işarə edir.
 
-## Core layout
+## Əsas düzən
 
-| Component | Purpose | Source |
+| Komponent | Məqsəd | Mənbə |
 | --- | --- | --- |
-| **Header** | Negotiates features (packed structs/sequences, compact lengths, compression flags) and embeds a CRC64 checksum so payload integrity is checked before decode. | `norito::header` — see `norito.md` (“Header & Flags”, repository root) |
-| **Bare payload** | Deterministic value encoding used for hashing/comparison. The same layout is wrapped by the header for transport. | `norito::codec::{Encode, Decode}` |
-| **Compression** | Optional Zstd (and experimental GPU acceleration) activated via the `compression` flag byte. | `norito.md`, “Compression negotiation” |
+| **Başlıq** | Xüsusiyyətləri müzakirə edir (paketli strukturlar/ardıcıllıqlar, yığcam uzunluqlar, sıxılma bayraqları) və CRC64 yoxlama məbləğini daxil edir, beləliklə deşifrədən əvvəl yükün bütövlüyü yoxlanılır. | `norito::header` — bax `norito.md` (“Başlıq və Bayraqlar”, depo kökü) |
+| **Çılpaq faydalı yük** | Hashing/müqayisə üçün istifadə edilən deterministik dəyər kodlaması. Eyni layout nəqliyyat üçün başlıq ilə bükülmüşdür. | `norito::codec::{Encode, Decode}` |
+| **Sıxılma** | Könüllü Zstd (və eksperimental GPU sürətləndirilməsi) `compression` bayt baytı vasitəsilə aktivləşdirildi. | `norito.md`, “Sıxılma danışıqları” |
 
-The full flag registry (packed-struct, packed-seq, compact lengths, compression)
-lives in `norito::header::flags`. `norito::header::Flags` exposes convenience
-checks for runtime inspection; reserved layout bits are rejected by decoders.
+Tam bayraq reyestri (paket-struct, packed-seq, kompakt uzunluqlar, sıxılma)
+`norito::header::flags`-də yaşayır. `norito::header::Flags` rahatlığı ortaya qoyur
+iş vaxtının yoxlanılmasını yoxlayır; qorunan layout bitləri dekoderlər tərəfindən rədd edilir.
 
-## Derive support
+## Dəstək əldə edin
 
-`norito_derive` ships `Encode`, `Decode`, `IntoSchema`, and JSON helper derives.
-Key conventions:
+`norito_derive` `Encode`, `Decode`, `IntoSchema` göndərir və JSON köməkçisi gəlir.
+Əsas konvensiyalar:
 
-- Structs/enums derive packed layouts when the `packed-struct` feature is
-  enabled (default). Implementation lives in `crates/norito_derive/src/derive_struct.rs`
-  and the behaviour is documented in `norito.md` (“Packed layouts”).
-- Packed collections use fixed-width sequence headers and offsets in v1; only
-  per-value length prefixes are affected by `COMPACT_LEN`.
-- JSON helpers (`norito::json`) provide deterministic Norito-backed JSON for
-  open APIs. Use `norito::json::{to_json_pretty, from_json}` — never `serde_json`.
+- `packed-struct` xüsusiyyəti olduqda strukturlar/saxlamalar qablaşdırılmış planlar əldə edir
+  aktivdir (standart). Tətbiq `crates/norito_derive/src/derive_struct.rs`-də yaşayır
+  və davranış `norito.md` (“Paketlənmiş planlar”) sənədində sənədləşdirilir.
+- Paketlənmiş kolleksiyalar v1-də sabit enli ardıcıllıq başlıqlarından və ofsetlərdən istifadə edir; yalnız
+  hər dəyər uzunluğu prefiksləri `COMPACT_LEN` tərəfindən təsirlənir.
+- JSON köməkçiləri (`norito::json`) üçün deterministik Norito dəstəklənən JSON təmin edir.
+  API-ləri açın. `norito::json::{to_json_pretty, from_json}` istifadə edin — heç vaxt `serde_json`.
 
-## Multicodec & identifier tables
+## Multikodek və identifikator cədvəlləri
 
-Norito keeps its multicodec assignments in `norito::multicodec`. The reference
-table (hashes, key types, payload descriptors) is maintained in `multicodec.md`
-at the repository root. When a new identifier is added:
+Norito multikodek təyinatlarını `norito::multicodec`-də saxlayır. İstinad
+cədvəl (heshlər, əsas növlər, faydalı yük təsvirləri) `multicodec.md`-də saxlanılır
+depo kökündə. Yeni identifikator əlavə edildikdə:
 
-1. Update `norito::multicodec::registry`.
-2. Extend the table in `multicodec.md`.
-3. Regenerate downstream bindings (Python/Java) if they consume the map.
+1. `norito::multicodec::registry`-i yeniləyin.
+2. `multicodec.md`-də cədvəli genişləndirin.
+3. Aşağı axın bağlamaları (Python/Java) xəritədən istifadə edərsə, bərpa edin.
 
-## Regenerating docs & fixtures
+## Sənədlərin və qurğuların bərpası
 
-With the portal currently hosting a prose summary, use the upstream Markdown
-sources as the source of truth:
+Portalda hazırda nəsr xülasəsi var, yuxarı Markdown-dan istifadə edin
+həqiqət mənbəyi kimi mənbələr:
 
 - **Spec**: `norito.md`
-- **Multicodec table**: `multicodec.md`
-- **Benchmarks**: `crates/norito/benches/`
-- **Golden tests**: `crates/norito/tests/`
+- **Multicodec cədvəli**: `multicodec.md`
+- **Bençmarklar**: `crates/norito/benches/`
+- **Qızıl testlər**: `crates/norito/tests/`
 
-When the Docusaurus automation goes live, the portal will be updated via a
-sync script (tracked in `docs/portal/scripts/`) that pulls the data from these
-files. Until then, keep this page aligned manually whenever the spec changes.
+Docusaurus avtomatlaşdırılması işə salındıqda, portal yenilənəcək.
+bunlardan məlumatları çıxaran sinxronizasiya skripti (`docs/portal/scripts/`-də izlənilir)
+fayllar. O vaxta qədər, spesifikasiyalar dəyişəndə ​​bu səhifəni əl ilə düzülmüş saxlayın.

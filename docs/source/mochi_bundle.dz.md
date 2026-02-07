@@ -7,47 +7,52 @@ generator: scripts/sync_docs_i18n.py
 source_hash: f2dd292b7d15b449f3cec1b79343387a8c23beef3a163367bd5fa8ced8593aae
 source_last_modified: "2025-12-29T18:16:35.986892+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# MOCHI Bundle Tooling
+# MOCHI བུནཌལ་ལག་ཆས་ཚུ།
 
-MOCHI ships with a lightweight packaging workflow so developers can produce a
-portable desktop bundle without wiring bespoke CI scripts. The `xtask`
-subcommand handles compilation, layout, hashing, and (optionally) archive
-creation in one shot.
+MOCHI གྲུ་གཟིངས་ཚུ་ ལྗིད་ཚད་མར་ཕབ་འབད་ནིའི་ལཱ་གི་རྒྱུན་རིམ་དང་གཅིག་ཁར་ གོང་འཕེལ་གཏང་མི་ཚུ་གིས་ ཅིག་བཟོ་ཚུགས།
+འབག་བཏུབ་པའི་ཌེཀསི་ཊོཔ་ བཱན་ཌལ་ བེ་རིང་པོཀ་ སི་ཨའི་ ཡིག་གཟུགས་ཚུ། `xtask`
+ཡན་ལག་བརྡ་བཀོད་ཀྱིས་ བསྡུ་སྒྲིག་འབད་ནི་དང་ བཀོད་རིས་ ཧ་ཤིང་ དེ་ལས་ (གདམ་ཁ་ཅན་སྦེ་) གཏན་མཛོད་ཚུ་ འཛིན་སྐྱོང་འཐབ་ཨིན།
+པར་གཅིག་ནང་གསར་བསྐྲུན་འབད།
 
-## Generating a bundle
+## བང་བུད་བཟོ་སྟེ།
 
 ```bash
 cargo xtask mochi-bundle
 ```
 
-By default the command builds release binaries, assembles the bundle under
-`target/mochi-bundle/`, and emits a `mochi-<os>-<arch>-release.tar.gz` archive
-alongside a deterministic `manifest.json`. The manifest lists every file with
-its size and SHA-256 hash so CI pipelines can re-run verification or publish
-attestations. The helper ensures both the `mochi` desktop shell and the
-workspace `kagami` binary are present so genesis generation works out of the
-box.
+སྔོན་སྒྲིག་གིས་ བརྡ་བཀོད་ཀྱིས་ གསར་བཏོན་གཉིས་ལྡན་བཟོ་བསྐྲུན་འབདཝ་ཨིན་ འོག་ལུ་ཡོད་པའི་བཱུནཌལ་འདི་ འོག་ལུ་ བསྡུ་སྒྲིག་འབདཝ་ཨིན།
+`target/mochi-bundle/`, དང་ `mochi-<os>-<arch>-release.tar.gz` ཡིག་མཛོད་ཅིག་བཏོན་ཡོད།
+དེ་དང་མཉམ་དུ་ གཏན་འབེབས་ `manifest.json`. གསལ་རྟགས་དེ་གིས་ ཡིག་སྣོད་རེ་རེ་དང་གཅིག་ཁར་ཐོ་ཡིག་བཀོདཔ་ཨིན།
+དེའི་ཚད་དང་ SHA-256 ཧེཤ་ དེ་འབདཝ་ལས་ སི་ཨའི་ མདོང་ལམ་གྱིས་ བདེན་དཔྱད་འབད་ཚུགསཔ་ ཡང་ན་ དཔར་བསྐྲུན་འབད་ཚུགས།
+༥༤ གཟེངས་རྟགས། གྲོགས་རམ་པ་འདི་གིས་ `mochi` ཌེཀསི་ཊོཔ་ཤེལ་དང་ དེ་ལས་
+ལས་ཀའི་ས་སྟོང་ `kagami` གཉིས་ལྡན་འདི་ཡོདཔ་ལས་ རིགས་མཚན་གྱི་མི་རབས་འདི་ ཕྱི་ཁར་ལས་ ཕྱི་ཁར་ཐོན་དོ་ཡོདཔ་ཨིན།
+སྒྲོམ།
 
-### Flags
+### ལྕགས།
 
-| Flag                | Description                                                                 |
-|---------------------|-----------------------------------------------------------------------------|
-| `--out <dir>`       | Override the output directory (defaults to `target/mochi-bundle`).         |
-| `--profile <name>`  | Build with a specific Cargo profile (e.g., `debug` for tests).              |
-| `--no-archive`      | Skip the `.tar.gz` archive, leaving only the prepared folder.               |
-| `--kagami <path>`   | Use an explicit `kagami` binary instead of building `iroha_kagami`.         |
-| `--matrix <path>`   | Append bundle metadata to a JSON matrix for CI provenance tracking.         |
-| `--smoke`           | Run `mochi --help` from the packaged bundle as a basic execution gate.      |
-| `--stage <dir>`     | Copy the finished bundle (and archive, when present) into a staging folder. |
+| དར་ | འགྲེལ་བཤད་ |
+|་་་་་་་་་་་་་་་་་་་་་་་་་་་་་་་་་
+| `--out <dir>` | ཐོན་འབྲས་སྣོད་ཐོ་འདི་བཀག་བཞག (`target/mochi-bundle` ལུ་སྔོན་སྒྲིག་ཚུ་)།         |
+| `--profile <name>` | དམིགས་བསལ་གྱི་ ཀར་གོ་གསལ་སྡུད་ཅིག་དང་གཅིག་ཁར་བཟོ་བསྐྲུན་འབད་ (དཔེར་ན་ `debug` བརྟག་དཔྱད་ཀྱི་དོན་ལུ་)།              |
+| `--no-archive` | `.tar.gz` ཡིག་མཛོད་འདི་གྲ་སྒྲིག་འབད་ཞིནམ་ལས་ གྲ་སྒྲིག་འབད་ཡོད་པའི་སྣོད་འཛིན་རྐྱངམ་ཅིག་བཞག་དགོ།               |
+| `--kagami <path>` | `kagami` གཉིས་ལྡན་གྱི་ཚབ་ལུ་ `iroha_kagami` གཉིས་ལྡན་ལག་ལེན་འཐབ།         |
+| `--matrix <path>` | སི་ཨའི་ བདེན་དཔྱད་འཚོལ་ཞིབ་ཀྱི་དོན་ལུ་ ཇེ་ཨེསི་ཨོ་ཨེན་མེ་ཊིགསི་ལུ་ བཱན་ཌལ་མེ་ཊ་ཌེ་ཊ་ སྦྱར་བརྩེགས་འབད།         |
+| `--smoke` | ཐུམ་སྒྲིལ་འབད་ཡོད་པའི་བཱུནཌི་ལས་ གཞི་རྟེན་ལག་ལེན་གྱི་སྒོ་ར་སྦེ་ གཡོག་བཀོལ།      |
+| `--stage <dir>` | མཇུག་བསྡུ་ཡོད་པའི་བཱུན་ཌལ་(དང་ཡིག་མཛོད་ ཡོད་པའི་སྐབས་) འདི་ སྟེགས་རིས་སྣོད་འཛིན་ཅིག་ལུ་འདྲ་བཤུས་རྐྱབས། |
 
-`--stage` is intended for CI pipelines where each build agent uploads its
-artefacts to a shared location. The helper recreates the bundle directory and
-copies the generated archive into the staging directory so publish jobs can
-collect platform-specific outputs without shell scripting.
+```
+./bin/mochi --data-root ./data --profile four-peer-bft \
+    --torii-start 12000 --p2p-start 14000 \
+    --irohad /path/to/irohad --kagami /path/to/kagami
+``` འདི་ བཟོ་བསྐྲུན་གྱི་ལས་ཚབ་རེ་རེ་གིས་ སྐྱེལ་བཙུགས་འབད་སའི་ CI གི་མདོང་ལམ་གྱི་དོན་ལུ་ཨིན།
+བརྗེ་སོར་གྱི་ས་གནས་ཅིག་ལུ་ ཅ་རྙིང་། གྲོགས་རམ་པ་གིས་ བཱན་ཌལ་སྣོད་ཐོ་འདི་ ལོག་གསར་བསྐྲུན་འབདཝ་ཨིན།
+བཟོ་ཡོད་པའི་ཡིག་མཛོད་ཚུ་ གནས་རིམ་གྱི་སྣོད་ཐོ་ནང་ འདྲ་བཤུས་རྐྱབ་སྟེ་ ལཱ་གཡོག་ཚུ་ དཔར་བསྐྲུན་འབདཝ་ཨིན།
+ཤེལ་གྱི་ཡིག་གཟུགས་མེད་པར་ སྟེགས་བུ་དམིགས་བསལ་གྱི་ཐོན་འབྲས་ཚུ་བསྡུ་ལེན་འབད།
 
-The layout inside the bundle is intentionally simple:
+བཱན་ཌལ་གྱི་ནང་ན་ཡོད་པའི་སྒྲིག་བཀོད་འདི་ ཤེས་བཞིན་དུ་འཇམ་ཏོང་ཏོ་ཨིན།
 
 ```
 bin/mochi              # egui desktop executable
@@ -58,11 +63,11 @@ LICENSE                # repository licence
 manifest.json          # generated file manifest with SHA-256 digests
 ```
 
-### Runtime overrides
+### རན་དུས་བཀག་ཆ།
 
-The packaged `mochi` executable accepts command-line overrides for the most
-common supervisor settings. Use these flags instead of editing
-`config/local.toml` when experimenting:
+ཐུམ་སྒྲིལ་འབད་ཡོད་མི་ `mochi` ལག་ལེན་འཐབ་བཏུབ་མི་འདི་གིས་ མང་ཤོས་ཅིག་གི་དོན་ལུ་ བརྡ་བཀོད་གྲལ་ཐིག་བརྒལ་མི་ཚུ་ དང་ལེན་འབདཝ་ཨིན།
+སྤྱིར་བཏང་ལྟ་རྟོག་པ་སྒྲིག་སྟངས། ཞུན་དག་འབད་ནིའི་ཚབ་ལུ་ དར་ཚིག་འདི་ཚུ་ལག་ལེན་འཐབ།
+བརྟག་དཔྱད་འབད་བའི་སྐབས་ `config/local.toml`:
 
 ```
 ./bin/mochi --data-root ./data --profile four-peer-bft \
@@ -70,16 +75,16 @@ common supervisor settings. Use these flags instead of editing
     --irohad /path/to/irohad --kagami /path/to/kagami
 ```
 
-Any CLI value takes precedence over `config/local.toml` entries and environment
-variables.
+སི་ཨེལ་ཨའི་གནས་གོང་གང་རུང་གིས་ `config/local.toml` ཐོ་བཀོད་དང་མཐའ་འཁོར་ལས་ གཞི་བསྟུན་འབདཝ་ཨིན།
+འགྱུར་ཅན་ཚུ།
 
-## Snapshot automation
+## པར་ལེན་འཕྲུལ་ཆས།
 
-`manifest.json` records the generation timestamp, target triple, Cargo profile,
-and the complete file inventory. Pipelines can diff the manifest to detect when
-new artefacts appear, upload the JSON alongside release assets, or audit the
-hashes before promoting a bundle to operators.
+`manifest.json` གིས་ མི་རབས་ཀྱི་དུས་ཚོད་མཚོན་རྟགས་ དམིགས་གཏད་གསུམ་ལྡན་ ཀཱར་གོ་གསལ་སྡུད་ཚུ་ ཐོ་བཀོད་འབདཝ་ཨིན།
+དང་ ཡིག་སྣོད་ཐོ་གཞུང་ཆ་ཚང་། Pipelines གིས་ ག་དེམ་ཅིག་སྦེ་ གསལ་སྟོན་འབད་ཚུགས།
+ཅ་རྙིང་གསརཔ་ཚུ་འབྱུངམ་ད་ ཇེ་ཨེསི་ཨོ་ཨེན་འདི་ གསར་བཏོན་རྒྱུ་དངོས་དང་གཅིག་ཁར་ སྐྱེལ་བཙུགས་འབད་ ཡང་ན་ རྩིས་ཞིབ་འབད་ནི།
+བཀོལ་སྤྱོད་པ་ཚུ་ལུ་ བཱན་ཌལ་ ཁྱབ་སྤེལ་མ་འབད་བའི་ཧེ་མ།
 
-The helper is idempotent: re-running the command updates the manifest and
-overwrites the previous archive, keeping `target/mochi-bundle/` as the single
-source of truth for the latest bundle on the current machine.
+གྲོགས་རམ་པ་དེ་ བསམ་པ་ཅན་ཨིན་: བརྡ་བཀོད་འདི་ལོག་སྟེ་གཡོག་བཀོལ་མི་འདི་གིས་ གསལ་སྟོན་ཚུ་དང་ དེ་ལས་ གསལ་སྟོན་འབདཝ་ཨིན།
+ཧེ་མའི་གཏན་མཛོད་འདི་ བསྐོར་ར་རྐྱབ་སྟེ་ `target/mochi-bundle/` འདི་ གཅིག་རྐྱངམ་ཅིག་སྦེ་བཞག་ཡོདཔ་ཨིན།
+ད་ལྟོའི་འཕྲུལ་ཆས་གུ་ཡོད་པའི་ བཱན་ཌལ་གསརཔ་གི་དོན་ལུ་ བདེན་པ་གི་འབྱུང་ཁུངས།

@@ -6,28 +6,29 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 1f133d9489c4bcfae2212e6c5dc098f39c3dea3e5cd42855ba76e8c9b73b4d03
 source_last_modified: "2026-01-03T18:07:57.103009+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-//! Notes for the RustCrypto SM integration spike.
+//! הערות עבור ספייק האינטגרציה של RustCrypto SM.
 
 # RustCrypto SM Spike Notes
 
-## Objective
-Validate that introducing RustCrypto’s `sm2`, `sm3`, and `sm4` crates (plus `rfc6979`, `ccm`, `gcm`) as optional dependencies compiles cleanly in the `iroha_crypto` crate and yields acceptable build times before wiring the feature flag into the wider workspace.
+## מטרה
+ודא שהכנסת ארגזי `sm2`, `sm3` ו-`sm4` של RustCrypto (בתוספת `rfc6979`, `ccm`, `sm4` מותאמת לתלות אופציונלית ב-I100NI060) `iroha_crypto` ארגז ומניב זמני בנייה מקובלים לפני חיווט דגל הפיצ'ר לסביבת העבודה הרחבה יותר.
 
-## Proposed Dependency Map
+## מפת תלות מוצעת
 
-| Crate | Suggested Version | Features | Notes |
-|-------|-------------------|----------|-------|
-| `sm2` | `0.13` (RustCrypto/signatures) | `std` | Depends on `elliptic-curve`; verify MSRV matches workspace. |
-| `sm3` | `0.5.0-rc.1` (RustCrypto/hashes) | default | API parallels `sha2`, integrates with existing `digest` traits. |
-| `sm4` | `0.5.1` (RustCrypto/block-ciphers) | default | Works with cipher traits; AEAD wrappers deferred to later spike. |
-| `rfc6979` | `0.4` | default | Reuse for deterministic nonce derivation. |
+| ארגז | גרסה מוצעת | תכונות | הערות |
+|-------|------------------------|--------|-------|
+| `sm2` | `0.13` (RustCrypto/חתימות) | `std` | תלוי ב-`elliptic-curve`; ודא ש-MSRV מתאים למרחב העבודה. |
+| `sm3` | `0.5.0-rc.1` (RustCrypto/hashes) | ברירת מחדל | API מקביל ל-`sha2`, משתלב עם תכונות `digest` קיימות. |
+| `sm4` | `0.5.1` (RustCrypto/בלוק-ciphers) | ברירת מחדל | עובד עם תכונות צופן; עטיפות AEAD נדחו לספייק מאוחר יותר. |
+| `rfc6979` | `0.4` | ברירת מחדל | שימוש חוזר לגזירת אי-נונס דטרמיניסטית. |
 
-*Versions reflect current releases as of 2024-12; confirm with `cargo search` before landing.*
+*גרסאות משקפות מהדורות נוכחיות נכון לשנים 2024-12; אשר עם `cargo search` לפני הנחיתה.*
 
-## Manifest Changes (draft)
+## שינויים גלויים (טיוטה)
 
 ```toml
 [features]
@@ -40,34 +41,59 @@ sm4 = { version = "0.5.1", optional = true }
 rfc6979 = { version = "0.4", optional = true, default-features = false }
 ```
 
-Follow-up: pin `elliptic-curve` to match versions already in `iroha_crypto` (currently `0.13.8`).
+מעקב: הצמד `elliptic-curve` כדי להתאים לגרסאות שכבר נמצאות ב-`iroha_crypto` (כיום `0.13.8`).
 
-## Spike Checklist
-- [x] Add optional dependencies and feature to `crates/iroha_crypto/Cargo.toml`.
-- [x] Create `signature::sm` module behind `cfg(feature = "sm")` with placeholder structs to confirm wiring.
-- [x] Run `cargo check -p iroha_crypto --features sm` to confirm compile; record build time and new dependency count (`cargo tree --features sm`).
-- [x] Confirm the std-only posture with `cargo check -p iroha_crypto --features sm --locked`; `no_std` builds are no longer supported.
-- [x] File results (timings, dependency tree delta) in `docs/source/crypto/sm_program.md`.
+## רשימת ספייק
+- [x] הוסף תלות ותכונה אופציונלית ל-`crates/iroha_crypto/Cargo.toml`.
+- [x] צור מודול `signature::sm` מאחורי `cfg(feature = "sm")` עם מבני מיקום לאישור החיווט.
+- [x] הפעל את `cargo check -p iroha_crypto --features sm` כדי לאשר קומפילציה; שיא זמן בנייה וספירת תלות חדשה (`cargo tree --features sm`).
+- [x] אשר את היציבה הרגילה בלבד עם `cargo check -p iroha_crypto --features sm --locked`; `no_std` לא נתמכים עוד.
+- [x] תוצאות קובץ (תזמונים, דלתא של עץ התלות) ב-`docs/source/crypto/sm_program.md`.
 
-## Observations To Capture
-- Additional compile time vs. baseline.
-- Binary size impact (if measurable) with `cargo builtinsize`.
-- Any MSRV or feature conflicts (e.g., with `elliptic-curve` minor versions).
-- Warnings emitted (unsafe code, const-fn gating) that may require upstream patches.
+## תצפיות ללכוד
+- זמן קומפילציה נוסף לעומת קו הבסיס.
+- השפעה בגודל בינארי (אם ניתן למדידה) עם `cargo builtinsize`.
+- כל התנגשות MSRV או תכונה (למשל, עם גרסאות מינוריות של `elliptic-curve`).
+- נפלטו אזהרות (קוד לא בטוח, const-fn gating) שעשויות לדרוש תיקונים במעלה הזרם.
 
-## Pending Items
-- Await Crypto WG approval before inflating workspace dependency graph.
-- Confirm whether to vendor crates for review or rely on crates.io (mirrors may be required).
-- Coordinate `Cargo.lock` refresh per `sm_lock_refresh_plan.md` before marking checklist complete.
-- Use `scripts/sm_lock_refresh.sh` once approval is granted to regenerate the lockfile and dependency tree.
+## פריטים ממתינים
+- המתן לאישור Crypto WG לפני ניפוח גרף התלות של סביבת העבודה.
+- אשר אם לספק ארגזים לבדיקה או להסתמך על crates.io (ייתכן שיידרשו מראות).
+- תאמו את רענון `Cargo.lock` לכל `sm_lock_refresh_plan.md` לפני סימון רשימת התיוג הושלמה.
+- השתמש ב-`scripts/sm_lock_refresh.sh` לאחר מתן אישור לחידוש קובץ הנעילה ועץ התלות.
 
-## 2025-01-19 Spike Log
-- Added optional dependencies (`sm2 0.13`, `sm3 0.5.0-rc.1`, `sm4 0.5.1`, `rfc6979 0.4`) and `sm` feature flag in `iroha_crypto`.
-- Stubbed `signature::sm` module to exercise hashing/block cipher APIs during compilation.
-- `cargo check -p iroha_crypto --features sm --locked` now resolves dependency graph but aborts with `Cargo.lock` update requirement; repository policy forbids lockfile edits, so the compile run remains pending until we coordinate an allowed lock refresh.
+## 2025-01-19 ספייק יומן
+- נוספו תלות אופציונלית (`sm2 0.13`, `sm3 0.5.0-rc.1`, `sm4 0.5.1`, `rfc6979 0.4`) ודגל תכונה `sm` ב-`iroha_crypto`.
+- מודול `signature::sm` מעוצב להפעלת ממשקי API של גיבוש/חסימה של צופן במהלך ההידור.
+- `cargo check -p iroha_crypto --features sm --locked` פותר כעת את גרף התלות אך מבטל עם דרישת העדכון של `Cargo.lock`; מדיניות המאגר אוסרת עריכות של קבצי נעילה, כך שהפעלת ההידור נשארת בהמתנה עד שנתאם רענון מותר לנעילה.## 2026-02-12 ספייק יומן
+- פתר את חוסם קבצי הנעילה הקודם - התלות כבר נלכדה - כך ש-`cargo check -p iroha_crypto --features sm --locked` מצליח (בנייה קרה 7.9s ב-dev Mac; הפעלה מחדש מצטברת של 0.23s).
+- `cargo check -p iroha_crypto --no-default-features --features "std sm" --locked` עובר ב-1.0 שניות, מה שמאשר את התכונה האופציונלית קומפילציה בתצורות `std` בלבד (לא נשאר נתיב `no_std`).
+- דלתא תלות עם תכונת `sm` מופעלת מציגה 11 ארגזים: `base64ct`, `ghash`, `opaque-debug`, `pem-rfc7468`, ```toml
+[features]
+sm = ["dep:sm2", "dep:sm3", "dep:sm4", "dep:rfc6979"]
 
-## 2026-02-12 Spike Log
-- Resolved the previous lockfile blocker—the dependencies are already captured—so `cargo check -p iroha_crypto --features sm --locked` succeeds (cold build 7.9 s on dev Mac; incremental re-run 0.23 s).
-- `cargo check -p iroha_crypto --no-default-features --features "std sm" --locked` passes in 1.0 s, confirming the optional feature compiles in `std`-only configurations (no `no_std` path remains).
-- Dependency delta with the `sm` feature enabled introduces 11 crates: `base64ct`, `ghash`, `opaque-debug`, `pem-rfc7468`, `pkcs8`, `polyval`, `primeorder`, `sm2`, `sm3`, `sm4`, and `sm4-gcm`. (`rfc6979` was already part of the baseline graph.)
-- Build warnings persist for unused NEON policy helpers; leave as-is until the metering smoothing runtime re-enables those code paths.
+[dependencies]
+sm2 = { version = "0.13", optional = true, default-features = false, features = ["std"] }
+sm3 = { version = "0.5.0-rc.1", optional = true }
+sm4 = { version = "0.5.1", optional = true }
+rfc6979 = { version = "0.4", optional = true, default-features = false }
+```, ```toml
+[features]
+sm = ["dep:sm2", "dep:sm3", "dep:sm4", "dep:rfc6979"]
+
+[dependencies]
+sm2 = { version = "0.13", optional = true, default-features = false, features = ["std"] }
+sm3 = { version = "0.5.0-rc.1", optional = true }
+sm4 = { version = "0.5.1", optional = true }
+rfc6979 = { version = "0.4", optional = true, default-features = false }
+```, ```toml
+[features]
+sm = ["dep:sm2", "dep:sm3", "dep:sm4", "dep:rfc6979"]
+
+[dependencies]
+sm2 = { version = "0.13", optional = true, default-features = false, features = ["std"] }
+sm3 = { version = "0.5.0-rc.1", optional = true }
+sm4 = { version = "0.5.1", optional = true }
+rfc6979 = { version = "0.4", optional = true, default-features = false }
+``` `primeorder`, `sm2`, `sm3`, `sm4`, ו-`sm4-gcm`. (`rfc6979` כבר היה חלק מגרף הבסיס.)
+- אזהרות בנייה נמשכות עבור עוזרי מדיניות NEON שאינם בשימוש; השאר כפי שהוא עד שזמן הריצה של החלקת המדידה יאפשר מחדש את נתיבי הקוד הללו.

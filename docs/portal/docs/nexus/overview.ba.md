@@ -10,65 +10,66 @@ translation_last_reviewed: 2026-02-07
 id: nexus-overview
 title: Sora Nexus overview
 description: High-level summary of the Iroha 3 (Sora Nexus) architecture with pointers to the canonical mono-repo docs.
+translator: machine-google-reviewed
 ---
 
-Nexus (Iroha 3) extends Iroha 2 with multi-lane execution, governance-scoped
-data spaces, and shared tooling across every SDK. This page mirrors the new
-`docs/source/nexus_overview.md` brief in the mono-repo so portal readers can
-quickly understand how the architecture pieces fit together.
+I18NT0000000006X (Iroha 3) I18NT0000000003X 2 күп һыҙатлы башҡарыу менән оҙайта, идара итеү-киҫелгән
+мәғлүмәт киңлектәрен, һәм һәр SDK буйынса уртаҡ инструменталь. Был бит яңы көҙгө .
+I18NI0000000028X брифы моно-репо шулай портал уҡыусылар ала
+тиҙ аңлай, нисек архитектура киҫәктәре бергә тура килә.
 
-## Release lines
+## Һыҙыҡтарҙы сығарыу
 
-- **Iroha 2** – self-hosted deployments for consortium or private networks.
-- **Iroha 3 / Sora Nexus** – the multi-lane public network where operators
-  register data spaces (DS) and inherit shared governance, settlement, and
-  observability tooling.
-- Both lines compile from the same workspace (IVM + Kotodama toolchain), so SDK
-  fixes, ABI updates, and Norito fixtures remain portable. Operators download
-  the `iroha3-<version>-<os>.tar.zst` bundle to join Nexus; refer to
-  `docs/source/sora_nexus_operator_onboarding.md` for the fullscreen checklist.
+- **I18NT000000004X 2** – консорциум йәки шәхси селтәрҙәр өсөн үҙ-үҙен алып барылған таратыу.
+- **I18NT0000000005X 3 / Сора I18NT0000000007X** – операторҙар ҡайҙалыр күп һыҙатлы йәмәғәт селтәре
+  теркәү мәғлүмәт киңлектәре (DS) һәм мираҫҡа уртаҡ идара итеү, иҫәп-хисап, һәм
+  күҙәтеүсәнлек инструменттары.
+- Ике һыҙыҡ та бер үк эш урынын (I18NT000000015X + I18NT000000000000000000000000000000000000000000000000000000000е ) инструменттары менән төҙөй.
+  төҙәтеүҙәр, ABI яңыртыуҙар, һәм I18NT000000001X ҡоролмалары портатив булып ҡала. Операторҙар скачать
+  I18NI0000029X өйөмө Nexus ҡушылырға; һылтанма
+  I18NI000000030X өсөн тулы экранлы тикшерелгән исемлек.
 
-## Building blocks
+## Төҙөлөш блоктары
 
-| Component | Summary | Portal hooks |
-|-----------|---------|--------------|
-| Data Space (DS) | Governance-defined execution/storages domain that owns one or more lanes, declares validator sets, privacy class, fee + DA policy. | See [Nexus spec](./nexus-spec) for the manifest schema. |
-| Lane | Deterministic shard of execution; emits commitments that the global NPoS ring orders. Lane classes include `default_public`, `public_custom`, `private_permissioned`, and `hybrid_confidential`. | [Lane model](./nexus-lane-model) captures geometry, storage prefixes, and retention. |
-| Transition plan | Placeholder identifiers, routing phases, and dual-profile packaging track how single-lane deployments evolve into Nexus. | [Transition notes](./nexus-transition-notes) document each migration phase. |
-| Space Directory | Registry contract that stores DS manifests + versions. Operators reconcile catalog entries against this directory before joining. | Manifest diff tracker lives under `docs/source/project_tracker/nexus_config_deltas/`. |
-| Lane catalog | `[nexus]` config section that maps lane IDs to aliases, routing policies, and DA thresholds. `irohad --sora --config … --trace-config` prints the resolved catalog for audits. | Use `docs/source/sora_nexus_operator_onboarding.md` for the CLI walk-through. |
-| Settlement router | XOR transfer orchestrator that connects private CBDC lanes with public liquidity lanes. | `docs/source/cbdc_lane_playbook.md` spells out policy knobs and telemetry gates. |
-| Telemetry/SLOs | Dashboards + alerts under `dashboards/grafana/nexus_*.json` capture lane height, DA backlog, settlement latency, and governance queue depth. | [Telemetry remediation plan](./nexus-telemetry-remediation) spells out the dashboards, alerts, and audit evidence. |
+| Компонент | Йәмғеһе | Портал ҡармаҡтар |
+|---------|----------|--------------|
+| Мәғлүмәттәр йыһан (ДС) | Идара итеү-билдәләнгән башҡарыу/һаҡлау домен, бер йәки бер нисә һыҙатҡа эйә, валитатор йыйылмаһы иғлан итә, хосуси класы, түләү + DA сәйәсәте. | Ҡарағыҙ [I18NT000000009X спец] (I18NU000000016X) өсөн манифест схемаһы. |
+| Лейн | Детерминистик зарур башҡарыу; глобаль NPoS йөҙөк бойороҡтары йөкләмәләр сығара. Лейн кластарында I18NI000000031X, I18NI000000032X, I18NI000000033X, һәм `hybrid_confidential` инә. | [Лейн моделе] (./nexus-lane-model) геометрия, һаҡлау префикстарын һәм һаҡлауҙы тота. |
+| Күсеш планы | Урын идентификаторҙары, маршрутлаштырыу фазалары, һәм ике профилле упаковка трек нисек бер һыҙатлы таратыу I18NT000000010X үҫешә. | [Күсеш иҫкәрмәләр](I18NU000000018X) һәр миграция этабын документлаштыра. |
+| Йыһан каталогы | Реестр килешә, һаҡлау DS күренә + версиялары. Операторҙар каталогы яҙмаларын яраштырып, был каталогҡа ҡаршы ҡушылыр алдынан. | Манифест дифф трекер йәшәй аҫтында I18NI0000000355. |
+| Лейн каталогы | I18NI000000036X конфигурация бүлеге, тип карталар һыҙат идентификаторҙары псевдоним, маршрутлаштырыу сәйәсәте, һәм DA сиктәре. I18NI000000037X аудит өсөн хәл ителгән каталогты баҫтыра. | Ҡулланыу I18NI000000038X өсөн CLI йөрөү-аша. |
+| Ҡасаба маршрутизаторы | XOR трансфер оркестры, шәхси CBDC һыҙаттарын йәмәғәт ликвидлыҡ һыҙаттары менән тоташтыра. | `docs/source/cbdc_lane_playbook.md` сәйәсәт ручкалары һәм телеметрия ҡапҡалары тураһында яҙа. |
+| Телеметрия/СЛО | Приборҙар таҡталары + I18NI000000040X буйынса иҫкәртмәләр тотоу һыҙаты бейеклеге, DA артта ҡалыу, ҡасаба латентлығы, һәм идара итеү сират тәрәнлеге. | [Телеметрияны төҙәтеү планы](I18NU000000019X) приборҙар таҡталары, иҫкәртмәләр һәм аудит дәлилдәрен яҙа. |
 
-## Rollout snapshot
+## рулет снимок
 
-| Phase | Focus | Exit criteria |
-|-------|-------|---------------|
-| N0 – Closed beta | Council-managed registrar (`.sora`), manual operator onboarding, static lane catalog. | Signed DS manifests + rehearsed governance hand-offs. |
-| N1 – Public launch | Adds `.nexus` suffixes, auctions, self-service registrar, XOR settlement wiring. | Resolver/gateway sync tests, billing reconciliation dashboards, dispute tabletop drills. |
-| N2 – Expansion | Introduces `.dao`, reseller APIs, analytics, dispute portal, steward scorecards. | Compliance artefacts versioned, policy-jury toolkit online, treasury transparency reports. |
-| NX-12/13/14 gate | Compliance engine, telemetry dashboards, and documentation must ship together before partner pilots. | [Nexus overview](./nexus-overview) + [Nexus operations](./nexus-operations) published, dashboards wired, policy engine merged. |
+| Фаза | Фокус | Сығыу критерийҙары |
+|------|-------|----------------|
+| N0 – Ябыҡ бета | Совет менән идара итеү регистраторы (`.sora`), ҡул менән оператор onboarding, статик һыҙат каталогы. | Ҡултамғалы DS күрһәтә + репетицияланған идара итеү ҡулдары. |
+| N1 – Йәмәғәтселек старт | I18NI000000042X суффикстары, аукциондар, үҙ-үҙеңде хеҙмәтләндереүҙең регистраторы, XOR ҡасаба проводкаларын өҫтәй. | Репостр/шлюз синхронизация һынауҙары, биллинг ярашыу таҡталары, бәхәс өҫтәл өҫтө күнекмәләр. |
+| N2 – Киңәйтеү | `.dao`, риселлер API-лар, аналитика, бәхәс порталы, стеуард маркировкалары менән таныштыра. | Ҡабул итеү артефакттары версияһында, сәйәсәт-прицепция интернаттары онлайн, ҡаҙна асыҡлыҡ отчеттары. |
+| NX-12/13/14 ҡапҡаһы | Ҡабул итеү двигателе, телеметрия приборҙар таҡтаһы, һәм документация партнер осоусылар алдында бергә ташырға тейеш. | [Nexus обзор](./nexus-overview) + [I18NT000000012X операциялар] (./nexus-operations) баҫылған, приборҙар таҡталары проводной, сәйәсәт двигателе берләште. |
 
-## Operator responsibilities
+## Оператор бурыстары
 
-1. **Config hygiene** – keep `config/config.toml` synced with the published lane &
-   dataspace catalog; archive `--trace-config` output with every release ticket.
-2. **Manifest tracking** – reconcile catalog entries with the latest Space
-   Directory bundle before joining or upgrading nodes.
-3. **Telemetry coverage** – expose the `nexus_lanes.json`, `nexus_settlement.json`,
-   and related SDK dashboards; wire alerts to PagerDuty and run quarterly reviews per the telemetry remediation plan.
-4. **Incident reporting** – follow the severity matrix in
-   [Nexus operations](./nexus-operations) and file RCAs within five business days.
-5. **Governance readiness** – attend Nexus council votes impacting your lanes and
-   rehearse rollback instructions quarterly (tracked via
-   `docs/source/project_tracker/nexus_config_deltas/`).
+1. **Конфиглы гигиена** – I18NI000000044X баҫылған һыҙат менән синхронлаштырыу & 1990 й.
+   мәғлүмәттәр киңлеге каталогы; архив I18NI0000000045X сығыш менән һәр релиз билет.
+2. **Манифест күҙәтеү** – каталог яҙмалары менән яраштырыу һуңғы киңлек
+   Каталог өйөмө ҡушылыр алдынан йәки яңыртыу төйөндәре.
+3. **Телеметрия ҡаплауы** – I18NI000000046X, `nexus_settlement.json`, фашлау,
+   һәм уға бәйле SDK приборҙар таҡталары; сым иҫкәртмәләр PagerDuty һәм йүгерә квартал тикшерелгән буйынса телеметрияны тергеҙеү планы.
+4. **Инцидент отчет ** – 2012 йылда ауырлыҡ матрицаһына эйәреп барығыҙ.
+   [Nexus операциялары] (./nexus-operations) һәм биш эш көнө эсендә RCA-лар файлы.
+5. **Идара итеү әҙерлеге** – ҡатнашыу I18NT0000000000014X советы һеҙҙең һыҙаттарға йоғонто яһай һәм
+   репетиция кире ҡағыу күрһәтмәләр квартал һайын (күҙәлгән аша
+   `docs/source/project_tracker/nexus_config_deltas/` X).
 
-## See also
+## Ҡарағыҙ ҙа
 
-- Canonical overview: `docs/source/nexus_overview.md`
-- Detailed spec: [./nexus-spec](./nexus-spec)
-- Lane geometry: [./nexus-lane-model](./nexus-lane-model)
-- Transition plan: [./nexus-transition-notes](./nexus-transition-notes)
-- Telemetry remediation plan: [./nexus-telemetry-remediation](./nexus-telemetry-remediation)
-- Operations runbook: [./nexus-operations](./nexus-operations)
-- Operator onboarding guide: `docs/source/sora_nexus_operator_onboarding.md`
+- Каноник дөйөм ҡараш: I18NI000000049X X
+- Ентекле спец: [./nexus-spec](./nexus-spec)
+- Лейн геометрияһы: [./нексус-һыҙыҡ-модель] (./nexus-lane-model)
+- күсеү планы: [./нексус-күсеш-яҙмалар] (I18NU000000255X)
+- Телеметрияны төҙәтеү планы: [./нексус-телеметрия-ремедиация] (./nexus-telemetry-remediation)
+- Операциялар runbook: [./нексус-операциялар] (I18NU000000027X)
+- Оператор onboarding етәксеһе: I18NI000000050X

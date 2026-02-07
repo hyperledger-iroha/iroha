@@ -4,110 +4,110 @@ direction: ltr
 source: docs/portal/docs/sorafs/developer-releases.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: Proceso de lanzamiento
-summary: Ejecuta el gate de lanzamiento de CLI/SDK, aplica la política de versionado compartida y publica notas de lanzamiento canónicas.
+Название: Процесс Ланзамьенто
+Краткое описание: Извлечение шлюза синхронизации CLI/SDK, применение политики совместной версии и публикация заметок о каноническом обновлении.
 ---
 
-# Proceso de lanzamiento
+# Процесс очистки
 
-Los binarios de SoraFS (`sorafs_cli`, `sorafs_fetch`, helpers) y los crates de SDK
-(`sorafs_car`, `sorafs_manifest`, `sorafs_chunker`) se publican juntos. El pipeline
-de lanzamiento mantiene el CLI y las bibliotecas alineados, asegura cobertura de
-lint/test y captura artefactos para consumidores downstream. Ejecuta la lista de
-verificación de abajo para cada tag candidato.
+Бинарные файлы SoraFS (`sorafs_cli`, `sorafs_fetch`, helpers) и ящики SDK
+(`sorafs_car`, `sorafs_manifest`, `sorafs_chunker`) являются общественными объединениями. Эл трубопровод
+lanzamiento mantiene el CLI и las bibliotecas alineados, asegura cobertura de
+lint/test и захват артефактов для последующих потребителей. Извлеките список
+проверка подлинности для каждого тега кандидата.
 
-## 0. Confirmar la aprobación de la revisión de seguridad
+## 0. Подтвердить одобрение пересмотра мер безопасности
 
-Antes de ejecutar el gate técnico de lanzamiento, captura los artefactos más
-recientes de la revisión de seguridad:
+Прежде чем выбросить технические ворота, захватите больше артефактов
+Recientes de la revisión de seguridad:
 
-- Descarga el memo más reciente de revisión de seguridad SF-6 ([reports/sf6-security-review](./reports/sf6-security-review.md))
-  y registra su hash SHA256 en el ticket de lanzamiento.
-- Adjunta el enlace del ticket de remediación (por ejemplo, `governance/tickets/SF6-SR-2026.md`) y anota
-  los aprobadores de Security Engineering y del Tooling Working Group.
-- Verifica que la lista de remediación del memo esté cerrada; los ítems sin resolver bloquean el lanzamiento.
-- Prepárate para subir los logs del harness de paridad (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`)
-  junto con el bundle del manifest.
-- Confirma que el comando de firma que planeas ejecutar incluya tanto `--identity-token-provider` como
-  un `--identity-token-audience=<aud>` explícito para que el alcance de Fulcio quede capturado en la evidencia del release.
+- Загрузите большую заметку о пересмотре безопасности SF-6 ([reports/sf6-security-review](./reports/sf6-security-review.md))
+  и зарегистрируйте свой хеш SHA256 в билете Lanzamiento.
+- Дополнение к билету исправления (например, `governance/tickets/SF6-SR-2026.md`) и еще раз.
+  лос-апробадоры инженерной безопасности и рабочей группы по инструментарию.
+- Проверка списка исправлений заметок об ошибках; Лос-предметы не могут быть заблокированы устройством разрешения.
+- Подготовьте журналы для хранения журналов безопасности (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`).
+  объединение с пакетом манифеста.
+- Подтвердите, что команда фирмы, которая выбрасывает самолет, включает в себя соответствующий `--identity-token-provider` как
+  `--identity-token-audience=<aud>` поясняет, что альканс де Фульсио был захвачен в качестве доказательства освобождения.
 
-Incluye estos artefactos al notificar a gobernanza y publicar el lanzamiento.
+Включите эти артефакты в уведомление губернатора и опубликуйте его.
 
-## 1. Ejecutar el gate de lanzamiento/pruebas
+## 1. Выдвиньте ворота ланзамьенто/прюбас
 
-El helper `ci/check_sorafs_cli_release.sh` ejecuta formateo, Clippy y tests
-sobre los crates de CLI y SDK con un directorio target local al workspace (`.target`)
-para evitar conflictos de permisos al ejecutarse dentro de contenedores CI.
+El helper `ci/check_sorafs_cli_release.sh` форматирование файла, Clippy и тесты
+Собраны ящики CLI и SDK с целевым каталогом локальной рабочей области (`.target`)
+для устранения конфликтов разрешений на выброс содержимого содержимого CI.
 
 ```bash
 CARGO_TARGET_DIR=.target ci/check_sorafs_cli_release.sh
 ```
 
-El script realiza las siguientes comprobaciones:
+Сценарий реализует следующие проверки:
 
-- `cargo fmt --all -- --check` (workspace)
-- `cargo clippy --locked --all-targets` para `sorafs_car` (con la feature `cli`),
-  `sorafs_manifest` y `sorafs_chunker`
-- `cargo test --locked --all-targets` para esos mismos crates
+- `cargo fmt --all -- --check` (рабочая область)
+- `cargo clippy --locked --all-targets` для `sorafs_car` (с функцией `cli`),
+  `sorafs_manifest` и `sorafs_chunker`
+- `cargo test --locked --all-targets` для ящиков с мисками
 
-Si algún paso falla, corrige la regresión antes de etiquetar. Los builds de release
-deben estar continuos con main; no hagas cherry-pick de fixes en ramas de release.
-El gate también comprueba que los flags de firma sin claves (`--identity-token-issuer`,
-`--identity-token-audience`) se proporcionen donde corresponda; los argumentos
-faltantes hacen fallar la ejecución.
+Если вы еще не сделали этого, исправьте отступления от этикета. Лос-билды выпуска
+deben estar continuos con main; никаких исправлений в рамах выпуска.
+Ворота также связаны с флагами фирмы без клав (`--identity-token-issuer`,
+`--identity-token-audience`) соответствует требованиям; лос аргументос
+фальтантес хасен упал на выброс.
 
-## 2. Aplicar la política de versionado
+## 2. Политическое приложение версии
 
-Todos los crates de CLI/SDK de SoraFS usan SemVer:
-
-- `MAJOR`: Se introduce para el primer release 1.0. Antes de 1.0 el incremento
-  menor `0.y` **indica cambios con ruptura** en la superficie del CLI o en los
+Все ящики CLI/SDK для SoraFS, использующие SemVer:- `MAJOR`: Представляем вашему вниманию первый выпуск 1.0. Ставка 1.0 на увеличение
+  menor `0.y` **indica cambios con ruptura** на поверхности CLI или на лос
   esquemas Norito.
-- `MINOR`: Trabajo de funciones sin ruptura (nuevos comandos/flags, nuevos
-  campos Norito protegidos por política opcional, adiciones de telemetría).
-- `PATCH`: Correcciones de bugs, releases solo de documentación y actualizaciones de
-  dependencias que no cambian el comportamiento observable.
+- `MINOR`: Работа функций без разрыва (новые команды/флаги, новые
+  Кампос Norito, дополнительная защита от политической политики, дополнительные телеметрические настройки).
+- `PATCH`: исправления ошибок, отдельные выпуски документации и актуализация.
+  зависимости от того, что камбийский эль-comportamiento не наблюдаем.
 
-Siempre mantén `sorafs_car`, `sorafs_manifest` y `sorafs_chunker` en la misma versión
-para que los consumidores de SDK downstream puedan depender de una única cadena
-alineada. Al incrementar versiones:
+Всегда используйте `sorafs_car`, `sorafs_manifest` и `sorafs_chunker` в неправильной версии
+для того, чтобы потребители SDK ниже по течению могли зависеть от una cadena
+Алинеада. Все дополнительные версии:
 
-1. Actualiza los campos `version =` en cada `Cargo.toml`.
-2. Regenera el `Cargo.lock` vía `cargo update -p <crate>@<new-version>` (el workspace
-   exige versiones explícitas).
-3. Ejecuta el gate de lanzamiento otra vez para asegurar que no queden artefactos
-   obsoletos.
+1. Актуализировать кампус `version =` в каждом номере `Cargo.toml`.
+2. Восстановить `Cargo.lock` через `cargo update -p <crate>@<new-version>` (рабочее пространство
+   Exige Versiones Explícitas).
+3. Вытащите ворота для проветривания еще раз, чтобы убедиться, что нет артефактов.
+   устаревшие.
 
-## 3. Preparar notas de lanzamiento
+## 3. Подготовьте ноты ланзамьенто.
 
-Cada release debe publicar un changelog en markdown que resalte cambios que
-impacten CLI, SDK y gobernanza. Usa la plantilla en
-`docs/examples/sorafs_release_notes.md` (cópiala a tu directorio de artefactos de
-release y completa las secciones con detalles concretos).
+Выпуск Cada должен быть опубликован в журнале изменений и уценке, которые можно повторно использовать.
+Влияние CLI, SDK и управления. США la plantilla ru
+`docs/examples/sorafs_release_notes.md` (скопируйте в директорию артефактов
+выпуск и полные разделы с конкретными подробностями).
 
-Contenido mínimo:
+Минимальное содержание:
 
-- **Destacados**: titulares de funciones para consumidores de CLI y SDK.
-- **Impacto**: cambios con ruptura, upgrades de políticas, requisitos
-  mínimos de gateway/nodo.
-- **Pasos de actualización**: comandos TL;DR para actualizar dependencias cargo y
-  reejecutar fixtures deterministas.
-- **Verificación**: hashes o envoltorios de salida de comandos y la revisión exacta
-  de `ci/check_sorafs_cli_release.sh` ejecutada.
+- **Destacados**: названия функций для пользователей CLI и SDK.
+- **Воздействие**: борьба с разрывом, обновление политики, необходимые условия.
+  мини-шлюзы/узлы.
+- **Участки актуализации**: команды TL;DR для актуализации зависимых грузов и
+  reejecutar светильники детерминисты.
+- **Проверка**: хэши или данные, полученные от команды, и точная ревизия.
+  `ci/check_sorafs_cli_release.sh` извлечен.
 
-Adjunta las notas de lanzamiento completas al tag (por ejemplo, el cuerpo del release
-en GitHub) y guárdalas junto a los artefactos generados de forma determinista.
+Дополнения к примечаниям к завершению записи (для примера, в память о выпуске)
+en GitHub) и защитите созданные артефакты детерминированной формы.
 
-## 4. Ejecutar los hooks de release
+## 4. Высвободите крючки
 
-Ejecuta `scripts/release_sorafs_cli.sh` para generar el bundle de firmas y el
-resumen de verificación que se envía con cada release. El wrapper compila el CLI
-cuando es necesario, llama a `sorafs_cli manifest sign` y reproduce de inmediato
-`manifest verify-signature` para que los fallos aparezcan antes de etiquetar.
-Ejemplo:
+Извлеките `scripts/release_sorafs_cli.sh` для формирования пакета фирм и эл.
+Возобновляется проверка, которую вы отправили с каждым выпуском. Обертка компилирует CLI
+Когда это необходимо, позвоните `sorafs_cli manifest sign` и немедленно воспроизведите
+`manifest verify-signature`, чтобы они могли быть повреждены до этикета.
+Пример:
 
 ```bash
 scripts/release_sorafs_cli.sh \
@@ -121,34 +121,32 @@ scripts/release_sorafs_cli.sh \
   --expect-token-hash "$(cat .release/token.hash)"
 ```
 
-Consejos:
-
-- Registra los inputs del release (payload, plans, summaries, hash de token esperado)
-  en tu repo o config de despliegue para que el script sea reproducible. El bundle
-  de fixtures en `fixtures/sorafs_manifest/ci_sample/` muestra el layout canónico.
-- Basa la automatización de CI en `.github/workflows/sorafs-cli-release.yml`; ejecuta
-  el gate de release, invoca el script anterior y archiva bundles/firmas como
-  artefactos del workflow. Refleja el mismo orden de comandos (gate de release → firmar
-  → verificar) en otros sistemas CI para que los logs de auditoría coincidan con los
-  hashes generados.
+Советы:- Регистрация входных данных выпуска (полезная нагрузка, планы, сводки, хеш-код маркера)
+  В вашем репозитории или конфигурации despliegue, чтобы сценарий можно было воспроизвести. Эл пучок
+  светильники в `fixtures/sorafs_manifest/ci_sample/` соответствуют каноническому макету.
+- База автоматизации CI в `.github/workflows/sorafs-cli-release.yml`; выбросы
+  elgate de Release, вызов el script anterior и архивные пакеты/фирмы как
+  артефакты рабочего процесса. Refleja el mismo orden de comandos (ворота освобождения → фирма)
+  → проверить) в других системах CI, чтобы журналы аудиторий совпадали с лос
+  генерируемые хеши.
 - Mantén juntos `manifest.bundle.json`, `manifest.sig`, `manifest.sign.summary.json`
-  y `manifest.verify.summary.json`; forman el paquete referenciado en la notificación
-  de gobernanza.
-- Cuando el release actualice fixtures canónicos, copia el manifest actualizado,
-  el chunk plan y los summaries en `fixtures/sorafs_manifest/ci_sample/` (y actualiza
-  `docs/examples/sorafs_ci_sample/manifest.template.json`) antes de etiquetar.
-  Los operadores downstream dependen de los fixtures versionados para reproducir
-  el bundle de release.
-- Captura el log de ejecución de la verificación de canales acotados de
-  `sorafs_cli proof stream` y adjúntalo al paquete del release para demostrar que
-  las salvaguardas de proof streaming siguen activas.
-- Registra el `--identity-token-audience` exacto usado durante la firma en las
-  notas de lanzamiento; gobernanza verifica el audience contra la política de Fulcio
-  antes de aprobar la publicación.
+  y `manifest.verify.summary.json`; сформировать пакет ссылок в уведомлении
+  де Гобернанса.
+- Когда будет выпущен актуальный канонический светильник, скопируйте актуализированный манифест,
+  план фрагмента и сводки в `fixtures/sorafs_manifest/ci_sample/` (и актуализация
+  `docs/examples/sorafs_ci_sample/manifest.template.json`) до этикета.
+  Следующие операторы зависят от версий светильников для воспроизведения
+  комплект выпуска.
+- Захват журнала извлечения каналов проверки открытых каналов.
+  `sorafs_cli proof stream` и дополнение к пакету выпуска для демонстрации того, что
+  las salvaguardas de доказательство потоковой передачи снова активируется.
+- Зарегистрируйте `--identity-token-audience` точно в течение всего срока использования фирмы.
+  нотас де ланзамьенто; gobernanza verifica el Audience contra la politica de Fulcio
+  перед апробацией публикации.
 
-Usa `scripts/sorafs_gateway_self_cert.sh` cuando el release también incluya un
-rollout de gateway. Apunta al mismo bundle de manifest para probar que la
-atestación coincide con el artefacto candidato:
+США `scripts/sorafs_gateway_self_cert.sh`, когда выпуск также будет включен
+развертывание шлюза. Apunta al mismo Bundle de Manifest для проверки того, что
+аттестация совпадает с кандидатским артефактом:
 
 ```bash
 scripts/sorafs_gateway_self_cert.sh --config docs/examples/sorafs_gateway_self_cert.conf \
@@ -156,42 +154,40 @@ scripts/sorafs_gateway_self_cert.sh --config docs/examples/sorafs_gateway_self_c
   --manifest-bundle artifacts/release/manifest.bundle.json
 ```
 
-## 5. Etiquetar y publicar
+## 5. Этикет и публичность
 
-Después de que los checks pasen y los hooks se completen:
-
-1. Ejecuta `sorafs_cli --version` y `sorafs_fetch --version` para confirmar que los binarios
-   reportan la nueva versión.
-2. Prepara la configuración del release en un `sorafs_release.toml` versionado (preferido)
-   o en otro archivo de config rastreado por tu repo de despliegue. Evita depender de
-   variables de entorno ad-hoc; pasa rutas al CLI con `--config` (o equivalente) para que
-   los inputs del release sean explícitos y reproducibles.
-3. Crea un tag firmado (preferido) o un tag anotado:
+После завершения проверок и перехватов:1. Выберите `sorafs_cli --version` и `sorafs_fetch --version` для подтверждения двоичных файлов.
+   репортаж о новой версии.
+2. Подготовьте конфигурацию выпуска в версии `sorafs_release.toml` (предпочтительно).
+   o другой архив конфигурации будет перенесен в ваш репозиторий. Эвита зависит от
+   специальные переменные; не работать в CLI с `--config` (или эквивалентом) для этого
+   Лос-входы для релиза были явными и воспроизводимыми.
+3. Создайте тег фирмы (предпочтительный) или тег анотадо:
    ```bash
    git tag -s sorafs-vX.Y.Z -m "SoraFS CLI & SDK vX.Y.Z"
    git push origin sorafs-vX.Y.Z
    ```
-4. Sube los artefactos (bundles CAR, manifests, resúmenes de proofs, notas de release,
-   outputs de atestación) al registry del proyecto siguiendo el checklist de gobernanza
-   en la [guía de despliegue](./developer-deployment.md). Si el release generó nuevos
-   fixtures, súbelos al repositorio de fixtures compartido o al object store para que la
-   automatización de auditoría pueda comparar el bundle publicado con el control de
-   versiones.
-5. Notifica al canal de gobernanza con enlaces al tag firmado, notas de release, hashes
-   del bundle/firmas del manifest, resúmenes archivados de `manifest.sign/verify` y
-   cualquier envoltorio de atestación. Incluye la URL del job CI (o archivo de logs) que
-   ejecutó `ci/check_sorafs_cli_release.sh` y `scripts/release_sorafs_cli.sh`. Actualiza
-   el ticket de gobernanza para que los auditores puedan trazar las aprobaciones a los
-   artefactos; cuando el job `.github/workflows/sorafs-cli-release.yml` publique
-   notificaciones, enlaza los hashes registrados en lugar de pegar resúmenes ad-hoc.
+4. Sube los artefactos (пакеты CAR, манифесты, резюме доказательств, уведомления о выпуске,
+   результаты аттестации) в реестре проекта, в котором указан контрольный список правительства
+   в [гиа-де-сплье] (./developer-deployment.md). Если вышел новый выпуск
+   светильники, взяты из хранилища светильников, разделенного на все хранилища объектов, для того, чтобы
+   автоматизация аудитории позволяет сравнить опубликованный пакет с контролем
+   версии.
+5. Уведомление о правительственном канале с прикрепленными к нему фирменными тегами, примечаниями к выпуску и хэшами.
+   пакет/фирмы манифеста, архивные резюме `manifest.sign/verify` y
+   cualquier envoltorio de atestación. Включите URL-адрес задания CI (или архива журналов), который
+   выброс `ci/check_sorafs_cli_release.sh` и `scripts/release_sorafs_cli.sh`. Актуализация
+   эль-билет губернатора, чтобы аудиторы могли пройти лас-апробасьонс в лос
+   артефакты; когда работа `.github/workflows/sorafs-cli-release.yml` публичная
+   уведомления, регистрируемые хеши и специальные резюме.
 
-## 6. Seguimiento posterior al release
+## 6. Seguimiento задний релиз
 
-- Asegura que la documentación que apunta a la nueva versión (quickstarts, plantillas de CI)
-  esté actualizada o confirma que no se requieren cambios.
-- Registra entradas de roadmap si se requiere trabajo posterior (por ejemplo, flags de
-- Archiva los logs de salida del gate de release para auditoría: guárdalos junto a los
-  artefactos firmados.
+- Убедитесь, что документация соответствует новой версии (быстрые старты, установки CI)
+  Это актуализировано или подтверждено, что вам не нужны камбиосы.
+- Зарегистрируйте ввод дорожной карты, если требуется задняя работа (например, флаги
+- Архив журналов освобождения ворот для аудитории: охранники в Лос-Анджелесе
+  твердые артефакты.
 
-Seguir este pipeline mantiene el CLI, los crates del SDK y el material de gobernanza
-alineados para cada ciclo de release.
+Следите за этим конвейером, управляя CLI, ящиками SDK и материалами правительства.
+alineados для каждого цикла выпуска.

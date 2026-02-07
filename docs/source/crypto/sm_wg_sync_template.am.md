@@ -7,39 +7,40 @@ generator: scripts/sync_docs_i18n.py
 source_hash: c5fe52a907606a67a09e0ff229adb94f91dda73d809d8a8344166862dc62def9
 source_last_modified: "2025-12-29T18:16:35.947414+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-//! Template for recording SM rollout decisions during Crypto WG syncs.
+//! በCrypto WG ማመሳሰል ወቅት የኤስኤም ልቀት ውሳኔዎችን ለመቅዳት አብነት።
 
-# SM Rollout – WG Sync Notes (Template)
+# የኤስኤምኤስ ልቀት - የWG ማመሳሰል ማስታወሻዎች (አብነት)
 
-- **Date:** 2025-__-__
-- **Participants:** Crypto WG core, Release Eng, Security Review, SDK leads
-- **Facilitator:** ___________________
+- **ቀን:**2025-__-__
+- ** ተሳታፊዎች: ** Crypto WG ኮር, መለቀቅ ኢንጂነር, የደህንነት ግምገማ, የኤስዲኬ ይመራል
+- **አስተባባሪ፡** ___________________
 
-## Agenda
-1. Lock refresh approval (`sm_lock_refresh_plan.md`)
-2. Deterministic policy & config knobs (SM-1/SM-3 tasks)
-3. Compliance brief status (SM-6a complete) & operator checklist updates (SM-6b)
-4. Dependency audit reviewers for `sm2`, `sm3`, `sm4`, `rfc6979`
+# አጀንዳ
+1. የማደስ ማረጋገጫን ቆልፍ (`sm_lock_refresh_plan.md`)
+2. ቆራጥ ፖሊሲ እና የማዋቀር ቁልፎች (SM-1/SM-3 ተግባራት)
+3. ተገዢነት አጭር ሁኔታ (SM-6a ተጠናቋል) እና ከዋኝ ዝርዝር ማሻሻያ (SM-6b)
+4. የጥገኛ ኦዲት ገምጋሚዎች ለ`sm2`፣ `sm3`፣ `sm4`፣ `rfc6979`
 
-## Decisions
-- [ ] Lock refresh approved? Details:
-- [ ] Deterministic policy affirmed? Notes:
-- [ ] Compliance brief owner + due date:
-- [ ] Audit reviewers assigned:
+# ውሳኔዎች
+- [ ] መቆለፊያ ማደስ ጸድቋል? ዝርዝሮች፡
+- [ ] ቆራጥ ፖሊሲ ተረጋገጠ? ማስታወሻዎች፡-
+- [ ] ተገዢነት አጭር ባለቤት + የማለቂያ ቀን፡
+- [ ] የኦዲት ገምጋሚዎች ተመድበዋል፡-
 
-## Action Items
-| Item | Owner | Due | Status |
-|------|-------|-----|--------|
-| Prepare Cargo.lock PR after approval | Release Eng | ████ | ☐ |
-| Verify Annex D OpenSSL checks | Crypto WG | ████ | ☐ |
-| Track compliance brief revisions & operator checklist addenda | Docs/Legal | ████ | ☐ |
+## የተግባር እቃዎች
+| ንጥል | ባለቤት | የሚከፈልበት | ሁኔታ |
+|-------|-------|-----|----|
+| ከተፈቀደ በኋላ Cargo.lock PR አዘጋጁ | መልቀቅ ኢንጅነር | ████ | ☐ |
+| አባሪ D OpenSSL ቼኮችን ያረጋግጡ | Crypto WG | ████ | ☐ |
+| ተገዢነትን ይከታተሉ አጭር ክለሳዎች እና ከዋኝ ማረጋገጫ ዝርዝር addnda | ሰነዶች/ህጋዊ | ████ | ☐ |
 
-## Notes / Risks
+## ማስታወሻዎች / አደጋዎች
 - _______________________________
 - _______________________________
 
-## Follow-up
-- Next review date:
-- Reporting back channel:
+#ክትትል
+- የሚቀጥለው የግምገማ ቀን፡-
+- መልሶ ማሰራጫ ጣቢያ;

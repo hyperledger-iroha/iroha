@@ -6,57 +6,59 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: SNS KPI dashboard
 description: Live Grafana panels that aggregate registrar, freeze, and revenue metrics for SN-8a.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Sora Name Service KPI Dashboard
+# Sora 名称服务 KPI 仪表板
 
-The KPI dashboard gives stewards, guardians, and regulators a single place to
-review adoption, error, and revenue signals before the monthly annex cadence
-(SN-8a). The Grafana definition ships in the repository at
-`dashboards/grafana/sns_suffix_analytics.json` and the portal mirrors the same
-panels via an embedded iframe so the experience matches the internal Grafana
-instance.
+KPI 仪表板为管理者、监护人和监管者提供了一个统一的位置
+在每月附件节奏之前审查采用情况、错误和收入信号
+(SN-8a)。 Grafana 定义位于存储库中
+`dashboards/grafana/sns_suffix_analytics.json` 与门户镜像相同
+通过嵌入式 iframe 进行面板，因此体验与内部 Grafana 相匹配
+实例。
 
-## Filters & Data Sources
+## 过滤器和数据源
 
-- **Suffix filter** – drives the `sns_registrar_status_total{suffix}` queries so
-  `.sora`, `.nexus`, and `.dao` can be inspected independently.
-- **Bulk release filter** – scopes the `sns_bulk_release_payment_*` metrics so
-  finance can reconcile a specific registrar manifest.
-- **Metrics** – pulls from Torii (`sns_registrar_status_total`,
-  `torii_request_duration_seconds`), guardian CLI (`guardian_freeze_active`),
-  `sns_governance_activation_total`, and the bulk-onboarding helper metrics.
+- **后缀过滤器** – 驱动 `sns_registrar_status_total{suffix}` 查询，以便
+  `.sora`、`.nexus`和`.dao`可以独立检查。
+- **批量发布过滤器** – 限制 `sns_bulk_release_payment_*` 指标的范围，以便
+  财务部门可以核对特定注册商清单。
+- **指标** – 取自 Torii (`sns_registrar_status_total`,
+  `torii_request_duration_seconds`), 监护人 CLI (`guardian_freeze_active`),
+  `sns_governance_activation_total`，以及批量入职帮助程序指标。
 
-## Panels
+## 面板
 
-1. **Registrations (last 24h)** – number of successful registrar events for the
-   selected suffix.
-2. **Governance activations (30d)** – charter/addendum motions recorded by the
-   CLI.
-3. **Registrar throughput** – per-suffix rate of successful registrar actions.
-4. **Registrar error modes** – 5 minute rate of error-labelled
-   `sns_registrar_status_total` counters.
-5. **Guardian freeze windows** – live selectors where `guardian_freeze_active`
-   reports an open freeze ticket.
-6. **Net payment units by asset** – totals reported by
-   `sns_bulk_release_payment_net_units` per asset.
-7. **Bulk requests per suffix** – manifest volumes per suffix id.
-8. **Net units per request** – ARPU-style calculation derived from the release
-   metrics.
+1. **注册（过去 24 小时）** – 成功注册商活动的数量
+   选定的后缀。
+2. **治理激活（30天）** – 章程/附录动议记录
+   命令行界面。
+3. **注册商吞吐量** – 每个后缀的注册商成功操作率。
+4. **注册商错误模式** – 5 分钟错误率标记
+   `sns_registrar_status_total` 计数器。
+5. **Guardian 冻结窗口** – 实时选择器，其中 `guardian_freeze_active`
+   报告未结冻结票证。
+6. **按资产划分的净支付单位** – 按资产报告的总计
+   每项资产 `sns_bulk_release_payment_net_units`。
+7. **每个后缀的批量请求** – 每个后缀 ID 的清单卷。
+8. **每个请求的净单位** – 来自发布的 ARPU 样式计算
+   指标。
 
-## Monthly KPI Review Checklist
+## 每月 KPI 审核清单
 
-The finance lead drives a recurring review on the first Tuesday of every month:
+财务负责人在每个月的第一个星期二进行定期审核：
 
-1. Open the portal’s **Analytics → SNS KPI** page (or Grafana dashboard `sns-kpis`).
-2. Capture a PDF/CSV export of the registrar throughput and revenue tables.
-3. Compare suffixes for SLA breaches (error rate spikes, frozen selectors >72 h,
-   ARPU deltas >10 %).
-4. Log summaries + action items in the relevant annex entry under
-   `docs/source/sns/regulatory/<suffix>/YYYY-MM.md`.
-5. Attach the exported dashboard artefacts to the annex commit and link them in
-   the council agenda.
+1. 打开门户的 **分析 → SNS KPI** 页面（或 Grafana 仪表板 `sns-kpis`）。
+2. 捕获注册商吞吐量和收入表的 PDF/CSV 导出。
+3. 比较 SLA 违规的后缀（错误率峰值、冻结选择器 >72 小时、
+   ARPU 增量 >10%）。
+4. 日志摘要 + 相关附件条目中的行动项目
+   `docs/source/sns/regulatory/<suffix>/YYYY-MM.md`。
+5. 将导出的仪表板工件附加到附件提交并将它们链接到
+   理事会议程。
 
-If the review uncovers SLA breaches, file a PagerDuty incident for the affected
-owner (registrar duty manager, guardian on-call, or steward program lead) and
-track the remediation in the annex log.
+如果审核发现存在 SLA 违规行为，请为受影响的用户提交 PagerDuty 事件
+所有者（登记员值班经理、值班监护人或管家计划负责人）以及
+在附件日志中跟踪修复情况。

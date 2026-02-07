@@ -7,20 +7,21 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 2ecdf23dc61024ae4c509806700773d9b34ddd36076c1182cbeccd3654b29144
 source_last_modified: "2026-01-05T18:22:23.392202+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-## Iroha Connect Client Examples (TypeScript and Kotlin)
+## Iroha Connect 客戶端示例（TypeScript 和 Kotlin）
 
-This document shows minimal client-side snippets implementing v0 rules:
-- AEAD AAD binds outer header (version, sid, dir, seq, kind=Ciphertext).
-- Nonce derived from `seq` (12-byte IETF nonce: 0x00000000 || seq_le).
-- Post‑Approve control frames (Close/Reject) sent encrypted.
+本文檔顯示了實現 v0 規則的最小客戶端片段：
+- AEAD AAD 綁定外部標頭（version、sid、dir、seq、kind=Ciphertext）。
+- 隨機數源自 `seq`（12 字節 IETF 隨機數：0x00000000 || seq_le）。
+- 批准後控制幀（關閉/拒絕）以加密方式發送。
 
-These are illustrative; hardening/production checks omitted.
+這些都是說明性的；省略硬化/生產檢查。
 
-### TypeScript (libsodium + WebCrypto)
+### TypeScript（libsodium + WebCrypto）
 
-Dependencies: `libsodium-wrappers` (X25519, BLAKE2b, ChaCha20‑Poly1305), WebCrypto (HKDF‑SHA‑256).
+依賴項：`libsodium-wrappers`（X25519、BLAKE2b、ChaCha20-Poly1305）、WebCrypto（HKDF-SHA-256）。
 
 ```ts
 import sodium from 'libsodium-wrappers';
@@ -99,9 +100,9 @@ async function openEnvelope(k: Uint8Array, sid: Uint8Array, dir: 'A2W'|'W2A', se
 })();
 ```
 
-### Kotlin (JDK 11 + BouncyCastle)
+### Kotlin（JDK 11 + BouncyCastle）
 
-Dependencies:
+依賴項：
 
 ```kotlin
 dependencies { implementation("org.bouncycastle:bcprov-jdk15on:1.78.1") }
@@ -199,7 +200,7 @@ fun main() {
 }
 ```
 
-Notes:
-- Client computes `sid` (32 bytes; base64url/hex) and POSTs it to `/v1/connect/session` to obtain one‑time tokens; server echoes `sid`. Join WS with `Authorization: Bearer <token>` or `Sec-WebSocket-Protocol: iroha-connect.token.v1.<base64url(token)>`.
-- After keys exist (Approve), send Close/Reject in encrypted payloads.
-- Dedupe keys and `seq` must be monotonic per direction for app/wallet frames; `Envelope.seq == frame.seq`. Server events use a separate server-side sequence and are excluded from AEAD/dedupe.
+注意事項：
+- 客戶端計算 `sid`（32 字節；base64url/hex）並將其 POST 到 `/v1/connect/session` 以獲取一次性令牌；服務器回顯 `sid`。使用 `Authorization: Bearer <token>` 或 `Sec-WebSocket-Protocol: iroha-connect.token.v1.<base64url(token)>` 加入 WS。
+- 密鑰存在（批准）後，以加密的有效負載發送“關閉/拒絕”。
+- 對於應用程序/錢包框架，重複數據刪除密鑰和 `seq` 在每個方向上必須是單調的； `Envelope.seq == frame.seq`。服務器事件使用單獨的服務器端序列，並且從 AEAD/重複數據刪除中排除。

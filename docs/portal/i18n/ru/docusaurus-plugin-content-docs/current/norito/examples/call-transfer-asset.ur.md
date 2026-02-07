@@ -4,28 +4,30 @@ direction: ltr
 source: docs/portal/docs/norito/examples/call-transfer-asset.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-slug: /norito/examples/call-transfer-asset
+пул: /norito/examples/call-transfer-asset
 title: Kotodama سے ہوسٹ ٹرانسفر کال کریں
-description: دکھاتا ہے کہ Kotodama انٹری پوائنٹ کس طرح ہوسٹ کی `transfer_asset` انسٹرکشن کو inline میٹا ڈیٹا ویلیڈیشن کے ساتھ کال کر سکتا ہے۔
-source: crates/ivm/docs/examples/08_call_transfer_asset.ko
+описание: دکھاتا ہے کہ Kotodama انٹری پوائنٹ کس طرح ہوسٹ کی `transfer_asset` انسٹرکشن Если вы хотите использовать встроенные функции, вы можете использовать их в качестве встроенного варианта.
+источник: crates/ivm/docs/examples/08_call_transfer_asset.ko
 ---
 
-دکھاتا ہے کہ Kotodama انٹری پوائنٹ کس طرح ہوسٹ کی `transfer_asset` انسٹرکشن کو inline میٹا ڈیٹا ویلیڈیشن کے ساتھ کال کر سکتا ہے۔
+Если вам нужен Kotodama, вы можете использовать `transfer_asset`. встроенные функции, которые помогут вам выбрать нужный вариант
 
 ## لیجر واک تھرو
 
-- کنٹریکٹ اتھارٹی (مثلا `ih58...`) کو اس اثاثے سے فنڈ کریں جسے وہ منتقل کرے گی اور اتھارٹی کو `CanTransfer` رول یا مساوی اجازت دیں۔
-- `call_transfer_asset` انٹری پوائنٹ کال کریں تاکہ کنٹریکٹ اکاؤنٹ سے `ih58...` کو 5 یونٹس منتقل ہوں، یہ اس طریقے کی عکاسی کرتا ہے کہ آن چین آٹومیشن ہوسٹ کالز کو لپیٹ سکتی ہے۔
-- `FindAccountAssets` یا `iroha_cli ledger assets list --account ih58...` کے ذریعے بیلنس دیکھیں اور ایونٹس چیک کریں تاکہ تصدیق ہو کہ میٹا ڈیٹا گارڈ نے ٹرانسفر کانٹیکسٹ لاگ کیا ہے۔
+- Установите флажок (`ih58...`) для получения дополнительной информации о Если у вас есть `CanTransfer`, вы можете использовать его в качестве источника питания.
+- `call_transfer_asset` Для получения дополнительной информации о `ih58...` для 5 یونٹس منتقل ہوں، یہ اس طریقے کی عکاسی کرتا ہے کہ کین آٹومیشن ہوسٹ کالز کو لپیٹ سکتی ہے۔
+- `FindAccountAssets` یا `iroha_cli ledger assets list --account ih58...` может быть использовано в качестве дополнительного источника питания. Если вы хотите, чтобы вы выбрали лучший вариант
 
-## متعلقہ SDK گائیڈز
+## Использование SDK
 
-- [Rust SDK quickstart](/sdks/rust)
-- [Python SDK quickstart](/sdks/python)
-- [JavaScript SDK quickstart](/sdks/javascript)
+- [Краткий старт Rust SDK](/sdks/rust)
+- [Краткое руководство по Python SDK] (/sdks/python)
+- [Краткое руководство по JavaScript SDK] (/sdks/javascript)
 
 [Kotodama سورس ڈاؤن لوڈ کریں](/norito-snippets/call-transfer-asset.ko)
 

@@ -8,102 +8,113 @@ source_hash: 2ebff8477d06e2aac8840988d31762704d05ded353d3f900a87db3ea5091e718
 source_last_modified: "2026-01-04T08:19:26.508527+00:00"
 translation_last_reviewed: 2026-02-07
 title: Governance ZK Vote Tally
+translator: machine-google-reviewed
 ---
 
-## Overview
+## སྤྱི་མཐོང་།
 
-Iroha’s governance tally flow relies on a Halo2/IPA circuit that verifies a bit vote commitment and its membership in the eligible voter set. This note captures the circuit parameters, public inputs, and auditing fixtures so reviewers can regenerate the verifying key and proofs used in tests.
+Iroha གི་གཞུང་སྐྱོང་འདི་ Halo2/IPA གློག་ལམ་ལུ་བརྟེན་ཏེ་ ཚོགས་རྒྱན་བཙུགས་ནི་གི་ཁས་བླངས་དང་ འཐུས་མི་ཚུ་ བདེན་དཔྱད་འབདཝ་ཨིན། འ་ནི་དྲན་འཛིན་འདི་གིས་ གློག་ལམ་ཚད་གཞི་དང་ མི་མང་གི་ནང་འདྲེན་ དེ་ལས་ རྩིས་ཞིབ་ཀྱི་ ཅ་ཆས་ཚུ་ བསྐྱར་ཞིབ་འབད་མི་ཚུ་གིས་ བརྟག་དཔྱད་ནང་ལག་ལེན་འཐབ་མི་ བདེན་དཔྱད་ལྡེ་མིག་དང་ བདེན་ཁུངས་ཚུ་ བསྐྱར་བཟོ་འབད་ཚུགས།
 
-## Circuit Summary
+## གློག་རྒྱུན་བཅུད་བསྡུས།
 
-- **Circuit identifier**: `halo2/pasta/vote-bool-commit-merkle8-v1`
-- **Implementation**: `VoteBoolCommitMerkle::<8>` in `iroha_core::zk::depth`
-- **Domain size**: `k = 6`
-- **Backend**: Transparent Halo2/IPA over Pasta (ZK1 envelope: `IPAK` + `H2VK` for VKs, `PROF` + `I10P` for proofs)
-- **Witness shape**:
-  - ballot bit `v ∈ {0,1}`
-  - randomness scalar `ρ`
-  - eight sibling scalars for the Merkle path
-  - direction bits (all zero in the reference witnesses)
-- **Merkle compressor**: `H(x, y) = 2·(x + 7)^5 + 3·(y + 13)^5 (mod p)` where `p` is the Pasta scalar modulus
-- **Public inputs**:
-  - column 0: `commit`
-  - column 1: Merkle root
-  - exposed via the `I10P` TLV (`cols = 2`, `rows = 1`)
+- **གློག་ལམ་ངོས་འཛིན་**:: `halo2/pasta/vote-bool-commit-merkle8-v1`
+- **ལག་ལེན་**: `VoteBoolCommitMerkle::<8>` ནང་ `iroha_core::zk::depth` ནང་།
+- **མངའ་ཁོངས་ཚད་**: `k = 6`
+- **Backend**: དྭངས་གསལ་གྱི་ Halo2/IPA (ZK1 ཡིག་ཤུབས་: `IPAK` + `H2VK` དང་ VKs, `PROF` + ```bash
+cargo xtask zk-vote-tally-bundle \
+  --out fixtures/zk/vote_tally \
+  --print-hashes \
+  --attestation fixtures/zk/vote_tally/bundle.attestation.json
+``` + བདེན་པའི་དོན་ལུ།
+- **དཔང་པོའི་དབྱིབས་**:
+  - ཚོགས་རྒྱན་བིཊི་ `v ∈ {0,1}`
+  - གང་བྱུང་འཕོ་འགྱུར་ `ρ`
+  - མར་ཀེལ་ལམ་གྱི་དོན་ལུ་ སྤུན་ཆ་གི་སྤུན་ཆ་བརྒྱད་པ།
+  - ཁ་ཕྱོགས་བིཊི་ཚུ་ (གཞི་བསྟུན་གྱི་དཔང་པོ་ཚུ་ནང་ ཀླད་ཀོར་ཆ་མཉམ་)།
+- **merkle བསྡམ་བཞག་འཕྲུལ་ཆས་**: `H(x, y) = 2·(x + 7)^5 + 3·(y + 13)^5 (mod p)` དེ་ཡང་ `p` འདི་ པ་སི་ཊ་ སི་ཀ་ལར་མོ་ཌུ་ལཱསི་ཨིན།
+- **དཔེ་སྐྲུན་གྱི་ཨིན་པུཊི་**::
+  - ཀེར་ཐིག་༠: I༡༨NI00000022X
+  - ཀེར་ཐིག་༡: མེར་ཀལ་རྩ་བ།
+  - `I10P` TLV (`cols = 2`, `rows = 1`)
 
-### Circuit layout
+### གློག་རྒྱུན་བཀོད་སྒྲིག།
 
-- **Advice columns**:
-  - `v` – ballot bit constrained to be boolean.
-  - `ρ` – blinding scalar used in the vote commitment.
-  - `sibling[i]` for `i ∈ [0, 7]` – Merkle path element at depth `i`.
-  - `dir[i]` for `i ∈ [0, 7]` – direction bit selecting left (`0`) or right (`1`) branch.
-  - `node[i]` for `i ∈ [0, 7]` – Merkle accumulator after depth `i`.
-- **Instance columns**:
-  - `commit` – public commitment published by the voter.
-  - `root` – Merkle root of the eligible voter set.
-- **Selector**: `s_vote` enables the gate on the single populated row.
+- **བསླབ་བྱའི་ཀ་ཆེན་**::
+  - `v` – ཚོགས་རྒྱན་བཙུགས་ནིའི་དོན་ལུ་ ཚོགས་རྒྱན་བིཊི་བཀག་ཆ་འབད་ཡོདཔ།
+  - `ρ` – ཚོགས་རྒྱན་ཁས་བླངས་ནང་ལག་ལེན་འཐབ་མི་ scalar མིག་བཙུམ།
+  - `sibling[i]` for `i ∈ [0, 7]` – གཏིང་ཚད་ `i` ལུ་ Merkle གི་འགྲུལ་ལམ་ཆ་ཤས།
+  - `dir[i]` གི་དོན་ལུ་ `i ∈ [0, 7]` – ཁ་ཕྱོགས་བིཊི་གཡོན་སེལ་འཐུ་འབད་དེ་ (Torii) ཡང་ན་ གཡས་ཁ་ཐུག་ (`1`) ཡན་ལག་.
+  - `node[i]` གི་དོན་ལུ་ `i ∈ [0, 7]` – གཏིང་ཚད་ `i` གི་ཤུལ་ལས་ Merkle བསྡུ་གསོག་འབད་མི།
+- **Instance ཀ་ཆེན་ཚུ་**:
+  - `commit` – ཚོགས་རྒྱན་བཙུགས་མི་གིས་ མི་མང་གི་ཁས་བླངས་ པར་སྐྲུན་འབད་ཡོདཔ།
+  - `root` – འོས་འཚམ་གྱི་ ཚོགས་རྒྱན་བཙུགས་མི་ གཞི་སྒྲིག་གི་ Merkle རྩ་བ་།
+- **སེལ་འཐུ་**: `s_vote` གིས་ མི་རློབས་རྐྱང་པའི་གྲལ་ཐིག་གུ་ཡོད་པའི་སྒོ་འདི་ལྕོགས་ཅན་བཟོཝ་ཨིན།
 
-All advice cells are assigned in the first (and only) row of the region; the circuit uses a `SimpleFloorPlanner`.
+བསླབ་བྱའི་ནང་ཐིག་ཆ་མཉམ་ ལུང་ཕྱོགས་ཀྱི་(དང་རྐྱངམ་ཅིག་) གྲལ་ཐིག་ནང་འགན་སྤྲོད་འབད་ཡོདཔ་ཨིན། གློག་ལམ་འདི་གིས་ `SimpleFloorPlanner` ལག་ལེན་འཐབ་ཨིན།
 
-### Gate system
+### སྒོ་གི་ལམ་ལུགས།
 
-Let `H` be the compressor defined above and `prev_0 = H(v, ρ)`. The gate enforces:
+`H` འདི་ གོང་ལུ་ངེས་འཛིན་འབད་ཡོད་པའི་ བསྡམ་འཕྲུལ་དང་ `prev_0 = H(v, ρ)` འདི་ བསྡམ་བཞག་མི་འདི་ཨིན། འཛུལ་སྒོ་འདི་:
 
-1. `s_vote · v · (v - 1) = 0` – boolean ballot bit.
-2. `s_vote · (H(v, ρ) - commit) = 0` – commitment consistency.
-3. For each depth `i`:
-   - `s_vote · dir[i] · (dir[i] - 1) = 0` – boolean path direction.
+1. `s_vote · v · (v - 1) = 0` – བུ་ལིན་ཚོགས་རྒྱན་བིཊ་།
+2. `s_vote · (H(v, ρ) - commit) = 0` – ཁས་བླངས་ཀྱི་རྟགས་མ།
+༣ གཏིང་ཚད་རེ་རེའི་དོན་ལུ་ `i`:
+   - `s_vote · dir[i] · (dir[i] - 1) = 0` – བུ་ལིན་འགྲུལ་ལམ་ཁ་ཕྱོགས།
    - `left = H(prev_i, sibling[i])`
    - `right = H(sibling[i], prev_i)`
    - `expected = (1 - dir[i]) · left + dir[i] · right`
    - `s_vote · (node[i] - expected) = 0`
    - `prev_{i+1} = node[i]`
-4. `s_vote · (prev_8 - root) = 0` – accumulator equals the public Merkle root.
+4. `s_vote · (prev_8 - root) = 0` – བསྡུ་གསོག་འབད་མི་གིས་ མི་མང་མར་ཀེལ་གྱི་རྩ་བ་དང་འདྲན་འདྲ་ཨིན།
 
-The compressor uses quintic shapes only; no lookup tables are required. All arithmetic is performed in the Pasta scalar field, and the row count `k = 6` allocates `2^k = 64` rows — only row zero is populated.
+བསྡམ་འཕྲུལ་འདི་གིས་ quintic དབྱིབས་ཚུ་རྐྱངམ་ཅིག་ལག་ལེན་འཐབ་ཨིན། བལྟ་བཤལ་ཐིག་ཁྲམ་ཚུ་དགོཔ་མེད། ཨང་རྩིས་རིག་པ་ཆ་མཉམ་ པཱསི་ཊ་ སི་ཀཱ་ལར་ས་སྒོ་ནང་ འབད་ཡོདཔ་དང་ གྲལ་ཐིག་ཨང་ `k = 6` གིས་ ```text
+public_inputs_schema_hash = 0xfae4cbe786f280b4e2184dbb06305fe46b7aee20464c0be96023ffd8eac064d3
+``` གྲལ་ཐིག་ཚུ་ བགོ་བཀྲམ་འབདཝ་ཨིན་ — གྲལ་ཐིག་ཀླད་ཀོར་རྐྱངམ་ཅིག་ མི་རློབས་ཨིན།
 
-### Canonical fixture
+### ཏན་ཏན་སྒྲིག་ཆ།
 
-The deterministic harness (`zk_testkit::vote_merkle8_bundle`) populates the witness with:
+གཏན་འབེབས་ཀྱི་ harness (`zk_testkit::vote_merkle8_bundle`) གིས་ དཔང་པོ་འདི་ འདི་དང་གཅིག་ཁར་ མི་རློབས་བཏོནམ་ཨིན།
 
-- `v = 1`
+- ```bash
+cargo xtask zk-vote-tally-bundle \
+  --out fixtures/zk/vote_tally \
+  --verify \
+  --attestation fixtures/zk/vote_tally/bundle.attestation.json
+```
 - `ρ = 12345`
-- `sibling[i] = 10 + i` for `i ∈ [0, 7]`
+- `sibling[i] = 10 + i` གི་དོན་ལུ་ `i ∈ [0, 7]`
 - `dir[i] = 0`
-- `node[i] = H(node[i-1], sibling[i])` with `node[-1] = H(v, ρ)`
+- `node[i] = H(node[i-1], sibling[i])` `node[-1] = H(v, ρ)` དང་མཉམ་དུ།
 
-This produces the public values:
+འདི་གིས་ མི་མང་གི་གནས་གོང་ཚུ་ བཏོནམ་ཨིན།
 
 ```text
 commit = 0x20574662a58708e02e0000000000000000000000000000000000000000000000
 root   = 0xb63752ff429362c3a9b3cd5966c23567fdb757ce3b38af724b9303a5ea2f5817
 ```
 
-The `public_inputs_schema_hash` recorded in the verifying-key registry is `blake2b-256(commit_bytes || root_bytes)` with the least significant bit forced to `1`, yielding:
+བདེན་དཔྱད་ལྡེ་མིག་ཐོ་བཀོད་ནང་ ཐོ་བཀོད་འབད་དེ་ཡོད་མི་ `public_inputs_schema_hash` འདི་ `blake2b-256(commit_bytes || root_bytes)` འདི་ `1` ལུ་ གལ་གནད་ཅན་གྱི་བིཊི་ཉུང་ཤོས་ཅིག་ བཙན་ཤེད་ཀྱིས་ ཐོན་སྐྱེད་འབད་ཡོདཔ།
 
 ```text
 public_inputs_schema_hash = 0xfae4cbe786f280b4e2184dbb06305fe46b7aee20464c0be96023ffd8eac064d3
 ```
 
-### Verifying key record
+### ལྡེ་མིག་དྲན་ཐོ་བདེན་དཔྱད་འབད་ནི།
 
-Governance registers the verifier under:
-
-- `backend = "halo2/pasta/ipa-v1/vote-bool-commit-merkle8-v1"`
+གཞུང་སྐྱོང་གིས་ བདེན་དཔྱད་འབད་མི་འདི་ འོག་ལུ་བཀོད་དེ་ཡོད།- `backend = "halo2/pasta/ipa-v1/vote-bool-commit-merkle8-v1"`
 - `circuit_id = "halo2/pasta/vote-bool-commit-merkle8-v1"`
 - `backend tag = BackendTag::Halo2IpaPasta`
 - `curve = "pallas"`
 - `public_inputs_schema_hash = 0xfae4…64d3`
-- `commitment = sha256(backend || vk_bytes)` (32-byte digest)
+- `commitment = sha256(backend || vk_bytes)` (32-byte བཞུ་ཚུགས།)
 
-The canonical bundle includes an inline verifying key (`key = Some(VerifyingKeyBox { … })`) together with the proof envelope. `vk_len`, `max_proof_bytes`, and optional metadata URIs are populated from the generated artefacts.
+ཀེ་ནོ་ནིག་བཱན་ཌལ་ནང་ བདེན་ཁུངས་ཅན་གྱི་ཡིག་ཤུབས་དང་གཅིག་ཁར་ ནང་ཐིག་བདེན་དཔྱད་ལྡེ་མིག་ (`key = Some(VerifyingKeyBox { … })`) ཚུ་ཚུདཔ་ཨིན། `vk_len`, `max_proof_bytes`, དང་ གདམ་ཁའི་མེ་ཊ་ཌེ་ཊ་ URIs ཚུ་ བཟོ་བཏོན་འབད་ཡོད་པའི་ ཅ་རྙིང་ཚུ་ལས་ མི་རློབས་བཙུགསཔ་ཨིན།
 
-## Reference Fixtures
+## དཔྱད་གཞི།
 
-Use `cargo xtask zk-vote-tally-bundle --print-hashes` to regenerate the inline verifying key and proof bundle consumed by integration tests (outputs land in `fixtures/zk/vote_tally/` by default). The command prints a short summary (`backend`, `commit`, `root`, schema hash, lengths) and optionally the file hashes so auditors can capture attestation notes. Pass `--summary-json -` to emit the same data as JSON (or supply a path to write it to disk). Pass `--attestation attestation.json` (or `-` for stdout) to write a Norito JSON manifest containing the summary plus Blake2b-256 digests and sizes for every bundle artifact so attestation packets can be archived with the fixtures. When run with `--verify`, providing `--attestation <path>` checks that the manifest’s bundle metadata and artifact lengths match the freshly regenerated bundle (it does not compare the per-run proof digest, which changes with transcript randomness).
+`cargo xtask zk-vote-tally-bundle --print-hashes` ལག་ལེན་འཐབ། མཉམ་བསྡོམས་བརྟག་དཔྱད་ཚུ་གིས་ བདེན་དཔྱད་ལྡེ་མིག་དང་ བདེན་ཁུངས་ཅན་གྱི་བཱན་ཌལ་ཚུ་ ལོག་བཟོ་ནི་གི་དོན་ལུ་ ལག་ལེན་འཐབ་དགོ། བརྡ་བཀོད་འདི་གིས་ བཅུད་བསྡུས་ཐུང་ཀུ་ཅིག་དཔར་བསྐྲུན་འབདཝ་ཨིན་ (`backend`, `commit`, Norito, ལས་འཆར་ཧེ་ཤི་དང་ རིང་ཚད་ཚུ་) དེ་ལས་ གདམ་ཁ་ཅན་གྱི་ཡིག་སྣོད་ཀྱི་ཧེ་ཤེ་ཚུ་གིས་ བརྟག་དཔྱད་འབད་མི་ཚུ་གིས་ བརྟག་དཔྱད་འབད་ཚུགས། `--summary-json -` འདི་ JSON དང་འདྲ་བའི་གནད་སྡུད་གཅིག་པ་བཏོན་ནིའི་དོན་ལུ་ (ཡང་ན་ ཌིཀསི་ལུ་བྲིས་ནིའི་དོན་ལུ་ འགྲུལ་ལམ་ཅིག་བཀྲམ་སྤེལ་འབད་ནི) `--attestation attestation.json` (ཡང་ན་ `-`) འདི་ Norito JSON ཅིག་བྲིས་ནིའི་དོན་ལུ་ བརྒྱུད་དེ་ བཅུད་བསྡུས་དང་ Blake2b-256 བཅུད་བསྡུས་ཚུ་དང་ ཚད་ཚུ་ སྐར་མདའ་ཚུ་ སྒྲིག་བཀོད་ཚུ་དང་གཅིག་ཁར་ གཏན་མཛོད་འབད་ཚུགས། `--verify` དང་ཅིག་ཁར་ གཡོག་བཀོལ་བའི་སྐབས་ལུ་ `--attestation <path>` གིས་ གསལ་སྟོན་གྱི་ བཱན་ཌལ་མེ་ཊ་ཌེ་ཊ་དང་ ཅ་རྙིང་གི་རིང་ཚད་འདི་ གསརཔ་སྦེ་བསྐྱར་བཟོ་འབད་མི་ བཱན་ཌལ་དང་མཐུན་སྒྲིག་ཡོདཔ་སྦེ་ བརྟག་དཔྱད་འབདཝ་ཨིན།
 
-Regenerate the canonical fixtures and manifest:
+ཁྲིམས་ལུགས་ཀྱི་ བརྟན་བརྟན་ཚུ་ ལོག་བཟོ་ཞིནམ་ལས་ གསལ་སྟོན་འབད།
 
 ```bash
 cargo xtask zk-vote-tally-bundle \
@@ -112,7 +123,7 @@ cargo xtask zk-vote-tally-bundle \
   --attestation fixtures/zk/vote_tally/bundle.attestation.json
 ```
 
-Verify the checked-in artifacts remain current (requires the fixture directory to contain the baseline bundle):
+ཞིབ་དཔྱད་འབད་ཡོད་པའི་ ཅ་རྙིང་ཚུ་ བདེན་དཔྱད་འབད་ (གཞི་རྟེན་བང་རིམ་ནང་གནས་ནིའི་དོན་ལུ་ རིམ་སྒྲིག་སྣོད་ཐོ་འདི་དགོཔ་ཨིན་):
 
 ```bash
 cargo xtask zk-vote-tally-bundle \
@@ -121,7 +132,7 @@ cargo xtask zk-vote-tally-bundle \
   --attestation fixtures/zk/vote_tally/bundle.attestation.json
 ```
 
-Example manifest:
+དཔེར་ན་ གསལ་སྟོན་:
 
 ```jsonc
 {
@@ -157,43 +168,73 @@ Example manifest:
 }
 ```
 
-Store the current manifest next to your canonical artifacts (for example at `fixtures/zk/vote_tally/bundle.attestation.json`). The upstream repository keeps this directory empty to avoid committing large binary bundles, so seed it locally before relying on `--verify`.
+ཁྱོད་ཀྱི་ཁྲིམས་ལུགས་ཀྱི་ ཅ་རྙིང་ཚུ་གི་བོ་ལོག་ཁར་ ད་ལྟོའི་གསལ་སྟོན་འདི་ གསོག་འཇོག་འབད་ (དཔེར་ན་ `fixtures/zk/vote_tally/bundle.attestation.json` ལུ་)། ཡར་འཕེལ་གྱི་མཛོད་ཁང་འདི་གིས་ སྣོད་ཐོ་འདི་ གཉིས་ལྡན་གྱི་བང་རིམ་སྦོམ་ཚུ་མ་འབད་ནི་གི་དོན་ལུ་ སྟོངམ་སྦེ་བཞགཔ་ཨིནམ་ལས་ `--verify` ལུ་བློ་གཏད་མ་ཚར་བའི་ཧེ་མ་ ས་གནས་ནང་རང་ སོན་བཏབ་ཨིན།
 
-`generated_unix_ms` is derived deterministically from the commitment/verifying-key fingerprint so it remains stable across regenerations. The generator uses a fixed ChaCha20 transcript, so the metadata, verifying key, and proof envelope hashes are reproducible. Any digest mismatch now indicates drift that must be investigated. Auditors should record the emitted values alongside the artefacts they attest.
+```jsonc
+{
+  "generated_unix_ms": 3513801751697071715,
+  "hash_algorithm": "blake2b-256",
+  "bundle": {
+    "backend": "halo2/pasta/ipa-v1/vote-bool-commit-merkle8-v1",
+    "circuit_id": "halo2/pasta/vote-bool-commit-merkle8-v1",
+    "commit_hex": "20574662a58708e02e0000000000000000000000000000000000000000000000",
+    "root_hex": "b63752ff429362c3a9b3cd5966c23567fdb757ce3b38af724b9303a5ea2f5817",
+    "public_inputs_schema_hash_hex": "fae4cbe786f280b4e2184dbb06305fe46b7aee20464c0be96023ffd8eac064d3",
+    "vk_commitment_hex": "6f4749f5f75fee2a40880d4798123033b2b8036284225bad106b04daca5fb10e",
+    "vk_len": 66,
+    "proof_len": 2748
+  },
+  "artifacts": [
+    {
+      "file": "vote_tally_meta.json",
+      "len": 522,
+      "blake2b_256": "5d0030856f189033e5106415d885fbb2e10c96a49c6115becbbff8b7fd992b77"
+    },
+    {
+      "file": "vote_tally_proof.zk1",
+      "len": 2748,
+      "blake2b_256": "01449c0599f9bdef81d45f3be21a514984357a0aa2d7fcf3a6d48be6307010bb"
+    },
+    {
+      "file": "vote_tally_vk.zk1",
+      "len": 66,
+      "blake2b_256": "2fd5859365f1d9576c5d6836694def7f63149e885c58e72f5c4dff34e5005d6b"
+    }
+  ]
+}
+``` འདི་ ཁས་བླངས་/བདེན་དཔྱད་ཀྱི་ མཛུབ་མོ་གི་པར་ལས་ གཏན་འབེབས་སྦེ་ བསྐྱར་བཟོ་འབད་བའི་སྐབས་ལུ་ བརྟན་ཏོག་ཏོ་སྦེ་ཡོདཔ་ཨིན། གློག་ཤུགས་བཏོན་མི་གིས་ ChaCha20 གི་ཡིག་ཆ་ཚུ་ལག་ལེན་འཐབ་དོ་ཡོདཔ་ལས་ མེ་ཊ་ཌེ་ཊ་དང་ བདེན་དཔྱད་ཀྱི་ལྡེ་མིག་ དེ་ལས་ བདེན་ཁུངས་ཅན་གྱི་ཡིག་ཤུབས་ཀྱི་ཧ་ཤེ་ཚུ་ བསྐྱར་བཟོ་འབད་ཚུགསཔ་ཨིན། ད་ལྟོ་ཞིབ་དཔྱད་འབད་དགོ་པའི་ གཡོ་འགུལ་གྱི་བརྡ་མཚོན་སྟོནམ་ཨིན། རྩིས་ཞིབ་པ་ཚུ་གིས་ ཁོང་གིས་ བདེན་ཁུངས་བཀལ་ཡོད་པའི་ ཅ་ཆས་ཚུ་དང་གཅིག་ཁར་ བཏོན་པའི་གནས་གོང་ཚུ་ ཐོ་བཀོད་འབད་དགོ།
 
-Workflow reminder:
+ལཱ་རྒྱུན་དྲན་སྐུལ་:
 
-1. Run `cargo xtask zk-vote-tally-bundle --out fixtures/zk/vote_tally --print-hashes --attestation fixtures/zk/vote_tally/bundle.attestation.json` to seed the bundle locally.
-2. Commit or archive the resulting artefacts as needed.
-3. Use `--verify` on subsequent regenerations to ensure the attestation matches the canonical bundle.
+༡ ས་གནས་ནང་ བུན་ཌལ་ སོན་བཏབ་ནིའི་དོན་ལུ་ `cargo xtask zk-vote-tally-bundle --out fixtures/zk/vote_tally --print-hashes --attestation fixtures/zk/vote_tally/bundle.attestation.json` གཡོག་བཀོལ།
+༢ གྲུབ་འབྲས་ཐོན་པའི་དངོས་པོ་ཚུ་ དགོས་མཁོ་དང་འཁྲིལ་ ཁས་བླངས་དང་ ཡང་ན་ གཏན་མཛོད་འབད་དགོ།
+༣ བདེན་དཔང་འདི་ ཀེ་ནོ་ནིག་བཱན་ཌལ་དང་མཐུན་སྒྲིག་འབད་ནི་ལུ་ ཤུལ་མམ་གྱི་ བསྐྱར་འབྱུང་ཚུ་གུ་ Norito ལག་ལེན་འཐབ།
 
-Internally the task runs the deterministic generator in `xtask/src/vote_tally.rs`, which:
+ནང་འཁོད་ལས་ཀ་འདི་གིས་ `xtask/src/vote_tally.rs` ནང་ལུ་ གཏན་འབེབས་བཟོ་མི་ གློག་ཤུགས་འཕྲུལ་ཆས་འདི་ གཡོག་བཀོལཝ་ཨིན།
 
-1. Samples the witnesses (`v = 1`, `ρ = 12345`, siblings `10..17`)
-2. Runs `keygen_vk`/`keygen_pk`
-3. Produces a Halo2 proof and wraps it in a ZK1 envelope (including public instances)
-4. Emits the verifying key record with the appropriate `public_inputs_schema_hash`
+1. དཔང་པོ་ (`v = 1`, `ρ = 12345`, སྤུན་མཆེད་ `10..17`)
+2. `keygen_vk`/`keygen_pk` གཡོག་བཀོལ།
+༣ ཧེ་ལོ་༢ བདེན་དཔང་ཅིག་བཟོ་ཞིནམ་ལས་ ZK1 ཡིག་ཤུབས་ནང་ བཀབ་སྟེ་ (མི་མང་གི་གནས་སྟངས་ཚུ་རྩིས་ཏེ་)།
+༤ འོས་འབབ་ཅན་གྱི་ `public_inputs_schema_hash` དང་གཅིག་ཁར་ བདེན་དཔྱད་ལྡེ་མིག་དྲན་ཐོ་འདི་ བཀོདཔ་ཨིན།
 
-## Tamper Coverage
+## ཊམ་པར་ཁྱབ་ཁོངས།
 
-`crates/iroha_core/tests/zk_vote_tally_audit.rs` loads the bundle and checks:
+`crates/iroha_core/tests/zk_vote_tally_audit.rs` གིས་ བཱན་ཌལ་འདི་མངོན་གསལ་འབད་དེ་ ཞིབ་དཔྱད་:
 
-- The genuine proof verifies against the bundled inline VK.
-- Flipping any byte in the commitment column causes verification to fail.
-- Flipping any byte in the root column causes verification to fail.
+- བདེན་ཁུངས་ངོ་མ་འདི་གིས་ ནང་ཐིག་ VK ལུ་ བདེན་དཔྱད་འབདཝ་ཨིན།
+- ཁས་བླངས་ཀེར་ཐིག་ནང་ བཱའིཊི་གང་རུང་ཅིག་ ཕར་ཚུར་འབད་མི་འདི་གིས་ བདེན་དཔྱད་འཐུས་ཤོར་འབྱུང་བཅུགཔ་ཨིན།
+- རྩ་བའི་ཀེར་ཐིག་ནང་ བཱའིཊི་གང་རུང་ཅིག་ གཡོག་བཀོལ་མི་འདི་གིས་ བདེན་བཤད་འདི་ འཐུས་ཤོར་བྱུངམ་ཨིན།འ་ནི་འགྱུར་ལྡོག་བརྟག་དཔྱད་ཚུ་གིས་ Torii (དང་ ཧོསཊི་) གིས་ མི་མང་གི་ཨིན་པུཊ་ཚུ་ བདེན་ཁུངས་བཟོ་བའི་ཤུལ་ལས་ བསྡམ་བཞག་མི་ ཡིག་ཤུབས་ཚུ་ ངོས་ལེན་མ་འབད་བས།
 
-These regression tests guarantee Torii (and hosts) reject envelopes whose public inputs are tampered after proof generation.
-
-Run the regression locally with:
+དང་བཅས་ གནས་ས་ལུ་ རྒྱབ་བསྐྱོར་གཡོག་བཀོལ།
 
 ```bash
 cargo test -p iroha_core zk_vote_tally_audit -- --nocapture
 ```
 
-## Audit Checklist
+## རྩིས་ཞིབ་ཞིབ་དཔྱད་ཐོ་ཡིག་།
 
-1. Review `VoteBoolCommitMerkle::<8>` for constraint completeness and constant selection.
-2. Re-run `cargo xtask zk-vote-tally-bundle --verify --print-hashes` to reproduce the VK/proof and confirm the recorded hashes.
-3. Confirm Torii’s tally handler uses the same backend identifier and envelope layout.
-4. Execute the tamper regression to ensure mutated proofs fail verification.
-5. Hash and gossip the `bundle.attestation.json` output (Blake2b-256) so reviewers can log the canonical manifest alongside their attestations.
+1. བཀག་ཆ་ཆ་ཚང་དང་ དུས་རྒྱུན་སེལ་འཐུ་གི་དོན་ལུ་ `VoteBoolCommitMerkle::<8>` བསྐྱར་ཞིབ་འབད།
+༢ ཝི་ཀེ་/བདེན་དཔང་འདི་ བསྐྱར་བཟོ་འབད་ནི་དང་ ཐོ་བཀོད་འབད་ཡོད་པའི་ ཧ་ཤེ་ཚུ་ ངེས་གཏན་བཟོ་ནི་ལུ་ ལོག་སྟེ་ར་ `cargo xtask zk-vote-tally-bundle --verify --print-hashes` འདི་ ངེས་གཏན་བཟོ།
+3. Torii གི་ ཊ་ལི་འཛིན་སྐྱོང་པ་འདི་ ངེས་གཏན་བཟོ་མི་འདི་གིས་ རྒྱབ་ལོག་ངོས་འཛིན་འབད་མི་དང་ ཡིག་ཤུབས་སྒྲིག་བཀོད་གཅིགཔོ་འདི་ལག་ལེན་འཐབ་ཨིན།
+༤ འགྱུར་བཅོས་འབད་ཡོད་པའི་བདེན་ཁུངས་ཚུ་གིས་ བདེན་དཔྱད་འབད་ནི་ལུ་ འཐུས་ཤོར་བྱུང་ཡོདཔ་ངེས་གཏན་བཟོ་ནི་ལུ་ ཊམ་པར་འགྱུར་ལྡོག་འདི་ལག་ལེན་འཐབ།
+5. Hash དང་ཁ་གཏམ་འདི་ `bundle.attestation.json` ཐོན་འབྲས་ (Blake2b-256) གིས་ བསྐྱར་ཞིབ་པ་ཚུ་གིས་ ཁོང་རའི་བདེན་དཔང་ཚུ་དང་གཅིག་ཁར་ ཁྲིམས་ལུགས་ཀྱི་གསལ་སྟོན་ཚུ་ རྒྱུན་སྐྱོང་འཐབ་ཚུགས།

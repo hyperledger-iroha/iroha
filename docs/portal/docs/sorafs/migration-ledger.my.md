@@ -9,36 +9,36 @@ source_last_modified: "2026-01-05T09:28:11.880522+00:00"
 translation_last_reviewed: 2026-02-07
 title: "SoraFS Migration Ledger"
 description: "Canonical change log tracking every migration milestone, owners, and required follow-ups."
+translator: machine-google-reviewed
 ---
 
-> Adapted from [`docs/source/sorafs/migration_ledger.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/migration_ledger.md).
+> [`docs/source/sorafs/migration_ledger.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/migration_ledger.md).
 
-# SoraFS Migration Ledger
+#SoraFS ရွှေ့ပြောင်းစာရင်းစာအုပ်
 
-This ledger mirrors the migration change log captured in the SoraFS
-Architecture RFC. Entries are grouped by milestone and list the effective
-window, impacted teams, and required actions. Updates to the migration plan
-MUST modify both this page and the RFC (`docs/source/sorafs_architecture_rfc.md`)
-to keep downstream consumers aligned.
+ဤစာရင်းဇယားသည် SoraFS တွင် ရိုက်ကူးထားသော ပြောင်းရွှေ့မှု ပြောင်းလဲမှုမှတ်တမ်းကို ထင်ဟပ်စေသည်
+ဗိသုကာ RFC ။ ထည့်သွင်းမှုများကို မှတ်တိုင်အလိုက် အုပ်စုဖွဲ့ပြီး ထိရောက်မှုကို စာရင်းပြုစုထားသည်။
+ပြတင်းပေါက်၊ သက်ရောက်မှုရှိသော အသင်းများနှင့် လိုအပ်သော လုပ်ဆောင်ချက်များ။ ရွှေ့ပြောင်းနေထိုင်မှု အစီအစဉ်အတွက် အပ်ဒိတ်များ
+ဤစာမျက်နှာနှင့် RFC (`docs/source/sorafs_architecture_rfc.md`) နှစ်ခုလုံးကို ပြင်ဆင်ရမည်
+အောက်ခြေ စားသုံးသူများ ညီညွတ်စေရန်။
 
-| Milestone | Effective Window | Change Summary | Impacted Teams | Action Items | Status |
-|-----------|------------------|----------------|----------------|--------------|--------|
-| M1 | Weeks&nbsp;7–12 | CI enforces deterministic fixtures; alias proofs available in staging; tooling exposes explicit expectation flags. | Docs, Storage, Governance | Ensure fixtures stay signed, register aliases in staging registry, update release checklists with `--car-digest/--root-cid` enforcement. | ⏳ Pending |
+| မှတ်တိုင် | Effective Window | အနှစ်ချုပ် | ပြောင်းရန် ထိခိုက်ခံအဖွဲ့များ | Action Items | အဆင့်အတန်း |
+|-----------|------------------|----------------|----------------|-----------------|--------|
+| M1 | အပတ်များ 7–12 | CI သည် အဆုံးအဖြတ်ပေးသော ပြိုင်ပွဲများကို ပြဋ္ဌာန်းသည်၊ ဇာတ်ခုံတွင်ရရှိနိုင်သော နံပတ်အထောက်အထားများ ကိရိယာတန်ဆာပလာသည် ပြတ်သားသော မျှော်လင့်ချက်အလံများကို ဖော်ထုတ်သည်။ | Docs, Storage, Governance | ပွဲစဉ်များကို လက်မှတ်မထိုးထားကြောင်း သေချာစေရန်၊ အဆင့်သတ်မှတ်ထားသော မှတ်ပုံတင်ခြင်းတွင် နာမည်တူများ မှတ်ပုံတင်ပါ၊ `--car-digest/--root-cid` ပြဋ္ဌာန်းချက်ဖြင့် ထုတ်ပြန်ချက်စစ်ဆေးရန်စာရင်းများကို အပ်ဒိတ်လုပ်ပါ။ | ⏳ ဆိုင်းငံ့ |
 
-Governance control plane minutes referencing these milestones live under
-`docs/source/sorafs/`. Teams should add dated bullet points beneath each row
-when notable events occur (e.g., new alias registrations, registry incident
-retrospectives) to provide an auditable paper trail.
+အုပ်ချုပ်မှုထိန်းချုပ်မှု လေယာဉ်မိနစ်များတွင် ဤမှတ်တိုင်များကို ကိုးကားဖော်ပြထားသည်။
+`docs/source/sorafs/`။ အသင်းများသည် အတန်းတစ်ခုစီ၏အောက်တွင် ရက်စွဲပါကျည်ဆန်အမှတ်များ ထည့်သင့်သည်။
+ထင်ရှားသော အဖြစ်အပျက်များ ပေါ်ပေါက်လာသောအခါ (ဥပမာ၊ အမည်သစ် မှတ်ပုံတင်ခြင်း၊ မှတ်ပုံတင်ခြင်း အဖြစ်အပျက်
+နောက်ကြောင်းပြန်မှုများ) စာရင်းစစ်နိုင်သော စာရွက်လမ်းကြောင်းကို ပံ့ပိုးပေးရန်။
 
-## Recent Updates
+## လတ်တလော အပ်ဒိတ်များ
 
-- 2025-11-01 — Circulated `migration_roadmap.md` to governance council and
-  operator lists for review; awaiting sign-off at the next council session
-  (ref: `docs/source/sorafs/council_minutes_2025-10-29.md` follow-up).
-- 2025-11-02 — Pin Registry register ISI now enforces shared chunker/policy
-  validation via `sorafs_manifest` helpers, keeping on-chain paths aligned
-  with Torii checks.
-- 2026-02-13 — Added provider advert rollout phases (R0–R3) to the ledger and
-  published the associated dashboards and operator guidance
-  (`provider_advert_rollout.md`, `grafana_sorafs_admission.json`).
-
+- 2025-11-01 — `migration_roadmap.md` ကို အုပ်ချုပ်ရေးကောင်စီသို့ ဖြန့်ဝေပြီး
+  ပြန်လည်သုံးသပ်ရန်အတွက် အော်ပရေတာစာရင်းများ၊ လာမည့် ကောင်စီအစည်းအဝေးတွင် လက်မှတ်ရေးထိုးရန် စောင့်ဆိုင်းနေသည်။
+  (ref: `docs/source/sorafs/council_minutes_2025-10-29.md` နောက်ဆက်တွဲ)။
+- 2025-11-02 — Pin Registry မှတ်ပုံတင်ခြင်း ISI သည် ယခုအခါ မျှဝေထားသော chunker/policy ကို ကျင့်သုံးသည်
+  `sorafs_manifest` ကူညီပေးသူများမှတစ်ဆင့် တရားဝင်အတည်ပြုခြင်း၊ ကွင်းဆက်လမ်းကြောင်းများကို ချိန်ညှိပေးသည်
+  Torii စစ်ဆေးမှုများဖြင့်။
+- 2026-02-13 — Added provider advert outlet phases (R0–R3) ကို လယ်ဂျာတွင် နှင့်
+  ဆက်စပ်ဒက်ရှ်ဘုတ်များနှင့် အော်ပရေတာလမ်းညွှန်ချက်ကို ထုတ်ပြန်ခဲ့သည်။
+  (`provider_advert_rollout.md`၊ `grafana_sorafs_admission.json`)။

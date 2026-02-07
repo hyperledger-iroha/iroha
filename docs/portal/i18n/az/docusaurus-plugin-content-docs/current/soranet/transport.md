@@ -8,25 +8,27 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraNet transport overview
 sidebar_label: Transport Overview
 description: Handshake, salt rotation, and capability guidance for the SoraNet anonymity overlay.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
+:::Qeyd Kanonik Mənbə
 :::
 
-SoraNet is the anonymity overlay that backs SoraFS range fetches, Norito RPC streaming, and future Nexus data lanes. The transport program (roadmap items **SNNet-1**, **SNNet-1a**, and **SNNet-1b**) defined a deterministic handshake, post-quantum (PQ) capability negotiation, and salt rotation plan so every relay, client, and gateway observes the same security posture.
+SoraNet SoraFS diapazonunu, Norito RPC axınını və gələcək Nexus məlumat zolaqlarını dəstəkləyən anonimlik örtüyüdür. Nəqliyyat proqramı (yol xəritəsi elementləri **SNNet-1**, **SNNet-1a** və **SNNet-1b**) deterministik əl sıxma, post-kvant (PQ) qabiliyyəti danışıqları və duz fırlanma planını müəyyən etdi ki, hər rele, müştəri və şlüz eyni təhlükəsizlik duruşunu müşahidə etsin.
 
-## Goals & network model
+## Məqsədlər və şəbəkə modeli
 
-- Build three-hop circuits (entry → middle → exit) over QUIC v1 so abusive peers never reach Torii directly.
-- Layer a Noise XX *hybrid* handshake (Curve25519 + Kyber768) on top of QUIC/TLS to bind session keys to the TLS transcript.
-- Require capability TLVs that advertise PQ KEM/signature support, relay role, and protocol version; GREASE unknown types to keep future extensions deployable.
-- Rotate blinded-content salts daily and pin guard relays for 30 days so directory churn cannot deanonymize clients.
-- Keep cells fixed at 1024 B, inject padding/dummy cells, and export deterministic telemetry so downgrade attempts are caught quickly.
+- QUIC v1 üzərində üç-hoplu sxemlər (giriş → orta → çıxış) qurun ki, təhqiramiz həmyaşıdlar heç vaxt birbaşa Torii-ə çatmasın.
+- Sessiya açarlarını TLS transkriptinə bağlamaq üçün QUIC/TLS-in üstünə Noise XX *hibrid* əl sıxma (Curve25519 + Kyber768) qat edin.
+- PQ KEM/imza dəstəyini, relay rolunu və protokol versiyasını reklam edən qabiliyyət TLV-lərini tələb edin; Gələcək genişləndirmələrin yerləşdirilə bilməsi üçün naməlum növləri yağlayın.
+- Kor məzmunlu duzları gündəlik fırladın və 30 gün ərzində qoruyucu releləri bağlayın ki, kataloq çaxnaşması müştəriləri deanonimləşdirməsin.
+- Hüceyrələri 1024B-də sabit saxlayın, doldurma/dummy xanaları yeridin və deterministik telemetriyanı ixrac edin ki, səviyyəni endirmə cəhdləri tez tutulsun.
 
-## Handshake pipeline (SNNet-1a)
+## Əl sıxma boru kəməri (SNNet-1a)
 
-1. **QUIC/TLS envelope** – clients dial relays over QUIC v1 and complete a TLS 1.3 handshake using Ed25519 certificates signed by the governance CA. The TLS exporter (`tls-exporter("soranet handshake", 64)`) seeds the Noise layer so the transcripts are inseparable.
-2. **Noise XX hybrid** – protocol string `Noise_XXhybrid_25519+Kyber768_AESGCM_SHA256` with prologue = TLS exporter. Message flow:
+1. **QUIC/TLS zərfi** – müştərilər QUIC v1 üzərindən releləri yığırlar və idarəetmə CA tərəfindən imzalanmış Ed25519 sertifikatlarından istifadə edərək TLS1.3 əl sıxışmasını tamamlayırlar. TLS ixracatçısı (`tls-exporter("soranet handshake", 64)`) Səs-küy qatını toxumlayır, beləliklə transkriptlər ayrılmazdır.
+2. **Noise XX hibrid** – proloq = TLS ixracatçısı olan `Noise_XXhybrid_25519+Kyber768_AESGCM_SHA256` protokol sətri. Mesaj axını:
 
    ```
    -> e, s
@@ -34,9 +36,9 @@ SoraNet is the anonymity overlay that backs SoraFS range fetches, Norito RPC str
    -> ee, se, pq_ciphertext
    ```
 
-   Curve25519 DH output and both Kyber encapsulations are mixed into the final symmetric keys. Failure to negotiate PQ material aborts the handshake outright—no classical-only fallback is permitted.
+   Curve25519 DH çıxışı və hər iki Kyber encapsulations son simmetrik düymələrə qarışdırılır. PQ materialının müzakirə edilməməsi əl sıxma prosesini tamamilə dayandırır - heç bir klassik geri dönüşə icazə verilmir.
 
-3. **Puzzle tickets & tokens** – relays can demand an Argon2id proof-of-work ticket before `ClientHello`. Tickets are length-prefixed frames that carry the hashed Argon2 solution and expire within the policy bounds:
+3. **Puzzle biletləri və nişanlar** – relaylar `ClientHello`-dən əvvəl Argon2id iş sübutu biletini tələb edə bilər. Biletlər hashed Argon2 həllini daşıyan və siyasət hüdudlarında müddəti bitən uzunluqlu prefiksli çərçivələrdir:
 
    ```norito
    struct PowTicketV1 {
@@ -48,15 +50,15 @@ SoraNet is the anonymity overlay that backs SoraFS range fetches, Norito RPC str
    }
    ```
 
-   Admission tokens prefixed with `SNTK` bypass puzzles when an ML-DSA-44 signature from the issuer validates against the active policy and revocation list.
+   Emitentdən ML-DSA-44 imzası aktiv siyasətə və ləğvetmə siyahısına qarşı doğrulandıqda, `SNTK` prefiksli qəbul nişanları tapmacalardan keçər.
 
-4. **Capability TLV exchange** – the final Noise payload transports the capability TLVs described below. Clients abort the connection if any mandatory capability (PQ KEM/signature, role, or version) is missing or mismatched with the directory entry.
+4. **Qabiliyyət TLV mübadiləsi** – son Səs yükü aşağıda təsvir edilən qabiliyyət TLV-lərini nəql edir. Müştərilər hər hansı məcburi imkan (PQ KEM/imza, rol və ya versiya) yoxdursa və ya kataloq girişi ilə uyğun gəlmirsə, əlaqəni dayandırır.
 
-5. **Transcript logging** – relays log the transcript hash, TLS fingerprint, and TLV contents to feed downgrade detectors and compliance pipelines.
+5. **Transkript qeydi** – relelər aşağı səviyyəli detektorları və uyğunluq boru kəmərlərini qidalandırmaq üçün transkript hashini, TLS barmaq izini və TLV məzmununu qeyd edir.
 
-## Capability TLVs (SNNet-1c)
+## Qabiliyyətli TLV (SNNet-1c)
 
-Capabilities reuse a fixed `typ/length/value` TLV envelope:
+İmkanlar sabit `typ/length/value` TLV zərfindən təkrar istifadə edir:
 
 ```norito
 struct CapabilityTLV {
@@ -66,48 +68,48 @@ struct CapabilityTLV {
 }
 ```
 
-Defined types today:
+Bu gün müəyyən edilmiş növlər:
 
-- `snnet.pqkem` – Kyber level (`kyber768` for the current rollout).
-- `snnet.pqsig` – PQ signature suite (`ml-dsa-44`).
-- `snnet.role` – relay role (`entry`, `middle`, `exit`, `gateway`).
-- `snnet.version` – protocol version identifier.
-- `snnet.grease` – random filler entries in the reserved range to ensure future TLVs are tolerated.
+- `snnet.pqkem` – Kyber səviyyəsi (cari buraxılış üçün `kyber768`).
+- `snnet.pqsig` – PQ imza dəsti (`ml-dsa-44`).
+- `snnet.role` – rele rolu (`entry`, `middle`, `exit`, `gateway`).
+- `snnet.version` – protokol versiyası identifikatoru.
+- `snnet.grease` – gələcək TLV-lərə yol verilməsini təmin etmək üçün qorunan diapazonda təsadüfi doldurucu daxiletmələr.
 
-Clients maintain an allow-list of required TLVs and fail handshakes that omit or downgrade them. Relays publish the same set in their directory microdescriptor so validation is deterministic.
+Müştərilər tələb olunan TLV-lərin icazəli siyahısını saxlayır və onları buraxan və ya aşağı səviyyəyə salan uğursuz əl sıxmalarını saxlayır. Röleler eyni dəsti öz kataloq mikrodeskriptorunda dərc edir, beləliklə, doğrulama deterministikdir.
 
-## Salt rotation & CID blinding (SNNet-1b)
+## Duz fırlanması və CID-nin korlanması (SNNet-1b)
 
-- Governance publishes a `SaltRotationScheduleV1` record with `(epoch_id, salt, valid_after, valid_until)` values. Relays and gateways fetch the signed schedule from the directory publisher.
-- Clients apply the new salt at `valid_after`, keep the previous salt for a 12 h grace period, and retain a 7-epoch history to tolerate delayed updates.
-- Canonical blinded identifiers use:
+- İdarəetmə `(epoch_id, salt, valid_after, valid_until)` dəyərləri ilə `SaltRotationScheduleV1` qeydini dərc edir. Rele və şlüzlər imzalanmış cədvəli kataloq naşirindən alır.
+- Müştərilər yeni duzu `valid_after`-də tətbiq edir, əvvəlki duzu 12 saat güzəşt müddəti üçün saxlayır və gecikmiş yeniləmələrə dözmək üçün 7 dövr tarixini saxlayır.
+- Kanonik kor identifikatorlar istifadə edir:
 
   ```
   cache_key = BLAKE3("soranet.blinding.canonical.v1" ∥ salt ∥ cid)
   ```
 
-  Gateways accept the blinded key via `Sora-Req-Blinded-CID` and echo it in `Sora-Content-CID`. Circuit/request blinding (`CircuitBlindingKey::derive`) ships in `iroha_crypto::soranet::blinding`.
-- If a relay misses an epoch, it halts new circuits until it downloads the schedule and emits a `SaltRecoveryEventV1`, which on-call dashboards treat as a paging signal.
+  Şlüzlər korlanmış açarı `Sora-Req-Blinded-CID` vasitəsilə qəbul edir və onu `Sora-Content-CID`-də əks etdirir. `iroha_crypto::soranet::blinding`-də dövrə/sorğu korlaması (`CircuitBlindingKey::derive`) göndərilir.
+- Əgər rele bir dövrü qaçırarsa, o, cədvəli endirənə qədər yeni dövrələri dayandırır və çağırışda olan tablosunun peyqinq siqnalı kimi qəbul etdiyi `SaltRecoveryEventV1` siqnalını buraxır.
 
-## Directory data & guard policy
+## Kataloq məlumatları və mühafizə siyasəti
 
-- Microdescriptors carry relay identity (Ed25519 + ML-DSA-65), PQ keys, capability TLVs, region tags, guard eligibility, and the currently advertised salt epoch.
-- Clients pin guard sets for 30 days and persist `guard_set` caches alongside the signed directory snapshot. CLI and SDK wrappers surface the cache fingerprint so rollout evidence can be attached to change reviews.
+- Mikrodeskriptorlar relay identifikasiyası (Ed25519 + ML-DSA-65), PQ düymələri, qabiliyyət TLV-ləri, region teqləri, mühafizə uyğunluğu və hazırda reklam edilən duz dövrünü daşıyır.
+- Müştərilər mühafizə dəstlərini 30 gün ərzində bağlayır və imzalanmış kataloq snapşotunun yanında `guard_set` keşlərini saxlayırlar. CLI və SDK sarğıları keş barmaq izini üzə çıxarır ki, rəyləri dəyişdirmək üçün təqdimat sübutları əlavə olunsun.
 
-## Telemetry & rollout checklist
+## Telemetriya və yayım yoxlama siyahısı
 
-- Metrics to export before production:
+- İstehsaldan əvvəl ixrac üçün ölçülər:
   - `soranet_handshake_success_total{role}`
   - `soranet_handshake_failure_total{reason}`
   - `soranet_handshake_latency_seconds`
   - `soranet_capability_mismatch_total`
   - `soranet_salt_rotation_lag_seconds`
-- Alert thresholds live alongside the salt rotation SOP SLO matrix (`docs/source/soranet_salt_plan.md#slo--alert-matrix`) and must be mirrored in Alertmanager before the network is promoted.
-- Alerts: >5 % failure rate over 5 minutes, salt lag >15 minutes, or capability mismatches observed in production.
-- Rollout steps:
-  1. Exercise relay/client interoperability tests on staging with the hybrid handshake and PQ stack enabled.
-  2. Rehearse the salt rotation SOP (`docs/source/soranet_salt_plan.md`) and attach drill artefacts to the change record.
-  3. Enable capability negotiation in the directory, then roll out to entry relays, middle relays, exits, and finally clients.
-  4. Record guard cache fingerprints, salt schedules, and telemetry dashboards for each phase; attach the evidence bundle to `status.md`.
+- Xəbərdarlıq hədləri duz fırlanma SOP SLO matrisi (`docs/source/soranet_salt_plan.md#slo--alert-matrix`) ilə yanaşı yaşayır və şəbəkə təşviq edilməzdən əvvəl Alertmanager-də əks etdirilməlidir.
+- Xəbərdarlıqlar: 5 dəqiqə ərzində >5% uğursuzluq dərəcəsi, duz gecikməsi >15 dəqiqə və ya istehsalda müşahidə olunan qabiliyyət uyğunsuzluğu.
+- Yayım addımları:
+  1. Hibrid əl sıxma və PQ yığınını aktivləşdirərək səhnələşdirmə üzrə relay/müştəri qarşılıqlı fəaliyyət testlərini həyata keçirin.
+  2. Duz fırlanma SOP-u (`docs/source/soranet_salt_plan.md`) təkrarlayın və qazma artefaktlarını dəyişiklik qeydinə əlavə edin.
+  3. Kataloqda qabiliyyət danışıqlarını aktivləşdirin, sonra giriş relelərinə, orta relelərə, çıxışlara və nəhayət müştərilərə keçin.
+  4. Hər bir mərhələ üçün qoruyucu keş barmaq izlərini, duz cədvəllərini və telemetriya panellərini qeyd edin; sübut paketini `status.md`-ə əlavə edin.
 
-Following this checklist lets operator, client, and SDK teams adopt SoraNet transports in lockstep while meeting the determinism and audit requirements captured in the SNNet roadmap.
+Bu yoxlama siyahısından sonra operator, müştəri və SDK komandalarına SNNet yol xəritəsində əks olunmuş determinizm və audit tələblərinə cavab verən SoraNet daşımaları blokadada qəbul etməyə imkan verir.

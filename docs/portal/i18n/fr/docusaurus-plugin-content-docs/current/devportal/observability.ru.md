@@ -4,38 +4,38 @@ direction: ltr
 source: docs/portal/docs/devportal/observability.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Наблюдаемость и аналитика портала
+# Portail d'analyse et d'analyse
 
-Дорожная карта DOCS-SORA требует аналитики, синтетических probe и автоматизации
-проверки битых ссылок для каждого preview build. В этой заметке описана инфраструктура,
-которая поставляется вместе с порталом, чтобы операторы могли подключить мониторинг
+La carte DOCS-SORA effectue des analyses, des sondes synthétiques et des automatismes
+проверки битых ссылок для каждого version préliminaire. В этой заметке описана инфраструктура,
+À l'intérieur du portail, les opérateurs peuvent surveiller la surveillance
 без утечки данных посетителей.
 
 ## Тегирование релиза
 
-- Установите `DOCS_RELEASE_TAG=<identifier>` (fallback на `GIT_COMMIT` или `dev`) при сборке портала.
-  Значение внедряется в `<meta name="sora-release">`, чтобы probes и dashboards могли отличать
+- Installez `DOCS_RELEASE_TAG=<identifier>` (repli sur `GIT_COMMIT` ou `dev`) sur le portail.
+  Les informations fournies dans `<meta name="sora-release">` permettent d'afficher les sondes et les tableaux de bord.
   развертывания.
 - `npm run build` создает `build/release.json` (записывается `scripts/write-checksums.mjs`), где описаны
-  тег, timestamp и опциональный `DOCS_RELEASE_SOURCE`. Этот файл упаковывается в preview-артефакты
-  и упоминается в отчете link checker.
+  tel, horodatage et optionnel `DOCS_RELEASE_SOURCE`. Этот файл упаковывается в preview-артефакты
+  et vous pouvez supprimer le vérificateur de liens.
 
 ## Аналитика с сохранением приватности
 
 - Настройте `DOCS_ANALYTICS_ENDPOINT=<https://collector.example/ingest>` для включения легкого трекера.
   Пейлоады содержат `{ event, path, locale, release, ts }` без referrer или IP метаданных, и при
   возможности используется `navigator.sendBeacon`, чтобы не блокировать навигации.
-- Управляйте выборкой через `DOCS_ANALYTICS_SAMPLE_RATE` (0-1). Трекер хранит последний отправленный path
+- Управляйте выборкой через `DOCS_ANALYTICS_SAMPLE_RATE` (0-1). Трекер хранит последний отправленный chemin
   и никогда не отправляет дубликаты событий для одной навигации.
-- Реализация находится в `src/components/AnalyticsTracker.jsx` и глобально монтируется через `src/theme/Root.js`.
+- La réalisation est effectuée dans `src/components/AnalyticsTracker.jsx` et globalement à partir de `src/theme/Root.js`.
 
-## Синтетические пробы
-
-- `npm run probe:portal` делает GET-запросы на типичные маршруты (`/`, `/norito/overview`,
-  `/reference/torii-swagger`, и т.д.) и проверяет, что мета тег `sora-release` соответствует
-  `--expect-release` (или `DOCS_RELEASE_TAG`). Пример:
+## Синтетические пробы- `npm run probe:portal` retarde GET-запросы на типичные маршруты (`/`, `/norito/overview`,
+  `/reference/torii-swagger`, et t.d.) et prouve que la méta `sora-release` est la solution
+  `--expect-release` (ou `DOCS_RELEASE_TAG`). Exemple :
 
 ```bash
 PORTAL_BASE_URL="https://docs.staging.sora" \
@@ -43,52 +43,48 @@ DOCS_RELEASE_TAG="preview-42" \
 npm run probe:portal -- --expect-release=preview-42
 ```
 
-Сбои показываются по path, что упрощает gate CD по успеху проб.
+Si vous recherchez un chemin, vous devez ouvrir le CD de Gate à votre recherche.
 
-## Автоматизация битых ссылок
+## Véhicules automatiques
 
-- `npm run check:links` сканирует `build/sitemap.xml`, убеждается, что каждая запись мапится на локальный файл
-  (проверяя fallback `index.html`), и пишет `build/link-report.json`, содержащий метаданные релиза, итоги,
-  ошибки и SHA-256 отпечаток `checksums.sha256` (выставлен как `manifest.id`), чтобы каждый отчет можно
+- `npm run check:links` recherche `build/sitemap.xml` pour savoir ce qui peut être téléchargé sur la carte locale.
+  (Prise de secours `index.html`), et `build/link-report.json`, la réponse métadonnée est ici,
+  Les connecteurs et l'opérateur SHA-256 `checksums.sha256` (appelés `manifest.id`) peuvent être trouvés
   было связать с манифестом артефакта.
-- Скрипт завершается с ненулевым кодом, когда страница отсутствует, поэтому CI может блокировать релизы
-  при устаревших или сломанных маршрутах. Отчеты содержат кандидатные пути, которые пытались открыть, что
+- Le script est ajouté au nouveau code, alors que la page d'accueil est utilisée, le CI peut bloquer les réponses
+  при устаревших или сломанных маршрутах. Les autres candidats sont ceux qui doivent s'ouvrir, c'est ça
   помогает проследить регрессию маршрутизации до дерева docs.
 
-## Дашборд Grafana и алерты
+## Dashbord Grafana et alertes- `dashboards/grafana/docs_portal.json` publie le dossier Grafana **Publication du portail Docs**.
+  Sur les panneaux suivants :
+  - *Refus de passerelle (5 m)* Utilisez `torii_sorafs_gateway_refusals_total` en temps réel
+    `profile`/`reason`, le SRE peut prendre en charge la poussée politique ou les jetons.
+  - *Alias Cache Refresh Outcomes* et *Alias Proof Age p90* отслеживают `torii_sorafs_alias_cache_*`,
+    Vous devez fournir une preuve complète avant le basculement DNS.
+  - *Nombre de manifestes du registre des broches* et état *Nombre d'alias actifs* élimine l'arriéré du registre des broches et s'en occupe.
+    число alias, чтобы gouvernance могла аудировать каждый реLIS.
+  - *Expiration de la passerelle TLS (heures)* permet de créer une passerelle de publication de certificats TLS
+    (alerte 72 h).
+  - *Résultats SLA de réplication* et *Replication Backlog* следят за телеметрией
+    `torii_sorafs_replication_*`, vous devez déterminer quelles sont les réponses proposées par GA après la publication.
+- Utilisez les modèles prédéfinis (`profile`, `reason`), pour vous concentrer sur
+  profil de publication `docs.sora` ou partagez des informations sur chaque étudiant.
+- Le routage PagerDuty utilise les panneaux du bord pour la documentation : alertes
+  `DocsPortal/GatewayRefusals`, `DocsPortal/AliasCache` et `DocsPortal/TLSExpiry`,
+  Cette série est actuellement disponible pour vous. Activez l'alerte Runbook à cet endroit,
+  Les agents de garde peuvent utiliser le Prometheus.
 
-- `dashboards/grafana/docs_portal.json` публикует Grafana доску **Docs Portal Publishing**.
-  Она включает следующие панели:
-  - *Gateway Refusals (5m)* использует `torii_sorafs_gateway_refusals_total` в разрезе
-    `profile`/`reason`, чтобы SRE могли обнаруживать плохие policy push или сбои токенов.
-  - *Alias Cache Refresh Outcomes* и *Alias Proof Age p90* отслеживают `torii_sorafs_alias_cache_*`,
-    чтобы подтвердить наличие свежих proof перед DNS cut over.
-  - *Pin Registry Manifest Counts* и стат *Active Alias Count* отражают backlog pin-registry и общее
-    число alias, чтобы governance могла аудировать каждый релиз.
-  - *Gateway TLS Expiry (hours)* подсвечивает приближение истечения TLS cert publishing gateway
-    (порог алерта 72 h).
-  - *Replication SLA Outcomes* и *Replication Backlog* следят за телеметрией
-    `torii_sorafs_replication_*`, чтобы убедиться, что все реплики соответствуют GA после публикации.
-- Используйте встроенные template переменные (`profile`, `reason`), чтобы фокусироваться на
-  publishing профиле `docs.sora` или исследовать всплески по всем шлюзам.
-- Роутинг PagerDuty использует панели дашборда как доказательство: алерты
-  `DocsPortal/GatewayRefusals`, `DocsPortal/AliasCache` и `DocsPortal/TLSExpiry` срабатывают,
-  когда соответствующие серии выходят за порог. Привяжите runbook алерта к этой странице,
-  чтобы on-call инженеры могли повторить точные Prometheus запросы.
-
-## Сводим вместе
-
-1. Во время `npm run build` установите переменные окружения release/analytics и дайте post-build шагу
-   записать `checksums.sha256`, `release.json` и `link-report.json`.
-2. Запустите `npm run probe:portal` против preview hostname с `--expect-release`, связанным с тем же тегом.
-   Сохраните stdout для publishing чеклиста.
-3. Запустите `npm run check:links`, чтобы быстро упасть на битых записях sitemap и архивировать
-   сгенерированный JSON отчет вместе с preview артефактами. CI кладет последний отчет в
-   `artifacts/docs_portal/link-report.json`, чтобы governance могла скачать evidence bundle прямо из логов build.
-4. Прокиньте analytics endpoint в ваш privacy-preserving collector (Plausible, self-hosted OTEL ingest и т.д.)
-   и убедитесь, что sample rate документируется для каждого релиза, чтобы dashboards корректно интерпретировали
+## Сводим вместе1. Lors de la mise à jour `npm run build`, installez la version finale/l'analyse et les données post-build
+   Téléchargez `checksums.sha256`, `release.json` et `link-report.json`.
+2. Sélectionnez `npm run probe:portal` pour prévisualiser le nom d'hôte avec `--expect-release`, en vous connectant à votre sujet.
+   Connectez la sortie standard à la liste de publication.
+3. Cliquez sur `npm run check:links` pour télécharger le plan du site et l'archiver.
+   Le générateur JSON ouvre la fenêtre des éléments d'aperçu. CI cladет последний отчет в
+   `artifacts/docs_portal/link-report.json`, la gouvernance peut télécharger un ensemble de preuves pour la création de logos.
+4. Connectez le point de terminaison d'analyse à votre collecteur préservant la confidentialité (ingestion OTEL plausible et auto-hébergée et ainsi de suite)
+   et déterminez quelle fréquence d'échantillonnage est documentée pour chaque version, quels tableaux de bord sont correctement interprétés
    счетчики.
-5. CI уже прокладывает эти шаги через preview/deploy workflows
+5. CI propose ces workflows de prévisualisation/déploiement
    (`.github/workflows/docs-portal-preview.yml`,
-   `.github/workflows/docs-portal-deploy.yml`), поэтому локальные dry runs должны покрывать
+   `.github/workflows/docs-portal-deploy.yml`), les courses à sec locales doivent être effectuées
    только поведение, связанное с секретами.

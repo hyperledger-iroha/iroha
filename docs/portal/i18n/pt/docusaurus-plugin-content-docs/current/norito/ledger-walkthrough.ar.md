@@ -4,24 +4,26 @@ direction: ltr
 source: docs/portal/docs/norito/ledger-walkthrough.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: جولة في السجل
-description: اعادة انتاج تدفق حتمي register -> mint -> transfer باستخدام CLI `iroha` والتحقق من حالة السجل الناتجة.
-slug: /norito/ledger-walkthrough
+título: جولة في السجل
+description: اعادة انتاج تدفق حتمي registrar -> mint -> transferir باستخدام CLI `iroha` والتحقق من حالة السجل الناتجة.
+slug: /norito/ledger-passo a passo
 ---
 
-تكمل هذه الجولة [Norito quickstart](./quickstart.md) عبر توضيح كيفية تعديل حالة السجل وفحصها باستخدام CLI `iroha`. ستسجل تعريف اصل جديدا، وتسك وحدات في حساب المشغل الافتراضي، وتنقل جزءا من الرصيد الى حساب اخر، وتتحقق من المعاملات والممتلكات الناتجة. كل خطوة تعكس التدفقات المغطاة في quickstarts الخاصة ب Rust/Python/JavaScript لتتمكن من التحقق من التطابق بين CLI وسلوك SDK.
+تكمل هذه الجولة [Norito quickstart](./quickstart.md) عبر توضيح كيفية تعديل حالة السجل وفحصها Use CLI `iroha`. Faça o download do cartão de crédito e do cartão de crédito no final do mês. Faça isso com cuidado e segurança. Você pode usar os guias de início rápido para Rust/Python/JavaScript usando o CLI e SDK.
 
 ## المتطلبات المسبقة
 
 - اتبع [quickstart](./quickstart.md) لتشغيل شبكة بعقدة واحدة عبر
   `docker compose -f defaults/docker-compose.single.yml up --build`.
-- تاكد من ان `iroha` (الـ CLI) مبني او محمل وانك تستطيع الوصول الى الـ peer باستخدام `defaults/client.toml`.
-- ادوات اختيارية: `jq` (تنسيق ردود JSON) وصدفة POSIX لمقاطع متغيرات البيئة في الاسفل.
+- Você pode usar `iroha` (CLI) e usar o peer `defaults/client.toml`.
+- A configuração é: `jq` (JSON) e POSIX para enviar mensagens de texto no site.
 
-طوال الدليل، استبدل `$ADMIN_ACCOUNT` و `$RECEIVER_ACCOUNT` بمعرفات الحساب التي تخطط لاستخدامها. يتضمن الـ bundle الافتراضي بالفعل حسابين مشتقين من مفاتيح العرض:
+Para obter mais informações, verifique `$ADMIN_ACCOUNT` e `$RECEIVER_ACCOUNT`. يتضمن الـ bundle الافتراضي بالفعل حسابين مشتقين من مفاتيح العرض:
 
 ```sh
 export ADMIN_ACCOUNT="ih58..."
@@ -34,9 +36,9 @@ export RECEIVER_ACCOUNT="ih58..."
 iroha --config defaults/client.toml account list all --limit 5 --table
 ```
 
-## 1. فحص حالة genesis
+## 1. فحص حالة gênese
 
-ابدأ باستكشاف السجل الذي يستهدفه CLI:
+Clique em CLI:
 
 ```sh
 # Domains المسجلة في genesis
@@ -51,22 +53,22 @@ iroha --config defaults/client.toml account list filter \
 iroha --config defaults/client.toml asset definition list all --table
 ```
 
-تعتمد هذه الاوامر على ردود مدعومة ب Norito، لذا يكون الترشيح والتقسيم حتميين ومتطابقين مع ما تتلقاه SDKs.
+A solução de problemas de hardware é Norito, mas não há nenhum problema com isso. Você pode usar SDKs.
 
 ## 2. تسجيل تعريف اصل
 
-انشئ اصلا جديدا قابلا للسك بلا حدود باسم `coffee` داخل نطاق `wonderland`:
+Para obter mais informações sobre o `coffee`, use o `wonderland`:
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
   --id coffee#wonderland
 ```
 
-يطبع CLI hash المعاملة المقدمة (مثلا `0x5f…`). احفظه كي تستعلم عن الحالة لاحقا.
+Use o hash CLI do arquivo (como `0x5f…`). Você pode fazer isso sem parar.
 
 ## 3. سك وحدات في حساب المشغل
 
-توجد كميات الاصول تحت الزوج `(asset definition, account)`. اسك 250 وحدة من `coffee#wonderland` في `$ADMIN_ACCOUNT`:
+Verifique o valor do arquivo `(asset definition, account)`. 250 unidades de `coffee#wonderland` em `$ADMIN_ACCOUNT`:
 
 ```sh
 iroha --config defaults/client.toml asset mint \
@@ -74,13 +76,13 @@ iroha --config defaults/client.toml asset mint \
   --quantity 250
 ```
 
-مرة اخرى احفظ hash المعاملة (`$MINT_HASH`) من خرج CLI. للتحقق من الرصيد نفذ:
+Crie um hash de hash (`$MINT_HASH`) na CLI. Para obter mais informações:
 
 ```sh
 iroha --config defaults/client.toml asset list all --limit 5 --table
 ```
 
-او لاستهداف الاصل الجديد فقط:
+E o que fazer:
 
 ```sh
 iroha --config defaults/client.toml asset list filter \
@@ -90,7 +92,7 @@ iroha --config defaults/client.toml asset list filter \
 
 ## 4. نقل جزء من الرصيد الى حساب اخر
 
-انقل 50 وحدة من حساب المشغل الى `$RECEIVER_ACCOUNT`:
+Mais de 50 itens do site `$RECEIVER_ACCOUNT`:
 
 ```sh
 iroha --config defaults/client.toml asset transfer \
@@ -99,7 +101,7 @@ iroha --config defaults/client.toml asset transfer \
   --quantity 50
 ```
 
-احفظ hash المعاملة باسم `$TRANSFER_HASH`. استعلم عن الممتلكات في الحسابين للتحقق من الارصدة الجديدة:
+Use hash como `$TRANSFER_HASH`. استعلم عن الممتلكات no site do site:
 
 ```sh
 iroha --config defaults/client.toml asset list filter \
@@ -111,7 +113,7 @@ iroha --config defaults/client.toml asset list filter \
 
 ## 5. التحقق من ادلة السجل
 
-استخدم الهاشات المحفوظة لتاكيد ان المعاملتين تم التزامهما:
+Para obter mais informações sobre o assunto, consulte:
 
 ```sh
 iroha --config defaults/client.toml transaction get --hash $MINT_HASH | jq .
@@ -125,12 +127,12 @@ iroha --config defaults/client.toml transaction get --hash $TRANSFER_HASH | jq .
 iroha --config defaults/client.toml blocks 0 --timeout 5s --table
 ```
 
-تستخدم كل الاوامر اعلاه نفس payloads الخاصة ب Norito التي تستخدمها SDKs. اذا كررت هذا التدفق عبر الكود (انظر quickstarts للـ SDK ادناه)، فستتطابق الهاشات والارصدة ما دمت تستهدف الشبكة نفسها والافتراضات نفسها.
+Você pode usar payloads em Norito para SDKs. Para obter mais informações sobre os guias de início rápido do SDK, consulte o guia de início rápido do SDK. Limpe o local e o local de trabalho.
 
-## روابط تكافؤ SDK
+## SDK do SDK
 
-- [Rust SDK quickstart](../sdks/rust) — يوضح تسجيل التعليمات، ارسال المعاملات، واستطلاع الحالة من Rust.
-- [Python SDK quickstart](../sdks/python) — يعرض نفس عمليات register/mint مع مساعدات JSON مدعومة ب Norito.
-- [JavaScript SDK quickstart](../sdks/javascript) — يغطي طلبات Torii، ومساعدات الحوكمة، واغلفة الاستعلامات المtyped.
+- [Guia de início rápido do Rust SDK](../sdks/rust) — Você pode instalar o Rust SDK no Rust.
+- [Início rápido do SDK do Python](../sdks/python) — Você pode usar o registro/mint como um arquivo JSON para Norito.
+- [JavaScript SDK quickstart](../sdks/javascript) — يغطي طلبات Torii, ومساعدات الحوكمة, واغلفة الاستعلامات Typed.
 
-نفذ جولة CLI اولا ثم كرر السيناريو باستخدام SDK المفضل لديك للتأكد من تطابق السطحين في هاشات المعاملات والارصدة ومخرجات الاستعلام.
+A CLI não está disponível para download no SDK do site para que você possa usar o SDK no seu computador. المعاملات والارصدة ومخرجات الاستعلام.

@@ -8,43 +8,45 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Puzzle Service Operations Guide
 sidebar_label: Puzzle Service Ops
 description: Operating the `soranet-puzzle-service` daemon for Argon2/ML-DSA admission tickets.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
-:::
+:::иҫкәртергә канонлы сығанаҡ
+::: 1990 й.
 
-# Puzzle Service Operations Guide
+# Пазл хеҙмәте операциялары ҡулланмаһы
 
-The `soranet-puzzle-service` daemon (`tools/soranet-puzzle-service/`) issues
-Argon2-backed admission tickets that mirror the relay’s `pow.puzzle.*` policy
-and, when configured, brokers ML-DSA admission tokens on behalf of edge relays.
-It exposes five HTTP endpoints:
+I18NI000000006X демоны (`tools/soranet-puzzle-service/`) мәсьәләләре
+Argon2-арҡа ҡабул итеү билеттары, улар көҙгө эстафе
+һәм, ҡасан конфигурацияланған, брокерҙар ML-DSA ҡабул итеү жетондары исеменән сит реле.
+Ул биш HTTP ос нөктәһен фашлай:
 
-- `GET /healthz` – liveness probe.
-- `GET /v1/puzzle/config` – returns the effective PoW/puzzle parameters pulled
-  from the relay JSON (`handshake.descriptor_commit_hex`, `pow.*`).
-- `POST /v1/puzzle/mint` – mints an Argon2 ticket; an optional JSON body
+- `GET /healthz` X – йәнлелек зонды.
+- I18NI000000010X – PoW/маҡсат параметрҙарын кире ҡайтара
+  эстафетаһынан JSON (`handshake.descriptor_commit_hex`, `pow.*`).
+- `POST /v1/puzzle/mint` – Аргон2 билеты мәтрүшкәһе; өҫтәмә JSON тән
   `{ "ttl_secs": <u64>, "transcript_hash_hex": "<32-byte hex>", "signed": true }`
-  requests a shorter TTL (clamped to the policy window), binds the ticket to a
-  transcript hash, and returns a relay-signed ticket + signature fingerprint
-  when signing keys are configured.
-- `GET /v1/token/config` – when `pow.token.enabled = true`, returns the active
-  admission-token policy (issuer fingerprint, TTL/clock-skew bounds, relay ID,
-  and the merged revocation set).
-- `POST /v1/token/mint` – mints an ML-DSA admission token bound to the supplied
-  resume hash; the request body accepts `{ "transcript_hash_hex": "...", "ttl_secs": <u64>, "flags": <u8> }`.
+  ҡыҫҡараҡ TTL һорай (сәйәси тәҙрәгә ҡыҫтырылған), билетты бәйләй
+  стенограмма хеш, һәм ҡайтара реле-билет + ҡултамға бармаҡ эҙҙәре
+  асҡыстарға ҡул ҡуйғанда, конфигурациялана.
+- I18NI000000015X – ҡасан I18NI000000016X, әүҙем ҡайтара
+  ҡабул итеү-журнал сәйәсәте (эҙләүсе бармаҡ эҙҙәре, TTL/сәғәт-сиква сиктәре, реле ID,
+  һәм берләштерелгән тартып алыу комплекты).
+- I18NI000000017X – мәтрүшкә МЛ-ДСА ҡабул итеү токен менән тәьмин ителгән
+  резюме хеш; запрос органы `{ "transcript_hash_hex": "...", "ttl_secs": <u64>, "flags": <u8> }` ҡабул итә.
 
-Tickets produced by the service are verified in the
-`volumetric_dos_soak_preserves_puzzle_and_latency_slo`
-integration test, which also exercises relay throttles during volumetric DoS
-scenarios.【tools/soranet-relay/tests/adaptive_and_puzzle.rs:337】
+Хеҙмәтләндереүсе билеттар 2019 йылда раҫлана.
+`volumetric_dos_soak_preserves_puzzle_and_latency_slo` X.
+интеграция тесты, ул шулай уҡ күнегеүҙәр реле дроссель ваҡытында күләмле DoS
+сценарийҙар.【инструменттар/соранет-эстафета/тестар/адаптив_ һәм пазл.р. 337】
 
-## Configuring token issuance
+## Конфигурациялау токен сығарыу
 
-Set the relay JSON fields under `pow.token.*` (see
-`tools/soranet-relay/deploy/config/relay.entry.json` for an example) to enable
-ML-DSA tokens. At minimum provide the issuer public key and optional
-revocation list:
+I18NI000000020X буйынса эстафета JSON яландарын ҡуйырға (ҡара:
+Миҫал өсөн I18NI000000021X)
+МЛ-ДСА токендары. Минимум эмитент асыҡ асҡыс һәм теләк буйынса тәьмин итеү
+ҡайтарыу исемлеге:
 
 ```json
 "pow": {
@@ -57,13 +59,13 @@ revocation list:
 }
 ```
 
-The puzzle service reuses these values and automatically reloads the Norito
-JSON revocation file at runtime. Use the `soranet-admission-token` CLI
-(`cargo run -p soranet-relay --bin soranet_admission_token`) to mint and inspect
-tokens offline, append `token_id_hex` entries to the revocation file, and audit
-existing credentials before pushing updates to production.
+Пазл хеҙмәте был ҡиммәттәрҙе ҡабаттан ҡуллана һәм автоматик рәүештә Norito .
+JSON ҡайтарыу файлы эшләү ваҡытында. I18NI000000022X CLI ҡулланыу
+(I18NI000000023X) мәтрүшкә һәм тикшерергә
+токендар офлайн, ҡушымта I18NI00000000024X яҙмаларҙы ҡабул итеү файлына, һәм аудит
+ғәмәлдәге ышаныс ҡағыҙҙары етештереүгә яңыртыуҙарҙы этәрергә тиклем.
 
-Pass the issuer secret key to the puzzle service via the CLI flags:
+Эмитент йәшерен асҡыс аша үтергә пазл хеҙмәте аша CLI флагтары:
 
 ```bash
 cargo run -p soranet-puzzle-service -- \
@@ -73,82 +75,82 @@ cargo run -p soranet-puzzle-service -- \
   --token-revocation-refresh-secs 60
 ```
 
-`--token-secret-hex` is also available when the secret is managed by an out-of-band
-tooling pipeline. The revocation file watcher keeps `/v1/token/config` current;
-coordinate updates with the `soranet-admission-token revoke` command to avoid lagging
-revocation state.
+I18NI000000025X шулай уҡ ҡасан сер менән идара итеү диапазоны-диапазон .
+инструменталь торба үткәргес. Ҡабул итеү файлын күҙәтеүсе `/v1/token/config`E ток тота;
+I18NI0000000027X командаһы менән координациялауҙы координациялай
+ҡайтарыу хәле.
 
-Set `pow.signed_ticket_public_key_hex` in the relay JSON to advertise the ML-DSA-44 public
-key used to verify signed PoW tickets; `/v1/puzzle/config` echoes the key and its BLAKE3
-fingerprint (`signed_ticket_public_key_fingerprint_hex`) so clients can pin the verifier.
-Signed tickets are validated against the relay ID and transcript bindings and share the same
-revocation store; raw 74-byte PoW tickets remain valid when the signed-ticket verifier is
-configured. Pass the signer secret via `--signed-ticket-secret-hex` or
-`--signed-ticket-secret-path` when launching the puzzle service; startup rejects mismatched
-keypairs if the secret does not validate against `pow.signed_ticket_public_key_hex`.
-`POST /v1/puzzle/mint` accepts `"signed": true` (and optional `"transcript_hash_hex"`) to
-return a Norito-encoded signed ticket alongside the raw ticket bytes; responses include
-`signed_ticket_b64` and `signed_ticket_fingerprint_hex` to help track replay fingerprints.
-Requests with `signed = true` are rejected if the signer secret is not configured.
+I18NI000000028X комплекты эстафетала JSON реклама өсөн ML-DSA-44 йәмәғәт
+ҡул ҡуйылған PoW билеттарын раҫлау өсөн ҡулланылған асҡыс; I18NI000000029X асҡысты һәм уның BLAKE3-сөһөн яңғырата.
+бармаҡ эҙҙәре (I18NI000000030X) шулай клиенттар тикшерергә мөмкин.
+Ҡултамғалы билеттар ҡаршы раҫлана реле идентификаторы һәм стенограмма бәйләүҙәр һәм шул уҡ бүлешергә .
+тартып алыу магазины; сеймал 74-байт PoW билеттары ғәмәлдә ҡала, ҡасан ҡул ҡуйылған-билет тикшерергә
+— тип конфигурацияланы. Ҡул ҡуйыусы серен I18NI000000031X йәки
+I18NI000000032X пазл хеҙмәтен башлағанда; стартаптың тап килмәүен кире ҡаға
+клавиатура, әгәр сер I18NI000000033X ҡаршы раҫламаһа.
+I18NI000000034X ҡабул итә I18NI0000000035X (һәм өҫтәмә I18NI000000036X)
+ҡайтарыу I18NT000000001X-кодланған ҡул ҡуйылған билет менән бергә сеймал билеттары; яуаптар үҙ эсенә ала
+I18NI000000037X һәм I18NI000000038X ярҙам итеү өсөн реплей бармаҡ эҙҙәрен күҙәтергә.
+I18NI000000039X менән запростар кире ҡағыла, әгәр ҡул ҡуйыусы сере конфигурацияланмаған.
 
-## Key rotation playbook
+## Төп әйләнеш плейбук
 
-1. **Collect the new descriptor commit.** Governance publishes the relay
-   descriptor commit in the directory bundle. Copy the hex string into
-   `handshake.descriptor_commit_hex` inside the relay JSON configuration shared
-   with the puzzle service.
-2. **Review puzzle policy bounds.** Confirm the updated
-   `pow.puzzle.{memory_kib,time_cost,lanes}` values align with the release
-   plan. Operators should keep the Argon2 configuration deterministic across
-   relays (minimum 4 MiB memory, 1 ≤ lanes ≤ 16).
-3. **Stage the restart.** Reload the systemd unit or container once governance
-   announces the rotation cutover. The service has no hot-reload support; a
-   restart is required to pick up the new descriptor commit.
-4. **Validate.** Issue a ticket via `POST /v1/puzzle/mint` and confirm the
-   returned `difficulty` and `expires_at` match the new policy. The soak report
-   (`docs/source/soranet/reports/pow_resilience.md`) captures expected latency
-   bounds for reference. When tokens are enabled, fetch `/v1/token/config` to
-   ensure the advertised issuer fingerprint and revocation count match the
-   expected values.
+1. **Яңы дескриптор коммитты йыйып.** Идара итеү реле баҫтырып сығара.
+   дескриптор каталог өйөмөндә ҡылған. Алтын епте күсерергә .
+   I18NI0000000040X эсендә эстафета JSON конфигурацияһы уртаҡлашты
+   пазл хеҙмәте менән.
+2. **Пазл сәйәсәте сиктәрен тикшерергә.** Яңыртылған раҫланды
+   I18NI000000041X ҡиммәттәре релиз менән тура килә
+   план. Операторҙар Argon2 конфигурацияһы детерминистикы буйынса һаҡларға тейеш.
+   релелар (минималь 4МиБ хәтере, 1≤lanes≤16).
+3. **Стаж перезапуска
+   ротация өҙөклөгө тураһында иғлан итә. Хеҙмәтләндереүҙең ҡайнар-перечать ярҙамы юҡ; а .
+   перезапуск яңы дескрипторҙы алыу өсөн талап ителә.
+4. **Валидат.** I18NI000000042X аша билет сығарыу һәм раҫлау
+   `difficulty` һәм `expires_at` яңы сәйәсәтте матчҡа ҡайтара. Һыу инеү тураһында отчет
+   (I18NI0000000045X) көтөлгән латентлыҡты тотоу
+   сиктәре өсөн һылтанма. Ҡасан жетондар эшләй, алыу өсөн I18NI0000000046X .
+   реклама эмитенты бармаҡ эҙен һәм ҡайтарыу иҫәбе тап килгәнен тәьмин итеү
+   көтөлгән ҡиммәттәр.
 
-## Emergency disable procedure
+## Ғәҙәттән тыш хәлдәрҙе һүндереү процедураһы
 
-1. Set `pow.puzzle.enabled = false` in the shared relay configuration. Keep
-   `pow.required = true` if hashcash fallback tickets must remain mandatory.
-2. Optionally enforce `pow.emergency` entries to reject stale descriptors while
-   the Argon2 gate is offline.
-3. Restart both the relay and the puzzle service to apply the change.
-4. Monitor `soranet_handshake_pow_difficulty` to ensure the difficulty drops to
-   the expected hashcash value, and verify `/v1/puzzle/config` reports
+1. Дөйөм эстафета конфигурацияһында I18NI000000047X комплекты. Һаҡларға
+   I18NI000000048X, әгәр хешкэш fallback билеттар мотлаҡ ҡалырға тейеш.
+.
+   Argon2 ҡапҡаһы офлайн.
+3. үҙгәртергә ҡулланыу өсөн реле ла, пазл хеҙмәтен дә яңынан эшләтеп ебәрегеҙ.
+4. Монитор I18NI000000050X 2012 йылға тиклем ауырлыҡ төшөүен тәьмин итеү өсөн.
+   көтөлгән хешхеш хаҡы, һәм раҫлау I18NI0000000051X хәбәр итә
    `puzzle = null`.
 
-## Monitoring and alerting
+## Мониторинг һәм иҫкәртеү
 
-- **Latency SLO:** Track `soranet_handshake_latency_seconds` and keep the P95
-  below 300 ms. The soak test offsets provide calibration data for guard
-  throttles.【docs/source/soranet/reports/pow_resilience.md:1】
-- **Quota pressure:** Use `soranet_guard_capacity_report.py` with relay metrics
-  to tune `pow.quotas` cooldowns (`soranet_abuse_remote_cooldowns`,
-  `soranet_handshake_throttled_remote_quota_total`).【docs/source/soranet/relay_audit_pipeline.md:68】
-- **Puzzle alignment:** `soranet_handshake_pow_difficulty` should match the
-  difficulty returned by `/v1/puzzle/config`. Divergence indicates stale relay
-  config or a failed restart.
-- **Token readiness:** Alert if `/v1/token/config` drops to `enabled = false`
-  unexpectedly or if `revocation_source` reports stale timestamps. Operators
-  should rotate the Norito revocation file via the CLI whenever a token is
-  retired to keep this endpoint accurate.
-- **Service health:** Probe `/healthz` in the usual liveness cadence and alert
-  if `/v1/puzzle/mint` returns HTTP 500 responses (indicates Argon2 parameter
-  mismatch or RNG failures). Token minting errors surface through HTTP 4xx/5xx
-  responses on `/v1/token/mint`; treat repeated failures as a paging condition.
+- **Латенция СЛО:** I18NI000000053X трек һәм P95-те һаҡлағыҙ.
+  300мс түбән. Һынау офсеттары һаҡсы өсөн калибровка мәғлүмәттәрен тәьмин итә
+  д.
+- **Цета баҫымы:** I18NI0000000054X реле метрикаһы менән ҡулланыу
+  18NI000000055Х көйөнә (I18NI000000056X,
+  I18NI000000057X).【доктар/сығанаҡ/соранет/эстафет_кипелин.мд:68】
+- **Пазл тура килтереп:** I18NI0000000058X Е.
+  ауырлыҡ ҡайтарыла I18NI000000059X X. Дивергенция иҫке реле күрһәтә
+  конфигурация йәки уңышһыҙ перезапуск.
+- **Токен әҙерлеге:** Әгәр I18NI0000000060X `enabled = false`-ҡа тиклем төшһә, иҫкәртмә.
+  көтөлмәгәнсә йәки әгәр I18NI000000062X иҫке ваҡыт маркалары тураһында хәбәр итә. Операторҙар
+  тейеш әйләндерергә I18NT0000000000002X ҡабул итеү файлы аша CLI ҡасан да булһа токен
+  был ос нөктәһен теүәл тотоу өсөн пенсияға сыға.
+- **Хеҙмәт һаулыҡ:** зонд I18NI0000000063X ғәҙәти йәнлелек каденцияһы һәм иҫкәртмәһендә
+  әгәр I18NI0000000064X ҡайтара HTTP 500 яуап (аргон2 параметрын күрһәтә
+  тап килмәү йәки РНГ етешһеҙлектәре). Токен ҡойоу хаталары аша HTTP 4xx/5xx
+  I18NI000000065X буйынса яуаптар; ҡабатланған етешһеҙлектәрҙе пейджинг шарты тип дауалай.
 
-## Compliance and audit logging
+## Ҡабул итеү һәм аудит журналы
 
-Relays emit structured `handshake` events that include throttle reasons and
-cooldown durations. Ensure the compliance pipeline described in
-`docs/source/soranet/relay_audit_pipeline.md` ingests these logs so puzzle
-policy changes remain auditable. When the puzzle gate is enabled, archive the
-minted ticket samples and the Norito configuration snapshot with the rollout
-ticket for future audits. Admission tokens minted ahead of maintenance windows
-should be tracked with their `token_id_hex` values and inserted into the
-revocation file once they expire or are revoked.
+Релелар структуралы I18NI000000066XX ваҡиғалар, улар дроссель сәбәптәрен үҙ эсенә ала һәм
+һыуытҡыс оҙайлылығы. 2012 йылда һүрәтләнгән үтәү торбаһын тәьмин итеү.
+I18NI0000000067X был журналдарҙы шулай пазл ашай
+сәйәси үҙгәрештәр аудит ҡала. Ҡасан пазл ҡапҡаһы өҫтөндә эшләй, архив .
+һуғылған билет өлгөләре һәм I18NT000000000003X конфигурацияһы снимок менән ролл-аут
+билет киләсәктә аудит. Ҡабул итеү жетондары хеҙмәтләндереүҙең тәҙрәләренән алда һуғылған
+улар менән күҙәтергә тейеш I18NI00000000068X ҡиммәттәре һәм индереү
+уларҙы ҡабул итеү йәки тартып алынғас, ҡайтарыу файлы ҡабул ителә.

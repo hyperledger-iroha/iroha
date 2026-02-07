@@ -4,41 +4,43 @@ direction: ltr
 source: docs/portal/docs/devportal/preview-feedback/w2/summary.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: preview-feedback-w2-summary
-title: W2 فيڈبیک اور اسٹیٹس خلاصہ
-sidebar_label: W2 خلاصہ
-description: community preview wave (W2) کے لئے live digest۔
+идентификатор: предварительный просмотр-обратная связь-w2-сводка
+Название: W2 فيڈبیک اسٹیٹس خلاصہ
+Sidebar_label: W2 خلاصہ
+описание: волна предварительного просмотра сообщества (W2) کے لئے Live дайджест۔
 ---
 
 | آئٹم | تفصیل |
 | --- | --- |
-| لہر | W2 - community reviewers |
-| دعوتی ونڈو | 2025-06-15 -> 2025-06-29 |
+| لہر | W2 — рецензенты сообщества |
+| دعوتی ونڈو | 15.06.2025 -> 29.06.2025 |
 | آرٹیفیکٹ ٹیگ | `preview-2025-06-15` |
 | ٹریکر ایشو | `DOCS-SORA-Preview-W2` |
-| شرکا | comm-vol-01...comm-vol-08 |
+| شرکا | комм-объем-01... комм-об-08 |
 
 ## نمایاں نکات
 
-1. **Governance اور tooling** - community intake پالیسی 2025-05-20 کو متفقہ طور پر منظور ہوئی؛ motivation/timezone فیلڈز کے ساتھ اپ ڈیٹ request template `docs/examples/docs_preview_request_template.md` میں موجود ہے۔
-2. **Preflight evidence** - Try it proxy change `OPS-TRYIT-188` 2025-06-09 کو چلایا گیا، Grafana dashboards کیپچر کیے گئے، اور `preview-2025-06-15` کے descriptor/checksum/probe outputs `artifacts/docs_preview/W2/` میں archive کیے گئے۔
-3. **Invite wave** - آٹھ community reviewers کو 2025-06-15 کو مدعو کیا گیا، acknowledgements tracker invite table میں لاگ ہوئے؛ سب نے browsing سے پہلے checksum verification مکمل کیا۔
-4. **Feedback** - `docs-preview/w2 #1` (tooltip wording) اور `#2` (localization sidebar order) 2025-06-18 کو فائل ہوئے اور 2025-06-21 تک حل ہو گئے (Docs-core-04/05)؛ لہر کے دوران کوئی incidents نہیں ہوئے۔
+1. **Инструменты для управления** – прием сообщества پالیسی 20 мая 2025 г. мотивация/часовой пояс فیلڈز کے ساتھ اپ ڈیٹ шаблон запроса `docs/examples/docs_preview_request_template.md` میں موجود ہے۔
+2. **Предполетные доказательства** – попробуйте сменить прокси-сервер. `preview-2025-06-15` — выходы дескриптора/контрольной суммы/зонда. `artifacts/docs_preview/W2/` — архив.
+3. **Волна с приглашениями** – Отображение рецензентов сообщества کو 2025-06-15 کو مدعو کیا گیا، трекер благодарностей, таблица приглашений. سب نے просмотр سے پہلے проверка контрольной суммы مکمل کیا۔
+4. **Обратная связь** — `docs-preview/w2 #1` (текст всплывающей подсказки) или `#2` (порядок боковой панели локализации) 18 июня 2025 г., было добавлено 21 июня 2025 г. ہو گئے (Docs-core-04/05). لہر کے کوئی инциденты نہیں ہوئے۔
 
 ## ایکشن آئٹمز
 
-| ID | وضاحت | مالک | اسٹیٹس |
+| удостоверение личности | وضاحت | مالک | اسٹیٹس |
 | --- | --- | --- | --- |
-| W2-A1 | `docs-preview/w2 #1` (tooltip wording) حل کرنا۔ | Docs-core-04 | ✅ مکمل (2025-06-21). |
-| W2-A2 | `docs-preview/w2 #2` (localization sidebar) حل کرنا۔ | Docs-core-05 | ✅ مکمل (2025-06-21). |
-| W2-A3 | exit evidence archive کرنا + roadmap/status اپ ڈیٹ کرنا۔ | Docs/DevRel lead | ✅ مکمل (2025-06-29). |
+| W2-A1 | `docs-preview/w2 #1` (текст всплывающей подсказки) حل کرنا۔ | Документы-core-04 | ✅ مکمل (21 июня 2025 г.). |
+| W2-A2 | `docs-preview/w2 #2` (боковая панель локализации) | Документы-core-05 | ✅ مکمل (21 июня 2025 г.). |
+| W2-A3 | выход из архива доказательств کرنا + дорожная карта/статус اپ ڈیٹ کرنا۔ | Руководитель отдела документации и разработки | ✅ مکمل (29.06.2025). |
 
-## اختتامی خلاصہ (2025-06-29)
+## اختتامی خلاصہ (29 июня 2025 г.)
 
-- تمام آٹھ community reviewers نے تکمیل کی تصدیق کی اور preview access واپس لے لیا گیا؛ acknowledgements tracker invite log میں ریکارڈ ہوئے۔
-- آخری telemetry snapshots (`docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals`) green رہے؛ logs اور Try it proxy transcripts `DOCS-SORA-Preview-W2` کے ساتھ منسلک ہیں۔
-- evidence bundle (descriptor, checksum log, probe output, link report, Grafana screenshots, invite acknowledgements) `artifacts/docs_preview/W2/preview-2025-06-15/` میں archive ہوا۔
-- tracker کا W2 checkpoint log exit تک اپ ڈیٹ کیا گیا تاکہ roadmap W3 planning شروع ہونے سے پہلے audit-ready ریکارڈ رکھے۔
+- Пользователи сообщества рецензентов могут получить доступ к предварительному просмотру и получить доступ к предварительному просмотру. трекер благодарностей журнал приглашений میں ریکارڈ ہوئے۔
+- آخری снимки телеметрии (`docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals`) зеленый رہے؛ logs اور Попробуйте транскрипты прокси `DOCS-SORA-Preview-W2` کے ساتھ منسلک ہیں۔
+- пакет доказательств (дескриптор, журнал контрольной суммы, выходные данные зонда, отчет о ссылках, снимки экрана Grafana, подтверждения приглашения) Архив `artifacts/docs_preview/W2/preview-2025-06-15/` ہوا۔
+- трекер Для выхода из журнала контрольной точки W2 Есть план действий по планированию W3 Готовность к аудиту Готовность к аудиту

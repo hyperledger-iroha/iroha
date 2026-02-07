@@ -8,33 +8,35 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraFS Orchestrator Configuration
 sidebar_label: Orchestrator Configuration
 description: Configure the multi-source fetch orchestrator, interpret failures, and debug telemetry output.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
+:::དྲན་ཐོའི་འབྱུང་ཁུངས།
 :::
 
-# Multi-Source Fetch Orchestrator Guide
+# འབྱུང་ཁུངས་ཕེཆ་ཨོར་ཀེཊ་ཊར་ལམ་སྟོན།
 
-The SoraFS multi-source fetch orchestrator drives deterministic, parallel
-downloads from the provider set published in governance-backed adverts. This
-guide explains how to configure the orchestrator, what failure signals to expect
-during rollouts, and which telemetry streams expose health indicators.
+SoraFS སྣ་མང་འབྱུང་ཁུངས་ ཕེཆ་ཨོར་ཀེཊ་ཊར་ཚུ་གིས་ གཏན་འབེབས་བཟོ་མི་ མཉམ་འགྲོས་ མཉམ་འགྲོས་འབད།
+གཞུང་སྐྱོང་རྒྱབ་སྐྱོར་ཡོད་པའི་ཁྱབ་བསྒྲགས་ཚུ་ནང་ དཔར་བསྐྲུན་འབད་མི་ མཁོ་སྤྲོད་འབད་མི་ཆ་ཚན་ལས་ ཕབ་ལེན་ཚུ། ཨ་ནཱི
+ལམ་སྟོན་པ་གིས་ རོལ་དབྱངས་རིམ་སྒྲིག་འབད་ཐངས་སྐོར་ལས་ འགྲེལ་བཤད་རྐྱབ་སྟེ་ རེ་བ་ག་ཅི་གིས་ འཐུས་ཤོར་བའི་བརྡ་མཚོན་སྟོནམ་ཨིན།
+བསྐོར་འཁོར་གྱི་སྐབས་ལུ་དང་ ཊེ་ལི་མི་ཊི་རི་གིས་ གསོ་བའི་བརྡ་མཚོན་ཚུ་ གསལ་སྟོན་འབདཝ་ཨིན།
 
-## 1. Configuration Overview
+## 1. རིམ་སྒྲིག་སྤྱིར་བཏང་བལྟ་སྟངས།
 
-The orchestrator merges three sources of configuration:
+རོལ་དབྱངས་འདི་ རིམ་སྒྲིག་གི་འབྱུང་ཁུངས་གསུམ་མཉམ་བསྡོམས་འབདཝ་ཨིན།
 
-| Source | Purpose | Notes |
-|--------|---------|-------|
-| `OrchestratorConfig.scoreboard` | Normalises provider weights, validates telemetry freshness, and persists the JSON scoreboard used for audits. | Backed by `crates/sorafs_car::scoreboard::ScoreboardConfig`. |
-| `OrchestratorConfig.fetch` | Applies runtime limits (retry budgets, concurrency bounds, verification toggles). | Maps to `FetchOptions` in `crates/sorafs_car::multi_fetch`. |
-| CLI / SDK parameters | Cap the number of peers, attach telemetry regions, and surface deny/boost policies. | `sorafs_cli fetch` exposes these flags directly; SDKs thread them via `OrchestratorConfig`. |
+| ཡོང་ཁུངས། | དམིགས་ཡུལ། | དྲན་ཐོ། |
+|-----------|--------------------------------------------------------
+| `OrchestratorConfig.scoreboard` | ནོར་མཱ་ལིསི་བྱིན་མི་གིས་ ལྗིད་ཚད་དང་ ཊེ་ལི་མི་ཊི་གསརཔ་བདེན་དཔྱད་འབད་ནི་ དེ་ལས་ རྩིས་ཞིབ་ཀྱི་དོན་ལུ་ ལག་ལེན་འཐབ་མི་ ཇེ་ཨེསི་ཨོ་ཨེན་ སྐུགས་བཀོད་སྒྲིག་འདི་ གནས་ཏེ་ཡོདཔ་ཨིན། | རྒྱབ་ལོག་ `crates/sorafs_car::scoreboard::ScoreboardConfig`. |
+| `OrchestratorConfig.fetch` | རཱན་ཊའིམ་ཚད་གཞི་ཚུ་འཇུག་སྤྱོད་འབདཝ་ཨིན་ (དངུལ་རྩིས་དང་ དུས་མཉམ་གྱི་མཐའ་མཚམས་ བདེན་དཔྱད་ཀྱི་སོར་བསྒྱུར་ཚུ་)། | `FetchOptions` ལུ་ སབ་ཁྲ་ `crates/sorafs_car::multi_fetch` ལུ་ཨིན། |
+| CLI / ཨེསི་ཌི་ཀེ་ ཚད་གཞི་ཚུ། | མཉམ་རོགས་ཀྱི་གྱངས་ཁ་དང་ ཊེ་ལི་མི་ཊི་ལུང་ཕྱོགས་ཚུ་ མཐུད་དེ་ ཁ་ཐོག་ལུ་ ངོས་ལེན་མེད་པའི་/བོསི་སྲིད་བྱུས་ཚུ་ མཐུད་དགོ། | `sorafs_cli fetch` གིས་ དར་འདི་ཚུ་ ཐད་ཀར་དུ་ གསལ་སྟོན་འབདཝ་ཨིན། SDKs གིས་ `OrchestratorConfig` བརྒྱུད་དེ་ཁོང་ལུ་སྐུམ་པ་བཏབ། |
 
-The JSON helpers in `crates/sorafs_orchestrator::bindings` serialise the entire
-configuration into Norito JSON, making it portable across SDK bindings and
-automation.
+`crates/sorafs_orchestrator::bindings` ནང་ཡོད་པའི་ JSON གྲོགས་རམ་པ་ ཆ་མཉམ་རིམ་སྒྲིག་འབདཝ་ཨིན།
+རིམ་སྒྲིག་འདི་ Norito JSON ནང་ལུ་ ཨེསི་ཌི་ཀེ་ བཱའིན་ཌིང་ཚུ་ནང་ལུ་ འབག་བཏུབ་བཟོཝ་ཨིན།
+རང་འགོད།
 
-### 1.1 Sample JSON Configuration
+### ༡.༡ དཔེ་ཚད་ JSON མཐུན་སྒྲིག།
 
 ```json
 {
@@ -57,17 +59,17 @@ automation.
 }
 ```
 
-Persist the file through the usual `iroha_config` layering (`defaults/`, user,
-actual) so deterministic deployments inherit the same limits across nodes.
-For a direct-only fallback profile that aligns with the SNNet-5a rollout,
-consult `docs/examples/sorafs_direct_mode_policy.json` and the companion
-guidance in `docs/source/sorafs/direct_mode_pack.md`.
+ཡིག་སྣོད་འདི་ སྤྱིར་བཏང་ `iroha_config` བང་རིམ་ (`defaults/`, ལག་ལེན་པའི་ཐོག་ལས་ ལག་ལེན་འཐབ་དགོ།
+low ) དེ་འབདཝ་ལས་ གཏན་འབེབས་བཀྲམ་སྤེལ་ཚུ་གིས་ མཐུད་མཚམས་ཚུ་གི་ནང་འཁོད་ལུ་ ཚད་གཞི་གཅིག་པའི་ཤུལ་འཛིན་འབདཝ་ཨིན།
+ཨེསི་ཨེན་ནེཊི་-༥ཨེ་ བསྐོར་ཐེངས་དང་གཅིག་ཁར་ཕྲང་སྒྲིག་འབད་མི་ ཐད་ཀར་རྐྱངམ་ཅིག་ ཕོརེཀ་གསལ་སྡུད་ཅིག་གི་དོན་ལུ་;
+`docs/examples/sorafs_direct_mode_policy.json` དང་མཉམ་རོགས་ལུ་བལྟ་དགོ།
+ལམ་སྟོན་ `docs/source/sorafs/direct_mode_pack.md`.
 
-### 1.2 Compliance Overrides
+### ༡.༢ བསྟུན་འགྲིག་དྲག་པ།
 
-SNNet-9 threads governance-driven compliance into the orchestrator. A new
-`compliance` object in the Norito JSON configuration captures the carve-outs
-that force the fetch pipeline into direct-only mode:
+SNNet-9 གི་ཐིག་ཚུ་ གཞུང་སྐྱོང་གིས་ འདྲུད་བདའ་མི་ སྙན་ཆའི་སྡེ་ཚན་ནང་ བསྟར་སྤྱོད་འབད་ནི། གསརཔ།
+`compliance` དངོས་པོ་ Norito JSON རིམ་སྒྲིག་ནང་ བརྐོས་བརྐོསཔ་ཨའུཊི་ཚུ་ བཏོནམ་ཨིན།
+དེ་གིས་ འཕུར་འགྲུལ་གྱི་མདའ་མདའ་འདི་ ཐད་ཀར་དུ་ཐབས་ལམ་ནང་ལུ་ ཤུགས་བཏོནམ་ཨིན།
 
 ```json
 "compliance": {
@@ -80,121 +82,124 @@ that force the fetch pipeline into direct-only mode:
 }
 ```
 
-- `operator_jurisdictions` declares the ISO‑3166 alpha‑2 codes where this
-  orchestrator instance operates. Codes are normalised to uppercase during
-  parsing.
-- `jurisdiction_opt_outs` mirrors the governance register. When any operator
-  jurisdiction appears on the list, the orchestrator enforces
-  `transport_policy=direct-only` and emits the policy fallback reason
+- `operator_jurisdictions` གིས་ ISO‐‐‐13166 alpha‐2 གསང་ཡིག་ཚུ་ ག་སྟེ་ལུ་གསལ་བསྒྲགས་འབདཝ་ཨིན།
+  སྙན་ཆའི་དཔེ་ཚད་འདི་ལཱ་འབདཝ་ཨིན། གསང་གྲངས་ཚུ་ སྐབས་ལུ་ རྒྱ་ཚད་ལུ་ སྤྱིར་བཏང་སྦེ་བཟོ་ཡོདཔ་ཨིན།
+  དབྱེ་དཔྱད་འབད་ནི།
+- `jurisdiction_opt_outs` གིས་ གཞུང་སྐྱོང་ཐོ་བཀོད་ཀྱི་ མཐོང་སྣང་བྱིནམ་ཨིན། བཀོལ་སྤྱོད་པ་གང་རུང་སྐབས།
+  དབང་ཚད་འདི་ཐོ་ཡིག་ནང་ལུ་འབྱུངམ་ཨིན།
+  `transport_policy=direct-only` དང་ སྲིད་བྱུས་ཀྱི་ ཕོལཀ་རྒྱུ་མཚན་བཏོནམ་ཨིན།
   `compliance_jurisdiction_opt_out`.
-- `blinded_cid_opt_outs` lists manifest digests (blinded CIDs, encoded as
-  uppercase hex). Matching payloads also force direct-only scheduling and
-  surface the `compliance_blinded_cid_opt_out` fallback in telemetry.
-- `audit_contacts` records the URIs governance expects operators to publish in
-  their GAR playbooks.
-- `attestations` captures the signed compliance packets backing the policy.
-  Each entry defines an optional `jurisdiction` (ISO-3166 alpha-2 code), a
-  `document_uri`, the canonical 64-character `digest_hex`, the issuance
-  timestamp `issued_at_ms`, and an optional `expires_at_ms`. These artefacts
-  flow into the orchestrator’s audit checklist so governance tooling can link
-  overrides to the signed paperwork.
+- `blinded_cid_opt_outs` ཐོ་ཡིག་ཚུ་གིས་ བཞུ་བཅུད་ཚུ་ གསལ་སྟོན་འབདཝ་ཨིན་ (འོད་མདངས་ཅན་གྱི་སི་ཨའི་ཌི་ཚུ་ ཨིན་ཀོཌི་འབད་ཡོདཔ།
+  ཆེ་ཆུང་ ཧེགསི་). མཐུན་སྒྲིག་ཚུ་གིས་ཡང་ ཐད་ཀར་དུ་ དུས་ཚོད་བཀོད་ནི་དང་།
+  ཁ་ཐོག་འདི་ `compliance_blinded_cid_opt_out` བརྡ་འཕྲིན་ནང་།
+- `audit_contacts` གིས་ ཡུ་ཨར་ཨའི་གཞུང་གིས་ བཀོལ་སྤྱོད་པ་ཚུ་ ༢༠༠༨ ལུ་ དཔར་བསྐྲུན་འབད་དགོ་པའི་རེ་བ་བསྐྱེདཔ་ཨིན།
+  ཁོང་གི་ GAR རྩེད་དེབ་ཚུ།
+- `attestations` གིས་ སྲིད་བྱུས་ལུ་རྒྱབ་སྐྱོར་འབད་མི་ མིང་རྟགས་བཀོད་ཡོད་པའི་ བསྟར་སྤྱོད་ཐུམ་སྒྲིལ་ཚུ་ བཟུང་དོ་ཡོདཔ་ཨིན།
+  ཐོ་བཀོད་རེ་རེ་གིས་ གདམ་ཁ་ཅན་གྱི་ `jurisdiction` (ISO-3166 alpha-2 གསང་གྲངས་) ཅིག་ངེས་འཛིན་འབདཝ་ཨིན།
+  `document_uri`, ཀེ་ནོ་ནིག་ ༦༤-ཡིག་འབྲུ་ `digest_hex`, བརྡ་སྟོན།
+  timetamp `issued_at_ms`, དང་གདམ་ཁ་ཅན་གྱི་ `expires_at_ms`, ཅིག་། ཅ་རྙིང་འདི་དག་ནི།
+  འདོན་སྤེལ།: ༢༠༡༡/༠༤/༢༠ རིག་པ།(༡) འབྲུག་རྒྱང་བསྒྲགས་ལས་ཁུངས་ཀྱིས་ འབྲུག་རྒྱང་བསྒྲགས་ལས་ཁུངས་ལུ་ བརྡ་དོན་འཕྲུལ་རིག་དང་འབྲེལ་བའི་ ལས་རིམ་ཚུ་ འགོ་འདྲེན་འཐབ་སྟེ་ཡོདཔ་ཨིན།
+  མཚན་རྟགས་བཀོད་ཡོད་པའི་ཤོག་གུ་ཚུ་ལུ་ བརྒལ་གཏངམ་ཨིན།སྤྱིར་བཏང་རིམ་སྒྲིག་བང་རིམ་བརྒྱུད་དེ་ བསྟར་སྤྱོད་བཀག་ཆ་འདི་བྱིན་དོ་ཡོདཔ་ལས་ བཀོལ་སྤྱོད་པ་ཚུ་ལུ་ བཀོལ་སྤྱོད་པ་ཚུ་འབད།
+ཐག་གཅོད་ཀྱི་ གཏན་འབེབས་ཚུ་ ལེན་ནི། སྙན་ཆའི་སྡེ་ཚན་འདི་གིས་ བསྟར་སྤྱོད་འབད་ནི་ལུ་ _henter_ འཇུག་སྤྱོད་འབདཝ་ཨིན།
+འབྲི་ནི་-ཐབས་ལམ་གྱི་བརྡ་སྟོན་ཚུ་: ཨེསི་ཌི་ཀེ་གིས་ `upload-pq-only`, ཁྲིམས་ཁང་ཡང་ན་ ཡང་ཅིན་ ཡང་ན་ ཡང་ན་
+གསལ་སྟོན་གྱི་ ཡར་འཕེལ་ཚུ་ ད་ལྟོ་ཡང་ ཐད་ཀར་དུ་ སྐྱེལ་འདྲེན་འབད་མི་ལུ་ ལོག་འོང་ཞིནམ་ལས་ མེན་པའི་སྐབས་ མགྱོགས་དྲགས་སྦེ་ འཐུས་ཤོར་འགྱོཝ་ཨིན།
+མཐུན་སྒྲིག་ཅན་གྱི་བྱིན་མི་ཚུ་ཡོདཔ་ཨིན།
 
-Provide the compliance block via the usual configuration layering so operators
-receive deterministic overrides. The orchestrator applies compliance _after_
-write-mode hints: even if an SDK requests `upload-pq-only`, jurisdictional or
-manifest opt-outs still fall back to direct-only transport and fail fast when no
-compliant providers exist.
+ཀེ་ནི་ཀཱལ་ཡར་འཕེལ་གྱི་ཐོ་གཞུང་ཚུ་ འོག་ལུ་སྡོད་དོ་ཡོདཔ་ཨིན།
+`governance/compliance/soranet_opt_outs.json`; གཞུང་སྐྱོང་ལྷན་ཚོགས་ཀྱི་ པར་སྐྲུན་ཚུ།
+རྟགས་བཀོད་ཚུ་བརྒྱུད་དེ་དུས་མཐུན་ཚུ། དཔེར་བརྗོད་རིམ་སྒྲིག་ཆ་ཚང་(ཚུད་ཡོདཔ།
+བདེན་དཔང་།) ནི་ `docs/examples/sorafs_compliance_policy.json` ནང་ཡོད།
+བཀོལ་སྤྱོད་བྱ་རིམ་འདི་ ༡ ༡.
+[GAR དང་མཐུན་པའི་རྩེད་དེབ་](../../../source/soranet/gar_compliance_playbook.md).
 
-Canonical opt-out catalogues live under
-`governance/compliance/soranet_opt_outs.json`; the Governance Council publishes
-updates via tagged releases. A complete example configuration (including
-attestations) is available in `docs/examples/sorafs_compliance_policy.json`, and
-the operational process is captured in the
-[GAR compliance playbook](../../../source/soranet/gar_compliance_playbook.md).
+### 1.3 CLI & SDK ནོབས།
 
-### 1.3 CLI & SDK Knobs
+| དར་ཆ་ / ས་སྒོ། | ནུས་པ། |
+|-----------------------------------------------------------------------------------
+| `--max-peers` / `OrchestratorConfig::with_max_providers` | མཁོ་སྤྲོད་འབད་མི་ག་དེམ་ཅིག་གིས་ སྐུགས་ཐིག་ཁྲམ་ཚགས་མ་ནང་ལས་ གནས་ཚརཝ་ཨིན། འོས་འབབ་ཅན་གྱི་མཁོ་སྤྲོད་འབད་མི་རེ་རེ་བཞིན་དུ་ལག་ལེན་འཐབ་ནིའི་དོན་ལུ་ `None` ལུ་གཞི་སྒྲིག་འབད། |
+| `--retry-budget` / `FetchOptions::per_chunk_retry_limit` | ཆ་ཤས་རེ་ལུ་ ཀེབ་ཚུ་ བསྐྱར་བཟློས་འབད་ནི། ཚད་གཞི་ལས་ལྷག་སྟེ་ `MultiSourceError::ExhaustedRetries`. |
+| Norito | སྐུགས་ཤོག་བཟོ་མི་ནང་ལུ་ བསྐྱར་ལོག་/འཐུས་ཤོར་གྱི་པར་ཚུ་ བཙུགསཔ་ཨིན། `telemetry_grace_secs` ལས་ལྷག་པའི་ Stale renlemetry གིས་ བྱིན་མི་ཚུ་ འོས་འབབ་མེདཔ་སྦེ་རྟགས་བཀལཝ་ཨིན། |
+| Norito | གཡོག་བཀོལ་བའི་ཤུལ་ལས་ བརྟག་དཔྱད་འབད་ནིའི་དོན་ལུ་ རྩིས་སྟོན་འབད་ཡོད་པའི་སྐུགས་བཀོད་ (འོས་འབབ་ཅན་ + འོས་འབབ་ཅན་གྱི་བྱིན་མི་ཚུ་) ལུ་ ཡིད་ཆེས་བསྐྱེདཔ་ཨིན། |
+| Norito | སྐུགས་བོཌི་གི་དུས་ཚོད་རྟགས་བཀོད་ནི་འདི་ བརྒལ་ཏེ་ཡོདཔ་ལས་ བདེ་སྒྲིག་ཚུ་ འཛིན་བཟུང་ཚུ་ གཏན་འབེབས་སྦེ་རང་ ལུས་ཡོདཔ་ཨིན། |
+| `--deny-provider` སྐུགས་སྲིད་བྱུས་ཧུཀ་ | བརྡ་ཁྱབ་ཚུ་བཏོན་མ་གཏང་པར་ བྱིན་མི་ཚུ་ དུས་ཚོད་བཀོད་ནི་ལས་ གཏན་འབེབས་སྦེ་ ཕྱིར་བཏོན་འབད། མགྱོགས་དྲགས་ལན་འདེབས་ཐོ་ཡིག་ནགཔོ་བཟོ་ནི་ལུ་ཕན་ཐོགས་ཅན། |
+| Norito | གཞུང་སྐྱོང་གི་ལྗིད་ཚད་ཚུ་ མཚམས་མ་བཞག་པར་ ལྗིད་ཚད་ཅན་གྱི་ རོ་བིན་གྱི་ བུ་ལོན་ཚུ་ བདེ་སྒྲིག་འབད། |
+| `--telemetry-region` / `OrchestratorConfig::with_telemetry_region` | ཁ་ཡིག་ཚུ་གིས་ མེ་ཀྲིག་དང་ གཞི་བཀོད་འབད་ཡོད་པའི་དྲན་ཐོ་ཚུ་ འཛམ་གླིང་རྒྱས་བཤད་དང་ ཡང་ན་ རླབས་རྒྱུན་གྱི་ རླབས་ཚུ་གིས་ འདྲ་མཚུངས་བཟོ་ཚུགས། |
+| `--transport-policy` / `OrchestratorConfig::with_transport_policy` | ད་ལྟོ་ སྣ་མང་འབྱུང་ཁུངས་ཀྱི་ སྙན་ཆའི་སྡེ་ཚན་འདི་ གཞི་རྟེན་ཨིན་པའི་ `soranet-first` ལུ་སྔོན་སྒྲིག་འབདཝ་ཨིན། མར་ཕབ་འབད་བའི་སྐབས་ ཡང་ན་ བསྟར་སྤྱོད་བཀོད་ཁྱབ་འབད་བའི་ཤུལ་ལས་ `direct-only` ལག་ལེན་འཐབ། བསྟར་སྤྱོད་འདི་གིས་ ད་ལྟོ་ཡང་ ཐོག་ཁར་ལཱ་ཁག་སྦེ་ལཱ་འབདཝ་ཨིན། |
 
-| Flag / Field | Effect |
-|--------------|--------|
-| `--max-peers` / `OrchestratorConfig::with_max_providers` | Limits how many providers survive the scoreboard filter. Set to `None` to use every eligible provider. |
-| `--retry-budget` / `FetchOptions::per_chunk_retry_limit` | Caps retries per chunk. Exceeding the limit raises `MultiSourceError::ExhaustedRetries`. |
-| `--telemetry-json` | Injects latency/failure snapshots into the scoreboard builder. Stale telemetry beyond `telemetry_grace_secs` marks providers ineligible. |
-| `--scoreboard-out` | Persists the computed scoreboard (eligible + ineligible providers) for post-run inspection. |
-| `--scoreboard-now` | Overrides the scoreboard timestamp (Unix seconds) so fixture captures remain deterministic. |
-| `--deny-provider` / score policy hook | Deterministically exclude providers from scheduling without deleting adverts. Useful for fast-response blacklisting. |
-| `--boost-provider=name:delta` | Adjust the weighted round-robin credits for a provider while leaving governance weights untouched. |
-| `--telemetry-region` / `OrchestratorConfig::with_telemetry_region` | Labels emitted metrics and structured logs so dashboards can pivot by geography or rollout wave. |
-| `--transport-policy` / `OrchestratorConfig::with_transport_policy` | Defaults to `soranet-first` now that the multi-source orchestrator is baseline. Use `direct-only` when staging a downgrade or following a compliance directive, and reserve `soranet-strict` for PQ-only pilots; compliance overrides still act as the hard ceiling. |
+ད་ལྟོ་ SoraNet-first འདི་ སྐྱེལ་འདྲེན་གྱི་སྔོན་སྒྲིག་ཨིནམ་ལས་ བསྐོར་འགྲུལ་ཚུ་གིས་ འབྲེལ་ཡོད་ཨེསི་ཨེན་ནེཊི་བཀག་ཆ་འདི་ བཀོད་དགོ། SNNet-4/5/5b/6/6/8/8/12/13 མཐོ་རིམ་ཤེས་ཚད་མཐར་འཁྱོལ་བའི་ཤུལ་ལས་ གཞུང་སྐྱོང་གིས་ དགོས་མཁོའི་གནས་སྟངས་གོང་འཕེལ་གཏང་འོང་། དེ་ཚུན་ཚོད་ བྱུང་རྐྱེན་བཏང་མི་ བཀག་ཆ་འབད་མི་ཚུ་གིས་ `direct-only` ལུ་ གཙོ་རིམ་བཟུང་དགོཔ་དང་ དེ་ཚུ་ བསྐོར་ཐེངས་དྲན་ཐོ་ནང་ ཐོ་བཀོད་འབད་དགོཔ་ཨིན།
 
-SoraNet-first is now the shipping default, and rollbacks must cite the relevant SNNet blocker. After SNNet-4/5/5a/5b/6a/7/8/12/13 graduate, governance will ratchet the required posture forward (toward `soranet-strict`); until then, only incident-driven overrides should prioritise `direct-only`, and they must be recorded in the rollout log.
+གོང་འཁོད་ཀྱི་དར་ཆ་ཆ་མཉམ་གྱིས་ `sorafs_cli fetch` དང་ the གཉིས་ཆ་རའི་ `--`-style syntax དང་ལེན་འབདཝ་ཨིན།
+གོང་འཕེལ་གཏང་མི་-གདོང་ལན་ `sorafs_fetch` གཉིས་ལྡན་། SDKs གིས་ ཡིག་དཔར་རྐྱབས་ཐོག་ལས་ གདམ་ཁ་ཅོག་འཐདཔ་ཚུ་ གསལ་སྟོན་འབདཝ་ཨིན།
+བཟོ་བསྐྲུན་པ།
 
-All flags above accept `--`-style syntax in both `sorafs_cli fetch` and the
-developer-facing `sorafs_fetch` binary. SDKs expose the same options via typed
-builders.
+### ༡.༤ སྲུང་མཛོད་བདག་འཛིན།
 
-### 1.4 Guard Cache Management
+ད་ལྟོ་ CLI འདི་ SoraNet གི་སྲུང་རྒྱབ་ནང་ལུ་ གློག་ཐག་ཚུ་ གློག་ཐག་ཚུ་ བཀོལ་སྤྱོད་པ་ཚུ་གིས་ འཛུལ་ཞུགས་འབད་ཚུགས།
+རི་ལེ་ཚུ་ ཨེསི་ཨེན་ནེཊི་-༥ སྐྱེལ་འདྲེན་གྱི་ མཇུག་བསྡུའི་གདོང་ཁར་ གཏན་འབེབས་བཟོཝ་ཨིན། གསུམ
+ལཱ་གི་རྒྱུན་རིམ་ཚད་འཛིན་གསརཔ་:| དར་ | དམིགས་ཡུལ། |
+|------|--------------------------------------------------------------------
+| `--guard-directory <PATH>` | འཕྲལ་མྱུར་གྱི་ རི་ལེ་མོས་མཐུན་ (ཡན་ལག་ཚུ་སྟོན་ཡོད་པའི་ཡན་ལག་) འགྲེལ་བཤད་རྐྱབ་མི་ ཇེ་ཨེསི་ཨོ་ཨེན་ཡིག་སྣོད་ཅིག་ལུ་ བརྡ་སྟོན། སྣོད་ཐོ་འདི་སྤྲོད་མི་འདི་གིས་ ཕིཆ་མ་འབད་བའི་ཧེ་མ་ སྲུང་སྐྱོབ་ཀྱི་འདྲ་མཛོད་འདི་ གསར་བསྐྲུན་འབདཝ་ཨིན། |
+| `--guard-cache <PATH>` | Norito-encoded `GuardSet` ལུ་ ཤུལ་མམ་གྱི་སྣོད་ཐོ་གསརཔ་མ་བཀྲམ་སྤེལ་འབད་རུང་ རྗེས་འཛིན་འདི་ལོག་ལག་ལེན་འཐབ། |
+| `--guard-target <COUNT>` / `--guard-retention-days <DAYS>` | འཛུལ་ཞུགས་སྲུང་སྐྱོབ་པ་གི་གྱངས་ཁ་ (སྔོན་སྒྲིག་༣) དང་ བཀག་འཛིན་སྒོ་སྒྲིག་ (སྔོན་སྒྲིག་ཉིནམ་༣༠) གི་དོན་ལུ་ གདམ་ཁ་ཅན་གྱི་ བརྒལ་འགྱོཝ་ཨིན། |
+| `--guard-cache-key <HEX>` | གདམ་ཁ་ཅན་གྱི་ ༣༢ བཱའིཊི་ལྡེ་མིག་འདི་ བེལེཀ་༣ ཨེམ་ཨེ་སི་དང་གཅིག་ཁར་ ཉེན་སྲུངཔ་མཛོད་ནང་ རྟགས་བཀལ་ནི་ལུ་ལག་ལེན་འཐབ་མི་ ཡིག་སྣོད་འདི་ ལོག་སྟེ་ལག་ལེན་མ་འཐབ་པའི་ཧེ་མ་ བདེན་དཔྱད་འབད་ཚུགས། |
 
-The CLI now wires in the SoraNet guard selector so operators can pin entry
-relays deterministically ahead of the full SNNet-5 transport rollout. Three
-new flags control the workflow:
+གཱར་ཌི་སྣོད་ཐོ་ པེ་ལོཌི་ཚུ་གིས་ མཉམ་བསྡོམས་ལས་རིམ་ཅིག་ལག་ལེན་འཐབ་ཨིན།
 
-| Flag | Purpose |
-|------|---------|
-| `--guard-directory <PATH>` | Points to a JSON file describing the latest relay consensus (subset shown below). Passing the directory refreshes the guard cache before executing the fetch. |
-| `--guard-cache <PATH>` | Persists the Norito-encoded `GuardSet`. Subsequent runs reuse the cache even when no new directory is supplied. |
-| `--guard-target <COUNT>` / `--guard-retention-days <DAYS>` | Optional overrides for the number of entry guards to pin (default 3) and the retention window (default 30 days). |
-| `--guard-cache-key <HEX>` | Optional 32-byte key used to tag guard caches with a Blake3 MAC so the file can be verified before reuse. |
+ད་ལྟ་Norito གིས་ Norito-encoded གི་རེ་བ་ཡོད།
+`GuardDirectorySnapshotV2` དངུལ་སྤྲོད་བླངས། གཉིས་ལྡན་གྱི་པར་ལེན་འདི་ནང་ཡོདཔ་ཨིན།
 
-Guard directory payloads use a compact schema:
-
-The `--guard-directory` flag now expects a Norito-encoded
-`GuardDirectorySnapshotV2` payload. The binary snapshot contains:
-
-- `version` — schema version (currently `2`).
-- `directory_hash`, `published_at_unix`, `valid_after_unix`, `valid_until_unix` — consensus
-  metadata that must match every embedded certificate.
-- `validation_phase` — certificate policy gate (`1` = allow single Ed25519 signature,
-  `2` = prefer dual signatures, `3` = require dual signatures).
-- `issuers` — governance issuers with `fingerprint`, `ed25519_public`, and `mldsa65_public`.
-  Fingerprints are computed as
+- `version` — ལས་རིམ་ཐོན་རིམ་ (ད་ལྟོའི་ Prometheus).
+- `directory_hash`, `published_at_unix`, `valid_after_unix`, `valid_until_unix` —
+  བཙུགས་བཞག་ཡོད་པའི་ལག་ཁྱེར་ཆ་མཉམ་མཐུན་སྒྲིག་འབད་དགོ་པའི་མེ་ཊ་ཌེ་ཊ་ཚུ།
+- `validation_phase` — ལག་ཁྱེར་སྲིད་བྱུས་ཀྱི་སྒོ་ (`1` = Ed25519 མཚན་རྟགས་གཅིག་འབད་བཅུགཔ་ཨིན།
+  `2` = མཚན་རྟགས་གཉིས་ལྡན་ཚུ་ལུ་དགའ་བས། Norito = མཚན་རྟགས་གཉིས་ལྡན་དགོ།)
+- `issuers` — `fingerprint`, དང་ `ed25519_public`, དང་ `mldsa65_public` བཅས་ཀྱི་གཞུང་སྐྱོང་བྱེད་མཁན་ཚོ།
+  མཛུབ་མོའི་པར་ཚུ་ 1 རྩིས་རྐྱབ་ཡོདཔ་ཨིན།
   `BLAKE3("soranet.src.v2.issuer" || ed25519 || u32(len(ml-dsa)) || ml-dsa)`.
-- `relays` — a list of SRCv2 bundles (`RelayCertificateBundleV2::to_cbor()` output). Each bundle
-  carries the relay descriptor, capability flags, ML-KEM policy, and dual Ed25519/ML-DSA-65
-  signatures.
+- `relays` — ཨེསི་ཨར་སི་ཝི་༢ བཱན་ཌལ་གྱི་ཐོ་ཡིག་ (`RelayCertificateBundleV2::to_cbor()` ཐོན་འབྲས་)། བསྡམས་རེ་རེ།
+  རི་ལེ་འགྲེལ་བཤད་དང་ ལྕོགས་གྲུབ་ཀྱི་རྒྱལ་དར་ ཨེམ་ཨེལ་-ཀེ་ཨི་ཨེམ་སྲིད་བྱུས་ དེ་ལས་ གཉིས་ལྡན་ཨིཌི་༢༥༥༡༩/ཨེམ་ཨེལ་-ཌི་ཨེསི་ཨེ་-༦༥ འབག་འོང་།
+  མཚན་རྟགས་ཚུ།
 
-The CLI verifies every bundle against the declared issuer keys before merging the directory with
+སི་ཨེལ་ཨའི་གིས་ སྣོད་ཐོ་དང་གཅིག་ཁར་ མཉམ་བསྡོམས་མ་འབད་བའི་ཧེ་མ་ གསལ་བསྒྲགས་འབད་ཡོད་པའི་ བཏོན་མི་ལྡེ་མིག་ཚུ་ལུ་ བདེན་དཔྱད་འབདཝ་ཨིན།
 
-Invoke the CLI with `--guard-directory` to merge the latest consensus with the
-existing cache. The selector preserves pinned guards that are still within the
-retention window and eligible in the directory; new relays replace expired
-entries. After a successful fetch the updated cache is written back to the path
-supplied via `--guard-cache`, keeping subsequent sessions deterministic. SDKs
-can reproduce the same behaviour by calling
-`GuardSelector::select(&RelayDirectory, existing_guard_set, now_unix_secs)` and
-threading the resulting `GuardSet` through `SorafsGatewayFetchOptions`.
+CLI འདི་ `--guard-directory` དང་ཅིག་ཁར་ འབོད་བརྡ་གཏང་སྟེ་ གསརཔ་གི་མོས་མཐུན་འདི་ མཉམ་བསྡོམས་འབད་དགོ།
+ཡོད་པའི་འདྲ་མཛོད་། གདམ་འཐུ་འབད་མི་གིས་ ད་ལྟོ་ཡང་ ནང་འཁོད་ལུ་ཡོད་པའི་ སྲུང་རྒྱབ་ཚུ་ ཉམས་སྲུང་འབདཝ་ཨིན།
+བཀག་འཛིན་སྒོ་སྒྲིག་དང་ སྣོད་ཐོ་ནང་ འོས་འབབ་ཡོདཔ་ཨིན། བརྒྱུད་འཕྲིན་གསརཔ་ཚུ་ རྫོགས་ཡོདཔ།
+འཛུལ་ཞུགས་ཚུ། མཐར་འཁྱོལ་ཅན་གྱི་འཐོབ་ཚུགས་པའི་ཤུལ་ལས་ དུས་མཐུན་བཟོ་ཡོད་པའི་འདྲ་མཛོད་འདི་ འགྲུལ་ལམ་ལུ་ལོག་བྲིས་ཡོདཔ་ཨིན།
+`--guard-cache` བརྒྱུད་དེ་ ཤུལ་མའི་དུས་ཚོད་ཚུ་ གཏན་འབེབས་བཟོ་ནི། ཨེསི་ཌི་ཀེ་ཚུ།
+འབོད་བརྡ་གཏང་ཐོག་ལས་ སྤྱོད་ལམ་གཅིག་པ་ བསྐྱར་བཟོ་འབད་ཚུགས།
+`GuardSelector::select(&RelayDirectory, existing_guard_set, now_unix_secs)` དང་།
+གྲུབ་འབྲས་ `GuardSet` ལས་ `SorafsGatewayFetchOptions` ལས་བར་ན།
 
-`ml_kem_public_hex` enables the selector to prioritise PQ-capable guards during
-the SNNet-5 rollout. Stage toggles (`anon-guard-pq`, `anon-majority-pq`,
-`anon-strict-pq`) now demote classical relays automatically: when a PQ guard is
-available the selector drops excess classical pins so subsequent sessions favour
-hybrid handshakes. CLI/SDK summaries surface the resulting mix via
+Prometheus གིས་ སེལ་འཐུ་འབད་མི་གིས་ PQ-ableable ཉེན་སྐྱོབ་ཚུ་ གཙོ་རིམ་བཟུང་ནི་ལུ་ ལྕོགས་ཅན་བཟོཝ་ཨིན།
+the SNNet-5 བསྐོར་འགྲན། གོ་རིམ་གྱི་ གློག་ཐག་ (`anon-guard-pq`, `anon-majority-pq`,
+`anon-strict-pq`) ད་ལྟ་ སྔར་ལུགས་ཀྱི་ རི་ལེ་ཚུ་ རང་བཞིན་གྱིས་ མར་ཕབ་འབདཝ་ཨིན།
+འདམ་ཁ་རྐྱབ་མི་འདི་གིས་ སྔར་སྲོལ་གྱི་ པིན་ཚུ་ མང་དྲགས་སྦེ་ བཀོག་བཞག་དོ་ཡོདཔ་ལས་ དེ་གི་ཤུལ་ལས་ ཕན་ཐོགས་དོ་ཡོདཔ་ཨིན།
+ལག་བཟོ། CLI/SDK བཅུད་བསྡུས་ཚུ་ གྲུབ་འབྲས་སླ་བསྲེ་འདི་ བརྒྱུད་དེ་འགྱོཝ་ཨིན།
 `anonymity_status`/`anonymity_reason`, `anonymity_effective_policy`,
 `anonymity_pq_selected`,
 `anonymity_classical_selected`, `anonymity_pq_ratio`,
-`anonymity_classical_ratio`, and the companion candidate/deficit/supply delta
-fields, making brownouts and classical fallbacks explicit.
+`anonymity_classical_ratio`, དང་ མཉམ་རོགས་ཀྱི་འདེམས་ངོ་/ཉུང་མཐའ་/བཀྲམ་སྤེལ་ཌེལ་ཊ།
+field, རྒྱ་སྨུག་དང་སྔར་སྲོལ་གྱི་ ཕོཝ་བེག་ཚུ་ གསལ་ཏོག་ཏོ་སྦེ་བཟོཝ་ཨིན།ད་ལྟ་སྲུང་སྐྱོབ་སྣོད་ཐོ་ཚུ་གིས་ SRCv2 ཆ་ཚང་ བརྒྱུད་དེ་ བཙུགས་ཚུགས།
+`certificate_base64`. སྙན་ཆའི་སྡེ་ཚན་འདི་གིས་ བཱན་ཌལ་རེ་རེ་ལུ་ བརྡ་སྟོན་འབད་དེ་ ལོག་སྟེ་བདེན་དཔྱད་འབདཝ་ཨིན།
+Ed25519/ML-DSA མཚན་རྟགས་ཚུ་ དེ་ལས་ མཉམ་དུ་དངུལ་འཛིན་ལག་ཁྱེར་འདི་ བཞགཔ་ཨིན།
+བཀག་སྡོམ་འདྲ་མཉམ།. ལག་ཁྱེར་ཅིག་ཡོད་པའི་སྐབས་ དེ་ དོན་ལུ་ ཁྲིམས་ལུགས་འབྱུང་ཁུངས་ལུ་འགྱུརཝ་ཨིན།
+PQ ལྡེ་མིག་དང་ ལག་པའི་གྱོན་ཆས་ཀྱི་དགའ་གདམ་དང་ ལྗིད་ཚད་ཚུ། གནས་ཡུན་ཚང་བའི་ལག་ཁྱེར་ནི།
+གློག་རྒྱུན་གྱི་མི་ཚེ་འཁོར་རིམ་འཛིན་སྐྱོང་བརྒྱུད་དེ་ཁྱབ་སྤེལ་འབད་དེ་ བརྒྱུད་དེ་ ཕྱིར་འཐེན་འབདཝ་ཨིན།
+```json
+"compliance": {
+  "operator_jurisdictions": ["US", "JP"],
+  "jurisdiction_opt_outs": ["US"],
+  "blinded_cid_opt_outs": [
+    "C6B434E5F23ABD318F01FEDB834B34BD16B46E0CC44CD70536233A632DFA3828"
+  ],
+  "audit_contacts": ["mailto:compliance@example.org"]
+}
+``` དང་ `telemetry::sorafs.circuit`, དེ་གིས་ ཐོ་བཀོད་འབདཝ་ཨིན།
+ཆ་གནས་སྒོ་སྒྲིག་དང་ ལག་བཟོའི་ཁང་མིག་ཚུ་ དེ་ལས་ མཚན་རྟགས་གཉིས་ལྡན་ཚུ་ བལྟ་ཡོདཔ་ཨིན་ན་མེན་ན།
+བསྲུངཔ་རེ་རེ།
 
-Guard directories may now embed a complete SRCv2 bundle via
-`certificate_base64`. The orchestrator decodes every bundle, re-validates the
-Ed25519/ML-DSA signatures, and retains the parsed certificate alongside the
-guard cache. When a certificate is present it becomes the canonical source for
-PQ keys, handshake suite preferences, and weighting; expired certificates are
-propagate through circuit lifecycle management and are surfaced via
-`telemetry::sorafs.guard` and `telemetry::sorafs.circuit`, which record the
-validity window, handshake suites, and whether dual signatures were observed for
-each guard.
-
-Use the CLI helpers to keep snapshots in sync with publishers:
+པར་སྐྲུན་པ་ཚུ་དང་མཉམ་འབྱུང་སྦེ་པར་ལེན་ཚུ་བཞག་ནི་ལུ་ སི་ཨེལ་ཨའི་གྲོགས་རམ་ཚུ་ལག་ལེན་འཐབ།
 
 ```bash
 sorafs_cli guard-directory fetch \
@@ -207,23 +212,23 @@ sorafs_cli guard-directory verify \
   --expected-directory-hash <directory-hash-hex>
 ```
 
-`fetch` downloads and verifies the SRCv2 snapshot before writing it to disk,
-while `verify` replays the validation pipeline for artefacts sourced from other
-teams, emitting a JSON summary that mirrors the CLI/SDK guard selector output.
+`fetch` ཕབ་ལེན་འབད་དེ་ ཌིཀསི་ལུ་མ་བྲིས་པའི་ཧེ་མ་ ཨེསི་ཨར་སི་ཝི་༢ པར་ལེན་འདི་ བདེན་དཔྱད་འབདཝ་ཨིན།
+དེ་ལས་ `verify` གིས་ གཞན་ལས་འབྱུང་ཁུངས་བྱུང་ཡོད་པའི་ ཅ་རྙིང་ཚུ་གི་དོན་ལུ་ བདེན་དཔྱད་ཀྱི་ མདོང་ལམ་འདི་ ལོག་གཏང་དོ་ཡོདཔ་ཨིན།
+སྡེ་ཚན་ཚུ་ སི་ཨེལ་ཨའི་/ཨེསི་ཌི་ཀེ་ བཀག་འཛིན་འདེམས་སྒྲུག་ཨའུཊི་པུཊ་ལུ་ ཇེ་ཨེསི་ཨོ་ཨེན་བཅུད་བསྡུས་ཅིག་བཏོན་ནི།
 
-### 1.5 Circuit Lifecycle Manager
+### 1.5 གློག་རྒྱུན་མི་ཚེ་བདག་པོ།
 
-When both a relay directory and guard cache are provided, the orchestrator
-activates the circuit lifecycle manager to pre-build and renew SoraNet circuits
-before each fetch. Configuration lives in `OrchestratorConfig`
-(`crates/sorafs_orchestrator/src/lib.rs:305`) via two new fields:
+རི་ལེ་སྣོད་ཐོ་དང་ སྲུང་སྐྱོབ་ཀྱི་འདྲ་མཛོད་གཉིས་ཆ་ར་བྱིན་པའི་སྐབས་ སྙན་ཆའི་སྡེ་ཚན་འདི་ཨིན།
+སོ་ར་ནེཊི་གློག་ལམ་ཚུ་ སྔོན་སྒྲིག་འབད་དེ་ བསྐྱར་གསོ་འབད་ནི་ལུ་ གློག་ལམ་མི་ཚེ་འཁོར་རིམ་འཛིན་སྐྱོང་པ་འདི་ ཤུགས་ལྡན་བཟོཝ་ཨིན།
+རེ་རེ་ལུ་མ་ལྷོད་པའི་ཧེ་མ། རིམ་སྒྲིག་འདི་ `OrchestratorConfig` ནང་ལུ།
+(`crates/sorafs_orchestrator/src/lib.rs:305`) ས་སྒོ་གསརཔ་གཉིས་བརྒྱུད་དེ་:
 
-- `relay_directory`: carries the SNNet-3 directory snapshot so middle/exit hops
-  can be selected deterministically.
-- `circuit_manager`: optional configuration (enabled by default) controlling the
-  circuit TTL.
+- `relay_directory`: ཨེསི་ཨེན་ནེཊི་-༣ སྣོད་ཐོ་འདི་ བར་ན/ཕྱིར་འཐོན་ཧོབ་ཚུ་ པར་ལེན་འབདཝ་ཨིན།
+  གཏན་འཁེལ་སྦེ་སེལ་འཐུ་འབད་ཚུགས།
+- `circuit_manager`: གདམ་ཁའི་རིམ་སྒྲིག་ (སྔོན་སྒྲིག་གིས་ལྕོགས་ཅན་བཟོ་ཡོདཔ་) ཚད་འཛིན་འབདཝ་ཨིན།
+  cut TTL.
 
-Norito JSON now accepts a `circuit_manager` block:
+Norito JSON གིས་ད་ལྟོ་ `circuit_manager` སྡེབ་ཚན་:
 
 ```json
 "circuit_manager": {
@@ -232,30 +237,30 @@ Norito JSON now accepts a `circuit_manager` block:
 }
 ```
 
-SDKs forward directory data through
+ཨེསི་ཌི་ཀེ་ཨེསི་ཚུ་ བརྒྱུད་དེ་ སྣོད་ཐོ་གནད་སྡུད་གདོང་ཕྱོགས་འབད།
 `SorafsGatewayFetchOptions::relay_directory`
-(`crates/iroha/src/client.rs:320`), and the CLI wires it automatically whenever
-`--guard-directory` is supplied (`crates/iroha_cli/src/commands/sorafs.rs:365`).
+(`crates/iroha/src/client.rs:320`), དང་ སི་ཨེལ་ཨའི་ གློག་ཐག་ཚུ་ ནམ་ར་འབད་རུང་ རང་བཞིན་གྱིས་ ནམ་དུས་ལུ་ཨིན།
+`--guard-directory` བཀྲམ་སྤེལ་ (`crates/iroha_cli/src/commands/sorafs.rs:365`).
 
-The manager renews circuits whenever guard metadata changes (endpoint, PQ key,
-or pinned timestamp) or the TTL elapses. The helper `refresh_circuits`
-invoked ahead of each fetch (`crates/sorafs_orchestrator/src/lib.rs:1346`)
-emits `CircuitEvent` logs so operators can trace lifecycle decisions. The soak
-test `circuit_manager_latency_soak_remains_stable_across_rotations`
-(`crates/sorafs_orchestrator/src/soranet.rs:1479`) demonstrates stable latency
-across three guard rotations; see the accompanying report at
+འཛིན་སྐྱོང་པ་གིས་ མེ་ཊ་ཌེ་ཊ་བསྒྱུར་བཅོས་འབད་བའི་སྐབས་ གློག་ལམ་ཚུ་ བསྐྱར་གསོ་འབདཝ་ཨིན་ (མཐའ་ཕྱོགས་ པི་ཀིའུ་ལྡེ་མིག་།
+ཡང་ན་ ཊི་ཊི་ཨེལ་ འཕེན་ཡོདཔ། གྲོགས་རམ་འབད་མི་ `refresh_circuits`
+ཕེཆ་རེ་རེ་བཞིན་ (`crates/sorafs_orchestrator/src/lib.rs:1346`) རེ་རེ་བཞིན་ལས་ མདུན་སྐྱོད་བྱས།
+`CircuitEvent` གི་དྲན་ཐོ་ཚུ་ བཀོལ་སྤྱོད་པ་ཚུ་གིས་ མི་ཚེ་འཁོར་རིམ་གྱི་གྲོས་ཐག་ཚུ་ འཚོལ་ཞིབ་འབད་ཚུགས། སོང།
+བརྟག་དཔྱད་`circuit_manager_latency_soak_remains_stable_across_rotations`
+(`crates/sorafs_orchestrator/src/soranet.rs:1479`) གིས་ བརྟན་ཏོག་ཏོ་ཡོད་པའི་ འཕྲོ་མཐུད་ཀྱི་ འཕྲོ་མཐུད་སྟོནམ་ཨིན།
+ཉེན་སྲུངཔ་བསྒྱིར་གསུམ་ནང་; མཉམ་དུ་ཡོད་པའི་སྙན་ཞུ་འདི་ ༡ ལུ་བལྟ།
 `docs/source/soranet/reports/circuit_stability.md:1`.
 
-### 1.6 Local QUIC Proxy
+###
 
-The orchestrator can optionally spawn a local QUIC proxy so browser extensions
-and SDK adapters do not have to manage certificates or guard cache keys. The
-proxy binds to a loopback address, terminates QUIC connections, and returns a
-Norito manifest describing the certificate and optional guard cache key to the
-client. Transport events emitted by the proxy are counted via
+སྙན་ཆའི་སྡེ་ཚན་འདི་གིས་ གདམ་ཁ་ཅན་སྦེ་ ཉེ་གནས་ཀྱི་ QUIC ངོ་ཚབ་ཅིག་ བརྡ་འཚོལ་འབད་ཚུགསཔ་ལས་ བརྡ་འཚོལ་རྒྱ་བསྐྱེད་ཚུ།
+དང་ ཨེསི་ཌི་ཀེ་ཨེ་ཌབ་ཊར་ཚུ་གིས་ ལག་ཁྱེར་ཚུ་ ཡང་ན་ སྲུང་སྐྱོབ་འདྲ་མཛོད་ལྡེ་མིག་ཚུ་ འཛིན་སྐྱོང་འཐབ་དགོཔ་མེད། ཚིག༌ཕྲད
+པོརོག་སི་ ལུཔ་བེག་ཁ་བྱང་ཅིག་ལུ་བསྡམས་ཏེ་ ཀིའུ་ཨའི་ཨའི་སི་མཐུད་ལམ་ཚུ་མཇུག་བསྡུ་ཞིནམ་ལས་ ཅིག་སླར་ལོག་འབདཝ་ཨིན།
+Norito ལག་ཁྱེར་དང་གདམ་ཁ་ཅན་གྱི་སྲུང་སྐྱོབ་འདྲ་མཛོད་ལྡེ་མིག་ ལུ་འགྲེལ་བཤད་རྐྱབ་ནི།
+ལས༌མགྲོན། ངོ་ཚབ་ཀྱིས་བཏོན་མི་ སྐྱེལ་འདྲེན་ལས་རིམ་ཚུ་ བརྒྱུད་དེ་ རྩིས་རྐྱབ་ཨིན།
 `sorafs_orchestrator_transport_events_total`.
 
-Enable the proxy through the new `local_proxy` block in the orchestrator JSON:
+ཨོར་ཀིསི་ཊི་ཊར་ཇེ་ཨེསི་ནང་ `local_proxy` སྡེབ་ཚན་གསརཔ་བརྒྱུད་དེ་ ངོ་ཚབ་འདི་ལྕོགས་ཅན་བཟོ།
 
 ```json
 "local_proxy": {
@@ -277,323 +282,309 @@ Enable the proxy through the new `local_proxy` block in the orchestrator JSON:
     "room_policy": "public"
   }
 }
-```
+```- `bind_addr` ཚད་འཛིན་ཚུ་ པོརོག་སི་གིས་ཉན་མི་ (`0` འདྲེན་ལམ་འདི་ལག་ལེན་འཐབ།
+  euperemaral འདྲེན་ལམ།
+- `telemetry_label` ཁྱབ་བསྒྲགས་ཚུ་ནང་ལུ་ ཁྱབ་སྤེལ་འབདཝ་ཨིནམ་ལས་ ཌེཤ་བོརཌི་ཚུ་གིས་ དབྱེ་བ་ཕྱེ་ཚུགས།
+  ཐོབ་པའི་དུས་ཚོད་ལས་ ངོ་ཚབ་ཚུ།
+- `guard_cache_key_hex` (གདམ་ཁ་ཅན་) གིས་ ངོ་ཚབ་ཀྱི་ཁ་ཐོག་འདི་ ལྡེ་མིག་བཀག་འཛིན་གཅིག་མཚུངས་འབད་བཅུགཔ་ཨིན།
+  CLI/SDKs ཚུ་གིས་ བརྡ་འཚོལ་རྒྱ་བསྐྱེད་ཚུ་ མཉམ་འབྱུང་སྦེ་བཞག་མི་ འདྲ་མཛོད་ནང་ འདྲ་མཛོད་འབད་དགོ།
+- `emit_browser_manifest` ལག་བཟོས་ཀྱིས་ གསལ་སྟོན་ཅིག་སླར་ལོག་འབདཝ་ཨིན་ན་མེན་ན་ སོར་བསྒྱུར་འབདཝ་ཨིན།
+  རྒྱ་བསྐྱེད་ཚུ་གིས་ གསོག་འཇོག་དང་ བདེན་དཔྱད་འབད་ཚུགས།
+- `proxy_mode` གིས་ པོརོག་སི་ཟམ་འདི་ ཉེ་གནས་ལུ་ (`bridge`) ཡང་ན་ པོརོ་སི་ཟམ་པ་ཚུ་ཨིན་ན་ (`bridge`) ཡང་ན་ སེལ་འཐུ་འབདཝ་ཨིན།
+  རྐྱངམ་ཅིག་ མེ་ཊ་ཌེ་ཊ་ བཤུབ་ནི་ དེ་འབདཝ་ལས་ ཨེསི་ཌི་ཀེ་ཚུ་གིས་ སོ་ར་ནེཊི་གློག་ལམ་ཚུ་རང་ ཁ་ཕྱེ་ཚུགས།
+  (`metadata-only`). ངོ་ཚབ་འདི་ `bridge` ལུ་སྔོན་སྒྲིག་འབདཝ་ཨིན། གཞི་སྒྲིག་ `metadata-only` ཡིན་ནམ།
+  ལཱ་འབད་སའི་ས་ཁོངས་འདི་གིས་ རྒྱུན་ལམ་ཚུ་ བརྡ་སྤྲོད་མེད་པར་ མངོན་གསལ་འབད་དགོ།
+- `prewarm_circuits`, `max_streams_per_circuit`, དང་ `circuit_ttl_hint_secs`
+  ཁ་ཐོག་ཁ་སྐོང་བརྡ་སྟོན་ཚུ་ བརྡ་འཚོལ་ལུ་ འཆར་དངུལ་ མཉམ་འགྲོས་རྒྱུན་ལམ་ཚུ་ འཆར་དངུལ་བཟོ་ཚུགས།
+  ངོ་ཚབ་འདི་གིས་ གློག་ལམ་ཚུ་ ག་དེ་སྦེ་ དྲག་པོ་སྦེ་ལག་ལེན་འཐབ་ཨིན་ན་ ཧ་གོ་དགོ།
+- ས་གནས་ཀྱི་སི་ཨར་ གཏན་མཛོད་འདྲ་མཛོད་ཅིག་ནང་ `car_bridge` (གདམ་ཁ་ཅན་) ས་ཚིགས་ཚུ། `extension`
+  ས་སྒོ་འདི་གིས་ རྒྱུན་ལམ་དམིགས་གཏད་འདི་གིས་ `*.car` འདི་བསལ་བའི་སྐབས་ མཐུད་ཡོད་པའི་རྗེས་འཇུག་འདི་ཚད་འཛིན་འབདཝ་ཨིན། སྡེ༌ཚན༌
+  `allow_zst = true` གིས་ སྔོན་སྒྲིག་འབད་ཡོད་པའི་ `*.car.zst` ཐད་ཀར་གྱི་ འཐུས་སྤྲོད་ནིའི་དོན་ལུ་ ཐད་ཀར་དུ་ ཕྱག་ཞུ་ཚུགས།
+- `kaigi_bridge` (གདམ་ཁ་ཅན་) གིས་ ཀའི་གི་ལམ་ཚུ་ ངོ་ཚབ་ལུ་ བཤོལ་བཞག་འབདཝ་ཨིན། ཚིག༌ཕྲད
+  `room_policy` གིས་ `public` ཡང་ན་ ཟམ་འདི་ལཱ་འབདཝ་ཨིན་ན་མེན་ན་ ཁྱབ་བསྒྲགས་འབདཝ་ཨིན།
+  `authenticated` ཐབས་ལམ་འདི་གིས་ བརྡ་འཚོལ་འབད་མི་ མཁོ་སྤྲོད་པ་ཚུ་གིས་ ཇི་ཨར་ ཁ་ཡིག་ངེས་བདེན་ཚུ་ སྔོན་སྒྲིག་འབད་ཚུགས།
+- `sorafs_cli fetch` `--local-proxy-mode=bridge|metadata-only` དང་།
+  `--local-proxy-norito-spool=PATH` གིས་ བཀོལ་སྤྱོད་པ་ཚུ་ བསྒྱུར་བཅོས་འབད་བཅུག་དོ་ཡོདཔ་ཨིན།
+  ཇེ་ཨེསི་ཨོ་སྲིད་བྱུས་ལེགས་བཅོས་མ་འབད་བར་ གཡོག་བཀོལ་མི་ཐབས་ལམ་ ཡང་ན་ སྤུ་ནཊི་གཞན་ལུ་ ས་ཚིགས་བཟོ།
+- `downgrade_remediation` (གདམ་ཁ་ཅན་) གིས་ རང་བཞིན་མར་ཕབ་ཀྱི་ ཧུག་ རིམ་སྒྲིག་འབདཝ་ཨིན།
+  སྙན་ཆའི་སྡེ་ཚན་འདི་ ལྕོགས་ཅན་བཟོ་བའི་སྐབས་ མར་ཕབ་ཀྱི་འགས་འགྱོ་མི་ཚུ་གི་དོན་ལུ་ བརྒྱུད་འཕྲིན་བརྒྱུད་ལམ་བལྟ་ནི།
+  དེ་ལས་ `threshold` རིམ་སྒྲིག་འབད་བའི་ཤུལ་ལས་ `window_secs` ནང་འཁོད་ལུ་ ཉེ་གནས་ལུ་ ཤུགས་བཏོནམ་ཨིན།
+  `target_mode` (སྔོན་སྒྲིག་ `metadata-only`) ནང་ལུ་ ངོ་ཚབ་འབད། ཚར་བཟོས་བཀག་ཚིགས།
+  ངོ་ཚབ་འདི་ `resume_mode` ལུ་ `cooldown_secs` གི་ཤུལ་ལས་ ལོག་འགྱོཝ་ཨིན། `modes` ལག་ལེན་འཐབ།
+  དམིགས་བསལ་རི་ལེ་ལས་འགན་ཚུ་ལུ་ གློག་ཐག་འདི་ ཁྱབ་ཚད་བཟོ་ནི་ལུ་ བཀོད་སྒྲིག་འབད་ (ཐོ་བཀོད་བསྐྱར་ལོག་ཚུ་ལུ་ སྔོན་སྒྲིག་ཚུ་)།
 
-- `bind_addr` controls where the proxy listens (use `0` port to request an
-  ephemeral port).
-- `telemetry_label` propagates into metrics so dashboards can distinguish
-  proxies from fetch sessions.
-- `guard_cache_key_hex` (optional) lets the proxy surface the same keyed guard
-  cache that the CLI/SDKs rely on, keeping browser extensions in sync.
-- `emit_browser_manifest` toggles whether the handshake returns a manifest that
-  extensions can store and validate.
-- `proxy_mode` selects whether the proxy bridges traffic locally (`bridge`) or
-  only emits metadata so SDKs can open SoraNet circuits themselves
-  (`metadata-only`). The proxy defaults to `bridge`; set `metadata-only` when a
-  workstation should expose the manifest without relaying streams.
-- `prewarm_circuits`, `max_streams_per_circuit`, and `circuit_ttl_hint_secs`
-  surface additional hints to the browser so it can budget parallel streams and
-  understand how aggressively the proxy reuses circuits.
-- `car_bridge` (optional) points at a local CAR archive cache. The `extension`
-  field controls the suffix appended when the stream target omits `*.car`; set
-  `allow_zst = true` to serve pre-compressed `*.car.zst` payloads directly.
-- `kaigi_bridge` (optional) exposes spooled Kaigi routes to the proxy. The
-  `room_policy` field advertises whether the bridge operates in `public` or
-  `authenticated` mode so browser clients can preselect the correct GAR labels.
-- `sorafs_cli fetch` exposes `--local-proxy-mode=bridge|metadata-only` and
-  `--local-proxy-norito-spool=PATH` overrides, letting operators toggle the
-  runtime mode or point at alternate spools without modifying the JSON policy.
-- `downgrade_remediation` (optional) configures the automatic downgrade hook.
-  When enabled the orchestrator watches relay telemetry for downgrade bursts
-  and, after the configured `threshold` within `window_secs`, forces the local
-  proxy into the `target_mode` (default `metadata-only`). Once downgrades stop
-  the proxy reverts to `resume_mode` after `cooldown_secs`. Use the `modes`
-  array to scope the trigger to specific relay roles (defaults to entry relays).
+པོརོག་སི་འདི་ ཟམ་ཐབས་ལམ་ནང་ གཡོག་བཀོལ་བའི་སྐབས་ གློག་རིམ་ཞབས་ཏོག་གཉིས་ལུ་ ཕྱག་ཞུཝ་ཨིན།
 
-When the proxy runs in bridge mode it serves two application services:
+- **`norito`** – མཁོ་སྤྲོད་འབད་མི་གི་རྒྱུན་ལམ་དམིགས་ཚད་འདི་ འབྲེལ་བ་ཡོད་མི་དང་འབྲེལ་བ་ཡོདཔ་ཨིན།
+  `norito_bridge.spool_dir`. དམིགས་ཚད་ཚུ་ གཙང་སྦྲ་འབད་ཡོདཔ་ཨིན་ (བརྐུ་མི་མེདཔ། ཆ་ཚང་མེད།
+  འགྲུལ་ལམ་ཚུ་), དང་ ཡིག་སྣོད་འདི་ལུ་རྒྱ་བསྐྱེད་མེད་པའི་སྐབས་ལུ་ རིམ་སྒྲིག་འབད་ཡོད་པའི་རྗེས་འཇུག་འདི་འཇུག་སྤྱོད་འབདཝ་ཨིན།
+  བརྡ་འཚོལ་པ་ལུ་ པེ་ལོཌི་འདི་ ཚིག་ཕྲད་ཀྱི་ རྒྱུན་སྤེལ་མ་འབད་བའི་ཧེ་མ་ཨིན།
+- **`car`** – རྒྱུན་ལམ་དམིགས་ཚད་ཚུ་ `car_bridge.cache_dir` ནང་འཁོད་ལུ་བསལ་ཞིནམ་ལས་ ཤུལ་འཛིན་འབད་ནི།
+  རིམ་སྒྲིག་འབད་ཡོད་པའི་སྔོན་སྒྲིག་རྒྱ་བསྐྱེད་དང་ མ་གཏོགས་ བསྡམ་བཞག་ཡོད་པའི་ པེ་ལོཌ་ཚུ་ ངོས་ལེན་མ་འབད།
+  `allow_zst` གཞི་སྒྲིག་འབད་ཡོདཔ་ཨིན། མཐར་འཁྱོལ་བའི་ཟམ་པ་ཚུ་ ཧེ་མ་ལས་ `STREAM_ACK_OK` དང་གཅིག་ཁར་ཨིན།
+  གཏན་མཛོད་བཱའིཊི་ཚུ་ སྤོ་བཤུད་འབད་ནི་འདི་གིས་ མཁོ་མངགས་འབད་མི་ཚུ་གིས་ བདེན་དཔྱད་འབད་ཚུགས།གནད་དོན་གཉིས་ཆ་རའི་ནང་ ངོ་ཚབ་འདི་གིས་ འདྲ་མཛོད་-ངོ་རྟགས་ཨེཆ་ཨེམ་ཨེ་སི་བཀྲམ་སྤེལ་འབདཝ་ཨིན།
+ལག་བརྡའི་སྐབས་སུ་ prese) དང་དྲན་ཐོ་ `norito_*` / `car_*` བརྡ་འཕྲིན་གྱི་རྒྱུ་མཚན་ནི།
+གསང་གྲངས་ཚུ་ ཌེཤ་བོརཌི་ཚུ་གིས་ མཐར་འཁྱོལ་དང་ ཡིག་སྣོད་མེདཔ་ དེ་ལས་ གཙང་སྦྲ་འབད་ནི་ཚུ་ ཁྱད་པར་ཕྱེ་ཚུགས།
+མིག་མཐོང་སྟེ་ འཐུས་ཤོར་བྱུང་ཡོདཔ།
 
-- **`norito`** – the client’s stream target is resolved relative to
-  `norito_bridge.spool_dir`. Targets are sanitised (no traversal, no absolute
-  paths), and when the file lacks an extension the configured suffix is applied
-  before the payload is streamed verbatim to the browser.
-- **`car`** – stream targets resolve inside `car_bridge.cache_dir`, inherit the
-  configured default extension, and reject compressed payloads unless
-  `allow_zst` is set. Successful bridges reply with `STREAM_ACK_OK` before
-  transferring the archive bytes so clients can pipeline verification.
+`Orchestrator::local_proxy().await` གཡོག་བཀོལ་བའི་ལག་ལེན་འདི་ ཕྱིར་བཏོན་འབདཝ་ལས་ ཁ་པར་བཏང་མི་ཚུ་གིས་ འབད་ཚུགས།
+ལག་ཁྱེར་ PEM ལྷག་ནི་དང་ བརྡ་འཚོལ་གྱི་གསལ་སྟོན་འདི་ལེན་ནི་ ཡང་ན་ མཛེས་སྡུག་ཅིག་ཞུ་བ་འབད།
+གློག་རིམ་ཕྱིར་འཐོན་འབདཝ་ད་བཀག་ཆ་འབད།
 
-In both cases the proxy supplies the cache-tag HMAC (when a guard cache key was
-present during the handshake) and records `norito_*` / `car_*` telemetry reason
-codes so dashboards can differentiate successes, missing files, and sanitisation
-failures at a glance.
+ལྕོགས་ཅན་བཟོ་བའི་སྐབས་ པོརོག་སི་ད་ལྟོ་ ** གཡོ་སྒྱུ་ཅན་གྱི་ v2** དྲན་ཐོ་ཚུ་ ཕྱག་ཞུཝ་ཨིན། ཡོད་པ་ལས་ལྷག་པ།
+ལག་ཁྱེར་དང་སྲུང་སྐྱོབ་འདྲ་མཛོད་ལྡེ་མིག་, v2 ཁ་སྐོང་།
 
-`Orchestrator::local_proxy().await` exposes the running handle so callers can
-read the certificate PEM, fetch the browser manifest, or request a graceful
-shutdown when the application exits.
+- `alpn` (`"sorafs-proxy/1"`) དང་ `capabilities` གི་ཨེ་རེ་ཅིག་འབདཝ་ལས་ མཁོ་མངགས་འབད་མི་ཚུ་གིས་ ངེས་གཏན་བཟོ་ཚུགས།
+  ཁོང་གིས་སླབ་དགོ་པའི་ རྒྱུན་ལམ་མཐུན་སྒྲིག་འདི་ཨིན།
+- ལགཔ་རེ་ལུ་ `session_id` དང་ འདྲ་མཛོད་ཀྱི་རྟགས་བཀོད་པའི་ཚྭ་ (`cache_tagging` block) ལུ།
+  ཚོགས་ཐེངས་རེ་ལུ་སྲུང་སྐྱོབ་དང་ HMAC ངོ་རྟགས་ཚུ་བཏོན་ནི།
+- གློག་ལམ་དང་ སྲུང་དམག་དང་ གདམ་ཁའི་ བརྡ་སྟོན་ཚུ་ (`circuit`, `guard_selection`,
+  `route_hints`) དེ་འབདཝ་ལས་ བརྡ་འཚོལ་མཉམ་བསྡོམས་འདི་གིས་ རྒྱུན་ལམ་ཚུ་གི་ཧེ་མ་ ཕྱུགཔོ་ཡུ་ཨའི་ ཕྱིར་ཐོན་འབད་ཚུགས།
+  ཁ་ཕྱེ་ནི
+- `telemetry_v2` ས་གནས་ཀྱི་ལག་ཆས་ཚུ་གི་དོན་ལུ་ དཔེ་ཚད་དང་སྒེར་དོན་གྱི་མཐུད་མཚམས་ཡོདཔ་ཨིན།
+- `STREAM_ACK_OK` རེ་རེ་ནང་ `cache_tag_hex` ཚུད་ཡོད། མཁོ་སྤྲོད་འབད་མི་ཚུ་གིས་ གནས་གོང་འདི་ ༡ ནང་ལུ་ ལོང་ཡོདཔ།
+  ཨེཆ་ཊི་ཊི་པི་ ཡང་ན་ ཊི་སི་པི་ཞུ་བ་ཚུ་བྱིན་པའི་སྐབས་ `x-sorafs-cache-tag` མགོ་ཡིག་འདི་ དེ་སྦེ་འདྲ་མཛོད་འབད་ཡོདཔ།
+  བཀག་འཛིན་གདམ་ཁ་ཚུ་ ངལ་གསོ་ནང་ གསང་བཟོ་འབད་བཞགཔ་ཨིན།
 
-When enabled, the proxy now serves **manifest v2** records. Besides the existing
-certificate and guard cache key, v2 adds:
+འཕྲོ་མཐུད་དེ་ v1 ཆ་ཚན་འོག་མ་ལུ་བརྟེན་དགོ།
 
-- `alpn` (`"sorafs-proxy/1"`) and a `capabilities` array so clients can confirm
-  the stream protocol they should speak.
-- A per-handshake `session_id` and cache-tagging salt (`cache_tagging` block) to
-  derive per-session guard affinities and HMAC tags.
-- Circuit and guard-selection hints (`circuit`, `guard_selection`,
-  `route_hints`) so browser integrations can expose richer UI before streams are
-  opened.
-- `telemetry_v2` with sampling and privacy knobs for local instrumentation.
-- Each `STREAM_ACK_OK` includes `cache_tag_hex`. Clients mirror the value in
-  the `x-sorafs-cache-tag` header when issuing HTTP or TCP requests so cached
-  guard selections remain encrypted at rest.
+## 2. འཐུས་ཤོར་ཡིག་ཆ།
 
-continue to rely on the v1 subset.
+སྙན་ཆའི་སྡེ་ཚན་འདི་གིས་ གཅིག་གི་ཧེ་མ་ དམ་དམ་གྱི་ལྕོགས་གྲུབ་དང་ འཆར་དངུལ་གྱི་ ཞིབ་དཔྱད་ཚུ་ བསྟར་སྤྱོད་འབདཝ་ཨིན།
+།བཏྟེ་ནི་འཕོ་བ་ཡིན། འཐུས་ཤོར་ཚུ་ དབྱེ་ཁག་གསུམ་ནང་ཚུདཔ་ཨིན།
 
-## 2. Failure Semantics
-
-The orchestrator enforces strict capability and budget checks before a single
-byte is transferred. Failures fall into three categories:
-
-1. **Eligibility failures (pre-flight).** Providers missing range capability,
-   expired adverts, or stale telemetry are logged in the scoreboard artefact and
-   omitted from scheduling. CLI summaries populate the `ineligible_providers`
-   array with reasons so operators can inspect governance drift without scraping
+1. **འོས་འབབ་འཐུས་ཤོར་ (འཕུར་འགྲུལ་གྱི་སྔོན་ལུ་)** ཁྱབ་ཚད་ཀྱི་ནུས་སྟོབས་མེདཔ་བྱིནམ་ཨིན།
+   དུས་ཡོལ་ཡོད་པའི་ཁྱབ་བསྒྲགས་ཡང་ན་ stale telemetry འདི་ སྐུགས་ཐོབ་ཚད་དང་ ནང་བསྐྱོད་འབད་ཡོདཔ་ཨིན།
+   ལས་རིམ་ལས་ ཕྱིར་བཏོན་འབད་ཡོདཔ། CLI བཅུད་བསྡུས་ཚུ་གིས་ `ineligible_providers` གི་མི་རློབས་བཏོནམ་ཨིན།
+   འདོན་སྤེལ།: ༢༠༡༠/༠༧/༠༣ རིག་པ།(༠) འདི་ཡང་ གཟའ་ཉི་མའི་ཉིན།
    logs.
-2. **Runtime exhaustion.** Each provider tracks consecutive failures. Once the
-   configured `provider_failure_threshold` is reached, the provider is marked
-   `disabled` for the remainder of the session. If every provider transitions to
-   `disabled`, the orchestrator returns
+2. **Runtime བཙོག་པ་** བྱིན་མི་རེ་རེ་གིས་ རིམ་མཐུན་གྱི་ འཐུས་ཤོར་ཚུ་ འགྱོཝ་ཨིན། ཚར་གཅིག་
+   རིམ་སྒྲིག་འབད་ཡོད་མི་ `provider_failure_threshold` འདི་ལྷོད་ཡོདཔ་ཨིན་ བྱིན་མི་འདི་རྟགས་བཀལ་ཡོདཔ་ཨིན།
+   ལཱ་ཡུན་ལྷག་ལུས་ཚུ་གི་དོན་ལུ་ `disabled` ཨིན། བྱིན་མི་རེ་རེ་ལུ་ འགྱུར་བཅོས་འགྱོཝ་ཨིན།
+   `disabled`, སྙན་ཆའི་སྡེ་ཚན་འདི་ལོག་འོང་།
    `MultiSourceError::NoHealthyProviders { last_error, chunk_index }`.
-3. **Deterministic aborts.** Hard limits surface as structured errors:
-   - `MultiSourceError::NoCompatibleProviders` — the manifest requires a chunk
-     span or alignment the remaining providers cannot honour.
-   - `MultiSourceError::ExhaustedRetries` — the per-chunk retry budget was
-     consumed.
-   - `MultiSourceError::ObserverFailed` — downstream observers (streaming hooks)
-     rejected a verified chunk.
+3. ** Deterministic oborts.** ཚད་གཞི་སྒྲིག་བཀོད་ཀྱི་འཛོལ་བ་སྦེ་ ཁ་ཐོག་ལུ་ཚད་གཞི།
+   - `MultiSourceError::NoCompatibleProviders` — གསལ་སྟོན་འདི་ལུ་ ཆུང་ཆུང་ཅིག་དགོཔ་ཨིན།
+     span ཡང་ན་ ལྷག་ལུས་བྱིན་མི་ཚུ་ གུས་ཞབས་འབད་མི་ཚུགས།
+   - `MultiSourceError::ExhaustedRetries` — ཆུ་རེའི་བསྐྱར་བཟོའི་འཆར་དངུལ་འདི་ནི།
+     ཟ་སྤྱོད་
+   - `MultiSourceError::ObserverFailed` — མར་ཁུའི་བལྟ་རྟོག་པ་ (བརྡ་རྟགས་ཧུཀ་)
+     བདེན་དཔྱད་འབད་ཡོད་པའི་ཆ་ཤས་ཚུ་ ངོས་ལེན་མ་འབད་བས།
 
-Every error embeds the offending chunk index and, when available, the final
-provider failure reason. Treat these as release blockers—retries with the same
-input will reproduce the failure until the underlying advert, telemetry, or
-provider health changes.
+འཛོལ་བ་རེ་རེ་གིས་ ཉེས་ཅན་ཆུང་ཆུང་ཟུར་ཐོ་དང་ འཐོབ་ཚུགས་པའི་སྐབས་ མཐའ་དཔྱད་འདི་ བཙུགསཔ་ཨིན།
+བྱིན་མི་ འཐུས་ཤོར་གྱི་རྒྱུ་མཚན་། འདི་ཚུ་ བཏོན་གཏང་ནི་བཀག་ཆ་སྦེ་བརྩི་འཇོག་འབད།
+ཨིན་པུཊི་གིས་ འཐུས་ཤོར་འདི་ འོག་ལུ་ཡོད་པའི་ཁྱབ་བསྒྲགས་དང་ ཊེ་ལི་མི་ཊི་རི་ ཡང་ན་ མ་འབད་ཚུན་ཚོད་ བསྐྱར་བཟོ་འབད་འོང་།
+བྱིན་མི་གསོ་བའི་འགྱུར་བ།
 
-### 2.1 Scoreboard Persistence
+### 2.1 སྐུགས་བསྒྲིགས།
 
-When `persist_path` is configured, the orchestrator writes the final scoreboard
-after each run. The JSON document contains:
+`persist_path` རིམ་སྒྲིག་འབད་བའི་སྐབས་ སྙན་ཆའི་སྡེ་ཚན་འདི་གིས་ མཐའ་མཇུག་གི་སྐུགས་ཐིག་ཁྲམ་འདི་བྲིས།
+རྒྱུག་རེ་རེ་གི་ཤུལ་ལས་། JSON ཡིག་ཆ་འདི་ནང་ཡོདཔ་ཨིན།- `eligibility` (`eligible` ཡང་ན་ `ineligible::<reason>`).
+- `weight` (གཡོག་བཀོལ་འདི་གི་དོན་ལུ་ ལྗིད་ཚད་ཚད་ལྡན་སྦེ་སྤྲོད་ཡོདཔ་ཨིན།)
+- `provider` མེ་ཊ་ཌེ་ཊ་ (ངོས་འཛིན་འབད་མི་, མཇུག་སྣོད་, དུས་མཉམ་གྱི་འཆར་དངུལ་)།
 
-- `eligibility` (`eligible` or `ineligible::<reason>`).
-- `weight` (normalised weight assigned for this run).
-- `provider` metadata (identifier, endpoints, concurrency budget).
+གཏན་མཛོད་ཀྱི་སྐུགས་བསྐུར་བ་འདི་ གསར་བཏོན་འབད་མི་ ཅ་ཆས་ཚུ་དང་གཅིག་ཁར་ ཐོ་བཀོད་ནགཔོ་དང་ དེ་ལས་ ཐོ་ཡིག་ནགཔོ་དང་
+བསྐོར་ར་གྲོས་ཐག་ཚུ་ རྩིས་ཞིབ་འབད་བཏུབ་སྦེ་ལུསཔ་ཨིན།
 
-Archive scoreboard snapshots alongside release artefacts so blacklisting and
-rollout decisions remain auditable.
+## 3. བརྒྱུད་འཕྲིན་དང་རྐྱེན་སེལ་ནི།
 
-## 3. Telemetry & Debugging
+### ༣.༡ ངེའི་ཨེན་༡༨NT0000000X མེ་ཊིཀསི།
 
-### 3.1 Prometheus Metrics
+སྙན་ཆའི་སྡེ་ཚན་འདི་གིས་ འོག་གི་མེ་ཊིགསི་ཚུ་ `iroha_telemetry` བརྒྱུད་དེ་ བཏོནམ་ཨིན།
 
-The orchestrator emits the following metrics via `iroha_telemetry`:
+| མེ་ཊིག་ | ཁ་ཡིག་ཚུ། | འགྲེལ་བཤད་ |
+|-----------------------------------------|
+| `sorafs_orchestrator_active_fetches` | `manifest_id`, `region` | འཕུར་འགྲུལ་གྱི་ནང་ལུ་ རོལ་དབྱངས་ཀྱི་ ཕེཊི་ཆི་གི་ཚད་གཞི། |
+| `sorafs_orchestrator_fetch_duration_ms` | `manifest_id`, `region` | Histogram མཇུག་ལས་མཇུག་ཚུན་ཚོད་ འཐོབ་མ་ཚུགས་པའི་ འཕྲོ་མཐུད་སྒྲ་བཟུང་། |
+| `sorafs_orchestrator_fetch_failures_total` | `manifest_id`, `region`, `reason`, ཊར་མི་ནཱལ་འཐུས་ཤོར་གྱི་གྱངས་ཁ་ (བསྐྱར་ཚོད་ཚུ་ ཐང་ཆད་ཡོདཔ་ཨིན་ བཀྲམ་སྤེལ་པ་མེདཔ་ བལྟ་རྟོག་པ་འཐུས་ཤོར་)། |
+| `sorafs_orchestrator_retries_total` | `manifest_id`, `provider`, `reason` | བྱིན་མི་རེ་ལུ་ ལོག་དཔའ་བཅམ་ནིའི་དཔའ་བཅམ། |
+| `sorafs_orchestrator_provider_failures_total` | `manifest_id`, `provider`, `reason` | ལཱ་ཡུན་གནས་རིམ་གྱི་བྱིན་མི་འཐུས་ཤོར་གྱི་གྱངས་ཁ་ཚུ་གིས་ ལྕོགས་མིན་བཟོ་བཅུགཔ་ཨིན། |
+| `sorafs_orchestrator_policy_events_total` | Norito, `outcome`, `reason` | མིང་མ་བཀོད་པའི་སྲིད་བྱུས་ཀྱི་གྲོས་ཐག་ཚུ་ ༼མཇལ་ཁ་དང་ བཱ་རཱོན་ཨའུཊ་༽ གིས་ བསྐོར་རིམ་དང་ མར་ཕབ་ཀྱི་རྒྱུ་མཚན་གྱིས་ སྡེ་ཚན་བཟོ་ཡོདཔ་ཨིན། |
+| `sorafs_orchestrator_pq_ratio` | `region`, `stage` | སེལ་འཐུ་འབད་ཡོད་པའི་སོ་ར་ནེཊ་ཆ་ཚན་ནང་ལུ་ པི་ཀིའུ་རི་ལེ་བགོ་བཤའ་གི་ཧིསི་ཊོ་གཱརམ། |
+| `sorafs_orchestrator_pq_candidate_ratio` | `region`, `stage` | སྐུགས་ཤོག་ནང་ PQ རི་ལེ་བཀྲམ་སྤེལ་གྱི་ཆ་ཚད་ཀྱི་ ཧིསི་ཊོ་གཱརམ། |
+| `sorafs_orchestrator_pq_deficit_ratio` | Norito, `stage` | སྲིད་བྱུས་མ་ལང་པའི་ ཧིསི་ཊོ་གཱརམ་ (དམིགས་གཏད་དང་ པི་ཀིའུ་བགོ་བཤའ་ངོ་མ་གི་བར་ན་ བར་སྟོང་)། |
+| `sorafs_orchestrator_classical_ratio` | `region`, `stage` | ལཱ་ཡུན་རེ་རེ་ནང་ལག་ལེན་འཐབ་མི་ སྔར་ལུགས་ཀྱི་ རི་ལེ་བགོ་བཤའ་གི་ ཧིསི་ཊོ་གཱརམ། |
+| `sorafs_orchestrator_classical_selected` | `region`, `stage` | ལཱ་ཡུན་རེ་ལུ་སེལ་འཐུ་འབད་ཡོད་པའི་ སྔར་ལུགས་ཀྱི་རི་ལེ་གྱངས་ཁ་ཚུ་གི་ ཧིསི་ཊོ་གཱརམ། |
 
-| Metric | Labels | Description |
-|--------|--------|-------------|
-| `sorafs_orchestrator_active_fetches` | `manifest_id`, `region` | Gauge of in-flight orchestrated fetches. |
-| `sorafs_orchestrator_fetch_duration_ms` | `manifest_id`, `region` | Histogram recording end-to-end fetch latency. |
-| `sorafs_orchestrator_fetch_failures_total` | `manifest_id`, `region`, `reason` | Counter of terminal failures (retries exhausted, no providers, observer failure). |
-| `sorafs_orchestrator_retries_total` | `manifest_id`, `provider`, `reason` | Counter of retry attempts per provider. |
-| `sorafs_orchestrator_provider_failures_total` | `manifest_id`, `provider`, `reason` | Counter of session-level provider failures leading to disablement. |
-| `sorafs_orchestrator_policy_events_total` | `region`, `stage`, `outcome`, `reason` | Count of anonymity policy decisions (met vs. brownout) grouped by rollout stage and fallback reason. |
-| `sorafs_orchestrator_pq_ratio` | `region`, `stage` | Histogram of PQ relay share among the selected SoraNet set. |
-| `sorafs_orchestrator_pq_candidate_ratio` | `region`, `stage` | Histogram of PQ relay supply ratios in the scoreboard snapshot. |
-| `sorafs_orchestrator_pq_deficit_ratio` | `region`, `stage` | Histogram of the policy shortfall (gap between target and actual PQ share). |
-| `sorafs_orchestrator_classical_ratio` | `region`, `stage` | Histogram of classical relay share used in each session. |
-| `sorafs_orchestrator_classical_selected` | `region`, `stage` | Histogram of classical relay counts selected per session. |
+ཐོན་སྐྱེད་ཀྱི་མཛུབ་མོ་ཚུ་ མ་ཕྱེ་བའི་ཧེ་མ་ ཌེཤ་བོརཌི་ཚུ་ གནས་རིམ་བཟོ་ནིའི་ མེ་ཊིགསི་ཚུ་ མཉམ་བསྡོམས་འབད།
+གྲོས་འཆར་བཀོད་ཡོད་པའི་བཀོད་སྒྲིག་འདི་གིས་ SF-6 བལྟ་རྟོག་འབད་ཚུགས་པའི་འཆར་གཞི་འདི་ གསལ་སྟོན་འབདཝ་ཨིན།
 
-Integrate the metrics into staging dashboards before flipping production knobs.
-The recommended layout mirrors the SF-6 observability plan:
+1. **ཤུགས་ལྡན་ཕེཊ་ཆི་** — གལ་སྲིད་ འཇལ་ཚད་འདི་ མཇུག་བསྡུ་མ་མཐུན་པར་ ཡར་འཛེགས་པ་ཅིན་ དྲན་སྐུལ་འབདཝ་ཨིན།
+2. **Retry ཆ་ཚད་** — `retry` གྱངས་ཁ་བརྐྱབ་མི་ཚུ་ བྱུང་རབས་ཀྱི་གཞི་རྟེན་ལས་ལྷག་པའི་སྐབས་ ཉེན་བརྡ་འབདཝ་ཨིན།
+3. **བདེན་པའི་འཐུས་ཤོར་ཚུ་** — བྱིན་མི་གང་རུང་གིས་བརྒལ་བའི་སྐབས་ ཤོག་ལེབ་ཀྱི་ཉེན་བརྡ་ཚུ་ འབྱུང་བཅུགཔ་ཨིན།
+   `session_failure > 0` སྐར་མ་ ༡༥ ནང་།
 
-1. **Active fetches** — alerts if the gauge climbs without matching completions.
-2. **Retry ratio** — warns when `retry` counters exceed historical baselines.
-3. **Provider failures** — triggers pager alerts when any provider crosses
-   `session_failure > 0` within 15 minutes.
+### ༣་༢ བརྩོན ་བའི་དྲན་དེབ་དམིགས་ཚད།
 
-### 3.2 Structured Log Targets
+སྙན་ཆའི་སྡེ་ཚན་འདི་གིས་ གཏན་འབེབས་དམིགས་གཏད་ཚུ་ལུ་ གཞི་བཀོད་འབད་ཡོད་པའི་བྱུང་རིམ་ཚུ་ དཔར་བསྐྲུན་འབདཝ་ཨིན།
 
-The orchestrator publishes structured events to deterministic targets:
-
-- `telemetry::sorafs.fetch.lifecycle` — `start` and `complete` lifecycle
-  markers with chunk counts, retries, and total duration.
-- `telemetry::sorafs.fetch.retry` — retry events (`provider`, `reason`,
-  `attempts`) for feeding into manual triage.
-- `telemetry::sorafs.fetch.provider_failure` — providers disabled due to
-  repeated errors.
-- `telemetry::sorafs.fetch.error` — terminal failures summarised with
-  `reason` and optional provider metadata.
-
-Forward these streams to the existing Norito log pipeline so incident response
-has a single source of truth. Lifecycle events expose the PQ/classical mix via
+- `telemetry::sorafs.fetch.lifecycle` — `start` དང་ `complete` མི་ཚེའི་འཁོར་ཆ།
+  ཅངཀ་གྱངས་ཁ་དང་ བསྐྱར་ལོག་ཚུ་ དེ་ལས་ དུས་ཡུན་ཡོངས་བསྡོམས་དང་གཅིག་ཁར་ རྟགས་བཀལ།
+- `telemetry::sorafs.fetch.retry` — བྱུང་རིམ་ཚུ་ ལོག་འབད་རྩོལ་བསྐྱེད་དོ་ (`provider`, `reason`,
+  `attempts`) ལག་ཐོག་ལས་ ཚོད་བརྟག་ནང་ ལྟོ་བྱིན་ནིའི་དོན་ལུ་ཨིན།
+- `telemetry::sorafs.fetch.provider_failure` — དེ་ལས་བརྟེན་ཏེ་ བྱིན་མི་ཚུ་ ལྕོགས་མིན་བཟོ་ཡོདཔ་ཨིན།
+  བསྐྱར་ལོག་འཛོལ་བ།
+- `telemetry::sorafs.fetch.error` — ཊར་མི་ནཱལ་འཐུས་ཤོར་ཚུ་ ༡ དང་གཅིག་ཁར་
+  `reason` དང་ གདམ་ཁ་ཅན་གྱི་བྱིན་མི་ མེ་ཊ་ཌེ་ཊ་ཚུ།རྒྱུན་ལམ་འདི་ཚུ་ ད་ལྟོ་ཡོད་པའི་ Norito དྲན་ཐོ་གི་མདོང་ལམ་ལུ་ དེ་འབདཝ་ལས་ བྱུང་རྐྱེན་ལན་གསལ་ལུ་ མདུན་སྐྱོད་འབད།
+བདེན་པ་གི་འབྱུང་ཁུངས་གཅིག་ཡོད། མི་ཚེ་འཁོར་རིམ་གྱི་ལས་རིམ་འདི་གིས་ PQ/སྔར་ལུགས་ཀྱི་སླ་བསྲེ་འདི་ བརྒྱུད་དེ་ གསལ་སྟོན་འབདཝ་ཨིན།
 `anonymity_effective_policy`, `anonymity_pq_ratio`,
-`anonymity_classical_ratio`, and their companion counters,
-making it straightforward to wire dashboards without scraping metrics. During
-GA rollouts, pin the log level to `info` for lifecycle/retry events and rely on
-`warn` for terminal errors.
+`anonymity_classical_ratio`, དང་ཁོང་ཚོའི་མཉམ་རོགས་ གྱངས་ཁ་བ།
+མེ་ཊིག་ཚུ་ མ་བཏོན་པར་ གློག་ཐག་ཚུ་ ཕྲང་ཏང་ཏ་བཟོཝ་ཨིན། སྐབས་སུ
+ཇི་ཨེ་ བཤུད་སྒྲིལ་ཚུ་ དྲན་ཐོ་གནས་རིམ་འདི་ `info` ལུ་ མི་ཚེ་འཁོར་རིམ་/བསྐྱར་ལོག་བྱུང་རིམ་ཚུ་དང་ གུ་བསྐྱེད།
+ཊར་མི་ནཱལ་འཛོལ་བ་ཚུ་གི་དོན་ལུ་ `warn`.
 
-### 3.3 JSON Summaries
+### 3.3 JSON བཅུད་བསྡུས།
 
-Both `sorafs_cli fetch` and the Rust SDK return a structured summary containing:
+`sorafs_cli fetch` དང་ རཱསི་ཨེསི་ཌི་ཀེ་གཉིས་ཆ་ར་གིས་ གཞི་བཀོད་འབད་ཡོད་པའི་བཅུད་དོན་ཅིག་ སླར་ལོག་འབདཝ་ཨིན།
 
-- `provider_reports` with success/failure counts and whether a provider was
-  disabled.
-- `chunk_receipts` detailing which provider satisfied each chunk.
-- `retry_stats` and `ineligible_providers` arrays.
+- མཐར་འཁྱོལ་/འཐུས་ཤོར་གྱི་གྱངས་ཁ་དང་ བྱིན་མི་ཅིག་ཨིན་ན་མེན་ན་ `provider_reports`
+  དབང༌པོ༌སྐྱོན༌ཅན།
+- `chunk_receipts` གིས་ ཆ་ཤས་རེ་རེ་ལུ་ བསྒྲུབ་ཡོདཔ་ཨིན་ན།
+- `retry_stats` དང་ `ineligible_providers` ཨེ་རེ་ཚུ།
 
-Archive the summary file when debugging misbehaving providers—the receipts map
-directly to the log metadata above.
+སྤྱོད་ལམ་ལོགཔ་སྦེ་བྱིན་མི་ཚུ་རྐྱེན་སེལ་འབད་བའི་སྐབས་ བཅུད་དོན་ཡིག་སྣོད་འདི་ གཏན་མཛོད་འབད་ བྱུང་འཛིན་གྱི་ས་ཁྲ་ཚུ།
+གོང་གི་དྲན་ཐོ་མེ་ཊ་ཌེ་ཊ་ལུ་ཐད་ཀར་དུ་ཡོད།
 
-## 4. Operational Checklist
+## 4. བཀོལ་སྤྱོད་དཔྱད་གཞི།
 
-1. **Stage configuration in CI.** Run `sorafs_fetch` with the target
-   configuration, pass `--scoreboard-out` to capture the eligibility view, and
-   diff against the previous release. Any unexpected ineligible provider halts
-   the promotion.
-2. **Validate telemetry.** Ensure the deployment exports `sorafs.fetch.*`
-   metrics and structured logs before enabling multi-source fetches for users.
-   The absence of metrics typically indicates the orchestrator facade was not
-   invoked.
-3. **Document overrides.** When applying emergency `--deny-provider` or
-   `--boost-provider` settings, commit the JSON (or CLI invocation) to your
-   change log. Rollbacks must revert the override and capture a new scoreboard
-   snapshot.
-4. **Re-run smoke tests.** After modifying retry budgets or provider caps,
-   re-fetch the canonical fixture (`fixtures/sorafs_manifest/ci_sample/`) and
-   verify chunk receipts remain deterministic.
+1. **གནས་རིམ་རིམ་སྒྲིག་ CI.** དམིགས་གཏད་དང་གཅིག་ཁར་ `sorafs_fetch` གཡོག་བཀོལ།
+   རིམ་སྒྲིག་, `--scoreboard-out` འོས་འབབ་མཐོང་སྣང་འཛིན་ཐབས་ལུ་ དང་ དང་།
+   dif སྔོན་གྱི་གསར་བཏོན་ལུ་རྒྱབ་འགལ་འབད། རེ་བ་མེད་པའི་འོས་འབབ་མེད་པའི་བྱིན་མི་བཀག་ཆ་གང་རུང་།
+   ཡར་འཕེལ་གཏང་ནི།
+2. ** བརྒྱུད་འཕྲིན་བདེན་དཔྱད་འབད།** བཀྲམ་སྤེལ་ཕྱིར་འདྲེན་འདི་ `sorafs.fetch.*` ལུ་ངེས་གཏན་བཟོ།
+   ལག་ལེན་པ་ཚུ་གི་དོན་ལུ་ སྣ་མང་འབྱུང་ཁུངས་ཀྱི་ ཕེཊི་ཚུ་ ལྕོགས་ཅན་མ་བཟོ་བའི་ཧེ་མ་ མེ་ཊིག་དང་ གཞི་བཀོད་འབད་ཡོད་པའི་དྲན་ཐོ་ཚུ།
+   མེ་ཊིགསི་མེད་མི་འདི་གིས་ སྤྱིར་བཏང་ལུ་ སྙན་ཆའི་ཚོགས་པ་གི་གདོང་ཕྱོགས་འདི་ མེན་ཟེར་སྟོནམ་ཨིན།
+   འབོད་བརྡ་གཏང་ཡོདཔ།
+3. **ཡིག་ཆ་བཀག་འགོག་བྱེད།** གློ་བུར་གྱི་ `--deny-provider` ཡང་ན་ ཡང་ན་ བཀོལ་སྤྱོད་བྱེད་པའི་སྐབས་ ཡང་ན་།
+   `--boost-provider` སྒྲིག་སྟངས་ཚུ་ ཁྱོད་རའི་དོན་ལུ་ ཇེ་ཨེསི་ཨོ་ཨེན་ (ཡང་ན་ སི་ཨེལ་ཨའི་ འབོད་བརྡ་) ལུ་ཁས་བླངས་འབད།
+   བསྒྱུར་བཅོས་དྲན་ཐོ། བསྐོར་རྒྱབ་ཚུ་གིས་ བཀག་ཆ་འབད་མི་འདི་ ལོག་བཏང་ཞིནམ་ལས་ སྐུགས་བརྡ་བྱང་གསརཔ་ཅིག་ བཟུང་དགོ།
+   པར་ལེན་ .
+4. **Re-run དུ་བ་བརྟག་དཔྱད་ཚུ་ བསྐྱར་དུ་འབད་རྩོལ་བསྐྱེད་པའི་ཤུལ་ལུ་ ཡང་ན་ བྱིན་མི་གི་ཁ་དོག་ཚུ་ ལེགས་བཅོས་འབད་ཚར་བའི་ཤུལ་ལས་
+   ཀེ་ནོ་ནིག་གཏན་འཇགས་ (`fixtures/sorafs_manifest/ci_sample/`) དང་།
+   བདེན་དཔྱད་ཀྱི་ ཆ་ཤས་བྱུང་འཛིན་ཚུ་ གཏན་འབེབས་སྦེ་རང་ ལུས་ཡོདཔ་ཨིན།
 
-Following the steps above keeps orchestrator behaviour reproducible across
-staged rollouts and provides the telemetry necessary for incident response.
+གོང་འཁོད་ཀྱི་གོ་རིམ་ཚུ་ལུ་གཞི་བཞག་སྟེ་ སྙན་ཆའི་སྡེ་ཚན་གྱི་སྤྱོད་ལམ་འདི་ བསྐྱར་བཟོ་འབད་ཚུགས།
+བཀོད་སྒྲིག་འབད་དེ་ བྱུང་རྐྱེན་གྱི་ལན་འདེབས་ལུ་དགོ་པའི་ བརྡ་འཕྲིན་འདི་ བྱིནམ་ཨིན།
 
-### 4.1 Policy Overrides
+### ༤.༡ སྲིད་བྱུས་འགན་ལེན།
 
-Operators can pin the active transport/anonymity stage without editing the
-base configuration by setting `policy_override.transport_policy` and
-`policy_override.anonymity_policy` in their `orchestrator` JSON (or supplying
-`--transport-policy-override=` / `--anonymity-policy-override=` to
-`sorafs_cli fetch`). When either override is present the orchestrator skips the
-usual brownout fallback: if the requested PQ tier cannot be satisfied, the
-fetch fails with `no providers` instead of quietly downgrading. Rollback to the
-default behaviour is as simple as clearing the override fields.
+བཀོལ་སྤྱོད་པ་ཚུ་གིས་ ཞུན་དག་མ་འབད་བར་ ཤུགས་ལྡན་སྐྱེལ་འདྲེན་/མིང་མ་བཀོད་པའི་གནས་རིམ་འདི་ པིན་འབད་ཚུགས།
+གཞི་རྟེན་རིམ་སྒྲིག་ `policy_override.transport_policy` དང་སྒྲིག་སྟངས།
+`policy_override.anonymity_policy` ནང་ཁོང་ཚོའི་`orchestrator` JSON (ཡང་ན་བཀྲམ་སྤེལ་འབད་མི།
+`--transport-policy-override=` / `--anonymity-policy-override=` ལུ་
+`sorafs_cli fetch`). ཡང་ན་ བཀག་ཆ་འབད་བའི་སྐབས་ སྙན་ཆའི་སྡེ་ཚན་འདི་གིས་ གོམ་འགྱོ་དོ་ཡོདཔ་ཨིན།
+གལ་ཏེ་ཞུ་བ་འབད་མི་ PQ གི་རིམ་པ་དེ་ བསམ་པ་མ་རྫོགས་པ་ཅིན།
+ཁུ་སིམ་སིམ་སྦེ་མར་ཕབ་འབད་ནིའི་ཚབ་ལུ་ `no providers` དང་ཅིག་ཁར་ འཐུས་ཤོར་བྱུང་ཡོདཔ་ཨིན། ལུ་བསྐོར་སྐྱོད་འབད།
+སྔོན་སྒྲིག་སྤྱོད་ལམ་འདི་ བཀག་ཆ་ས་སྒོ་ཚུ་བསལ་ནི་བཟུམ་སྦེ་འཇམ་ཏོང་ཏོ་ཨིན།
 
-The standard `iroha_cli app sorafs fetch` command exposes the same override flags,
-forwarding them to the gateway client so ad-hoc fetches and automation scripts
-share the identical stage pinning behaviour.
+ཚད་ལྡན་ `iroha_cli app sorafs fetch` བརྡ་བཀོད་ཀྱིས་ བཀག་དམ་ཅན་གྱི་དར་ཆ་གཅིགཔོ་ཚུ་ ཕྱིར་བཏོན་འབདཝ་ཨིན།
+དེ་ཚུ་ འཛུལ་སྒོ་གི་མཁོ་སྤྲོད་འབད་མི་ལུ་བཏང་དོ་ཡོདཔ་ལས་ དུས་མཐུན་གྱི་ ཕིཊི་ཆི་དང་ རང་བཞིན་ཡིག་ཆ་ཚུ་ ལུ།
+གནས་རིམ་འདྲ་མཚུངས་ཀྱི་སྤྱོད་ལམ་འདི་བགོ་བཤའ་རྐྱབ།Cross-SDK གི་སྒྲིག་བཀོད་ཚུ་ `fixtures/sorafs_gateway/policy_override/` གི་འོག་ལུ་ཡོདཔ་ཨིན། ཚིག༌ཕྲད
+CLI, Rust མཁོ་སྤྲོད་པ་ ཇ་བ་ཨིསི་ཀིརིཔཊི་བཱའིན་ཌིང་དང་ སུའིཕཊ་ ཧར་ནིས་ཌི་ཀོཌི་ཚུ་ཨིན།
+`override.json` དེ་དག་གིས་ཁོང་ཚོའི་ཆ་སྙོམས་ཆ་ཚང་ནང་།
+དེ་བསྐྱར་སྒྲིག་དང་ལོག་སྟེ་གཡོག་བཀོལ་དགོཔ་ཨིན་ `cargo test -p iroha`, `npm test`, དང་།
+`swift test` འདི་ ཨེསི་ཌི་ཀེ་ཚུ་ ཕྲང་སྒྲིག་འབད་བཞག་ནི། བསྐྱར་བཟོ་འབད་ཡོད་པའི་སྒྲིག་ཆས་འདི་ ཨ་རྟག་ར་ ལུ་མཉམ་སྦྲགས་འབད།
+འགྱུར་བའི་བསྐྱར་ཞིབ། དེ་ལས་ མར་ཁུའི་ཉོ་སྤྱོད་པ་ཚུ་གིས་ གན་རྒྱ་འདི་ དབྱེ་བ་ཕྱེ་ཚུགས།
 
-Cross-SDK fixtures live under `fixtures/sorafs_gateway/policy_override/`. The
-CLI, Rust client, JavaScript bindings, and Swift harness decode
-`override.json` in their parity suites so any change to the override payloads
-must update that fixture and re-run `cargo test -p iroha`, `npm test`, and
-`swift test` to keep the SDKs aligned. Always attach the regenerated fixture to
-change review so downstream consumers can diff the override contract.
+གཞུང་སྐྱོང་ལུ་ བཀག་ཆ་འབད་མི་ག་ར་གི་དོན་ལུ་ རན་བུཀ་ཐོ་བཀོད་འབད་དགོཔ་ཨིན། རྒྱུ་མཚན་འདི་ཐོ་བཀོད་འབད།
+རེ་བ་བསྐྱེད་པའི་དུས་ཡུན་དང་ ཁྱོད་རའི་བསྒྱུར་བཅོས་དྲན་དེབ་ནང་ བསྐྱར་ལོག་འགོ་བཙུགས་ནི་ PQ ལུ་བརྡ་བསྐུལ་འབད།
+རེཊ་ཅེཊ་བསྒྱིར་བའི་རྒྱུ་ལམ་དང་ མཚན་རྟགས་བཀོད་པའི་ཆ་འཇོག་འདི་ ཅ་རྙིང་གཅིག་ལུ་ མཐོ་གཏུགས་འབདཝ་ཨིན།
+bundle The སྐུགས་ཤོག་པར་འདི་གསོག་འཇོག་འབདཝ་ཨིན། དབང་བཟུང་ཚུ་ ཐུང་ཀུ་སྦེ་བཟོཝ་ཨིན།
+གློ་བུར་གྱི་གནས་སྟངས་ (དཔེར་ན་ PQ རྒྱབ་སྲུང་རྒྱ་སྨུག་); ཡུན་རིངམོ་སྦེ་འགྱོ་མི་ སྲིད་བྱུས་བསྒྱུར་བཅོས་ཚུ་ འགྱོ་དགོ།
+སྤྱིར་བཏང་ཚོགས་སྡེའི་ཚོགས་རྒྱན་བརྒྱུད་དེ་ མཐུད་མཚམས་གསརཔ་གུ་ མཐུད་མཚམས་གཅིག་ཁར་བསྡོམས་ཡོདཔ་ཨིན།
 
-Governance requires a runbook entry for every override. Record the reason,
-expected duration, and rollback trigger in your change log, notify the PQ
-ratchet rotation channel, and append the signed approval to the same artifact
-bundle that stores the scoreboard snapshot. Overrides are intended for short
-emergencies (e.g., PQ guard brownouts); long-running policy changes must go
-through the normal council vote so nodes converge on the new default.
+### 4.2 PQ རཏ་ཅེཊ་མེ་དྲིལ།
 
-### 4.2 PQ Ratchet Fire Drill
+- **རཱན་བུཀ་:** གི་དོན་ལུ་ `docs/source/soranet/pq_ratchet_runbook.md` ལུ་རྗེས་སུ་འབྲང་།
+  ཡར་འཕེལ་/མར་ཕབ་སྦྱོང་བརྡར་ནང་ སྲུང་འཁོར་འཛིན་སྐྱོང་དང་ བསྐོར་རྒྱབ་ཚུ་རྩིས་ཏེ་ཨིན།
+- **ཌེཤ་བོརཌི་:** བལྟ་རྟོག་འབད་ནིའི་དོན་ལུ་ `dashboards/grafana/soranet_pq_ratchet.json` ནང་འདྲེན་འབད།
+  `sorafs_orchestrator_policy_events_total`, རྒྱ་སྨུག་ཚད་དང་ PQ ཆ་ཚད་ཀྱི་སྤྱིར་སྙོམས་ .
+  དམག་སྦྱོང་སྐབས་ལུ།
+- **རང་བཞིན་:** `cargo test -p sorafs_orchestrator pq_ratchet_fire_drill_records_metrics`
+  འགྱུར་བཅོས་ཅོག་འཐདཔ་ཚུ་ལག་ལེན་འཐབ་ཞིནམ་ལས་ མེ་ཊིགསི་ཡར་སེང་བཟུམ་སྦེ་ བདེན་དཔྱད་འབདཝ་ཨིན།
+  བཀོལ་སྤྱོད་པ་ཚུ་གིས་ ཐད་རི་བ་རི་ སྦྱོང་བརྡར་འགོ་མ་བཙུགས་པའི་ཧེ་མ་ རེ་བ་བསྐྱེདཔ་ཨིན།
 
-- **Runbook:** Follow `docs/source/soranet/pq_ratchet_runbook.md` for the
-  promotion/demotion rehearsal, including guard-directory handling and rollback.
-- **Dashboard:** Import `dashboards/grafana/soranet_pq_ratchet.json` to monitor
-  `sorafs_orchestrator_policy_events_total`, brownout rate, and PQ ratio mean
-  during the drill.
-- **Automation:** `cargo test -p sorafs_orchestrator pq_ratchet_fire_drill_records_metrics`
-  exercises the same transitions and verifies that metrics increment as
-  expected before operators run the live drill.
+## 5. རོལ་མོའི་དེབ་ཐོ།
 
-## 5. Rollout Playbooks
+SNNet-5 སྐྱེལ་འདྲེན་གྱི་ བསྐོར་འགྲུལ་འདི་གིས་ སྲུང་རྒྱབ་གསརཔ་གི་གདམ་ཁ་ གཞུང་སྐྱོང་འགོ་བཙུགསཔ་ཨིན།
+བདེན་ཁུངས་དང་ སྲིད་བྱུས་ཀྱི་ མར་ཕབ་ཚུ། འོག་གི་ རྩེད་དེབ་ཚུ་གིས་ གོ་རིམ་འདི་ ༡ ལུ་ མཉམ་སྦྲགས་འབད།
+མཐའ་མཇུག་ལག་ལེན་པ་ཚུ་གི་དོན་ལུ་ སྣ་མང་འབྱུང་ཁུངས་ཀྱི་ ཕེཊི་ཆི་ཚུ་ ལྕོགས་ཅན་མ་བཟོ་བའི་ཧེ་མ་དང་ དེ་ལས་ མར་ཕབ་ཀྱི་ རྗེས་སུ་འཇུག་དགོ།
+འགྲུལ་ལམ་ལོག་ཐད་ཀར་ཐབས་ལམ་ལུ།
 
-The SNNet-5 transport rollout introduces new guard selection, governance
-attestations, and policy fallbacks. The playbooks below codify the sequence to
-follow before enabling multi-source fetches for end users, plus the downgrade
-path back to direct mode.
+### ༥.༡ གོང་འཕེལ་གཏང་མི (སི་ཨའི་ / གནས་སྟངས།)
 
-### 5.1 Developer Pre-Flight (CI / Staging)
+1. ** CI.ནང་ལུ་ སྐུགས་ཚད་བསྐྱར་བཟོ་འབད་ནི།** `sorafs_cli fetch` གཡོག་བཀོལ། (ཡང་ན་ SDK
+   འདྲ་མཉམ།) དང་མཉམ་དུ་ `fixtures/sorafs_manifest/ci_sample/` གསལ་སྟོན་ལ་རྒྱབ་འགལ་བྱེད།
+   འདེམས་ངོ་རིམ་སྒྲིག་འདི། བརྒྱུད་དེ་ སྐུགས་བོང་བུ་འདི་ འགན་ལེན་འབད།
+   `--scoreboard-out=artifacts/sorafs/scoreboard.json` དང་བདེན་དཔང་།
+   - `anonymity_status=="met"` དང་ `anonymity_pq_ratio` གིས་དམིགས་གཏད་གྲུབ་ཡོད།
+     གནས་རིམ་ (Norito, `anon-majority-pq`, ཡང་ན་ `anon-strict-pq`).
+   - སེམས་ཐག་བཅད་པའི་ཆ་ཤས་ཚུ་ ད་ལྟོ་ཡང་ གསེར་གྱི་ཆ་ཚན་དང་མཐུན་སྒྲིག་ཡོདཔ་ཨིན།
+     མཛོད་ཁང་།
+2. ** གསལ་སྟོན་གཞུང་སྐྱོང་ལུ་བདེན་དཔྱད་འབད།** སི་ཨེལ་ཨའི་ / ཨེསི་ཌི་ཀེ་ བཅུད་བསྡུས་བརྟག་དཔྱད་འབད་དེ་ ངེས་གཏན་བཟོ།
+   གསར་དུ་ཐོན་ཡོད། `manifest_governance.council_signatures` བཀོད་སྒྲིག་ཡོད།
+   རེ་བ་སྐྱེད་པའི་ ལྷན་ཚོགས་ཀྱི་མཛུབ་མོ་གི་པར་རིས། འདི་གིས་ འཛུལ་སྒོ་ལན་འདེབས་ཚུ་གིས་ ཇི་ཨར་ བཏངམ་ཨིན།
+   ཡིག་ཤུབས་དང་དེ་ `validate_manifest` ངོས་ལེན་འབད་ཡོད།
+3. **ལུས་སྦྱོང་གིས་ བསྟར་སྤྱོད་འབད་ནི།** དབང་ཚད་ཀྱི་གསལ་སྡུད་རེ་རེ་བཞིན་དུ་ ལས་ མངོན་གསལ་འབད།
+   `docs/examples/sorafs_compliance_policy.json` དང་ སྙན་ཆའི་སྡེ་ཚན་འདི་ བདེན་བཤད་འབདཝ་ཨིན།
+   སྲིད་བྱུས་ཀྱི་ མེལ་བེག་ (`compliance_jurisdiction_opt_out` ཡང་ཅིན་ ཡང་ན་ ཚུལ་ལྡན་སྦེ་ བཏོནམ་ཨིན།
+   `compliance_blinded_cid_opt_out`). མེན་པའི་སྐབས་ གྲུབ་འབྲས་ཐོབ་མ་ཚུགས་པའི་གྲུབ་འབྲས་འདི་ཐོ་བཀོད་འབད།
+   མཐུན་སྒྲིག་ཅན་གྱི་སྐྱེལ་འདྲེན་ཚུ་འཐོབ་ཚུགས།
+༤.
+   རིམ་སྒྲིག་འབད་ཞིནམ་ལས་ སྙན་ཆའི་སྡེ་ཚན་འདི་ ངེས་གཏན་བཟོ་ནི་ལུ་ ཕིཆ་འདི་ ལོག་གཡོག་བཀོལ་ནི།
+   སོ་ར་ནེཊ་རི་ལེ་ཚུ་ མ་ལག་པར་ Torii/QUIC ལུ་ལོག་འགྱོཝ་ཨིན། ཇེ་ཨེསི་ཨོ་འདི་བཞག་དགོ།
+   ཐོན་རིམ་ཚད་འཛིན་གྱི་ འགྱུར་ལྡོག་ཅན་འབདཝ་ལས་ དེ་ མགྱོགས་དྲགས་སྦེ་ ཁྱབ་སྤེལ་འབད་ཚུགས།
+   བྱུང༌རྐྱེན།
 
-1. **Regenerate scoreboards in CI.** Run `sorafs_cli fetch` (or the SDK
-   equivalent) against the `fixtures/sorafs_manifest/ci_sample/` manifest with
-   the candidate configuration. Persist the scoreboard via
-   `--scoreboard-out=artifacts/sorafs/scoreboard.json` and assert:
-   - `anonymity_status=="met"` and the `anonymity_pq_ratio` meets the targeted
-     stage (`anon-guard-pq`, `anon-majority-pq`, or `anon-strict-pq`).
-   - The deterministic chunk receipts still match the golden set committed to
-     the repository.
-2. **Verify manifest governance.** Inspect the CLI / SDK summary and ensure the
-   newly surfaced `manifest_governance.council_signatures` array contains the
-   expected Council fingerprints. This confirms gateway responses ship the GAR
-   envelope and that `validate_manifest` accepted it.
-3. **Exercise compliance overrides.** Load each jurisdictional profile from
-   `docs/examples/sorafs_compliance_policy.json` and assert the orchestrator
-   emits the correct policy fallback (`compliance_jurisdiction_opt_out` or
-   `compliance_blinded_cid_opt_out`). Record the resulting fetch failure when no
-   compliant transports are available.
-4. **Simulate downgrade.** Flip `transport_policy` to `direct-only` in the
-   configuration under test and re-run the fetch to ensure the orchestrator
-   falls back to Torii/QUIC without touching SoraNet relays. Keep this JSON
-   variant under version control so it can be promoted rapidly during an
-   incident.
+### ༥.༢ བཀོལ་སྤྱོད་པ་ཐོ་ཡིག (ཐོན་ལས་ཀྱི་རླབས་རིམ།)1. **རིམ་སྒྲིག་འདི་ `iroha_config`.** གི་ཐོག་ལས་ གཏན་གཏན་སྦེ་ལག་ལེན་འཐབ་མི་ JSON དཔར་བསྐྲུན་འབད།
+   in CI འདི་ `actual` བང་རིམ་བརྒལ་ཡོད། རོལ་དབྱངས་པོད་ / གཉིས་ལྡན་ངེས་གཏན་བཟོ།
+   འགོ་བཙུགས་པའི་སྐབས་ རིམ་སྒྲིག་གསརཔ་གི་ ཧེཤ་ཚུ་ ནང་བསྐྱོད་འབདཝ་ཨིན།
+2. ** གཞི་རིམ་སྲུང་སྐྱོབ་ཀྱི་འདྲ་མཛོད་ཚུ།** `--guard-directory` བརྒྱུད་དེ་ རི་ལེ་སྣོད་ཐོ་འདི་ གསར་བསྐྲུན་འབད།
+   དང་ Norito `--guard-cache` དང་མཉམ་དུ་ གནས་ཡུན་བརྟན་པོ་ཡོད། འདྲ་མཛོད་འདི་བདེན་དཔྱད་འབད།
+   མཚན་རྟགས་ (`--guard-cache-key` རིམ་སྒྲིག་འབད་ཡོདཔ་ཨིན་) དེ་ལས་ ཐོན་རིམ་འོག་ལུ་གསོག་འཇོག་འབད་ཡོདཔ་ཨིན།
+   བསྒྱུར་བཅོས་ཚད་འཛིན་།
+3. ** ཊེ་ལི་མི་ཊི་ ཌེཤ་བོརཌི་ཚུ་ལྕོགས་ཅན་བཟོ།** ལག་ལེན་པ་འགྲུལ་སྐྱོད་མ་འབད་བའི་ཧེ་མ་ ངེས་གཏན་བཟོ།
+   མཐའ་འཁོར་ནང་ `sorafs.fetch.*`, `sorafs_orchestrator_policy_events_total`, དང་།
+   པོརོག་སི་མེ་ཊིགསི་ (ས་གནས་ཀྱི་ཀིའུ་ཨའི་ཨའི་སི་ པོརོག་སི་ལག་ལེན་འཐབ་པའི་སྐབས།) ཉེན་བརྡ་ཚུ་ ལུ་བསྡམ་དགོ།
+   `anonymity_brownout_effective` དང་ མཐུན་སྒྲིག་ཅན་གྱི་ ཕོལོ་བེག་ གྱངས་ཁ་ཚུ།
+4. **དངོས་གསལ་གྱི་དུ་ཁ་བརྟག་དཔྱད།** གཞུང་སྐྱོང་ཆ་འཇོག་བྱས་པའི་གསལ་སྟོན་ཅིག་རེ་རེར་དུ་ཕེབས་དགོས།
+   བྱིན་མི་སྡེ་ཚན་ (PQ, སྔར་སྲོལ་དང་ ཐད་ཀར་) དང་ ཆ་ཤས་ཐོབ་ཐངས་ཚུ་ ངེས་གཏན་བཟོཝ་ཨིན།
+   CAR གིས་ བཞུ་བཅུག་སྟེ་ ཚོགས་སྡེའི་མིང་རྟགས་ཚུ་ CI གཞི་རྟེན་དང་མཐུན་སྒྲིག་འབདཝ་ཨིན།
+5. **བརྡ་སྤྲོད་འབད་ནི།** དང་ཅིག་ཁར་ བསྐོར་འཁོར་འཚོལ་ཞིབ་འདི་ དུས་མཐུན་བཟོ་ནི།
+   `scoreboard.json` ཅ་རྙིང་དང་ ཉེན་སྲུངཔ་ མཛུབ་མོའི་མཛུབ་མོའི་རྟགས་ དེ་ལས་ འབྲེལ་མཐུད་ཅིག།
+   logs གིས་ བཟོ་བསྐྲུན་གྱི་ཐོབ་ཐང་འགོ་དང་པ་གི་དོན་ལུ་ གསལ་སྟོན་གཞུང་སྐྱོང་བདེན་དཔྱད་སྟོནམ་ཨིན།
 
-### 5.2 Operator Rollout (Production Waves)
+### ༥.༣ མར་འབབ་ / རོལ་བེག་གི་བྱ་རིམ།
 
-1. **Stage the configuration via `iroha_config`.** Publish the exact JSON used
-   in CI as an `actual` layer override. Confirm the orchestrator pod / binary
-   logs the new configuration hash on startup.
-2. **Prime guard caches.** Refresh the relay directory via `--guard-directory`
-   and persist the Norito guard cache with `--guard-cache`. Verify the cache is
-   signed (if `--guard-cache-key` is configured) and stored under versioned
-   change control.
-3. **Enable telemetry dashboards.** Before serving user traffic, ensure the
-   environment publishes `sorafs.fetch.*`, `sorafs_orchestrator_policy_events_total`, and
-   the proxy metrics (when using the local QUIC proxy). Alarms should be tied to
-   `anonymity_brownout_effective` and compliance fallback counters.
-4. **Run live smoke tests.** Fetch a governance-approved manifest through each
-   provider cohort (PQ, classical, and direct) and confirm chunk receipts,
-   CAR digests, and council signatures match the CI baseline.
-5. **Communicate activation.** Update the rollout tracker with the
-   `scoreboard.json` artefact, the guard cache fingerprint, and a link to the
-   logs showing manifest governance verification for the first production fetch.
+བྱུང་རྐྱེན་ཚུ་, པི་ཀིའུ་མ་ལྷོདཔ་ ཡང་ན་ ཁྲིམས་ལུགས་ཞུ་བ་ཚུ་ ལོག་བསྐོར་རྐྱབ་པའི་སྐབས་ རྗེས་སུ་འཇུག་དགོ།
+འདིའི་གཏན་འབེབས་རིམ་པ་:
 
-### 5.3 Downgrade / Rollback Procedure
+1. **Switch སྐྱེལ་འདྲེན་སྲིད་བྱུས་.** `transport_policy=direct-only` ལག་ལེན་འཐབ་དགོ།
+   དེ་འཕྲལ་ལས་ SoraNet གློག་ལམ་གསར་བསྐྲུན་གསརཔ་འདི་བཀག་བཞགཔ་ཨིན།
+2. **ཆུ་སྲིན་སྲུང་སྐྱོབ་གནས་སྟངས།** གིས་ གཞི་བསྟུན་འབད་ཡོད་པའི་ སྲུང་རྒྱབ་ཀྱི་ འདྲ་མཛོད་ཡིག་སྣོད་འདི་ བཏོན་གཏང་ནི་ཡང་ན་ གཏན་མཛོད་འབད་ནི།
+   `--guard-cache` དེ་འབདཝ་ལས་ ཤུལ་ལས་ རྒྱུག་མི་ཚུ་གིས་ པིན་འབད་ཡོད་པའི་རི་ལེ་ཚུ་ ལོག་ལག་ལེན་འཐབ་ནི་ལུ་ དཔའ་བཅམ་མི་བཏུབ།
+   གོ་རིམ་འདི་ མགྱོགས་དྲགས་སྦེ་ མགྱོགས་དྲགས་སྦེ་ ལྕོགས་ཅན་བཟོ་ནི་གི་ འཆར་གཞི་བརྩམས་ཞིནམ་ལས་ འདྲ་མཛོད་འདི་ ལུས་པའི་སྐབས་ལུ་རྐྱངམ་ཅིག་ འཛེམ་དགོ།
+   ཆ་འཇོག་ཡོདཔ།
+3. **ས་གནས་ཀྱི་པོརོག་སི་ཚུ་ལྕོགས་ཅན་བཟོ་དགོ།** ས་གནས་ཀྱི་ཀིའུ་ཨའི་སི་ པོརོག་སི་འདི་ `bridge` ཐབས་ལམ་ནང་ཨིན་པ་ཅིན་
+   `proxy_mode="metadata-only"` དང་གཅིག་ཁར་ སྙན་ཆའི་སྡེ་ཚན་འདི་ལོག་འགོ་བཙུགས། ཡང་ན་ འདི་བཏོན་གཏང་།
+   `local_proxy` ཆ་ཚང་བཀག་ཡོད། འདྲེན་ལམ་གསར་བཏོན་འདི་ལཱ་འབད་སའི་ས་ཁོངས་དང་།
+   browser མཉམ་བསྡོམས་ཚུ་ Torii འཛུལ་སྤྱོད་ལུ་ སླར་ལོག་འབདཝ་ཨིན།
+4. **གསལ་པོ་བཀག་འགོག་ཚུ་ དབང་དུ་བསྡུ་དགོ།** ཁྲིམས་ཁང་གི་ གདམ་ཁའི་ཐོ་བཀོད་ (ཡང་ན་ a ཡང་ན་ a
+   འདི་བཟུམ་སྦེ་ གནོད་སྐྱོན་ཕོག་མི་ གླ་ཆ་ཚུ་གི་དོན་ལུ་ བསྟར་སྤྱོད་ཀྱི་སྲིད་བྱུས་ལུ་ yepChe
+   རང་བཞིན་དང་ བརྡ་བཀོད་སྒྲོམ་ཚུ་གིས་ དམིགས་ཡུལ་ཐད་ཀར་ཐབས་ལམ་བཀོལ་སྤྱོད་འདི་ གསལ་སྟོན་འབདཝ་ཨིན།
+5. **རྩིས་ཞིབ་བདེན་དཔང་།** `--scoreboard-out` དང་མཉམ་དུ་བསྒྱུར་བཅོས་རྗེས་ཀྱི་ཕེཆ་ཅིག་བཏང་།
+   དང་ CLI JSON བཅུད་བསྡུས་ (`manifest_governance` ཚུ་རྩིས་ཏེ་) དེ་ མཉམ་དུ།
+   བྱུང་རྐྱེན་གྱི་ཤོག་བྱང་།
 
-When incidents, PQ deficits, or regulatory requests force a rollback, follow
-this deterministic sequence:
+-##| བརྟག་ཞིབ་ས་ཚིགས། | དམིགས་ཡུལ། | གྲོས་འཆར་ཡོད་པའི་བདེན་ཁུངས། |
+|------------------------------------------------------- |
+| བསྟར་སྤྱོད་སྲིད་བྱུས་རིམ་པ་ | ཇི་ཨར་ ཡིག་སྣོད་ཚུ་དང་གཅིག་ཁར་ ཕྲང་སྒྲིག་འབད་མི་ བརྐོས་བརྐོའི་ ཕྲང་སྒྲིག་ཚུ་ ངེས་གཏན་བཟོཝ་ཨིན། | མཚན་རྟགས་བཀོད་ཡོདཔ། `soranet_opt_outs.json` པར་ལེན་ + སྙན་ཆའི་སྡེ་ཚན་རིམ་སྒྲིག་འབད་ཡོདཔ། |
+| དབང་འཛིན་གཙོ་བོ་ཐོ་བཀོད་འབད་ཡོདཔ། | བདེན་དཔང་ཚོགས་སྡེའི་མིང་རྟགས་ཚུ་ འཛུལ་སྒོ་ག་ར་གསལ་སྟོན་འབདཝ་ཨིན། | `sorafs_cli fetch ... --output /dev/null --summary out.json` དང་ `manifest_governance.council_signatures` ཡིག་མཛོད་བཀོད་ཡོད། |
+| ཨེག་ཊི་ཤཱན་ ཐོ་གཞུང་ | `compliance.attestations` ནང་གཞི་བསྟུན་འབད་ཡོད་པའི་ཡིག་ཆ་ཚུ་རྗེས་སྙེག་འབདཝ་ཨིན། | PDFs/JSON ཅ་ཆས་ཚུ་ བཞུ་བཅོས་དང་ དུས་ཡུན་ཚང་བའི་ མཉམ་སྦྲགས་འབད་དགོ། |
+| མར་ཕབ་སྦྱོང་བརྡར་ནང་བསྐྱོད་འབད་ཡོདཔ། | ལོག་བསྐོར་བརྐྱབ་ནི་ངེས་གཏན་བཟོཝ་ཨིན། | ཐད་ཀར་གྱི་སྲིད་བྱུས་ལག་ལེན་དང་ སྲུང་སྐྱོབ་ཀྱི་ འདྲ་མཛོད་ཚུ་ བཏོན་བཏང་མི་ ཟླཝ་གསུམ་གྱི་རིང་ལུ་ སྐམ་འགྱོ་མི་ ཐོ་བཀོད་ཚུ། |
+| བརྒྱུད་འཕྲིན་བཞག་ཐངས། | ལྟ་རྟོག་པ་ཚུ་གི་དོན་ལུ་ ཁྲིམས་ལུགས་ཀྱི་གནས་སྡུད་ཚུ་བྱིནམ་ཨིན། | ཌེཤ་བོརཌ་ཕྱིར་འདྲེན་ཡང་ན་ ཨོ་ཊི་ཨེལ་པར་ལེན་འདི་ `sorafs.fetch.*` ངེས་གཏན་བཟོ་ནི་དང་ བསྟར་སྤྱོད་འབད་མི་ ཕོལོ་བེཀ་ཚུ་ སྲིད་བྱུས་རེ་ལུ་ བཞག་སྟེ་ཡོདཔ་ཨིན། |
 
-1. **Switch transport policy.** Apply `transport_policy=direct-only` (and, if
-   immediately halts new SoraNet circuit construction.
-2. **Flush guard state.** Delete or archive the guard cache file referenced by
-   `--guard-cache` so subsequent runs do not attempt to reuse pinned relays.
-   Skip this step only when a rapid re-enable is planned and the cache remains
-   valid.
-3. **Disable local proxies.** If the local QUIC proxy was in `bridge` mode,
-   restart the orchestrator with `proxy_mode="metadata-only"` or remove the
-   `local_proxy` block entirely. Document the port release so workstation and
-   browser integrations revert to direct Torii access.
-4. **Clear compliance overrides.** Append a jurisdictional opt-out entry (or a
-   blinded-CID entry) to the compliance policy for the affected payloads so
-   automation and dashboards reflect the intentional direct-mode operation.
-5. **Capture audit evidence.** Run a post-change fetch with `--scoreboard-out`
-   and store the CLI JSON summary (including `manifest_governance`) alongside
-   the incident ticket.
-
-### 5.4 Regulated Deployment Checklist
-
-| Checkpoint | Purpose | Recommended Evidence |
-|------------|---------|----------------------|
-| Compliance policy staged | Confirms the jurisdictional carve-out aligns with GAR filings. | Signed `soranet_opt_outs.json` snapshot + orchestrator config diff. |
-| Manifest governance recorded | Proves Council signatures accompany every gateway manifest. | `sorafs_cli fetch ... --output /dev/null --summary out.json` with `manifest_governance.council_signatures` archived. |
-| Attestation inventory | Tracks the documents referenced in `compliance.attestations`. | Store PDFs/JSON artefacts alongside the attestation digest and expiry. |
-| Downgrade drill logged | Ensures rollback remains deterministic. | Quarterly dry-run record showing direct-only policy applied and guard cache cleared. |
-| Telemetry retention | Provides forensic data for regulators. | Dashboard export or OTEL snapshot confirming `sorafs.fetch.*` and compliance fallbacks are being retained per policy. |
-
-Operators should review the checklist prior to each rollout window and furnish
-the evidence pack to governance or regulators on request. Developers can reuse
-the same artefacts for postmortem packets when brownouts or compliance overrides
-are triggered during testing.
+བཀོལ་སྤྱོད་པ་ཚུ་གིས་ བསྐོར་ཐེངས་སྒོ་སྒྲིག་རེ་རེ་གི་ཧེ་མ་དང་ བྱིན་ཡོད་པའི་ ཞིབ་དཔྱད་ཐོ་ཡིག་འདི་ བསྐྱར་ཞིབ་འབད་དགོ།
+ཞུ་བ་འབད་བའི་སྐབས་ གཞུང་སྐྱོང་དང་ ཡང་ན་ ཁྲིམས་ལུགས་ཚུ་ལུ་ སྒྲུབ་བྱེད་ཀྱི་ ཐུམ་སྒྲིལ་འབད་ནི། གོང་འཕེལ་གཏང་མི་ཚུ་གིས་ ལོག་ལག་ལེན་འཐབ་བཏུབ།
+འདོན་སྤེལ།: ༢༠༡༡/༠༤/༢༠ རིག་པ།(༡) འབྲུག་རྒྱང་བསྒྲགས་ལས་ཁུངས་ཀྱིས་ འབྲུག་རྒྱང་བསྒྲགས་ལས་ཁུངས་ལུ་ བརྡ་དོན་འཕྲུལ་རིག་དང་འབྲེལ་བའི་ ལས་རིམ་ཚུ་ འགོ་འདྲེན་འཐབ་སྟེ་ཡོདཔ་ཨིན།
+བརྟག་དཔྱད་ཀྱི་སྐབས་ལུ་ འབྱུང་བཅུགཔ་ཨིན།

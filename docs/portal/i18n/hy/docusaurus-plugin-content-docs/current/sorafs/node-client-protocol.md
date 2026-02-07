@@ -4,152 +4,154 @@ direction: ltr
 source: docs/portal/docs/sorafs/node-client-protocol.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# SoraFS Node ↔ Client Protocol
+# SoraFS հանգույց ↔ Հաճախորդի արձանագրություն
 
-This guide summarises the canonical protocol definition in
-[`docs/source/sorafs_node_client_protocol.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs_node_client_protocol.md).
-Use the upstream spec for byte-level Norito layouts and changelogs; the portal
-copy keeps the operational highlights close to the rest of the SoraFS runbooks.
+Այս ուղեցույցը ամփոփում է կանոնական արձանագրության սահմանումը
+[`docs/source/sorafs_node_client_protocol.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs_node_client_protocol.md):
+Օգտագործեք վերին հոսանքի սպեկտրը բայթ մակարդակի Norito դասավորությունների և փոփոխության մատյանների համար; պորտալը
+պատճենը պահպանում է գործառնական կարևորագույն կետերը մնացած SoraFS վազքագրքերին մոտ:
 
-## Provider Adverts & Validation
+## Մատակարարի գովազդ և վավերացում
 
-SoraFS providers gossip `ProviderAdvertV1` payloads (see
-`crates/sorafs_manifest::provider_advert`) signed by the governed operator.
-The adverts pin discovery metadata and the guardrails the multi-source
-orchestrator enforces at runtime.
+SoraFS պրովայդերները բամբասում են `ProviderAdvertV1` օգտակար բեռները (տես
+`crates/sorafs_manifest::provider_advert`) ստորագրված կառավարվող օպերատորի կողմից:
+Գովազդները ամրացնում են հայտնաբերման մետատվյալները, իսկ պաշտպանիչ բազրիքները՝ բազմակողմանի
+նվագախումբը պարտադրում է գործարկման ժամանակ:
 
-- **Lifetime** — `issued_at < expires_at ≤ issued_at + 86 400 s`. Providers
-  should refresh every 12 hours.
-- **Capability TLVs** — the TLV list advertises transport features (Torii,
-  QUIC+Noise, SoraNet relays, vendor extensions). Unknown codes may be skipped
-  when `allow_unknown_capabilities = true`, following GREASE guidance.
-- **QoS hints** — `availability` tier (Hot/Warm/Cold), maximum retrieval
-  latency, concurrency limit, and optional stream budget. QoS must align with
-  observed telemetry and is audited by admission.
-- **Endpoints & rendezvous topics** — concrete service URLs with TLS/ALPN
-  metadata plus the discovery topics clients should subscribe to when building
-  guard sets.
-- **Path diversity policy** — `min_guard_weight`, AS/pool fan-out caps, and
-  `provider_failure_threshold` make deterministic multi-peer fetches possible.
-- **Profile identifiers** — providers must expose the canonical handle (e.g.
-  `sorafs.sf1@1.0.0`); optional `profile_aliases` help older clients migrate.
+- **Կյանքի ընթացքում** — `issued_at < expires_at ≤ issued_at + 86 400 s`. Մատակարարներ
+  պետք է թարմացվի յուրաքանչյուր 12 ժամը մեկ:
+- **Հնարավորություն TLVs** — TLV ցուցակը գովազդում է տրանսպորտային առանձնահատկությունները (Torii,
+  QUIC+Noise, SoraNet ռելեներ, վաճառողի ընդլայնումներ): Անհայտ կոդերը կարող են բաց թողնել
+  երբ `allow_unknown_capabilities = true`, հետևելով GREASE ուղեցույցին:
+- **QoS ակնարկներ** — `availability` մակարդակ (տաք/տաք/սառը), առավելագույն որոնում
+  ուշացում, միաժամանակության սահմանաչափ և կամընտիր հոսքի բյուջե: QoS-ը պետք է համապատասխանի
+  դիտվում է հեռաչափություն և աուդիտ է անցնում ընդունելության միջոցով:
+- **Վերջնակետեր և հանդիպման թեմաներ** — կոնկրետ ծառայության URL-ներ TLS/ALPN-ով
+  մետատվյալներ, գումարած հայտնաբերման թեմաները, որոնց հաճախորդները պետք է բաժանորդագրվեն կառուցելիս
+  պահակային հավաքածուներ.
+- **Ճանապարհների բազմազանության քաղաքականություն** — `min_guard_weight`, AS/լողավազանի օդափոխիչի գլխարկներ և
+  `provider_failure_threshold`-ը հնարավոր է դարձնում դետերմինիստական մի քանի հավասարակցական բեռներ:
+- **Պրոֆիլների նույնացուցիչներ** — մատակարարները պետք է բացահայտեն կանոնական բռնիչը (օրինակ.
+  `sorafs.sf1@1.0.0`); ընտրովի `profile_aliases` օգնում է տարեց հաճախորդներին արտագաղթել:
 
-Validation rules reject zero stake, empty capability/endpoints/topic lists,
-misordered lifetimes, or missing QoS targets. Admission envelopes compare the
-advert and proposal bodies (`compare_core_fields`) before gossiping updates.
+Վավերացման կանոնները մերժում են զրոյական խաղադրույքը, դատարկ հնարավորությունները/վերջնական կետերը/թեմաների ցուցակները,
+սխալ դասավորված կյանքի ժամկետներ կամ բացակայող QoS թիրախներ: Ընդունելության ծրարները համեմատում են
+գովազդային և առաջարկների մարմիններ (`compare_core_fields`) նախքան բամբասանքների թարմացումները:
 
 ### Range Fetch Extensions
 
-Range-capable providers include the following metadata:
+Շրջանակի ընդունակ մատակարարները ներառում են հետևյալ մետատվյալները.
 
-| Field | Purpose |
+| Դաշտային | Նպատակը |
 |-------|---------|
-| `CapabilityType::ChunkRangeFetch` | Declares `max_chunk_span`, `min_granularity`, and alignment/proof flags. |
-| `StreamBudgetV1` | Optional concurrency/throughput envelope (`max_in_flight`, `max_bytes_per_sec`, optional `burst`). Requires a range capability. |
-| `TransportHintV1` | Ordered transport preferences (e.g., `torii_http_range`, `quic_stream`, `soranet_relay`). Priorities are `0–15` and duplicates are rejected. |
+| `CapabilityType::ChunkRangeFetch` | Հայտարարում է `max_chunk_span`, `min_granularity` և հավասարեցում/ապացույց դրոշներ: |
+| `StreamBudgetV1` | Ընտրովի միաժամանակյա/թողունակության ծրար (`max_in_flight`, `max_bytes_per_sec`, կամընտիր `burst`): Պահանջում է տիրույթի հնարավորություն: |
+| `TransportHintV1` | Պատվիրված տրանսպորտի նախապատվությունները (օրինակ՝ `torii_http_range`, `quic_stream`, `soranet_relay`): Առաջնահերթությունները `0–15` են, իսկ կրկնօրինակները մերժվում են: |
 
-Tooling support:
+Գործիքների աջակցություն.
 
-- Provider advert pipelines must validate range capability, stream budget, and
-  transport hints before emitting deterministic payloads for audits.
-- `cargo xtask sorafs-admission-fixtures` bundles canonical multi-source
-  adverts alongside downgrade fixtures under
+- Մատակարարի գովազդային խողովակաշարերը պետք է վավերացնեն միջակայքի հնարավորությունները, հոսքի բյուջեն և
+  փոխադրման ակնարկներ նախքան ստուգումների համար դետերմինիստական բեռներ արտանետելը:
+- `cargo xtask sorafs-admission-fixtures` փաթեթներ կանոնական բազմաղբյուր
+  Գովազդներ նվազման հարմարանքների կողքին տակ
   `fixtures/sorafs_manifest/provider_admission/`.
-- Range-capable adverts that omit `stream_budget` or `transport_hints` are
-  rejected by the CLI/SDK loaders before scheduling, keeping the multi-source
-  harness aligned with Torii admission expectations.
+- Գովազդներ, որոնք ունակ են տիրույթի, որոնք բաց են թողնում `stream_budget` կամ `transport_hints`
+  մերժվել է CLI/SDK բեռնիչների կողմից նախքան պլանավորումը՝ պահպանելով բազմաղբյուրը
+  զենք ու զրահ, որը համահունչ է Torii ընդունելության ակնկալիքներին:
 
-## Gateway Range Endpoints
+## Դարպասների միջակայքի վերջնակետեր
 
-Gateways accept deterministic HTTP requests that mirror the advert metadata.
+Դարպասները ընդունում են որոշիչ HTTP հարցումներ, որոնք արտացոլում են գովազդի մետատվյալները:
 
 ### `GET /v1/sorafs/storage/car/{manifest_id}`
 
-| Requirement | Details |
+| Պահանջը | Մանրամասն |
 |-------------|---------|
-| **Headers** | `Range` (single window aligned to chunk offsets), `dag-scope: block`, `X-SoraFS-Chunker`, optional `X-SoraFS-Nonce`, and mandatory base64 `X-SoraFS-Stream-Token`. |
-| **Responses** | `206` with `Content-Type: application/vnd.ipld.car`, `Content-Range` describing the served window, `X-Sora-Chunk-Range` metadata, and echoed chunker/token headers. |
-| **Failure modes** | `416` for misaligned ranges, `401` for missing/invalid tokens, `429` when stream/byte budgets are exceeded. |
+| **Վերնագրեր** | `Range` (մեկ պատուհան, որը հավասարեցված է մասնատված շեղումների վրա), `dag-scope: block`, `X-SoraFS-Chunker`, ընտրովի `X-SoraFS-Nonce` և պարտադիր բազա64 `X-SoraFS-Stream-Token`: |
+| **Պատասխաններ** | `206`՝ `Content-Type: application/vnd.ipld.car`-ով, `Content-Range`, որը նկարագրում է սպասարկվող պատուհանը, `X-Sora-Chunk-Range` մետատվյալները և արձագանքվող chunker/token վերնագրերը: |
+| **Խափանման ռեժիմներ** | `416`՝ սխալ դասավորված ընդգրկույթների համար, `401`՝ բացակայող/անվավեր նշանների համար, `429`, երբ հոսքի/բայթ բյուջեն գերազանցվում է: |
 
 ### `GET /v1/sorafs/storage/chunk/{manifest_id}/{digest}`
 
-Single-chunk fetch with the same headers plus the deterministic chunk digest.
-Useful for retries or forensic downloads when CAR slices are unnecessary.
+Մեկ կտոր բեռնում նույն վերնագրերով, գումարած դետերմինիստական մասի ամփոփումը:
+Օգտակար է կրկնակի փորձերի կամ դատաբժշկական ներբեռնումների համար, երբ ԱՎՏՈՄԵՔԵՆԱՅԻ հատվածներն ավելորդ են:
 
-## Multi-Source Orchestrator Workflow
+## Բազմաղբյուր նվագախմբի աշխատանքային հոսք
 
-When SF-6 multi-source fetch is enabled (Rust CLI via `sorafs_fetch`,
-SDKs via `sorafs_orchestrator`):
+Երբ միացված է SF-6 բազմաղբյուրի բեռնումը (Rust CLI `sorafs_fetch`-ի միջոցով,
+SDK-ներ `sorafs_orchestrator`-ի միջոցով):
 
-1. **Collect inputs** — decode the manifest chunk plan, pull the latest adverts,
-   and optionally pass a telemetry snapshot (`--telemetry-json` or
-   `TelemetrySnapshot`).
-2. **Build a scoreboard** — `Orchestrator::build_scoreboard` evaluates
-   eligibility and records rejection reasons; `sorafs_fetch --scoreboard-out`
-   persists the JSON.
-3. **Schedule chunks** — `fetch_with_scoreboard` (or `--plan`) enforces range
-   constraints, stream budgets, retry/peer caps (`--retry-budget`,
-   `--max-peers`), and emits a manifest-scoped stream token for each request.
-4. **Verify receipts** — outputs include `chunk_receipts` and
-   `provider_reports`; CLI summaries persist `provider_reports`,
-   `chunk_receipts`, and `ineligible_providers` for evidence bundles.
+1. **Հավաքեք մուտքեր** — վերծանեք մանիֆեստի մասի պլանը, քաշեք վերջին գովազդները,
+   և կամայականորեն փոխանցեք հեռաչափության լուսանկար (`--telemetry-json` կամ
+   `TelemetrySnapshot`):
+2. **Կառուցեք ցուցատախտակ** — գնահատում է `Orchestrator::build_scoreboard`
+   իրավասությունը և գրանցում է մերժման պատճառները. `sorafs_fetch --scoreboard-out`
+   պահպանում է JSON-ը:
+3. **Ժամանակացույցի կտորները** — `fetch_with_scoreboard` (կամ `--plan`) ընդլայնում է միջակայքը
+   սահմանափակումներ, հոսքային բյուջեներ, կրկնակի/համակցային սահմանաչափեր (`--retry-budget`,
+   `--max-peers`), և թողարկում է մանիֆեստի շրջանակով հոսքի նշան յուրաքանչյուր հարցման համար:
+4. **Ստուգեք անդորրագրերը** — արդյունքները ներառում են `chunk_receipts` և
+   `provider_reports`; CLI ամփոփագրերը պահպանվում են `provider_reports`,
+   `chunk_receipts` և `ineligible_providers` ապացույցների փաթեթների համար:
 
-Common errors raised to operators/SDKs:
+Օպերատորների/SDK-ների մոտ առաջացած ընդհանուր սխալները.
 
-| Error | Description |
+| Սխալ | Նկարագրություն |
 |-------|-------------|
-| `no providers were supplied` | No eligible entries after filtering. |
-| `no compatible providers available for chunk {index}` | Range or budget mismatch for a specific chunk. |
-| `retry budget exhausted after {attempts}` | Increase `--retry-budget` or evict failing peers. |
-| `no healthy providers remaining` | All providers disabled after repeated failures. |
-| `streaming observer failed` | Downstream CAR writer aborted. |
-| `orchestrator invariant violated` | Capture manifest, scoreboard, telemetry snapshot, and CLI JSON for triage. |
+| `no providers were supplied` | Զտելուց հետո համապատասխան գրառումներ չկան: |
+| `no compatible providers available for chunk {index}` | Շրջանակի կամ բյուջեի անհամապատասխանություն որոշակի հատվածի համար: |
+| `retry budget exhausted after {attempts}` | Բարձրացրեք `--retry-budget` կամ վտարեք ձախողված հասակակիցներին: |
+| `no healthy providers remaining` | Բոլոր մատակարարներն անջատվել են կրկնվող ձախողումներից հետո: |
+| `streaming observer failed` | Downstream CAR գրողը ընդհատվել է: |
+| `orchestrator invariant violated` | Լուսանկարեք մանիֆեստը, ցուցատախտակը, հեռաչափության լուսանկարը և CLI JSON-ը տրաժի համար: |
 
-## Telemetry & Evidence
+## Հեռաչափություն և ապացույցներ
 
-- Metrics emitted by the orchestrator:  
+- Նվագախմբի կողմից թողարկված չափումներ.  
   `sorafs_orchestrator_active_fetches`, `sorafs_orchestrator_fetch_duration_ms`,
   `sorafs_orchestrator_retries_total`, `sorafs_orchestrator_provider_failures_total`
-  (tagged by manifest/region/provider). Set `telemetry_region` in config or via
-  CLI flags so dashboards partition by fleet.
-- CLI/SDK fetch summaries include persisted scoreboard JSON, chunk receipts,
-  and provider reports which must ship in rollout bundles for SF-6/SF-7 gates.
-- Gateway handlers expose `telemetry::sorafs.fetch.lifecycle|retry|provider_failure|error`
-  so SRE dashboards can correlate orchestrator decisions with server behaviour.
+  (պիտակավորված է մանիֆեստի/տարածաշրջանի/մատակարարի կողմից): Սահմանեք `telemetry_region` կոնֆիգուրայում կամ միջոցով
+  CLI-ն նշում է, որպեսզի վահանակները բաժանվեն ըստ նավատորմի:
+- CLI/SDK-ի բեռնման ամփոփագրերը ներառում են կայուն ցուցատախտակ JSON, կտոր անդորրագրեր,
+  և մատակարարի հաշվետվությունները, որոնք պետք է առաքվեն SF-6/SF-7 դարպասների համար նախատեսված փաթեթներով:
+- Դարպասների մշակողները բացահայտում են `telemetry::sorafs.fetch.lifecycle|retry|provider_failure|error`-ը
+  այնպես որ SRE վահանակները կարող են կապել նվագախմբի որոշումները սերվերի վարքագծի հետ:
 
-## CLI & REST Helpers
+## CLI & REST Օգնականներ
 
-- `iroha app sorafs pin list|show`, `alias list`, and `replication list` wrap the
-  pin-registry REST endpoints and print raw Norito JSON with attestation blocks
-  for audit evidence.
-- `iroha app sorafs storage pin` and `torii /v1/sorafs/pin/register` accept Norito
-  or JSON manifests plus optional alias proofs and successors; malformed proofs
-  raise `400`, stale proofs surface `503` with `Warning: 110`, and
-  hard-expired proofs return `412`.
-- `iroha app sorafs repair list` mirrors repair queue filters, while
-  `repair claim|complete|fail|escalate` submit signed worker actions or slash
-  proposals to Torii. Slash proposals may include a governance approval summary
-  (approve/reject/abstain vote counts plus approved_at/finalized_at
-  timestamps); when present it must satisfy quorum and dispute/appeal windows,
-  otherwise the proposal stays in dispute until votes resolve at the deadline.
-- Repair listings and worker queue selection are ordered by SLA deadline, failure severity, and provider backlog with deterministic tie-breakers (queued time, manifest digest, ticket id).
-- Repair status responses include an `events` array containing base64 Norito
-  `RepairTaskEventV1` entries ordered by occurrence for audit trails; the list
-  is capped to the most recent transitions.
-- `iroha app sorafs gc inspect|dry-run --data-dir=/var/lib/sorafs` emits read-only
-  retention reports from the local manifest store for audit evidence.
-- REST endpoints (`/v1/sorafs/pin`, `/v1/sorafs/aliases`,
-  `/v1/sorafs/replication`) include attestation structures so clients can
-  verify data against the latest block headers before taking action.
+- `iroha app sorafs pin list|show`, `alias list` և `replication list` փաթաթում են
+  pin-registry REST վերջնակետերը և տպեք հում Norito JSON՝ ատեստավորման բլոկներով
+  աուդիտորական ապացույցների համար:
+- `iroha app sorafs storage pin` և `torii /v1/sorafs/pin/register` ընդունում են Norito
+  կամ JSON-ի դրսևորումներ՝ գումարած կամընտիր կեղծանունների ապացույցներ և իրավահաջորդներ. սխալ ձևակերպված ապացույցներ
+  բարձրացնել `400`, հնացած մակերևույթը `503` `Warning: 110`-ով, և
+  ժամկետանց ապացույցները վերադարձնում են `412`:
+- `iroha app sorafs repair list` հայելիները վերանորոգում են հերթի ֆիլտրերը, մինչդեռ
+  `repair claim|complete|fail|escalate` ներկայացնել ստորագրված աշխատողի գործողությունները կամ կտրատել
+  առաջարկներ Torii-ին: Շեղ առաջարկները կարող են ներառել կառավարման հաստատման ամփոփագիր
+  (հաստատել/մերժել/ձեռնպահ մնալ ձայների հաշվարկը գումարած հաստատված_at/finalized_at
+  ժամանակային դրոշմանիշներ); առկայության դեպքում այն պետք է բավարարի քվորումին և վիճարկման/բողոքարկման պատուհաններին,
+  Հակառակ դեպքում առաջարկը մնում է վիճելի, քանի դեռ քվեարկությունները չեն լուծվել վերջնաժամկետում:
+- Վերանորոգման ցուցակները և աշխատողների հերթերի ընտրությունը պատվիրված են ըստ SLA-ի վերջնաժամկետի, ձախողման ծանրության և մատակարարների հետաձգման՝ որոշիչ կապի անջատիչներով (հերթի ժամանակ, մանիֆեստի ամփոփում, տոմսի id):
+- Վերանորոգման կարգավիճակի պատասխանները ներառում են `events` զանգված, որը պարունակում է base64 Norito
+  `RepairTaskEventV1` գրառումներ՝ ըստ պատահականության, աուդիտի հետքերի համար. ցուցակը
+  սահմանափակված է ամենավերջին անցումներով:
+- `iroha app sorafs gc inspect|dry-run --data-dir=/var/lib/sorafs`-ը թողարկում է միայն կարդալու համար
+  պահման հաշվետվություններ տեղական մանիֆեստների խանութից՝ աուդիտորական ապացույցների համար:
+- REST վերջնակետեր (`/v1/sorafs/pin`, `/v1/sorafs/aliases`,
+  `/v1/sorafs/replication`) ներառում է ատեստավորման կառույցներ, որպեսզի հաճախորդները կարողանան
+  ստուգեք տվյալները վերջին բլոկի վերնագրերի համեմատ՝ նախքան գործողություն կատարելը:
 
-## References
+## Հղումներ
 
-- Canonical spec:
+- Կանոնական բնութագրեր.
   [`docs/source/sorafs_node_client_protocol.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs_node_client_protocol.md)
-- Norito types: `crates/sorafs_manifest/src/{provider_advert,provider_admission}.rs`
-- CLI helpers: `crates/iroha_cli/src/commands/sorafs.rs`,
+- Norito տեսակներ՝ `crates/sorafs_manifest/src/{provider_advert,provider_admission}.rs`
+- CLI օգնականներ՝ `crates/iroha_cli/src/commands/sorafs.rs`,
   `crates/sorafs_car/src/bin/sorafs_fetch.rs`
-- Orchestrator crate: `crates/sorafs_orchestrator`
-- Dashboard pack: `dashboards/grafana/sorafs_fetch_observability.json`
+- Նվագախմբի տուփ՝ `crates/sorafs_orchestrator`
+- Վահանակի փաթեթ՝ `dashboards/grafana/sorafs_fetch_observability.json`

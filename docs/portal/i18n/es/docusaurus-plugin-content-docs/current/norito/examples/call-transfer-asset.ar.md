@@ -4,30 +4,32 @@ direction: ltr
 source: docs/portal/docs/norito/examples/call-transfer-asset.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
 slug: /norito/examples/call-transfer-asset
-title: استدعاء نقل المضيف من Kotodama
-description: يوضح كيف يمكن لنقطة دخول Kotodama استدعاء تعليمة المضيف `transfer_asset` مع التحقق المضمن من بيانات التعريف.
-source: crates/ivm/docs/examples/08_call_transfer_asset.ko
+título: استدعاء نقل المضيف من Kotodama
+descripción: يوضح كيف يمكن لنقطة دخول Kotodama استدعاء تعليمة المضيف `transfer_asset` مع التحقق المضمن من بيانات التعريف.
+fuente: crates/ivm/docs/examples/08_call_transfer_asset.ko
 ---
 
-يوضح كيف يمكن لنقطة دخول Kotodama استدعاء تعليمة المضيف `transfer_asset` مع التحقق المضمن من بيانات التعريف.
+يوضح كيف يمكن لنقطة دخول Kotodama استدعاء تعليمة الضيف `transfer_asset` مع التحقق المضمن من بيانات التعريف.
 
 ## جولة دفتر الأستاذ
 
-- موّل سلطة العقد (مثلا `ih58...`) بالأصل الذي ستنقله وامنح السلطة دور `CanTransfer` أو إذنا مكافئا.
-- استدعِ نقطة الدخول `call_transfer_asset` لنقل 5 وحدات من حساب العقد إلى `ih58...`، بما يعكس طريقة تغليف الأتمتة على السلسلة لنداءات المضيف.
-- تحقق من الأرصدة عبر `FindAccountAssets` أو `iroha_cli ledger assets list --account ih58...` وافحص الأحداث لتأكيد أن حارس بيانات التعريف سجل سياق النقل.
+- Utilice el cable de alimentación (`ih58...`) para conectar el cable y el conector de `CanTransfer` y el cable de alimentación.
+- Presione el botón `call_transfer_asset` para 5 veces el conector `ih58...`, y luego presione el botón `ih58...`. الأتمتة على السلسلة لنداءات المضيف.
+- Para cambiar la configuración de `FindAccountAssets` o `iroha_cli ledger assets list --account ih58...` y de las opciones de configuración سياق النقل.
 
 ## أدلة SDK ذات صلة
 
-- [البدء السريع لـ Rust SDK](/sdks/rust)
-- [البدء السريع لـ Python SDK](/sdks/python)
+- [Aplicación del SDK de Rust](/sdks/rust)
+- [Aplicación del SDK de Python](/sdks/python)
 - [البدء السريع لـ JavaScript SDK](/sdks/javascript)
 
-[نزّل مصدر Kotodama](/norito-snippets/call-transfer-asset.ko)
+[Actualización Kotodama](/norito-snippets/call-transfer-asset.ko)
 
 ```text
 // Direct builtin call (no contract-style call syntax) inside a contract.

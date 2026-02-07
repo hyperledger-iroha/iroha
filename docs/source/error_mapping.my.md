@@ -7,39 +7,40 @@ generator: scripts/sync_docs_i18n.py
 source_hash: cba8780bcec4ebf562dc9c5725f328b0ea2d9009517efa5b5a504e2fb6be81fe
 source_last_modified: "2026-01-11T04:52:11.136647+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Error Mapping Guide
+# အမှားမြေပုံလမ်းညွှန်
 
-Last updated: 2025-08-21
+နောက်ဆုံးမွမ်းမံမှု- 2025-08-21
 
-This guide maps common failure modes in Iroha to stable error categories surfaced by the data model. Use it to design tests and to make client error handling predictable.
+ဤလမ်းညွှန်ချက်သည် Iroha ရှိ ဘုံပျက်ကွက်မုဒ်များကို ဒေတာမော်ဒယ်မှပေါ်လွင်သော တည်ငြိမ်သောအမှားအမျိုးအစားများဆီသို့ မြေပုံညွှန်းပေးသည်။ စမ်းသပ်မှုများကို ဒီဇိုင်းရေးဆွဲရန်နှင့် သုံးစွဲသူများ၏ အမှားအယွင်းကို ကိုင်တွယ်ဖြေရှင်းမှုကို ခန့်မှန်းနိုင်စေရန် ၎င်းကို အသုံးပြုပါ။
 
-Principles
-- Instruction and query paths emit structured enums. Avoid panics; report a specific category wherever possible.
-- Categories are stable, messages may evolve. Clients should match on categories, not on free‑form strings.
+အခြေခံမူများ
+- ညွှန်ကြားချက်နှင့် မေးမြန်းမှုလမ်းကြောင်းများသည် ဖွဲ့စည်းထားသော စာရင်းများကို ထုတ်လွှတ်သည်။ ထိတ်လန့်ကြောက်ရွံ့ခြင်းကို ရှောင်ပါ။ တတ်နိုင်သမျှ သီးခြားအမျိုးအစားတစ်ခုကို သတင်းပို့ပါ။
+- အမျိုးအစားများသည် တည်ငြိမ်သည်၊ မက်ဆေ့ချ်များ ပြောင်းလဲနိုင်သည်။ ဖောက်သည်များသည် အခမဲ့ပုံစံစာတန်းများပေါ်တွင်မဟုတ်ဘဲ အမျိုးအစားများပေါ်တွင် တူညီသင့်သည်။
 
-Categories
-- InstructionExecutionError::Find: Entity missing (asset, account, domain, NFT, role, trigger, permission, public key, block, transaction). Example: removing a non‑existent metadata key yields Find(MetadataKey).
-- InstructionExecutionError::Repetition: Duplicate registration or conflicting ID. Contains the instruction type and the repeated IdBox.
-- InstructionExecutionError::Mintability: Mintability invariant violated (`Once` exhausted twice, `Limited(n)` overdrawn, or attempts to disable `Infinitely`). Examples: minting an asset defined as `Once` twice yields `Mintability(MintUnmintable)`; configuring `Limited(0)` yields `Mintability(InvalidMintabilityTokens)`.
-- InstructionExecutionError::Math: Numeric domain errors (overflow, divide‑by‑zero, negative value, not enough quantity). Example: burning more than available amount yields Math(NotEnoughQuantity).
-- InstructionExecutionError::InvalidParameter: Invalid instruction parameter or configuration (e.g., time trigger in the past). Use for malformed contract payloads.
-- InstructionExecutionError::Evaluate: DSL/spec mismatch for instruction shape or types. Example: wrong numeric spec for an asset value yields Evaluate(Type(AssetNumericSpec(..))).
-- InstructionExecutionError::InvariantViolation: Violation of a system invariant that cannot be expressed in other categories. Example: attempting to remove the last signatory.
-- InstructionExecutionError::Query: Wrapping of QueryExecutionFail when a query fails during instruction execution.
+အမျိုးအစားများ
+- InstructionExecutionError::Find- ပျောက်ဆုံးနေသော အကြောင်းအရာ (ပိုင်ဆိုင်မှု၊ အကောင့်၊ ဒိုမိန်း၊ NFT၊ အခန်းကဏ္ဍ၊ အစပျိုးမှု၊ ခွင့်ပြုချက်၊ အများသူငှာသော့၊ ပိတ်ဆို့၊ ငွေပေးငွေယူ)။ ဥပမာ- တည်ရှိခြင်းမရှိသော မက်တာဒေတာကီးကို ဖယ်ရှားခြင်းက Find(MetadataKey) ကို ထုတ်ပေးသည်။
+- InstructionExecutionError::ထပ်တလဲလဲ- မှတ်ပုံတင်ခြင်း သို့မဟုတ် ကွဲလွဲနေသော ID။ ညွှန်ကြားချက်အမျိုးအစားနှင့် ထပ်ခါတလဲလဲ IdBox ပါရှိသည်။
+- InstructionExecutionError::Mintability- Mintability ပုံစံကွဲသည် (`Once` နှစ်ကြိမ် ကုန်ဆုံးသွားသည်၊ `Limited(n)` ကျော်လွန်သွားခြင်း သို့မဟုတ် `Infinitely` ကို ပိတ်ရန် ကြိုးပမ်းမှုများ)။ ဥပမာများ- `Once` အဖြစ် သတ်မှတ်ထားသော ပိုင်ဆိုင်မှုတစ်ခုကို နှစ်ကြိမ် တူးဖော်ခြင်းသည် `Mintability(MintUnmintable)` ကို ထုတ်ပေးသည်။ `Limited(0)` ကို စီစဉ်သတ်မှတ်ခြင်းသည် `Mintability(InvalidMintabilityTokens)` ကို ထုတ်ပေးသည်။
+- InstructionExecutionError::Math- Numeric domain errors (ပိုလျှံမှု၊ ပိုင်းခြားမှု-သုည၊ အနုတ်တန်ဖိုး၊ လုံလောက်သော ပမာဏ)။ ဥပမာ- ရနိုင်သောပမာဏထက် ပိုလောင်ကျွမ်းခြင်းသည် သင်္ချာ(NotEnoughQuantity)ကို ထုတ်ပေးသည်။
+- InstructionExecutionError::InvalidParameter- မမှန်ကန်သော ညွှန်ကြားချက်ဘောင် သို့မဟုတ် ဖွဲ့စည်းမှုပုံစံ (ဥပမာ၊ ယခင်က အချိန်အစပျိုးမှု)။ မှားယွင်းသော စာချုပ်စာတမ်းများအတွက် အသုံးပြုပါ။
+- InstructionExecutionError::အကဲဖြတ်ခြင်း- ညွှန်ကြားချက်ပုံသဏ္ဍာန် သို့မဟုတ် အမျိုးအစားများအတွက် DSL/spec မကိုက်ညီပါ။ ဥပမာ- ပိုင်ဆိုင်မှုတန်ဖိုးတစ်ခုအတွက် မှားယွင်းသော ကိန်းဂဏာန်း spec သည် အကဲဖြတ်သည်(အမျိုးအစား(AssetNumericSpec(..))))။
+- InstructionExecutionError::InvariantViolation- အခြားအမျိုးအစားများတွင် ဖော်ပြ၍မရသော စနစ်မူကွဲကို ချိုးဖောက်ခြင်း။ ဥပမာ- နောက်ဆုံးလက်မှတ်ထိုးသူကို ဖယ်ရှားရန် ကြိုးပမ်းခြင်း။
+- InstructionExecutionError::Query- ညွှန်ကြားချက်ကိုလုပ်ဆောင်နေစဉ်အတွင်း query တစ်ခုပျက်သွားသောအခါ QueryExecution ၏ Wrapping Fail ဖြစ်သည်။
 
 QueryExecutionFail
-- Find: Missing entity in query context.
-- Conversion: Wrong type expected by a query.
-- NotFound: Missing live query cursor.
-- CursorMismatch / CursorDone: Cursor protocol errors.
-- FetchSizeTooBig: Server‑enforced limit exceeded.
-- GasBudgetExceeded: Query execution exceeded the gas/materialization budget.
-- InvalidSingularParameters: Unsupported parameters for singular queries.
-- CapacityLimit: Live query store capacity reached.
+- ရှာပါ- စုံစမ်းမှုအကြောင်းအရာတွင် ပျောက်ဆုံးနေသော အရာ။
+- ပြောင်းလဲခြင်း- မေးခွန်းတစ်ခုက မျှော်လင့်ထားသည့် အမျိုးအစား မှားနေသည်။
+- NotFound- တိုက်ရိုက်မေးမြန်းမှု cursor ပျောက်နေသည်။
+- CursorMismatch / CursorDone- Cursor ပရိုတိုကော အမှားများ။
+- FetchSizeTooBig- ဆာဗာမှ ပြဌာန်းထားသော ကန့်သတ်ချက်ကို ကျော်လွန်သွားပါပြီ။
+- GasBudget ကျော်လွန်သည်- မေးမြန်းမှုလုပ်ဆောင်မှုသည် ဓာတ်ငွေ့/ရုပ်ထွက်ဘတ်ဂျက်ကို ကျော်လွန်သွားခဲ့သည်။
+- InvalidSingularParameters- အနည်းကိန်းမေးခွန်းများအတွက် ပံ့ပိုးမထားသော ဘောင်များ။
+- CapacityLimit- တိုက်ရိုက်မေးမြန်းမှု စတိုးဆိုင်စွမ်းရည် ပြည့်သွားပါပြီ။
 
-Testing Tips
-- Prefer unit tests close to the origin of an error. For example, asset numeric spec mismatch can be generated in data‑model tests.
-- Integration tests should cover end‑to‑end mapping for representative cases (e.g., duplicate register, missing key on remove, transfer without ownership).
-- Keep assertions resilient by matching enum variants instead of message substrings.
+စမ်းသပ်ခြင်း အကြံပြုချက်များ
+- အမှားတစ်ခု၏ဇာစ်မြစ်နှင့်နီးစပ်သော ယူနစ်စစ်ဆေးမှုများကို ဦးစားပေးပါ။ ဥပမာအားဖြင့်၊ ဒေတာ-မော်ဒယ် စမ်းသပ်မှုများတွင် ပိုင်ဆိုင်မှု ကိန်းဂဏာန်းမတူညီမှုကို ထုတ်ပေးနိုင်သည်။
+- ပေါင်းစပ်စစ်ဆေးမှုများသည် ကိုယ်စားလှယ်ကိစ္စများအတွက် အဆုံးမှ အဆုံးထိ မြေပုံဆွဲခြင်း (ဥပမာ၊ မှတ်ပုံတင်မိတ္တူပွားခြင်း၊ ဖယ်ရှားခြင်းတွင် သော့ပျောက်ဆုံးခြင်း၊ ပိုင်ဆိုင်မှုမရှိဘဲ လွှဲပြောင်းခြင်း) တို့ကို အကျုံးဝင်စေသင့်သည်။
+- မက်ဆေ့ချ်စာတန်းခွဲများအစား enum မျိုးကွဲများကို ယှဉ်တွဲခြင်းဖြင့် အခိုင်အမာပြောဆိုမှုများကို ခံနိုင်ရည်ရှိအောင်ထားပါ။

@@ -9,71 +9,72 @@ source_last_modified: "2025-12-29T18:16:35.201601+00:00"
 translation_last_reviewed: 2026-02-07
 title: SF-6 Security Review
 summary: Findings and follow-up items from the independent assessment of keyless signing, proof streaming, and manifest submission pipelines.
+translator: machine-google-reviewed
 ---
 
-# SF-6 Security Review
+# SF-6 Хәүефһеҙлек тикшерелеүе
 
-**Assessment window:** 2026-02-10 → 2026-02-18  
-**Review leads:** Security Engineering Guild (`@sec-eng`), Tooling Working Group (`@tooling-wg`)  
-**Scope:** SoraFS CLI/SDK (`sorafs_cli`, `sorafs_car`, `sorafs_manifest`), proof streaming APIs, Torii manifest handling, Sigstore/OIDC integration, CI release hooks.  
-**Artifacts:**  
-- CLI source and tests (`crates/sorafs_car/src/bin/sorafs_cli.rs`)  
-- Torii manifest/proof handlers (`crates/iroha_torii/src/sorafs/api.rs`)  
-- Release automation (`ci/check_sorafs_cli_release.sh`, `scripts/release_sorafs_cli.sh`)  
-- Deterministic parity harness (`crates/sorafs_car/tests/sorafs_cli.rs`, [SoraFS Orchestrator GA Parity Report](./orchestrator-ga-parity.md))
+**Байлау тәҙрәһе:** 2026-02-10 → 2026-02-18  
+**Тәбәктәрҙе тикшерергә:** Хәүефһеҙлек инженерияһы гильдияһы (I18NI000000019X), инструменталь эш төркөмө (`@tooling-wg`)  
+**Скоп:** I18NT0000000000003X CLI/SDK (`sorafs_cli`, I18NI000000022X, `sorafs_manifest`), иҫбатлау потоковый APIs, I18NT00000005 манифест менән эш итеү, Sigstore/OIDC интеграцияһы, CI сығарыу ҡармаҡтары.  
+**Артифакттар:**  
+- CLI сығанағы һәм һынауҙары (I18NI000000024X)  
+- I18NT0000000006X манифест/иҫбатлаусы идара итеүселәр (I18NI000000025X)  
+- Автоматлаштырыуҙы сығарыу (`ci/check_sorafs_cli_release.sh`, I18NI000000027X)  
+- Детерминистик паритет йүгәне (I18NI000000028X, [I18NT000000004X оркестры Паритет отчеты] (./orchestrator-ga-parity.md))
 
-## Methodology
+## Методика
 
-1. **Threat modelling workshops** mapped attacker capabilities for developer workstations, CI systems, and Torii nodes.  
-2. **Code review** focused on credential surfaces (OIDC token exchange, keyless signing), Norito manifest validation, and proof streaming back-pressure.  
-3. **Dynamic testing** replayed fixture manifests and simulated failure modes (token replay, manifest tampering, truncated proof streams) using the parity harness and bespoke fuzz drives.  
-4. **Configuration inspection** validated `iroha_config` defaults, CLI flag handling, and release scripts to ensure deterministic, auditable runs.  
-5. **Process interview** confirmed remediation flow, escalation paths, and audit evidence capture with Tooling WG release owners.
+1. **Треат моделләштереү оҫтаханалары** картаға һөжүм итеүсе мөмкинлектәре өсөн эшләүсе эш станциялары, CI системалары, һәм I18NT000000007X төйөндәре.  
+2. **Код тикшерергә** йүнәлтелгән ышаныс ҡағыҙҙары өҫтө (I18NT000000012X токен биржа, асҡысһыҙ ҡул ҡуйыу), Norito манифест раҫлау, һәм иҫбатлау потоковый артҡа баҫым.  
+3. **Динамик һынау ** реплей ҡоролмалары реплей һәм моделләштерелгән етешһеҙлектәр режимдары (токен реплей, күрһәтеү, үҙгәртеп ҡороу, ҡыҫҡартылған иҫбатлау ағымдары) паритет йүгән һәм заказ буйынса fuzz диск ҡулланып.  
+4. **Конфигурация тикшерелгән** раҫланған I18NI000000029X стандарт, CLI флагы менән эш итеү, һәм скрипттар сығарыу өсөн детерминистик, аудит йүгерә.  
+5. **Процесс интервью ** раҫланы rememediation ағымы, эскалация юлдары, һәм аудит дәлилдәрен тотоу менән Tooling WG релиз хужалары.
 
-## Findings Summary
+## Табыштар Йәмғеһе
 
-| ID | Severity | Area | Finding | Resolution |
-|----|----------|------|---------|------------|
-| SF6-SR-01 | High | Keyless signing | OIDC token audience defaults were implicit in CI templates, risking cross-tenant replay. | Added explicit `--identity-token-audience` enforcement in release hooks and CI templates ([release process](../developer-releases.md), `docs/examples/sorafs_ci.md`). CI now fails when the audience is omitted. |
-| SF6-SR-02 | Medium | Proof streaming | Back-pressure paths accepted unbounded subscriber buffers, enabling memory exhaustion. | `sorafs_cli proof stream` enforces bounded channel sizes with deterministic truncation, logging Norito summaries and aborting the stream; Torii mirror updated to bound response chunks (`crates/iroha_torii/src/sorafs/api.rs`). |
-| SF6-SR-03 | Medium | Manifest submission | CLI accepted manifests without verifying embedded chunk plans when `--plan` was absent. | `sorafs_cli manifest submit` now recomputes and compares CAR digests unless `--expect-plan-digest` is provided, rejecting mismatches and surfacing remediation hints. Tests cover success/failure cases (`crates/sorafs_car/tests/sorafs_cli.rs`). |
-| SF6-SR-04 | Low | Audit trail | Release checklist lacked a signed approval log for the security review. | Added [release process](../developer-releases.md) section requiring attachment of review memo hashes and sign-off ticket URL before GA. |
+| ID | Ауырлыҡ | Район | Тап | Резолюция |
+|---|---------|--------|----------|------------|
+| SF6-SR-01 | Юғары | Асҡысһыҙ ҡул ҡуйыу | I18NT000000013X токен аудиторияһы ғәҙәттәгесә CI ҡалыптарында йәшерен булды, арендатор реплей хәүефе. | Өҫтәлгән асыҡ I18NI00000000030X үтәү релиз ҡармаҡтар һәм CI ҡалыптары ([процесс] (../developer-releases.md), I18NI000000031X). CI хәҙер тамашасыларҙы төшөрөп ҡалдырғанда уңышһыҙлыҡҡа осрай. |
+| SF6-SR-02 | Урта | Дәлил потоковый | Арҡа баҫым юлдары ҡабул ителгән сикһеҙ абонент буферҙары, хәтер арыу мөмкинлеге бирә. | I18NI000000032X детерминистик ҡыҫҡартыу менән сикләнгән канал ҙурлыҡтарын үтәй, Norito резюмеларын теркәү һәм ағымды туҡтатыу; Torii көҙгө яңыртылған бәйләү яуап өлөштәре (`crates/iroha_torii/src/sorafs/api.rs`). |
+| SF6-SR-03 | Урта | Манифест тапшырыу | CLI ҡабул итеү манифесттар тикшермәйенсә, индерелгән өлөшләтә пландары, ҡасан I18NI000000034XX юҡ. | `sorafs_cli manifest submit` хәҙер ҡабаттан иҫәпләү һәм сағыштырыу CAR distests, әгәр I18NI000000036X тәьмин ителмәһә, тап килмәүҙәр һәм өҫкө ҡатламдарҙы төҙәтеү кәңәштәрен кире ҡаға. Һынауҙар уңыш/уңышһыҙлыҡҡа осраған осраҡтар (`crates/sorafs_car/tests/sorafs_cli.rs`). |
+| SF6-SR-04 | Түбән | Аудит эҙ | Релиз тикшерелгән исемлек етешмәй ҡул ҡуйылған раҫлау журналы өсөн хәүефһеҙлек тикшерергә. | Өҫтәлгән [релиз процесы](../developer-releases.md) бүлеге талап итеү беркетелгән тикшерелгән иҫтәлекле хештар һәм ҡул ҡуйыу-офф билет URL-адресы GA алдынан. |
 
-All high/medium findings were fixed during the review window and validated through the existing parity harness. No latent critical issues remain.
+Бөтә юғары/уртаса табыштар тикшерелгән тәҙрә ваҡытында нығытылған һәм ғәмәлдәге паритет йүгәне аша раҫланған. Бер ниндәй ҙә йәшерен тәнҡит мәсьәләләре ҡалмай.
 
-## Control Validation
+## Контроль раҫлау
 
-- **Credential scope:** Default CI templates now mandate explicit audience and issuer assertions; the CLI and release helper both fail fast unless `--identity-token-audience` accompanies `--identity-token-provider`.  
-- **Deterministic replay:** Updated tests cover positive/negative manifest submission flows, ensuring mismatched digests remain non-deterministic failures and are surfaced before touching the network.  
-- **Proof streaming back-pressure:** Torii now streams PoR/PoTR items over bounded channels, and the CLI retains only truncated latency samples + five failure exemplars, preventing unbounded subscriber growth while keeping deterministic summaries.  
-- **Observability:** Proof streaming counters (`torii_sorafs_proof_stream_*`) and CLI summaries capture abort reasons, providing operators with audit breadcrumbs.  
-- **Documentation:** Developer guides ([developer index](../developer-index.md), [CLI reference](../developer-cli.md)) call out security-sensitive flags and escalation workflows.
+- **Иҫ киткес даирәһе:** CI ҡалыптары хәҙер асыҡ аудитория һәм эмитенты раҫлауҙары мандат; CLI һәм сығарыу ярҙамсыһы икеһе лә тиҙ уңышһыҙлыҡҡа осрай, әгәр I18NI000000038X X`--identity-token-provider` оҙатып.  
+- **Детерминистик реплей:** Яңыртылған һынауҙар ыңғай/тиҫкәре асыҡ тапшырыу ағымдарын ҡаплай, тап килмәгән дигестиларҙы тәьмин итеү детерминистик булмаған етешһеҙлектәр ҡала һәм селтәргә ҡағылыр алдынан өҫкә сыға.  
+- **Дәлилдәр стриминг артҡа баҫым:** I18NT000000009X хәҙер PoR/PoTR әйберҙәре сикле каналдар өҫтөндә ағымдар, ә CLI тик ҡыҫҡартылған латентлыҡ өлгөләрен һаҡлай + биш уңышһыҙлыҡ өлгөһө, сикһеҙ абоненттар үҫешенә юл ҡуймай, шул уҡ ваҡытта детерминистик резюмеларҙы һаҡлай.  
+- **Күҙәтеүсәнлек:** иҫбатлау потоковый счетчиктар (I18NI000000040X) һәм CLI резюмелары аборт сәбәптәрен тота, операторҙарға аудит икмәк һыҙғырыуҙары менән тәьмин итә.  
+- *Документация:** Үҫтереүселәр етәкселеге ([үҫешкәндәр индексы](../developer-index.md), [CLI һылтанма] (../developer-cli.md)) хәүефһеҙлеккә һиҙгер флагтар һәм эскалация эш ағымын саҡыра.
 
-## Release Checklist Additions
+## Шикләү исемлеге өҫтәмәләр
 
-Release managers **must** attach the following evidence when promoting a GA candidate:
+Етәкселәр ** тейеш ** түбәндәге дәлилдәрҙе беркетергә, ҡасан пропагандалау GA кандидат:
 
-1. Hash of the latest security review memo (this document).  
-2. Link to the tracked remediation ticket (e.g., `governance/tickets/SF6-SR-2026.md`).  
-3. Output of `scripts/release_sorafs_cli.sh --manifest ... --bundle-out ... --signature-out ...` showing explicit audience/issuer arguments.  
-4. Captured logs from the parity harness (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`).  
-5. Confirmation that Torii release notes include bounded proof streaming telemetry counters.
+1. Хэш һуңғы хәүефһеҙлек тикшерелгән иҫкәртмә (был документ).  
+2. Һылтанма менән күҙәтеү rememedia торған билет (мәҫәлән, `governance/tickets/SF6-SR-2026.md`).  
+3. I18NI000000042X асыҡ аудитория/эмиссия аргументтары күрһәтеү.  
+4. Паритет йүгәненән алынған журналдар (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`).  
+.
 
-Failure to collect the artefacts above blocks GA sign-off.
+Йыйылмау йыя артефакттар өҫтөндә блоктар GA caine-off.
 
-**Reference artefact hashes (2026-02-20 sign-off):**
+**Һылтанма артефакт хештары (2026-02-20 ҡул ҡуйыу):**
 
-- `sf6_security_review.md` — `66001d0b53d8e7ed5951a07453121c075dea931ca44c11f1fcd1571ed827342a`
+- `sf6_security_review.md` — I18NI000000045X
 
-## Outstanding Follow-ups
+##
 
-- **Threat model refresh:** Repeat this review quarterly or before major CLI flag additions.  
-- **Fuzzing coverage:** Proof streaming transport encodings are fuzzed via `fuzz/proof_stream_transport`, covering identity, gzip, deflate, and zstd payloads.  
-- **Incident rehearsal:** Schedule an operator exercise simulating token compromise and manifest rollback, ensuring documentation reflects practised procedures.
+- **Треат моделе яңыртыу:** Был обзор квартал һайын йәки CLI флагы өҫтәмәләренә тиклем ҡабатлау.  
+- **Fuzzing ҡаплау:** иҫбатлау потоковый транспорт кодировкаһы аша fuzzed I18NI000000046X, ҡаплау шәхес, gzip, дефляция, һәм zstd файҙалы йөкләмәләр.  
+- **Инцидент репетиция:** Оператор күнекмәләрен планлаштырыу моделләштереү токен компромисс һәм асыҡ кире ҡағыу, документация тәьмин итеү практика процедураларын сағылдыра.
 
-## Approval
+## Хуплау
 
-- Security Engineering Guild representative: @sec-eng (2026-02-20)  
-- Tooling Working Group representative: @tooling-wg (2026-02-20)
+- Хәүефһеҙлек инженерияһы гильдияһы вәкиле: @sec-eng (2026-02-20)  
+- Ҡораллы эшсе төркөм вәкиле: @otooling-grat (2026-02-20)
 
-Store signed approvals alongside the release artefact bundle.
+Магазин раҫлауҙары менән бер рәттән ҡул ҡуйҙы, уларҙы сығарыу артефакт өйөмө.

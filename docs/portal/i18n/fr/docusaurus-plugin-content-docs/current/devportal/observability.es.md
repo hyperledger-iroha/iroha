@@ -4,41 +4,41 @@ direction: ltr
 source: docs/portal/docs/devportal/observability.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Observabilidad y analitica del portal
+# Observabilité et analyse du portail
 
-El roadmap DOCS-SORA requiere analitica, probes sinteticos y automatizacion de enlaces rotos
-para cada build de preview. Esta nota documenta la plomeria que ahora viene con el portal
-para que los operadores puedan conectar monitoreo sin filtrar datos de visitantes.
+La feuille de route DOCS-SORA nécessite des analyses, des sondes synthétiques et une automatisation des liens rotatifs
+pour chaque build d'aperçu. Cette note documente la plomberie qui vient maintenant avec le portail
+pour que les opérateurs puissent connecter le moniteur sans filtrer les données des visiteurs.
 
-## Etiquetado de release
+## Étiquette de sortie
 
-- Definir `DOCS_RELEASE_TAG=<identifier>` (hace fallback a `GIT_COMMIT` o `dev`) al
-  construir el portal. El valor se inyecta en `<meta name="sora-release">`
-  para que probes y dashboards distingan despliegues.
-- `npm run build` emite `build/release.json` (escrito por
-  `scripts/write-checksums.mjs`) describiendo el tag, timestamp y el
-  `DOCS_RELEASE_SOURCE` opcional. El mismo archivo se empaqueta en los artefactos de preview y
-  se referencia en el reporte del link checker.
+- Définir `DOCS_RELEASE_TAG=<identifier>` (faire replier un `GIT_COMMIT` ou `dev`) al
+  construire le portail. La valeur est injectée dans `<meta name="sora-release">`
+  pour que les sondes et les tableaux de bord distinguent les plis.
+- `npm run build` émet `build/release.json` (écrit par
+  `scripts/write-checksums.mjs`) décrivant la balise, l'horodatage et le
+  `DOCS_RELEASE_SOURCE` en option. Le même fichier est empaqueté dans les artefacts de prévisualisation et
+  se référence dans le rapport du vérificateur de liens.
 
-## Analitica con preservacion de privacidad
+## Analyse avec préservation de la vie privée
 
-- Configurar `DOCS_ANALYTICS_ENDPOINT=<https://collector.example/ingest>` para
-  habilitar el tracker liviano. Los payloads contienen `{ event, path, locale,
-  release, ts }` sin metadata de referrer o IP, y se usa `navigator.sendBeacon`
-  siempre que sea posible para evitar bloquear navegaciones.
-- Controlar el muestreo con `DOCS_ANALYTICS_SAMPLE_RATE` (0-1). El tracker guarda
-  el ultimo path enviado y nunca emite eventos duplicados para la misma navegacion.
-- La implementacion vive en `src/components/AnalyticsTracker.jsx` y se monta
-  globalmente a traves de `src/theme/Root.js`.
+- Configurer `DOCS_ANALYTICS_ENDPOINT=<https://collector.example/ingest>` pour
+  Habiliter le tracker Liviano. Les charges utiles contiennent `{ événement, chemin, paramètres régionaux,
+  version, ts }` sin metadata de referrer o IP, y se usa `navigator.sendBeacon`
+  Il est toujours possible d'éviter de bloquer la navigation.
+- Contrôler le festival avec `DOCS_ANALYTICS_SAMPLE_RATE` (0-1). Le tracker garde
+  le dernier chemin emprunté et n'émet jamais d'événements dupliqués pour la même navigation.
+- La mise en œuvre vive en `src/components/AnalyticsTracker.jsx` et se monte
+  globalement à travers de `src/theme/Root.js`.
 
-## Probes sinteticos
-
-- `npm run probe:portal` emite requests GET contra rutas comunes
-  (`/`, `/norito/overview`, `/reference/torii-swagger`, etc.) y verifica que el
-  meta tag `sora-release` coincide con `--expect-release` (o
-  `DOCS_RELEASE_TAG`). Ejemplo:
+## Sondes synthétiques- `npm run probe:portal` émet des requêtes GET contra rutas comunes
+  (`/`, `/norito/overview`, `/reference/torii-swagger`, etc.) et vérifiez que le
+  la balise méta `sora-release` coïncide avec `--expect-release` (o
+  `DOCS_RELEASE_TAG`). Exemple :
 
 ```bash
 PORTAL_BASE_URL="https://docs.staging.sora" \
@@ -46,58 +46,55 @@ DOCS_RELEASE_TAG="preview-42" \
 npm run probe:portal -- --expect-release=preview-42
 ```
 
-Los fallos se reportan por path, lo que facilita gatear CD con el resultado del probe.
+Les erreurs se rapportent au chemin, ce qui facilite l'accès au CD avec le résultat de la sonde.
 
-## Automatizacion de enlaces rotos
+## Automatisation des liens de rotation
 
-- `npm run check:links` escanea `build/sitemap.xml`, asegura que cada entrada mapea a un
-  archivo local (chequeando fallbacks `index.html`), y escribe
-  `build/link-report.json` con metadata de release, totales, fallos y el fingerprint
-  SHA-256 de `checksums.sha256` (expuesto como `manifest.id`) para que cada reporte
-  se pueda vincular al manifiesto del artefacto.
-- El script sale con codigo distinto de cero cuando falta una pagina, asi que CI puede
-  bloquear releases en rutas obsoletas o rotas. Los reportes citan las rutas candidatas
-  que se intentaron, lo que ayuda a rastrear regresiones de routing hasta el arbol de docs.
+- `npm run check:links` escanea `build/sitemap.xml`, assurez-vous que cada entrada mapea a un
+  archiver local (chèque et solutions de secours `index.html`), et écrire
+  `build/link-report.json` avec métadonnées de publication, totaux, erreurs et empreintes digitales
+  SHA-256 de `checksums.sha256` (expédié comme `manifest.id`) pour chaque rapport
+  il peut être vinculaire au manifeste de l'artefact.
+- Le script sale avec un code distinct de zéro lorsqu'il manque une page, car je peux le faire
+  bloquer les versions en routes obsolètes ou en rotations. Los reportes citan las rutas candidats
+  qui se tente, ce qui aide à rastrear les régressions de routage jusqu'à l'arbol de docs.
 
-## Dashboard y alertas de Grafana
-
-- `dashboards/grafana/docs_portal.json` publica el tablero Grafana **Docs Portal Publishing**.
-  Incluye los siguientes paneles:
-  - *Gateway Refusals (5m)* usa `torii_sorafs_gateway_refusals_total` con scope
-    `profile`/`reason` para que SRE detecte pushes de politica malos o fallas de tokens.
-  - *Alias Cache Refresh Outcomes* y *Alias Proof Age p90* siguen
-    `torii_sorafs_alias_cache_*` para demostrar que existen proofs frescos antes de un cut
-    over de DNS.
-  - *Pin Registry Manifest Counts* y la estadistica *Active Alias Count* reflejan el
-    backlog del pin-registry y los aliases totales para que gobernanza pueda auditar
-    cada release.
-  - *Gateway TLS Expiry (hours)* destaca cuando el TLS cert del gateway de publishing
-    se acerca al vencimiento (umbral de alerta en 72 h).
-  - *Replication SLA Outcomes* y *Replication Backlog* vigilan la telemetria
-    `torii_sorafs_replication_*` para asegurar que todas las replicas cumplen el
-    nivel GA despues de publicar.
-- Usa las variables de plantilla integradas (`profile`, `reason`) para enfocarte en el
-  perfil de publishing `docs.sora` o investigar picos en todos los gateways.
-- El routing de PagerDuty usa los paneles del dashboard como evidencia: las alertas
-  `DocsPortal/GatewayRefusals`, `DocsPortal/AliasCache` y `DocsPortal/TLSExpiry`
-  disparan cuando la serie correspondiente cruza su umbral. Enlaza el runbook de la alerta
-  a esta pagina para que on-call pueda reproducir las queries exactas de Prometheus.
+## Tableau de bord et alertes de Grafana- `dashboards/grafana/docs_portal.json` publie le tableau Grafana **Docs Portal Publishing**.
+  Inclut les panneaux suivants :
+  - *Refus de passerelle (5 m)* USA `torii_sorafs_gateway_refusals_total` avec portée
+    `profile`/`reason` pour que SRE détecte des poussées politiques malveillantes ou des erreurs de jetons.
+  - *Alias Cache Refresh Outcomes* et *Alias Proof Age p90* ci-dessous
+    `torii_sorafs_alias_cache_*` pour démontrer qu'il existe des épreuves fresques avant une coupe
+    sur le DNS.
+  - *Pin Registry Manifest Counts* et l'état *Active Alias Count* reflète le
+    arriéré du registre des broches et des alias totaux pour que la gouvernance puisse auditer
+    version cada.
+  - *Expiration de la passerelle TLS (heures)* lorsque le certificat TLS de la passerelle de publication est activé
+    se acerca al vencimiento (ombre d'alerte en 72 h).
+  - *Résultats SLA de réplication* et *Replication Backlog* vigilan la telemetria
+    `torii_sorafs_replication_*` pour garantir que toutes les répliques complètent le
+    niveau GA après publication.
+- Utiliser les variables de plante intégrées (`profile`, `reason`) pour enfocarte en el
+  profil de publication `docs.sora` pour étudier les picos et toutes les passerelles.
+- Le routage de PagerDuty utilise les panneaux du tableau de bord comme preuve : les alertes
+  `DocsPortal/GatewayRefusals`, `DocsPortal/AliasCache` et `DocsPortal/TLSExpiry`
+  disparan cuando la série correspondant cruza su umbral. Afficher le runbook de l'alerteCette page permet de reproduire les requêtes exactes de Prometheus.
 
 ## Poniendolo en conjunto
 
-1. Durante `npm run build`, define las variables de entorno de release/analitica y
-   deja que el post-build emita `checksums.sha256`, `release.json` y
+1. Durante `npm run build`, définissez les variables d'environnement de publication/analyse et
+   déjà que le post-build émet `checksums.sha256`, `release.json` et
    `link-report.json`.
-2. Ejecuta `npm run probe:portal` contra el hostname de preview con
-   `--expect-release` conectado al mismo tag. Guarda el stdout para el checklist de publishing.
-3. Ejecuta `npm run check:links` para fallar rapido en entradas rotas del sitemap y archiva
-   el reporte JSON generado junto con los artefactos de preview. CI deja el ultimo reporte en
-   `artifacts/docs_portal/link-report.json` para que gobernanza pueda descargar el bundle de evidencia
-   directo desde los logs de build.
-4. Enruta el endpoint de analitica hacia tu colector con preservacion de privacidad (Plausible,
-   OTEL ingest self-hosted, etc.) y asegura que las tasas de muestreo queden documentadas por
-   release para que los dashboards interpreten los conteos correctamente.
-5. CI ya conecta estos pasos en los workflows de preview/deploy
+2. Exécutez `npm run probe:portal` contre le nom d'hôte de l'aperçu avec
+   `--expect-release` connecté à l'étiquette mismo. Gardez la sortie standard pour la liste de contrôle de publication.
+3. Exécutez `npm run check:links` pour démarrer rapidement les entrées rotatives du plan du site et des archives
+   le rapport JSON généré conjointement avec les artefacts de prévisualisation. CI a déjà le dernier rapport en
+   `artifacts/docs_portal/link-report.json` pour que le gouvernement puisse télécharger le paquet de preuves
+   directement à partir des journaux de build.
+4. Enruta el endpoint de analitica hacia votre collecteur avec préservation de la confidentialité (Plausible,
+   OTEL ingère auto-hébergé, etc.) et assure que les tâches de muestreo sont documentées par
+   release pour que les tableaux de bord interprètent correctement les contenus.
+5. CI vous connecte ces étapes aux workflows de prévisualisation/déploiement
    (`.github/workflows/docs-portal-preview.yml`,
-   `.github/workflows/docs-portal-deploy.yml`), asi que los dry runs locales solo necesitan
-   cubrir comportamiento especifico de secretos.
+   `.github/workflows/docs-portal-deploy.yml`), car les applications locales à sec ne nécessitent que
+   adopter un comportement spécifique de secrets.

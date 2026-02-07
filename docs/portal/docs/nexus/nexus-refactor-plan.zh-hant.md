@@ -10,109 +10,110 @@ translation_last_reviewed: 2026-02-07
 id: nexus-refactor-plan
 title: Sora Nexus ledger refactor plan
 description: Mirror of `docs/source/nexus_refactor_plan.md`, detailing the phased clean-up work for the Iroha 3 codebase.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
-This page mirrors `docs/source/nexus_refactor_plan.md`. Keep both copies aligned until the multilingual edition lands in the portal.
+:::注意規範來源
+此頁面鏡像 `docs/source/nexus_refactor_plan.md`。保持兩個副本對齊，直到多語言版本登陸門戶。
 :::
 
-# Sora Nexus Ledger Refactor Plan
+# Sora Nexus 賬本重構計劃
 
-This document captures the immediate roadmap for the Sora Nexus Ledger ("Iroha 3") refactor. It reflects the current repository layout and the regressions observed in genesis/WSV bookkeeping, Sumeragi consensus, smart-contract triggers, snapshot queries, pointer-ABI host bindings, and Norito codecs. The objective is to converge on a coherent, testable architecture without attempting to land all fixes in one monolithic patch.
+本文檔捕獲了 Sora Nexus Ledger（“Iroha 3”）重構的直接路線圖。它反映了當前存儲庫佈局以及在 genesis/WSV 簿記、Sumeragi 共識、智能合約觸發器、快照查詢、指針 ABI 主機綁定和 Norito 編解碼器中觀察到的回歸。目標是集中在一個連貫的、可測試的架構上，而不是試圖將所有修復都放在一個單一的補丁中。
 
-## 0. Guiding Principles
-- Preserve deterministic behavior across heterogeneous hardware; leverage acceleration only through opt-in feature flags with identical fallbacks.
-- Norito is the serialization layer. Any state/schema changes must include Norito encode/decode round-trip tests and fixture updates.
-- Configuration flows through `iroha_config` (user → actual → defaults). Remove ad-hoc environment toggles from production paths.
-- ABI policy remains V1 and non-negotiable. Hosts must reject unknown pointer types/syscalls deterministically.
-- `cargo test --workspace` and golden tests (`ivm`, `norito`, `integration_tests`) remain the baseline gate for every milestone.
+## 0. 指導原則
+- 跨異構硬件保留確定性行為；僅通過具有相同回退功能的選擇加入功能標誌來利用加速。
+- Norito 是序列化層。任何狀態/模式更改都必須包括 Norito 編碼/解碼往返測試和夾具更新。
+- 配置流經 `iroha_config`（用戶 → 實際 → 默認值）。從生產路徑中刪除臨時環境切換。
+- ABI 政策仍然是 V1 並且不可協商。主機必須明確拒絕未知的指針類型/系統調用。
+- `cargo test --workspace` 和黃金測試（`ivm`、`norito`、`integration_tests`）仍然是每個里程碑的基線門。
 
-## 1. Repository Topology Snapshot
-- `crates/iroha_core`: Sumeragi actors, WSV, genesis loader, pipelines (query, overlay, zk lanes), smart-contract host glue.
-- `crates/iroha_data_model`: authoritative schema for on-chain data and queries.
-- `crates/iroha`: client API used by CLI, tests, SDK.
-- `crates/iroha_cli`: operator CLI, currently mirrors numerous APIs in `iroha`.
-- `crates/ivm`: Kotodama bytecode VM, pointer-ABI host integration entry points.
-- `crates/norito`: serialization codec with JSON adapters and AoS/NCB backends.
-- `integration_tests`: cross-component assertions covering genesis/bootstrap, Sumeragi, triggers, pagination, etc.
-- Docs already outline Sora Nexus Ledger goals (`nexus.md`, `new_pipeline.md`, `ivm.md`), but the implementation is fragmented and partially stale relative to the code.
+## 1. 存儲庫拓撲快照
+- `crates/iroha_core`：Sumeragi 參與者、WSV、創世加載器、管道（查詢、覆蓋、zk 通道）、智能合約主機膠水。
+- `crates/iroha_data_model`：鏈上數據和查詢的權威模式。
+- `crates/iroha`：CLI、測試、SDK 使用的客戶端 API。
+- `crates/iroha_cli`：操作員 CLI，當前鏡像 `iroha` 中的眾多 API。
+- `crates/ivm`：Kotodama 字節碼 VM、指針 ABI 主機集成入口點。
+- `crates/norito`：帶有 JSON 適配器和 AoS/NCB 後端的序列化編解碼器。
+- `integration_tests`：跨組件斷言，涵蓋創世/引導、Sumeragi、觸發器、分頁等。
+- 文檔已經概述了 Sora Nexus Ledger 目標（`nexus.md`、`new_pipeline.md`、`ivm.md`），但相對於代碼而言，實現是支離破碎且部分陳舊的。
 
-## 2. Refactor Pillars & Milestones
+## 2. 重構支柱和里程碑
 
-### Phase A – Foundations and Observability
-1. **WSV Telemetry + Snapshots**
-   - Establish canonical snapshot API in `state` (`WorldStateSnapshot` trait) used by queries, Sumeragi, and CLI.
-   - Use `scripts/iroha_state_dump.sh` to produce deterministic snapshots via `iroha state dump --format norito`.
-2. **Genesis/Bootstrap Determinism**
-   - Refactor genesis ingestion to flow through a single Norito-powered pipeline (`iroha_core::genesis`).
-  - Add integration/regression coverage that replays genesis plus the first block and asserts identical WSV roots across arm64/x86_64 (tracked under `integration_tests/tests/genesis_replay_determinism.rs`).
-3. **Cross-crate Fixity Tests**
-   - Expand `integration_tests/tests/genesis_json.rs` to validate WSV, pipeline, and ABI invariants in one harness.
-  - Introduce a `cargo xtask check-shape` scaffold that panics on schema drift (tracked under DevEx tooling backlog; see `scripts/xtask/README.md` action item).
+### A 階段 – 基礎和可觀察性
+1. **WSV 遙測 + 快照**
+   - 在查詢、Sumeragi 和 CLI 使用的 `state`（`WorldStateSnapshot` 特徵）中建立規範快照 API。
+   - 使用 `scripts/iroha_state_dump.sh` 通過 `iroha state dump --format norito` 生成確定性快照。
+2. **創世/引導決定論**
+   - 重構創世攝取以流經單個 Norito 支持的管道 (`iroha_core::genesis`)。
+  - 添加集成/回歸覆蓋，重放創世加上第一個塊，並在arm64/x86_64上斷言相同的WSV根（在`integration_tests/tests/genesis_replay_determinism.rs`下跟踪）。
+3. **跨板條箱固定性測試**
+   - 展開 `integration_tests/tests/genesis_json.rs` 以驗證一個工具中的 WSV、管道和 ABI 不變量。
+  - 引入一個 `cargo xtask check-shape` 腳手架，該腳手架會因架構漂移而發生恐慌（在 DevEx 工具積壓下跟踪；請參閱 `scripts/xtask/README.md` 操作項）。
 
-### Phase B – WSV & Query Surface
-1. **State Storage Transactions**
-   - Collapse `state/storage_transactions.rs` into a transactional adapter that enforces commit ordering and conflict detection.
-   - Unit tests now verify asset/world/triggers modifications roll back on failure.
-2. **Query Model Refactor**
-   - Move pagination/cursor logic into reusable components under `crates/iroha_core/src/query/`. Align Norito representations in `iroha_data_model`.
-  - Add snapshot queries for triggers, assets, and roles with deterministic ordering (tracked via `crates/iroha_core/tests/snapshot_iterable.rs` for current coverage).
-3. **Snapshot Consistency**
-   - Ensure `iroha ledger query` CLI uses the same snapshot path as Sumeragi/fetchers.
-   - CLI snapshot regression tests live under `tests/cli/state_snapshot.rs` (feature-gated for slow runs).
+### B 階段 – WSV 和查詢界面
+1. **狀態存儲交易**
+   - 將 `state/storage_transactions.rs` 折疊到事務適配器中，強制執行提交順序和衝突檢測。
+   - 單元測試現在驗證資產/世界/觸發器修改在失敗時回滾。
+2. **查詢模型重構**
+   - 將分頁/光標邏輯移至 `crates/iroha_core/src/query/` 下的可重用組件中。對齊 `iroha_data_model` 中的 Norito 表示。
+  - 添加具有確定性排序的觸發器、資產和角色的快照查詢（通過 `crates/iroha_core/tests/snapshot_iterable.rs` 跟踪當前覆蓋範圍）。
+3. **快照一致性**
+   - 確保 `iroha ledger query` CLI 使用與 Sumeragi/fetchers 相同的快照路徑。
+   - CLI 快照回歸測試在 `tests/cli/state_snapshot.rs` 下進行（針對緩慢運行的功能門控）。
 
-### Phase C – Sumeragi Pipeline
-1. **Topology & Epoch Management**
-   - Extract `EpochRosterProvider` into a trait with implementations backed by WSV stake snapshots.
-  - `WsvEpochRosterAdapter::from_peer_iter` offers a simple mock-friendly constructor for benches/tests.
-2. **Consensus Flow Simplification**
-   - Reorganize `crates/iroha_core/src/sumeragi/*` into modules: `pacemaker`, `aggregation`, `availability`, `witness` with shared types under `consensus`.
-  - Replace ad-hoc message passing with typed Norito envelopes and introduce view-change property tests (tracked in the Sumeragi messaging backlog).
-3. **Lane/Proof Integration**
-   - Align lane proofs with DA commitments and ensure RBC gating is uniform.
-   - End-to-end integration test `integration_tests/tests/extra_functional/seven_peer_consistency.rs` now verifies the RBC-enabled path.
+### C 階段 – Sumeragi 管道
+1. **拓撲和紀元管理**
+   - 將 `EpochRosterProvider` 提取到具有 WSV 權益快照支持的實現的特徵中。
+  - `WsvEpochRosterAdapter::from_peer_iter` 為工作台/測試提供了一個簡單的模擬友好構造函數。
+2. **共識流程簡化**
+   - 將 `crates/iroha_core/src/sumeragi/*` 重新組織為模塊：`pacemaker`、`aggregation`、`availability`、`witness`，並在 `consensus` 下共享類型。
+  - 用鍵入的 Norito 信封替換臨時消息傳遞，並引入視圖更改屬性測試（在 Sumeragi 消息積壓中跟踪）。
+3. **車道/證明集成**
+   - 將車道證明與 DA 承諾保持一致，並確保 RBC 門控是統一的。
+   - 端到端集成測試 `integration_tests/tests/extra_functional/seven_peer_consistency.rs` 現在驗證啟用 RBC 的路徑。
 
-### Phase D – Smart Contracts & Pointer-ABI Hosts
-1. **Host Boundary Audit**
-   - Consolidate pointer-type checks (`ivm::pointer_abi`) and host adapters (`iroha_core::smartcontracts::ivm::host`).
-   - Pointer table expectations and host manifest bindings are covered by `crates/iroha_core/tests/ivm_pointer_abi_tlv_types.rs` and `ivm_host_mapping.rs`, which exercise the golden TLV mappings.
-2. **Trigger Execution Sandbox**
-   - Refactor triggers to run through a common `TriggerExecutor` that enforces gas, pointer validation, and event journaling.
-  - Add regression tests for call/time triggers covering failure paths (tracked via `crates/iroha_core/tests/trigger_failure.rs`).
-3. **CLI & Client Alignment**
-   - Ensure CLI operations (`audit`, `gov`, `sumeragi`, `ivm`) rely on the shared `iroha` client functions to avoid drift.
-   - CLI JSON snapshot tests live in `tests/cli/json_snapshot.rs`; keep them up to date so core command output continues to match the canonical JSON reference.
+### D 階段 – 智能合約和 Pointer-ABI 主機
+1. **主機邊界審計**
+   - 合併指針類型檢查 (`ivm::pointer_abi`) 和主機適配器 (`iroha_core::smartcontracts::ivm::host`)。
+   - 指針表期望和主機清單綁定由 `crates/iroha_core/tests/ivm_pointer_abi_tlv_types.rs` 和 `ivm_host_mapping.rs` 涵蓋，它們執行黃金 TLV 映射。
+2. **觸發執行沙箱**
+   - 重構觸發器以通過通用 `TriggerExecutor` 運行，該 `TriggerExecutor` 強制執行氣體、指針驗證和事件日誌記錄。
+  - 添加覆蓋故障路徑的呼叫/時間觸發器回歸測試（通過 `crates/iroha_core/tests/trigger_failure.rs` 跟踪）。
+3. **CLI 和客戶端調整**
+   - 確保 CLI 操作（`audit`、`gov`、`sumeragi`、`ivm`）依賴於共享的 `iroha` 客戶端功能以避免漂移。
+   - CLI JSON 快照測試位於 `tests/cli/json_snapshot.rs` 中；讓它們保持最新，以便核心命令輸出繼續與規範的 JSON 參考相匹配。
 
-### Phase E – Norito Codec Hardening
-1. **Schema Registry**
-   - Create a Norito schema registry under `crates/norito/src/schema/` to source canonical encodings for core data types.
-   - Added doc tests verifying sample payload encoding (`norito::schema::SamplePayload`).
-2. **Golden Fixtures Refresh**
-   - Update `crates/norito/tests/*` golden fixtures to match new WSV schema once the refactor lands.
-   - `scripts/norito_regen.sh` regenerates the Norito JSON goldens deterministically via the `norito_regen_goldens` helper.
-3. **IVM/Norito Integration**
-   - Validate Kotodama manifest serialization end-to-end through Norito, ensuring pointer ABI metadata is consistent.
-   - `crates/ivm/tests/manifest_roundtrip.rs` keeps Norito encode/decode parity for manifests.
+### E 階段 – Norito 編解碼器強化
+1. **架構註冊表**
+   - 在 `crates/norito/src/schema/` 下創建 Norito 架構註冊表，以獲取核心數據類型的規範編碼。
+   - 添加了驗證示例有效負載編碼的文檔測試（`norito::schema::SamplePayload`）。
+2. **黃金賽程刷新**
+   - 一旦重構落地，更新 `crates/norito/tests/*` 黃金裝置以匹配新的 WSV 模式。
+   - `scripts/norito_regen.sh` 通過 `norito_regen_goldens` 幫助程序確定性地重新生成 Norito JSON 黃金。
+3. **IVM/Norito 集成**
+   - 通過 Norito 端到端驗證 Kotodama 清單序列化，確保指針 ABI 元數據一致。
+   - `crates/ivm/tests/manifest_roundtrip.rs` 保留清單的 Norito 編碼/解碼奇偶校驗。
 
-## 3. Cross-Cutting Concerns
-- **Testing Strategy**: Every phase promotes unit tests → crate tests → integration tests. Failing tests capture current regressions; new tests prevent them from resurfacing.
-- **Documentation**: After each phase lands, update `status.md` and roll open items into `roadmap.md` while pruning completed tasks.
-- **Performance Benchmarks**: Maintain existing benches in `iroha_core`, `ivm`, and `norito`; add baseline measurements post-refactor to validate no regressions.
-- **Feature Flags**: Keep crate-level toggles only for backends that require external toolchains (`cuda`, `zk-verify-batch`). CPU SIMD paths are always built and selected at runtime; provide deterministic scalar fallbacks for unsupported hardware.
+## 3. 跨領域關注點
+- **測試策略**：每個階段都會促進單元測試→板條箱測試→集成測試。失敗的測試捕獲當前的回歸；新的測試阻止它們重新出現。
+- **文檔**：每個階段落地後，更新 `status.md` 並將未完成的項目滾動到 `roadmap.md`，同時修剪已完成的任務。
+- **性能基準**：維護 `iroha_core`、`ivm` 和 `norito` 中的現有基準；添加重構後的基線測量以驗證沒有回歸。
+- **功能標誌**：僅為需要外部工具鏈的後端保留板條箱級切換（`cuda`、`zk-verify-batch`）。 CPU SIMD 路徑始終在運行時構建和選擇；為不受支持的硬件提供確定性標量回退。
 
-## 4. Immediate Next Actions
-- Phase A scaffolding (snapshot trait + telemetry wiring) – see actionable tasks in roadmap updates.
-- The recent defect audit for `sumeragi`, `state`, and `ivm` surfaced the following highlights:
-  - `sumeragi`: dead-code allowances guard view-change proof broadcast, VRF replay state, and EMA telemetry export. These stay gated until Phase C’s consensus flow simplification and lane/proof integration deliverables land.
-  - `state`: `Cell` cleanup and telemetry routing move onto the Phase A WSV telemetry track, while the SoA/parallel-apply notes fold into the Phase C pipeline optimisation backlog.
-  - `ivm`: CUDA toggle exposure, envelope validation, and Halo2/Metal coverage map to Phase D host-boundary work plus the cross-cutting GPU acceleration theme; kernels remain on the dedicated GPU backlog until ready.
-- Prepare cross-team RFC summarizing this plan for sign-off before landing invasive code changes.
+## 4. 下一步立即行動
+- A 階段腳手架（快照特徵 + 遙測接線）——查看路線圖更新中的可操作任務。
+- 最近對 `sumeragi`、`state` 和 `ivm` 的缺陷審計發現了以下亮點：
+  - `sumeragi`：死代碼津貼保護視圖更改證明廣播、VRF 重播狀態和 EMA 遙測導出。這些將一直處於封閉狀態，直到 C 階段的共識流程簡化和通道/證明集成交付成果落地。
+  - `state`：`Cell` 清理和遙測路由移至 A 階段 WSV 遙測軌道，而 SoA/並行應用註釋併入 C 階段管道優化待辦事項中。
+  - `ivm`：CUDA 切換曝光、包絡驗證和 Halo2/Metal 覆蓋映射到 D 階段主機邊界工作以及橫切 GPU 加速主題；內核保留在專用 GPU 待辦事項上，直到準備就緒。
+- 準備跨團隊 RFC，總結該計劃，以便在進行侵入性代碼更改之前簽署。
 
-## 5. Open Questions
-- Should RBC remain optional past P1, or is it mandatory for Nexus ledger lanes? Requires stakeholder decision.
-- Do we enforce DS composability groups in P1 or keep them disabled until lane proofs mature?
-- What is the canonical location for ML-DSA-87 parameters? Candidate: new `crates/fastpq_isi` crate (pending creation).
+## 5. 開放性問題
+- RBC 在 P1 之後是否應該保持可選狀態，還是對於 Nexus 賬本通道是強制的？需要利益相關者做出決定。
+- 我們是否在 P1 中強制執行 DS 可組合性組，或者在車道證明成熟之前將其禁用？
+- ML-DSA-87 參數的規範位置是什麼？候選：新的 `crates/fastpq_isi` 箱子（待創建）。
 
 ---
 
-_Last updated: 2025-09-12_
+_最後更新：2025-09-12_

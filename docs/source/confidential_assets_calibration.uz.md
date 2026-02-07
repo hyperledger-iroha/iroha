@@ -7,37 +7,38 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 01bfdc70f601098acaefc60c6a3b4c464218b8c6f01f2f20eb3632994ff7110f
 source_last_modified: "2025-12-29T18:16:35.932211+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Confidential Gas Calibration Baselines
+# Maxfiy gaz kalibrlash asoslari
 
-This ledger tracks the validated outputs of the confidential gas calibration
-benchmarks. Each row documents a release-quality measurement set captured with
-the procedure described in `docs/source/confidential_assets.md#calibration-baselines--acceptance-gates`.
+Ushbu kitob maxfiy gaz kalibrlashning tasdiqlangan natijalarini kuzatib boradi
+benchmarks. Har bir qatorda suratga olingan reliz sifati o'lchovlari to'plami hujjatlashtirilgan
+`docs/source/confidential_assets.md#calibration-baselines--acceptance-gates` da tasvirlangan protsedura.
 
-| Date (UTC) | Commit | Profile | `ns/op` | `gas/op` | `ns/gas` | Notes |
+| Sana (UTC) | Majburiyat | Profil | `ns/op` | `gas/op` | `ns/gas` | Eslatmalar |
 | --- | --- | --- | --- | --- | --- | --- |
-| 2025-10-18 | 3c70a7d3 | baseline-neon | 2.93e5 | 1.57e2 | 1.87e3 | Darwin 25.0.0 arm64e (hostinfo); `cargo bench -p iroha_core --bench isi_gas_calibration -- --sample-size=200 --warm-up-time=5 --save-baseline neon-20251018`; `cargo test -p iroha_core bench_repro -- --ignored`; `cargo bench -p ivm --bench gas_calibration -- --sample-size=200 --warm-up-time=5`; `rustc 1.88.0 (6b00bc3)` |
-| 2026-04-28 | 8ea9b2a7 | baseline-neon-20260428 | 4.29e6 | 1.57e2 | 2.73e4 | Darwin 25.0.0 arm64 (`rustc 1.91.0`). Command: `cargo bench -p iroha_core --bench isi_gas_calibration -- --sample-size=10 --warm-up-time=2 --noplot --save-baseline baseline-neon-20260428`; log at `docs/source/confidential_assets_calibration_neon_20260428.log`. x86_64 parity runs (SIMD-neutral + AVX2) are scheduled for the 2026-03-19 Zurich lab slot; artefacts will land under `artifacts/confidential_assets_calibration/2026-03-x86/` with matching commands and will be merged into the baseline table once captured. |
-| 2026-04-28 | — | baseline-simd-neutral | — | — | — | **Waived** on Apple Silicon—`ring` enforces NEON for the platform ABI, so `RUSTFLAGS="-C target-feature=-neon"` fails before the bench can run (`docs/source/confidential_assets_calibration_simd_neutral_attempt_20260428.log`). Neutral data stays gated on CI host `bench-x86-neon0`. |
-| 2026-04-28 | — | baseline-avx2 | — | — | — | **Deferred** until an x86_64 runner is available. `arch -x86_64` cannot spawn binaries on this machine (“Bad CPU type in executable”; see `docs/source/confidential_assets_calibration_avx2_attempt_20260428.log`). CI host `bench-x86-avx2a` remains the source of record. |
+| 2025-10-18 | 3c70a7d3 | asosiy neon | 2.93e5 | 1.57e2 | 1.87e3 | Darvin 25.0.0 arm64e (hostinfo); `cargo bench -p iroha_core --bench isi_gas_calibration -- --sample-size=200 --warm-up-time=5 --save-baseline neon-20251018`; `cargo test -p iroha_core bench_repro -- --ignored`; `cargo bench -p ivm --bench gas_calibration -- --sample-size=200 --warm-up-time=5`; `rustc 1.88.0 (6b00bc3)` |
+| 28.04.2026 | 8ea9b2a7 | bazaviy-neon-20260428 | 4.29e6 | 1.57e2 | 2.73e4 | Darvin 25.0.0 arm64 (`rustc 1.91.0`). Buyruq: `cargo bench -p iroha_core --bench isi_gas_calibration -- --sample-size=10 --warm-up-time=2 --noplot --save-baseline baseline-neon-20260428`; `docs/source/confidential_assets_calibration_neon_20260428.log` manziliga kiring. x86_64 pariteti (SIMD-neytral + AVX2) 2026-03-19 Tsyurix laboratoriya uyasiga rejalashtirilgan; artefaktlar mos keladigan buyruqlar bilan `artifacts/confidential_assets_calibration/2026-03-x86/` ostida tushadi va qo'lga kiritilgandan so'ng asosiy jadvalga birlashtiriladi. |
+| 28.04.2026 | — | bazaviy-simd-neytral | — | — | — | **Apple Silicon-da bekor qilindi**—`ring` ABI platformasi uchun NEON-ni qo'llaydi, shuning uchun `RUSTFLAGS="-C target-feature=-neon"` dastgoh ishlamasdan oldin ishlamay qoladi (`docs/source/confidential_assets_calibration_simd_neutral_attempt_20260428.log`). Neytral ma'lumotlar CI xosti `bench-x86-neon0` da yopiq qoladi. |
+| 28.04.2026 | — | baseline-avx2 | — | — | — | **X86_64 yuguruvchisi mavjud bo'lgunga qadar kechiktirildi**. `arch -x86_64` bu mashinada ikkilik fayllarni yarata olmaydi (bajariladigan faylda noto'g'ri protsessor turi; qarang: `docs/source/confidential_assets_calibration_avx2_attempt_20260428.log`). CI xost `bench-x86-avx2a` rekord manbai bo'lib qolmoqda. |
 
-`ns/op` aggregates the median wall-clock per instruction measured by Criterion;
-`gas/op` is the arithmetic mean of the corresponding schedule costs from
-`iroha_core::gas::meter_instruction`; `ns/gas` divides the summed nanoseconds by
-the summed gas across the nine-instruction sample set.
+`ns/op` mezon bo'yicha o'lchangan har bir ko'rsatma uchun o'rtacha devor soatini jamlaydi;
+`gas/op` - tegishli jadval xarajatlarining o'rtacha arifmetik qiymati
+`iroha_core::gas::meter_instruction`; `ns/gas` yig'ilgan nanosoniyalarni ga ajratadi
+to'qqiz instruktsiyali namunalar to'plami bo'ylab jamlangan gaz.
 
-*Note.* The current arm64 host does not emit Criterion `raw.csv` summaries out of
-the box; rerun with `CRITERION_OUTPUT_TO=csv` or an upstream fix before tagging a
-release so the artefacts required by the acceptance checklist are attached.
-If `target/criterion/` is still missing after `--save-baseline`, collect the run
-on a Linux host or serialize the console output into the release bundle as a
-temporary stop-gap. For reference, the arm64 console log from the latest run
-lives at `docs/source/confidential_assets_calibration_neon_20251018.log`.
+*Eslatma.* Joriy arm64 xosti `raw.csv` mezoni xulosalarini chiqarmaydi
+quti; a teglashdan oldin `CRITERION_OUTPUT_TO=csv` yoki yuqori oqim tuzatish bilan qayta ishga tushiring
+chiqaring, shuning uchun qabul qilish nazorat ro'yxatida talab qilinadigan artefaktlar ilova qilinadi.
+Agar `target/criterion/` `--save-baseline` dan keyin ham yo'qolsa, yugurishni to'plang.
+Linux xostida yoki konsol chiqishini relizlar to'plamiga ketma-ketlashtiring
+vaqtinchalik uzilish. Malumot uchun, so'nggi ishga tushirishdan arm64 konsol jurnali
+`docs/source/confidential_assets_calibration_neon_20251018.log` da yashaydi.
 
-Per-instruction medians from the same run (`cargo bench -p iroha_core --bench isi_gas_calibration`):
+Xuddi shu ishga tushirilgan har bir ko'rsatma medianalari (`cargo bench -p iroha_core --bench isi_gas_calibration`):
 
-| Instruction | median `ns/op` | schedule `gas` | `ns/gas` |
+| Ko'rsatma | median `ns/op` | jadval `gas` | `ns/gas` |
 | --- | --- | --- | --- |
 | RegisterDomain | 3.46e5 | 200 | 1.73e3 |
 | RegisterAccount | 3.15e5 | 200 | 1.58e3 |
@@ -49,11 +50,9 @@ Per-instruction medians from the same run (`cargo bench -p iroha_core --bench is
 | MintAsset | 1.56e5 | 150 | 1.04e3 |
 | TransferAsset | 3.68e5 | 180 | 2.04e3 |
 
-### 2026-04-28 (Apple Silicon, NEON enabled)
+### 28.04.2026 (Apple Silicon, NEON yoqilgan)
 
-Median latencies for the 2026-04-28 refresh (`cargo bench -p iroha_core --bench isi_gas_calibration -- --sample-size=10 --warm-up-time=2 --noplot --save-baseline baseline-neon-20260428`):
-
-| Instruction | median `ns/op` | schedule `gas` | `ns/gas` |
+28.04.2026 yangilash uchun oʻrtacha kechikishlar (`cargo bench -p iroha_core --bench isi_gas_calibration -- --sample-size=10 --warm-up-time=2 --noplot --save-baseline baseline-neon-20260428`):| Ko'rsatma | median `ns/op` | jadval `gas` | `ns/gas` |
 | --- | --- | --- | --- |
 | RegisterDomain | 8.58e6 | 200 | 4.29e4 |
 | RegisterAccount | 4.40e6 | 200 | 2.20e4 |
@@ -65,19 +64,19 @@ Median latencies for the 2026-04-28 refresh (`cargo bench -p iroha_core --bench 
 | MintAsset | 3.92e6 | 150 | 2.61e4 |
 | TransferAsset | 3.59e6 | 180 | 1.99e4 |
 
-`ns/op` and `ns/gas` aggregates in the table above are derived from the sum of
-these medians (total `3.85717e7` ns across the nine-instruction set and 1,413
-gas units).
+Yuqoridagi jadvaldagi `ns/op` va `ns/gas` agregatlari yig'indisidan olingan.
+bu medianlar (to'qqizta ko'rsatmalar to'plami bo'yicha jami `3.85717e7`ns va 1413
+gaz birliklari).
 
-The schedule column is enforced by `gas::tests::calibration_bench_gas_snapshot`
-(total 1,413 gas across the nine-instruction set) and will trip if future patches
-change metering without updating the calibration fixtures.
+Jadval ustuni `gas::tests::calibration_bench_gas_snapshot` tomonidan amalga oshiriladi
+(to'qqizta ko'rsatmalar to'plami bo'ylab jami 1,413 gaz) va agar kelajakda yamoqlar bo'lsa, o'chib ketadi
+kalibrlash moslamalarini yangilamasdan o'lchashni o'zgartirish.
 
-## Commitment Tree Telemetry Evidence (M2.2)
+## Majburiyatlar daraxti telemetriya dalillari (M2.2)
 
-Per roadmap task **M2.2**, every calibration run must capture the new
-commitment-tree gauges and eviction counters to prove the Merkle frontier stays
-within configured bounds:
+**M2.2** yo'l xaritasi vazifasiga ko'ra, har bir kalibrlash jarayoni yangisini olishi kerak
+Merkle chegarasi qolishini isbotlash uchun majburiyat daraxti o'lchagichlari va ko'chirish hisoblagichlari
+sozlangan chegaralar ichida:
 
 - `iroha_confidential_tree_commitments{asset_id}`
 - `iroha_confidential_tree_depth{asset_id}`
@@ -89,44 +88,44 @@ within configured bounds:
 - `iroha_confidential_frontier_evictions_total{asset_id}`
 - `iroha_zk_verifier_cache_events_total{cache,event}`
 
-Record the values immediately before and after the calibration workload. A
-single command per asset is sufficient; example for `xor#wonderland`:
+Kalibrlash ish yukidan oldin va keyin qiymatlarni darhol yozib oling. A
+har bir aktiv uchun bitta buyruq etarli; `xor#wonderland` uchun misol:
 
 ```bash
 curl -s http://127.0.0.1:8180/metrics \
   | rg 'iroha_confidential_(tree_(commitments|depth)|root_history_entries|frontier_(checkpoints|last_checkpoint_height|last_checkpoint_commitments)|root_evictions_total|frontier_evictions_total){asset_id="xor#wonderland"}'
 ```
 
-Attach the raw output (or Prometheus snapshot) to the calibration ticket so the
-governance reviewer can confirm root-history caps and checkpoint intervals are
-honoured. The telemetry guide in `docs/source/telemetry.md#confidential-tree-telemetry-m22`
-expands on alerting expectations and the associated Grafana panels.
+Xom chiqishni (yoki Prometheus suratini) kalibrlash chiptasiga ulang, shunda
+Boshqaruv tekshiruvchisi ildiz tarixining chegaralarini va nazorat nuqtalari oralig'ini tasdiqlashi mumkin
+sharaflangan. `docs/source/telemetry.md#confidential-tree-telemetry-m22` da telemetriya qo'llanmasi
+ogohlantirish kutishlari va tegishli Grafana panellarini kengaytiradi.
 
-Include the verifier cache counters in the same scrape so reviewers can confirm
-the miss ratio stayed below the 40 % warning threshold:
+Tekshiruvchilar kesh hisoblagichlarini bir xil skrepga qo'shing, shunda ko'rib chiquvchilar tasdiqlashlari mumkin
+o'tkazib yuborish darajasi 40% ogohlantirish chegarasidan past bo'lib qoldi:
 
 ```bash
 curl -s http://127.0.0.1:8180/metrics \\
   | rg 'iroha_zk_verifier_cache_events_total{cache="vk",event="(hit|miss)"}'
 ```
 
-Document the derived ratio (`miss / (hit + miss)`) inside the calibration note
-to show the SIMD-neutral cost modelling exercises reused warm caches instead of
-thrashing the Halo2 verifier registry.
+Olingan nisbatni (`miss / (hit + miss)`) kalibrlash eslatmasi ichida hujjatlang
+SIMD-neytral xarajat modellashtirish mashqlar o'rniga issiq keshlar qayta ko'rsatish uchun
+Halo2 tekshiruvi registrini sindirish.
 
-## Neutral & AVX2 Waiver
+## Neytral va AVX2dan voz kechish
 
-SDK Council granted a temporary waiver for the Phase C gate requiring
-`baseline-simd-neutral` and `baseline-avx2` measurements:
+SDK Kengashi PhaseC eshigini talab qilish uchun vaqtinchalik voz kechdi
+`baseline-simd-neutral` va `baseline-avx2` o'lchovlari:
 
-- **SIMD-neutral:** On Apple Silicon the `ring` crypto backend enforces NEON for
-  ABI correctness. Disabling the feature (`RUSTFLAGS="-C target-feature=-neon"`)
-  aborts the build before the bench binary is produced (`docs/source/confidential_assets_calibration_simd_neutral_attempt_20260428.log`).
-- **AVX2:** The local toolchain cannot spawn x86_64 binaries (`arch -x86_64 rustc -V`
-  → “Bad CPU type in executable”; see
+- **SIMD-neytral:** Apple Silicon-da `ring` kripto-versiyasi NEON-dan foydalanadi.
+  ABI to'g'riligi. Funktsiyani o'chirish (`RUSTFLAGS="-C target-feature=-neon"`)
+  dastgoh binari ishlab chiqarilishidan oldin qurilishni to'xtatadi (`docs/source/confidential_assets_calibration_simd_neutral_attempt_20260428.log`).
+- **AVX2:** Mahalliy asboblar zanjiri x86_64 ikkilik fayllarni ishlab chiqara olmaydi (`arch -x86_64 rustc -V`
+  → "Bajariladigan faylda noto'g'ri CPU turi"; qarang
   `docs/source/confidential_assets_calibration_avx2_attempt_20260428.log`).
 
-Until CI hosts `bench-x86-neon0` and `bench-x86-avx2a` are online, the NEON run
-above plus the telemetry evidence satisfy the Phase C acceptance criteria.
-The waiver is recorded in `status.md` and will be revisited once x86 hardware is
-available.
+`bench-x86-neon0` va `bench-x86-avx2a` CI xostlari onlayn bo'lgunga qadar NEON ishlaydi
+yuqoridagi va telemetriya dalillari PhaseC qabul qilish mezonlariga javob beradi.
+Voz kechish `status.md` da qayd etilgan va x86 uskunasi oʻrnatilgandan keyin qayta koʻrib chiqiladi.
+mavjud.

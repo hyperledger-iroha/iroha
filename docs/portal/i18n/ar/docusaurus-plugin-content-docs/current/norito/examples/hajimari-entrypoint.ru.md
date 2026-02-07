@@ -4,30 +4,32 @@ direction: rtl
 source: docs/portal/docs/norito/examples/hajimari-entrypoint.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-slug: /norito/examples/hajimari-entrypoint
-title: Каркас входной точки Hajimari
-description: Минимальный каркас контракта Kotodama с одной публичной точкой входа и хендлом состояния.
-source: crates/ivm/docs/examples/01_hajimari.ko
+سبيكة: /norito/examples/hajimari-entrypoint
+العنوان: karcas водной точки هاجيماري
+الوصف: الحد الأدنى من عقد السيارة Kotodama مع مياه عامة واحدة وحالة جيدة.
+المصدر:crates/ivm/docs/examples/01_hajimari.ko
 ---
 
-Минимальный каркас контракта Kotodama с одной публичной точкой входа и хендлом состояния.
+الحد الأدنى من عقد الشحن Kotodama مع مياه عامة جيدة واحدة وحالة جيدة.
 
-## Пошаговый обход реестра
+## Почаговый обдод еестра
 
-- Скомпилируйте контракт с `koto_compile --abi 1` как показано в [Norito Getting Started](/norito/getting-started#1-compile-a-kotodama-contract) или через `cargo test -p ivm developer_portal_norito_snippets_compile`.
-- Прогоните smoke-test байткода локально с `ivm_run` / `developer_portal_norito_snippets_run`, чтобы проверить лог `info!` и начальный syscall перед тем, как трогать узел.
-- Разверните артефакт через `iroha_cli app contracts deploy` и подтвердите манифест, используя шаги из [Norito Getting Started](/norito/getting-started#4-deploy-via-iroha_cli).
+- قم بتجميع العقد باستخدام `koto_compile --abi 1` كما تم عرضه في [Norito البدء](/norito/getting-started#1-compile-a-kotodama-contract) أو عبر `cargo test -p ivm developer_portal_norito_snippets_compile`.
+- قم بترقية الرمز البنكي لاختبار الدخان محليًا باستخدام `ivm_run` / `developer_portal_norito_snippets_run` للتحقق من السجل `info!` وبدء استدعاء النظام قبل ذلك، كما يمكنك شراءها.
+- تم التحقق من المنتج من خلال `iroha_cli app contracts deploy` وبيان التحقق، باستخدام أشياء من [Norito الشروع في العمل](/norito/getting-started#4-deploy-via-iroha_cli).
 
-## Связанные руководства SDK
+## تطوير شامل SDK
 
 - [Quickstart Rust SDK](/sdks/rust)
 - [Quickstart Python SDK](/sdks/python)
 - [Quickstart JavaScript SDK](/sdks/javascript)
 
-[Скачать исходник Kotodama](/norito-snippets/hajimari-entrypoint.ko)
+[تحميل المصدر Kotodama](/norito-snippets/hajimari-entrypoint.ko)
 
 ```text
 // Minimal initializer-style function inside a contract.

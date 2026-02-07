@@ -4,28 +4,30 @@ direction: ltr
 source: docs/portal/docs/norito/examples/nft-flow.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-slug: /norito/examples/nft-flow
-title: NFT کو منٹ، منتقل اور برن کریں
-description: NFT کے لائف سائیکل کو ابتدا سے انتہا تک دکھاتا ہے: مالک کو منٹ کرنا، منتقل کرنا، میٹا ڈیٹا ٹیگ کرنا، اور برن کرنا۔
-source: crates/ivm/docs/examples/12_nft_flow.ko
+limace : /norito/exemples/nft-flow
+titre : NFT کو منٹ، منتقل اور برن کریں
+description : NFT est un produit de référence pour les utilisateurs de NFT : Il s'agit d'un modèle de NFT ڈیٹا ٹیگ کرنا، اور برن کرنا۔
+source : crates/ivm/docs/examples/12_nft_flow.ko
 ---
 
-NFT کے لائف سائیکل کو ابتدا سے انتہا تک دکھاتا ہے: مالک کو منٹ کرنا، منتقل کرنا، میٹا ڈیٹا ٹیگ کرنا، اور برن کرنا۔
+NFT est un outil de recherche en ligne gratuit : il s'agit d'un modèle de référencement gratuit ڈیٹا ٹیگ کرنا، اور برن کرنا۔
 
 ## لیجر واک تھرو
 
-- یقینی بنائیں کہ NFT ڈیفینیشن (مثلا `n0#wonderland`) موجود ہو اور اسنیپٹ میں استعمال ہونے والے مالک/موصول کنندہ اکاؤنٹس (`ih58...`, `ih58...`) بھی موجود ہوں۔
-- `nft_issue_and_transfer` انٹری پوائنٹ کال کریں تاکہ NFT منٹ ہو، Alice سے Bob کو منتقل ہو، اور اجرا کی وضاحت کرنے والا میٹا ڈیٹا فلیگ منسلک ہو۔
-- `iroha_cli ledger nfts list --account <id>` یا SDK کے متبادل استعمال کر کے NFT لیجر اسٹیٹ دیکھیں تاکہ ٹرانسفر کی تصدیق ہو، پھر تصدیق کریں کہ برن انسٹرکشن چلنے کے بعد اثاثہ حذف ہو جاتا ہے۔
+- Le logiciel NFT (`n0#wonderland`) est également disponible en ligne. والے مالک/موصول کنندہ اکاؤنٹس (`ih58...`, `ih58...`) par ھی موجود ہوں۔
+- `nft_issue_and_transfer` L'application NFT est basée sur Alice et Bob et sur l'application NFT. کرنے والا میٹا ڈیٹا فلیگ منسلک ہو۔
+- `iroha_cli ledger nfts list --account <id>` pour un SDK permettant de créer un lien NFT avec un logiciel de stockage ہو، پھر تصدیق کریں کہ برن انسٹرکشن چلنے کے بعد اثاثہ حذف ہو جاتا ہے۔
 
-## متعلقہ SDK گائیڈز
+## Utiliser le SDK
 
-- [Rust SDK quickstart](/sdks/rust)
-- [Python SDK quickstart](/sdks/python)
-- [JavaScript SDK quickstart](/sdks/javascript)
+- [Démarrage rapide du SDK Rust](/sdks/rust)
+- [Démarrage rapide du SDK Python](/sdks/python)
+- [Démarrage rapide du SDK JavaScript](/sdks/javascript)
 
 [Kotodama سورس ڈاؤن لوڈ کریں](/norito-snippets/nft-flow.ko)
 

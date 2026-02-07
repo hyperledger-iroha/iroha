@@ -7,41 +7,42 @@ generator: scripts/sync_docs_i18n.py
 source_hash: e797879d1f77c8cfd62fcc67874d584f6bdeee9395faafe52fc33f26ce2e6a21
 source_last_modified: "2025-12-29T18:16:35.904811+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Welcome to the SORA Nexus Developer Portal
+# SORA Nexus Хөгжүүлэгчийн порталд тавтай морилно уу.
 
-The SORA Nexus developer portal bundles interactive documentation, SDK
-tutorials, and API references for Nexus operators and Hyperledger Iroha
-contributors. It complements the main docs site by surfacing hands-on guides
-and generated specs directly from this repository.
+SORA Nexus хөгжүүлэгч портал нь интерактив баримт бичгийн багц, SDK
+зааварчилгаа, Nexus операторууд болон Hyperledger Iroha-д зориулсан API лавлагаа
+хувь нэмэр оруулагчид. Энэ нь гарын авлагыг гаргаснаар үндсэн баримт бичгийн сайтыг нөхдөг
+мөн энэ агуулахаас техникийн үзүүлэлтүүдийг шууд үүсгэсэн.
 
-## What you can do here
+## Та энд юу хийж чадах вэ
 
-- **Learn Norito** – start with the overview and quickstart to understand the
-  serialization model and bytecode tooling.
-- **Bootstrap SDKs** – follow quickstarts for JavaScript and Rust today; Python,
-  Swift, and Android guides will join them as recipes are migrated.
-- **Browse API references** – the Torii OpenAPI page renders the latest REST
-  specification, and configuration tables link back to the canonical Markdown
-  sources.
-- **Prepare deployments** – operational runbooks (telemetry, settlement, Nexus
-  overlays) are being ported from `docs/source/` and will land in this site as
-  the migration progresses.
+- **Norito-г сур** – тоймоос эхэлж, ойлгохын тулд хурдан эхлүүлээрэй.
+  цуваа загвар болон байт код хэрэгсэл.
+- **Bootstrap SDKs** – өнөөдөр JavaScript болон Rust-ийн хурдан эхлэлийг дагана уу; Python,
+  Жорыг шилжүүлэх үед Swift болон Android хөтөчүүд тэдэнтэй нэгдэх болно.
+- **API лавлагаа үзэх** – Torii OpenAPI хуудас нь хамгийн сүүлийн үеийн REST-ийг гаргадаг.
+  тодорхойлолт, тохиргооны хүснэгтүүд нь каноник Markdown руу буцаж холбогддог
+  эх сурвалжууд.
+- **Байршуулах ажлыг бэлтгэх** – үйлдлийн дэвтэр (телеметр, тооцоо, Nexus)
+  давхаргууд) `docs/source/`-ээс зөөгдөн байгаа бөгөөд энэ сайтад дараах байдлаар буух болно.
+  шилжилт хөдөлгөөн урагшилж байна.
 
-## Current status
+## Одоогийн байдал
 
-- ✅ Docusaurus v3 scaffolding with live pages for Norito and SDK quickstarts.
-- ✅ Torii OpenAPI plugin wired to `npm run sync-openapi`.
-- ⏳ Migrating the remaining guides from `docs/source/`.
-- ⏳ Adding preview builds and linting to the documentation CI.
+- ✅ Norito болон SDK хурдан эхлүүлэхэд зориулагдсан шууд хуудас бүхий Docusaurus v3 шат.
+- ✅ Torii OpenAPI залгаасыг `npm run sync-openapi` руу холбосон.
+- ⏳ Үлдсэн хөтөчүүдийг `docs/source/`-ээс шилжүүлж байна.
+- ⏳ Баримт бичгийн CI-д урьдчилж харах бүтээц болон өнгөлгөөг нэмж байна.
 
-## Getting involved
+## Оролцож байна
 
-- See `docs/portal/README.md` for local development commands (`npm install`,
+- Орон нутгийн хөгжлийн командуудыг `docs/portal/README.md`-с үзнэ үү (`npm install`,
   `npm run start`, `npm run build`).
-- Content migration tasks are tracked alongside the `DOCS-*` roadmap items.
-  Contributions are welcome—port sections from `docs/source/` and add the page
-  to the sidebar.
-- If you add a generated artifact (specs, config tables), document the build
-  command so future contributors can refresh it easily.
+- Агуулга шилжүүлэх ажлыг `DOCS-*` замын газрын зургийн дагуу хянадаг.
+  Хувь нэмэр оруулахыг урьж байна—`docs/source/` портын хэсгүүд болон хуудсыг нэмнэ үү
+  хажуу тал руу.
+- Хэрэв та үүсгэсэн олдвор (техникийн үзүүлэлтүүд, тохиргооны хүснэгтүүд) нэмбэл бүтээцийг баримтжуулна
+  тушаал өгснөөр ирээдүйн хувь нэмэр оруулагчид үүнийг хялбархан сэргээх боломжтой.

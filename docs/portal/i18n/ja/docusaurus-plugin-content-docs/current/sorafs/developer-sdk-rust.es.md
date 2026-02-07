@@ -4,26 +4,28 @@ direction: ltr
 source: docs/portal/docs/sorafs/developer-sdk-rust.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: developer-sdk-rust
-title: Fragmentos de SDK de Rust
-sidebar_label: Fragmentos de Rust
-description: Ejemplos mínimos en Rust para consumir proof streams y manifests.
+ID: 開発者-sdk-rust
+タイトル: SDK の Rust のフラグメント
+サイドバーラベル: 錆びた断片
+説明: 証明ストリームとマニフェストを消費する Rust のミニモス。
 ---
 
-:::note Fuente canónica
-Esta página refleja `docs/source/sorafs/developer/sdk/rust.md`. Mantén ambas copias sincronizadas.
+:::メモ フエンテ カノニカ
+`docs/source/sorafs/developer/sdk/rust.md` のページを参照してください。マンテン・アンバス・コピアス・シンクロニザダス。
 :::
 
-Los crates de Rust en este repositorio impulsan el CLI y pueden incrustarse dentro de
-orquestadores o servicios personalizados. Los fragmentos de abajo resaltan los helpers
-que más piden los desarrolladores.
+ロス クレイツとエステ リポジトリのインパルサン エル CLI およびクラスター デントロ デ プエデン
+オルケスタドーレスまたはパーソナルサービス。ロス フラグメントス デ アバホ レサルタン ロス ヘルパーズ
+ケ・マス・ピデン・ロス・デサロラドーレス。
 
-## Helper de proof stream
+## 証明ストリームのヘルパー
 
-Reutiliza el parser de proof stream existente para agregar métricas de una respuesta HTTP:
+HTTP 解析メトリクスの存在を証明するストリームの解析機能:
 
 ```rust
 use std::error::Error;
@@ -61,52 +63,52 @@ pub fn collect_proof_metrics(response: Response) -> Result<ProofStreamSummary, B
 }
 ```
 
-La versión completa (con tests) vive en `docs/examples/sorafs_rust_proof_stream.rs`.
-`ProofStreamSummary::to_json()` renderiza el mismo JSON de métricas que el CLI, lo que
-facilita alimentar backends de observabilidad o aserciones de CI.
+バージョンが完了しました (テスト中) `docs/examples/sorafs_rust_proof_stream.rs` で生き続けてください。
+`ProofStreamSummary::to_json()` CLI からのメトリクスに関する JSON のレンダリング、ロケール
+CI の観察や研究を容易にするための食品バックエンド。
 
-## Puntuación de fetch multi-source
+## マルチソースフェッチの句読点
 
-El módulo `sorafs_car::multi_fetch` expone el scheduler de fetch asíncrono usado por el
-CLI. Implementa `sorafs_car::multi_fetch::ScorePolicy` y pásalo vía
-`FetchOptions::score_policy` para ajustar el orden de proveedores. El test unitario
-`multi_fetch::tests::score_policy_can_filter_providers` muestra cómo forzar
-preferencias personalizadas.
+`sorafs_car::multi_fetch` モジュールのスケジューラーのフェッチとクロノメーターの実行
+CLI。 `sorafs_car::multi_fetch::ScorePolicy` を実装してください。
+`FetchOptions::score_policy` 正義の秩序を証明するために。エルテストユニタリオ
+`multi_fetch::tests::score_policy_can_filter_providers` 夢の世界
+個人的な好み。
 
-Otros knobs reflejan flags del CLI:
+CLI からの Otros ノブのリフレジャン フラグ:
 
-- `FetchOptions::per_chunk_retry_limit` coincide con el flag `--retry-budget` para
-  ejecuciones de CI que restringen los reintentos a propósito.
-- Combina `FetchOptions::global_parallel_limit` con `--max-peers` para limitar la
-  cantidad de proveedores concurrentes.
-- `OrchestratorConfig::with_telemetry_region("region")` etiqueta las métricas
-  `sorafs_orchestrator_*`, mientras que `OrchestratorConfig::with_transport_policy`
-  refleja el flag `--transport-policy` del CLI. `TransportPolicy::SoranetPreferred`
-  se entrega como valor por defecto en superficies CLI/SDK; usa
-  `TransportPolicy::DirectOnly` solo al preparar un downgrade o seguir una directiva de
-  compliance, y reserva `SoranetStrict` para pilotos PQ-only con aprobación explícita.
-- Configura `SorafsGatewayFetchOptions::write_mode_hint =
-  Some(WriteModeHint::UploadPqOnly)` para forzar subidas PQ-only; el helper promoverá
-  automáticamente las políticas de transporte/anonimato salvo que se sobrescriban
-  explícitamente.
-- Usa `SorafsGatewayFetchOptions::policy_override` para fijar un transporte o tier de
-  anonimato temporal para una sola solicitud; al proporcionar cualquiera de los campos
-  se omite la degradación por brownout y falla si el tier solicitado no puede
-  satisfacerse.
-- Los bindings de Python (`sorafs_multi_fetch_local` / `sorafs_gateway_fetch`) y
-  JavaScript (`sorafsMultiFetchLocal`) reutilizan el mismo scheduler, así que configura
+- `FetchOptions::per_chunk_retry_limit` 一致コンエルフラグ `--retry-budget` パラ
+  正しい規制を解除してください。
+- Combina `FetchOptions::global_parallel_limit` コン `--max-peers` パラ リミッター ラ
+  兼務議員。
+- `OrchestratorConfig::with_telemetry_region("region")` メトリカスのエチケット
+  `sorafs_orchestrator_*`、ミエントラスク `OrchestratorConfig::with_transport_policy`
+  リフレジャ エル フラグ `--transport-policy` デル CLI。 `TransportPolicy::SoranetPreferred`
+  CLI/SDK の表面に欠陥がある場合は、これを確認してください。アメリカ
+  `TransportPolicy::DirectOnly` 単独でのダウングレードの準備と指示の確認
+  コンプライアンス、Y 予約 `SoranetStrict` パラ パイロット PQ のみの明示的な違反。
+- `SorafsGatewayFetchOptions::write_mode_hint = を設定します。
+  Some(WriteModeHint::UploadPqOnly)` は PQ 専用です。エルヘルパープロモーション
+  交通機関の政治的自動化/緊急一斉射撃の自動化
+  エクスプリシタメンテ。
+- 米国 `SorafsGatewayFetchOptions::policy_override` フィハルル輸送機関向け
+  アノニマト・テンポラル・パラ・ウナ・ソラ・ソリトゥド。アル・プロポーシオナル・クアルキエラ・デ・ロス・カンポス
+  ブラウンアウトによる劣化を防ぎ、安全性を追求しません
+  満足です。
+- Python のバインディングの喪失 (`sorafs_multi_fetch_local` / `sorafs_gateway_fetch`)
+  JavaScript (`sorafsMultiFetchLocal`) ミスモ スケジューラの再利用、構成として
   `return_scoreboard=true` en esos helpers para recuperar los pesos calculados junto con
-  los recibos de chunk.
-- `SorafsGatewayScoreboardOptions::telemetry_source_label` registra el stream OTLP que
-  produjo un bundle de adopción. Cuando se omite, el cliente deriva
-  `region:<telemetry_region>` (o `chain:<chain_id>`) automáticamente para que el
-  metadata siempre lleve una etiqueta descriptiva.
+  ロス・レシボス・デ・チャンク。
+- `SorafsGatewayScoreboardOptions::telemetry_source_label` レジストレーション ストリーム OTLP キュー
+  採用のバンドルを作成します。クアンド・セ・オミテ、エル・クライエンテ・デリバ
+  `region:<telemetry_region>` (または `chain:<chain_id>`) 自動処理
+  メタデータは、エチケットの説明を参照できます。
 
-## Fetch vía `iroha::Client`
+## `iroha::Client` 経由で取得
 
-El SDK de Rust incorpora el helper de gateway fetch; proporciona un manifest más los
-descriptores de proveedores (incluyendo stream tokens) y deja que el cliente ejecute
-el fetch multi-source:
+Rust の SDK にはゲートウェイフェッチのヘルパーが組み込まれています。マニフェスト ロスに比例する
+証明された記述子 (ストリーム トークンを含む) とクライアントの取り出し
+el フェッチマルチソース:
 
 ```rust
 use eyre::Result;
@@ -155,23 +157,23 @@ pub async fn fetch_payload(
 }
 ```
 
-Configura `transport_policy` como `Some(TransportPolicy::SoranetStrict)` cuando las
-subidas deban rechazar relays clásicos, o `Some(TransportPolicy::DirectOnly)` cuando
-SoraNet deba omitirse por completo. Apunta `scoreboard.persist_path` al directorio de
-artefactos de release, fija opcionalmente `scoreboard.now_unix_secs` y completa
-`scoreboard.metadata` con contexto de captura (etiquetas de fixtures, target Torii, etc.)
-para que `cargo xtask sorafs-adoption-check` consuma JSON determinista entre SDKs con
-el blob de procedencia que espera SF-6c.
-`Client::sorafs_fetch_via_gateway` ahora complementa ese metadata con el identificador
- de manifest, la expectativa opcional de manifest CID y el flag
-`gateway_manifest_provided` inspeccionando el `GatewayFetchConfig` suministrado, de modo
-que capturas que incluyen un envoltorio de manifest firmado cumplan el requisito de
-pruebas SF-6c sin duplicar esos campos manualmente.
+`transport_policy` を構成 `Some(TransportPolicy::SoranetStrict)` クアンドラス
+スビダス デバン レチャザール リレー クラシコス、o `Some(TransportPolicy::DirectOnly)` cuando
+SoraNet では完全に省略されています。 Apunta `scoreboard.persist_path` ディレクトリ
+リリースのアーティファクト、必要に応じて `scoreboard.now_unix_secs` を完了
+キャプチャのコンテキスト `scoreboard.metadata` (フィクスチャのエチケット、ターゲット Torii など)
+パラメータ `cargo xtask sorafs-adoption-check` コンスマ JSON 決定要素 SDK コン
+SF-6c の手順を確認します。
+`Client::sorafs_fetch_via_gateway` アホラの識別情報を補完するメタデータ
+ マニフェスト、期待されるオプションのマニフェスト CID およびフラグ
+`gateway_manifest_provided` 検査および検査 `GatewayFetchConfig` 管理、モード
+キャプチャーを含めて、マニフェスト・ファームド・クムプランを要求する必要があります
+プルエバス SF-6c シン デュプリカー EOS カンポス マニュアルメンテ。
 
-## Helpers de manifest
+## マニフェストのヘルパー
 
-`ManifestBuilder` sigue siendo la forma canónica de ensamblar payloads Norito de forma
-programática:
+`ManifestBuilder` 形式的なペイロードの形式 Norito 形式
+プログラム:
 
 ```rust
 use sorafs_manifest::{ManifestBuilder, ManifestV1, PinPolicy, StorageClass};
@@ -188,5 +190,5 @@ fn build_manifest(bytes: &[u8]) -> Result<ManifestV1, Box<dyn std::error::Error>
 }
 ```
 
-Incorpora el builder donde los servicios necesiten generar manifests al vuelo; el
-CLI sigue siendo la ruta recomendada para pipelines deterministas.
+ビルダーは、必要な一般的なマニフェストをアルブエロに組み込みます。エル
+CLI は、パイプラインの決定に関する推奨事項を示します。

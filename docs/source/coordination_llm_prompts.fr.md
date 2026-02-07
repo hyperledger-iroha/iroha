@@ -6,19 +6,20 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: cc5499372cc9b188384254f0bf05386d81a1a57e0388d74ad2ae698e0ab9945e
 source_last_modified: "2026-01-03T18:08:00.678386+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# LLM Coordination Prompts
+# Invites de coordination LLM
 
-## Purpose
+## Objectif
 
-These prompt templates help engineers quickly gather clarifications from @mtakemiya
-when roadmap items leave open questions. Copy one of the sections below into the
-LLM thread, replace the bracketed placeholders, and include relevant file or
-line references so context stays anchored.
+Ces modèles d'invite aident les ingénieurs à recueillir rapidement les éclaircissements de @mtakemiya
+lorsque les éléments de la feuille de route laissent des questions ouvertes. Copiez l'une des sections ci-dessous dans le
+fil LLM, remplacez les espaces réservés entre crochets et incluez le fichier ou le fichier pertinent.
+références de ligne pour que le contexte reste ancré.
 
-## Architecture Or Design Decisions
+## Décisions d'architecture ou de conception
 
 ````markdown
 We need clarification on an open design point from the roadmap.
@@ -39,7 +40,7 @@ Could you provide the expected decision or additional constraints so we can
 finish the implementation?
 ````
 
-## Configuration Or Operator Guidance
+## Configuration ou guide de l'opérateur
 
 ````markdown
 We are documenting configuration/operator guidance and need input.
@@ -54,7 +55,7 @@ Questions:
 Any specific wording or runbook steps you would like us to include?
 ````
 
-## Cryptography Or Protocol Primitives
+## Primitives de cryptographie ou de protocole
 
 ````markdown
 Before implementing the next cryptographic/protocol task, we need domain input.
@@ -69,7 +70,7 @@ Clarifications requested:
 Are there mandatory references or acceptance criteria we must observe?
 ````
 
-## Test Vectors Or Fixtures
+## Test de vecteurs ou d'appareils
 
 ````markdown
 We are preparing tests/fixtures for [feature]. Could you confirm the expected
@@ -84,7 +85,7 @@ Do we have canonical test data, or should we synthesise vectors using the
 current spec? Please confirm so we can keep CI deterministic.
 ````
 
-## Release Engineering Or Process
+## Ingénierie ou processus de publication
 
 ````markdown
 Clarification needed on release/coordination steps for [feature or milestone].

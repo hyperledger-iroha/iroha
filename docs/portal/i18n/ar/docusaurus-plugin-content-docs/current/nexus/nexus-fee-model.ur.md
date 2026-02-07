@@ -4,26 +4,28 @@ direction: rtl
 source: docs/portal/docs/nexus/nexus-fee-model.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: nexus-fee-model
-title: Nexus فیس ماڈل اپ ڈیٹس
-description: `docs/source/nexus_fee_model.md` کا آئینہ، جو lane settlement receipts اور reconciliation surfaces کی دستاویز کرتا ہے۔
+المعرف: نموذج رسوم العلاقة
+العنوان: Nexus فيس ماڈل اپ ڈیٹس
+الوصف: `docs/source/nexus_fee_model.md` هذا، إيصالات تسوية الممرات وأسطح المصالحة هي دستاويز كرتا.
 ---
 
-:::note کینونیکل ماخذ
-یہ صفحہ `docs/source/nexus_fee_model.md` کی عکاسی کرتا ہے۔ جاپانی، عبرانی، ہسپانوی، پرتگالی، فرانسیسی، روسی، عربی اور اردو ترجمے migrate ہونے تک دونوں نقول ہم آہنگ رکھیں۔
+:::ملاحظة کینونیکل مأخذ
+هذه هي الصفحة `docs/source/nexus_fee_model.md`. اليابان، عبراني، ہسپانوي، پرتگالی، فرانسيسی، روسي، عربي واردو ترجمے ہونے تک دونوں نقول ہم آہنگ رکھیں.
 :::
 
-# Nexus فیس ماڈل اپ ڈیٹس
+# Nexus فيس ماكل اپيس
 
-یکساں settlement router اب ہر lane کے لئے deterministic receipts محفوظ کرتا ہے تاکہ آپریٹرز gas debits کو Nexus فیس ماڈل کے مطابق reconcile کر سکیں۔
+جهاز التوجيه الخاص بالتسوية على طول المسار هو الإيصالات الحتمية محفوظات كرتا وحسابات ديون الغاز Nexus فيس ماكل وفقًا للتسوية.
 
-- router کی مکمل architecture، buffer policy، telemetry matrix اور rollout sequencing کے لئے `docs/settlement-router.md` دیکھیں۔ یہ گائیڈ وضاحت کرتا ہے کہ یہاں درج parameters کیسے NX-3 roadmap deliverable سے جڑتے ہیں اور SREs کو production میں router کی نگرانی کیسے کرنی چاہئے۔
-- Gas asset configuration (`pipeline.gas.units_per_gas`) میں `twap_local_per_xor` decimal، `liquidity_profile` (`tier1`, `tier2`, یا `tier3`) اور `volatility_class` (`stable`, `elevated`, `dislocated`) شامل ہیں۔ یہ flags settlement router کو feed ہوتے ہیں تاکہ حاصل ہونے والی XOR quote، canonical TWAP اور lane کے haircut tier سے میل کھائے۔
-- ہر gas payment والی transaction ایک `LaneSettlementReceipt` ریکارڈ کرتی ہے۔ ہر receipt caller کی فراہم کردہ source identifier، local micro-amount، فوری واجب الادا XOR، haircut کے بعد expected XOR، حاصل شدہ variance (`xor_variance_micro`) اور block timestamp (milliseconds) محفوظ کرتا ہے۔
-- Block execution receipts کو lane/dataspace کے حساب سے aggregate کرتا ہے اور انہیں `/v1/sumeragi/status` میں `lane_settlement_commitments` کے ذریعے شائع کرتا ہے۔ totals میں `total_local_micro`, `total_xor_due_micro`, اور `total_xor_after_haircut_micro` شامل ہوتے ہیں جو block پر جمع کر کے nightly reconciliation exports کے لئے فراہم ہوتے ہیں۔
-- ایک نیا `total_xor_variance_micro` counter یہ track کرتا ہے کہ کتنا safety margin استعمال ہوا (due XOR اور post-haircut expectation کے درمیان فرق)، اور `swap_metadata` deterministic conversion parameters (TWAP, epsilon, liquidity profile, اور volatility_class) کو دستاویز کرتا ہے تاکہ auditors runtime configuration سے الگ quote inputs کی تصدیق کر سکیں۔
+- بنية جهاز التوجيه الكاملة، وسياسة المخزن المؤقت، ومصفوفة القياس عن بعد، وتسلسل الطرح `docs/settlement-router.md`. هناك نقطة واضحة وهي معلمات الدرجة التي يمكن تسليمها لخريطة طريق NX-3 وSREs لجهاز التوجيه الذي يوجه هذا المنتج.
+- تكوين أصول الغاز (`pipeline.gas.units_per_gas`) `twap_local_per_xor` العشري، `liquidity_profile` (`tier1`، `tier2`، أو `tier3`) و`volatility_class` (`stable`, `elevated`, `dislocated`) شامل. يوجد جهاز توجيه لتسوية الأعلام يغذي ويحصل على اقتباس XOR وTWAP المتعارف عليه ومستوى قص الشعر على مستوى العالم.
+- عملية دفع الغاز هي `LaneSettlementReceipt` بطاقة الائتمان. يقوم المتصل باستلام معرف المصدر، والمبلغ الصغير المحلي، والدفع الفوري على XOR، وقص الشعر بعد XOR المتوقع، وقد تم الحصول على التباين (`xor_variance_micro`) والطابع الزمني للكتلة (ملي ثانية) محفوظات كرتا.
+- تم إنشاء إيصالات تنفيذ الكتلة للحارة/مساحة البيانات المجمعة و`/v1/sumeragi/status` في `lane_settlement_commitments` وهي شائعة الاستخدام. تتضمن الإجماليات `total_local_micro` و`total_xor_due_micro` و`total_xor_after_haircut_micro` كتلة من صادرات المصالحة الليلية المجمعة من أجل الحصول على معلومات إضافية.
+- عداد جديد `total_xor_variance_micro` وتتبع المسار واستخدام هامش الأمان (بسبب XOR وتوقعات ما بعد قص الشعر) ومعلمات التحويل الحتمية `swap_metadata` (TWAP وepsilon وملف تعريف السيولة وفئة التقلب) يقوم إعداد القائمة بتكوين وقت تشغيل المدققين بالإضافة إلى مراجعة مدخلات الاقتباس.
 
-Consumers `lane_settlement_commitments` کو موجودہ lane اور dataspace commitment snapshots کے ساتھ دیکھ سکتے ہیں تاکہ یہ تصدیق ہو کہ fee buffers، haircut tiers، اور swap execution configured Nexus fee model سے میل کھاتے ہیں۔
+`lane_settlement_commitments` للمستهلكين يوفر لقطات التزام بالممر ومساحة البيانات ويتيح لك التحقق من المخازن المؤقتة للرسوم وطبقات قص الشعر وتنفيذ المبادلة التي تم تكوينها Nexus نموذج الرسوم المحدود ہیں۔

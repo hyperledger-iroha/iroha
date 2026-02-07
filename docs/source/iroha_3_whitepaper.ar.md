@@ -6,111 +6,108 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 07e149429887b0dfc38cf0619552cbefcbae4dd1ec9fe9e9d47a05371ed08f29
 source_last_modified: "2026-01-03T18:07:57.204376+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Iroha v3.0 (Nexus Preview)
+# Iroha v3.0 (معاينة Nexus)
 
-This document captures the forward-looking Hyperledger Iroha v3 architecture, focusing on the multi-lane
-pipeline, Nexus data spaces, and the Asset Exchange Toolkit (AXT). It complements the Iroha v2 whitepaper by
-describing upcoming capabilities that are actively under development.
+يجسد هذا المستند بنية Hyperledger Iroha v3 التطلعية، مع التركيز على المسارات المتعددة
+خط الأنابيب ومساحات بيانات Nexus ومجموعة أدوات تبادل الأصول (AXT). وهو يكمل الورقة البيضاء Iroha v2 بواسطة
+وصف القدرات القادمة التي هي قيد التطوير بنشاط.
 
 ---
 
-## 1. Overview
+## 1. نظرة عامة
 
-Iroha v3 extends the deterministic foundation of v2 with horizontal scalability and richer cross-domain
-workflows. The release, codenamed **Nexus**, introduces:
+يعمل Iroha v3 على توسيع الأساس الحتمي للإصدار 2 مع قابلية التوسع الأفقي ومجالات أكثر ثراءً
+سير العمل. يقدم الإصدار، الذي يحمل الاسم الرمزي **Nexus**، ما يلي:
 
-- A single, globally shared network called **SORA Nexus**. All Iroha v3 peers participate in this universal
-  ledger rather than operating isolated deployments. Organisations join by registering their own data spaces,
-  which remain isolated for policy and privacy while anchoring into the common ledger.
-- A shared codebase: the same repository builds both Iroha v2 (self-hosted networks) and Iroha v3 (SORA Nexus).
-  Configuration selects the target mode so operators can adopt Nexus features without switching software
-  stacks. The Iroha Virtual Machine (IVM) is identical across both releases, so Kotodama contracts and bytecode
-  artefacts run seamlessly on self-hosted networks and the global Nexus ledger.
-- Multi-lane block production to process independent workloads in parallel.
-- Data spaces (DS) that isolate execution environments while remaining composable through on-chain anchors.
-- The Asset Exchange Toolkit (AXT) for atomic, cross-space value transfers and contract-controlled swaps.
-- Enhanced reliability through Reliable Broadcast Commit (RBC) lanes, deterministic deadlines, and proof
-  sampling budgets.
+- شبكة واحدة مشتركة عالميًا تسمى **SORA Nexus**. يشارك جميع أقران Iroha v3 في هذا العالمي
+  دفتر الأستاذ بدلاً من تشغيل عمليات النشر المعزولة. تنضم المنظمات عن طريق تسجيل مساحات البيانات الخاصة بها،
+  والتي تظل معزولة بالنسبة للسياسة والخصوصية أثناء تثبيتها في دفتر الأستاذ المشترك.
+- قاعدة تعليمات برمجية مشتركة: يقوم نفس المستودع بإنشاء كل من Iroha v2 (الشبكات ذاتية الاستضافة) وIroha v3 (SORA Nexus).
+  يحدد التكوين الوضع المستهدف حتى يتمكن المشغلون من اعتماد ميزات Nexus دون تبديل البرامج
+  مداخن. يتطابق الجهاز الظاهري Iroha (IVM) عبر كلا الإصدارين، لذا فإن عقود Kotodama والرمز الثانوي
+  تعمل المصنوعات اليدوية بسلاسة على الشبكات ذاتية الاستضافة ودفتر الأستاذ Nexus العالمي.
+- إنتاج كتل متعددة المسارات لمعالجة أعباء العمل المستقلة بالتوازي.
+- مساحات البيانات (DS) التي تعزل بيئات التنفيذ بينما تظل قابلة للتركيب من خلال نقاط الارتساء الموجودة على السلسلة.
+- مجموعة أدوات تبادل الأصول (AXT) لعمليات نقل القيمة الذرية وعبر الفضاء والمقايضات التي يتم التحكم فيها بالعقود.
+- موثوقية معززة من خلال مسارات التزام البث الموثوق (RBC)، والمواعيد النهائية الحتمية، والإثبات
+  ميزانيات أخذ العينات
 
-These features remain under active development; APIs and layouts may evolve before the v3 general
-availability milestone. Refer to `nexus.md`, `nexus_transition_notes.md`, and `new_pipeline.md` for
-engineering-level detail.
+تظل هذه الميزات قيد التطوير النشط؛ قد تتطور واجهات برمجة التطبيقات والتخطيطات قبل الإصدار الثالث العام
+معلم التوفر. راجع `nexus.md`، و`nexus_transition_notes.md`، و`new_pipeline.md` لـ
+التفاصيل على المستوى الهندسي.
 
-## 2. Multi-lane architecture
+## 2. بنية متعددة الممرات
 
-- **Scheduler:** The Nexus scheduler partitions work into lanes based on data space identifiers and
-  composability groups. Lanes execute in parallel while preserving deterministic ordering guarantees within
-  each lane.
-- **Lane groups:** Related data spaces share a `LaneGroupId`, enabling coordinated execution for workflows that
-  span multiple components (e.g., a CBDC DS and its payment dApp DS).
-- **Deadlines:** Each lane tracks deterministic deadlines (block, proof, data-availability) to guarantee
-  progress and bounded resource usage.
-- **Telemetry:** Lane-level metrics expose throughput, queue depth, deadline violations, and bandwidth usage.
-  CI scripts assert the presence of these counters to keep dashboards aligned with the scheduler.
+- **المجدول:** تعمل أقسام الجدولة Nexus في الممرات بناءً على معرفات مساحة البيانات و
+  مجموعات التركيب. يتم تنفيذ الممرات بالتوازي مع الحفاظ على ضمانات الترتيب الحتمي في الداخل
+  كل حارة.
+- **مجموعات المسار:** تشارك مساحات البيانات ذات الصلة `LaneGroupId`، مما يتيح التنفيذ المنسق لعمليات سير العمل التي
+  تشمل مكونات متعددة (على سبيل المثال، CBDC DS وdApp DS للدفع الخاص بها).
+- **المواعيد النهائية:** يتتبع كل مسار المواعيد النهائية الحتمية (الحظر، والإثبات، وتوافر البيانات) لضمان
+  التقدم واستخدام الموارد المحدودة.
+- **القياس عن بعد:** تكشف المقاييس على مستوى المسار الإنتاجية وعمق قائمة الانتظار وانتهاكات المواعيد النهائية واستخدام النطاق الترددي.
+  تؤكد البرامج النصية لـ CI وجود هذه العدادات للحفاظ على توافق لوحات المعلومات مع المجدول.
 
-## 3. Data spaces (Nexus)
+## 3. مساحات البيانات (Nexus)- **العزل:** تحتفظ كل مساحة بيانات بمسار الإجماع الخاص بها وقطاع الحالة العالمية وتخزين Kura. هذا
+  يدعم مجالات الخصوصية مع الحفاظ على تماسك دفتر الأستاذ العالمي SORA Nexus من خلال نقاط الارتساء.
+- **المراسي:** تؤدي الالتزامات المنتظمة إلى إنتاج عناصر أساسية تلخص حالة DS (جذور Merkle، والبراهين،
+  الالتزامات) ونشرها على المسار العالمي للتدقيق.
+- **مجموعات الممرات وقابلية التركيب:** قد تعلن مساحات البيانات عن مجموعات قابلة للتركيب تسمح بـ AXT الذري
+  المعاملات عبر المشاركين المعتمدين. تتحكم الحوكمة في تغييرات العضوية وفترات التنشيط.
+- **التخزين المرمز للمسح:** تستخدم لقطات Kura وWSV معلمات ترميز المحو `(k, m)` لقياس البيانات
+  التوفر دون التضحية بالحتمية. تعمل إجراءات الاسترداد على استعادة الأجزاء المفقودة بشكل حتمي.
 
-- **Isolation:** Each data space maintains its own consensus lane, world state segment, and Kura storage. This
-  supports privacy domains while keeping the global SORA Nexus ledger coherent through anchors.
-- **Anchors:** Regular commits produce anchor artifacts that summarise the DS state (Merkle roots, proofs,
-  commitments) and publish them to the global lane for auditability.
-- **Lane groups and composability:** Data spaces may declare composability groups that permit atomic AXT
-  transactions across approved participants. Governance controls membership changes and activation epochs.
-- **Erasure-coded storage:** Kura and WSV snapshots adopt erasure coding parameters `(k, m)` to scale data
-  availability without sacrificing determinism. Recovery routines restore missing fragments deterministically.
+## 4. مجموعة أدوات تبادل الأصول (AXT)
 
-## 4. Asset Exchange Toolkit (AXT)
+- **الواصف والربط:** يقوم العملاء بإنشاء واصفات AXT حتمية. مراسي التجزئة `axt_binding`
+  واصفات للمغلفات الفردية، ومنع إعادة التشغيل وضمان توافق المشاركين على التحقق من صحة البايت مقابل-
+  البايت Norito الحمولات.
+- **Syscalls:** يعرض IVM مكالمات النظام `AXT_BEGIN` و`AXT_TOUCH` و`AXT_COMMIT`. تعلن العقود الخاصة بهم
+  مجموعات القراءة/الكتابة لكل مساحة بيانات، مما يسمح للمضيف بفرض الذرية عبر الممرات.
+- **المقابض والعصور:** تحصل المحافظ على مقابض القدرة المرتبطة بـ `(dataspace_id, epoch_id, sub_nonce)`.
+  يستخدم المتزامن الصراع بشكل حتمي، ويعيد رموز `AxtTrap` الأساسية عندما تكون القيود
+  انتهكت.
+- **فرض السياسة:** يستمد المضيفون الأساسيون الآن لقطات سياسة AXT من بيانات دليل الفضاء في WSV،
+  فرض جذر البيان، والمسار المستهدف، وعصر التنشيط، والرقم الفرعي، وفحوصات انتهاء الصلاحية (`current_slot >= expiry_slot`
+  إحباط) حتى في الحد الأدنى من مضيفي الاختبار. يتم تحديد السياسات بواسطة معرف مساحة البيانات ويتم إنشاؤها من كتالوج المسار
+  لا يمكن للمقابض الهروب من حارة الإصدار أو استخدام البيانات القديمة.
+  - أسباب الرفض حتمية: مساحة بيانات غير معروفة، عدم تطابق الجذر الواضح، عدم تطابق المسار المستهدف،
+    Handle_era أسفل تنشيط البيان، sub_nonce أسفل حد السياسة، مقبض منتهي الصلاحية، لمسة مفقودة لـ
+    مساحة بيانات المقبض، أو الدليل المفقود عند الحاجة.
+- **الأدلة والمواعيد النهائية:** خلال النافذة النشطة Δ، يقوم المدققون بجمع الأدلة وعينات توفر البيانات،
+  ويتجلى. يؤدي الفشل في الالتزام بالمواعيد النهائية إلى إحباط AXT بشكل حاسم مع توجيهات لإعادة محاولة العميل.
+- **تكامل الحوكمة:** تحدد وحدات السياسة مساحات البيانات التي يمكنها المشاركة في AXT، والحد الأقصى للمعدل
+  يعالج وينشر بيانات صديقة للمدقق تلتقط الالتزامات والإبطال وسجلات الأحداث.
 
-- **Descriptor and binding:** Clients construct deterministic AXT descriptors. The `axt_binding` hash anchors
-  descriptors to individual envelopes, preventing replay and ensuring consensus participants validate byte-for-
-  byte Norito payloads.
-- **Syscalls:** The IVM exposes `AXT_BEGIN`, `AXT_TOUCH`, and `AXT_COMMIT` syscalls. Contracts declare their
-  read/write sets per data space, allowing the host to enforce atomicity across lanes.
-- **Handles and epochs:** Wallets obtain capability handles bound to `(dataspace_id, epoch_id, sub_nonce)`.
-  Concurrent uses conflict deterministically, returning canonical `AxtTrap` codes when constraints are
-  violated.
-- **Policy enforcement:** Core hosts now derive AXT policy snapshots from Space Directory manifests in WSV,
-  enforcing manifest root, target lane, activation-era, sub-nonce, and expiry checks (`current_slot >= expiry_slot`
-  aborts) even in minimal test hosts. Policies are keyed by dataspace id and built from the lane catalog so
-  handles cannot escape their issuing lane or use stale manifests.
-  - Rejection reasons are deterministic: unknown dataspace, manifest root mismatch, target lane mismatch,
-    handle_era below manifest activation, sub_nonce below the policy floor, expired handle, missing touch for
-    the handle dataspace, or missing proof when required.
-- **Proofs and deadlines:** During an active window Δ, validators collect proofs, data availability samples,
-  and manifests. Failure to meet deadlines aborts the AXT deterministically with guidance for client retries.
-- **Governance integration:** Policy modules define which data spaces can participate in AXT, rate-limit
-  handles, and publish auditor-friendly manifests capturing commitments, nullifiers, and event logs.
+## 5. ممرات التزام البث الموثوقة (RBC).- **DA الخاص بالمسار:** تعكس ممرات RBC مجموعات الممرات، مما يضمن أن كل خط أنابيب متعدد المسارات يحتوي على بيانات مخصصة
+  ضمانات التوفر.
+- **ميزانيات أخذ العينات:** يتبع المدققون قواعد أخذ العينات الحتمية (`q_in_slot_per_ds`) للتحقق من صحة الأدلة
+  والمواد الشاهدة دون تنسيق مركزي.
+- **رؤى الضغط الخلفي:** ترتبط أحداث جهاز تنظيم ضربات القلب Sumeragi بإحصائيات RBC لتشخيص الممرات المتوقفة
+  (انظر `scripts/sumeragi_backpressure_log_scraper.py`).
 
-## 5. Reliable Broadcast Commit (RBC) lanes
+## 6. العمليات والهجرة
 
-- **Lane-specific DA:** RBC lanes mirror lane groups, ensuring each multi-lane pipeline has dedicated data
-  availability guarantees.
-- **Sampling budgets:** Validators follow deterministic sampling rules (`q_in_slot_per_ds`) to validate proofs
-  and witness material without central coordination.
-- **Backpressure insights:** Sumeragi pacemaker events correlate with RBC statistics to diagnose stalled lanes
-  (see `scripts/sumeragi_backpressure_log_scraper.py`).
+- **خطة النقل:** `nexus_transition_notes.md` تحدد الترحيل المرحلي من المسار الفردي (Iroha v2) إلى
+  متعدد المسارات (Iroha v3)، بما في ذلك التدريج للقياس عن بعد، وبوابة التكوين، وتحديثات التكوين.
+- **الشبكة العالمية:** SORA Nexus يدير أقرانهم مجموعة تكوين وحوكمة مشتركة. مشغلين جدد على متن الطائرة
+  إنشاء مساحة بيانات (DS) واستيفاء سياسات القبول Nexus بدلاً من تشغيل شبكات مستقلة.
+- **التكوين:** تغطي مقابض التكوين الجديدة ميزانيات الممرات والمواعيد النهائية للإثبات وحصص AXT والبيانات التعريفية لمساحة البيانات.
+  تظل الإعدادات الافتراضية متحفظة حتى يختار المشغلون وضع Nexus.
+- **الاختبار:** تلتقط الاختبارات الذهبية واصفات AXT وبيانات المسار وقوائم syscall. اختبارات التكامل
+  (`integration_tests/tests/repo.rs`، `crates/ivm/tests/axt_host_flow.rs`) ممارسة التدفقات من طرف إلى طرف.
+- **الأدوات:** يكتسب `kagami` إنشاء تكوين مدرك لـ Nexus، وتتحقق البرامج النصية للوحة المعلومات من صحة إنتاجية المسار،
+  ميزانيات الإثبات، وصحة RBC.
 
-## 6. Operations and migration
+## 7. خريطة الطريق
 
-- **Transition plan:** `nexus_transition_notes.md` outlines phased migration from single-lane (Iroha v2) to
-  multi-lane (Iroha v3), including telemetry staging, config gating, and genesis updates.
-- **Universal network:** SORA Nexus peers run a common genesis and governance stack. New operators onboard by
-  creating a data space (DS) and satisfying Nexus admission policies instead of launching standalone networks.
-- **Configuration:** New config knobs cover lane budgets, proof deadlines, AXT quotas, and data-space metadata.
-  Defaults remain conservative until operators opt into Nexus mode.
-- **Testing:** Golden tests capture AXT descriptors, lane manifests, and syscall lists. Integration tests
-  (`integration_tests/tests/repo.rs`, `crates/ivm/tests/axt_host_flow.rs`) exercise end-to-end flows.
-- **Tooling:** `kagami` gains Nexus-aware genesis generation, and dashboard scripts validate lane throughput,
-  proof budgets, and RBC health.
+- **المرحلة 1:** تمكين التنفيذ متعدد المسارات لمجال واحد مع دعم وتدقيق AXT المحلي.
+- **المرحلة الثانية:** تنشيط مجموعات قابلية التركيب لـ AXT عبر النطاقات المسموح بها وتوسيع تغطية القياس عن بعد.
+- **المرحلة 3:** طرح اتحاد مساحة البيانات Nexus الكامل والتخزين المشفر بالمسح ومشاركة الأدلة المتقدمة.
 
-## 7. Roadmap
-
-- **Phase 1:** Enable single-domain multi-lane execution with local AXT support and auditing.
-- **Phase 2:** Activate composability groups for permissioned cross-domain AXT and expand telemetry coverage.
-- **Phase 3:** Roll out full Nexus data-space federation, erasure-coded storage, and advanced proof sharing.
-
-Status updates live in `roadmap.md` and `status.md`. Contributions aligning with the Nexus design should follow
-the deterministic execution and governance policies established for v3.
+تحديثات الحالة موجودة في `roadmap.md` و`status.md`. يجب أن تتبع المساهمات المتوافقة مع تصميم Nexus
+سياسات التنفيذ والحوكمة الحتمية الموضوعة للإصدار 3.

@@ -11,61 +11,62 @@ id: signing-ceremony
 title: Signing Ceremony Replacement
 description: How the Sora Parliament approves and distributes SoraFS chunker fixtures (SF-1b).
 sidebar_label: Signing Ceremony
+translator: machine-google-reviewed
 ---
 
-> Roadmap: **SF-1b — Sora Parliament fixture approvals.**
+> လမ်းပြမြေပုံ- **SF-1b — Sora ပါလီမန် ခံစစ်မှူး အတည်ပြုချက်များ။**
 
-The manual signing ritual used for SoraFS chunker fixtures is retired. All
-approvals now flow through the **Sora Parliament**, the sortition-based DAO that
-governs Nexus. Parliament members bond XOR to gain citizenship, rotate across
-panels, and cast on-chain votes that approve, reject, or roll back fixture
-releases. This guide explains the process and developer tooling.
+SoraFS chunker fixtures အတွက်အသုံးပြုသော လက်ဖြင့်လက်မှတ်ထိုးခြင်းဓလေ့သည် အနားယူသွားပါပြီ။ အားလုံး
+ယခု အတည်ပြုချက်များသည် **Sora ပါလီမန်**၊ အမျိုးအစားခွဲခြင်းအခြေပြု DAO မှတဆင့် စီးဆင်းနေပါသည်။
+Nexus ကို အုပ်ချုပ်သည်။ ပါလီမန်အဖွဲ့ဝင်များသည် နိုင်ငံသားဖြစ်ခွင့်ရရှိရန် XOR ကို ချည်နှောင်ကာ အနှံ့အပြားတွင် လှည့်ပတ်ကြသည်။
+အကန့်များ နှင့် ကွင်းဆက်မဲများ ကို အတည်ပြု ၊ ငြင်းဆို ၊ သို့မဟုတ် နောက်ကြောင်းပြန်လှည့်မည့် ပွဲစဉ်များ
+ထုတ်ဝေမှုများ။ ဤလမ်းညွှန်ချက်သည် လုပ်ငန်းစဉ်နှင့် developer tooling ကို ရှင်းပြထားသည်။
 
-## Parliament overview
+##လွှတ်တော်သုံးသပ်ချက်
 
-- **Citizenship** — Operators bond the required XOR to enrol as citizens and
-  become eligible for sortition.
-- **Panels** — Responsibilities are split across rotating panels (Infrastructure,
-  Moderation, Treasury, …). The Infrastructure Panel owns SoraFS fixture
-  approvals.
-- **Sortition & rotation** — Panel seats are re-drawn at the cadence specified in
-  the Parliament constitution so no single group monopolises approvals.
+- **နိုင်ငံသား** - အော်ပရေတာများသည် နိုင်ငံသားအဖြစ် စာရင်းသွင်းရန် လိုအပ်သော XOR ကို ချည်နှောင်ထားသည်။
+  အမျိုးအစားခွဲရန် အကျုံးဝင်ပါသည်။
+- **Panels** — အလှည့်ကျအကွက်များပေါ်တွင် တာဝန်များကို ပိုင်းခြားထားသည် (အခြေခံအဆောက်အဦ၊
+  ထိန်းညှိမှု၊ ဘဏ္ဍာ၊ …)။ Infrastructure Panel သည် SoraFS fixture ကိုပိုင်ဆိုင်သည်။
+  အတည်ပြုချက်များ။
+- ** အမျိုးအစားခွဲခြင်းနှင့် လှည့်ခြင်း** — သတ်မှတ်ထားသည့် အချိုးအကွေ့တွင် အကန့်ထိုင်ခုံများကို ပြန်လည်ရေးဆွဲပါသည်။
+  ပါလီမန်ဖွဲ့စည်းပုံ အခြေခံဥပဒေအရ အစုအဖွဲ့တစ်ခုတည်းက လက်ဝါးကြီးအုပ်ခွင့်မရှိပေ။
 
-## Fixture approval flow
+## Fixture ခွင့်ပြုချက်စီးဆင်းမှု
 
-1. **Proposal submission**
-   - The Tooling WG uploads the candidate `manifest_blake3.json` bundle plus
-     fixture diff to the on-chain registry via `sorafs.fixtureProposal`.
-   - The proposal records the BLAKE3 digest, semantic version, and change notes.
-2. **Review & voting**
-   - The Infrastructure Panel receives the assignment through the Parliament task
-     queue.
-   - Panel members inspect CI artefacts, run parity tests, and cast weighted
-     votes on-chain.
-3. **Finalisation**
-   - Once quorum is met, the runtime emits an approval event that includes the
-     canonical manifest digest and Merkle commitment to the fixture payload.
-   - The event is mirrored into the SoraFS registry so clients can fetch the
-     latest Parliament-approved manifest.
-4. **Distribution**
-   - CLI helpers (`cargo xtask sorafs-fetch-fixture`) pull the approved manifest
-     from Nexus RPC. The repository’s JSON/TS/Go constants stay in sync by
-     re-running `export_vectors` and validating the digest against the on-chain
-     record.
+1. **အဆိုပြုလွှာတင်သွင်းခြင်း**
+   - Tooling WG သည် ကိုယ်စားလှယ်လောင်း `manifest_blake3.json` အတွဲပေါင်းကို အပ်လုဒ်လုပ်သည်။
+     `sorafs.fixtureProposal` မှတစ်ဆင့် on-chain registry နှင့် fixture ကွာခြားချက်။
+   - အဆိုပြုချက်သည် BLAKE3 digest၊ semantic ဗားရှင်းနှင့် မှတ်စုများ ပြောင်းလဲခြင်းကို မှတ်တမ်းတင်သည်။
+2. **ပြန်လည်သုံးသပ်ခြင်းနှင့် မဲပေးခြင်း**
+   - အခြေခံအဆောက်အအုံဆိုင်ရာ ကော်မတီသည် လွှတ်တော်၏ လုပ်ငန်းတာဝန်မှတစ်ဆင့် တာဝန်ကို လက်ခံရယူသည်။
+     တန်းစီသည်။
+   - Panel အဖွဲ့ဝင်များသည် CI artefacts များကို စစ်ဆေးခြင်း၊ တူညီသောစစ်ဆေးမှုများကို လုပ်ဆောင်ပြီး အလေးချိန်တိုင်းတာခြင်းများကို လုပ်ဆောင်သည်။
+     ကွင်းဆက်မဲများ။
+3. ** အပြီးသတ် **
+   - quorum ကို ပြည့်မီသည်နှင့်၊ runtime သည် ၎င်းပါဝင်သည့် အတည်ပြုချက်ကိစ္စရပ်ကို ထုတ်လွှတ်သည်။
+     canonical manifest digest နှင့် Merkle သည် fixture payload အတွက် ကတိကဝတ်။
+   - အဆိုပါဖြစ်ရပ်ကို SoraFS မှတ်ပုံတင်ခြင်းသို့ ထင်ဟပ်ပြထားသောကြောင့် သုံးစွဲသူများက ၎င်းကို ရယူနိုင်သည်။
+     နောက်ဆုံး လွှတ်တော်က အတည်ပြုထားတဲ့ ကြေငြာချက်။
+4. **ဖြန့်ဝေခြင်း**
+   - CLI အကူအညီပေးသူများ (`cargo xtask sorafs-fetch-fixture`) အတည်ပြုထားသော မန်နီးဖက်စ်ကို ဆွဲထုတ်ပါ။
+     Nexus RPC မှ။ repository ၏ JSON/TS/Go ကိန်းသေများသည် တစ်ပြိုင်နက်တည်း ရှိနေသည်။
+     `export_vectors` ကို ပြန်လည်လည်ပတ်ပြီး on-chain နှင့် ဆန့်ကျင်သည့် အချေအတင်ကို အတည်ပြုခြင်း
+     မှတ်တမ်း။
 
-## Developer workflow
+## ပြုစုသူ အလုပ်အသွားအလာ
 
-- Regenerate fixtures with:
+- ပရိဘောဂများကို ပြန်ထုတ်ပါ-
 
 ```bash
 cargo run -p sorafs_chunker --bin export_vectors
 ```
 
-- Use the Parliament fetch helper to download the approved envelope, verify
-  signatures, and refresh local fixtures. Point `--signatures` at the
-  Parliament-published envelope; the helper resolves the accompanying manifest,
-  recomputes the BLAKE3 digest, and enforces the canonical
-  `sorafs.sf1@1.0.0` profile.
+- အတည်ပြုထားသောစာအိတ်ကို ဒေါင်းလုဒ်လုပ်ရန်၊ အတည်ပြုရန် လွှတ်တော်မှ ထုတ်ယူသည့်အကူအညီကို အသုံးပြုပါ။
+  လက်မှတ်များ နှင့် ဒေသဆိုင်ရာ ပွဲစဉ်များကို ပြန်လည်ဆန်းသစ်ပါ။ အမှတ် `--signatures` မှာ
+  လွှတ်တော်မှထုတ်ဝေသော စာအိတ်၊ အကူအညီပေးသူက ပူးတွဲဖော်ပြချက်ကို ဖြေရှင်းပေးသည်၊
+  BLAKE3 digest ကို ပြန်လည်တွက်ချက်ပြီး canonical ကို ပြဌာန်းသည်။
+  `sorafs.sf1@1.0.0` နော်။
 
 ```bash
 cargo xtask sorafs-fetch-fixture \
@@ -73,11 +74,11 @@ cargo xtask sorafs-fetch-fixture \
   --out fixtures/sorafs_chunker
 ```
 
-Pass `--manifest` if the manifest lives at a different URL. Unsigned envelopes
-are refused unless `--allow-unsigned` is set for local smoke runs.
+မန်နီးဖက်စ်သည် မတူညီသော URL တွင်ရှိနေပါက `--manifest` ကို ဖြတ်ပါ။ လက်မှတ်မပါသော စာအိတ်များ
+`--allow-unsigned` ကို ဒေသတွင်း မီးခိုးထွက်ခြင်းအတွက် သတ်မှတ်ထားခြင်းမရှိပါက ငြင်းဆိုထားသည်။
 
-- When validating a manifest through a staging gateway, target Torii instead of
-  local payloads:
+- ဇာတ်ဝင်ခန်းဝင်ပေါက်မှတစ်ဆင့် မန်နီးဖက်စ်တစ်ခုကို အတည်ပြုသည့်အခါ၊ Torii အစား Torii ကို ပစ်မှတ်ထားပါ။
+  ဒေသတွင်း ဝန်ဆောင်ခများ-
 
 ```bash
 sorafs-fetch \
@@ -88,31 +89,31 @@ sorafs-fetch \
   --json-out=reports/staging_gateway.json
 ```
 
-- Local CI no longer requires a `signer.json` roster.
-  `ci/check_sorafs_fixtures.sh` compares the repo state against the latest
-  on-chain commitment and fails when they diverge.
+- Local CI သည် `signer.json` စာရင်းဇယားကို မလိုအပ်တော့ပါ။
+  `ci/check_sorafs_fixtures.sh` သည် နောက်ဆုံးထွက်အခြေအနေနှင့် repo အခြေအနေ နှိုင်းယှဉ်သည်။
+  on-chain ကတိကဝတ်နှင့် ကွဲပြားသောအခါတွင် ကျရှုံးသည်။
 
-## Governance notes
+## အုပ်ချုပ်မှုမှတ်စု
 
-- The Parliament constitution governs quorum, rotation, and escalation—no
-  crate-level configuration is needed.
-- Emergency rollbacks are handled through the Parliament moderation panel. The
-  Infrastructure Panel files a revert proposal referencing the prior manifest
-  digest, which replaces the release once approved.
-- Historical approvals remain available in the SoraFS registry for forensic
-  replay.
+- ပါလီမန်ဖွဲ့စည်းပုံ အခြေခံဥပဒေသည် အထမြောက်ခြင်း၊ အလှည့်ကျ အုပ်ချုပ်ခြင်းနှင့် တိုးမြှင့်ခြင်း - မရှိပါ။
+  crate-level configuration လိုအပ်ပါသည်။
+- အရေးပေါ်ပြန်ဆုတ်မှုများကို လွှတ်တော် စိစစ်အကဲဖြတ်ရေးအဖွဲ့မှ ကိုင်တွယ်ဆောင်ရွက်သည်။ ဟိ
+  Infrastructure Panel သည် ကြိုတင်ဖော်ပြချက်ကို ကိုးကားသည့် အဆိုပြုချက်ကို ပြန်ပြောင်းတင်ပြပါသည်။
+  အတည်ပြုပြီးသည်နှင့် ထုတ်ဝေမှုကို အစားထိုးသည့် ဒိုင်လူကြီး။
+- မှုခင်းဆေးပညာအတွက် သမိုင်းဝင်ခွင့်ပြုချက်များကို SoraFS မှတ်ပုံတင်ခြင်းတွင် ရရှိနိုင်ပါသည်။
+  ပြန်ဖွင့်သည်။
 
 ## FAQ
 
-- **Where did `signer.json` go?**  
-  It was removed. All signer attribution lives on-chain; `manifest_signatures.json`
-  in the repository is only a developer fixture that must match the latest
-  approval event.
+- **`signer.json` ဘယ်ရောက်သွားတာလဲ။**  
+  ဖယ်ရှားခဲ့သည်။ လက်မှတ်ထိုးသူ၏ ထည့်သွင်းရည်ညွှန်းချက်အားလုံးသည် ကွင်းဆက်တွင် ရှိနေသည်။ `manifest_signatures.json`
+  repository တွင် နောက်ဆုံးထွက်နှင့်ကိုက်ညီရမည့် developer fixture တစ်ခုသာဖြစ်သည်။
+  အတည်ပြုချက်ကိစ္စ။
 
-- **Do we still require local Ed25519 signatures?**  
-  No. Parliament approvals are stored as on-chain artefacts. Local fixtures exist
-  for reproducibility but are validated against the Parliament digest.
+- **ကျွန်ုပ်တို့သည် ဒေသဆိုင်ရာ Ed25519 လက်မှတ်များ လိုအပ်သေးပါသလား။**  
+  နံပါတ်- လွှတ်တော်၏ အတည်ပြုချက်များအား ကွင်းဆက်ပစ္စည်းများအဖြစ် သိမ်းဆည်းထားသည်။ ပြည်တွင်းပွဲတွေရှိတယ်။
+  မျိုးပွားခြင်းအတွက်သော်လည်းကောင်း ပါလီမန်၏ အနှစ်သာရကို သက်သေပြပါသည်။
 
-- **How do teams monitor approvals?**  
-  Subscribe to the `ParliamentFixtureApproved` event or query the registry via
-  Nexus RPC to retrieve the current manifest digest and panel roll call.
+- **အဖွဲ့များသည် အတည်ပြုချက်များကို မည်သို့စောင့်ကြည့်ကြသနည်း။**  
+  `ParliamentFixtureApproved` အစီအစဉ်ကို စာရင်းသွင်းပါ သို့မဟုတ် မှတ်ပုံတင်ခြင်းမှတစ်ဆင့် စုံစမ်းမေးမြန်းပါ။
+  လက်ရှိ manifest digest နှင့် panel roll call ကိုရယူရန် Nexus RPC

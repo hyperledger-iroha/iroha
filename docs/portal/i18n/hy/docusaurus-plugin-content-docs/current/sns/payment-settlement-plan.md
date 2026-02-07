@@ -8,35 +8,37 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SNS Payment & Settlement Plan
 sidebar_label: Payment & settlement plan
 description: Playbook for routing SNS registrar revenue, reconciling steward/treasury splits, and producing evidence bundles.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-> Canonical source: [`docs/source/sns/payment_settlement_plan.md`](../../../source/sns/payment_settlement_plan.md).
+> Կանոնական աղբյուր՝ [`docs/source/sns/payment_settlement_plan.md`](../../../source/sns/payment_settlement_plan.md):
 
-Roadmap task **SN-5 — Payment & Settlement Service** introduces a deterministic
-payment layer for the Sora Name Service. Every registration, renewal, or refund
-must emit a structured Norito payload so treasury, stewards, and governance can
-replay the financial flows without spreadsheets. This page distills the spec
-for portal audiences.
+Ճանապարհային քարտեզի առաջադրանքը **SN-5 — Վճարումների և հաշվարկների ծառայություն** ներկայացնում է դետերմինիստիկա
+Sora Name Service-ի վճարման շերտը: Յուրաքանչյուր գրանցում, նորացում կամ փոխհատուցում
+պետք է թողարկի կառուցվածքային Norito ծանրաբեռնվածություն, որպեսզի գանձապետարանը, կառավարիչները և կառավարումը կարողանան
+վերարտադրել ֆինանսական հոսքերն առանց աղյուսակների: Այս էջը թորում է սպեկտրը
+պորտալի լսարանի համար:
 
-## Revenue model
+## Եկամուտի մոդել
 
-- Base fee (`gross_fee`) derives from the registrar pricing matrix.  
-- Treasury receives `gross_fee × 0.70`, stewards receive the remainder minus
-  referral bonuses (capped at 10 %).  
-- Optional holdbacks allow governance to pause steward payouts during disputes.  
-- Settlement bundles expose a `ledger_projection` block with the concrete
-  `Transfer` ISIs so automation can post XOR movements straight into Torii.
+- Հիմնական վճարը (`gross_fee`) բխում է գրանցողի գնագոյացման մատրիցից:  
+- Գանձապետարանը ստանում է `gross_fee × 0.70`, ստյուարդները ստանում են մնացած մինուսը
+  ուղղորդման բոնուսներ (սահմանված է 10%):  
+- Ընտրովի հետաձգումները թույլ են տալիս կառավարմանը դադարեցնել տնտեսվարողի վճարումները վեճերի ժամանակ:  
+- Հաշվարկային կապոցները բացահայտում են `ledger_projection` բլոկը բետոնով
+  `Transfer` ISI-ներ, որպեսզի ավտոմատացումը կարողանա տեղադրել XOR շարժումները ուղիղ Torii-ի մեջ:
 
-## Services & automation
+## Ծառայություններ և ավտոմատացում
 
-| Component | Purpose | Evidence |
+| Բաղադրիչ | Նպատակը | Ապացույցներ |
 |-----------|---------|----------|
-| `sns_settlementd` | Applies policy, signs bundles, surfaces `/v1/sns/settlements`. | JSON bundle + hash. |
-| Settlement queue & writer | Idempotent queue + ledger submitter driven by `iroha_cli app sns settlement ledger`. | Bundle hash ↔ tx hash manifest. |
-| Reconciliation job | Daily diff + monthly statement under `docs/source/sns/reports/`. | Markdown + JSON digest. |
-| Refund desk | Governance-approved refunds via `/settlements/{id}/refund`. | `RefundRecordV1` + ticket. |
+| `sns_settlementd` | Կիրառում է քաղաքականություն, ստորագրում է փաթեթները, մակերեսները `/v1/sns/settlements`: | JSON փաթեթ + հեշ: |
+| Հաշվարկային հերթ & գրող | Idempotent հերթ + մատյան ներկայացնող, որը վարում է `iroha_cli app sns settlement ledger`: | Փաթեթի հեշ ↔ tx հեշ մանիֆեստ: |
+| Հաշտեցման աշխատանք | Օրական տարբերություն + ամսական քաղվածք `docs/source/sns/reports/`-ի ներքո: | Markdown + JSON ամփոփում: |
+| Փոխհատուցման գրասեղան | Կառավարության կողմից հաստատված փոխհատուցումներ `/settlements/{id}/refund`-ի միջոցով: | `RefundRecordV1` + տոմս. |
 
-CI helpers mirror these flows:
+CI օգնականները արտացոլում են այս հոսքերը.
 
 ```bash
 # Quote & ledger projection
@@ -49,27 +51,27 @@ iroha_cli app sns settlement ledger --bundle artifacts/sns/settlements/2026-05/m
 iroha_cli app sns settlement reconcile --period 2026-05 --out docs/source/sns/reports/settlement_202605.md
 ```
 
-## Observability & reporting
+## Դիտորդականություն և հաշվետվություն
 
-- Dashboards: `dashboards/grafana/sns_payment_settlement.json` for treasury vs
-  steward totals, referral payouts, queue depth, and refund latency.
-- Alerts: `dashboards/alerts/sns_payment_settlement_rules.yml` monitors pending
-  age, reconciliation failures, and ledger drift.
-- Statements: daily digests (`settlement_YYYYMMDD.{json,md}`) roll into monthly
-  reports (`settlement_YYYYMM.md`) which are uploaded both to Git and the
-  governance object store (`s3://sora-governance/sns/settlements/<period>/`).
-- Governance packets bundle dashboards, CLI logs, and approvals before council
-  sign-off.
+- Վահանակներ՝ `dashboards/grafana/sns_payment_settlement.json` գանձապետարանի համար ընդդեմ
+  Ստյուարդի ընդհանուր գումարները, ուղղորդման վճարումները, հերթի խորությունը և փոխհատուցման ուշացումը:
+- Զգուշացումներ. `dashboards/alerts/sns_payment_settlement_rules.yml` մոնիտորներ սպասում են
+  տարիք, հաշտեցման ձախողումներ և մատյանում տեղաշարժ:
+- Հայտարարություններ. ամենօրյա ամփոփումները (`settlement_YYYYMMDD.{json,md}`) վերածվում են ամսական
+  հաշվետվություններ (`settlement_YYYYMM.md`), որոնք վերբեռնվում են և՛ Git, և՛ the
+  կառավարման օբյեկտների պահեստ (`s3://sora-governance/sns/settlements/<period>/`):
+- Կառավարման փաթեթները միավորում են վահանակները, CLI մատյանները և հաստատումները խորհրդի առաջ
+  ստորագրում.
 
-## Rollout checklist
+## Տարածման ստուգաթերթ
 
-1. Prototype quote + ledger helpers and capture a staging bundle.
-2. Launch `sns_settlementd` with queue + writer, wire dashboards, and exercise
-   alert tests (`promtool test rules ...`).
-3. Deliver refund helper plus monthly statement template; mirror artefacts into
+1. Նախատիպ մեջբերում + մատյանների օգնականներ և ֆիքսեք բեմական փաթեթը:
+2. Գործարկեք `sns_settlementd`-ը հերթով + գրիչով, լարային վահանակներով և վարժություններով
+   զգուշացման թեստեր (`promtool test rules ...`):
+3. Տրամադրել փոխհատուցման օգնական, գումարած ամսական քաղվածքի ձևանմուշ; հայելային արտեֆակտներ մեջ
    `docs/portal/docs/sns/reports/`.
-4. Run a partner rehearsal (full month of settlements) and capture the
-   governance vote marking SN-5 as complete.
+4. Գործարկել գործընկերոջ փորձը (բնակավայրերի ամբողջ ամիս) և գրավել այն
+   կառավարման քվեարկությունը՝ նշելով SN-5-ը որպես ավարտված:
 
-Refer back to the source document for the exact schema definitions, open
-questions, and future amendments.
+Վերադարձեք սկզբնաղբյուր փաստաթղթին՝ սխեմայի ճշգրիտ սահմանումների համար, բաց
+հարցեր և ապագա փոփոխություններ։

@@ -4,27 +4,29 @@ direction: ltr
 source: docs/portal/docs/reference/torii-rapidoc.mdx
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-import RapiDocPanel from '@site/src/components/RapiDocPanel.jsx';
+ներմուծել RapiDocPanel-ը '@site/src/components/RapiDocPanel.jsx'-ից;
 
 # Torii API (RapiDoc)
 
-`RapiDoc` offers a compact, documentation-first rendering of the same Torii
-OpenAPI document. Use it when you need a denser overview or read-only review of
-request/response models.
+`RapiDoc`-ն առաջարկում է միևնույն Torii-ի կոմպակտ, փաստաթղթային ներկայացում
+OpenAPI փաստաթուղթ: Օգտագործեք այն, երբ ձեզ անհրաժեշտ է ավելի խիտ ակնարկ կամ միայն կարդալու վերանայում
+հարցում/պատասխան մոդելներ.
 
-## Usage tips
+## Օգտագործման խորհուրդներ
 
-- Enter a bearer token to enable interactive calls. The value is forwarded as an
-  `X-TryIt-Auth` header and normalised by the proxy.
-- Configure `TRYIT_PROXY_PUBLIC_URL` when serving the portal so interactive
-  requests are routed through the staging proxy. The widget warns when the proxy
-  URL is missing.
-- Use the “OpenAPI snapshot” dropdown to load historical specs published by
-  `npm run sync-openapi`; the `Latest (tracked)` option always resolves to
+- Մուտքագրեք կրող նշան՝ ինտերակտիվ զանգերը միացնելու համար: Արժեքը փոխանցվում է որպես ան
+  `X-TryIt-Auth` վերնագիր և նորմալացված վստահված անձի կողմից:
+- Կարգավորեք `TRYIT_PROXY_PUBLIC_URL` պորտալն այդքան ինտերակտիվ սպասարկելիս
+  հարցումները ուղղորդվում են բեմադրող վստահված անձի միջոցով: Վիդջեթը զգուշացնում է, երբ վստահված անձը
+  URL-ը բացակայում է:
+- Օգտագործեք «OpenAPI snapshot» բացվող ցանկը՝ բեռնելու պատմական բնութագրերը հրապարակված
+  `npm run sync-openapi`; `Latest (tracked)` տարբերակը միշտ լուծում է
   `/openapi/torii.json`.
-- Combine with the “[Try it](/api/overview#try-it-sandbox-docs-3)” console when
-  working against staged gateways requiring the proxy.
+- Միավորել «[Փորձիր այն](/api/overview#try-it-sandbox-docs-3)» վահանակի հետ, երբ
+  աշխատում է բեմադրված դարպասների դեմ, որոնք պահանջում են վստահված անձ:
 
 <RapiDocPanel />

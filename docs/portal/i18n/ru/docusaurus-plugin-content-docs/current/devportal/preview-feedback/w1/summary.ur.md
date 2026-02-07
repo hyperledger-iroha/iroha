@@ -4,49 +4,51 @@ direction: ltr
 source: docs/portal/docs/devportal/preview-feedback/w1/summary.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: preview-feedback-w1-summary
-title: W1 فيڈبیک اور اختتامی خلاصہ
-sidebar_label: W1 خلاصہ
-description: پارٹنر/Torii integrators preview wave کے لئے نتائج، اقدامات اور اختتامی ثبوت۔
+идентификатор: предварительный просмотр-обратная связь-w1-сводка
+титул: W1
+Sidebar_label: W1 خلاصہ
+описание: پارٹنر/Torii предварительный просмотр для интеграторов wave
 ---
 
 | آئٹم | تفصیل |
 | --- | --- |
-| لہر | W1 - پارٹنرز اور Torii integrators |
-| دعوتی ونڈو | 2025-04-12 -> 2025-04-26 |
+| لہر | W1 - پارٹنرز اور Torii интеграторы |
+| دعوتی ونڈو | 12.04.2025 -> 26.04.2025 |
 | آرٹیفیکٹ ٹیگ | `preview-2025-04-12` |
 | ٹریکر ایشو | `DOCS-SORA-Preview-W1` |
-| شرکا | sorafs-op-01...03, torii-int-01...02, sdk-partner-01...02, gateway-ops-01 |
+| شرکا | sorafs-op-01...03, torii-int-01...02, sdk-partner-01...02, шлюз-ops-01 |
 
 ## نمایاں نکات
 
-1. **Checksum ورک فلو** - تمام reviewers نے `scripts/preview_verify.sh` کے ذریعے descriptor/archive کی تصدیق کی؛ logs کو دعوتی acknowledgements کے ساتھ محفوظ کیا گیا۔
-2. **ٹیلیمیٹری** - `docs.preview.integrity`, `TryItProxyErrors`, اور `DocsPortal/GatewayRefusals` dashboards پوری لہر کے دوران green رہے؛ کوئی incidents یا alert pages نہیں ہوئیں۔
-3. **Docs فيڈبیک (`docs-preview/w1`)** - دو معمولی نٹس ریکارڈ ہوئیں:
-   - `docs-preview/w1 #1`: Try it سیکشن میں navigation wording واضح کرنا (حل ہو گیا)۔
-   - `docs-preview/w1 #2`: Try it اسکرین شاٹ اپ ڈیٹ کرنا (حل ہو گیا)۔
-4. **Runbook parity** - SoraFS operators نے تصدیق کی کہ `orchestrator-ops` اور `multi-source-rollout` کے درمیان نئے cross-links نے W0 کے خدشات حل کیے۔
+1. **Контрольная сумма ورک فلو** - تمام рецензенты نے `scripts/preview_verify.sh` کے ذریعے дескриптор/архив کی تصدیق کی؛ журналы и благодарности
+2. **ٹیلیمیٹری** - `docs.preview.integrity`, `TryItProxyErrors`, а также `DocsPortal/GatewayRefusals` панели мониторинга, окрашенные в зеленый цвет. Страницы оповещений об инцидентах نہیں ہوئیں۔
+3. **Документация (`docs-preview/w1`)** - دو معمولی نٹس ریکارڈ ہوئیں:
+   - `docs-preview/w1 #1`: попробуйте سیکشن میں навигационная формулировка واضح کرنا (حل ہو گیا)۔
+   - `docs-preview/w1 #2`: Попробуйте.
+4. **Четность Runbook** — операторы SoraFS и перекрестные ссылки `orchestrator-ops` и `multi-source-rollout`. W0 کے خدشات حل کیے۔
 
 ## ایکشن آئٹمز
 
-| ID | وضاحت | مالک | اسٹیٹس |
+| удостоверение личности | وضاحت | مالک | اسٹیٹس |
 | --- | --- | --- | --- |
-| W1-A1 | `docs-preview/w1 #1` کے مطابق Try it navigation wording اپ ڈیٹ کرنا۔ | Docs-core-02 | ✅ مکمل (2025-04-18). |
-| W1-A2 | `docs-preview/w1 #2` کے مطابق Try it اسکرین شاٹ اپ ڈیٹ کرنا۔ | Docs-core-03 | ✅ مکمل (2025-04-19). |
-| W1-A3 | پارٹنر findings اور telemetry evidence کو roadmap/status میں سمری کرنا۔ | Docs/DevRel lead | ✅ مکمل (tracker + status.md دیکھیں). |
+| W1-A1 | `docs-preview/w1 #1` کے مطابق Попробуйте навигационную формулировку اپ ڈیٹ کرنا۔ | Документы-core-02 | ✅ مکمل (18 апреля 2025 г.). |
+| W1-A2 | `docs-preview/w1 #2` کے مطابق Попробуйте اسکرین شاٹ اپ ڈیٹ کرنا۔ | Документы-core-03 | ✅ مکمل (19 апреля 2025 г.). |
+| W1-A3 | Результаты телеметрии, данные телеметрии, дорожная карта/статус, данные, данные | Руководитель отдела документации и разработки | ✅ مکمل (трекер + status.md دیکھیں). |
 
-## اختتامی خلاصہ (2025-04-26)
+## اختتامی خلاصہ (26 апреля 2025 г.)
 
-- تمام آٹھ reviewers نے آخری office hours میں تکمیل کی تصدیق کی، لوکل artefacts صاف کیے، اور ان کی رسائی واپس لی گئی۔
-- ٹیلیمیٹری اختتام تک green رہی؛ آخری snapshots `DOCS-SORA-Preview-W1` کے ساتھ منسلک ہیں۔
-- دعوتی log میں exit acknowledgements شامل کیے گئے؛ tracker نے W1 کو 🈴 پر سیٹ کیا اور checkpoints شامل کیے۔
-- evidence bundle (descriptor, checksum log, probe output, Try it proxy transcript, telemetry screenshots, feedback digest) `artifacts/docs_preview/W1/` میں archive ہوا۔
+- Обратитесь к рецензентам и к рабочим часам, а также к артефактам и артефактам. رسائی واپس لی گئی۔
+- ٹیلیمیٹری اختتام تک зеленый رہی؛ Снимки `DOCS-SORA-Preview-W1` можно использовать для просмотра изображений.
+- دعوتی log گئے؛ трекер نے W1 کو 🈴 پر سیٹ کیا اور checkpoints شامل کیے۔
+- пакет доказательств (дескриптор, журнал контрольной суммы, выходные данные зонда, расшифровка прокси-сервера Try it, снимки экрана телеметрии, дайджест обратной связи) Архив `artifacts/docs_preview/W1/` ہوا۔
 
 ## اگلے اقدامات
 
-- W2 community intake plan تیار کریں (governance approval + request template tweaks).
-- W2 wave کے لئے preview artefact tag ریفریش کریں اور تاریخیں فائنل ہونے پر preflight اسکرپٹ دوبارہ چلائیں۔
-- W1 کے قابل اطلاق findings کو roadmap/status میں منتقل کریں تاکہ community wave کے پاس تازہ guidance ہو۔
+- План приема сообщества W2 تیار کریں (утверждение руководства + настройки шаблона запроса).
+- W2 wave کے لئے предварительный просмотр тега артефакта. چلائیں۔
+- W1: результаты исследований, дорожная карта/статус, информация о волне сообщества, рекомендации, рекомендации.

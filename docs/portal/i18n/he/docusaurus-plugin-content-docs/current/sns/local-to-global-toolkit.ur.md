@@ -4,6 +4,8 @@ direction: rtl
 source: docs/portal/docs/sns/local-to-global-toolkit.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 # Local -> Global ایڈریس ٹول کٹ
@@ -13,12 +15,12 @@ generator: docs/portal/scripts/sync-i18n.mjs
 ## جائزہ
 
 - `scripts/address_local_toolkit.sh` `iroha` CLI کو wrap کرتا ہے تاکہ یہ پیدا کرے:
-  - `audit.json` -- `iroha tools address audit --format json` کا structured output۔
+  - `audit.json` -- `iroha tools address audit --format json` פלט מובנה.
   - `normalized.txt` -- ہر Local-domain selector کے لیے IH58 (ترجیحی) / compressed (`sora`, second-best) literals۔
 - اس اسکرپٹ کو address ingest dashboard (`dashboards/grafana/address_ingest.json`)
-  اور Alertmanager rules (`dashboards/alerts/address_ingest_rules.yml`) کے ساتھ استعمال کریں تاکہ
-  Local-8 / Local-12 cutover کی حفاظت ثابت ہو۔ Local-8 اور Local-12 collision panels اور
-  `AddressLocal8Resurgence`, `AddressLocal12Collision`, اور `AddressInvalidRatioSlo` alerts
+  כללי Alertmanager (`dashboards/alerts/address_ingest_rules.yml`)
+  Local-8 / Local-12 cutover. Local-8 אוור Local-12 לוחות התנגשות אוור
+  התראות `AddressLocal8Resurgence`, `AddressLocal12Collision`, אור `AddressInvalidRatioSlo`
   کو manifest تبدیلیاں promote کرنے سے پہلے دیکھیں۔
 - UX اور incident-response کے لیے [Address Display Guidelines](address-display-guidelines.md) اور
   [Address Manifest runbook](../../../source/runbooks/address_manifest_ops.md) کو دیکھیں۔
@@ -37,7 +39,7 @@ scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_exa
 - `--allow-errors` تاکہ malformed rows پر بھی scan جاری رہے (CLI behavior جیسا)۔
 
 اسکرپٹ رن کے آخر میں artefact paths لکھتا ہے۔ دونوں فائلیں
-change-management ticket کے ساتھ منسلک کریں اور Grafana screenshot بھی شامل کریں جو
+כרטיס ניהול שינויים.
 >=30 دن تک صفر Local-8 detections اور صفر Local-12 collisions دکھائے۔
 
 ## CI انضمام

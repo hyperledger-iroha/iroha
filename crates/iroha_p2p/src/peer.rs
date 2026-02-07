@@ -2365,7 +2365,7 @@ mod run {
     /// This reader supports "batched frames": a single encrypted frame may
     /// contain multiple Norito-framed messages concatenated back-to-back.
     /// This reduces the encrypted frame rate and therefore lowers Tokio IO
-    /// driver overhead under high message volumes (e.g. NPoS consensus).
+    /// driver overhead under high message volumes (e.g. `NPoS` consensus).
     struct MessageReader<E: Enc, M: Pload> {
         read: Box<dyn AsyncRead + Send + Unpin>,
         buffer: bytes::BytesMut,
@@ -2608,14 +2608,7 @@ mod run {
                     // Control traffic should not be delayed behind other high batches.
                     if class == HighBatchClass::Control {
                         self.flush_plain_high()?;
-                        Self::enqueue_encrypted_to_queue(
-                            &self.cryptographer,
-                            &self.buffer,
-                            &mut self.encrypted,
-                            &mut self.frame_pool,
-                            &mut self.queue_high,
-                            self.max_frame_bytes,
-                        )?;
+                        self.enqueue_current_buffer(Priority::High)?;
                         return Ok(());
                     }
 
@@ -2634,14 +2627,7 @@ mod run {
 
                     // If the single message exceeds the high cap, still send it as its own frame.
                     if self.plain_high.is_empty() && msg_len > cap {
-                        Self::enqueue_encrypted_to_queue(
-                            &self.cryptographer,
-                            &self.buffer,
-                            &mut self.encrypted,
-                            &mut self.frame_pool,
-                            &mut self.queue_high,
-                            self.max_frame_bytes,
-                        )?;
+                        self.enqueue_current_buffer(Priority::High)?;
                         return Ok(());
                     }
 
@@ -2658,14 +2644,7 @@ mod run {
                     }
 
                     if self.plain_low.is_empty() && msg_len > cap {
-                        Self::enqueue_encrypted_to_queue(
-                            &self.cryptographer,
-                            &self.buffer,
-                            &mut self.encrypted,
-                            &mut self.frame_pool,
-                            &mut self.queue_low,
-                            self.max_frame_bytes,
-                        )?;
+                        self.enqueue_current_buffer(Priority::Low)?;
                         return Ok(());
                     }
 
@@ -2718,17 +2697,18 @@ mod run {
             if self.plain_high.is_empty() {
                 return Ok(());
             }
-            let mut plaintext = core::mem::take(&mut self.plain_high);
-            Self::enqueue_encrypted_to_queue(
-                &self.cryptographer,
-                &plaintext,
-                &mut self.encrypted,
-                &mut self.frame_pool,
-                &mut self.queue_high,
-                self.max_frame_bytes,
-            )?;
-            plaintext.clear();
-            self.plain_high = plaintext;
+            let plaintext = core::mem::take(&mut self.plain_high);
+            match self.enqueue_encrypted(&plaintext, Priority::High) {
+                Ok(()) => {
+                    let mut plaintext = plaintext;
+                    plaintext.clear();
+                    self.plain_high = plaintext;
+                }
+                Err(err) => {
+                    self.plain_high = plaintext;
+                    return Err(err);
+                }
+            }
             self.plain_high_msgs = 0;
             self.plain_high_class = None;
             Ok(())
@@ -2738,36 +2718,51 @@ mod run {
             if self.plain_low.is_empty() {
                 return Ok(());
             }
-            let mut plaintext = core::mem::take(&mut self.plain_low);
-            Self::enqueue_encrypted_to_queue(
-                &self.cryptographer,
-                &plaintext,
-                &mut self.encrypted,
-                &mut self.frame_pool,
-                &mut self.queue_low,
-                self.max_frame_bytes,
-            )?;
-            plaintext.clear();
-            self.plain_low = plaintext;
+            let plaintext = core::mem::take(&mut self.plain_low);
+            match self.enqueue_encrypted(&plaintext, Priority::Low) {
+                Ok(()) => {
+                    let mut plaintext = plaintext;
+                    plaintext.clear();
+                    self.plain_low = plaintext;
+                }
+                Err(err) => {
+                    self.plain_low = plaintext;
+                    return Err(err);
+                }
+            }
             self.plain_low_msgs = 0;
             Ok(())
         }
 
-        fn enqueue_encrypted_to_queue(
-            cryptographer: &Cryptographer<E>,
-            plaintext: &[u8],
-            encrypted: &mut Vec<u8>,
-            frame_pool: &mut Vec<BytesMut>,
-            queue: &mut VecDeque<BytesMut>,
-            max_frame_bytes: usize,
-        ) -> Result<(), Error> {
-            let encrypted = cryptographer.encrypt_into(plaintext, encrypted)?;
+        /// Enqueue currently encoded message bytes from `self.buffer`.
+        ///
+        /// Keeps the original bytes intact when encryption/framing fails.
+        fn enqueue_current_buffer(&mut self, priority: Priority) -> Result<(), Error> {
+            let plaintext = core::mem::take(&mut self.buffer);
+            match self.enqueue_encrypted(&plaintext, priority) {
+                Ok(()) => {
+                    let mut plaintext = plaintext;
+                    plaintext.clear();
+                    self.buffer = plaintext;
+                    Ok(())
+                }
+                Err(err) => {
+                    self.buffer = plaintext;
+                    Err(err)
+                }
+            }
+        }
+
+        fn enqueue_encrypted(&mut self, plaintext: &[u8], priority: Priority) -> Result<(), Error> {
+            let encrypted = self
+                .cryptographer
+                .encrypt_into(plaintext, &mut self.encrypted)?;
 
             let size = encrypted.len();
-            if size > max_frame_bytes {
+            if size > self.max_frame_bytes {
                 return Err(Error::FrameTooLarge);
             }
-            let mut frame = frame_pool.pop().unwrap_or_default();
+            let mut frame = self.frame_pool.pop().unwrap_or_default();
             frame.clear();
             let needed = size.saturating_add(Self::U32_SIZE);
             if frame.capacity() < needed {
@@ -2776,7 +2771,10 @@ mod run {
             #[allow(clippy::cast_possible_truncation)]
             frame.put_u32(size as u32);
             frame.put_slice(encrypted);
-            queue.push_back(frame);
+            match priority {
+                Priority::High => self.queue_high.push_back(frame),
+                Priority::Low => self.queue_low.push_back(frame),
+            }
             Ok(())
         }
 
@@ -2801,7 +2799,7 @@ mod run {
                 } else {
                     &mut self.queue_low
                 };
-                let frame_len = queue.front().map(BytesMut::len).unwrap_or(0);
+                let frame_len = queue.front().map_or(0, BytesMut::len);
                 if frames_added > 0
                     && self.batch.len().saturating_add(frame_len) > Self::MAX_BATCH_BYTES
                 {
@@ -2947,6 +2945,7 @@ mod run {
                 ncore::decode_field_canonical::<Self>(bytes)
             }
         }
+
         #[derive(Default)]
         struct WriteStats {
             writes: usize,

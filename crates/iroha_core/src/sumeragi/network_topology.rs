@@ -116,11 +116,7 @@ impl Topology {
 
     /// Index of proxy tail
     pub fn proxy_tail_index(&self) -> usize {
-        if self.0.len() <= 3 {
-            return self.min_votes_for_commit() - 1;
-        }
-        // NOTE: for larger sets, keep proxy-tail aligned with 2f position.
-        self.max_faults().saturating_mul(2)
+        self.min_votes_for_commit().saturating_sub(1)
     }
 
     /// Deterministic set of collector indices for the current topology.
@@ -450,23 +446,27 @@ impl Topology {
     }
 
     /// Re-arrange the set of peers after each successful block commit.
+    #[cfg(test)]
     fn rotate_set_a(&mut self) {
-        let rotate_at = self.min_votes_for_commit();
-        self.0[..rotate_at].rotate_left(1);
+        if self.0.len() <= 1 {
+            return;
+        }
+        let rotate_at = self.min_votes_for_commit().min(self.0.len());
+        if rotate_at > 1 {
+            self.0[..rotate_at].rotate_left(1);
+        }
     }
 
     /// Update topology after a block has been committed.
     ///
-    /// Set A is rotated, membership is refreshed, and final ordering is
-    /// canonicalized so all peers derive the same post-commit topology.
+    /// Membership is refreshed while preserving canonical ordering for subsequent
+    /// per-view role derivation.
     pub fn block_committed(
         &mut self,
         new_peers: impl IntoIterator<Item = PeerId>,
         _prev_block_hash: HashOf<BlockHeader>,
     ) {
-        self.rotate_set_a();
         self.update_peer_list(new_peers);
-        self.canonicalize_order();
         self.1 = 0;
     }
 
@@ -486,7 +486,7 @@ pub fn commit_quorum_from_len(len: usize) -> usize {
     if len <= 3 {
         return len;
     }
-    len.saturating_mul(2).saturating_add(2) / 3
+    len.saturating_mul(2).saturating_add(1) / 3
 }
 
 /// Compute the redundant send fan-out (r) for a topology of the given length.
@@ -1161,6 +1161,7 @@ mod tests {
             (2, 2, vec![1]),
             (3, 3, vec![2]),
             (4, 3, vec![2, 3]),
+            (5, 3, vec![2, 3]),
         ];
 
         for (len, expected_min, expected_collectors) in cases {
@@ -1184,7 +1185,7 @@ mod tests {
 
     #[test]
     fn commit_quorum_helper_matches_topology_rule() {
-        let cases = [1_usize, 2, 3, 4, 6, 7, 9, 10, 16];
+        let cases = [1_usize, 2, 3, 4, 5, 6, 7, 9, 10, 16];
         for len in cases {
             let topology = test_topology(len);
             assert_eq!(
@@ -1193,6 +1194,13 @@ mod tests {
                 "quorum mismatch for len={len}"
             );
         }
+    }
+
+    #[test]
+    fn commit_quorum_len6_is_four() {
+        let topology = test_topology(6);
+        assert_eq!(commit_quorum_from_len(6), 4);
+        assert_eq!(topology.min_votes_for_commit(), 4);
     }
 
     #[test]
@@ -1373,11 +1381,11 @@ mod tests {
 
     #[test]
     fn collectors_fallback_bumps_small_k_to_quorum() {
-        // N = 5; min_votes = 4 => tail idx = 3.
+        // N = 5; min_votes = 3 => tail idx = 2.
         let peers = test_peers(5);
         let topology = Topology::new(peers);
-        // K=1 should still fill quorum=4 via wraparound: 3,4,1,2 (skip leader 0).
-        assert_eq!(topology.collector_indices_k_fallback(1), vec![3, 4, 1, 2]);
+        // K=1 should still fill quorum=3: 2,3,4.
+        assert_eq!(topology.collector_indices_k_fallback(1), vec![2, 3, 4]);
     }
 
     #[test]
@@ -1406,10 +1414,10 @@ mod tests {
 
     #[test]
     fn redundant_send_r_floor_bumps_to_quorum() {
-        // N = 5 => min_votes_for_commit = 4.
+        // N = 5 => min_votes_for_commit = 3.
         let peers = test_peers(5);
         let topology = Topology::new(peers);
-        assert_eq!(topology.redundant_send_r_floor(2), 4);
+        assert_eq!(topology.redundant_send_r_floor(2), 3);
         assert_eq!(topology.redundant_send_r_floor(6), 6);
     }
 
@@ -1498,8 +1506,8 @@ mod tests {
     }
 
     #[test]
-    fn collectors_k3_follow_block_committed_canonical_order() {
-        // After a commit, ordering is canonicalized; no prev-hash rotation is applied.
+    fn collectors_k3_follow_block_committed_membership_refresh() {
+        // After a commit, collector indices keep the same canonical ordering.
         let peers = test_peers(7);
         let mut topo = Topology::new(peers.clone());
         let idxs_before = topo.collector_indices_k(3);
@@ -1517,7 +1525,7 @@ mod tests {
     }
 
     #[test]
-    fn block_committed_canonicalizes_peer_order() {
+    fn block_committed_preserves_membership_order() {
         let mut peers = test_peers(4);
         peers.reverse();
         let mut topo = Topology::new(peers.clone());
@@ -1525,10 +1533,7 @@ mod tests {
 
         topo.block_committed(peers.clone(), prev_hash);
 
-        let mut expected = peers;
-        expected.sort();
-        expected.dedup();
-        assert_eq!(topo.as_ref(), expected.as_slice());
+        assert_eq!(topo.as_ref(), peers.as_slice());
     }
 
     #[test]
@@ -1573,8 +1578,8 @@ mod tests {
     }
 
     #[test]
-    fn collectors_k2_follow_block_committed_canonical_order_n4() {
-        // N=4 -> min_votes=3 -> canonicalized ordering only.
+    fn collectors_k2_follow_block_committed_rotation_n4() {
+        // N=4 -> min_votes=3 -> block_committed rotates Set A by one.
         let peers = test_peers(4);
         let mut topo = Topology::new(peers.clone());
         let idxs_before = topo.collector_indices_k(2);
@@ -1584,7 +1589,7 @@ mod tests {
         topo.block_committed(peers.clone(), prev_hash);
         let idxs_after = topo.collector_indices_k(2);
         let cs_after: Vec<_> = idxs_after.iter().map(|&i| topo.0[i].clone()).collect();
-        assert_eq!(cs_after, cs_before);
+        assert_eq!(cs_after, vec![peers[0].clone(), peers[3].clone()]);
     }
 
     #[test]
@@ -1610,8 +1615,8 @@ mod tests {
     }
 
     #[test]
-    fn collectors_k3_follow_block_committed_canonical_order_n5() {
-        // N=5 -> min_votes=3 -> canonicalized ordering only.
+    fn collectors_k3_follow_block_committed_rotation_n5() {
+        // N=5 -> min_votes=3 -> block_committed rotates Set A by one.
         let peers = test_peers(5);
         let mut topo = Topology::new(peers.clone());
         let idxs_before = topo.collector_indices_k(3);
@@ -1624,7 +1629,10 @@ mod tests {
         topo.block_committed(peers.clone(), prev_hash);
         let idxs_after = topo.collector_indices_k(3);
         let cs_after: Vec<_> = idxs_after.iter().map(|&i| topo.0[i].clone()).collect();
-        assert_eq!(cs_after, cs_before);
+        assert_eq!(
+            cs_after,
+            vec![peers[0].clone(), peers[3].clone(), peers[4].clone()]
+        );
     }
 
     #[test]

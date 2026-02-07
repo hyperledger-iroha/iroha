@@ -4,113 +4,110 @@ direction: rtl
 source: docs/portal/docs/sorafs/provider-admission-policy.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-> Адаптировано из [`docs/source/sorafs/provider_admission_policy.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/provider_admission_policy.md).
+> [`docs/source/sorafs/provider_admission_policy.md`] (https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/provider_admission_policy.md) سے موافقت پذیر۔
 
-# Политика допуска и идентификации провайдеров SoraFS (черновик SF-2b)
+# فراہم کنندہ داخلہ اور شناختی پالیسی SoraFS (مسودہ SF-2B)
 
-Эта записка фиксирует практические результаты для **SF-2b**: определить и
-принудительно применять процесс допуска, требования к идентичности и
-аттестационные payload'ы для провайдеров хранения SoraFS. Она расширяет
-процесс высокого уровня, описанный в RFC архитектуры SoraFS, и разбивает
-оставшуюся работу на отслеживаемые инженерные задачи.
+اس نوٹ میں ** SF-2B ** کے عملی نتائج کی دستاویز کی گئی ہے: شناخت کریں اور
+داخلے کے عمل ، شناخت کی ضروریات اور نافذ کریں
+اسٹوریج فراہم کرنے والوں کے لئے سرٹیفیکیشن پے لوڈ SoraFS۔ وہ پھیلتی ہے
+اعلی سطح کا عمل آرکیٹیکچر RFC SoraFS اور بریک میں بیان کیا گیا ہے
+ٹریک شدہ انجینئرنگ کے کاموں پر باقی کام۔
 
-## Цели политики
+## پالیسی اہداف
 
-- Гарантировать, что только проверенные операторы могут публиковать записи `ProviderAdvertV1`, которые сеть принимает.
-- Привязать каждый ключ объявления к документу идентичности, утвержденному governance, аттестованным эндпоинтам и минимальному вкладу stake.
-- Предоставить детерминированные инструменты проверки, чтобы Torii, шлюзы и `sorafs-node` применяли одинаковые проверки.
-- Поддерживать обновление и аварийное аннулирование без нарушения детерминизма или удобства инструментов.
+- اس بات کو یقینی بنائیں کہ صرف تصدیق شدہ آپریٹرز `ProviderAdvertV1` ریکارڈ شائع کرسکتے ہیں جسے نیٹ ورک قبول کرتا ہے۔
+- ہر اشتہار کی کلید کو گورننس سے منظور شدہ شناختی دستاویز ، مصدقہ اختتامی نکات اور کم سے کم حصص کی شراکت سے لنک کریں۔
+- جانچ پڑتال کے اوزار فراہم کریں تاکہ Torii ، گیٹ ویز اور `sorafs-node` ایک ہی چیک کا اطلاق کریں۔
+- ٹولز کے عزم یا استعمال کے بغیر سمجھوتہ کیے بغیر اپ ڈیٹ اور فیل اوور کی حمایت کریں۔
 
-## Требования к идентичности и stake
+## شناخت اور داؤ کی ضروریات
 
-| Требование | Описание | Результат |
-|------------|----------|-----------|
-| Происхождение ключа объявления | Провайдеры должны зарегистрировать пару ключей Ed25519, которой подписывается каждое advert. Бандл допуска хранит публичный ключ вместе с подписью governance. | Расширить схему `ProviderAdmissionProposalV1` полем `advert_key` (32 bytes) и сослаться на нее из реестра (`sorafs_manifest::provider_admission`). |
-| Указатель stake | Для допуска требуется ненулевой `StakePointer`, указывающий на активный staking pool. | Добавить валидацию в `sorafs_manifest::provider_advert::StakePointer::validate()` и выводить ошибки в CLI/тестах. |
-| Теги юрисдикции | Провайдеры объявляют юрисдикцию + юридический контакт. | Расширить схему предложения полем `jurisdiction_code` (ISO 3166-1 alpha-2) и опциональным `contact_uri`. |
-| Аттестация эндпоинта | Каждый объявленный эндпоинт должен быть подкреплен отчетом сертификата mTLS или QUIC. | Определить Norito payload `EndpointAttestationV1` и хранить его по каждому эндпоинту в бандле допуска. |
+| ضرورت | تفصیل | نتیجہ |
+| ----------- | ---------- | ----------- |
+| AD کلیدی اصل | فراہم کنندگان کو ED25519 کلیدی جوڑی کو رجسٹر کرنا ہوگا جس کے ساتھ ہر اشتہار پر دستخط ہوتے ہیں۔ اجازت کا بنڈل گورننس کے دستخط کے ساتھ ساتھ عوامی کلید کو بھی محفوظ کرتا ہے۔ | `ProviderAdmissionProposalV1` اسکیما کو `advert_key` فیلڈ (32 بائٹس) کے ساتھ بڑھاؤ اور اس سے رجسٹری (`sorafs_manifest::provider_admission`) سے رجوع کریں۔ |
+| داؤ انڈیکس | داخلے کے لئے ایک غیر صفر `StakePointer` کی ضرورت ہوتی ہے جس میں ایک فعال اسٹیکنگ پول کی نشاندہی ہوتی ہے۔ | CLI/ٹیسٹوں میں `sorafs_manifest::provider_advert::StakePointer::validate()` اور آؤٹ پٹ غلطیوں میں توثیق شامل کریں۔ |
+| دائرہ اختیار ٹیگز | فراہم کرنے والے دائرہ اختیار + قانونی رابطے کا اعلان کرتے ہیں۔ | پیش کش اسکیم کو فیلڈ `jurisdiction_code` (ISO 3166-1 الفا -2) اور اختیاری `contact_uri` کے ساتھ بڑھا دیں۔ |
+| اختتامی نقطہ سرٹیفیکیشن | ہر اعلان کردہ اختتامی نقطہ کو ایم ٹی ایل ایس یا کوئیک سرٹیفکیٹ رپورٹ کے ذریعہ تعاون کرنا چاہئے۔ | Norito پے لوڈ `EndpointAttestationV1` کی وضاحت کریں اور داخلہ کے بنڈل میں ہر اختتامی نقطہ کے لئے اسٹور کریں۔ |
 
-## Процесс допуска
+## داخلہ کا عمل
 
-1. **Создание предложения**
-   - CLI: добавить `cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission proposal ...`,
-     формирующий `ProviderAdmissionProposalV1` + бандл аттестации.
-   - Валидация: убедиться в наличии обязательных полей, stake > 0, канонического chunker handle в `profile_id`.
-2. **Одобрение governance**
-   - Совет подписывает `blake3("sorafs-provider-admission-v1" || canonical_bytes)` используя существующие
-     инструменты envelope (модуль `sorafs_manifest::governance`).
-   - Envelope сохраняется в `governance/providers/<provider_id>/admission.json`.
-3. **Внесение в реестр**
-   - Реализовать общий валидатор (`sorafs_manifest::provider_admission::validate_envelope`), который
-     переиспользуют Torii/шлюзы/CLI.
-   - Обновить путь допуска Torii, чтобы отклонять adverts, у которых digest или срок действия отличается от envelope.
-4. **Обновление и отзыв**
-   - Добавить `ProviderAdmissionRenewalV1` с опциональными обновлениями эндпоинтов/stake.
-   - Открыть путь CLI `--revoke`, который фиксирует причину отзыва и отправляет событие governance.
+1. ** ایک پیش کش بنائیں **
+   - CLI: `cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission proposal ...` شامل کریں ،
+     `ProviderAdmissionProposalV1` + سرٹیفیکیشن بنڈل تشکیل دینا۔
+   - توثیق: `profile_id` میں مطلوبہ فیلڈز ، اسٹیک> 0 ، کیننیکل چنکر ہینڈل کی موجودگی کو یقینی بنائیں۔
+2. ** گورننس کی منظوری **
+   - کونسل کے اشارے `blake3("sorafs-provider-admission-v1" || canonical_bytes)` موجودہ کا استعمال کرتے ہوئے
+     لفافے کے اوزار (ماڈیول `sorafs_manifest::governance`)۔
+   - `governance/providers/<provider_id>/admission.json` میں لفافہ محفوظ کیا گیا ہے۔
+3. ** رجسٹر میں اندراج **
+   - ایک عام جائز (`sorafs_manifest::provider_admission::validate_envelope`) کو نافذ کریں
+     Torii/گیٹ ویز/سی ایل آئی کو دوبارہ استعمال کریں۔
+   - داخلے کا راستہ Torii ان اشتہارات کو مسترد کرنے کے لئے اپ ڈیٹ کریں جن کی ڈائجسٹ یا میعاد ختم ہونے کی تاریخ لفافے سے مختلف ہے۔
+4. ** اپ ڈیٹ اور جائزہ **
+   - اختیاری اختتامی نقطہ/اسٹیک اپڈیٹس کے ساتھ `ProviderAdmissionRenewalV1` شامل کریں۔
+   - اوپن سی ایل آئی پاتھ Norito ، جو منسوخ کرنے کی وجہ کو اپنی گرفت میں لے جاتا ہے اور گورننس ایونٹ کو روانہ کرتا ہے۔
 
-## Задачи реализации
+## نفاذ کے کام| خطہ | مسئلہ | مالک (زبانیں) | حیثیت |
+| --------- | -------- | ---------- | -------- |
+| اسکیم | `ProviderAdmissionProposalV1` ، `ProviderAdmissionEnvelopeV1` ، `EndpointAttestationV1` (Norito) سے `crates/sorafs_manifest/src/provider_admission.rs` کی وضاحت کریں۔ توثیق کے مددگاروں کے ساتھ `sorafs_manifest::provider_admission` میں نافذ کیا گیا ہے اسٹوریج / گورننس | ✅ مکمل |
+| سی ایل آئی ٹولز | `sorafs_manifest_stub` کو سب کامنڈس کے ساتھ بڑھاؤ: `provider-admission proposal` ، `provider-admission sign` ، `provider-admission verify`۔ | ٹولنگ ڈبلیو جی | ✅ مکمل |
 
-| Область | Задача | Owner(s) | Статус |
-|---------|--------|----------|--------|
-| Схема | Определить `ProviderAdmissionProposalV1`, `ProviderAdmissionEnvelopeV1`, `EndpointAttestationV1` (Norito) в `crates/sorafs_manifest/src/provider_admission.rs`. Реализовано в `sorafs_manifest::provider_admission` с помощниками валидации.【F:crates/sorafs_manifest/src/provider_admission.rs#L1】 | Storage / Governance | ✅ Завершено |
-| Инструменты CLI | Расширить `sorafs_manifest_stub` подкомандами: `provider-admission proposal`, `provider-admission sign`, `provider-admission verify`. | Tooling WG | ✅ Завершено |
+سی ایل آئی اسٹریم اب انٹرمیڈیٹ سرٹیفکیٹ بنڈل (`--endpoint-attestation-intermediate`) کو قبول کرتا ہے ،
+`sign`/`verify` کے دوران کونسل کے دستخطوں کی تصدیق اور کونسل کے دستخطوں کی تصدیق کرتے ہیں۔ آپریٹرز کر سکتے ہیں
+اشتہاری اداروں کو براہ راست منتقل کریں یا دستخط شدہ اشتہارات کو دوبارہ استعمال کریں ، اور دستخطی فائلیں ہوسکتی ہیں
+آٹومیشن کی آسانی کے ل I `--council-signature-public-key` کو `--council-signature-file` کے ساتھ جوڑ کر منتقل کریں۔
 
-CLI поток теперь принимает промежуточные бандлы сертификатов (`--endpoint-attestation-intermediate`),
-выдает канонические байты предложения/envelope и проверяет подписи совета во время `sign`/`verify`. Операторы могут
-передавать тела advert напрямую или переиспользовать подписанные adverts, а файлы подписей можно
-передавать, сочетая `--council-signature-public-key` с `--council-signature-file` для удобства автоматизации.
+### سی ایل آئی حوالہ
 
-### Справочник CLI
-
-Запускайте каждую команду через `cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission ...`.
-
-- `proposal`
-  - Обязательные флаги: `--provider-id=<hex32>`, `--chunker-profile=<namespace.name@semver>`,
-    `--stake-pool-id=<hex32>`, `--stake-amount=<amount>`, `--advert-key=<hex32>`,
-    `--jurisdiction-code=<ISO3166-1>`, и как минимум один `--endpoint=<kind:host>`.
-  - Для аттестации каждого эндпоинта требуются `--endpoint-attestation-attested-at=<secs>`,
-    `--endpoint-attestation-expires-at=<secs>`, сертификат через
-    `--endpoint-attestation-leaf=<path>` (плюс опциональный `--endpoint-attestation-intermediate=<path>`
-    для каждого элемента цепочки) и любые согласованные ALPN ID
-    (`--endpoint-attestation-alpn=<token>`). Для QUIC-эндпоинтов можно передать транспортные отчеты через
-    `--endpoint-attestation-report[-hex]=...`.
-  - Выход: канонические байты предложения Norito (`--proposal-out`) и JSON-сводка
-    (stdout по умолчанию или `--json-out`).
+`cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission ...` کے ذریعے ہر کمانڈ چلائیں۔- `proposal`
+  - مطلوبہ جھنڈے: `--provider-id=<hex32>` ، `--chunker-profile=<namespace.name@semver>` ،
+    `--stake-pool-id=<hex32>` ، `--stake-amount=<amount>` ، `--advert-key=<hex32>` ،
+    `--jurisdiction-code=<ISO3166-1>` ، اور کم از کم ایک `--endpoint=<kind:host>`۔
+  - `--endpoint-attestation-attested-at=<secs>` ہر اختتامی نقطہ کی سند کے لئے ضروری ہے ،
+    `--endpoint-attestation-expires-at=<secs>` ، سرٹیفکیٹ کے ذریعے
+    `--endpoint-attestation-leaf=<path>` (اس کے علاوہ اختیاری `--endpoint-attestation-intermediate=<path>`
+    ہر چین عنصر کے لئے) اور کسی بھی مستقل ALPN IDs کے لئے
+    (`--endpoint-attestation-alpn=<token>`)۔ کوئیک اختتامی نکات کے ل you ، آپ ٹرانسپورٹ رپورٹس کے ذریعے بھیج سکتے ہیں
+    `--endpoint-attestation-report[-hex]=...`۔
+  - آؤٹ پٹ: کیننیکل جملہ بائٹس Norito (`--proposal-out`) اور JSON خلاصہ
+    (ڈیفالٹ یا `--json-out` کے ذریعہ stdout)۔
 - `sign`
-  - Входные данные: предложение (`--proposal`), подписанный advert (`--advert`), опциональное тело advert
-    (`--advert-body`), retention epoch и как минимум одна подпись совета. Подписи можно передавать
-    inline (`--council-signature=<signer_hex:signature_hex>`) или через файлы, сочетая
-    `--council-signature-public-key` с `--council-signature-file=<path>`.
-  - Формирует валидированный envelope (`--envelope-out`) и JSON-отчет с привязками digest,
-    числом подписантов и входными путями.
+  - ان پٹ: پیش کش (`--proposal`) ، دستخط شدہ اشتہار (`--advert`) ، اختیاری باڈی ایڈورٹ
+    (`--advert-body`) ، برقرار رکھنے کا دور اور کم از کم ایک کونسل کے دستخط۔ دستخطوں کو منتقل کیا جاسکتا ہے
+    ان لائن (`--council-signature=<signer_hex:signature_hex>`) یا فائلوں کے ذریعے ، امتزاج
+    `--council-signature-public-key` کے ساتھ `--council-signature-file=<path>`۔
+  - ایک توثیق شدہ لفافہ (`--envelope-out`) اور ڈائجسٹ بائنڈنگ کے ساتھ JSON رپورٹ تیار کرتا ہے ،
+    دستخط کرنے والوں اور داخلے کے راستوں کی تعداد۔
 - `verify`
-  - Проверяет существующий envelope (`--envelope`) и опционально сверяет соответствующее предложение,
-    advert или тело advert. JSON-отчет подсвечивает значения digest, статус проверки подписей
-    и какие опциональные артефакты совпали.
+  - موجودہ لفافے (`--envelope`) کی جانچ پڑتال کرتا ہے اور اختیاری طور پر متعلقہ پیش کش کی جانچ پڑتال کرتا ہے ،
+    اشتہار یا جسمانی اشتہار۔ JSON رپورٹ ڈائجسٹ اقدار ، دستخطی توثیق کی حیثیت کو اجاگر کرتی ہے
+    اور کون سے اختیاری نمونے ملتے ہیں۔
 - `renewal`
-  - Связывает новый утвержденный envelope с ранее утвержденным digest. Требуются
-    `--previous-envelope=<path>` и последующий `--envelope=<path>` (оба Norito payload).
-    CLI проверяет, что profile aliases, capabilities и advert key остаются неизменными, при этом допускает
-    обновления stake, эндпоинтов и metadata. Выводит канонические байты `ProviderAdmissionRenewalV1`
-    (`--renewal-out`) плюс JSON-сводку.
+  - نئے منظور شدہ لفافے کو پہلے سے منظور شدہ ڈائجسٹ سے جوڑتا ہے۔ مطلوب
+    `--previous-envelope=<path>` اور اس کے بعد `--envelope=<path>` (دونوں Norito پے لوڈ)۔
+    سی ایل آئی کی جانچ پڑتال کرتی ہے کہ عرفیت ، صلاحیتوں اور اشتہار کی کلید میں کوئی تبدیلی نہیں ہوتی ہے ، جبکہ اجازت دیتے ہوئے
+    داؤ ، اختتامی نقطہ اور میٹا ڈیٹا کی تازہ کاری۔ آؤٹ پٹس کیننیکل بائٹس `ProviderAdmissionRenewalV1`
+    (`--renewal-out`) پلس JSON خلاصہ۔
 - `revoke`
-  - Выпускает аварийный бандл `ProviderAdmissionRevocationV1` для провайдера, чей envelope нужно отозвать.
-    Требует `--envelope=<path>`, `--reason=<text>`, как минимум одну `--council-signature` и опциональные
-    `--revoked-at`/`--notes`. CLI подписывает и проверяет digest отзыва, записывает Norito payload через
-    `--revocation-out` и печатает JSON-отчет с digest и числом подписей.
-| Проверка | Реализовать общий валидатор, используемый Torii, шлюзами и `sorafs-node`. Предоставить unit + CLI интеграционные тесты.【F:crates/sorafs_manifest/src/provider_admission.rs#L1】【F:crates/iroha_torii/src/sorafs/admission.rs#L1】 | Networking TL / Storage | ✅ Завершено |
-| Интеграция Torii | Подключить валидатор к приему adverts в Torii, отклонять adverts вне политики и публиковать телеметрию. | Networking TL | ✅ Завершено | Torii теперь загружает governance envelopes (`torii.sorafs.admission_envelopes_dir`), проверяет совпадение digest/подписи при приеме и публикует телеметрию допуска.【F:crates/iroha_torii/src/sorafs/admission.rs#L1】【F:crates/iroha_torii/src/sorafs/discovery.rs#L1】【F:crates/iroha_torii/src/sorafs/api.rs#L1】 |
-| Обновление | Добавить схемы обновления/отзыва + CLI помощники, опубликовать жизненный цикл в документации (см. runbook ниже и команды CLI в `provider-admission renewal`/`revoke`).【crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L477】【docs/source/sorafs/provider_admission_policy.md:120】 | Storage / Governance | ✅ Завершено |
-| Телеметрия | Определить dashboards/alerts `provider_admission` (пропущенное обновление, срок действия envelope). | Observability | 🟠 В процессе | Счетчик `torii_sorafs_admission_total{result,reason}` существует; dashboards/alerts в работе.【F:crates/iroha_telemetry/src/metrics.rs#L3798】【F:docs/source/telemetry.md#L614】 |
+  - کسی ایسے فراہم کنندہ کے لئے ایک ہنگامی بنڈل `ProviderAdmissionRevocationV1` جاری کرتا ہے جس کے لفافے کو منسوخ کرنے کی ضرورت ہے۔
+    `--envelope=<path>` ، `--reason=<text>` ، کم از کم ایک `--council-signature` اور اختیاری کی ضرورت ہے
+    `--revoked-at`/`--notes`۔ Norito پے لوڈ لکھتا ہے
+    `--revocation-out` اور ہضم اور دستخطوں کی تعداد کے ساتھ JSON رپورٹ پرنٹ کرتا ہے۔
+| چیک | Torii ، گیٹ ویز اور `sorafs-node` کے ذریعہ استعمال کردہ ایک مشترکہ توثیق کار کو نافذ کریں۔ یونٹ + سی ایل آئی انضمام کے ٹیسٹ مہیا کریں نیٹ ورکنگ TL/اسٹوریج | ✅ مکمل |
+| انضمام Torii | Torii میں اشتہارات قبول کرنے کے لئے توثیق کرنے والے کو مربوط کریں ، پالیسی سے باہر اشتہارات کو مسترد کریں اور ٹیلی میٹری شائع کریں۔ | نیٹ ورکنگ TL | ✅ مکمل | Torii اب گورننس لفافے (`torii.sorafs.admission_envelopes_dir`) لوڈ کرتا ہے ، استقبالیہ پر ہضم/دستخطی میچ چیک کرتا ہے اور ٹیلی میٹری کو شائع کرتا ہے داخلہ۔ 【f: کریٹس/اروہ_ٹوری/ایس آر سی/سرفس/داخلہ| اپ ڈیٹ | اپ ڈیٹ/یاد رکھنے والی اسکیمیں + سی ایل آئی مددگار شامل کریں ، دستاویزات میں لائف سائیکل شائع کریں (نیچے رن بک دیکھیں اور سی ایل آئی کمانڈز میں شامل کریں۔ `provider-admission renewal`/`revoke`). 【کریٹس/sorafs_car/src/sorafs_manifest_stub/فراہم کنندہ_ایڈیشن.رس#l477 】【 دستاویزات/ماخذ/sorafs/فراہم کنندہ_ایڈیشن_پولیسی.مڈی: 120】 | اسٹوریج / گورننس | ✅ مکمل |
+| ٹیلی میٹری | ڈیش بورڈز/الرٹس `provider_admission` کی وضاحت کریں (یاد تازہ کاری ، لفافے کی میعاد ختم ہونے کی تاریخ)۔ | مشاہدہ | 🟠 ترقی میں | کاؤنٹر `torii_sorafs_admission_total{result,reason}` موجود ہے ؛ ڈیش بورڈز/انتباہات جاری ہیں
 
-### Runbook обновления и отзыва
+### رن بک اپڈیٹس اور آراء
 
-#### Плановое обновление (обновления stake/топологии)
-1. Соберите пару последующего предложения/advert через `provider-admission proposal` и `provider-admission sign`,
-   увеличив `--retention-epoch` и обновив stake/эндпоинты по необходимости.
-2. Выполните
+#### شیڈول اپ ڈیٹ (داؤ/ٹوپولوجی اپ ڈیٹ)
+1. `provider-admission proposal` اور `provider-admission sign` کے ذریعے فالو اپ آفر/اشتہاری جوڑی جمع کریں ،
+   `--retention-epoch` میں اضافہ اور ضرورت کے مطابق اسٹیکس/اختتامی مقامات کو اپ ڈیٹ کرنا۔
+2. عمل کریں
    ```bash
    cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission \
      renewal \
@@ -120,18 +117,18 @@ CLI поток теперь принимает промежуточные бан
      --json-out=governance/providers/<id>/renewal.json \
      --notes="stake top-up 2025-03"
    ```
-   Команда проверяет неизменность полей capability/profile через
-   `AdmissionRecord::apply_renewal`, выпускает `ProviderAdmissionRenewalV1` и печатает digests для
-   журнала governance.【crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L477】【F:crates/sorafs_manifest/src/provider_admission.rs#L422】
-3. Замените предыдущий envelope в `torii.sorafs.admission_envelopes_dir`, закоммитьте Norito/JSON обновления
-   в репозиторий governance и добавьте hash обновления + retention epoch в `docs/source/sorafs/migration_ledger.md`.
-4. Сообщите операторам, что новый envelope активен, и отслеживайте
-   `torii_sorafs_admission_total{result="accepted",reason="stored"}` для подтверждения приема.
-5. Пересоздайте и зафиксируйте канонические fixtures через `cargo run -p sorafs_car --bin provider_admission_fixtures --features cli`;
-   CI (`ci/check_sorafs_fixtures.sh`) проверяет стабильность Norito выходов.
+   کمانڈ صلاحیت/پروفائل فیلڈز کے ذریعہ عدم استحکام کی جانچ پڑتال کرتا ہے
+   `AdmissionRecord::apply_renewal` ، `ProviderAdmissionRenewalV1` کو جاری کرتا ہے اور پرنٹ ہضم ہوتا ہے
+   گورننس میگزین۔ 【کریٹس/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#l477 】【 f: creats/sorafs_manifest/src/فراہم کنندہ_اڈمیشن. rs#l422】
+3. پچھلے لفافے کو `torii.sorafs.admission_envelopes_dir` میں تبدیل کریں ، Norito/JSON تازہ کاریوں کا ارتکاب کریں
+   گورننس ریپوزٹری میں اور `docs/source/sorafs/migration_ledger.md` میں اپ ڈیٹ ہیش + برقرار رکھنے کے عہد کو شامل کریں۔
+4. آپریٹرز کو مطلع کریں کہ نیا لفافہ فعال اور مانیٹر ہے
+   `torii_sorafs_admission_total{result="accepted",reason="stored"}` استقبال کی تصدیق کے لئے۔
+5. `cargo run -p sorafs_car --bin provider_admission_fixtures --features cli` کے ذریعے کیننیکل فکسچر کو دوبارہ بنائیں اور ٹھیک کریں۔
+   CI (`ci/check_sorafs_fixtures.sh`) Norito آؤٹ پٹ کے استحکام کی جانچ کرتا ہے۔
 
-#### Аварийный отзыв
-1. Определите компрометированный envelope и выпустите отзыв:
+#### ایمرجنسی یاد
+1. سمجھوتہ شدہ لفافے کی شناخت کریں اور رائے جاری کریں:
    ```bash
    cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission \
      revoke \
@@ -143,31 +140,29 @@ CLI поток теперь принимает промежуточные бан
      --revocation-out=governance/providers/<id>/revocation.to \
      --json-out=governance/providers/<id>/revocation.json
    ```
-   CLI подписывает `ProviderAdmissionRevocationV1`, проверяет набор подписей через
-   `verify_revocation_signatures` и сообщает digest отзыва.【crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L593】【F:crates/sorafs_manifest/src/provider_admission.rs#L486】
-2. Удалите envelope из `torii.sorafs.admission_envelopes_dir`, распространите Norito/JSON отзыва в admission-кеши
-   и зафиксируйте hash причины в протоколе governance.
-3. Отслеживайте `torii_sorafs_admission_total{result="rejected",reason="admission_missing"}`, чтобы подтвердить,
-   что кеши отбросили отозванный advert; храните артефакты отзыва в ретроспективах инцидента.
+   سی ایل آئی کے اشارے `ProviderAdmissionRevocationV1` ، کے ذریعہ سیٹ کے سیٹ کی تصدیق کرتے ہیں
+   `verify_revocation_signatures` اور ایک جائزہ ڈائجسٹ کی اطلاع دیتا ہے۔ 【کریٹس/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#l593 】【 f: creats/sorafs_manifest/src/فراہم کنندہ_ایڈیشن. rs#l486】
+2. `torii.sorafs.admission_envelopes_dir` سے لفافہ کو ہٹا دیں ، Norito/JSON آراء کو داخلہ کیچوں میں تقسیم کریں
+   اور گورننس پروٹوکول میں ہیش وجوہات کو ریکارڈ کریں۔
+3. ٹریک `torii_sorafs_admission_total{result="rejected",reason="admission_missing"}` کی تصدیق کے ل .۔
+   اس کیچوں نے منسوخ شدہ اشتہار کو ضائع کردیا۔ واقعہ کے پسپائیوں میں اسٹور یاد کرنے والے نمونے۔
 
-## Тестирование и телеметрия
+## جانچ اور ٹیلی میٹری- پیش کشوں اور داخلے کے لفافے کے لئے گولڈن فکسچر شامل کریں
+  `fixtures/sorafs_manifest/provider_admission/`۔
+- پیش کشوں کو دوبارہ بنانے اور لفافے کو چیک کرنے کے لئے CI (`ci/check_sorafs_fixtures.sh`) میں توسیع کریں۔
+- تیار کردہ فکسچر میں `metadata.json` شامل ہے جس میں کیننیکل ہضم ہوتا ہے۔ بہاو ​​ٹیسٹ تصدیق کرتے ہیں
+  `proposal_digest_hex` == `ca8e73a1f319ae83d7bd958ccb143f9b790c7e4d9c8dfe1f6ad37fa29facf936`۔
+- انضمام کے ٹیسٹ فراہم کریں:
+  - Torii گمشدہ یا میعاد ختم ہونے والے داخلے کے لفافوں کے ساتھ اشتہارات کو مسترد کرتا ہے۔
+  - CLI تجاویز کے ایک دور کے سفر سے گزرتا ہے → لفافہ → توثیق۔
+  - گورننس اپ ڈیٹ فراہم کنندہ ID کو تبدیل کیے بغیر اختتامی نقطہ تصدیق کو گھوماتا ہے۔
+- ٹیلی میٹری کی ضروریات:
+  - `provider_admission_envelope_{accepted,rejected}` کاؤنٹرز کو Torii پر خارج کریں۔ ✅ `torii_sorafs_admission_total{result,reason}` اب قبول شدہ/مسترد دکھاتا ہے۔
+  - مشاہدہ میں میعاد ختم ہونے والے انتباہات شامل کریں (7 دن کے اندر مطلوبہ تازہ کاری)۔
 
-- Добавить golden fixtures для предложений и envelope допуска в
-  `fixtures/sorafs_manifest/provider_admission/`.
-- Расширить CI (`ci/check_sorafs_fixtures.sh`) для пересоздания предложений и проверки envelope.
-- Сгенерированные fixtures включают `metadata.json` с каноническими digests; downstream-тесты утверждают
-  `proposal_digest_hex` == `ca8e73a1f319ae83d7bd958ccb143f9b790c7e4d9c8dfe1f6ad37fa29facf936`.
-- Предоставить интеграционные тесты:
-  - Torii отклоняет adverts с отсутствующими или просроченными admission envelopes.
-  - CLI проходит round-trip предложения → envelope → verification.
-  - Обновление governance вращает endpoint аттестацию без изменения provider ID.
-- Требования по телеметрии:
-  - Emit `provider_admission_envelope_{accepted,rejected}` counters в Torii. ✅ `torii_sorafs_admission_total{result,reason}` теперь показывает accepted/rejected.
-  - Добавить предупреждения об истечении срока в наблюдаемость (обновление требуется в течение 7 дней).
+## اگلے اقدامات
 
-## Следующие шаги
-
-1. ✅ Завершены изменения схем Norito и добавлены помощники валидации в `sorafs_manifest::provider_admission`. Feature flags не нужны.
-2. ✅ CLI потоки (`proposal`, `sign`, `verify`, `renewal`, `revoke`) задокументированы и проверены интеграционными тестами; поддерживайте скрипты governance в синхронизации с runbook.
-3. ✅ Torii admission/discovery принимает envelopes и публикует телеметрические счетчики принятия/отклонения.
-4. Фокус на наблюдаемости: завершить dashboards/alerts по admission, чтобы обновления, требуемые в течение семи дней, поднимали предупреждения (`torii_sorafs_admission_total`, expiry gauges).
+1. I Norito اسکیموں میں تبدیلیاں مکمل ہوچکی ہیں اور توثیق کے مددگاروں کو `sorafs_manifest::provider_admission` میں شامل کیا گیا ہے۔ خصوصیت کے جھنڈوں کی ضرورت نہیں ہے۔
+2. ✅ CLI اسٹریمز (`proposal` ، `sign` ، `verify` ، `renewal` ، `revoke`) کو انضمام کے ٹیسٹ کے ذریعہ دستاویزی اور تصدیق کی گئی ہے۔ رن بکس کے ساتھ ہم آہنگی میں گورننس اسکرپٹ رکھیں۔
+3. ✅ Torii داخلہ/دریافت لفافے قبول کرتا ہے اور ٹیلی میٹک قبولیت/مسترد کاؤنٹرز کو شائع کرتا ہے۔
+4. مشاہدہ پر فوکس کریں: داخلے پر مکمل ڈیش بورڈز/الرٹس تاکہ سات دن کے اندر مطلوبہ تازہ کاری انتباہات میں اضافہ کرے (`torii_sorafs_admission_total` ، میعاد ختم گیجز)۔

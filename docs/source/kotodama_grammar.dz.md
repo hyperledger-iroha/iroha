@@ -7,99 +7,96 @@ generator: scripts/sync_docs_i18n.py
 source_hash: ac9b1fa221c6de46c139ee3a3c280957adad4910b49015fbb746259a4af22659
 source_last_modified: "2026-01-30T12:29:10.190473+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Kotodama Language Grammar and Semantics
+# Kotodama སྐད་ཡིག་ཡིག་གཟུགས་དང་ཡིག་གཟུགས་རིག་པ།
 
-This document specifies the Kotodama language syntax (lexing, grammar), typing rules, deterministic semantics, and how programs lower to IVM bytecode (.to) with Norito pointer-ABI conventions. Kotodama sources use the .ko extension. The compiler emits IVM bytecode (.to) and can optionally return a manifest.
+ཡིག་ཆ་འདི་གིས་ Kotodama སྐད་ཡིག་ཚིག་སྦྱོར་ (ཚབ་དང་ཡིག་གཟུགས་) ཡིག་དཔར་རྐྱབ་ཐངས་ ལམ་ལུགས་ གཏན་འབེབས་བརྡ་འཕྲིན་རིག་པ་ དེ་ལས་ ལས་རིམ་ཚུ་ Norito དཔག་བྱེད་-ཨེ་བི་ཨའི་ གྲོས་མཐུན་ཚུ་ ག་དེ་སྦེ་དམའ་སུ་སྦེ་ གསལ་བཀོད་འབདཝ་ཨིན། Kotodama འབྱུང་ཁུངས་ཚུ་གིས་ .ko རྒྱ་བསྐྱེད་ལག་ལེན་འཐབ་ཨིན། བསྡུ་སྒྲིག་འབད་མི་གིས་ IVM བཱའིཊི་ཀོཌི་ (.to) (.to) བཏོན་ཞིནམ་ལས་ གདམ་ཁ་ཅན་སྦེ་ གསལ་སྟོན་ཅིག་སླར་ལོག་འབད་ཚུགས།
 
-Contents
-- Overview and Goals
-- Lexical Structure
-- Types and Literals
-- Declarations and Modules
-- Contract Container and Metadata
-- Functions and Parameters
-- Statements
-- Expressions
-- Builtins and Pointer-ABI Constructors
-- Collections and Maps
-- Deterministic Iteration and Bounds
-- Errors and Diagnostics
-- Codegen Mapping to IVM
-- ABI, Header, and Manifest
-- Roadmap
+ནང་དོན།
+- སྤྱི་མཐོང་དང་དམིགས་ཡུལ་།
+- ཚིག་མཛོད་ཀྱི་བཟོ་བཀོད།
+- དབྱེ་བ་དང་ཡིག་འབྲུ།
+- གསལ་བསྒྲགས།
+- གན་ཡིག་གན་ཡིག་དང་ མེ་ཊ་ཌེ་ཊ་
+- ལས་འགན་དང་ཚད་བཟུང་།
+- གསུང་བཤད་པ།
+- བརྡ་སྟོན།
+- བཱའི་ཊིན་དང་ པོན་ཊར་-ཨེ་བི་ཨའི་ བཟོ་བསྐྲུན་པ།
+- བསྡུ་སྒྲིག་དང་སབ་ཁྲ་ཚུ།
+- གཏན་འཇགས་བསྐྱར་བཅོས།
+- འཛོལ་བ་དང་བརྟག་དཔྱད།
+- ཀོ་ཌི་ཇེན་སབ་ཁྲ་ IVM ལུ།
+- ABI, མགོ་ཡིག་, དང་ མ་ཕན།
+- ལམ་སྟོན།
 
-## Overview and Goals
+## རྒྱུན་བསྒྲིགས་དང་དམིགས་ཡུལ་།
 
-- Deterministic: Programs must produce identical results across hardware; no floating point or nondeterministic sources. All host interactions happen through syscalls with Norito-encoded arguments.
-- Portable: Targets Iroha Virtual Machine (IVM) bytecode, not a physical ISA. RISC‑V–like encodings visible in the repository are implementation details of IVM decoding and must not change observable behavior.
-- Auditable: Small, explicit semantics; clear mapping of syntax to IVM opcodes and to host syscalls.
-- Boundedness: Loops over unbounded data must carry explicit bounds. Map iteration has strict rules to guarantee determinism.
+- གཏན་འབེབས་: ལས་རིམ་ཚུ་གིས་ མཐུན་རྐྱེན་ཚུ་ནང་ གྲུབ་འབྲས་འདྲ་མཚུངས་བཟོ་དགོ། ཕོལོ་ཊིང་ས་ཚིགས་ཡང་ན་ གཏན་འཁེལ་གྱི་འབྱུང་ཁུངས་མེད། ཧོསིཊི་འབྲེལ་བ་ཆ་མཉམ་ Norito-encoded རྩོད་བསྡུར་ཚུ་དང་གཅིག་ཁར་ syscalls བརྒྱུད་དེ་འབྱུངམ་ཨིན།
+- འབག་བཏུབ་མི་: དམིགས་གཏད་ Iroha བརྡ་དོན་འཕྲུལ་ཆས་ (IVM) བཱའིཊི་ཀོཌ་ དངོས་གཟུགས་ཨའི་ཨེསི་ཨེ་མེན། RISC-V འདི་ མཛོད་ཁང་ནང་མཐོང་ཚུགས་མི་ བརྡ་བཀོད་ཚུ་ IVM གི་ བརྡ་བཀོད་ཀྱི་ ཁ་གསལ་ཚུ་ཨིནམ་ལས་ བལྟ་བརྟོག་འབད་བཏུབ་པའི་ སྤྱོད་ལམ་བསྒྱུར་བཅོས་འབད་མི་བཏུབ།
+- རྩིས་ཞིབ་: ཆུང་ཀུ་དང་ གསལ་རི་རི་ ཡིག་བརྡ། ཚིག་སྦྱོར་གྱི་གསལ་སྟོན་འདི་ IVM ཁ་ཕྱེ་ནི་དང་ ཧོསཊི་སི་སི་ཀཱལ་ཚུ་ལུ་ཨིན།
+- མཚམས་ཚད་: མཐའ་མཚམས་མེད་པའི་གནད་སྡུད་གུ་ཡོད་པའི་ བསྐྱར་ལོག་ཚུ་གིས་ གསལ་ཏོག་ཏོ་སྦེ་ མཐའ་མཚམས་ཚུ་ འབག་འོང་དགོ། སབ་ཁྲ་བསྐྱར་བཟློས་འབད་ནི་ལུ་ གཏན་འབེབས་བཟོ་ནི་གི་དོན་ལུ་ ལམ་ལུགས་དམ་དམ་ཡོདཔ་ཨིན།
 
-## Lexical Structure
+## ཚིག་མཛོད་ཀྱི་བཟོ་བཀོད།
 
-Whitespace and comments
-- Whitespace separates tokens and is otherwise insignificant.
-- Line comments start with `//` and run to end-of-line.
-- Block comments `/* ... */` do not nest.
+དཀར་པོའི་ས་སྟོང་དང་བསམ་ཚུལ།
+- ཝའིཊ་པེསི་གིས་ ཊོ་ཀེན་ཚུ་ དབྱེ་བ་ཕྱེ་སྟེ་ དེ་མེན་པ་ཅིན་ གལ་གནད་ཆུང་བ་ཡོདཔ་ཨིན།
+- གྲལ་ཐིག་གི་བསམ་འཆར་ཚུ་ `//` ལས་འགོ་བཙུགས་ཏེ་ གྲལ་ཐིག་མཇུག་ལུ་གཡོག་བཀོལ།
+- བཀག་ཆ་བསམ་འཆར་ `/* ... */` ཚང་མ་མིན།
 
-Identifiers
-- Start: `[A-Za-z_]` then continue `[A-Za-z0-9_]*`.
-- Case-sensitive; `_` is a valid identifier but discouraged.
+ངོས་འཛིན་འབད་མི།
+- འགོ་བཙུགས་: `[A-Za-z_]` དེ་ལས་ `[A-Za-z0-9_]*` འཕྲོ་མཐུད་འབད།
+- གནད་དོན་-ཚོར་བ།; `_` འདི་ ནུས་ཅན་ངོས་འཛིན་པ་ཅིག་ཨིན་རུང་ སེམས་ཤུགས་མེདཔ་བཟོཝ་ཨིན།
 
-Keywords (reserved)
-- `seiyaku`, `hajimari`, `kotoage`, `kaizen`, `state`, `struct`, `fn`, `let`, `const`, `return`, `if`, `else`, `while`, `for`, `in`, `break`, `continue`, `true`, `false`, `permission`, `kotoba`.
+གཙོ་ཚིག་ (གསོག་འཇོག་འབད་ཡོདཔ།)
+- `seiyaku`, `hajimari`, `kotoage`, `kaizen`, `state`, `struct`, `fn`, `let`, `const`, `return`, `if`, `else`, `while`, `for`, Kotodama, `break`, `continue`, `true`, Kotodama, Kotodama, Kotodama.
 
-Operators and punctuation
-- Arithmetic: `+ - * / %`
-- Bitwise: `& | ^ ~`, shifts `<< >>`
-- Compare: `== != < <= > >=`
-- Logical: `&& || !`
-- Assign: `= += -= *= /= %= &= |= ^= <<= >>=`
-- Misc: `: , ; . :: ->`
-- Brackets: `() [] {}`
+བཀོལ་སྤྱོད་པ་དང་བརྡ་རྟགས་བཀོད།
+- ཨང་རྩིས་: `+ - * / %`
+- བིཊི་ཝའིསི་ཊི་: `& | ^ ~`, སོར་བསྒྱུར་ `<< >>`
+- ག་བསྡུར།: `== != < <= > >=`
+- ཚད་མ་རིག་པ་: `&& || !`
+- འགན་སྤྲོད་: `= += -= *= /= %= &= |= ^= <<= >>=`
+- མི་སི།: `: , ; . :: ->`
+- གུག་ཤད་: `() [] {}`ཚིག་དོན་ཚུ།
+- ཧྲིལ་གྲངས་: བཅུ་ཚག་ (`123`), ཧེགསི་ (`0x2A`) གཉིས་ལྡན་ (`0b1010`). ཧྲིལ་གྲངས་ཆ་མཉམ་ རན་ཊའིམ་ལུ་ ༦༤-བིཊི་ མཚན་རྟགས་བཀོད་ཡོདཔ་ཨིན། རྗེས་འཇུག་མེད་པའི་ཚིག་དོན་ཚུ་ བརྟག་དཔྱད་ཀྱི་ཐོག་ལས་ ཡང་ན་ སྔོན་སྒྲིག་གིས་ `int` སྦེ་ཡིག་དཔར་རྐྱབས་ཡོདཔ་ཨིན།
+- ཡིག་རྒྱུན་: བྲོས་བྱོལ་གྱི་ཐོག་ལས་ གཉིས་ལྡབ་སྦེ་ ལུང་འདྲེན་འབད་ཡོདཔ་ཨིན། `\"`, `\\`); UTF‐༨. རའུ་ཡིག་རྒྱུན་ཚུ་ `r"..."` ཡང་ན་ `r#"..."#` ཚུ་ ལྕོགས་མིན་བཟོ་སྟེ་ གསརཔ་ཚུ་ འབད་བཅུགཔ་ཨིན།
+- བཱའིཊི་: ཐར་ཐབས་དང་གཅིག་ཁར་ `b"..."` ཡང་ན་ `br"..."` / `rb"..."`; `bytes` ཚིག་ཕྲད་ཐོན་ཡོད།
+- བུ་ལིན་: `true`, `false`.
 
-Literals
-- Integer: decimal (`123`), hex (`0x2A`), binary (`0b1010`). All integers are signed 64-bit at runtime; literals without suffix are typed via inference or as `int` by default.
-- String: double-quoted with escapes (`\n`, `\r`, `\t`, `\0`, `\xNN`, `\u{...}`, `\"`, `\\`); UTF‑8. Raw strings `r"..."` or `r#"..."#` disable escapes and allow newlines.
-- Bytes: `b"..."` with escapes, or raw `br"..."` / `rb"..."`; yields a `bytes` literal.
-- Boolean: `true`, `false`.
+## དབྱེ་བ་དང་ཡིག་འབྲུ།
 
-## Types and Literals
+རྒྱ་ཚད་ཀྱི་དབྱེ་བ།
+- Kotodama: 64-bit གཉིས་ཀྱི་མཐུན་རྐྱེན།; ཨང་རྩིས་རིག་པའི་བཤུབ་ཚད། མོ་ཌུ་ལོ་ ༢^༦༤ ཁ་སྐོང་/ཡན་ལག་/མུལ་གྱི་དོན་ལུ་; དབྱེ་བ་འདི་གིས་ I1NT00000031X ནང་ལུ་ མཚན་རྟགས་བཀོད་/མཚན་རྟགས་མ་བཀོད་པའི་འགྱུར་བ་ཚུ་ ངེས་འཛིན་འབད་ཡོདཔ་ཨིན། བསྡུ་སྒྲིག་འབད་མི་འདི་གིས་ ཡིག་བརྡའི་དོན་ལུ་ འོས་འབབ་ཅན་གྱི་ཨོཔ་གདམ་ཁ་རྐྱབ་ཨིན།
+- Kotodama, `Amount`, `Balance`: Norito: Norito `Numeric` (512-bit mantissa and scales) ཚུན་ཚོད་ མཚན་རྟགས་བཀོད་ཡོདཔ། Kotodama གིས་ འ་ནི་མིང་གཞན་འདི་ ལོག་པ་མེན་པའི་འབོར་ཚད་སྦེ་ བརྩི་དོ་ཡོདཔ་ཨིན། ཨང་རྩིས་རིག་པ་འདི་ཞིབ་དཔྱད་འབད་ནི་དང་ མིང་གཞན་ཚུ་ཉམས་སྲུང་འབདཝ་ཨིནམ་དང་ ལྕུག་གུ་ཚུ་ཡང་ན་བགོ་རྩིས་གུ་ཡོད་པའི་ ལྕགས་ཐག་ཚུ་ ཀླད་ཀོར་གྱིས་བགོ་བསྡམས། `int` ལག་ལེན་འཐབ་པའི་གནས་གོང་ཚུ་ འཇལ་ཚད་ ༠; གཞི་བསྒྱུར་ཚུ་ `int` ལུ་ རན་ཊའིམ་ལུ་ ཁྱབ་ཚད་བརྟག་དཔྱད་འབད་ཡོདཔ་ཨིན་ (negative, interal, in i64 ནང་ཚུད་ཡོདཔ་)།
+- `bool`: གཏན་ཚིག་བདེན་པ་གནས་གོང་; `0`/`1` ལུ་མར་ཕབ་འབད་ཡོདཔ།
+- `string`: བསྒྱུར་བཅོས་འབད་མ་ཚུགས་པའི་ ཡུ་ཊི་ཨེཕ་‐༨ ཡིག་རྒྱུན་; syscalls ལུ་སྤྲོད་པའི་སྐབས་ Norito TLV འདི་ ངོ་སྤྲོད་འབད་ཡོདཔ་ཨིན། in-VM བཀོལ་སྤྱོད་བཱའིཊི་སིལསི་དང་རིང་ཚད་།
+- `bytes`: རྦོབ་རིལ་ནི་ Norito དངུལ་སྤྲོད་པ། དཔག་བྱེད་-ཨེ་བི་ཨའི་ `Blob` གིས་ ཧེ་ཤིང་/ཀིརིཔ་ཊོ་/བདེན་ཁུངས་ཨིན་པུཊི་དང་ ཐུབ་ཚད་ཅན་གྱི་ བཀབ་བཙུགས་ཚུ་གི་དོན་ལུ་ དབྱེ་བ་བཏོནམ་ཨིན།
 
-Scalar types
-- `int`: 64-bit two’s-complement; arithmetic wraps modulo 2^64 for add/sub/mul; division has defined signed/unsigned variants in IVM; the compiler chooses the appropriate op for semantics.
-- `fixed_u128`, `Amount`, `Balance`: numeric aliases backed by Norito `Numeric` (signed decimal with up to 512-bit mantissa and scale). Kotodama treats these aliases as non-negative quantities; arithmetic is checked, preserves the alias, and traps on overflow or division by zero. Values created from `int` use scale 0; conversions to/from `int` are range-checked at runtime (non-negative, integral, fits in i64).
-- `bool`: logical truth value; lowered to `0`/`1`.
-- `string`: immutable UTF‑8 string; represented as Norito TLV when passed to syscalls; in-VM operations use byte slices and length.
-- `bytes`: raw Norito payload; aliases the pointer-ABI `Blob` type for hashing/crypto/proof inputs and durable overlays.
+བརྩེགས་རིགས།
+- `struct Name { field: Type, ... }` ལག་ལེན་པའི་-ངེས་འཛིན་འབད་ཡོད་པའི་ཐོན་སྐྱེད་དབྱེ་བ་ཚུ། བཟོ་བསྐྲུན་པ་ཚུ་གིས་ གསལ་བརྗོད་ཚུ་ནང་ འབོད་བརྡ་ཚིག་སྦྱོར་ `Name(a, b, ...)` ལག་ལེན་འཐབ་ཨིན། ས་སྒོའི་འཛུལ་སྤྱོད་ `obj.field` འདི་རྒྱབ་སྐྱོར་དང་ ནང་འཁོད་ལས་ ཊུཔ་ལི་བཟོ་རྣམ་གནས་ས་ས་སྒོ་ཚུ་ལུ་མར་ཕབ་འབདཝ་ཨིན། ཐུབ་ཚད་གནས་སྟངས་ ABI on-chain འདི་ Norito-encoded; བཀོད་སྒྲིག་འབད་མི་གིས་ བཀོད་རིས་བཀོད་རྒྱ་དང་ འཕྲལ་གྱི་བརྟག་དཔྱད་ (`crates/iroha_core/tests/kotodama_struct_overlay.rs`) ཚུ་ གསར་བཏོན་ཚུ་ནང་ལུ་ བསྡམ་བཞག་སྟེ་བཞག་མི་འདི་ བཀབ་སྟེ་བཞགཔ་ཨིན།
+- `Map<K, V>`: གཏན་འབེབས་མཐུན་འབྲེལ་གྱི་སབ་ཁྲ་; བརྗོད་ཚིག་འདི་གིས་ བསྐྱར་ལོག་དང་འགྱུར་བཅོས་ཚུ་ བཀག་ཆ་འབདཝ་ཨིན། ༼གཤམ་ལུ་བལྟ།༽
+- `Tuple (T1, T2, ...)`: གནས་ས་ས་སྒོ་ཚུ་དང་གཅིག་ཁར་ མིང་མ་བཀོད་པའི་ཐོན་སྐྱེད་དབྱེ་བ་; སྣ་མང་ལོག་པ་ལུ་ལག་ལེན་འཐབ་ཡོདཔ།
 
-Composite types
-- `struct Name { field: Type, ... }` user-defined product types. Constructors use call syntax `Name(a, b, ...)` in expressions. Field access `obj.field` is supported and lowers to tuple-style positional fields internally. Durable state ABI on-chain is Norito-encoded; the compiler emits overlays that mirror the struct order and recent tests (`crates/iroha_core/tests/kotodama_struct_overlay.rs`) keep the layout locked in across releases.
-- `Map<K, V>`: deterministic associative map; semantics restrict iteration and mutations during iteration (see below).
-- `Tuple (T1, T2, ...)`: anonymous product type with positional fields; used for multi-return.
+དམིགས་བསལ་དཔག་བྱེད་-ཨེ་བི་ཨའི་དབྱེ་བ་ཚུ་ (གདོང་ཁ་)
+- Kotodama, `Name`, `Json`, `Json`, Kotodama, Kotodama, དང་དེ་དང་འདྲ་བའི་སློབ་ཚན་གྱི་དབྱེ་བ་དང་འདྲ་བ། འདི་ཚུ་ INPUTལུང་ཕྱོགས་ནང་ལུ་ ཡིག་དཔར་རྐྱབ་མི་དང་ འགྱུར་བཅོས་འགྱོ་མ་ཚུགས་པའི་ མཚོན་རྟགས་བཀོད་མི་ཚུ་ཨིནམ་དང་ འདི་ཡང་ syscal གི་གྲོས་བསྡུར་སྦེ་རྐྱངམ་ཅིག་ལག་ལེན་འཐབ་ཚུགས་ནི་ཨིནམ་དང་ ཡང་ན་ འགྱུར་ལྡོག་མེད་པར་ འགྱུར་ལྡོག་ཅན་གྱི་བར་ན་སྤོ་བཤུད་འབདཝ་ཨིན།
 
-Special pointer-ABI types (host-facing)
-- `AccountId`, `AssetDefinitionId`, `Name`, `Json`, `NftId`, `Blob`, and similar are not first-class runtime types. They are constructors that yield typed, immutable pointers into the INPUT region (Norito TLV envelopes) and can only be used as syscall arguments or moved between variables without mutation.
+དབྱེ་བ་གི་གཞི་བསྟུན།
+- ས་གནས་ཀྱི་ `let` འགོ་བཙུགས་མི་ལས་ བརྟག་དཔྱད་དབྱེ་བ་ཚུ་ བརྡ་སྟོནམ་ཨིན། ལས་འགན་ཚད་བཟུང་ཚུ་ གསལ་རི་རི་སྦེ་ཡིག་དཔར་རྐྱབས་དགོ། ལོག་འོང་བའི་དབྱེ་བ་ཚུ་ གསལ་ཏོག་ཏོ་ཅིག་མེདཔ་མ་གཏོགས་ ཤེས་རྟོགས་མེདཔ་འོང་།
 
-Type inference
-- Local `let` bindings infer type from initializer. Function parameters must be explicitly typed. Return types may be inferred unless ambiguous.
+## གསལ་བསྒྲགས།མཐོ་རིམ་རྣམ་གྲངས།
+- གན་ཡིག་ཚུ་: `seiyaku Name { ... }` ནང་ ལས་འགན་དང་ གནས་སྟངས་ བཀོད་སྒྲིག་ དེ་ལས་ མེ་ཊ་ཌེ་ཊ་ཚུ་ཡོདཔ་ཨིན།
+- ཡིག་སྣོད་རེ་ལུ་ གན་རྒྱ་སྣ་ཚོགས་འབད་ཆོགཔ་ཨིན་རུང་ སེམས་ཤུགས་མེདཔ་བཟོ་ཡོདཔ། གཞི་རིམ་ `seiyaku` འདི་ གསལ་སྟོན་ནང་ སྔོན་སྒྲིག་ཐོ་བཀོད་སྦེ་ ལག་ལེན་འཐབ་ཨིན།
+- `struct` གསལ་བསྒྲགས་ཚུ་གིས་ གན་རྒྱ་ནང་འཁོད་ལུ་ ལག་ལེན་པའི་དབྱེ་བ་ཚུ་ ངེས་འཛིན་འབདཝ་ཨིན།
 
-## Declarations and Modules
+མངོན་གསལ།
+- `kotoage fn` མི་མང་འཛུལ་སྒོ་ཅིག་སྟོནམ་ཨིན། མཐོང་སྣང་གིས་ གསང་ཡིག་མེན་པར་ བཏང་མི་ཆོག་པའི་གནང་བ་ཚུ་ལུ་ ཐོ་ཕོགཔ་ཨིན།
+- གདམ་ཁ་ཅན་གྱི་འཛུལ་སྤྱོད་ཀྱི་བརྡ་སྟོན་ཚུ་: `#[access(read=..., write=...)]` གིས་ `fn`/`kotoage fn` གིས་ གསལ་སྟོན་ལྷག་/ཡིག་ཆའི་ལྡེ་མིག་ཚུ་བཀྲམ་སྤེལ་འབད་ནི་ལུ་ སྔོན་སྒྲིག་འབད་ཚུགས། བསྡུ་སྒྲིག་འབད་མི་འདི་གིས་ བསླབ་བྱ་གི་བརྡ་སྟོན་ཚུ་ཡང་ རང་བཞིན་གྱིས་ བཏོནམ་ཨིན། opaque གི་འབོད་བརྡ་ཚུ་ རྙིང་མའི་ཝའིལ་ཀརཌ་ལྡེ་མིག་ཚུ་ལུ་ལོག་འོངམ་ཨིནམ་དང་ (`*`) དེ་ལས་ གསལ་ཏོག་ཏོ་སྦེ་འཛུལ་སྤྱོད་ཀྱི་བརྡ་སྟོན་ཚུ་ མ་བྱིན་ཚུན་ཚོད་ ནད་བརྟག་ཅིག་བཏོན་དོ་ཡོདཔ་ལས་ དུས་ཚོད་བཀོད་མི་ཚུ་གིས་ ལྡེ་མིག་ལེགས་ཤོམ་གྱི་དོན་ལུ་ ཕན་ནུས་ཅན་གྱི་ prepass ནང་ལུ་ གདམ་ཁ་རྐྱབ་ཚུགས།
 
-Top-level items
-- Contracts: `seiyaku Name { ... }` contain functions, state, structs, and metadata.
-- Multiple contracts per file are allowed but discouraged; one primary `seiyaku` is used as default entry in manifests.
-- `struct` declarations define user types within a contract.
+## གན་ཡིག་གན་ཡིག་དང་མེ་ཊ་ཌེ་ཊ་
 
-Visibility
-- `kotoage fn` denotes a public entrypoint; visibility affects dispatcher permissions, not codegen.
-- Optional access hints: `#[access(read=..., write=...)]` can precede `fn`/`kotoage fn` to supply manifest read/write keys. The compiler also emits advisory hints automatically; opaque host calls fall back to conservative wildcard keys (`*`) and surface a diagnostic unless explicit access hints are provided, so schedulers can opt into a dynamic prepass for finer-grained keys.
-
-## Contract Container and Metadata
-
-Syntax
+ཚིག་སྦྱོར།
 ```
 seiyaku Name {
   meta {
@@ -117,35 +114,33 @@ seiyaku Name {
 }
 ```
 
-Semantics
-- `meta { ... }` fields override compiler defaults for the emitted IVM header: `abi_version`, `vector_length` (0 means unset), `max_cycles` (0 means compiler default), `features` toggles header feature bits (ZK tracing, vector announce). The compiler treats `max_cycles: 0` as “use default” and emits the configured non‑zero default to satisfy admission requirements. Unsupported features are ignored with a warning. When `meta {}` is omitted, the compiler emits `abi_version = 1` and uses the option defaults for the remaining header fields.
-- `features: ["zk", "simd"]` (aliases: `"vector"`) explicitly requests the corresponding header bits. Unknown feature strings now produce a parser error instead of being ignored.
-- `state` declares durable contract variables. The compiler lowers accesses into `STATE_GET/STATE_SET/STATE_DEL` syscalls and the host stages them in a per-transaction overlay (checkpoint/restore rollback, flush-on-commit into WSV). Access hints are emitted for literal state paths; dynamic keys fall back to map-level conflict keys. For explicit host-backed reads/writes, use the `state_get/state_set/state_del` helpers and the `get_or_insert_default` map helpers; these route through Norito TLVs and keep names/field order stable.
-- State identifiers are reserved; shadowing a `state` name in parameters or `let` bindings is rejected (`E_STATE_SHADOWED`).
-- State map values are not first-class: use the state identifier directly for map operations and iteration. Binding or passing state maps to user-defined functions is rejected (`E_STATE_MAP_ALIAS`).
-- Durable state maps currently support `int` and pointer-ABI key types only; other key types are rejected at compile time.
-- Durable state fields must be `int`, `bool`, `Json`, `Blob`/`bytes`, or pointer-ABI types (including structs/tuples composed of these fields); `string` is not supported for durable state.
+ཡིག་བརྡ།
+- Kotodama ས་སྒོ་འདི་གིས་ བཀོལ་སྤྱོད་འབད་མི་ `abi_version`, `vector_length` (0 ཟེར་མི་འདི་ མ་བཞག་ཟེར་མི་འདི་) `max_cycles` (0 ཟེར་མི་འདི་ བསྡུ་སྒྲིག་འབད་མི་ སྔོན་སྒྲིག་) `features` གི་དོན་ལུ་ སྔོན་སྒྲིག་འབདཝ་ཨིན། མགོ་ཡིག་མགོ་ཡིག་ཁྱད་རྣམ་བིཊི་ཚུ་ (ZK རྗེས་འདེད་འབད་ནི་ ཝེག་ཊར་གསལ་བསྒྲགས་)། བསྡུ་སྒྲིག་འབད་མི་འདི་གིས་ `max_cycles: 0` འདི་ “ལག་ལེན་གྱི་སྔོན་སྒྲིག་” སྦེ་བརྩི་དོ་ཡོདཔ་དང་ འཛུལ་ཞུགས་དགོས་མཁོ་ཚུ་ གྲུབ་ཚུགསཔ་སྦེ་ རིམ་སྒྲིག་འབད་ཡོད་པའི་སྔོན་སྒྲིག་འདི་ རིམ་སྒྲིག་འབདཝ་ཨིན། རྒྱབ་སྐྱོར་མ་འབད་བའི་ཁྱད་རྣམ་ཚུ་ ཉེན་བརྡ་དང་གཅིག་ཁར་ སྣང་མེད་བཞགཔ་ཨིན། Kotodama འདི་བཏོན་པའི་སྐབས་ བསྡུ་སྒྲིག་འབད་མི་འདི་གིས་ `abi_version = 1` འདི་བཏོན་ཞིནམ་ལས་ མགོ་ཡིག་ས་སྒོ་ལྷག་ལུས་ཚུ་གི་དོན་ལུ་ གདམ་ཁའི་སྔོན་སྒྲིག་ཚུ་ལག་ལེན་འཐབ་ཨིན།
+- `features: ["zk", "simd"]` (aliase: `abi_hash`) གིས་ འབྲེལ་མཐུན་མགོ་ཡིག་བིཊི་ཚུ་ གསལ་ཏོག་ཏོ་སྦེ་ཞུ་བ་འབདཝ་ཨིན། མ་ཤེས་པའི་ཁྱད་རྣམ་ཡིག་རྒྱུན་ཚུ་གིས་ ད་ལྟོ་ སྣང་མེད་བཞག་ནིའི་ཚབ་ལུ་ དབྱེ་དཔྱད་འཛོལ་བ་ཅིག་ བཏོནམ་ཨིན།
+- `state` ཐུབ་ཚད་འགྱུར་ཅན་འགྱུར་ཅན་གསལ་བསྒྲགས་འབདཝ་ཨིན། བསྡུ་སྒྲིག་འབད་མི་འདི་གིས་ `STATE_GET/STATE_SET/STATE_DEL` syscalls ནང་ལུ་འཛུལ་སྤྱོད་ཚུ་ མར་ཕབ་འབདཝ་ཨིནམ་དང་ ཧོསིཊི་གི་གནས་རིམ་འདི་ ཚོང་འབྲེལ་རེ་རེ་ལུ་ བརྡ་བཀོད་འབདཝ་ཨིན། འཛུལ་སྤྱོད་ཀྱི་བརྡ་སྟོན་ཚུ་ ངོ་མ་སྦེ་ རྒྱལ་ཁབ་ཀྱི་ལམ་གྱི་དོན་ལུ་ བཏོན་ཡོདཔ་ཨིན། ཌའི་ནམ་ལྡེ་མིག་ཚུ་ ས་ཁྲ་གནས་རིམ་གྱི་ འཁྲུག་རྩོད་ལྡེ་མིག་ཚུ་ལུ་ ལོག་འགྱོཝ་ཨིན། གསལ་ཏོག་ཏོ་སྦེ་ ཧོསིཊི་རྒྱབ་སྐྱོར་ལྷག་/འབྲི་ནི་ཚུ་གི་དོན་ལུ་ `state_get/state_set/state_del` གྲོགས་རམ་དང་ `get_or_insert_default` སབ་ཁྲ་གྲོགས་རམ་པ་ཚུ་ལག་ལེན་འཐབ། འདི་ Norito TLVs བརྒྱུད་དེ་ མིང་/ ས་སྒོའི་བཀའ་རྒྱ་ བརྟན་ཏོག་ཏོ་སྦེ་བཞག།
+- རྒྱལ་ཁབ་ཀྱི་ངོས་འཛིན་ཚུ་ བཀག་བཞག་ཡོདཔ་ཨིན། ཚད་བཟུང་ཚུ་ནང་ `state` མིང་ཅིག་ ཡང་ན་ `let` བཱའིན་ཌིང་ཚུ་ ངོས་ལེན་མ་འབད་བར་ (`E_STATE_SHADOWED`)
+- མངའ་སྡེའི་སབ་ཁྲ་གནས་གོང་ཚུ་ དབྱེ་རིམ་དང་པ་མེན་: ས་ཁྲ་བཀོལ་སྤྱོད་དང་བསྐྱར་ལོག་དོན་ལུ་ མངའ་སྡེའི་ངོས་འཛིན་པ་འདི་ལག་ལེན་འཐབ། ལག་ལེན་པ་ངེས་འཛིན་འབད་ཡོད་པའི་ལས་འགན་ཚུ་ལུ་ མངའ་སྡེའི་སབ་ཁྲ་ཚུ་ མཐུད་ནི་ཡང་ན་ བརྒྱུད་སྤྲོད་འབད་ནི་འདི་ ངོས་ལེན་མ་འབད་ (`E_STATE_MAP_ALIAS`).
+- ཐུབ་ཚད་ཅན་གྱི་མངའ་སྡེ་སབ་ཁྲ་ཚུ་གིས་ ད་ལྟོ་ `int` དང་ དཔག་བྱེད་-ABI ལྡེ་མིག་དབྱེ་བ་རྐྱངམ་ཅིག་ལུ་རྒྱབ་སྐྱོར་འབདཝ་ཨིན། གཞན་མི་གཙོ་བོ་དབྱེ་བ་ཚུ་ བསྡུ་སྒྲིག་འབད་བའི་དུས་ཚོད་ལུ་ ངོས་ལེན་མེདཔ་ཨིན།
+- ཐུབ་ཚད་ཅན་གྱི་མངའ་སྡེའི་ས་ཁོངས་ཚུ་ `int`, `bool`, `Json`, `Blob`/`bytes`, ཡང་ན་ དཔག་བྱེད་-ཨེ་བི་ཨའི་དབྱེ་བ་ཚུ་ (མ་ཚུད་པར་ བཀོད་སྒྲིག་/སྦྱོར་སྡེ།) `string` འདི་ཐུབ་པའི་གནས་སྟངས་ཀྱི་དོན་ལུ་རྒྱབ་སྐྱོར་མ་འབད་བས།
 
-### Kotoba localization
-Syntax
+### ཀོ་ཏོ་བ་ས་གནས་བཟོ་བ།
+ཚིག་སྦྱོར།
 ```
 kotoba {
   "E_UNBOUNDED_ITERATION": { en: "Loop over map lacks a bound." }
 }
-```
+```ཡིག་བརྡ།
+- `kotoba` གན་ཡིག་གསལ་སྟོན་ལུ་ སྐད་སྒྱུར་ཐིག་ཁྲམ་ཚུ་ མཉམ་སྦྲགས་འབད་ (`kotoba` ས་སྒོ་)།
+- འཕྲིན་དོན་ཨའི་ཌི་ཚུ་དང་ སྐད་ཡིག་ངོ་རྟགས་ཚུ་གིས་ ངོས་འཛིན་འབད་མི་ཚུ་ངོས་ལེན་འབད་ཡོདཔ་ ཡང་ན་ ཡིག་རྒྱུན་ཡིག་རྒྱུན་ཚུ་ ངོས་ལེན་འབདཝ་ཨིན། ཐོ་བཀོད་ཚུ་ སྟོངམ་མེན་དགོ།
+- འདྲ་བཤུས་ `msg_id` + སྐད་ཡིག་ངོ་རྟགས་ཆ་ཚུ་ བསྡུ་སྒྲིག་འབད་བའི་དུས་ཚོད་ལུ་ ངོས་ལེན་འབདཝ་ཨིན།
 
-Semantics
-- `kotoba` entries attach translation tables to the contract manifest (`kotoba` field).
-- Message IDs and language tags accept identifiers or string literals; entries must be non-empty.
-- Duplicate `msg_id` + language tag pairs are rejected at compile time.
+## གསུམ་རིམ་གསལ་བསྒྲགས།
 
-## Trigger Declarations
+འཛུལ་ཞུགས་ས་ཚིགས་ཀྱི་མངོན་གསལ་ཚུ་ལུ་ མེ་ཊ་ཌེ་ཊ་འདི་ དུས་ཚོད་བཀོད་ནི་དང་ རང་བཞིན་ཐོ་བཀོད་འབད་དེ་ཡོད་མི་ ཊི་གར་གསལ་བསྒྲགས་ཚུ་གིས་ མེ་ཊ་ཌེ་ཊ་འདི་ མཉམ་སྦྲགས་འབདཝ་ཨིན།
+གན་རྒྱ་གི་གནས་སྟངས་ཅིག་ ཤུགས་ལྡན་བཟོ་བའི་སྐབས་ (ཤུགས་ལྡན་བཟོ་མ་ཚུགས་པའི་ཐོག་ལུ་བཏོན་བཏང་ཡོདཔ་ཨིན།)། དེ་ཚུ་ ནང་ན་ལུ་ དབྱེ་དཔྱད་འབད་ཡོདཔ་ཨིན།
+`seiyaku` སྡེབ་ཚན།
 
-Trigger declarations attach scheduling metadata to entrypoint manifests and are auto-registered
-when a contract instance is activated (removed on deactivation). They are parsed inside a
-`seiyaku` block.
-
-Syntax
+ཚིག་སྦྱོར།
 ```
 register_trigger wake {
   call run;
@@ -156,71 +151,69 @@ register_trigger wake {
 }
 ```
 
-Notes
-- `call` must reference a public `kotoage fn` entrypoint in the same contract; an optional
-  `namespace::entrypoint` is recorded in the manifest but cross-contract callbacks are rejected
-  by the runtime for now (local callbacks only).
-- Supported filters: `time pre_commit` and `time schedule(start_ms, period_ms?)`, plus
-  `execute trigger <name>` for by-call triggers, `data any`, and pipeline filters
-  (`pipeline transaction`, `pipeline block`, `pipeline merge`, `pipeline witness`).
-- `authority` optionally overrides the trigger authority (AccountId string literal). If omitted,
-  the runtime uses the contract-activation authority.
-- Metadata values must be JSON literals (`string`, `number`, `bool`, `null`) or `json!(...)`.
-- Runtime-injected trigger metadata keys: `contract_namespace`, `contract_id`,
+དྲན་ཐོ་ཚུ།
+- `call` གིས་ གན་རྒྱ་གཅིག་ནང་ མི་མང་ `kotoage fn` འཛུལ་སྒོ་ཅིག་ གཞི་བསྟུན་འབད་དགོ། གདམ་ཁ་ཅན་ཅིག།
+  `namespace::entrypoint` འདི་ གསལ་སྟོན་ནང་སྒྲ་བཟུང་འབད་ཡོདཔ་ཨིན་རུང་ ཕར་ཚུར་གྱི་ཁ་འབག་གི་འབོད་བརྡ་ཚུ་ ངོས་ལེན་མ་འབད་བས།
+  ད་ལྟོའི་དོན་ལུ་ རཱན་ཊའིམ་གིས་ (ས་གནས་ཀྱི་འབོད་བརྡ་རྒྱབ་ལོག་རྐྱངམ་ཅིག)།
+- རྒྱབ་སྐྱོར་ཡོད་པའི་ཚགས་མ་ཚུ་: `time pre_commit` དང་ `time schedule(start_ms, period_ms?)`, ཁ་སྐོང་།
+  བཱའི་-འབོད་བརྡ་ཚུ་གི་དོན་ལུ་ `execute trigger <name>`, `data any`, དང་ མདོང་ལམ་ཚགས་མ་ཚུ།
+  (I 18NI0000000000171X, `pipeline block`, `pipeline merge`, Kotodama)
+- `authority` གིས་ གདམ་ཁ་ཅན་གྱི་ཐོག་ལས་ ཊི་རི་ཊི་དབང་ཚད་ (རྩིས་ཁྲ་ཡིག་རྒྱུན་ཡིག་འབྲུ་) འདི་ བརྒལ་གཏངམ་ཨིན། བཀོ་བཞག་པ་ཅིན།
+  རན་ཊའིམ་གྱིས་ གན་རྒྱ་ལག་ལེན་འཐབ་པའི་དབང་ཚད་ལག་ལེན་འཐབ་ཨིན།
+- མེ་ཊ་ཌེ་ཊ་གནས་གོང་ཚུ་ JSON ཚིག་མཛོད་ (`string`, `number`, `bool`, `null`) ཡང་ན་ `null`) ཡང་ན་ `hajimari() { ... }`.
+- རན་ཊའིམ་བཙུགས་ཡོད་པའི་ ཊི་རི་ཊི་མེ་ཊ་ཌེ་ཊ་ལྡེ་མིག་ཚུ་: `contract_namespace`, `contract_id`,
   `contract_entrypoint`, `contract_code_hash`, `contract_trigger_id`.
 
-## Functions and Parameters
+## ལས་འགན་དང་ཚད་བཟུང་།
 
-Syntax
-- Declaration: `fn name(param1: Type, param2: Type, ...) -> Ret { ... }`
-- Public: `kotoage fn name(...) { ... }`
-- Initializer: `hajimari() { ... }` (invoked on deploy by the runtime, not by the VM itself).
-- Upgrade hook: `kaizen(args...) permission(Role) { ... }`.
+ཚིག་སྦྱོར།
+- གསལ་བསྒྲགས།: `fn name(param1: Type, param2: Type, ...) -> Ret { ... }`
+- མི་མང་: `kotoage fn name(...) { ... }`
+- འགོ་བཙུགས་མི་: `hajimari() { ... }` (ཝི་ཨེམ་རང་ཉིད་ཀྱིས་མེན་པར་ གཡོག་བཀོལ་བའི་དུས་ཚོད་ཀྱིས་ བཀྲམ་སྤེལ་འབད་ཡོདཔ་ཨིན།)
+- ཡར་འཕར་ཧུཀ་: `kaizen(args...) permission(Role) { ... }`.
 
-Parameters and returns
-- Arguments are passed in registers `r10..r22` as values or INPUT pointers (Norito TLV) per ABI; additional args spill to stack.
-- Functions return zero or one scalar or tuple. Primary return value is in `r10` for scalar; tuples are materialized in stack/OUTPUT by convention.
+ཚད་བཟུང་དང་སླར་ལོག་ཚུ།
+- རྩོད་བསྡུར་ཚུ་ ཐོ་བཀོད་ `r10..r22` གནས་གོང་སྦེ་ ཡང་ན་ INPUT དཔག་བྱེད་ (Norito TLV) རེ་ལུ་ ཆ་འཇོག་འབདཝ་ཨིན། བརྩེགས་བརྩེགས་འབད་ནི་ལུ་ ཁ་སྐོང་ཨར་ཇི་ཚུ་བཞུར་ཡོདཔ།
+- ལས་འགན་ཚུ་ ཀླད་ཀོར་ཡང་ན་ སི་ཀེ་ལར་ཡང་ན་ ཊུཔ་ལི་གཅིག་སླར་ལོག་འབདཝ་ཨིན། གཞི་རིམ་སླར་ལོག་གནས་གོང་འདི་ scalar གི་དོན་ལུ་ `r10` ནང་ལུ་ཡོདཔ་ཨིན། tuples ཚུ་ བརྩེགས་ཕུང་/OUTPUT ནང་ ཆིངས་ཡིག་ནང་ དངོས་གཞི་བཟོཝ་ཨིན།
 
-## Statements
+## གསུང་བཤད་པ།- འགྱུར་ལྡོག་ཅན་གྱི་བཱའིན་ཌིང་ཚུ་: `let x = expr;`, `let mut x = expr;` (རིགས་འགྱུར་ཅན་འདི་ དུས་ཚོད་བསྡུ་སྒྲིག་འབད་མི་ཞིབ་དཔྱད་ཅིག་ཨིན།
+- ལས་འགན་: `x = expr;` དང་ རྫས་སྦྱོར་ཚུ་ `x += 1;` ལ་སོགས་པ་ཚུ་བཟོཝ་ཨིན། tuple/struct ས་སྒོ་ཚུ་ འགྱུར་བཅོས་འགྱོ་མི་ཚུགས།
+- ཨང་གྲངས་ཀྱི་མིང་ཚིག་ (`fixed_u128`, `Amount`, `Balance`) འདི་ `Numeric`-backed དབྱེ་བ་ཚུ་ ཁྱད་པར་ཅན་ཨིན། ཨང་རྩིས་རིག་པ་གིས་ མིང་གཞན་ཚུ་ ཉམས་སྲུང་འབད་དེ་ མིང་གཞན་སླ་བསྲེ་རྐྱབ་མི་འདི་གིས་ `int` མཐུད་དེ་ བསྒྱུར་བཅོས་འབད་དགོཔ་ཨིན། `int` ལུ་ གཞི་བསྟུན་ཚུ་ རན་ཊའིམ་ལུ་ ཞིབ་དཔྱད་འབད་ཡོདཔ་ཨིན།
+- ཚད་འཛིན། `if (cond) { ... } else { ... }`, `while (cond) { ... }`, སི་-བཟོ་རྣམ་ `for (init; cond; step) { ... }`.
+  - `for` འགོ་བཙུགས་མི་ཚུ་དང་ རིམ་པ་ཚུ་ འཇམ་ཏོང་ཏོ་ `let name = expr` ཡང་ན་ གསལ་བརྗོད་གསལ་བཤད་ཚུ་ཨིན་དགོ། མགུ་རྙོག་ཅན་གྱི་གཏོར་བཤིག་འདི་ ངོས་ལེན་མ་འབད་བས། (`E0005`, `E0006`)
+  - `for` ཁ་ཕྱེ་ནི: in the ཚིག་ཕྲད་ལས་ བཱའིན་ཌིང་ཚུ་ བསྐྱར་ལོག་ནང་དང་ དེ་གི་ཤུལ་ལས་; གཟུགས་ཡང་ན་གོམ་པ་ནང་ལུ་བཟོ་ཡོད་པའི་བཱའིན་ཌིང་ཚུ་ བསྐོར་རིམ་ལས་ཐར་མི་ཚུགས།
+- སྤུས་ཚད་ (`==`, `!=`) འདི་ Kotodama, `string`, དཔག་བྱེད་-ABI scalars (དཔེར་ན་ Kotodama, གི་དོན་ལུ་རྒྱབ་སྐྱོར་འབདཝ་ཨིན། `Name`, `Blob`/`bytes`, `Json`; tuples དང་ བཀོད་རིས་ དེ་ལས་ སབ་ཁྲ་ཚུ་ ག་བསྡུར་མ་འབད་བས།
+- སབ་ཁྲ་གི་བསྐྱར་ལོག་: `for (k, v) in map { ... }` (གཏན་འབེབས་རིག་པ་; འོག་ལུ་བལྟ།)
+- ཕོལོ།: `return expr;`, `break;`, `continue;`.
+- འབོད་བརྡ་: `name(args...);` ཡང་ན་ IVM (གཉིས་ཆ་ར་གིས་ ངོས་ལེན་འབད་ཡོདཔ་ཨིན་ བསྡུ་སྒྲིག་འབད་མི་གིས་ བརྡ་བཤད་ཚུ་ལུ་ སྤྱིར་བཏང་བཟོཝ་ཨིན།)
+- བདེན་དཔང་ཚུ་: `assert(cond);`, IVM གིས་ IVM `ASSERT*` མེན་མི་-ZK བཟོ་བསྐྲུན་ནང་ ཡང་ན་ ZK ཐབས་ལམ་ནང་ ZK ཉོགས་འཛིན།
 
-- Variable bindings: `let x = expr;`, `let mut x = expr;` (mutability is a compile-time check; runtime mutation is allowed for locals only).
-- Assignment: `x = expr;` and compound forms `x += 1;` etc. Targets must be variables or map indices; tuple/struct fields are immutable.
-- Numeric aliases (`fixed_u128`, `Amount`, `Balance`) are distinct `Numeric`-backed types; arithmetic preserves the alias and mixing aliases requires converting through an `int` binding. Conversions to/from `int` are checked at runtime (non-negative, integral, range-limited).
-- Control: `if (cond) { ... } else { ... }`, `while (cond) { ... }`, C-style `for (init; cond; step) { ... }`.
-  - `for` initializers and steps must be simple `let name = expr` or expression statements; complex destructuring is rejected (`E0005`, `E0006`).
-  - `for` scoping: bindings from the init clause are visible in the loop and after it; bindings created in the body or step do not escape the loop.
-- Equality (`==`, `!=`) is supported for `int`, `bool`, `string`, pointer-ABI scalars (e.g., `AccountId`, `Name`, `Blob`/`bytes`, `Json`); tuples, structs, and maps are not comparable.
-- Map loop: `for (k, v) in map { ... }` (deterministic; see below).
-- Flow: `return expr;`, `break;`, `continue;`.
-- Call: `name(args...);` or `call name(args...);` (both accepted; compiler normalizes to call statements).
-- Assertions: `assert(cond);`, `assert_eq(a, b);` map to IVM `ASSERT*` in non-ZK builds or ZK constraints in ZK mode.
+## གསལ་བཤད།
 
-## Expressions
-
-Precedence (high → low)
-1. Member/index: `a.b`, `a[b]`
+མཐོ་ཚད་(མཐོ་ → དམའ་བ།)
+1. འཐུས་མིའི་/ཟུར་ཐོ།: `a.b`, `a[b]`
 2. Unary: `! ~ -`
-3. Multiplicative: `* / %`
-4. Additive: `+ -`
-5. Shifts: `<< >>`
-6. Relational: `< <= > >=`
-7. Equality: `== !=`
-8. Bitwise AND/XOR/OR: `& ^ |`
-9. Logical AND/OR: `&& ||`
-10. Ternary: `cond ? a : b`
+3. སྒྱུར་རྩིས་: `* / %`
+4. ཁ་སྐོང་: `+ -`
+5. སོར་གྲངས།: `<< >>`
+༦ འབྲེལ་བ།: `< <= > >=` འབྲེལ་བ།
+7. འདྲ་མཉམ་: `== !=`
+8. བིཊ་ཝའིལ་ཨེ་ཨེན་ཌི་/ཨེགསི་ཨོ་ཨར་/OR: `& ^ |`
+9. ཚད་མ་དང་པ།/OR: `&& ||`
+10. `cond ? a : b` དང་།
 
-Calls and tuples
-- Calls use positional arguments: `f(a, b, c)`.
-- Tuple literal: `(a, b, c)` and destructure: `let (x, y) = pair;`.
-- Tuple destructuring requires tuple/struct types with matching arity; mismatches are rejected.
+འབོད་བརྡ་དང་ཐུན་མོང་།
+- འབོད་བརྡ་ཚུ་གིས་ གནས་ཚད་ཅན་གྱི་སྒྲུབ་རྟགས་ཚུ་ལག་ལེན་འཐབ་ཨིན་: `f(a, b, c)`.
+- ཊུ་པལ་ལི་ཊར་: `(a, b, c)` དང་ གཏོར་བཤིག་: `let (x, y) = pair;`.
+- ཊུ་པལ་ བརྡལ་བཤིག་གཏང་ནི་ལུ་ མཐུན་སྒྲིག་ཅན་གྱི་ རྩ་ཕྲན་དང་གཅིག་ཁར་ ཊུཔ་ལི་/བཟོ་བཀོད་དབྱེ་བ་ཚུ་དགོཔ་ཨིན། མ་མཐུན་མི་ཚུ་ ངོས་ལེན་མ་འབད་བས།
 
-Strings and bytes
-- Strings are UTF‑8; raw string and byte literal forms are accepted in source.
-- Byte literals (`b"..."`, `br"..."`, `rb"..."`) lower to `bytes` (Blob) pointers; wrap with `norito_bytes(...)` when a syscall expects NoritoBytes TLV payloads.
+ཡིག་རྒྱུན་དང་བཱའིཊི།
+- ཡིག་རྒྱུན་ཚུ་ UTF‐༨ ཨིན། rw ཡིག་རྒྱུན་དང་བཱའིཊི་ཚིག་དོན་རྣམ་པ་ཚུ་འབྱུང་ཁུངས་ནང་ངོས་ལེན་འབདཝ་ཨིན།
+- བཱའིཊི་ཡིག་ཆའི་ (`b"..."`, `br"..."`, `rb"..."`) ལས་ `bytes` (Blob) དཔག་བྱེད་ཚུ་ ; `norito_bytes(...)` གིས་ syscall གིས་ NoritoBytes TLV གི་ འབབ་ཁུངས་ཚུ་ རེ་བ་བསྐྱེདཔ་ཨིན།
 
-## Builtins and Pointer-ABI Constructors
+## བ ལ་ ན་དང་ ས་ཚན་-བི་ཨའི་ བ ་ ་བཟོ་མི།
 
-Pointer constructors (emit Norito TLV into INPUT and return a typed pointer)
+དཔག་བྱེད་བཟོ་བསྐྲུན་པ་ཚུ་ (INPUT ནང་ལུ་ Norito TLV འདི་བཏོན་ཞིནམ་ལས་ ཡིག་དཔར་རྐྱབས་ཡོད་པའི་དཔག་བྱེད་ཅིག་སླར་ལོག་འབད།)
 - `account_id(string) -> AccountId*`
 - `asset_definition(string) -> AssetDefinitionId*`
 - `asset_id(string) -> AssetId*`
@@ -233,28 +226,26 @@ Pointer constructors (emit Norito TLV into INPUT and return a typed pointer)
 - `dataspace_id(string|0xhex) -> DataSpaceId*`
 - `axt_descriptor(string|0xhex) -> AxtDescriptor*`
 - `asset_handle(string|0xhex) -> AssetHandle*`
-- `proof_blob(string|0xhex) -> ProofBlob*`
-
-Prelude macros provide shorter aliases and inline validation for these constructors:
-- `account!("ih58...")`, `account_id!("ih58...")`
-- `asset_definition!("rose#wonderland")`, `asset_id!("rose#wonderland")`
-- `domain!("wonderland")`, `domain_id!("wonderland")`
+- `proof_blob(string|0xhex) -> ProofBlob*`སྔོན་འགྲོའི་མེཀ་རོ་ཚུ་གིས་ བཟོ་བསྐྲུན་པ་འདི་ཚུ་གི་དོན་ལུ་ མིང་ཚིག་ཐུང་ཀུ་དང་ ནང་ཐིག་བདེན་དཔྱད་ཚུ་བྱིནམ་ཨིན།
+- `kotoba`, `account_id!("ih58...")`,
+- `asset_definition!("rose#wonderland")`, `asset_id!("rose#wonderland")`,
+- `domain!("wonderland")`, `domain_id!("wonderland")`,
 - `name!("example")`
-- `json!("{\"hello\":\"world\"}")` or structured literals such as `json!{ hello: "world" }`
-- `nft_id!("dragon$demo")`, `blob!("bytes")`, `norito_bytes!("...")`
+- `json!("{\"hello\":\"world\"}")` ཡང་ན་ བཀོད་སྒྲིག་ཅན་གྱི་ཡིག་འབྲུ། དཔེར་ན་ `json!{ hello: "world" }` བཟུམ།
+- `nft_id!("dragon$demo")`, `blob!("bytes")`, `norito_bytes!("...")`,
 
-The macros expand to the constructors above and reject invalid literals at compile time.
+མེཀ་རོ་ཚུ་གིས་ གོང་འཁོད་བཟོ་བསྐྲུན་པ་ཚུ་ལུ་ རྒྱ་སྐྱེད་འབད་དེ་ བསྡུ་སྒྲིག་འབད་བའི་དུས་ཚོད་ལུ་ ནུས་མེད་ཀྱི་ཡིག་དོན་ཚུ་ ངོས་ལེན་མི་འབད།
 
-Implementation status
-- Implemented: constructors above accept string literal arguments and lower to typed Norito TLV envelopes placed in the INPUT region. They return immutable typed pointers usable as syscall arguments. Non-literal string expressions are rejected; use `Blob`/`bytes` for dynamic inputs. `blob`/`norito_bytes` also accept `bytes`-typed values at runtime without macro shims.
-- Extended forms:
-  - `json(Blob[NoritoBytes]) -> Json*` via `JSON_DECODE` syscall.
-  - `name(Blob[NoritoBytes]) -> Name*` via `NAME_DECODE` syscall.
-  - Pointer decode from Blob/NoritoBytes: any pointer constructor (including AXT types) accepts a `Blob`/`NoritoBytes` payload and lowers to `POINTER_FROM_NORITO` with the expected type id.
-  - Pass-through for pointer forms: `name(Name) -> Name*`, `blob(Blob) -> Blob*`, `norito_bytes(Blob) -> Blob*`.
-  - Method sugar is supported: `s.name()`, `s.json()`, `b.blob()`, `b.norito_bytes()`.
+བཀོལ་བ ན་ ་གནས་ ས།
+- བཀོལ་སྤྱོད་འབད་ཡོདཔ་: ལྟག་ལུ་ཡོད་པའི་ བཟོ་བསྐྲུན་པ་ཚུ་གིས་ ཡིག་རྒྱུན་ཚིག་དོན་སྒྲུབ་རྟགས་ཚུ་ངོས་ལེན་འབདཝ་ཨིནམ་དང་ ཡིག་དཔར་རྐྱབས་ཡོད་པའི་ Norito ཊི་ཨེལ་ཝི་ ཡིག་ཤུབས་ཚུ་ INPUT ལུང་ཕྱོགས་ནང་བཙུགས་ཡོདཔ་ཨིན། དེ་ཚུ་གིས་ འགྱུར་མེད་ཡིག་དཔར་རྐྱབས་ཡོད་པའི་ དཔག་བྱེད་ཚུ་ རིམ་ལུགས་ཀྱི་སྒྲུབ་རྟགས་སྦེ་ ལག་ལེན་འཐབ་བཏུབ་པའི་ སླར་ལོག་འབདཝ་ཨིན། ཚིག་དོན་མེན་པའི་ཡིག་རྒྱུན་གསལ་བརྗོད་ཚུ་ ངོས་ལེན་མ་འབད་བར་; ཌའི་ནམ་ཨིན་པུཊི་ཚུ་གི་དོན་ལུ་ `Blob`/`bytes` ལག་ལེན་འཐབ། `blob`/`norito_bytes` གིས་ཡང་ མེཀ་རོ་ཤིམ་མེད་པར་ རན་ཊའིམ་ལུ་ `bytes`-type tycyed གནས་གོང་ཚུ་ཡང་ ངོས་ལེན་འབདཝ་ཨིན།
+- རྒྱ་བསྐྱེད་ཀྱི་རྣམ་པ་:
+  - `json(Blob[NoritoBytes]) -> Json*` `JSON_DECODE` syscall.
+  - `name(Blob[NoritoBytes]) -> Name*` `NAME_DECODE` syscall.
+  - བློ་བོ/ནོ་རི་ཊོ་བཱའིཊིསི་ལས་ དཔག་བྱེད་ཌི་ཀོཌི་: དཔག་བྱེད་བཟོ་བསྐྲུན་པ་གང་རུང་ (ཨེ་ཨེགསི་ཊི་དབྱེ་བ་ཚུ་རྩིས་ཏེ་) གིས་ `Blob`/`NoritoBytes` པེ་ལོཌི་ཅིག་ངོས་ལེན་འབདཝ་ཨིནམ་དང་ རེ་བ་བསྐྱེད་མི་དབྱེ་བ་ཨའི་ཌི་དང་གཅིག་ཁར་ `POINTER_FROM_NORITO` ལུ་མར་ཕབ་འབདཝ་ཨིན།
+  - དཔག་བྱེད་འབྲི་ཤོག་ཚུ་གི་དོན་ལུ་ བརྒྱུད་འཕྲིན་གཏང་ནི།: `name(Name) -> Name*`, `blob(Blob) -> Blob*`, `norito_bytes(Blob) -> Blob*`.
+  - ཐབས་ལམ་གུ་རམ་འདི་རྒྱབ་སྐྱོར་འབད་ཡོདཔ་ཨིན། `s.name()`, `s.json()`, `b.blob()`, Kotodama.
 
-Host/syscall builtins (map to SCALL; exact numbers in ivm.md)
+ཧོསིཊི་/སིསི་ཀཱལ་བགྲེནསི་ (ཨེསི་སི་ཨེལ་ཨེལ་ལུ་ས་ཁྲ་; ཨང་གྲངས་ངེས་བདེན་ ivm.md) ཨིན།
 - `mint_asset(AccountId*, AssetDefinitionId*, numeric)`
 - `burn_asset(AccountId*, AssetDefinitionId*, numeric)`
 - `transfer_asset(AccountId*, AccountId*, AssetDefinitionId*, numeric)`
@@ -280,116 +271,125 @@ Host/syscall builtins (map to SCALL; exact numbers in ivm.md)
 - `axt_commit()`
 - `contains(Map<K,V>, K) -> bool`
 
-Utility builtins
-- `info(string|int)`: emits a structured event/message via OUTPUT.
-- `hash(blob) -> Blob*`: returns a Norito-encoded hash as Blob.
-- `build_submit_ballot_inline(election_id, ciphertext, nullifier32, backend, proof, vk) -> Blob*` and `build_unshield_inline(asset, to, amount, inputs32, backend, proof, vk) -> Blob*`: inline ISI builders; all arguments must be compile-time literals (string literals or pointer constructors from literals). `nullifier32` and `inputs32` must be exactly 32 bytes (raw string or `0x` hex), and `amount` must be non-negative.
+བཀོལ་སྤྱོད་ཀྱི་བཟོ་བཀོད།
+- `info(string|int)`: གིས་ OUTPUT བརྒྱུད་དེ་ གཞི་བཀོད་འབད་ཡོད་པའི་བྱུང་ལས་/འཕྲིན་དོན་ཅིག་ བཏོནམ་ཨིན།
+- `hash(blob) -> Blob*`: གིས་ Norito-ཨིན་ཀོཌི་འབད་ཡོད་པའི་ཧེ་ཤི་འདི་ བློ་བོའི་སྦེ་སླར་ལོག་འབདཝ་ཨིན།
+- `build_submit_ballot_inline(election_id, ciphertext, nullifier32, backend, proof, vk) -> Blob*` དང་ `build_unshield_inline(asset, to, amount, inputs32, backend, proof, vk) -> Blob*`: inline ISI བཟོ་བསྐྲུན་པ། སྒྲུབ་རྟགས་ཚུ་ཆ་མཉམ་རང་ བསྡུ་སྒྲིག་འབད་བའི་དུས་ཚོད་ཀྱི་ ཚིག་དོན་ཚུ་འོང་དགོཔ་ཨིན།(ཡིག་རྒྱུན་གྱི་ཚིག་དོན་ཡང་ན་ ཚིག་དོན་ལས་ དཔག་བྱེད་བཟོ་བསྐྲུན་པ་ཚུ་)། `nullifier32` དང་ `inputs32` འདི་ ཏག་ཏག་སྦེ་ 32 བཱའིཊི་ཚུ་ (raw ཡིག་རྒྱུན་ཡང་ན་ `0x` hex) དང་ `amount` འདི་ ནེ་གེ་མེན་མེན་དགོ།
 - `schema_info(Name*) -> Json* { "id": "<hex>", "version": N }`
-- `encode_schema(Name*, Json*) -> Blob`: encodes JSON using the host schema registry (DefaultRegistry supports `QueryRequest` and `QueryResponse` in addition to Order/Trade samples).
-- `decode_schema(Name*, Blob|bytes) -> Json*`: decodes Norito bytes using the host schema registry.
-- `pointer_to_norito(ptr) -> NoritoBytes*`: wraps an existing pointer-ABI TLV as NoritoBytes for storage or transport.
-- `isqrt(int) -> int`: integer square root (`floor(sqrt(x))`) implemented as an IVM opcode.
-- `min(int, int) -> int`, `max(int, int) -> int`, `abs(int) -> int`, `div_ceil(int, int) -> int`, `gcd(int, int) -> int`, `mean(int, int) -> int` — fused arithmetic helpers backed by native IVM opcodes (ceil division traps on divide-by-zero).
+- `encode_schema(Name*, Json*) -> Blob`: ཧོསིཊི་ལས་རིམ་ཐོ་བཀོད་ལག་ལེན་འཐབ་ཐོག་ལས་ ཇེ་ཨེསི་ཨོ་ཨེན་ཀོཌི་ཚུ་ཨིན་ (སྔོན་སྒྲིག་ཐོ་བཀོད་ཀྱིས་ `QueryRequest` དང་ `QueryResponse` ལུ་རྒྱབ་སྐྱོར་འབདཝ་ཨིན་ བཀའ་རྒྱ་/ཚོང་འབྲེལ་དཔེ་ཚད་ཚུ་གི་ཁ་སྐོང་ལུ་)།
+- `decode_schema(Name*, Blob|bytes) -> Json*`: ཌི་ཀོཌི་ཚུ་ Norito བཱའིཊི་ཚུ་ ཧོསིཊི་འཆར་གཞི་ཐོ་བཀོད་ལག་ལེན་འཐབ་ཐོག་ལས་ཨིན།
+- `pointer_to_norito(ptr) -> NoritoBytes*`: ད་ལྟོ་ཡོད་པའི་ དཔག་བྱེད་-ABI TLV འདི་ གསོག་འཇོག་ཡང་ན་ སྐྱེལ་འདྲེན་གྱི་དོན་ལུ་ NoritoBytes སྦེ་ བཀབ་བཞགཔ་ཨིན།
+- `isqrt(int) -> int`: ཧྲིལ་གྲངས་གྲུ་བཞི་རྩ་བ་ (`floor(sqrt(x))`) འདི་ IVM opcode སྦེ་ལག་ལེན་འཐབ་ཡོདཔ་ཨིན།
+- `min(int, int) -> int`, `max(int, int) -> int`, `abs(int) -> int`, `div_ceil(int, int) -> int`, `div_ceil(int, int) -> int`, `gcd(int, int) -> int`, `mean(int, int) -> int`, `mean(int, int) -> int`, IVM ཁ་ཕྱེ་ (བགོ་བཤའ་བགོ་བའི་ཐོག་ལུ་ ceil དབྱེ་བ་ཚུ་ བགོ་བཤའ་རྐྱབ་ནི་-ཀླད་ཀོར་སྦེ་ བཀག་ཆ་འབདཝ་ཨིན།)དྲན་ཐོ་ཚུ།
+- Builtins འདི་ ཕྲང་ཕྲང་སྦེ་ཡོདཔ་ཨིན། བསྡུ་སྒྲིག་འབད་མི་འདི་གིས་ འགུལ་སྐྱོད་ཐོ་བཀོད་འབད་ནི་དང་ `SCALL` མར་ཕབ་འབདཝ་ཨིན།
+- བརྡ་རྟགས་བཟོ་བསྐྲུན་པ་ཚུ་ གཙང་ཏོག་ཏོ་ཨིན་: ཝི་ཨེམ་གྱིས་ INPUT ནང་ Norito TLV འདི་ འབོད་བརྡ་དུས་ཡུན་གྱི་དོན་ལུ་ འགྱུར་བཅོས་འགྱོ་མ་ཚུགསཔ་སྦེ་ ངེས་གཏན་བཟོཝ་ཨིན།
+ - དཔག་བྱེད་-ཨེ་བི་ཨའི་ས་སྒོ་ཚུ་དང་གཅིག་ཁར་ བཀོད་རིས་ཚུ་ (དཔེར་ན་ `DomainId`, `AccountId`) ཨར་གོ་ནོ་མིསི་སྦེ་ སི་སི་ཀཱལ་སྒྲུབ་རྟགས་ཚུ་སྡེ་ཚན་བཟོ་ནི་ལུ་ ལག་ལེན་འཐབ་བཏུབ། བསྡུ་སྒྲིག་འབད་མི་གིས་ `obj.field` གིས་ བགོ་བཀྲམ་ཁ་སྐོང་མེད་པར་ ཐོ་བཀོད་/གནས་གོང་ནོར་བཅོས་ལུ་ སབ་ཁྲ་བཟོཝ་ཨིན།
 
-Notes
-- Builtins are thin shims; the compiler lowers them to register moves and a `SCALL`.
-- Pointer constructors are pure: the VM ensures the Norito TLV in INPUT is immutable for the call duration.
- - Structs with pointer-ABI fields (e.g., `DomainId`, `AccountId`) can be used to group syscall arguments ergonomically. The compiler maps `obj.field` to the correct register/value without extra allocations.
+## བསྡུ་སྒྲིག་དང་ས་ཁྲ།
 
-## Collections and Maps
+དབྱེ་བ་: `Map<K, V>`
+- དྲན་ཚད་ནང་སབ་ཁྲ་ཚུ་ (`Map::new()` བརྒྱུད་དེ་ བགོ་བཀྲམ་འབད་ཡོདཔ་ ཡང་ན་ ཚད་གཞི་སྦེ་སྤྲོད་ཡོདཔ་) ལྡེ་མིག་/གནས་གོང་ཆ་གཅིག་གསོག་འཇོག་འབད། ལྡེ་མིག་དང་གནས་གོང་ཚུ་ མིང་ཚིག་ཚད་ཀྱི་དབྱེ་བ་འོང་དགོཔ་ཨིན་: `abi_hash`, `bool`, `string`, `Blob`, `int`, `int`, `int`, Kotodama, KotodamaX, ཡང་ན་ དཔག་བྱེད་ཀྱི་དབྱེ་བ་ཚུ་ (.. `AccountId`, `Name`).
+- ཐུབ་ཚད་ཅན་གྱི་གནས་སྟངས་སབ་ཁྲ་ (`state Map<...>`) གིས་ Norito-ཨིན་ཀོཌི་འབད་ཡོད་པའི་ལྡེ་མིག་/གནས་གོང་ཚུ་ལག་ལེན་འཐབ། རྒྱབ་སྐྱོར་འབད་ཡོད་པའི་ལྡེ་མིག་: `int` ཡང་ན་ དཔག་བྱེད་དབྱེ་བ་ཚུ། རྒྱབ་སྐྱོར་ཡོད་པའི་གནས་གོང་ཚུ་: `int`, Kotodama, `Json`, `Blob`/`bytes`, ཡང་ན་ དཔག་བྱེད་ཀྱི་དབྱེ་བ་ཚུ།
+- `Map::new()` བགོ་བཀྲམ་འབད་དེ་ ཀླད་ཀོར་-མིན་པ་-མིན་པ་ཅན་འདི་དྲན་ཚད་ནང་གི་ཐོ་བཀོད་ (ལྡེ་མིག་/གནས་གོང་ = ༠) འབདཝ་ཨིན། non-`Map<int,int>` སབ་ཁྲ་ཚུ་གི་དོན་ལུ་ གསལ་ཏོག་ཏོ་དབྱེ་བ་བརྡ་སྟོན་ཡང་ན་ སླར་ལོག་དབྱེ་བ་ཅིག་བྱིན།
+- མངའ་སྡེའི་སབ་ཁྲ་ཚུ་ དབྱེ་རིམ་དང་པའི་གནས་གོང་ཚུ་མེན། ཁྱོད་ཀྱིས་ དེ་ཚུ་ལོག་སྟེ་འགན་སྤྲོད་འབད་མི་ཚུགས། (དཔེར་ན་ `M = Map::new()`); དུས་མཐུན་བཟོ་བའི་ཐོ་བཀོད་ཚུ་ (`M[key] = value`).
+- ལག་ལེན་ཚུ།
+  - ཟུར་ཐོ་བཟོ་ནི་: `map[key]` get/set གནས་གོང་ (ཧོསིཊི་སི་སི་ཀཱལ་བརྒྱུད་དེ་ གཞི་སྒྲིག་འབད་ཡོདཔ་; རན་ཊའིམ་ཨེ་པི་ཨའི་ སབ་ཁྲ་བལྟ།)
+  - གནས་སྟངས།: `contains(map, key) -> bool` (དམའ་བའི་རོགས་རམ་; མཉམ་དུ་ཡོད་པའི་ syscall ཡིན་སྲིད།)
+  - བསྐྱར་ལོག་: `for (k, v) in map { ... }` ཐག་བཅད་ཀྱི་གོ་རིམ་དང་ རིགས་འགྱུར་གྱི་ལམ་ལུགས་ཚུ་དང་གཅིག་ཁར་ཨིན།
 
-Type: `Map<K, V>`
-- In-memory maps (heap-allocated via `Map::new()` or passed as parameters) store a single key/value pair; keys and values must be word-sized types: `int`, `bool`, `string`, `Blob`, `bytes`, `Json`, or pointer types (e.g., `AccountId`, `Name`).
-- Durable state maps (`state Map<...>`) use Norito-encoded keys/values. Supported keys: `int` or pointer types. Supported values: `int`, `bool`, `Json`, `Blob`/`bytes`, or pointer types.
-- `Map::new()` allocates and zero-initializes the single in-memory entry (key/value = 0); for non-`Map<int,int>` maps, provide an explicit type annotation or return type.
-- State maps are not first-class values: you cannot reassign them (e.g., `M = Map::new()`); update entries via indexing (`M[key] = value`).
-- Operations:
-  - Indexing: `map[key]` get/set value (set performed via host syscall; see runtime API mapping).
-  - Existence: `contains(map, key) -> bool` (lowered helper; may be an intrinsic syscall).
-  - Iteration: `for (k, v) in map { ... }` with deterministic order and mutation rules.
+ངེས་འཛིན་བསྐྱར་བཟློས་ཀྱི་ལམ་ལུགས།
+- བསྐྱར་ལོག་ཆ་ཚན་འདི་ བསྐྱར་ལོག་ཐོ་བཀོད་ནང་ ལྡེ་མིག་ཚུ་གི་ པར་ལེན་འདི་ཨིན།
+- བཀའ་རྒྱ་འདི་ Norito-encoded ལྡེ་མིག་ཚུ་གི་ བཱའིཊི་ཚིག་མཛོད་གོ་རིམ་དམ་དམ་སྦེ་ ཡར་འཕར་འགྱོཝ་ཨིན།
+- བསྐྱར་འཁོར་གྱི་སྐབས་ལུ་ བསྐྱར་ལོག་སབ་ཁྲ་ལུ་ བཟོ་བཀོད་བསྒྱུར་བཅོས་འབད་ནི་ (བཙུགས་/བཏོན་གཏང་ནི་/གསལ་ཏོག་ཏོ་) གིས་ གཏན་འབེབས་ `E_ITER_MUTATION` ཕྲེང་བ་འདི་འབྱུང་དོ་ཡོདཔ་ཨིན།
+- མཐའ་མཚམས་དགོཔ་ཨིན་: སབ་ཁྲ་གུ་གསལ་བསྒྲགས་འབད་མི་ མཐོ་ཤོས་ (`@max_len`) གསལ་ཏོག་ཏོ་སྦེ་ ཁྱད་ཆོས་ `#[bounded(n)]`, ཡང་ན་ `.take(n)`/`.range(..)` ལག་ལེན་འཐབ་སྟེ་ གསལ་ཏོག་ཏོ་སྦེ་ བཀག་ཆ་འབད་མི་ཅིག་ཨིན། དེ་མེན་པ་ཅིན་ བསྡུ་སྒྲིག་འབད་མི་འདི་གིས་ `E_UNBOUNDED_ITERATION` བཏོནམ་ཨིན།
 
-Deterministic iteration rules
-- The iteration set is the snapshot of keys at loop entry.
-- Order is strictly ascending byte-lexicographic order of Norito-encoded keys.
-- Structural modifications (insert/remove/clear) to the iterated map during the loop cause a deterministic `E_ITER_MUTATION` trap.
-- Boundedness is required: either a declared max (`@max_len`) on the map, an explicit attribute `#[bounded(n)]`, or an explicit bound using `.take(n)`/`.range(..)`; otherwise the compiler emits `E_UNBOUNDED_ITERATION`.
+བདོག་གཏད་ཀྱི་གྲོགས་རམ་ཚུ།
+- `#[bounded(n)]`: ས་ཁྲའི་གསལ་བརྗོད་གུ་གདམ་ཁ་ཅན་གྱི་ཁྱད་ཆོས་, དཔེར་ན་. `for (k, v) in my_map #[bounded(2)] { ... }`.
+- `.take(n)`: འགོ་བཙུགས་ཁམས་ཅིག་ལས་ `n` ཐོ་བཀོད་འགོ་དང་པ་འདི་ བསྐྱར་ལོག་འབད།
+- `.range(start, end)`: ཕྱེད་ཀ་ཁ་ཕྱེ་བའི་བར་མཚམས་ `[start, end)` ནང་ བསྐྱར་ལོག་ཐོ་བཀོད་ཚུ་. ཡིག་བརྡའི་རིག་པ་འདི་ `start` དང་ `n = end - start` དང་འདྲ་མཉམ་ཨིན།ཌའི་ནམ་མཐའམ་གུ་གི་དྲན་ཐོ།
+- ཚིག་དོན་མཐའ་མཚམས་ཚུ་: `n`, `start`, དང་ `end` འདི་ ཧྲིལ་གྲངས་ཡིག་ཆའི་ཚུ་ ཆ་ཚང་རྒྱབ་སྐྱོར་དང་ བསྐྱར་ལོག་ཀྱི་ཨང་གྲངས་གཏན་བཟོས་ལུ་ བསྡུ་སྒྲིག་འབད་ཡོདཔ་ཨིན།
+- ངོ་མ་མེན་པའི་མཐའ་མཚམས་: `kotodama_dynamic_bounds` ཁྱད་རྣམ་འདི་ `ivm` crate ནང་ལུ་ལྕོགས་ཅན་བཟོ་བའི་སྐབས་ བསྡུ་སྒྲིག་འབད་མི་འདི་གིས་ ཌའི་ནམ་གྱི་ `start`, དང་ `end`, དང་ `end`, དང་ཉེན་སྲུང་གི་དོན་ལུ་ གཡོག་བཀོལ་བའི་དུས་ཚོད་ཚུ་ངོས་ལེན་འབདཝ་ཨིན། (ལོག་པ་, `end >= start`). ཀེ་ལུ་ ཕྱིར་བཏོན་འབད་མི་འདི་གིས་ གཟུགས་ཁ་སྐོང་བཀོལ་སྤྱོད་འབད་ནི་ལས་ བཀག་ཐབས་ལུ་ `if (i < n)` ཞིབ་དཔྱད་ཚུ་དང་གཅིག་ཁར་ བསྐྱར་ལོག་ཚུ་ ལྟ་རྟོག་འབད་ཡོདཔ་ཨིན། (སྔོན་སྒྲིག་ K=2) ཁྱོད་ཀྱིས་ K ལས་རིམ་གྱི་ཐོག་ལས་ `CompilerOptions { dynamic_iter_cap, .. }` བརྒྱུད་དེ་ བསྒྱུར་བཅོས་འབད་ཚུགས།
+- བསྡུ་སྒྲིག་འབད་མ་ཚར་བའི་ཧེ་མ་ Kotodama ལིན་ཊི་ཉེན་བརྡ་ཚུ་ བརྟག་དཔྱད་འབད་ནིའི་དོན་ལུ་ `koto_lint` གཡོག་བཀོལ། བསྡུ་སྒྲིག་འབད་མི་ངོ་མ་འདི་ དབྱེ་དཔྱད་འབད་བའི་ཤུལ་ལས་ མར་ཕབ་འབད་དེ་ དུས་རྒྱུན་དུ་ འགྱོཝ་ཨིན།
+- འཛོལ་བའི་ཨང་རྟགས་ཚུ་ [Kotodama བསྡུ་སྒྲིག་འཛོལ་བ་ཨང་རྟགས་](./kotodama_error_codes.md)ནང་ ཡིག་ཐོག་ལུ་བཀོད་དེ་ཡོདཔ་ཨིན། མགྱོགས་དྲགས་འགྲེལ་བཤད་ཀྱི་དོན་ལུ་ `koto_compile --explain <code>` ལག་ལེན་འཐབ།
 
-Bounds helpers
-- `#[bounded(n)]`: optional attribute on the map expression, e.g. `for (k, v) in my_map #[bounded(2)] { ... }`.
-- `.take(n)`: iterate the first `n` entries from the start.
-- `.range(start, end)`: iterate entries in the half-open interval `[start, end)`. Semantics are equivalent to `start` and `n = end - start`.
+## འཛོལ་བ་དང་བརྟག་དཔྱད།
 
-Notes on dynamic bounds
-- Literal bounds: `n`, `start`, and `end` as integer literals are fully supported and compile to a fixed number of iterations.
-- Non-literal bounds: when the `kotodama_dynamic_bounds` feature is enabled in the `ivm` crate, the compiler accepts dynamic `n`, `start`, and `end` expressions and inserts runtime assertions for safety (non-negative, `end >= start`). Lowering emits up to K guarded iterations with `if (i < n)` checks to avoid extra body executions (default K=2). You can tune K programmatically via `CompilerOptions { dynamic_iter_cap, .. }`.
-- Run `koto_lint` to inspect Kotodama lint warnings prior to compilation; the main compiler always proceeds with lowering after parsing and type-checking.
-- Error codes are documented in [Kotodama Compiler Error Codes](./kotodama_error_codes.md); use `koto_compile --explain <code>` for quick explanations.
-
-## Errors and Diagnostics
-
-Compile-time diagnostics (examples)
-- `E_UNBOUNDED_ITERATION`: loop over map lacks a bound.
-- `E_MUT_DURING_ITER`: structural mutation of iterated map in loop body.
-- `E_STATE_SHADOWED`: local bindings cannot shadow `state` declarations.
-- `E_BREAK_OUTSIDE_LOOP`: `break` used outside a loop.
-- `E_CONTINUE_OUTSIDE_LOOP`: `continue` used outside a loop.
-- `E0005`: for-loop initializer is more complex than supported.
-- `E0006`: for-loop step clause is more complex than supported.
-- `E_BAD_POINTER_USE`: using a pointer-ABI constructor result where a first-class type is required.
+བསྡུ་སྒྲིག་དུས་ཚོད་ཀྱི་བརྟག་དཔྱད།(དཔེར་ན།)
+- `E_UNBOUNDED_ITERATION`: ས་ཁྲ་གུ་ཡོད་པའི་ བསྐྱར་ལོག་འདི་ མཐའ་མཚམས་མེདཔ་ཨིན།
+- `E_MUT_DURING_ITER`: བསྐྱར་འཁོར་གྱི་གཟུགས་ནང་ བསྐྱར་ཟློས་འབད་བའི་སབ་ཁྲ་གི་བཟོ་བཀོད་འགྱུར་བ།
+- `E_STATE_SHADOWED`: ནང་འཁོད་བཱའིན་ཌིང་ཚུ་གིས་ གྱིབ་མ་ `state` གསལ་བསྒྲགས་ཚུ་འབད་མི་ཚུགས།
+- `E_BREAK_OUTSIDE_LOOP`: བསྐྱར་འཁོར་ཅིག་གི་ཕྱི་ཁར་ལག་ལེན་འཐབ་ཡོདཔ་ཨིན།
+- `E_CONTINUE_OUTSIDE_LOOP`: བསྐྱར་འཁོར་ཅིག་གི་ཕྱི་ཁར་ལག་ལེན་འཐབ་ཡོདཔ་ཨིན།
+- `E0005`: ཕོར་-ལུཔ་འགོ་བཙུགས་མི་འདི་རྒྱབ་སྐྱོར་འབད་མི་ལས་ མགུ་རྙོག་དྲགས་ཡོདཔ་ཨིན།
+- `E0006`: for-loop ཚིག་ཕྲད་འདི་རྒྱབ་སྐྱོར་འབད་མི་ལས་ མགུ་རྙོག་དྲགས་ཡོདཔ་ཨིན།
+- `E_BAD_POINTER_USE`: དབྱེ་རིམ་དང་པའི་དབྱེ་བ་དགོཔ་ཨིན་མི་ དཔག་བྱེད་-ཨེ་བི་ཨའི་ བཟོ་བསྐྲུན་གྲུབ་འབྲས་ལག་ལེན་འཐབ་སྟེ།
 - `E_UNRESOLVED_NAME`, `E_TYPE_MISMATCH`, `E_ARITY_MISMATCH`, `E_DUP_SYMBOL`.
-- Tooling: `koto_compile` runs the lint pass before emitting bytecode; use `--no-lint` to skip or `--deny-lint-warnings` to fail the build on lint output.
+- ལག་ཆས་ཚུ་: `koto_compile` གིས་ བཱའིཊི་ཀོཌི་གི་ཧེ་མ་ ལིནཊི་ཆོག་ཡིག་འདི་གཡོག་བཀོལཝ་ཨིན། ལིན་ཊི་ཨའུཊི་པུཊི་གུ་བཟོ་བསྐྲུན་འདི་འཐུས་ཤོར་འབྱུང་ནི་གི་དོན་ལུ་ `--no-lint` ལག་ལེན་འཐབ།
 
-Runtime VM errors (selected; full list in ivm.md)
-- `E_NORITO_INVALID`, `E_OOB`, `E_UNALIGNED`, `E_SCALL_UNKNOWN`, `E_ASSERT`, `E_ASSERT_EQ`, `E_ITER_MUTATION`.
+རཱན་ཊའིམ་ཝི་ཨེམ་འཛོལ་བ་ཚུ་ (སེལ་འཐུ་འབད་ཡོདཔ་; ཐོ་ཡིག་ཆ་ཚང་ ivm.md ནང་)།
+`E_OOB`, `E_UNALIGNED`, `E_SCALL_UNKNOWN`, `E_ASSERT`, `E_ASSERT_EQ`, `E_ASSERT_EQ`, `E_ITER_MUTATION`, `E_ITER_MUTATION`.
 
-Error messages
-- Diagnostics carry stable `msg_id`s that map to entries in `kotoba {}` translation tables when available.
+འཛོལ་བའི་འཕྲིན་དོན་ཚུ།
+- ནད་བརྟག་འདི་གིས་ བརྟན་ཏོག་ཏོ་ `msg_id` ཚུ་ འཐོབ་ཚུགས་པའི་སྐབས་ `kotoba {}` སྐད་སྒྱུར་ཐིག་ཁྲམ་ཚུ་ནང་ ཐོ་བཀོད་ཚུ་ལུ་ སབ་ཁྲ་བཟོཝ་ཨིན།
 
-## Codegen Mapping to IVM
+## ཀོཌི་ཇེན་སབ་ཁྲ་ IVM ལུ།
 
-Pipeline
-1. Lexer/Parser produce AST.
-2. Semantic analysis resolves names, checks types, and populates symbol tables.
-3. IR lowering to a simple SSA-like form.
-4. Register allocation to IVM GPRs (`r10+` for args/ret per calling convention); spills to stack.
-5. Bytecode emission: mix of IVM-native and RV-compat encodings as allowed; metadata header emitted with `abi_version`, features, vector length, and `max_cycles`.
+གཡུར་རྟགས།
+1. ལེགསི་/པཱར་སར་ཐོན་སྐྱེད་ཨེ་ཨེས།
+༢ ཡིག་བརྡའི་དབྱེ་དཔྱད་ཀྱིས་ མིང་ཚུ་སེལ་ནི་དང་ དབྱེ་བ་ཚུ་བརྟག་དཔྱད་འབད་ནི་ དེ་ལས་ རྟགས་མཚན་ཐིག་ཁྲམ་ཚུ་ མི་རློབས་བཏོནམ་ཨིན།
+3. IR འདི་ SSA བཟུམ་གྱི་རྣམ་པ་འཇམ་ཏོང་ཏོ་ཅིག་ལུ་མར་ཕབ་འབད་ནི།
+༤ ཐོ་བཀོད་བགོ་བཀྲམ་ Kotodama GPRs (`r10+` འབོད་བརྡ་གཏོང་བའི་ཆིངས་ཡིག་རེ་ལུ་ args/ret གི་དོན་ལུ་); བརྩེགས་བརྩེགས་ལུ་ spells.
+༥ བཱའིཊི་ཀོཌ་ཐོན་རླུང་: Norito-native དང་ RV-compat encodings ཚུ་ གནང་བ་བྱིན་ཐོག་ལས་ སླ་བསྲེ་རྐྱབ། མེ་ཊ་ཌེ་ཊ་མགོ་འདི་ `abi_version` དང་ ཁྱད་རྣམ་ ཝེག་ཊར་རིང་ཚད་ དེ་ལས་ `max_cycles` ཚུ་དང་ཅིག་ཁར་ བཏོན་གཏང་ཡོདཔ་ཨིན།སབ་ཁྲ་བཟོ་ནི་འོད་རྟགས་ཚུ་།
+- ཨང་རྩིས་དང་ཚད་མའི་ས་ཁྲ་ IVM ALU ops.
+- གནས་སྟངས་ཅན་གྱི་ཡན་ལག་དང་མཆོངས་ཚུ་ལུ་ ཡན་ལག་དང་ཚད་འཛིན་སབ་ཁྲ་བཟོ་ནི། བསྡུ་སྒྲིག་འབད་མི་འདི་གིས་ ཁེ་སང་ཡོད་སར་ བསྡམ་བཞག་ཡོད་པའི་རྣམ་པ་ཚུ་ལག་ལེན་འཐབ་ཨིན།
+- ས་གནས་ཀྱི་མི་ཚུ་གི་དོན་ལུ་ ཝི་ཨེམ་བང་རིམ་ལུ་ འཕྱེལ་འགྱོཝ་ཨིན། ཕྲང་སྒྲིག་འདི་ བསྟར་སྤྱོད་འབད་ཡོདཔ་ཨིན།
+- ཐོ་བཀོད་འབད་ནིའི་དོན་ལུ་ མར་ཕབ་དང་ `SCALL` འདི་ ༨-བིཊི་ཨང་དང་གཅིག་ཁར་ མར་ཕབ་འབདཝ་ཨིན།
+- བརྡ་རྟགས་བཟོ་བསྐྲུན་པ་ཚུ་གིས་ INPUT ལུང་ཕྱོགས་ནང་ལུ་ TLVs ཚུ་བཙུགས་ཞིནམ་ལས་ ཁོང་གི་ཁ་བྱང་ཚུ་བཏོནམ་ཨིན།
+- `ASSERT`/`ASSERT_EQ` ལུ་ བདེན་བཤད་ཀྱི་སབ་ཁྲ་འདི་གིས་ ZK བཟོ་བསྐྲུན་ནང་ལུ་ ཐོ་ཕོག་མི་ཚུ་ ZK ལག་ལེན་འཐབ་ནི་དང་ བཀག་ཆ་འབདཝ་ཨིན།
 
-Mapping highlights
-- Arithmetic and logic map to IVM ALU ops.
-- Branching and control map to conditional branches and jumps; the compiler uses compressed forms where profitable.
-- Memory for locals spills to the VM stack; alignment is enforced.
-- Builtins lower to register moves and `SCALL` with 8-bit number.
-- Pointer constructors place Norito TLVs into the INPUT region and produce their addresses.
-- Assertions map to `ASSERT`/`ASSERT_EQ` which trap in non-ZK execution and emit constraints in ZK builds.
+ངེས་པའི་ཆོས་ཀྱི་ཐོགས་ཆས།
+- FP མེད། གཏན་འབེབས་མེད་པའི་ syscalls མེད།
+- SIMD/GPU མགྱོགས་ཚད་འདི་ བཱའིཊི་ཀོཌི་ལུ་མཐོང་མ་ཚུགསཔ་ཨིནམ་ལས་ བིཊི་-འདྲ་མཚུངས་སྦེ་དགོཔ་ཨིན། བསྡུ་སྒྲིག་འབད་མི་གིས་ མཐུན་རྐྱེན་དམིགས་བསལ་གྱི་ ops ཚུ་ བཏོནམ་ཨིན།
 
-Determinism constraints
-- No FP; no nondeterministic syscalls.
-- SIMD/GPU acceleration is invisible to bytecode and must be bit-identical; compiler does not emit hardware-specific ops.
+## ABI, མགོ་ཡིག་, དང་ མཚོན་ཆར།
 
-## ABI, Header, and Manifest
+IVM མགོ་ཡིག་ས་སྒོ་ཚུ་ བསྡུ་སྒྲིག་འབད་མི་གིས་གཞི་སྒྲིག་འབད་ཡོདཔ།
+- `version`: IVM བཱའིཊི་ཀོཌི་རྩ་སྒྲིག་ཐོན་རིམ་ (མ་ཇོར་.མི་ནར)།
+- `abi_version`: སི་ཀཱལ་ཐིག་ཁྲམ་དང་ དཔག་བྱེད་-ཨེ་བི་ཨའི་ ལས་འཆར་གྱི་ཐོན་རིམ་།
+- `feature_bits`: ཁྱད་ཆོས་དར་ཆ་ (དཔེར་ན་ `ZK`, `VECTOR`)
+- `vector_len`: གཏན་ཚིག་ཅན་གྱི་བེག་ཊར་རིང་ཚད་ (༠ → གཞི་སྒྲིག་མ་འབད་མི)།
+- `max_cycles`: འཛུལ་ཞུགས་བཀག་ཆ་དང་ ZK པེ་ཌིང་བརྡ་སྟོན་།
 
-IVM header fields set by the compiler
-- `version`: IVM bytecode format version (major.minor).
-- `abi_version`: syscall table and pointer-ABI schema version.
-- `feature_bits`: feature flags (e.g., `ZK`, `VECTOR`).
-- `vector_len`: logical vector length (0 → unset).
-- `max_cycles`: admission bound and ZK padding hint.
+མ་ཕེསཊ་ (གདམ་ཁ་ཅན་གྱི་སྣུམ་འཁོར་)
+- ```
+seiyaku Name {
+  meta {
+    abi_version: 1,
+    vector_length: 0,
+    max_cycles: 0,
+    features: ["zk", "simd"],
+  }
 
-Manifest (optional sidecar)
-- `code_hash`, `abi_hash`, metadata from `meta {}` block, compiler version, and build hints for reproducibility.
+  state int counter;
 
-## Roadmap
+  hajimari() { counter = 0; }
 
-- **KD-231 (Apr 2026):** add compile-time range analysis for iteration bounds so loops expose bounded access sets to the scheduler.
-- **KD-235 (May 2026):** introduce a first-class `bytes` scalar distinct from `string` for pointer constructors and ABI clarity.
-- **KD-242 (Jun 2026):** expand the builtin opcode set (hash / signature verification) behind feature flags with deterministic fallbacks.
-- **KD-247 (Jun 2026):** stabilize error `msg_id`s and maintain the mapping in `kotoba {}` tables for localized diagnostics.
-### Manifest Emission
+  kotoage fn inc() { counter = counter + 1; }
+}
+```, `abi_hash`, `meta {}` སྡེབ་ཚན་བསྡུ་སྒྲིག་འབད་མི་ལས་ མེ་ཊ་ཌེ་ཊ་ དེ་ལས་ བསྐྱར་བཟོ་འབད་ནི་གི་དོན་ལུ་ བསྐྱར་བཟོ་འབད་ནི་གི་དོན་ལུ་ བརྡ་རྟགས་ཚུ་བཟོ་བསྐྲུན་འབད།
 
-- The Kotodama compiler API can return a `ContractManifest` alongside the compiled `.to` via `ivm::kotodama::compiler::Compiler::compile_source_with_manifest`.
-- Fields:
-  - `code_hash`: hash of the code bytes (excluding the IVM header and literals) computed by the compiler to bind the artifact.
-  - `abi_hash`: stable digest of the allowed syscall surface for the program's `abi_version` (see `ivm.md` and `ivm::syscalls::compute_abi_hash`).
-- Optional `compiler_fingerprint` and `features_bitmap` are reserved for toolchains.
-- `entrypoints`: ordered list of exported entrypoints (public, `hajimari`, `kaizen`) including their required `permission(...)` strings and the compiler’s best-effort read/write key hints so admission logic and schedulers can reason about expected WSV access.
-- The manifest is intended for admission-time checks and for registries; see `docs/source/new_pipeline.md` for lifecycle.
+## ལམ་སམ།
+
+- **KD-231 (Apr2026):** བསྐྱར་ལོག་མཐའ་མཚམས་ཚུ་གི་དོན་ལུ་ བསྡུ་སྒྲིག་འབད་བའི་དུས་ཚོད་ཁྱབ་ཚད་དབྱེ་དཔྱད་ཁ་སྐོང་འབདཝ་ལས་ བསྐྱར་ལོག་ཚུ་གིས་ དུས་ཚོད་བཀོད་མི་ལུ་ མཐའ་མཚམས་འཛུལ་སྤྱོད་ཆ་ཚན་ཚུ་ གསལ་སྟོན་འབདཝ་ཨིན།
+- **KD-235 (May2026):** གིས་ དཔག་བྱེད་བཟོ་བསྐྲུན་པ་དང་ ABI གསལ་ཏོག་ཏོ་གི་དོན་ལུ་ `string` ལས་ ཁྱད་པར་ཕྱེ་སྟེ་ `bytes` scalar འདི་ ངོ་སྤྲོད་འབདཝ་ཨིན།
+- **KD-242 (Jun2026):** ཁྱད་རྣམ་དར་ཆ་ཚུ་གི་རྒྱབ་ཁར་ བཀོད་སྒྲིག་ཨོག་ཀོཌི་ཆ་ཚན་ (hash / མཚན་རྟགས་བདེན་དཔྱད་) རྒྱ་བསྐྱེད་འབད།
+- **KD-247 (Jun2026):** བརྟན་ཏོག་ཏོ་གི་འཛོལ་བ་ `msg_id`s དང་ ཉེ་གནས་ནད་བརྟག་གི་དོན་ལུ་ `kotoba {}` ཐིག་ཁྲམ་ནང་ ས་ཁྲ་བཟོ་ནི་འདི་ གནས་སྡུད།
+### ངོ་མའི་ཐོན་རླུང་།
+
+- Kotodama བསྡུ་སྒྲིག་འབད་མི་ API གིས་ `ContractManifest` ཅིག་ `.to` དང་ཅིག་ཁར་ `ivm::kotodama::compiler::Compiler::compile_source_with_manifest` བརྒྱུད་དེ་ ལོག་གཏང་ཚུགས།
+- ས་ཁྲ་ཚུ།
+  - `code_hash`: གསང་ཡིག་བཱའིཊི་ཚུ་གི་ཧེཊི་ཚུ་ (IVM མགོ་ཡིག་དང་ཡིག་ཆའི་ཆ་རྐྱེན་ཚུ་མ་རྩིས་བར་) རྩིས་སྟོན་འབད་མི་གིས་ ཅ་རྙིང་འདི་བསྡམ་ནིའི་དོན་ལུ་ བསྡུ་སྒྲིག་འབད་མི་གིས་ རྩིས་སྟོན་འབདཝ་ཨིན།
+  - `abi_hash`: ལས་རིམ་གྱི་ `abi_version` (`ivm.md` དང་ `abi_hash`) གི་དོན་ལུ་ ཆོག་ཐམ་ཡོད་པའི་ སི་ཀཱལ་ཁ་ཐོག་གི་ བརྟན་ཏོག་ཏོ་ཡོད་པའི་ བཞུ་ཚུགས།
+- གདམ་ཁ་ཅན་གྱི་ `compiler_fingerprint` དང་ `features_bitmap` ཚུ་ ལག་ཆས་རིམ་སྒྲིག་ཚུ་གི་དོན་ལུ་ བཀག་བཞག་ཡོདཔ་ཨིན།
+- `entrypoints`: ཕྱིར་གཏོང་འབད་ཡོད་པའི་ ཕྱིར་འདྲེན་འབད་མི་ འཛུལ་སྒོ་ཚུ་གི་ གོ་རིམ་ཅན་གྱི་ཐོ་ཡིག་ (public, `hajimari`, `kaizen`) ཁོང་རའི་དགོས་མཁོའི་ `permission(...)` ཡིག་རྒྱུན་ཚུ་དང་ གློག་རིག་གིས་ བློ་སྤོབས་དྲག་ཤོས་ལྷག་/ཡིག་འབྲི་ལྡེ་མིག་ཚུ་ ཌབ་ལུ་ཨེསི་ཝི་ལུ་ རྒྱུ་མཚན་བཀོད་ཚུགས། ལྷོད༌ལམ།
+- གསལ་སྟོན་འདི་ འཛུལ་ཞུགས་དུས་ཚོད་ཀྱི་ཞིབ་དཔྱད་དང་ ཐོ་བཀོད་ཚུ་གི་དོན་ལུ་ཨིན། བལྟ་ `docs/source/new_pipeline.md` མི་ཚེ་འཁོར་རིམ་གྱི་དོན་ལུ་ཨིན།

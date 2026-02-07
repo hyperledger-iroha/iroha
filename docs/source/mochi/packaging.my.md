@@ -7,71 +7,72 @@ generator: scripts/sync_docs_i18n.py
 source_hash: c7ab0877a6f43402d6ec13a44c4a7c2b68e4a49e6103bb50d7469d9e71aaa953
 source_last_modified: "2025-12-29T18:16:35.984945+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# MOCHI Packaging Guide
+# MOCHI ထုပ်ပိုးမှုလမ်းညွှန်
 
-This guide explains how to build the MOCHI desktop supervisor bundle, inspect
-the generated artefacts, and tune the runtime overrides that ship with the
-bundle. It complements the quickstart by focusing on reproducible packaging
-and CI usage.
+ဤလမ်းညွှန်တွင် MOCHI ဒက်စ်တော့ ကြီးကြပ်ရေးမှူး အတွဲကို တည်ဆောက်ပုံ၊ စစ်ဆေးရန် ရှင်းပြထားသည်။
+ထုတ်ပေးထားသော artefacts နှင့် runtime ကို ချိန်ညှိပြီး ၎င်းနှင့်အတူ သင်္ဘောကို overrides
+အတွဲ။ ပြန်လည်ထုတ်လုပ်နိုင်သော ထုပ်ပိုးမှုကို အာရုံစိုက်ခြင်းဖြင့် အမြန်စတင်မှုကို ဖြည့်ဆည်းပေးသည်။
+နှင့် CI အသုံးပြုမှု။
 
-## Prerequisites
+## လိုအပ်ချက်များ
 
-- Rust toolchain (edition 2024 / Rust 1.82+) with workspace dependencies
-  already built.
-- `irohad`, `iroha_cli`, and `kagami` compiled for the desired target. The
-  bundler reuses binaries from `target/<profile>/`.
-- Sufficient disk space for the bundle output under `target/` or a custom
-  destination.
+- အလုပ်ခွင်မှီခိုမှုနှင့်အတူ Rust toolchain (edition 2024 / Rust 1.82+)
+  ဆောက်ပြီးသား။
+- လိုချင်သောပစ်မှတ်အတွက် `irohad`, `iroha_cli`, နှင့် `kagami`။ ဟိ
+  bundle သည် `target/<profile>/` မှ binaries ကို ပြန်သုံးသည်။
+- `target/` သို့မဟုတ် စိတ်ကြိုက်အတွဲအထွက်အတွက် လုံလောက်သော disk space
+  ဦးတည်ရာ။
 
-Build the dependencies once before running the bundler:
+အစုအဝေးကို မလည်ပတ်မီ တစ်ကြိမ်တည်းတွင် မှီခိုမှုကို တည်ဆောက်ပါ-
 
 ```bash
 cargo build -p irohad -p iroha_cli -p iroha_kagami
 ```
 
-## Building the bundle
+## အစုအဝေးတည်ဆောက်ခြင်း။
 
-Invoke the dedicated `xtask` command from the repository root:
+repository root မှ သီးသန့် `xtask` အမိန့်ကို တောင်းခံပါ။
 
 ```bash
 cargo xtask mochi-bundle
 ```
 
-By default this produces a release bundle under `target/mochi-bundle/` with a
-filename derived from the host OS and architecture (for example,
-`mochi-macos-aarch64-release.tar.gz`). Use the following flags to customise
-the build:
+ပုံမှန်အားဖြင့် ၎င်းသည် `target/mochi-bundle/` အောက်တွင် ထုတ်ဝေမှုအစုအဝေးကို ထုတ်လုပ်သည်။
+host OS နှင့် architecture မှဆင်းသက်လာသော filename (ဥပမာ၊
+`mochi-macos-aarch64-release.tar.gz`)။ စိတ်ကြိုက်ပြင်ဆင်ရန် အောက်ပါအလံများကို အသုံးပြုပါ။
+တည်ဆောက်မှု-
 
-- `--profile <name>` – choose a Cargo profile (`release`, `debug`, or a
-  custom profile).
-- `--no-archive` – keep the expanded directory without creating a `.tar.gz`
-  archive (useful for local testing).
-- `--out <path>` – write bundles to a custom directory instead of
-  `target/mochi-bundle/`.
-- `--kagami <path>` – supply a prebuilt `kagami` executable to include in the
-  archive. When omitted, the bundler reuses (or builds) the binary from the
-  selected profile.
-- `--matrix <path>` – append bundle metadata to a JSON matrix file (created if
-  missing) so CI pipelines can record every host/profile artefact produced in a
-  run. Entries include the bundle directory, manifest path and SHA-256, optional
-  archive location, and the latest smoke-test result.
-- `--smoke` – execute the packaged `mochi --help` as a lightweight smoke gate
-  after bundling; failures surface missing dependencies before publishing an
-  artefact.
-- `--stage <path>` – copy the finished bundle (and archive when produced) into
-  a staging directory so multi-platform builds can deposit artefacts in one
-  location without extra scripting.
+- `--profile <name>` – ကုန်စည်ပရိုဖိုင် (`release`၊ `debug` သို့မဟုတ်
+  စိတ်ကြိုက်ပရိုဖိုင်)။
+- `--no-archive` - `.tar.gz` ကို မဖန်တီးဘဲ တိုးချဲ့ထားသော လမ်းညွှန်ကို သိမ်းဆည်းထားပါ
+  archive (ဒေသတွင်းစမ်းသပ်မှုအတွက်အသုံးဝင်သည်)။
+- `--out <path>` - အစုအဝေးများကို စိတ်ကြိုက်လမ်းညွှန်အစား စိတ်ကြိုက်စာရင်းတွင်ရေးပါ။
+  `target/mochi-bundle/`။
+- `--kagami <path>` - တွင်ထည့်သွင်းရန်ကြိုတင်တည်ဆောက်ထားသော `kagami` ကို ပံ့ပိုးပေးသည်
+  တင်ထားပါတယ်။ ချန်လှပ်ထားသောအခါ၊ အစုအဝေးသည် binary ကို ပြန်လည်အသုံးပြုသည် (သို့မဟုတ်) တည်ဆောက်သည်။
+  ရွေးချယ်ထားသော ပရိုဖိုင်။
+- `--matrix <path>` – အတွဲလိုက် မက်တာဒေတာကို JSON matrix ဖိုင်တစ်ခုသို့ ပေါင်းထည့်ပါ (ဖန်တီးထားလျှင်
+  ပျောက်ဆုံးနေသည်) ထို့ကြောင့် CI ပိုက်လိုင်းများသည် a တွင်ထုတ်လုပ်သည့် host/profile artefact တိုင်းကို မှတ်တမ်းတင်နိုင်သည်။
+  ပြေး ထည့်သွင်းမှုများတွင် အတွဲလိုက်လမ်းညွှန်၊ မန်နီးဖက်စ်လမ်းကြောင်းနှင့် SHA-256၊ စိတ်ကြိုက်ရွေးချယ်နိုင်သည်။
+  သိမ်းဆည်းထားသော တည်နေရာနှင့် နောက်ဆုံးထွက် မီးခိုးစမ်းသပ်မှုရလဒ်။
+- `--smoke` - ထုပ်ပိုးထားသော `mochi --help` ကို ပေါ့ပါးသော မီးခိုးတံခါးအဖြစ် လုပ်ဆောင်ပါ
+  အစုအဝေးပြီးနောက်; ပျက်ကွက်မှုများသည် မထုတ်ဝေမီ ပျောက်ဆုံးနေသော မှီခိုမှုများအား ပေါ်လွင်စေသည်။
+  လက်ရာ။
+- `--stage <path>` - ပြီးသွားသောအတွဲ (ထုတ်လုပ်လိုက်သောအခါ မော်ကွန်းတင်) သို့ ကူးယူပါ
+  multi-platform builds များသည် artefacts များကို တစ်ခုတည်းတွင် အပ်နှံနိုင်သောကြောင့် ဇာတ်ညွှန်းလမ်းညွှန်တစ်ခု
+  အပို scripting မပါဘဲတည်နေရာ။
 
-The command copies `mochi-ui-egui`, `kagami`, `LICENSE`, the sample
-configuration, and `mochi/BUNDLE_README.md` into the bundle. A deterministic
-`manifest.json` is generated alongside the binaries so CI jobs can track file
-hashes and sizes.
+အမိန့်ပေးချက်သည် နမူနာကို `mochi-ui-egui`၊ `kagami`၊ `LICENSE`၊
+configuration နှင့် `mochi/BUNDLE_README.md` အစုအဝေးထဲသို့။ အဆုံးအဖြတ်တစ်ခု
+`manifest.json` ကို binaries များနှင့်အတူ ထုတ်ပေးသောကြောင့် CI အလုပ်များသည် ဖိုင်ကို ခြေရာခံနိုင်သည်
+hashes နှင့်အရွယ်အစားများ။
 
-## Bundle layout and verification
+## အတွဲလိုက် အပြင်အဆင်နှင့် အတည်ပြုခြင်း။
 
-An expanded bundle follows the layout documented in `BUNDLE_README.md`:
+တိုးချဲ့ထားသောအတွဲသည် `BUNDLE_README.md` တွင် မှတ်တမ်းတင်ထားသော အပြင်အဆင်ကို လိုက်နာသည်-
 
 ```
 bin/mochi
@@ -82,56 +83,54 @@ manifest.json
 LICENSE
 ```
 
-The `manifest.json` file lists every artefact with its SHA-256 hash. Verify
-the bundle after copying it to another system:
+`manifest.json` သည် ၎င်း၏ SHA-256 hash ဖြင့် အနုပညာပစ္စည်းများအားလုံးကို စာရင်းပြုစုထားသည်။ စိစစ်ပါ။
+၎င်းကို အခြားစနစ်သို့ ကူးယူပြီးနောက် အတွဲလိုက်-
 
 ```bash
 jq -r '.files[] | "\(.sha256)  \(.path)"' manifest.json | sha256sum --check
 ```
 
-CI pipelines can cache the expanded directory, sign the archive, or publish
-the manifest alongside release notes. The manifest includes the generator
-profile, target triple, and creation timestamp to aid provenance tracking.
+CI ပိုက်လိုင်းများသည် တိုးချဲ့ထားသော လမ်းညွှန်ကို ကက်ရှ်လုပ်နိုင်ပြီး၊ မော်ကွန်းကို လက်မှတ်ထိုး သို့မဟုတ် ထုတ်ဝေနိုင်သည်။
+ထုတ်ဝေမှုမှတ်စုများနှင့်အတူ မန်နီးဖက်စ်။ မန်နီးဖက်စ်တွင် မီးစက်ပါဝင်သည်။
+ပရိုဖိုင်၊ ပစ်မှတ်သုံးဆနှင့် ဖန်တီးမှုအချိန်တံဆိပ်ကို သက်သေခြေရာခံခြင်းကို အထောက်အကူဖြစ်စေသည်။
 
-## Runtime overrides
+## Runtime သည် overrides ဖြစ်သည်။
 
-MOCHI discovers helper binaries and runtime locations through CLI flags or
-environment variables:
+MOCHI သည် အကူအညီပေးသူ binaries နှင့် runtime တည်နေရာများကို CLI အလံများ သို့မဟုတ်
+ပတ်ဝန်းကျင်ပြောင်းလဲမှုများ-- `--data-root` / `MOCHI_DATA_ROOT` - သက်တူရွယ်တူအတွက်သုံးသော အလုပ်ခွင်ကို အစားထိုးပါ။
+  configs၊ သိုလှောင်မှုနှင့် မှတ်တမ်းများ။
+- `--profile` – topology presets များအကြား ပြောင်းပါ (`single-peer`၊
+  `four-peer-bft`)။
+- `--torii-start`၊ `--p2p-start` - ခွဲဝေပေးရာတွင် အသုံးပြုသည့် အခြေခံ port များကို ပြောင်းလဲပါ။
+  ဝန်ဆောင်မှုများ။
+- `--irohad` / `MOCHI_IROHAD` – သီးခြား `irohad` ဒွိစုံကို အမှတ်အသားပြုပါ။
+- `--kagami` / `MOCHI_KAGAMI` - ထုပ်ပိုးထားသော `kagami` ကို အစားထိုးပါ။
+- `--iroha-cli` / `MOCHI_IROHA_CLI` - ရွေးချယ်နိုင်သော CLI အကူအညီပေးသူကို အစားထိုးပါ။
+- `--restart-mode <never|on-failure>` - အလိုအလျောက် ပြန်လည်စတင်ခြင်းကို ပိတ်ပါ သို့မဟုတ် အတင်းအကြပ်လုပ်ပါ။
+  exponential backoff မူဝါဒ။
+- `--restart-max <attempts>` - ပြန်လည်စတင်ရန်ကြိုးစားသည့်အကြိမ်အရေအတွက်ကို အစားထိုးပါ။
+  `on-failure` မုဒ်တွင် အလုပ်လုပ်သည်။
+- `--restart-backoff-ms <millis>` - အလိုအလျောက် ပြန်လည်စတင်ခြင်းအတွက် အခြေခံ backoff ကို သတ်မှတ်ပါ။
+- `MOCHI_CONFIG` - စိတ်ကြိုက် `config/local.toml` လမ်းကြောင်းကို ပံ့ပိုးပါ။
 
-- `--data-root` / `MOCHI_DATA_ROOT` – override the workspace used for peer
-  configs, storage, and logs.
-- `--profile` – switch between topology presets (`single-peer`,
-  `four-peer-bft`).
-- `--torii-start`, `--p2p-start` – change the base ports used when allocating
-  services.
-- `--irohad` / `MOCHI_IROHAD` – point at a specific `irohad` binary.
-- `--kagami` / `MOCHI_KAGAMI` – override the bundled `kagami`.
-- `--iroha-cli` / `MOCHI_IROHA_CLI` – override the optional CLI helper.
-- `--restart-mode <never|on-failure>` – disable automatic restarts or force the
-  exponential backoff policy.
-- `--restart-max <attempts>` – override the number of restart attempts when
-  running in `on-failure` mode.
-- `--restart-backoff-ms <millis>` – set the base backoff for automatic restarts.
-- `MOCHI_CONFIG` – provide a custom `config/local.toml` path.
+CLI အကူအညီ (`mochi --help`) သည် အလံစာရင်းအပြည့်အစုံကို ပရင့်ထုတ်သည်။ ပတ်ဝန်းကျင်က လွှမ်းမိုးနေတယ်။
+လွှင့်တင်ခြင်းတွင် အကျိုးသက်ရောက်စေပြီး အတွင်းရှိ ဆက်တင်များ ဒိုင်ယာလော့ဂ်နှင့် ပေါင်းစပ်နိုင်ပါသည်။
+UI။
 
-The CLI help (`mochi --help`) prints the full flag list. Environment overrides
-take effect on launch and can be combined with the Settings dialog inside the
-UI.
+## CI အသုံးပြုမှု အရိပ်အမြွက်
 
-## CI usage hints
-
-- Run `cargo xtask mochi-bundle --no-archive` to generate a directory that can
-  be zipped with platform-specific tooling (ZIP for Windows, tarballs for
-  Unix).
-- Capture bundle metadata with `cargo xtask mochi-bundle --matrix dist/matrix.json`
-  so release jobs can publish a single JSON index listing every host/profile
-  artefact produced in the pipeline.
-- Use `cargo xtask mochi-bundle --stage /mnt/staging/mochi` (or similar) on each
-  build agent to upload the bundle and archive into a shared directory that the
-  publishing job can consume.
-- Publish both the archive and `manifest.json` so operators can verify bundle
-  integrity.
-- Store the generated directory as a build artefact to seed smoke tests that
-  exercise the supervisor with deterministically packaged binaries.
-- Record bundle hashes in release notes or in the `status.md` log for future
-  provenance checks.
+- လုပ်နိုင်သောလမ်းညွှန်တစ်ခုထုတ်လုပ်ရန် `cargo xtask mochi-bundle --no-archive` ကိုဖွင့်ပါ။
+  ပလက်ဖောင်းအလိုက် ကိရိယာတန်ဆာပလာများ (Windows အတွက် ZIP၊ tarballs) ဖြင့် ဇစ်ဆွဲထားပါ။
+  Unix)။
+- `cargo xtask mochi-bundle --matrix dist/matrix.json` ဖြင့် အတွဲလိုက် မက်တာဒေတာကို ရိုက်ကူးပါ။
+  ထို့ကြောင့် အလုပ်များ သည် host/profile တိုင်းတွင်ဖော်ပြထားသော JSON အညွှန်းကိန်းတစ်ခုတည်းကို ထုတ်ဝေနိုင်ပါသည်။
+  ပိုက်လိုင်းမှ ထုတ်လုပ်သော ပစ္စည်းများ။
+- တစ်ခုစီတွင် `cargo xtask mochi-bundle --stage /mnt/staging/mochi` (သို့မဟုတ် အလားတူ) ကိုသုံးပါ။
+  အစုအစည်းကို အပ်လုဒ်လုပ်ပြီး မျှဝေထားသော လမ်းညွှန်တစ်ခုသို့ သိမ်းဆည်းရန်အတွက် တည်ဆောက်အေးဂျင့်
+  ထုတ်ဝေရေးအလုပ်က စားသုံးလို့ရတယ်။
+- မှတ်တမ်းဟောင်းနှင့် `manifest.json` နှစ်ခုလုံးကို ထုတ်ဝေရန် အော်ပရေတာများက အတွဲလိုက်ကို စစ်ဆေးနိုင်သည်
+  သမာဓိ။
+- မျိုးစေ့မီးခိုးစမ်းသပ်မှုများအတွက် ထုတ်လုပ်ထားသော လမ်းညွှန်ကို သိမ်းဆည်းပါ။
+  ကြီးကြပ်သူအား အဆုံးအဖြတ်ဖြင့် ထုပ်ပိုးထားသော binaries ဖြင့် လေ့ကျင့်ပါ။
+- ထုတ်ဝေမှုမှတ်စုများတွင် သို့မဟုတ် အနာဂတ်အတွက် `status.md` မှတ်တမ်းတွင် အစုအစည်း hashe များကို မှတ်တမ်းတင်ပါ
+  သက်သေစစ်ဆေးမှုများ။

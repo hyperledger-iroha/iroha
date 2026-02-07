@@ -4,30 +4,32 @@ direction: rtl
 source: docs/portal/docs/norito/examples/call-transfer-asset.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-slug: /norito/examples/call-transfer-asset
-title: Invocar transferencia do host a partir de Kotodama
-description: Mostra como um entrypoint Kotodama pode chamar a instrucao do host `transfer_asset` com validacao inline de metadados.
-source: crates/ivm/docs/examples/08_call_transfer_asset.ko
+سلگ:/نوریٹو/مثالوں/کال ٹرانسفر-اثاثہ
+عنوان: Kotodama سے میزبان میزبان کی منتقلی
+تفصیل: یہ ظاہر کرتا ہے کہ کس طرح Kotodama انٹری پوائنٹ `transfer_asset` میزبان ہدایت کو ان لائن میٹا ڈیٹا کی توثیق کے ساتھ کال کرسکتا ہے۔
+ماخذ: کریٹس/IVM/دستاویزات/مثالوں/08_Call_transfer_asset.ko
 ---
 
-Mostra como um entrypoint Kotodama pode chamar a instrucao do host `transfer_asset` com validacao inline de metadados.
+یہ ظاہر کرتا ہے کہ کس طرح Kotodama انٹری پوائنٹ `transfer_asset` میزبان ہدایت کو ان لائن میٹا ڈیٹا کی توثیق کے ساتھ کال کرسکتا ہے۔
 
-## Roteiro do livro razao
+## لیجر اسکرپٹ
 
-- Financie a autoridade do contrato (por exemplo `ih58...`) com o ativo que ela transferira e conceda a autoridade o papel `CanTransfer` ou permissao equivalente.
-- Chame o entrypoint `call_transfer_asset` para transferir 5 unidades da conta do contrato para `ih58...`, refletindo como a automacao on-chain pode envolver chamadas do host.
-- Verifique saldos via `FindAccountAssets` ou `iroha_cli ledger assets list --account ih58...` e inspecione eventos para confirmar que o guard de metadados registrou o contexto da transferencia.
+- معاہدہ اتھارٹی (مثال کے طور پر `ih58...`) کو اس اثاثہ کے ساتھ فنڈ دیں جو اس نے منتقل کیا ہے اور اتھارٹی کو کاغذ `CanTransfer` یا مساوی اجازت دیں۔
+- معاہدہ اکاؤنٹ سے 5 یونٹوں کو `ih58...` میں منتقل کرنے کے لئے انٹری پوائنٹ `call_transfer_asset` پر کال کریں ، اس بات کی عکاسی کرتے ہوئے کہ آن چین آٹومیشن میں میزبان کالوں کو کس طرح شامل کیا جاسکتا ہے۔
+- `FindAccountAssets` یا `iroha_cli ledger assets list --account ih58...` کے ذریعے توازن چیک کریں اور اس بات کی تصدیق کے لئے واقعات کا معائنہ کریں کہ میٹا ڈیٹا گارڈ نے منتقلی کے سیاق و سباق کو ریکارڈ کیا۔
 
-## Guias de SDK relacionados
+## متعلقہ SDK گائیڈز
 
-- [Quickstart do SDK Rust](/sdks/rust)
-- [Quickstart do SDK Python](/sdks/python)
-- [Quickstart do SDK JavaScript](/sdks/javascript)
+- [مورچا SDK کوئیک اسٹارٹ] (/sdks/rust)
+- [ازگر ایس ڈی کے کوئیک اسٹارٹ] (/sdks/python)
+- [جاوا اسکرپٹ SDK کوئیک اسٹارٹ] (/sdks/javascript)
 
-[Baixe a fonte Kotodama](/norito-snippets/call-transfer-asset.ko)
+[ماخذ Kotodama ڈاؤن لوڈ کریں] (/norito-snippets/call-transfer-asset.ko)
 
 ```text
 // Direct builtin call (no contract-style call syntax) inside a contract.

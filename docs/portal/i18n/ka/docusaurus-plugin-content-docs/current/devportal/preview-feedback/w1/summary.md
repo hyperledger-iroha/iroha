@@ -8,42 +8,44 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: W1 partner feedback & exit summary
 sidebar_label: W1 summary
 description: Findings, actions, and exit evidence for the partner/Torii integrator preview wave.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-| Item | Details |
+| ნივთი | დეტალები |
 | --- | --- |
-| Wave | W1 — Partners & Torii integrators |
-| Invite window | 2025‑04‑12 → 2025‑04‑26 |
-| Artefact tag | `preview-2025-04-12` |
-| Tracker issue | `DOCS-SORA-Preview-W1` |
-| Participants | sorafs-op-01…03, torii-int-01…02, sdk-partner-01…02, gateway-ops-01 |
+| ტალღა | W1 — პარტნიორები და Torii ინტეგრატორები |
+| მოწვევის ფანჯარა | 2025‑04‑12 → 2025‑04‑26 |
+| არტეფაქტის ტეგი | `preview-2025-04-12` |
+| ტრეკერის საკითხი | `DOCS-SORA-Preview-W1` |
+| მონაწილეები | sorafs-op-01…03, torii-int-01…02, sdk-partner-01…02, gateway-ops-01 |
 
-## Highlights
+## მაჩვენებლები
 
-1. **Checksum workflow** — All reviewers verified the descriptor/archive via `scripts/preview_verify.sh`; logs stored alongside the invite acknowledgements.
-2. **Telemetry** — `docs.preview.integrity`, `TryItProxyErrors`, and `DocsPortal/GatewayRefusals` dashboards stayed green for the entire wave; no incidents or alert pages fired.
-3. **Doc feedback (`docs-preview/w1`)** — Two minor nits filed:
-   - `docs-preview/w1 #1`: clarify nav wording in the Try it section (resolved).
-   - `docs-preview/w1 #2`: update Try it screenshot (resolved).
-4. **Runbook parity** — SoraFS operators confirmed the new cross-links between `orchestrator-ops` and `multi-source-rollout` addressed their W0 concerns.
+1. **Checksum workflow** — ყველა მიმომხილველმა გადაამოწმა აღწერილობა/არქივი `scripts/preview_verify.sh`-ის მეშვეობით; მოწვევის დადასტურების გვერდით შენახული ჟურნალები.
+2. **ტელემეტრია** — `docs.preview.integrity`, `TryItProxyErrors` და `DocsPortal/GatewayRefusals` დაფები მწვანე დარჩა მთელი ტალღისთვის; არანაირი ინციდენტი ან გაფრთხილების გვერდები არ არის გაშვებული.
+3. **დოკუმენტის გამოხმაურება (`docs-preview/w1`)** — შეტანილი ორი უმნიშვნელო პუნქტი:
+   - `docs-preview/w1 #1`: დააზუსტეთ ნავიგაციის ფორმულირება განყოფილებაში Try it (მოგვარებულია).
+   - `docs-preview/w1 #2`: განაახლეთ სცადეთ ეკრანის სურათი (მოგვარებულია).
+4. **Runbook პარიტეტი** — SoraFS ოპერატორებმა დაადასტურეს ახალი ჯვარედინი კავშირები `orchestrator-ops`-სა და `multi-source-rollout`-ს შორის, მიმართეს მათ W0 პრობლემებს.
 
-## Action items
+## სამოქმედო ელემენტი
 
-| ID | Description | Owner | Status |
+| ID | აღწერა | მფლობელი | სტატუსი |
 | --- | --- | --- | --- |
-| W1-A1 | Update Try it nav wording per `docs-preview/w1 #1`. | Docs-core-02 | ✅ Completed (2025‑04‑18). |
-| W1-A2 | Refresh Try it screenshot per `docs-preview/w1 #2`. | Docs-core-03 | ✅ Completed (2025‑04‑19). |
-| W1-A3 | Summarise partner findings + telemetry evidence in roadmap/status. | Docs/DevRel lead | ✅ Completed (see tracker + status.md). |
+| W1-A1 | განახლება სცადეთ ნავი ფორმულირება `docs-preview/w1 #1`-ით. | Docs-core-02 | ✅ დასრულებული (2025-04-18). |
+| W1-A2 | განაახლეთ სცადეთ ეკრანის ანაბეჭდი `docs-preview/w1 #2`-ზე. | Docs-core-03 | ✅ დასრულებული (2025-04-19). |
+| W1-A3 | შეაჯამეთ პარტნიორის დასკვნები + ტელემეტრიული მტკიცებულებები საგზაო რუკაში/სტატუსში. | Docs/DevRel წამყვანი | ✅ დასრულებულია (იხილეთ ტრეკერი + status.md). |
 
-## Exit summary (2025-04-26)
+## გამოსვლის შეჯამება (2025-04-26)
 
-- All eight reviewers confirmed completion during the final office hours, purged local artefacts, and had their access revoked.
-- Telemetry remained green through exit; final snapshots attached to `DOCS-SORA-Preview-W1`.
-- Invite log updated with exit acknowledgements; tracker flipped W1 to 🈴 and added the checkpoint entries.
-- Evidence bundle (descriptor, checksum log, probe output, Try it proxy transcript, telemetry screenshots, feedback digest) archived under `artifacts/docs_preview/W1/`.
+- რვავე მიმომხილველმა დაადასტურა დასრულება ბოლო სამუშაო საათებში, გაასუფთავეს ადგილობრივი არტეფაქტები და გაუქმდა მათი წვდომა.
+- ტელემეტრია დარჩა მწვანე გასასვლელით; `DOCS-SORA-Preview-W1`-ზე მიმაგრებული საბოლოო სნეპშოტები.
+- მოწვევის ჟურნალი განახლებულია გასვლის დადასტურებით; ტრეკერმა გადააბრუნა W1 🈴-ზე და დაამატა საგუშაგოს ჩანაწერები.
+- მტკიცებულებების ნაკრები (აღმწერი, საკონტროლო ჯამის ჟურნალი, გამოძიების გამომავალი, სცადეთ პროქსის ტრანსკრიპტი, ტელემეტრიის ეკრანის ანაბეჭდები, უკუკავშირის დაიჯესტი) დაარქივებულია `artifacts/docs_preview/W1/` ქვეშ.
 
-## Next steps
+## შემდეგი ნაბიჯები
 
-- Prepare the W2 community intake plan (governance approval + request template tweaks).
-- Refresh the preview artefact tag for the W2 wave and re-run the preflight script once dates are finalised.
-- Port applicable W1 findings into roadmap/status so the community wave has the latest guidance.
+- მოამზადეთ W2 საზოგადოების მიღების გეგმა (მმართველობის დამტკიცება + შაბლონის მოთხოვნის შესწორებები).
+- განაახლეთ გადახედვის არტეფაქტის ტეგი W2 ტალღისთვის და ხელახლა გაუშვით წინასწარი ფრენის სკრიპტი თარიღების დასრულების შემდეგ.
+- ჩართეთ W1-ის შედეგები საგზაო რუკა/სტატუსში, რათა საზოგადოების ტალღას ჰქონდეს უახლესი მითითებები.

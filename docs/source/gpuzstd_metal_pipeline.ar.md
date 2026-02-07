@@ -7,115 +7,114 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 019b3aa25ae224c1595467ac809f2c53290813e91a78b78b94ca71c3dd950264
 source_last_modified: "2026-01-31T19:25:45.072449+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# GPU Zstd (Metal) Pipeline
+# خط أنابيب GPU Zstd (المعدني).
 
-This document describes the deterministic GPU pipeline used by the Metal helper
-for zstd compression. It is a design and implementation guide for the
-`gpuzstd_metal` helper that emits standard zstd frames and deterministic bytes
-for a given sequence stream. Outputs must roundtrip with CPU decoders; byte-for-
-byte parity with the CPU compressor is not required because sequence generation
-differs.
+يصف هذا المستند خط أنابيب GPU الحتمي الذي يستخدمه المساعد المعدني
+لضغط zstd. وهو دليل التصميم والتنفيذ ل
+مساعد `gpuzstd_metal` الذي يصدر إطارات zstd القياسية والبايتات المحددة
+لتيار تسلسل معين. يجب أن تكون المخرجات ذهابًا وإيابًا مع أجهزة فك ترميز وحدة المعالجة المركزية؛ بايت مقابل
+تكافؤ البايت مع ضاغط وحدة المعالجة المركزية غير مطلوب بسبب إنشاء التسلسل
+يختلف.
 
-## Goals
+## الأهداف
 
-- Emit standard zstd frames that decode identically with CPU zstd; byte parity
-  with the CPU compressor is not required.
-- Deterministic outputs across hardware, drivers, and thread scheduling.
-- Explicit bounds checks and predictable buffer lifetimes.
+- تنبعث منها إطارات zstd القياسية التي يتم فك تشفيرها بشكل مماثل مع وحدة المعالجة المركزية zstd؛ تكافؤ البايت
+  مع ضاغط وحدة المعالجة المركزية غير مطلوب.
+- المخرجات الحتمية عبر الأجهزة وبرامج التشغيل وجدولة الخيط.
+- عمليات فحص الحدود الصريحة وعمر المخزن المؤقت الذي يمكن التنبؤ به.
 
-## Current implementation note
+## مذكرة التنفيذ الحالية
 
-- Match finding and sequence generation run on GPU.
-- Frame assembly and entropy coding (Huffman/FSE) currently run on the host
-  using the in-crate encoder; GPU Huffman/FSE kernels are parity-tested but not
-  yet wired into the full frame path.
-- Decode uses the in-crate frame decoder with a CPU zstd fallback for unsupported frames;
-  full GPU block decode remains in progress.
+- يتم تشغيل العثور على المطابقة وإنشاء التسلسل على وحدة معالجة الرسومات.
+- يتم تشغيل تجميع الإطار وترميز الإنتروبيا (Huffman/FSE) حاليًا على المضيف
+  باستخدام برنامج التشفير الموجود داخل الصندوق؛ يتم اختبار نواة GPU Huffman/FSE على أساس التكافؤ ولكنها ليست كذلك
+  بعد السلكية في مسار الإطار الكامل.
+- يستخدم فك التشفير وحدة فك ترميز الإطارات الموجودة في الصندوق مع احتياطي وحدة المعالجة المركزية zstd للإطارات غير المدعومة؛
+  لا يزال فك تشفير كتلة GPU الكامل قيد التقدم.
 
-## Encoding pipeline (high level)
+## خط أنابيب الترميز (مستوى عالٍ)
 
-1. Input staging
-   - Copy the input into a device buffer.
-   - Partition into fixed-size chunks (for sequence generation) and blocks (for
-     zstd frame assembly).
-2. Match finding and sequence emission
-   - GPU kernels scan each chunk and emit sequences (literal length, match
-     length, offset).
-   - Sequence ordering is stable and deterministic.
-3. Literal preparation
-   - Collect literals referenced by sequences.
-   - Build literal histograms and select literal block mode (raw, RLE, or
-     Huffman) deterministically.
-4. Huffman tables (literals)
-   - Generate code lengths from the histogram.
-   - Build canonical tables with deterministic tie-breaking that matches CPU
-     zstd output.
-5. FSE tables (LL/ML/OF)
-   - Normalize frequency counts.
-   - Build FSE decoding/encoding tables deterministically.
-6. Bitstream writer
-   - Pack bits little-endian (LSB-first).
-   - Flush on byte boundaries; pad with zeros only.
-   - Mask values to declared bit widths and enforce capacity checks.
-7. Block and frame assembly
-   - Emit block headers (type, size, last-block flag).
-   - Serialize literals and sequences into compressed blocks.
-   - Emit standard zstd frame headers and optional checksums.
+1. التدريج الإدخال
+   - انسخ الإدخال إلى المخزن المؤقت للجهاز.
+   - التقسيم إلى قطع ذات حجم ثابت (لإنشاء التسلسل) وكتل (ل
+     تجميع الإطار zstd).
+2. مطابقة النتائج وانبعاث التسلسل
+   - تقوم نواة وحدة معالجة الرسومات بمسح كل قطعة وإصدار تسلسلات (الطول الحرفي والمطابقة
+     الطول، الإزاحة).
+   - ترتيب التسلسل مستقر وحتمي.
+3. الإعداد الحرفي
+   - جمع الحرفيات المشار إليها بواسطة تسلسلات.
+   - إنشاء رسوم بيانية حرفية واختيار وضع الكتلة الحرفية (الخام، RLE، أو
+     هوفمان) حتمية.
+4. جداول هوفمان (حرفية)
+   - توليد أطوال التعليمات البرمجية من الرسم البياني.
+   - إنشاء جداول أساسية مع كسر التعادل الحتمي الذي يتوافق مع وحدة المعالجة المركزية
+     إخراج zstd.
+5. جداول FSE (LL/ML/OF)
+   - تطبيع أعداد التردد.
+   - بناء جداول فك/تشفير FSE بشكل حتمي.
+6. الكاتب Bitstream
+   - حزمة البتات الصغيرة (LSB-الأولى).
+   - التدفق على حدود البايت؛ لوحة مع الأصفار فقط.
+   - قناع القيم لعروض البت المعلنة وفرض اختبارات السعة.
+7. تجميع الكتلة والإطار
+   - تنبعث رؤوس الكتلة (النوع والحجم وعلامة الكتلة الأخيرة).
+   - تسلسل الحروف والتسلسلات في كتل مضغوطة.
+   - قم بإصدار رؤوس إطارات zstd القياسية والمجاميع الاختبارية الاختيارية.
 
-## Decoding pipeline (high level)
+## خط أنابيب فك التشفير (مستوى عالٍ)
 
-1. Frame parse
-   - Validate magic bytes, window settings, and frame header fields.
-2. Bitstream reader
-   - Read LSB-first bit sequences with strict bounds checks.
-3. Literal decode
-   - Decode literal blocks (raw, RLE, or Huffman) into the literal buffer.
-4. Sequence decode
-   - Decode LL/ML/OF values using FSE tables.
-   - Reconstruct matches using the sliding window.
-5. Output and checksum
-   - Write reconstructed bytes into the output buffer.
-   - Verify optional checksums when enabled.
+1. تحليل الإطار
+   - التحقق من صحة البايتات السحرية وإعدادات النافذة وحقول رأس الإطار.
+2. قارئ تيار البتات
+   - قراءة تسلسلات البت الأولى LSB مع فحوصات صارمة للحدود.
+3. فك التشفير الحرفي
+   - فك تشفير الكتل الحرفية (الخام أو RLE أو Huffman) في المخزن المؤقت الحرفي.
+4. فك التسلسل
+   - فك رموز قيم LL/ML/OF باستخدام جداول FSE.
+   - إعادة بناء المباريات باستخدام النافذة المنزلقة.
+5. الإخراج والمجموع الاختباري
+   - كتابة البايتات المعاد بناؤها في المخزن المؤقت للإخراج.
+   - التحقق من المجاميع الاختبارية الاختيارية عند التمكين.
 
-## Buffer lifetimes and ownership
+## عمر المخزن المؤقت وملكيته- المخزن المؤقت للإدخال: المضيف -> الجهاز، للقراءة فقط.
+- المخزن المؤقت للتسلسل: جهاز يتم إنتاجه عن طريق إيجاد التطابق ويستهلكه الإنتروبيا
+  الترميز؛ لا إعادة استخدام عبر الكتلة.
+- المخزن المؤقت الحرفي: جهاز يتم إنتاجه لكل كتلة ويتم تحريره بعد الكتلة
+  الانبعاثات.
+- المخزن المؤقت للإخراج: الجهاز، يحتفظ بايتات الإطار النهائية حتى يقوم المضيف بنسخها
+  خارج.
+- مخازن مؤقتة للخدش: يُعاد استخدامها عبر النوى، ولكن يتم استبدالها دائمًا بشكل حتمي.
 
-- Input buffer: host -> device, read-only.
-- Sequence buffer: device, produced by match-finding and consumed by entropy
-  coding; no cross-block reuse.
-- Literal buffer: device, produced for each block and released after block
-  emission.
-- Output buffer: device, holds the final frame bytes until the host copies them
-  out.
-- Scratch buffers: reused across kernels, but always overwritten deterministically.
+## مسؤوليات النواة
 
-## Kernel responsibilities
+- مطابقة حبات البحث: ابحث عن التطابقات وأصدر تسلسلات (LL/ML/OF + literals).
+- نواة بناء هوفمان: اشتقاق أطوال التعليمات البرمجية والجداول الأساسية.
+- نواة بناء FSE: بناء جداول LL/ML/OF وأجهزة الحالة.
+- نواة تشفير الكتلة: قم بإجراء تسلسل حرفي وتسلسلات في تدفق البتات.
+- فك تشفير النواة: تحليل تدفق البتات وإعادة بناء القيم الحرفية/التسلسلات.
 
-- Match finding kernels: find matches and emit sequences (LL/ML/OF + literals).
-- Huffman build kernels: derive code lengths and canonical tables.
-- FSE build kernels: build LL/ML/OF tables and state machines.
-- Block encode kernels: serialize literals and sequences into the bitstream.
-- Block decode kernels: parse bitstream and reconstruct literals/sequences.
+## قيود الحتمية والتكافؤ
 
-## Determinism and parity constraints
-
-- Canonical table builds must use the same ordering and tie-breaking as CPU
+- يجب أن تستخدم إصدارات الجدول الأساسية نفس الترتيب والربط الذي تستخدمه وحدة المعالجة المركزية
   zstd.
-- No atomics or reductions that depend on thread scheduling for any output byte.
-- Bitstream packing is little-endian, LSB-first; byte alignment pads with zeros.
-- All bounds checks are explicit; invalid inputs fail deterministically.
+- لا توجد ذرات أو تخفيضات تعتمد على جدولة الخيط لأي بايت إخراج.
+- تعبئة Bitstream هي نهاية صغيرة، LSB أولًا؛ منصات محاذاة البايت مع الأصفار.
+- جميع عمليات التحقق من الحدود صريحة؛ المدخلات غير الصالحة تفشل بشكل حتمي.
 
-## Validation
+## التحقق من الصحة
 
-- CPU golden vectors for the bitstream writer/reader.
-- Corpus parity tests comparing GPU and CPU outputs.
-- Fuzz coverage for malformed frames and boundary conditions.
+- ناقلات وحدة المعالجة المركزية الذهبية للكاتب/القارئ bitstream.
+- اختبارات تكافؤ المجموعة التي تقارن مخرجات وحدة معالجة الرسومات ووحدة المعالجة المركزية.
+- تغطية زغبية للإطارات المشوهة وشروط الحدود.
 
-## Benchmarking
+## المقارنة المرجعية
 
-Run `cargo test -p gpuzstd_metal gpu_vs_cpu_benchmark -- --ignored --nocapture` to
-compare CPU vs GPU encode latency across payload sizes. The test skips on hosts
-without a Metal-capable device; capture the output alongside hardware details
-when adjusting the GPU offload thresholds. Norito enforces the same cutoff in
-`gpu_zstd::encode_all`, so direct callers match the heuristic gate.
+قم بتشغيل `cargo test -p gpuzstd_metal gpu_vs_cpu_benchmark -- --ignored --nocapture` إلى
+قارن زمن استجابة وحدة المعالجة المركزية (CPU) مقابل وحدة معالجة الرسومات (GPU) عبر أحجام الحمولة النافعة. يتخطى الاختبار على المضيفين
+بدون جهاز قادر على المعدن؛ التقاط الإخراج جنبا إلى جنب مع تفاصيل الأجهزة
+عند ضبط عتبات تفريغ GPU. يفرض Norito نفس القطع في
+`gpu_zstd::encode_all`، لذا فإن المتصلين المباشرين يتطابقون مع البوابة الإرشادية.

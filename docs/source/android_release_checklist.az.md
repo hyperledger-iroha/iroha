@@ -7,107 +7,102 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 5ee3613b544a847953f5ec152092cb2fe1da35279c5482486513d6b8d6dddf02
 source_last_modified: "2026-01-05T09:28:11.999717+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Android Release Checklist (AND6)
+# Android Buraxılış Yoxlama Siyahısı (AND6)
 
-This checklist captures the **AND6 — CI & Compliance Hardening** gates from
-`roadmap.md` (§Priority 5). It aligns Android SDK releases with the Rust
-release RFC expectations by spelling out the CI jobs, compliance artefacts,
-device-lab evidence, and provenance bundles that must be attached before a GA,
-LTS, or hotfix train moves forward.
+Bu yoxlama siyahısı **AND6 — CI & Compliance Hardening** qapılarını əhatə edir
+`roadmap.md` (§Prioritet 5). Android SDK buraxılışlarını Rust ilə uyğunlaşdırır
+CI işlərini, uyğunluq artefaktlarını ifadə edərək RFC gözləntilərini buraxın,
+GA-dan əvvəl əlavə edilməli olan cihaz-laboratoriya sübutları və mənşə paketləri,
+LTS və ya düzəliş qatarı irəliləyir.
 
-Use this document together with:
+Bu sənədlə birlikdə istifadə edin:
 
-- `docs/source/android_support_playbook.md` — release calendar, SLAs, and
-  escalation tree.
-- `docs/source/android_runbook.md` — day‑to‑day operational runbooks.
-- `docs/source/compliance/android/and6_compliance_checklist.md` — regulator
-  artefact inventory.
-- `docs/source/release_dual_track_runbook.md` — dual-track release governance.
+- `docs/source/android_support_playbook.md` — buraxılış təqvimi, SLAs və
+  eskalasiya ağacı.
+- `docs/source/android_runbook.md` — gündəlik əməliyyat kitabçaları.
+- `docs/source/compliance/android/and6_compliance_checklist.md` — tənzimləyici
+  artefakt inventar.
+- `docs/source/release_dual_track_runbook.md` — iki yollu buraxılış idarəetməsi.
 
-## 1. Stage Gates at a Glance
+## 1. Bir Baxışda Səhnə Qapıları
 
-| Stage | Required Gates | Evidence |
+| Mərhələ | Tələb olunan Qapılar | Sübut |
 |-------|----------------|----------|
-| **T−7 days (pre-freeze)** | Nightly `ci/run_android_tests.sh` green for 14 days; `ci/check_android_fixtures.sh`, `ci/check_android_samples.sh`, and `ci/check_android_docs_i18n.sh` passing; lint/dependency scans queued. | Buildkite dashboards, fixture diff report, sample screenshot snapshots. |
-| **T−3 days (RC promotion)** | Device-lab reservation confirmed; StrongBox attestation CI run (`scripts/android_strongbox_attestation_ci.sh`); Robolectric/instrumented suites exercised on scheduled hardware; `./gradlew lintRelease ktlintCheck detekt dependencyGuard` clean. | Device matrix CSV, attestation bundle manifest, Gradle reports archived under `artifacts/android/lint/<version>/`. |
-| **T−1 day (go/no-go)** | Telemetry redaction status bundle refreshed (`scripts/telemetry/check_redaction_status.py --write-cache`); compliance artefacts updated per `and6_compliance_checklist.md`; provenance rehearsal completed (`scripts/android_sbom_provenance.sh --dry-run`). | `docs/source/compliance/android/evidence_log.csv`, telemetry status JSON, provenance dry-run log. |
-| **T0 (GA/LTS cutover)** | `scripts/publish_android_sdk.sh --dry-run` completed; provenance + SBOM signed; release checklist exported and attached to go/no-go minutes; `ci/sdk_sorafs_orchestrator.sh` smoke job green. | Release RFC attachments, Sigstore bundle, adoption artefacts under `artifacts/android/`. |
-| **T+1 day (post-cutover)** | Hotfix readiness verified (`scripts/publish_android_sdk.sh --validate-bundle`); dashboard diffs reviewed (`ci/check_android_dashboard_parity.sh`); evidence packet uploaded to `status.md`. | Dashboard diff export, link to `status.md` entry, archived release packet. |
+| **T−7 gün (öncədən dondurma)** | 14 gün ərzində gecə `ci/run_android_tests.sh` yaşıl; `ci/check_android_fixtures.sh`, `ci/check_android_samples.sh` və `ci/check_android_docs_i18n.sh` keçid; lint/asılılıq skanları növbəyə alınıb. | Buildkite idarə panelləri, qurğu fərqi hesabatı, nümunə skrinşot şəkilləri. |
+| **T−3 gün (RC təşviqi)** | Cihaz-laboratoriya rezervasiyası təsdiqləndi; StrongBox attestation CI run (`scripts/android_strongbox_attestation_ci.sh`); Planlaşdırılmış avadanlıqda həyata keçirilən robotelektrik/cihazlı dəstlər; `./gradlew lintRelease ktlintCheck detekt dependencyGuard` təmiz. | Cihaz matrisi CSV, attestasiya paketi manifest, `artifacts/android/lint/<version>/` altında arxivləşdirilmiş Gradle hesabatları. |
+| **T−1 gün (get/getməz)** | Telemetriya redaksiyası statusu paketi yeniləndi (`scripts/telemetry/check_redaction_status.py --write-cache`); uyğunluq artefaktları `and6_compliance_checklist.md` üzrə yenilənir; mənşəli məşq tamamlandı (`scripts/android_sbom_provenance.sh --dry-run`). | `docs/source/compliance/android/evidence_log.csv`, telemetriya statusu JSON, mənşəli quru iş jurnalı. |
+| **T0 (GA/LTS kəsilməsi)** | `scripts/publish_android_sdk.sh --dry-run` tamamlandı; mənşə + SBOM imzalanmışdır; buraxılış yoxlama siyahısı ixrac edilmiş və getmək/no-go dəqiqələrinə əlavə edilmişdir; `ci/sdk_sorafs_orchestrator.sh` tüstü işi yaşıl. | RFC qoşmalarını, Sigstore paketini, `artifacts/android/` altında övladlığa götürmə artefaktlarını buraxın. |
+| **T+1 gün (kəsikdən sonra)** | Düzəliş hazırlığı təsdiqləndi (`scripts/publish_android_sdk.sh --validate-bundle`); idarə paneli fərqləri nəzərdən keçirildi (`ci/check_android_dashboard_parity.sh`); sübut paketi `status.md`-ə yüklənmişdir. | Dashboard fərq ixracı, `status.md` girişinə keçid, arxivləşdirilmiş buraxılış paketi. |
 
-## 2. CI & Quality Gate Matrix
-
-| Gate | Command(s) / Script | Notes |
+## 2. CI & Keyfiyyət Qapısı Matrisi| Qapı | Əmr(lər) / Skript | Qeydlər |
 |------|--------------------|-------|
-| Unit + integration tests | `ci/run_android_tests.sh` (wraps `ci/run_android_tests.sh`) | Emits `artifacts/android/tests/test-summary.json` + test log. Includes Norito codec, queue, StrongBox fallback, and Torii client harness tests. Required nightly and before tagging. |
-| Fixture parity | `ci/check_android_fixtures.sh` (wraps `scripts/check_android_fixtures.py`) | Ensures regenerated Norito fixtures match the Rust canonical set; attach the JSON diff when the gate fails. |
-| Sample apps | `ci/check_android_samples.sh` | Builds `examples/android/{operator-console,retail-wallet}` and validates localized screenshots via `scripts/android_sample_localization.py`. |
-| Docs/I18N | `ci/check_android_docs_i18n.sh` | Guards README + localized quickstarts. Run again after doc edits land in the release branch. |
-| Dashboard parity | `ci/check_android_dashboard_parity.sh` | Confirms CI/exported metrics align with the Rust counterparts; required during T+1 verification. |
-| SDK adoption smoke | `ci/sdk_sorafs_orchestrator.sh` | Exercises the multi-source Sorafs orchestrator bindings with the current SDK. Required before uploading staged artefacts. |
-| Attestation verification | `scripts/android_strongbox_attestation_ci.sh --summary-out artifacts/android/attestation/ci-summary.json` | Aggregates the StrongBox/TEE attestation bundles under `artifacts/android/attestation/**`; attach the summary to GA packets. |
-| Device-lab slot validation | `scripts/check_android_device_lab_slot.py --root artifacts/android/device_lab/<slot> --json-out artifacts/android/device_lab/summary.json` | Validates instrumentation bundles before attaching evidence to release packets; CI runs against the sample slot in `fixtures/android/device_lab/slot-sample` (telemetry/attestation/queue/logs + `sha256sum.txt`). |
+| Vahid + inteqrasiya testləri | `ci/run_android_tests.sh` (`ci/run_android_tests.sh` sarılır) | `artifacts/android/tests/test-summary.json` + test jurnalını buraxır. Norito kodek, növbə, StrongBox ehtiyatı və Torii müştəri qoşqu testləri daxildir. Gecə və etiketləmədən əvvəl tələb olunur. |
+| Fikstur pariteti | `ci/check_android_fixtures.sh` (`scripts/check_android_fixtures.py` sarar) | Yenilənmiş Norito qurğularının Rust kanonik dəstinə uyğun olmasını təmin edir; qapı uğursuz olduqda JSON fərqini əlavə edin. |
+| Nümunə proqramlar | `ci/check_android_samples.sh` | `examples/android/{operator-console,retail-wallet}` qurur və `scripts/android_sample_localization.py` vasitəsilə lokallaşdırılmış ekran görüntülərini təsdiqləyir. |
+| Sənədlər/I18N | `ci/check_android_docs_i18n.sh` | README + lokallaşdırılmış sürətli başlanğıcları qoruyur. Sənəd redaktələri buraxılış filialına düşdükdən sonra yenidən işə salın. |
+| Dashboard pariteti | `ci/check_android_dashboard_parity.sh` | CI/ixrac edilmiş ölçülərin Rust analoqları ilə uyğunluğunu təsdiq edir; T+1 yoxlaması zamanı tələb olunur. |
+| SDK qəbul tüstü | `ci/sdk_sorafs_orchestrator.sh` | Cari SDK ilə çoxmənbəli Sorafs orkestrator bağlamalarını həyata keçirir. Mərhələli artefaktları yükləməzdən əvvəl tələb olunur. |
+| Attestasiyanın yoxlanılması | `scripts/android_strongbox_attestation_ci.sh --summary-out artifacts/android/attestation/ci-summary.json` | StrongBox/TEE attestasiya paketlərini `artifacts/android/attestation/**` altında birləşdirir; xülasəni GA paketlərinə əlavə edin. |
+| Cihaz laboratoriya yuvasının yoxlanılması | `scripts/check_android_device_lab_slot.py --root artifacts/android/device_lab/<slot> --json-out artifacts/android/device_lab/summary.json` | Paketləri buraxmaq üçün sübut əlavə etməzdən əvvəl cihaz paketlərini təsdiq edir; CI `fixtures/android/device_lab/slot-sample`-də nümunə yuvasına qarşı işləyir (telemetri/attestasiya/növbə/loqlar + `sha256sum.txt`). |
 
-> **Tip:** add these jobs to the `android-release` Buildkite pipeline so that
-> freeze weeks automatically re-run every gate with the release branch tip.
+> **İpucu:** bu işləri `android-release` Buildkite boru kəmərinə əlavə edin ki,
+> dondurma həftələri avtomatik olaraq hər qapını buraxma filialının ucu ilə yenidən işə salın.
 
-The consolidated `.github/workflows/android-and6.yml` job runs the lint,
-test-suite, attestation-summary, and device-lab slot checks on every PR/push
-touching Android sources, uploading evidence under `artifacts/android/{lint,tests,attestation,device_lab}/`.
+Konsolidasiya edilmiş `.github/workflows/android-and6.yml` işi tüyləri idarə edir,
+hər bir PR/push-da test dəsti, attestasiya-xülasə və cihaz-laboratoriya yuvası yoxlamaları
+Android mənbələrinə toxunmaq, `artifacts/android/{lint,tests,attestation,device_lab}/` altında sübut yükləmək.
 
 ## 3. Lint & Dependency Scans
 
-Run `scripts/android_lint_checks.sh --version <semver>` from the repo root. The
-script executes:
+Repo kökündən `scripts/android_lint_checks.sh --version <semver>`-i işə salın. The
+skript icra edir:
 
 ```
 lintRelease ktlintCheck detekt dependencyGuardBaseline \
 :operator-console:lintRelease :retail-wallet:lintRelease
 ```
 
-- Reports and dependency-guard outputs are archived under
-  `artifacts/android/lint/<label>/` and a `latest/` symlink for release
-  pipelines.
-- Failing lint findings require either remediation or an entry in the release
-  RFC documenting the accepted risk (approved by Release Engineering + Program
-  Lead).
-- `dependencyGuardBaseline` regenerates the dependency lock; attach the diff
-  to the go/no-go packet.
+- Hesabatlar və asılılıq-mühafizə çıxışları altında arxivləşdirilir
+  `artifacts/android/lint/<label>/` və buraxılış üçün `latest/` simvolik əlaqə
+  boru kəmərləri.
+- Uğursuz lint tapıntıları ya düzəliş, ya da buraxılışda qeyd tələb edir
+  Qəbul edilmiş riski sənədləşdirən RFC (Release Engineering + Proqramı tərəfindən təsdiq edilmişdir
+  aparıcı).
+- `dependencyGuardBaseline` asılılıq kilidini bərpa edir; fərqi əlavə edin
+  get/getmə paketinə.
 
-## 4. Device Lab & StrongBox Coverage
+## 4. Cihaz laboratoriyası və StrongBox əhatə dairəsi
 
-1. Reserve Pixel + Galaxy devices using the capacity tracker referenced in
-   `docs/source/compliance/android/device_lab_contingency.md`. Blocks releases
-   if <70 % availability.
-2. Execute `scripts/android_strongbox_attestation_ci.sh --report \
-   artifacts/android/attestation/<version>` to refresh the attestation report.
-3. Run the instrumentation matrix (document the suite/ABI list in the device
-   tracker). Capture failures in the incident log even if retries succeed.
-4. File a ticket if fallback to Firebase Test Lab is required; link the ticket
-   in the checklist below.
+1. Burada istinad edilən tutum izləyicisindən istifadə edərək Pixel + Galaxy cihazlarını ehtiyata qoyun
+   `docs/source/compliance/android/device_lab_contingency.md`. Buraxılışları bloklayır
+   əlçatanlıq `.
+3. Cihaz matrisini işə salın (cihazda paket/ABI siyahısını sənədləşdirin
+   izləyici). Yenidən cəhdlər uğurlu olsa belə, insident jurnalında uğursuzluqları qeyd edin.
+4. Firebase Test Laboratoriyasına geri qayıtmaq tələb olunarsa, bilet təqdim edin; bileti bağlayın
+   aşağıdakı yoxlama siyahısında.
 
-## 5. Compliance & Telemetry Artefacts
-
-- Follow `docs/source/compliance/android/and6_compliance_checklist.md` for EU
-  and JP submissions. Update `docs/source/compliance/android/evidence_log.csv`
-  with hashes + Buildkite job URLs.
-- Refresh telemetry redaction evidence via
+## 5. Uyğunluq və Telemetriya Artefaktları- AB üçün `docs/source/compliance/android/and6_compliance_checklist.md`-i izləyin
+  və JP təqdimatları. `docs/source/compliance/android/evidence_log.csv` yeniləyin
+  hash + Buildkite iş URL-ləri ilə.
+- Vasitəsilə telemetriya redaksiyası sübutlarını yeniləyin
   `scripts/telemetry/check_redaction_status.py --write-cache \
    --status-url https://android-observability.example/status.json`.
-  Store the resulting JSON under
+  Yaranan JSON-u altında saxlayın
   `artifacts/android/telemetry/<version>/status.json`.
-- Record the schema diff output from
+- Sxem fərqinin çıxışını qeyd edin
   `scripts/telemetry/run_schema_diff.sh --android-config ... --rust-config ...`
-  to prove parity with Rust exporters.
+  Rust ixracatçıları ilə bərabərliyi sübut etmək.
 
-## 6. Provenance, SBOM, and Publishing
+## 6. Mənbə, SBOM və Nəşriyyat
 
-1. Dry-run the publish pipeline:
+1. Nəşr xəttini qurudan idarə edin:
 
    ```bash
    scripts/publish_android_sdk.sh \
@@ -116,7 +111,7 @@ lintRelease ktlintCheck detekt dependencyGuardBaseline \
      --dry-run
    ```
 
-2. Generate SBOM + Sigstore provenance:
+2. SBOM + Sigstore mənşəyi yaradın:
 
    ```bash
    scripts/android_sbom_provenance.sh \
@@ -124,39 +119,39 @@ lintRelease ktlintCheck detekt dependencyGuardBaseline \
      --out artifacts/android/provenance/<semver>
    ```
 
-3. Attach `artifacts/android/provenance/<semver>/manifest.json` and signed
-   `checksums.sha256` to the release RFC.
-4. When promoting to the real Maven repository, rerun
-   `scripts/publish_android_sdk.sh` without `--dry-run`, capture the console
-   log, and upload the resulting artefacts to `artifacts/android/maven/<semver>`.
+3. `artifacts/android/provenance/<semver>/manifest.json` əlavə edin və imzalayın
+   `checksums.sha256` buraxılış RFC üçün.
+4. Həqiqi Maven repozitoriyasına irəliləyərkən təkrar işə salın
+   `scripts/publish_android_sdk.sh`, `--dry-run` olmadan, konsolu çəkin
+   daxil edin və əldə edilən artefaktları `artifacts/android/maven/<semver>`-ə yükləyin.
 
-## 7. Submission Packet Template
+## 7. Göndərmə Paket Şablonu
 
-Every GA/LTS/hotfix release should include:
+Hər GA/LTS/düzeltmə buraxılışına aşağıdakılar daxil olmalıdır:
 
-1. **Completed checklist** — copy this file’s table, tick each item, and link
-   to supporting artefacts (Buildkite run, logs, doc diffs).
-2. **Device lab evidence** — attestation report summary, reservation log, and
-   any contingency activations.
-3. **Telemetry packet** — redaction status JSON, schema diff, link to
-   `docs/source/sdk/android/telemetry_redaction.md` updates (if any).
-4. **Compliance artefacts** — entries added/updated in the compliance folder
-   plus the refreshed evidence log CSV.
-5. **Provenance bundle** — SBOM, Sigstore signature, and `checksums.sha256`.
-6. **Release summary** — one‑page overview attached to `status.md` summarising
-   the above (date, version, highlight of any waived gates).
+1. **Tamamlanmış yoxlama siyahısı** — bu faylın cədvəlini kopyalayın, hər bir elementi işarələyin və keçid edin
+   dəstəkləyici artefaktlara (Buildkite run, logs, doc diffs).
+2. **Cihazın laboratoriya sübutu** — attestasiya hesabatının xülasəsi, rezervasiya jurnalı və
+   hər hansı fövqəladə aktivləşdirmələr.
+3. **Telemetri paketi** — redaksiya statusu JSON, sxem fərqi, keçid
+   `docs/source/sdk/android/telemetry_redaction.md` yeniləmələri (əgər varsa).
+4. **Uyğunluq artefaktları** — uyğunluq qovluğuna əlavə edilmiş/yenilənilən qeydlər
+   üstəlik yenilənmiş sübut jurnalı CSV.
+5. **Provenance paketi** — SBOM, Sigstore imzası və `checksums.sha256`.
+6. **Buraxılış xülasəsi** — `status.md` xülasəsinə əlavə edilmiş bir səhifəlik icmal
+   yuxarıdakılar (tarix, versiya, hər hansı imtina edilmiş qapıların vurğulanması).
 
-Store the packet under `artifacts/android/releases/<version>/` and reference it
-in `status.md` and the release RFC.
+Paketi `artifacts/android/releases/<version>/` altında saxlayın və ona istinad edin
+`status.md` və buraxılış RFC-də.
 
-- `scripts/run_release_pipeline.py --publish-android-sdk ...` automatically
-  copies the latest lint archive (`artifacts/android/lint/latest`) and the
-  compliance evidence log into `artifacts/android/releases/<version>/` so the
-  submission packet always has a canonical location.
+- `scripts/run_release_pipeline.py --publish-android-sdk ...` avtomatik
+  ən son lint arxivini (`artifacts/android/lint/latest`) və
+  uyğunluq sübutu `artifacts/android/releases/<version>/`-ə daxil olun
+  təqdim paketi həmişə kanonik bir yerə malikdir.
 
 ---
 
-**Reminder:** update this checklist whenever new CI jobs, compliance artefacts,
-or telemetry requirements are added. Roadmap item AND6 stays open until the
-checklist and associated automation prove stable for two consecutive release
-trains.
+**Xatırlatma:** yeni CI işləri, uyğunluq artefaktları,
+və ya telemetriya tələbləri əlavə edilir. Yol xəritəsi elementi AND6 olana qədər açıq qalır
+yoxlama siyahısı və əlaqəli avtomatlaşdırma iki ardıcıl buraxılış üçün sabitdir
+qatarlar.

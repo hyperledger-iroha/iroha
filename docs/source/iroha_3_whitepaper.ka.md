@@ -7,110 +7,107 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 07e149429887b0dfc38cf0619552cbefcbae4dd1ec9fe9e9d47a05371ed08f29
 source_last_modified: "2025-12-29T18:16:35.968351+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Iroha v3.0 (Nexus Preview)
+# Iroha v3.0 (Nexus გადახედვა)
 
-This document captures the forward-looking Hyperledger Iroha v3 architecture, focusing on the multi-lane
-pipeline, Nexus data spaces, and the Asset Exchange Toolkit (AXT). It complements the Iroha v2 whitepaper by
-describing upcoming capabilities that are actively under development.
+ეს დოკუმენტი ასახავს მომავალს Hyperledger Iroha v3 არქიტექტურას, ფოკუსირებულია მრავალ ზოლზე
+მილსადენი, Nexus მონაცემთა სივრცეები და Asset Exchange Toolkit (AXT). ის ავსებს Iroha v2 თეთრ ქაღალდს
+აღწერს მომავალ შესაძლებლობებს, რომლებიც აქტიურად ვითარდება.
 
 ---
 
-## 1. Overview
+## 1. მიმოხილვა
 
-Iroha v3 extends the deterministic foundation of v2 with horizontal scalability and richer cross-domain
-workflows. The release, codenamed **Nexus**, introduces:
+Iroha v3 აფართოებს v2-ის დეტერმინისტულ საფუძველს ჰორიზონტალური მასშტაბურობით და უფრო მდიდარი ჯვარედინი დომენით
+სამუშაო პროცესები. გამოცემა, კოდირებული **Nexus**, წარმოგიდგენთ:
 
-- A single, globally shared network called **SORA Nexus**. All Iroha v3 peers participate in this universal
-  ledger rather than operating isolated deployments. Organisations join by registering their own data spaces,
-  which remain isolated for policy and privacy while anchoring into the common ledger.
-- A shared codebase: the same repository builds both Iroha v2 (self-hosted networks) and Iroha v3 (SORA Nexus).
-  Configuration selects the target mode so operators can adopt Nexus features without switching software
-  stacks. The Iroha Virtual Machine (IVM) is identical across both releases, so Kotodama contracts and bytecode
-  artefacts run seamlessly on self-hosted networks and the global Nexus ledger.
-- Multi-lane block production to process independent workloads in parallel.
-- Data spaces (DS) that isolate execution environments while remaining composable through on-chain anchors.
-- The Asset Exchange Toolkit (AXT) for atomic, cross-space value transfers and contract-controlled swaps.
-- Enhanced reliability through Reliable Broadcast Commit (RBC) lanes, deterministic deadlines, and proof
-  sampling budgets.
+- ერთიანი, გლობალურად გაზიარებული ქსელი, სახელად **SORA Nexus**. ყველა Iroha v3 თანატოლი მონაწილეობს ამ უნივერსალურში
+  წიგნი, ვიდრე იზოლირებული განლაგების ოპერირება. ორგანიზაციები უერთდებიან საკუთარი მონაცემთა სივრცის რეგისტრაციით,
+  რომლებიც იზოლირებულნი რჩებიან პოლიტიკისა და კონფიდენციალურობისთვის საერთო წიგნის ჩასმისას.
+- გაზიარებული კოდების ბაზა: ერთი და იგივე საცავი აშენებს როგორც Iroha v2 (თვით განთავსებულ ქსელებს) და Iroha v3 (SORA Nexus).
+  კონფიგურაცია ირჩევს სამიზნე რეჟიმს, რათა ოპერატორებმა მიიღონ Nexus ფუნქციები პროგრამული უზრუნველყოფის გადართვის გარეშე
+  სტეკები. Iroha ვირტუალური მანქანა (IVM) იდენტურია ორივე გამოშვებაში, ამიტომ Kotodama კონტრაქტები და ბაიტიკოდია
+  არტეფაქტები შეუფერხებლად მუშაობს თვითმასპინძელ ქსელებზე და გლობალურ Nexus წიგნში.
+- მრავალ ზოლიანი ბლოკის წარმოება დამოუკიდებელი სამუშაო დატვირთვის პარალელურად დასამუშავებლად.
+- მონაცემთა სივრცეები (DS), რომლებიც იზოლირებენ აღსრულების გარემოს, ხოლო კომპოზიციურად რჩება ჯაჭვზე არსებული წამყვანების მეშვეობით.
+- აქტივების გაცვლის ხელსაწყოების ნაკრები (AXT) ატომური, კოსმოსური ღირებულების გადაცემისთვის და კონტრაქტით კონტროლირებადი სვოპებისთვის.
+- გაძლიერებული სანდოობა Reliable Broadcast Commit (RBC) ზოლებით, დეტერმინისტული ვადები და მტკიცებულება
+  ბიუჯეტის შერჩევა.
 
-These features remain under active development; APIs and layouts may evolve before the v3 general
-availability milestone. Refer to `nexus.md`, `nexus_transition_notes.md`, and `new_pipeline.md` for
-engineering-level detail.
+ეს თვისებები რჩება აქტიური განვითარების პროცესში; API და განლაგება შეიძლება განვითარდეს v3 გენერალამდე
+ხელმისაწვდომობის ეტაპი. იხილეთ `nexus.md`, `nexus_transition_notes.md` და `new_pipeline.md`
+საინჟინრო დონის დეტალი.
 
-## 2. Multi-lane architecture
+## 2. მრავალზოლიანი არქიტექტურა
 
-- **Scheduler:** The Nexus scheduler partitions work into lanes based on data space identifiers and
-  composability groups. Lanes execute in parallel while preserving deterministic ordering guarantees within
-  each lane.
-- **Lane groups:** Related data spaces share a `LaneGroupId`, enabling coordinated execution for workflows that
-  span multiple components (e.g., a CBDC DS and its payment dApp DS).
-- **Deadlines:** Each lane tracks deterministic deadlines (block, proof, data-availability) to guarantee
-  progress and bounded resource usage.
-- **Telemetry:** Lane-level metrics expose throughput, queue depth, deadline violations, and bandwidth usage.
-  CI scripts assert the presence of these counters to keep dashboards aligned with the scheduler.
+- **განმგეგმავი:** Nexus განრიგის ტიხრები მუშაობს ზოლებად, მონაცემთა სივრცის იდენტიფიკატორების საფუძველზე და
+  კომპოზიტორობის ჯგუფები. ბილიკები შესრულებულია პარალელურად და შენარჩუნებულია დეტერმინისტული მოწესრიგების გარანტიები შიგნით
+  თითოეული ჩიხი.
+- **ზოლის ჯგუფები:** დაკავშირებული მონაცემთა სივრცეები იზიარებს `LaneGroupId`-ს, რაც საშუალებას აძლევს კოორდინირებულ შესრულებას სამუშაო ნაკადებისთვის, რომლებიც
+  მოიცავს მრავალ კომპონენტს (მაგ., CBDC DS და მისი გადახდის dApp DS).
+- ** ვადები: ** თითოეული ზოლი აკონტროლებს დეტერმინისტულ ვადებს (ბლოკი, მტკიცებულება, მონაცემთა ხელმისაწვდომობა) გარანტირებისთვის
+  პროგრესი და შეზღუდული რესურსების გამოყენება.
+- **ტელემეტრია:** ზოლის დონის მეტრიკა ავლენს გამტარუნარიანობას, რიგის სიღრმეს, ვადის დარღვევას და გამტარუნარიანობის გამოყენებას.
+  CI სკრიპტები ამტკიცებენ ამ მრიცხველების არსებობას, რათა დაფები განრიგდეს განრიგთან.
 
-## 3. Data spaces (Nexus)
-
-- **Isolation:** Each data space maintains its own consensus lane, world state segment, and Kura storage. This
-  supports privacy domains while keeping the global SORA Nexus ledger coherent through anchors.
-- **Anchors:** Regular commits produce anchor artifacts that summarise the DS state (Merkle roots, proofs,
-  commitments) and publish them to the global lane for auditability.
-- **Lane groups and composability:** Data spaces may declare composability groups that permit atomic AXT
-  transactions across approved participants. Governance controls membership changes and activation epochs.
-- **Erasure-coded storage:** Kura and WSV snapshots adopt erasure coding parameters `(k, m)` to scale data
-  availability without sacrificing determinism. Recovery routines restore missing fragments deterministically.
+## 3. მონაცემთა სივრცეები (Nexus)- ** იზოლაცია: ** თითოეული მონაცემთა სივრცე ინარჩუნებს თავის კონსენსუსის ხაზს, მსოფლიო მდგომარეობის სეგმენტს და Kura-ს შენახვას. ეს
+  მხარს უჭერს კონფიდენციალურობის დომენებს, ხოლო ინარჩუნებს გლობალურ SORA Nexus წიგნს წამყვანების მეშვეობით.
+- ** წამყვანები:** რეგულარული დავალებები წარმოქმნის წამყვან არტეფაქტებს, რომლებიც აჯამებს DS მდგომარეობას (მერკლის ფესვები, მტკიცებულებები,
+  ვალდებულებები) და გამოაქვეყნეთ ისინი გლობალურ ხაზში აუდიტის შესამოწმებლად.
+- **ზოლის ჯგუფები და კომპოზირებადობა:** მონაცემთა სივრცეში შეიძლება გამოცხადდეს კომპოზიტორობის ჯგუფები, რომლებიც ნებადართულია ატომურ AXT-ზე
+  ტრანზაქციები დამტკიცებულ მონაწილეებს შორის. მმართველობა აკონტროლებს წევრობის ცვლილებებს და აქტივაციის ეპოქებს.
+- ** წაშლის კოდირებული საცავი:** Kura და WSV სნეპშოტები იღებენ წაშლის კოდირების პარამეტრებს `(k, m)` მონაცემების მასშტაბირებისთვის
+  ხელმისაწვდომობა დეტერმინიზმის შეწირვის გარეშე. აღდგენის რუტინები აღადგენს დაკარგული ფრაგმენტებს დეტერმინისტულად.
 
 ## 4. Asset Exchange Toolkit (AXT)
 
-- **Descriptor and binding:** Clients construct deterministic AXT descriptors. The `axt_binding` hash anchors
-  descriptors to individual envelopes, preventing replay and ensuring consensus participants validate byte-for-
-  byte Norito payloads.
-- **Syscalls:** The IVM exposes `AXT_BEGIN`, `AXT_TOUCH`, and `AXT_COMMIT` syscalls. Contracts declare their
-  read/write sets per data space, allowing the host to enforce atomicity across lanes.
-- **Handles and epochs:** Wallets obtain capability handles bound to `(dataspace_id, epoch_id, sub_nonce)`.
-  Concurrent uses conflict deterministically, returning canonical `AxtTrap` codes when constraints are
-  violated.
-- **Policy enforcement:** Core hosts now derive AXT policy snapshots from Space Directory manifests in WSV,
-  enforcing manifest root, target lane, activation-era, sub-nonce, and expiry checks (`current_slot >= expiry_slot`
-  aborts) even in minimal test hosts. Policies are keyed by dataspace id and built from the lane catalog so
-  handles cannot escape their issuing lane or use stale manifests.
-  - Rejection reasons are deterministic: unknown dataspace, manifest root mismatch, target lane mismatch,
-    handle_era below manifest activation, sub_nonce below the policy floor, expired handle, missing touch for
-    the handle dataspace, or missing proof when required.
-- **Proofs and deadlines:** During an active window Δ, validators collect proofs, data availability samples,
-  and manifests. Failure to meet deadlines aborts the AXT deterministically with guidance for client retries.
-- **Governance integration:** Policy modules define which data spaces can participate in AXT, rate-limit
-  handles, and publish auditor-friendly manifests capturing commitments, nullifiers, and event logs.
+- **აღმწერი და სავალდებულო:** კლიენტები ქმნიან დეტერმინისტულ AXT დესკრიპტორებს. `axt_binding` ჰეშის წამყვანები
+  ცალკეული კონვერტების აღწერები, რომლებიც ხელს უშლიან ხელახლა დაკვრას და უზრუნველყოფენ მონაწილეთა კონსენსუსის დამოწმებას ბაიტისთვის
+  ბაიტი Norito დატვირთვა.
+- **Syscalls:** IVM ავლენს `AXT_BEGIN`, `AXT_TOUCH` და `AXT_COMMIT` სისტემებს. კონტრაქტები აცხადებენ მათ
+  წაკითხვა/ჩაწერა კომპლექტები მონაცემთა სივრცეში, რაც საშუალებას აძლევს მასპინძელს განახორციელოს ატომურობა ხაზების გასწვრივ.
+- **სახელურები და ეპოქები:** საფულეები იღებენ შესაძლებლობის სახელურებს, რომლებიც დაკავშირებულია `(dataspace_id, epoch_id, sub_nonce)`-ზე.
+  Concurrent იყენებს კონფლიქტს დეტერმინისტულად, აბრუნებს კანონიკურ `AxtTrap` კოდებს, როდესაც შეზღუდვებია
+  დაირღვა.
+- **პოლიტიკის აღსრულება:** ძირითადი მასპინძლები ახლა იღებენ AXT პოლიტიკის სნეპშოტებს Space Directory მანიფესტებიდან WSV-ში,
+  მანიფესტის ფესვის, სამიზნე ხაზის, აქტივაციის ეპოქის, სუბ-არა და ვადის გასვლის შემოწმებების აღსრულება (`current_slot >= expiry_slot`
+  აბორტები) თუნდაც მინიმალურ ტესტ ჰოსტებში. პოლიტიკები ჩაწერილია მონაცემთა სივრცის ID-ით და აგებულია ზოლის კატალოგიდან ასე
+  სახელურებს არ შეუძლიათ გაქცევა მათი გაცემის ზოლიდან ან გამოიყენონ მოძველებული მანიფესტები.
+  - უარის მიზეზები განმსაზღვრელია: უცნობი მონაცემთა სივრცე, აშკარა ფესვების შეუსაბამობა, სამიზნე ზოლის შეუსაბამობა,
+    handle_era ქვემოთ მანიფესტის გააქტიურება, sub_nonce ქვემოთ წესების სართულზე, ვადაგასული სახელური, აკლია შეხება
+    სახელურის მონაცემთა სივრცე, ან საჭიროების შემთხვევაში აკლია მტკიცებულება.
+- **მტკიცებულებები და ვადები:** აქტიური ფანჯრის Δ დროს, ვალიდატორები აგროვებენ მტკიცებულებებს, მონაცემთა ხელმისაწვდომობის ნიმუშებს,
+  და ვლინდება. ვადების შეუსრულებლობა წყვეტს AXT-ს დეტერმინისტულად კლიენტის ხელახალი ცდების მითითებით.
+- **მმართველობის ინტეგრაცია:** პოლიტიკის მოდულები განსაზღვრავენ მონაცემთა რომელ სივრცეებს შეუძლიათ მონაწილეობა მიიღონ AXT-ში, განაკვეთის ლიმიტი
+  ამუშავებს და აქვეყნებს აუდიტორისთვის ხელსაყრელ მანიფესტებს, რომლებიც აღწერს ვალდებულებებს, გაუქმებას და მოვლენის ჟურნალებს.
 
-## 5. Reliable Broadcast Commit (RBC) lanes
+## 5. სანდო მაუწყებლობის (RBC) ზოლები- ** ზოლის სპეციფიკური DA:** RBC ზოლები ასახავს ზოლის ჯგუფებს, რაც უზრუნველყოფს თითოეულ მრავალზოლიან მილსადენს გამოყოფილი მონაცემები
+  ხელმისაწვდომობის გარანტიები.
+- **შერჩევის ბიუჯეტები:** ვალიდიატორები იცავენ შერჩევის დეტერმინისტულ წესებს (`q_in_slot_per_ds`) მტკიცებულებების დასადასტურებლად
+  და მოწმობის მასალა ცენტრალური კოორდინაციის გარეშე.
+- ** უკანა წნევის ანალიზი: ** Sumeragi კარდიოსტიმულატორის მოვლენები კორელაციაშია RBC სტატისტიკასთან შეჩერებული ზოლების დიაგნოსტიკისთვის
+  (იხ. `scripts/sumeragi_backpressure_log_scraper.py`).
 
-- **Lane-specific DA:** RBC lanes mirror lane groups, ensuring each multi-lane pipeline has dedicated data
-  availability guarantees.
-- **Sampling budgets:** Validators follow deterministic sampling rules (`q_in_slot_per_ds`) to validate proofs
-  and witness material without central coordination.
-- **Backpressure insights:** Sumeragi pacemaker events correlate with RBC statistics to diagnose stalled lanes
-  (see `scripts/sumeragi_backpressure_log_scraper.py`).
+## 6. ოპერაციები და მიგრაცია
 
-## 6. Operations and migration
+- **გარდამავალი გეგმა:** `nexus_transition_notes.md` ასახავს ეტაპობრივ მიგრაციას ერთი ზოლიდან (Iroha v2)
+  მრავალ ზოლი (Iroha v3), ტელემეტრიის დადგმის, კონფიგურაციის კარიბჭის და გენეზის განახლებების ჩათვლით.
+- ** უნივერსალური ქსელი:** SORA Nexus თანატოლები აწარმოებენ საერთო გენეზის და მმართველობის სტეკს. ბორტზე ახალი ოპერატორები
+  მონაცემთა სივრცის (DS) შექმნა და Nexus დაშვების წესების დაკმაყოფილება დამოუკიდებელი ქსელების გაშვების ნაცვლად.
+- **კონფიგურაცია:** ახალი კონფიგურაციის ღილაკები მოიცავს ზოლის ბიუჯეტს, მტკიცებულების ვადებს, AXT კვოტას და მონაცემთა სივრცის მეტამონაცემებს.
+  ნაგულისხმევი რჩება კონსერვატიული მანამ, სანამ ოპერატორები არ აირჩევენ Nexus რეჟიმში.
+- ** ტესტირება:** ოქროს ტესტები აღწერს AXT აღწერებს, ზოლის მანიფესტებს და syscall სიებს. ინტეგრაციის ტესტები
+  (`integration_tests/tests/repo.rs`, `crates/ivm/tests/axt_host_flow.rs`) სავარჯიშოები ბოლოდან ბოლომდე.
+- ** ინსტრუმენტები:** `kagami` იძენს Nexus-ს ცოდნა გენეზის გენერაციას და დაფის სკრიპტები ამოწმებს ზოლის გამტარუნარიანობას,
+  მტკიცებულება ბიუჯეტი და RBC ჯანმრთელობა.
 
-- **Transition plan:** `nexus_transition_notes.md` outlines phased migration from single-lane (Iroha v2) to
-  multi-lane (Iroha v3), including telemetry staging, config gating, and genesis updates.
-- **Universal network:** SORA Nexus peers run a common genesis and governance stack. New operators onboard by
-  creating a data space (DS) and satisfying Nexus admission policies instead of launching standalone networks.
-- **Configuration:** New config knobs cover lane budgets, proof deadlines, AXT quotas, and data-space metadata.
-  Defaults remain conservative until operators opt into Nexus mode.
-- **Testing:** Golden tests capture AXT descriptors, lane manifests, and syscall lists. Integration tests
-  (`integration_tests/tests/repo.rs`, `crates/ivm/tests/axt_host_flow.rs`) exercise end-to-end flows.
-- **Tooling:** `kagami` gains Nexus-aware genesis generation, and dashboard scripts validate lane throughput,
-  proof budgets, and RBC health.
+## 7. საგზაო რუკა
 
-## 7. Roadmap
+- **ფაზა 1:** ჩართეთ ერთი დომენის მრავალ ზოლიანი შესრულება ადგილობრივი AXT მხარდაჭერით და აუდიტით.
+- **ფაზა 2:** გაააქტიურეთ კომპოზიტორობის ჯგუფები ნებადართული ჯვარედინი დომენური AXT-ისთვის და გააფართოვეთ ტელემეტრიის დაფარვა.
+- **ფაზა 3:** გააფართოვეთ სრული Nexus მონაცემთა სივრცის ფედერაცია, წაშლის კოდირებული საცავი და გაფართოებული მტკიცებულების გაზიარება.
 
-- **Phase 1:** Enable single-domain multi-lane execution with local AXT support and auditing.
-- **Phase 2:** Activate composability groups for permissioned cross-domain AXT and expand telemetry coverage.
-- **Phase 3:** Roll out full Nexus data-space federation, erasure-coded storage, and advanced proof sharing.
-
-Status updates live in `roadmap.md` and `status.md`. Contributions aligning with the Nexus design should follow
-the deterministic execution and governance policies established for v3.
+სტატუსის განახლებები პირდაპირ ეთერშია `roadmap.md` და `status.md`. Nexus დიზაინთან შესაბამისი წვლილი უნდა მოჰყვეს
+განმსაზღვრელი შესრულებისა და მმართველობის პოლიტიკა, რომელიც შეიქმნა v3.

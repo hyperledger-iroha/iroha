@@ -7,126 +7,127 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 4ac4c98cc4aa6ab0c34e58e6428d0ee33eb9a0c3fdad9e6958bdc75f2a48dc66
 source_last_modified: "2026-01-22T16:26:46.488648+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Fraud Governance Playbook
+# လိမ်လည်မှုဆိုင်ရာ အုပ်ချုပ်မှုစာအုပ်
 
-This document summarizes the scaffolding required for the PSP fraud stack while
-full microservices and SDKs are under active development. It captures
-expectations for analytics, auditor workflows, and fallback procedures so that
-upcoming implementations can plug into the ledger safely.
+ဤစာတမ်းသည် PSP လိမ်လည်မှုစဥ်အတွက် လိုအပ်သောငြမ်းများကို အကျဉ်းချုံးဖော်ပြပါသည်။
+အပြည့်အ၀ မိုက်ခရိုဝန်ဆောင်မှုများနှင့် SDK များသည် တက်ကြွစွာ ဖွံ့ဖြိုးတိုးတက်မှုအောက်တွင် ရှိနေပါသည်။ ဖမ်းတယ်။
+ခွဲခြမ်းစိတ်ဖြာမှု၊ စာရင်းစစ်လုပ်ငန်းအသွားအလာနှင့် ဆုတ်ယုတ်မှုဆိုင်ရာ လုပ်ထုံးလုပ်နည်းများအတွက် မျှော်မှန်းချက်
+လာမည့်အကောင်အထည်ဖော်မှုများသည် စာရင်းဇယားတွင် လုံခြုံစွာထည့်သွင်းနိုင်သည်။
 
-## Services Overview
+## ဝန်ဆောင်မှုများ ခြုံငုံသုံးသပ်ချက်
 
-1. **API Gateway** – receives synchronous `RiskQuery` payloads, forwards them to
-   feature aggregation, and relays `FraudAssessment` responses back to ledger
-   flows. High availability (active-active) is required; use regional pairs with
-   deterministic hashing to avoid request skew.
-2. **Feature Aggregation** – composes feature vectors for scoring. Emit
-   `FeatureInput` hashes only; sensitive payloads stay off-chain. Observability
-   must publish latency histograms, queue depth gauges, and replay counters per
-   tenant.
-3. **Risk Engine** – evaluates rules/models and produces deterministic
-   `FraudAssessment` outputs. Ensure rule execution order is stable and capture
-   audit logs per assessment ID.
+1. **API Gateway** – synchronous `RiskQuery` payload များကို လက်ခံရရှိပြီး ၎င်းတို့ထံ ပေးပို့သည်
+   အင်္ဂါရပ်စုစည်းမှုနှင့် `FraudAssessment` တုံ့ပြန်မှုများကို လယ်ဂျာသို့ပြန်ပို့ပေးသည်
+   စီးဆင်းသည်။ မြင့်မားသောရရှိနိုင်မှု (တက်ကြွတက်ကြွမှု) လိုအပ်သည်။ ဒေသဆိုင်ရာ အတွဲများကို အသုံးပြုပါ။
+   တောင်းဆိုမှု skew ကိုရှောင်ရှားရန် အဆုံးအဖြတ် hashing ။
+2. **Feature Aggregation** – အမှတ်ပေးရန်အတွက် feature vector များကို ရေးဖွဲ့ပါသည်။ ထုတ်လွှတ်သည်။
+   `FeatureInput` hash များသာ။ အရေးကြီးသော ဝန်တင်များသည် ကွင်းဆက်ပြင်ပတွင် ရှိနေသည်။ မြင်နိုင်စွမ်း
+   latency histograms၊ queue depth gauges နှင့် replay counters အလိုက် ထုတ်ဝေရပါမည်။
+   အိမ်ငှား။
+3. **Risk Engine** – စည်းမျဉ်း/မော်ဒယ်များကို အကဲဖြတ်ပြီး အဆုံးအဖြတ်ပေးသည်။
+   `FraudAssessment` ရုပ်ထွက်များ။ စည်းမျဉ်း အကောင်အထည်ဖော်မှု အမိန့်သည် တည်ငြိမ်ပြီး ဖမ်းယူမှုကို သေချာပါစေ။
+   အကဲဖြတ် ID တစ်ခုအတွက် စာရင်းစစ်မှတ်တမ်းများ။
 
-## Analytics & Model Promotion
+## ပိုင်းခြားစိတ်ဖြာမှုနှင့် မော်ဒယ်မြှင့်တင်ရေး
 
-- **Anomaly Detection**: maintain a streaming job that flags deviations in
-  decision rates per tenant. Feed alerts into the governance dashboard and store
-  summaries for quarterly reviews.
-- **Graph Analysis**: run nightly graph traversals on relational exports to
-  identify collusion clusters. Export findings into the governance portal via
-  `GovernanceExport` with references to supporting evidence.
-- **Feedback Ingestion**: curate manual review outcomes and chargeback reports.
-  Convert them into feature deltas and incorporate them into training datasets.
-  Publish ingestion status metrics so the risk team can spot stalled feeds.
-- **Model Promotion Pipeline**: automate candidate evaluation (offline metrics,
-  canary scoring, rollback readiness). Promotions should emit a signed
-  `FraudAssessment` sample set and update the `model_version` field in
-  `GovernanceExport`.
+- **ပုံမှန်မဟုတ်သော ထောက်လှမ်းခြင်း**- သွေဖည်မှုများကို အလံပြသည့် တိုက်ရိုက်လွှင့်ခြင်းအလုပ်ကို ထိန်းသိမ်းပါ။
+  အိမ်ငှားတစ်ဦးအတွက် ဆုံးဖြတ်ချက်နှုန်းများ။ သတိပေးချက်များကို အုပ်ချုပ်မှု ဒက်ရှ်ဘုတ်နှင့် စတိုးတွင် ထည့်သွင်းပါ။
+  သုံးလတစ်ကြိမ် သုံးသပ်ချက်များအတွက် အကျဉ်းချုပ်များ။
+- **ဂရပ်ဖစ်ခွဲခြမ်းစိတ်ဖြာခြင်း**- ဆက်စပ်တင်ပို့မှုများအပေါ် ညစဉ် ဂရပ်ဖြတ်သွားမှုများကို လုပ်ဆောင်ပါ။
+  စုစည်းမှုအစုများကို ခွဲခြားသတ်မှတ်ပါ။ တွေ့ရှိချက်များကို အုပ်ချုပ်ရေးပေါ်တယ်မှတစ်ဆင့် တင်ပို့ပါ။
+  သက်သေအထောက်အထားများ ရည်ညွှန်းချက်များနှင့်အတူ `GovernanceExport`။
+- ** တုံ့ပြန်ချက်ထည့်သွင်းခြင်း**- လက်စွဲပြန်လည်သုံးသပ်ခြင်းရလဒ်များနှင့် ငွေပြန်အမ်းခြင်းအစီရင်ခံစာများကို စီမံဆောင်ရွက်ပေးခြင်း။
+  ၎င်းတို့ကို အင်္ဂါရပ်ဒဲလ်တာအဖြစ်သို့ ပြောင်းလဲပြီး လေ့ကျင့်ရေးဒေတာအတွဲများတွင် ပေါင်းစပ်ပါ။
+  ရပ်တန့်နေသော ဖိဒ်များကို အန္တရာယ်အဖွဲ့မှ တွေ့ရှိနိုင်စေရန် စားသုံးမှုအခြေအနေ မက်ထရစ်များကို ထုတ်ဝေပါ။
+- **မော်ဒယ်မြှင့်တင်ရေးပိုက်လိုင်း**- လျှောက်ထားသူ၏ အကဲဖြတ်မှုကို အလိုအလျောက်လုပ်ဆောင်ခြင်း (အော့ဖ်လိုင်းမက်ထရစ်များ၊
+  ကိန္နရီ အမှတ်ပေးခြင်း၊ ပြန်လှည့်ရန် အဆင်သင့်)။ ပရိုမိုးရှင်းတွေ ထုတ်လွှတ်လိုက်တဲ့ ဆိုင်းဘုတ်တွေ
+  `FraudAssessment` နမူနာသတ်မှတ်ပြီး `model_version` အကွက်ကို အပ်ဒိတ်လုပ်ပါ။
+  `GovernanceExport`။
 
-## Auditor Workflow
+## စာရင်းစစ်ချုပ်လုပ်ငန်း
 
-1. Snapshot the latest `GovernanceExport` and verify the `policy_digest` matches
-   the manifest provided by the risk team.
-2. Validate that rule aggregates reconcile with ledger-side decision totals for
-   the sampled window.
-3. Review the anomaly detection and graph analysis reports for outstanding
-   issues. Document escalations and expected remediation owners.
-4. Sign and archive the review checklist. Store the Norito-encoded artifacts in
-   the governance portal for reproducibility.
+1. နောက်ဆုံးထွက် `GovernanceExport` ကို လျှပ်တစ်ပြက်ရိုက်ပြီး `policy_digest` ကိုက်ညီမှုများကို အတည်ပြုပါ
+   အန္တရာယ်အဖွဲ့မှ ပေးဆောင်သော သရုပ်ပြမှု။
+2. ထိုစည်းမျဉ်းကို စုစည်းထားသော လယ်ဂျာ-ဘက်ခြမ်းမှ အဆုံးအဖြတ်စုစုပေါင်းများ နှင့် ပြန်လည်ပေါင်းစည်းကြောင်း အတည်ပြုပါ။
+   နမူနာပြတင်းပေါက်။
+3. ထူးထူးခြားခြားအတွက် ကွဲလွဲနေသော ထောက်လှမ်းမှုနှင့် ဂရပ်ဖစ်ခွဲခြမ်းစိတ်ဖြာမှု အစီရင်ခံစာများကို ပြန်လည်သုံးသပ်ပါ။
+   ကိစ္စများ။ စာရွက်စာတမ်း တိုးချဲ့မှုများနှင့် မျှော်မှန်းထားသော ပြန်လည်ပြင်ဆင်ရေး ပိုင်ရှင်များ။
+4. သုံးသပ်ချက်စာရင်းကို လက်မှတ်ထိုးပြီး သိမ်းဆည်းပါ။ Norito-ကုဒ်လုပ်ထားသော ရှေးဟောင်းပစ္စည်းများကို သိမ်းဆည်းပါ။
+   ပြန်လည်ထုတ်လုပ်နိုင်မှုအတွက် အုပ်ချုပ်မှုပေါ်တယ်
 
-## Fallback Playbooks
+## နောက်ပြန်ဖွင့်စာအုပ်များ
 
-- **Engine Outage**: if the risk engine is unavailable for more than 60 seconds,
-  the gateway should flip into review-only mode, issuing `AssessmentDecision::Review`
-  for all requests and alerting operators.
-- **Telemetry Gap**: when metrics or traces fall behind (missing for 5 minutes),
-  halt automatic model promotions and notify the on-call engineer.
-- **Model Regression**: if post-deployment feedback indicates elevated fraud
-  losses, roll back to the previous signed model bundle and update the roadmap
-  with corrective actions.
+- **အင်ဂျင် ပြတ်တောက်ခြင်း**- အန္တရာယ် အင်ဂျင်သည် စက္ကန့် 60 ထက်ပို၍ မရနိုင်ပါက၊
+  တံခါးပေါက်သည် `AssessmentDecision::Review` ကို ထုတ်ပေးပြီး ပြန်လည်သုံးသပ်ရန်သာမုဒ်သို့ ပြောင်းသင့်သည်။
+  တောင်းဆိုချက်များနှင့် အော်ပရေတာများကို သတိပေးချက်အားလုံးအတွက်။
+- **Telemetry Gap**- မက်ထရစ်များ သို့မဟုတ် ခြေရာများ နောက်ကျကျန်နေချိန် (၅ မိနစ်ကြာအောင် ပျောက်နေ)၊
+  အလိုအလျောက် မော်ဒယ်အရောင်းမြှင့်တင်မှုများကို ရပ်ပြီး ဖုန်းခေါ်ဆိုမှု အင်ဂျင်နီယာထံ အကြောင်းကြားပါ။
+- **Model Regression**- အသုံးချပြီးနောက် တုံ့ပြန်ချက်သည် လိမ်လည်မှု မြင့်မားသည်ကို ညွှန်ပြနေပါက
+  ဆုံးရှုံးမှုများ၊ ယခင်လက်မှတ်ထိုးထားသော မော်ဒယ်အတွဲသို့ ပြန်လှည့်ပြီး လမ်းပြမြေပုံကို အပ်ဒိတ်လုပ်ပါ။
+  မှန်ကန်သောလုပ်ဆောင်ချက်များဖြင့်
 
-## Data-Sharing Agreements
+## ဒေတာမျှဝေခြင်းသဘောတူညီချက်များ
 
-- Maintain jurisdiction-specific appendices covering retention, encryption, and
-  breach notification SLAs. Partners must sign the appendix before receiving
-  `FraudAssessment` exports.
-- Document data minimization practices for each integration (e.g., hashing
-  account identifiers, truncating card numbers).
-- Refresh agreements annually or whenever regulatory requirements change.
+- ထိန်းသိမ်းမှု၊ ကုဒ်ဝှက်ခြင်းနှင့် အကျုံးဝင်သည့် တရားစီရင်ပိုင်ခွင့်ဆိုင်ရာ သီးခြားနောက်ဆက်တွဲများကို ထိန်းသိမ်းပါ။
+  ချိုးဖောက်မှုသတိပေးချက် SLAs။ ပါတနာများသည် လက်ခံရရှိခြင်းမပြုမီ နောက်ဆက်တွဲကို လက်မှတ်ရေးထိုးရပါမည်။
+  `FraudAssessment` တင်ပို့မှု။
+- ပေါင်းစည်းမှုတစ်ခုစီအတွက် စာရွက်စာတမ်းဒေတာကို လျှော့ချခြင်းအလေ့အကျင့်များ (ဥပမာ၊ hashing
+  အကောင့်အမှတ်အသားများ၊ ကတ်နံပါတ်များကို ဖြတ်တောက်ခြင်း)။
+- သဘောတူညီချက်များကို နှစ်စဉ် သို့မဟုတ် စည်းမျဉ်းစည်းကမ်းသတ်မှတ်ချက်များ ပြောင်းလဲသည့်အခါတိုင်း ပြန်လည်စတင်ပါ။
 
-## API Schemas
+## API အစီအစဉ်များ
 
-The gateway now exposes concrete JSON envelopes that map one-to-one to the
-Norito types implemented in `crates/iroha_data_model::fraud`:
+ယခု တံခါးပေါက်သည် ကွန်ကရစ် JSON စာအိတ်များကို တစ်လုံးမှ တစ်ခုသို့ ပုံဖော်ပေးသည်။
+Norito အမျိုးအစားများ `crates/iroha_data_model::fraud`
 
-- **Risk intake** – `POST /v1/fraud/query` accepts the `RiskQuery` schema:
-  - `query_id` (`[u8; 32]`, hex encoded)
-  - `subject` (`AccountId`, canonical IH58 literal; optional `@<domain>` hint or alias)
-  - `operation` (tagged enum matching `RiskOperation`; the JSON `type`
-    discriminator mirrors the enum variant)
-  - `related_asset` (`AssetId`, optional)
-  - `features` (array of `{ key: String, value_hash: hex32 }` mapped from
+- **စွန့်စားမှု** – `POST /v1/fraud/query` သည် `RiskQuery` အစီအစဉ်ကို လက်ခံသည်-
+  - `query_id` (`[u8; 32]`၊ hex ကုဒ်လုပ်ထားသည်)
+  - `subject` (`AccountId`၊ canonical IH58 literal; ရွေးချယ်နိုင်သော `@<domain>` အရိပ်အမြွက် သို့မဟုတ် နာမည်တူ)
+  - `operation` (`RiskOperation`၊ JSON `type` နှင့် ကိုက်ညီသော enum ကို tag လုပ်ထားသည်
+    ခွဲခြားဆက်ဆံသူသည် enum မူကွဲကို ထင်ဟပ်စေသည်)
+  - `related_asset` (`AssetId`၊ ရွေးချယ်နိုင်သည်)
+  - `features` (`{ key: String, value_hash: hex32 }` မှ ပုံဖော်ထားသည့် ခင်းကျင်းမှု
     `FeatureInput`)
   - `issued_at_ms` (`u64`)
-  - `context` (`RiskContext`; carries `tenant_id`, optional `session_id`,
-    optional `reason`)
-- **Risk decision** – `POST /v1/fraud/assessment` consumes the
-  `FraudAssessment` payload (also mirrored in the governance exports):
-  - `query_id`, `engine_id`, `risk_score_bps`, `confidence_bps`,
+  - `context` (`RiskContext`; `tenant_id`၊ ရွေးချယ်နိုင်သော `session_id`၊
+    ရွေးချယ်နိုင်သော `reason`)
+- **အန္တရာယ် ဆုံးဖြတ်ချက်** – `POST /v1/fraud/assessment` ကို စားသုံးသည်။
+  `FraudAssessment` ပေးဆောင်မှု (အုပ်ချုပ်မှု ပို့ကုန်များတွင်လည်း ထင်ဟပ်နေသည်)
+  - `query_id`, `engine_id`, `risk_score_bps`, `confidence_bps`၊
     `decision` (`AssessmentDecision` enum), `rule_outcomes`
-    (array of `{ rule_id, score_delta_bps, rationale? }`)
+    (`{ rule_id, score_delta_bps, rationale? }`)
   - `generated_at_ms`
-  - `signature` (optional base64 wrapping the Norito-encoded assessment)
-- **Governance export** – `GET /v1/fraud/governance/export` returns the
-  `GovernanceExport` structure when the `governance` feature is enabled, bundling
-  active parameters, the latest enactment, model version, policy digest, and the
-  `DecisionAggregate` histogram.
+  - `signature` (Norito-ကုဒ်ဝှက်ထားသော အကဲဖြတ်ချက်ကို ခြုံငုံ၍ ချန်လှပ်ထားနိုင်သော base64)
+- **Governance export** – `GET /v1/fraud/governance/export` ကို ပြန်ပေးသည်။
+  `GovernanceExport` အင်္ဂါရပ်ကို `governance` ကိုဖွင့်ထားသောအခါတွင် အစုအဝေး၊
+  တက်ကြွသောကန့်သတ်ချက်များ၊ နောက်ဆုံးအတည်ပြုချက်၊ မော်ဒယ်ဗားရှင်း၊ မူဝါဒအနှစ်ချုပ်နှင့်
+  `DecisionAggregate` ဟစ်စတိုဂရမ်။
 
-Round-trip tests in `crates/iroha_data_model/src/fraud/types.rs` ensure these
-schemas remain binary-conformant with the Norito codec, and
-`integration_tests/tests/fraud_monitoring_requires_assessment_bands.rs` exercises
-the full intake/decision pipeline end-to-end.
+`crates/iroha_data_model/src/fraud/types.rs` ရှိ အသွားအပြန် စစ်ဆေးမှုများသည် ၎င်းတို့ကို သေချာစေပါသည်။
+schemas များသည် Norito codec နှင့် binary-conformant ဖြစ်နေဆဲဖြစ်ပြီး၊
+`integration_tests/tests/fraud_monitoring_requires_assessment_bands.rs` လေ့ကျင့်ခန်း
+အပြည့်အဝ စားသုံးခြင်း/ဆုံးဖြတ်ချက် ပိုက်လိုင်း အဆုံးမှ အဆုံး။
 
-## PSP SDK References
+## PSP SDK ရည်ညွှန်းချက်များ
 
-The following language stubs track the PSP-facing integration examples:
+အောက်ဖော်ပြပါ ဘာသာစကား ဖြတ်ပိုင်းများသည် PSP-facing ပေါင်းစပ်မှု ဥပမာများကို ခြေရာခံသည်-
 
-- **Rust** – `integration_tests/tests/fraud_monitoring_requires_assessment_bands.rs`
-  uses the workspace `iroha` client to craft `RiskQuery` metadata and validate
-  admission failures/successes.
-- **TypeScript** – `docs/source/governance_api.md` documents the REST surface
-  consumed by the lightweight Torii gateway used in the PSP demo dashboard; the
-  scripted client lives in `scripts/ci/schedule_fraud_scoring.sh` for smoke
-  drills.
-- **Swift & Kotlin** – the existing SDKs (`IrohaSwift` and
-  `crates/iroha_cli/docs/multisig.md` references) expose the Torii metadata
-  hooks needed to attach `fraud_assessment_*` fields. PSP-specific helpers are
-  tracked under the “Fraud & Telemetry Governance Loop” milestone in
-  `status.md` and reuse those SDKs’ transaction builders.
+- **သံချေး** – `integration_tests/tests/fraud_monitoring_requires_assessment_bands.rs`
+  `RiskQuery` မက်တာဒေတာကို ဖန်တီးပြီး အတည်ပြုရန် အလုပ်ခွင် `iroha` ကို အသုံးပြုသည်
+  ဝင်ခွင့် ကျရှုံးမှုများ/အောင်မြင်မှုများ။
+- **TypeScript** – `docs/source/governance_api.md` သည် REST မျက်နှာပြင်ကို မှတ်တမ်းတင်သည်။
+  PSP သရုပ်ပြ ဒက်ရှ်ဘုတ်တွင် အသုံးပြုသော ပေါ့ပါးသော Torii တံခါးပေါက်မှ စားသုံးသည်။ အဆိုပါ
+  scripted client သည် မီးခိုးအတွက် `scripts/ci/schedule_fraud_scoring.sh` တွင် နေထိုင်ပါသည်။
+  လေ့ကျင့်မှုများ။
+- **Swift & Kotlin** - ရှိပြီးသား SDKs (`IrohaSwift` နှင့်
+  `crates/iroha_cli/docs/multisig.md` ကိုးကားချက်များ) Torii မက်တာဒေတာကို ဖော်ထုတ်ပါ
+  `fraud_assessment_*` အကွက်များ ပူးတွဲရန် ချိတ်များ လိုအပ်သည်။ PSP အလိုက် အထောက်အကူများ ဖြစ်ကြပါသည်။
+  “လိမ်လည်မှုနှင့် တယ်လီမက်ထရီ အုပ်ချုပ်ရေးကွင်း” အောက်တွင် ခြေရာခံထားသည်။
+  `status.md` နှင့် ထို SDKs ၏ ငွေပေးငွေယူ တည်ဆောက်သူများကို ပြန်သုံးပါ။
 
-These references will be kept in sync with the microservice gateway so PSP
-implementers always have an up-to-date schema and sample code path for each
-supported language.
+ဤအကိုးအကားများကို microservice gateway နှင့် ထပ်တူပြု၍ PSP တွင် ထားရှိပါမည်။
+အကောင်အထည်ဖော်သူများသည် တစ်ခုစီအတွက် နောက်ဆုံးပေါ် schema နှင့် နမူနာကုဒ်လမ်းကြောင်း အမြဲရှိသည်။
+ပံ့ပိုးထားသောဘာသာစကား။

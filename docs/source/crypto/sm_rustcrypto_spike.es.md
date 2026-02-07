@@ -6,28 +6,29 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 1f133d9489c4bcfae2212e6c5dc098f39c3dea3e5cd42855ba76e8c9b73b4d03
 source_last_modified: "2026-01-03T18:07:57.103009+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-//! Notes for the RustCrypto SM integration spike.
+//! Notas para el pico de integración de RustCrypto SM.
 
-# RustCrypto SM Spike Notes
+# Notas de pico de RustCrypto SM
 
-## Objective
-Validate that introducing RustCrypto’s `sm2`, `sm3`, and `sm4` crates (plus `rfc6979`, `ccm`, `gcm`) as optional dependencies compiles cleanly in the `iroha_crypto` crate and yields acceptable build times before wiring the feature flag into the wider workspace.
+## Objetivo
+Valide que la introducción de las cajas `sm2`, `sm3` e `sm4` de RustCrypto (más `rfc6979`, `ccm`, `gcm`) como dependencias opcionales se compile limpiamente en el `iroha_crypto` y produce tiempos de construcción aceptables antes de conectar el indicador de función al espacio de trabajo más amplio.
 
-## Proposed Dependency Map
+## Mapa de dependencia propuesto
 
-| Crate | Suggested Version | Features | Notes |
+| Caja | Versión sugerida | Características | Notas |
 |-------|-------------------|----------|-------|
-| `sm2` | `0.13` (RustCrypto/signatures) | `std` | Depends on `elliptic-curve`; verify MSRV matches workspace. |
-| `sm3` | `0.5.0-rc.1` (RustCrypto/hashes) | default | API parallels `sha2`, integrates with existing `digest` traits. |
-| `sm4` | `0.5.1` (RustCrypto/block-ciphers) | default | Works with cipher traits; AEAD wrappers deferred to later spike. |
-| `rfc6979` | `0.4` | default | Reuse for deterministic nonce derivation. |
+| `sm2` | `0.13` (RustCrypto/firmas) | `std` | Depende de `elliptic-curve`; verifique que MSRV coincida con el espacio de trabajo. |
+| `sm3` | `0.5.0-rc.1` (RustCrypto/hashes) | predeterminado | La API es paralela a `sha2` y se integra con los rasgos `digest` existentes. |
+| `sm4` | `0.5.1` (RustCrypto/cifrados de bloque) | predeterminado | Funciona con rasgos de cifrado; Los envoltorios de AEAD se aplazaron para un aumento posterior. |
+| `rfc6979` | `0.4` | predeterminado | Reutilización para derivación determinista nonce. |
 
-*Versions reflect current releases as of 2024-12; confirm with `cargo search` before landing.*
+*Las versiones reflejan los lanzamientos actuales a partir de 2024-12; confirme con `cargo search` antes de aterrizar.*
 
-## Manifest Changes (draft)
+## Cambios manifiestos (borrador)
 
 ```toml
 [features]
@@ -40,34 +41,32 @@ sm4 = { version = "0.5.1", optional = true }
 rfc6979 = { version = "0.4", optional = true, default-features = false }
 ```
 
-Follow-up: pin `elliptic-curve` to match versions already in `iroha_crypto` (currently `0.13.8`).
+Seguimiento: fije `elliptic-curve` para que coincida con las versiones que ya están en `iroha_crypto` (actualmente `0.13.8`).
 
-## Spike Checklist
-- [x] Add optional dependencies and feature to `crates/iroha_crypto/Cargo.toml`.
-- [x] Create `signature::sm` module behind `cfg(feature = "sm")` with placeholder structs to confirm wiring.
-- [x] Run `cargo check -p iroha_crypto --features sm` to confirm compile; record build time and new dependency count (`cargo tree --features sm`).
-- [x] Confirm the std-only posture with `cargo check -p iroha_crypto --features sm --locked`; `no_std` builds are no longer supported.
-- [x] File results (timings, dependency tree delta) in `docs/source/crypto/sm_program.md`.
+## Lista de verificación de picos
+- [x] Agregar dependencias y funciones opcionales a `crates/iroha_crypto/Cargo.toml`.
+- [x] Cree el módulo `signature::sm` detrás de `cfg(feature = "sm")` con estructuras de marcador de posición para confirmar el cableado.
+- [x] Ejecute `cargo check -p iroha_crypto --features sm` para confirmar la compilación; registrar el tiempo de compilación y el recuento de nuevas dependencias (`cargo tree --features sm`).
+- [x] Confirme la postura estándar únicamente con `cargo check -p iroha_crypto --features sm --locked`; Las compilaciones `no_std` ya no son compatibles.
+- [x] Resultados del archivo (tiempos, delta del árbol de dependencia) en `docs/source/crypto/sm_program.md`.
 
-## Observations To Capture
-- Additional compile time vs. baseline.
-- Binary size impact (if measurable) with `cargo builtinsize`.
-- Any MSRV or feature conflicts (e.g., with `elliptic-curve` minor versions).
-- Warnings emitted (unsafe code, const-fn gating) that may require upstream patches.
+## Observaciones para capturar
+- Tiempo de compilación adicional frente a la línea base.
+- Impacto del tamaño binario (si se puede medir) con `cargo builtinsize`.
+- Cualquier MSRV o conflicto de funciones (por ejemplo, con versiones menores de `elliptic-curve`).
+- Advertencias emitidas (código inseguro, activación const-fn) que pueden requerir parches ascendentes.
 
-## Pending Items
-- Await Crypto WG approval before inflating workspace dependency graph.
-- Confirm whether to vendor crates for review or rely on crates.io (mirrors may be required).
-- Coordinate `Cargo.lock` refresh per `sm_lock_refresh_plan.md` before marking checklist complete.
-- Use `scripts/sm_lock_refresh.sh` once approval is granted to regenerate the lockfile and dependency tree.
+## Elementos pendientes
+- Espere la aprobación de Crypto WG antes de inflar el gráfico de dependencia del espacio de trabajo.
+- Confirme si desea vender cajas para su revisión o confiar en crates.io (es posible que se requieran espejos).
+- Coordine la actualización de `Cargo.lock` según `sm_lock_refresh_plan.md` antes de marcar la lista de verificación como completa.
+- Utilice `scripts/sm_lock_refresh.sh` una vez que se haya concedido la aprobación para regenerar el archivo de bloqueo y el árbol de dependencia.
 
-## 2025-01-19 Spike Log
-- Added optional dependencies (`sm2 0.13`, `sm3 0.5.0-rc.1`, `sm4 0.5.1`, `rfc6979 0.4`) and `sm` feature flag in `iroha_crypto`.
-- Stubbed `signature::sm` module to exercise hashing/block cipher APIs during compilation.
-- `cargo check -p iroha_crypto --features sm --locked` now resolves dependency graph but aborts with `Cargo.lock` update requirement; repository policy forbids lockfile edits, so the compile run remains pending until we coordinate an allowed lock refresh.
-
-## 2026-02-12 Spike Log
-- Resolved the previous lockfile blocker—the dependencies are already captured—so `cargo check -p iroha_crypto --features sm --locked` succeeds (cold build 7.9 s on dev Mac; incremental re-run 0.23 s).
-- `cargo check -p iroha_crypto --no-default-features --features "std sm" --locked` passes in 1.0 s, confirming the optional feature compiles in `std`-only configurations (no `no_std` path remains).
-- Dependency delta with the `sm` feature enabled introduces 11 crates: `base64ct`, `ghash`, `opaque-debug`, `pem-rfc7468`, `pkcs8`, `polyval`, `primeorder`, `sm2`, `sm3`, `sm4`, and `sm4-gcm`. (`rfc6979` was already part of the baseline graph.)
-- Build warnings persist for unused NEON policy helpers; leave as-is until the metering smoothing runtime re-enables those code paths.
+## 2025-01-19 Registro de picos
+- Se agregaron dependencias opcionales (`sm2 0.13`, `sm3 0.5.0-rc.1`, `sm4 0.5.1`, `rfc6979 0.4`) y el indicador de características `sm` en `iroha_crypto`.
+- Módulo `signature::sm` bloqueado para ejercitar las API de cifrado de bloques/hashing durante la compilación.
+- `cargo check -p iroha_crypto --features sm --locked` ahora resuelve el gráfico de dependencia pero cancela con el requisito de actualización `Cargo.lock`; La política del repositorio prohíbe las ediciones de archivos de bloqueo, por lo que la ejecución de la compilación permanece pendiente hasta que coordinemos una actualización de bloqueo permitida.## 2026-02-12 Registro de picos
+- Se resolvió el bloqueador de archivos de bloqueo anterior (las dependencias ya están capturadas), por lo que `cargo check -p iroha_crypto --features sm --locked` tiene éxito (compilación en frío 7.9 en Mac de desarrollo; repetición incremental 0.23).
+- `cargo check -p iroha_crypto --no-default-features --features "std sm" --locked` pasa en 1.0, lo que confirma que la función opcional se compila en configuraciones exclusivas de `std` (no queda ninguna ruta `no_std`).
+- El delta de dependencia con la función `sm` habilitada introduce 11 cajas: `base64ct`, `ghash`, `opaque-debug`, `pem-rfc7468`, `pkcs8`, `polyval`, `primeorder`, `sm2`, `sm3`, `sm4` y `sm4-gcm`. (`rfc6979` ya formaba parte del gráfico de referencia).
+- Las advertencias de compilación persisten para los asistentes de políticas NEON no utilizados; déjelo como está hasta que el tiempo de ejecución de suavizado de medición vuelva a habilitar esas rutas de código.

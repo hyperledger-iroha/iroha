@@ -4,30 +4,32 @@ direction: rtl
 source: docs/portal/docs/norito/examples/call-transfer-asset.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-slug: /norito/examples/call-transfer-asset
-title: Invocar transferencia del host desde Kotodama
-description: Demuestra cómo un entrypoint de Kotodama puede llamar a la instrucción de host `transfer_asset` con validación de metadatos en línea.
-source: crates/ivm/docs/examples/08_call_transfer_asset.ko
+سبيكة: /norito/examples/call-transfer-asset
+العنوان: استدعاء نقل المضيف من Kotodama
+الوصف: يمكنك استخدام نقطة دخول Kotodama للاتصال بتعليمات المضيف `transfer_asset` مع التحقق من صحة البيانات الوصفية عبر الإنترنت.
+المصدر: صناديق/ivm/docs/examples/08_call_transfer_asset.ko
 ---
 
-Demuestra cómo un entrypoint de Kotodama puede llamar a la instrucción de host `transfer_asset` con validación de metadatos en línea.
+باستخدام نقطة دخول Kotodama يمكنك الاتصال بتعليمات المضيف `transfer_asset` مع التحقق من صحة البيانات التعريفية عبر الإنترنت.
 
 ## Recorrido del libro mayor
 
-- Fondea la autoridad del contrato (por ejemplo `ih58...`) con el activo que transferirá y otórgale el rol `CanTransfer` o un permiso equivalente.
-- Llama al entrypoint `call_transfer_asset` para transferir 5 unidades desde la cuenta del contrato a `ih58...`, reflejando la forma en que la automatización on-chain puede envolver llamadas del host.
-- Verifica los balances mediante `FindAccountAssets` o `iroha_cli ledger assets list --account ih58...` e inspecciona los eventos para confirmar que la guardia de metadatos registró el contexto de la transferencia.
+- قم بإنشاء ترخيص العقد (على سبيل المثال `ih58...`) مع النشاط الذي ينقل ويحرر الدور `CanTransfer` أو تصريح مكافئ.
+- اتصل بنقطة الدخول `call_transfer_asset` لنقل 5 وحدات من حساب العقد إلى `ih58...`، مما يعكس الطريقة التي يمكن أن تشمل بها الأتمتة على السلسلة مكالمات المضيف.
+- التحقق من الأرصدة بين `FindAccountAssets` أو `iroha_cli ledger assets list --account ih58...` وفحص الأحداث للتأكد من أن حماية البيانات تسجل سياق النقل.
 
-## Guías de SDK relacionadas
+## أدلة SDK ذات الصلة
 
-- [Quickstart del SDK de Rust](/sdks/rust)
+- [بدء التشغيل السريع لـ SDK de Rust](/sdks/rust)
 - [Quickstart del SDK de Python](/sdks/python)
-- [Quickstart del SDK de JavaScript](/sdks/javascript)
+- [بدء التشغيل السريع لـ SDK لـ JavaScript](/sdks/javascript)
 
-[Descarga la fuente de Kotodama](/norito-snippets/call-transfer-asset.ko)
+[تنزيل مصدر Kotodama](/norito-snippets/call-transfer-asset.ko)
 
 ```text
 // Direct builtin call (no contract-style call syntax) inside a contract.

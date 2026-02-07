@@ -7,27 +7,28 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 6561551b6f00fb37b8e41fc5ade61206d7bd9323ab8e089f3dd5d5cfdfc0fd53
 source_last_modified: "2025-12-29T18:16:35.975661+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Light Client Data Availability Sampling
+# Light Client ဒေတာရရှိနိုင်မှုနမူနာ
 
-The Light Client Sampling API allows authenticated operators to retrieve
-Merkle-authenticated RBC chunk samples for an in-flight block. Light clients
-can issue random sampling requests, verify the returned proofs against the
-advertised chunk root, and build confidence that data is available without
-fetching the entire payload.
+Light Client Sampling API သည် စစ်မှန်ကြောင်း အတည်ပြုထားသော အော်ပရေတာများကို ပြန်လည်ရယူရန် ခွင့်ပြုသည်။
+လေယာဉ်ပျံသန်းမှုပိတ်ဆို့ခြင်းအတွက် Merkle-စစ်မှန်ကြောင်းအထောက်အထားပြထားသော RBC အတုံးနမူနာများ။ အလင်းဖောက်သည်။
+ကျပန်းနမူနာတောင်းဆိုမှုများကို ထုတ်ပေးနိုင်ပြီး၊ ဆန့်ကျင်ဘက် ပြန်ပေးထားသည့် အထောက်အထားများကို စစ်ဆေးနိုင်သည်။
+ကြော်ငြာထားသော အတုံးအခဲများကို အမြစ်မစွဲဘဲ ဒေတာရရှိနိုင်ကြောင်း ယုံကြည်မှုတည်ဆောက်ပါ။
+payload တစ်ခုလုံးကို ရယူခြင်း။
 
-## Endpoint
+## အဆုံးမှတ်
 
 ```
 POST /v1/sumeragi/rbc/sample
 ```
 
-The endpoint requires an `X-API-Token` header matching one of the configured
-Torii API tokens. Requests are additionally rate-limited and subject to a daily
-per-caller byte budget; exceeding either returns HTTP 429.
+အဆုံးမှတ်သည် ပြင်ဆင်သတ်မှတ်ထားသော တစ်ခုနှင့် ကိုက်ညီသော `X-API-Token` ခေါင်းစီး လိုအပ်သည်
+Torii API တိုကင်များ တောင်းဆိုမှုများသည် ထပ်လောင်းအတိုးနှုန်း ကန့်သတ်ထားပြီး နေ့စဉ်နှင့်အမျှ အကျုံးဝင်ပါသည်။
+ခေါ်ဆိုသူတိုင်း ဘိုက်ဘတ်ဂျက်၊ တစ်ခုခုကိုကျော်လွန်ပါက HTTP 429 ကို ပြန်ပေးသည်။
 
-### Request Body
+### တောင်းခံလွှာ
 
 ```json
 {
@@ -39,12 +40,12 @@ per-caller byte budget; exceeding either returns HTTP 429.
 }
 ```
 
-* `block_hash` – target block hash in hex.
-* `height`, `view` – identifying tuple for the RBC session.
-* `count` – desired number of samples (defaults to 1, capped by configuration).
-* `seed` – optional deterministic RNG seed for reproducible sampling.
+* `block_hash` - hex ရှိ ပစ်မှတ်ဘလောက် ဟက်ရှ်။
+* `height`၊ `view` - RBC စက်ရှင်အတွက် tuple ကို ခွဲခြားသတ်မှတ်ခြင်း။
+* `count` - လိုချင်သောနမူနာအရေအတွက် (ပုံသေ ၁ သို့၊ ဖွဲ့စည်းမှုဖြင့် ကန့်သတ်ထားသည်)။
+* `seed` - မျိုးပွားနိုင်သောနမူနာအတွက် စိတ်ကြိုက်သတ်မှတ်နိုင်သော RNG မျိုးစေ့။
 
-### Response Body
+### တုံ့ပြန်မှုကိုယ်ထည်
 
 ```json
 {
@@ -69,29 +70,29 @@ per-caller byte budget; exceeding either returns HTTP 429.
 }
 ```
 
-Each sample entry contains the chunk index, payload bytes (hex), SHA-256 leaf
-digest, and a Merkle inclusion proof (with optional siblings encoded as hex
-strings). Clients can verify proofs using the `chunk_root` field.
+နမူနာထည့်သွင်းမှုတစ်ခုစီတွင် အတုံးအခဲအညွှန်း၊ payload bytes (hex)၊ SHA-256 အရွက်ပါရှိသည်။
+အချေအတင်၊ နှင့် Merkle ပါဝင်မှု အထောက်အထား (ရွေးချယ်နိုင်သော မွေးချင်းများ hex အဖြစ် ကုဒ်လုပ်ထားသော
+ကြိုးများ)။ ဖောက်သည်များသည် `chunk_root` အကွက်ကို အသုံးပြု၍ အထောက်အထားများကို စစ်ဆေးနိုင်သည်။
 
-## Limits and Budgets
+## အကန့်အသတ်နှင့် ဘတ်ဂျက်
 
-* **Max samples per request** – configurable via `torii.rbc_sampling.max_samples_per_request`.
-* **Max bytes per request** – enforced using `torii.rbc_sampling.max_bytes_per_request`.
-* **Daily byte budget** – tracked per caller through `torii.rbc_sampling.daily_byte_budget`.
-* **Rate limiting** – enforced using a dedicated token bucket (`torii.rbc_sampling.rate_per_minute`).
+* ** တောင်းဆိုမှုတစ်ခုအတွက် အများဆုံးနမူနာများ** – `torii.rbc_sampling.max_samples_per_request` မှတစ်ဆင့် ပြင်ဆင်သတ်မှတ်နိုင်သည်။
+* ** တောင်းဆိုမှုတစ်ခုအတွက် အများဆုံး bytes** – `torii.rbc_sampling.max_bytes_per_request` ကို အသုံးပြု၍ ပြဋ္ဌာန်းထားသည်။
+* **နေ့စဉ် ဘိုက်ဘတ်ဂျက်** – `torii.rbc_sampling.daily_byte_budget` မှတစ်ဆင့် ခေါ်ဆိုသူတစ်ဦးစီကို ခြေရာခံထားသည်။
+* **နှုန်းထားကန့်သတ်ချက်** – သီးခြားတိုကင်ပုံး (`torii.rbc_sampling.rate_per_minute`) ကို အသုံးပြု၍ ပြဋ္ဌာန်းထားသည်။
 
-Requests exceeding any limit return HTTP 429 (CapacityLimit). When the chunk
-store is unavailable or the session is missing payload bytes the endpoint
-returns HTTP 404.
+မည်သည့်ကန့်သတ်ချက်ထက်ကျော်လွန်တောင်းဆိုမှုများ HTTP 429 (CapacityLimit) ကို ပြန်ပေးသည်။ ရိုက်မယ်
+စတိုးကို မရရှိနိုင်ပါ သို့မဟုတ် စက်ရှင်သည် အဆုံးမှတ်၏ payload bytes ပျောက်ဆုံးနေပါသည်။
+HTTP 404 ကို ပြန်ပေးသည်။
 
-## SDK Integration
+## SDK ပေါင်းစည်းခြင်း။
 
 ### JavaScript
 
-`@iroha/iroha-js` exposes the `ToriiClient.sampleRbcChunks` helper so data
-availability verifiers can call the endpoint without rolling their own fetch
-logic. The helper validates the hex payloads, normalises integers, and returns
-typed objects that mirror the response schema above:
+`@iroha/iroha-js` သည် `ToriiClient.sampleRbcChunks` အကူအညီပေးသူ ဒေတာကို ထုတ်ပြသည်
+ရရှိနိုင်မှုစစ်ဆေးသူများသည် ၎င်းတို့၏ကိုယ်ပိုင်ထုတ်ယူမှုကို မပြုလုပ်ဘဲ အဆုံးမှတ်ကို ခေါ်ဆိုနိုင်သည်။
+ယုတ္တိဗေဒ။ အကူအညီပေးသူက hex payloads များကို validate လုပ်ပေးပြီး၊ integers များကို normalizes လုပ်ပြီး returns များကို ပြန်ပေးသည်။
+အထက်ဖော်ပြပါ တုံ့ပြန်မှုအစီအစဉ်ကို ထင်ဟပ်နေသည့် အရာဝတ္ထုများကို ရိုက်ထည့်သည်-
 
 ```js
 import { ToriiClient } from "@iroha/iroha-js";
@@ -117,8 +118,8 @@ for (const { digestHex, proof } of sample.samples) {
 }
 ```
 
-The helper throws when the server returns malformed data, helping JS-04 parity
-tests detect regressions alongside the Rust and Python SDKs. Rust
-(`iroha_client::ToriiClient::sample_rbc_chunks`) and Python
-(`IrohaToriiClient.sample_rbc_chunks`) ship equivalent helpers; use whichever
-matches your sampling harness.
+JS-04 တူညီမှုကို ကူညီပေးသည့် ဆာဗာသည် ပုံပျက်နေသော ဒေတာကို ပြန်ပေးသည့်အခါ အထောက်အကူပေးသူက ပစ်သည်။
+စမ်းသပ်မှုများသည် Rust နှင့် Python SDK များနှင့်အတူ ဆုတ်ယုတ်မှုကို ထောက်လှမ်းသည်။ သံချေး
+(`iroha_client::ToriiClient::sample_rbc_chunks`) နှင့် Python
+(`IrohaToriiClient.sample_rbc_chunks`) သင်္ဘောနှင့်ညီမျှသော အကူအညီပေးသူများ၊ ဘယ်ဟာကိုသုံးပါ။
+သင်၏နမူနာကြိုးကြိုးနှင့် ကိုက်ညီသည်။

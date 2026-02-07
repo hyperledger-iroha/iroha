@@ -10,85 +10,86 @@ translation_last_reviewed: 2026-02-07
 id: nexus-operations
 title: Nexus operations runbook
 description: Field-ready summary of the Nexus operator workflow, mirroring `docs/source/nexus_operations.md`.
+translator: machine-google-reviewed
 ---
 
-Use this page as the quick-reference sibling of
-`docs/source/nexus_operations.md`. It distils the operational checklist, change
-management hooks, and telemetry coverage requirements that Nexus operators must
-follow.
+Bu səhifəni sürətli istinad qardaşı kimi istifadə edin
+`docs/source/nexus_operations.md`. O, əməliyyat yoxlama siyahısını distillə edir, dəyişdirir
+idarəetmə qarmaqları və Nexus operatorlarının tələb etdiyi telemetriya əhatə dairəsi tələbləri
+izləyin.
 
-## Lifecycle checklist
+## Həyat dövrü yoxlama siyahısı
 
-| Stage | Actions | Evidence |
+| Mərhələ | Fəaliyyətlər | Sübut |
 |-------|--------|----------|
-| Pre-flight | Verify release hashes/signatures, confirm `profile = "iroha3"`, and prepare config templates. | `scripts/select_release_profile.py` output, checksum log, signed manifest bundle. |
-| Catalog alignment | Update `[nexus]` catalog, routing policy, and DA thresholds per council-issued manifest, then capture `--trace-config`. | `irohad --sora --config … --trace-config` output stored with onboarding ticket. |
-| Smoke & cutover | Run `irohad --sora --config … --trace-config`, execute CLI smoke (`FindNetworkStatus`), validate telemetry exports, and request admission. | Smoke-test log + Alertmanager confirmation. |
-| Steady state | Monitor dashboards/alerts, rotate keys per governance cadence, and sync configs/runbooks whenever manifests change. | Quarterly review minutes, dashboard screenshots, rotation ticket IDs. |
+| Uçuşdan əvvəl | Buraxılış hashlarını/imzalarını yoxlayın, `profile = "iroha3"`-i təsdiqləyin və konfiqurasiya şablonlarını hazırlayın. | `scripts/select_release_profile.py` çıxışı, yoxlama jurnalı, imzalanmış manifest paketi. |
+| Kataloqun düzülməsi | `[nexus]` kataloqunu, marşrutlaşdırma siyasətini və şura tərəfindən verilən manifest üzrə DA hədlərini yeniləyin, sonra `--trace-config`-i əldə edin. | `irohad --sora --config … --trace-config` çıxışı uçuş bileti ilə birlikdə saxlanılır. |
+| Duman və kəsmə | `irohad --sora --config … --trace-config`-i işə salın, CLI tüstüsünü (`FindNetworkStatus`) yerinə yetirin, telemetriya ixracını doğrulayın və qəbul tələb edin. | Smoke-test log + Alertmanager təsdiqi. |
+| Sabit vəziyyət | Tablolara/xəbərdarlıqlara nəzarət edin, idarəetmə ritminə görə düymələri fırladın və hər dəfə dəyişiklik olduqda konfiqurasiyaları/runbookları sinxronlaşdırın. | Rüblük nəzərdən keçirmə dəqiqələri, tablosuna ekran görüntüləri, fırlanma bileti identifikatorları. |
 
-Detailed onboarding (key replacement, routing templates, release profile steps)
-remain in `docs/source/sora_nexus_operator_onboarding.md`.
+Ətraflı işə qəbul (açarların dəyişdirilməsi, marşrutlaşdırma şablonları, buraxılış profili addımları)
+`docs/source/sora_nexus_operator_onboarding.md`-də qalır.
 
-## Change management
+## Dəyişikliklərin idarə edilməsi
 
-1. **Release updates** – track announcements in `status.md`/`roadmap.md`; attach
-   the onboarding checklist to every release PR.
-2. **Lane manifest changes** – verify signed bundles from the Space Directory and
-   archive them under `docs/source/project_tracker/nexus_config_deltas/`.
-3. **Configuration deltas** – every `config/config.toml` change requires a ticket
-   referencing the lane/data-space. Store a redacted copy of the effective config
-   whenever nodes join or upgrade.
-4. **Rollback drills** – quarterly rehearse stop/restore/smoke procedures; log
-   outcomes under `docs/source/project_tracker/nexus_config_deltas/<date>-rollback.md`.
-5. **Compliance approvals** – private/CBDC lanes must secure compliance sign-off
-   before modifying DA policy or telemetry redaction knobs (see
+1. **Reliz yeniləmələri** – `status.md`/`roadmap.md`-də elanları izləyin; əlavə edin
+   hər buraxılış PR-a daxil olma yoxlama siyahısı.
+2. **Zolaq manifest dəyişiklikləri** – Kosmik Kataloqdan imzalanmış paketləri yoxlayın və
+   onları `docs/source/project_tracker/nexus_config_deltas/` altında arxivləşdirin.
+3. **Konfiqurasiya deltaları** – hər `config/config.toml` dəyişiklik bilet tələb edir
+   zolağa/məlumat sahəsinə istinad edir. Effektiv konfiqurasiyanın redaktə edilmiş nüsxəsini saxlayın
+   qovşaqlar qoşulduqda və ya təkmilləşdikdə.
+4. **Geri döndərmə matkapları** – rüblük məşq dayandırma/bərpa/tüstüləmə prosedurları; log
+   `docs/source/project_tracker/nexus_config_deltas/<date>-rollback.md` altında nəticələr.
+5. **Uyğunluq təsdiqləri** – özəl/CBDC zolaqları uyğunluq qeydiyyatını təmin etməlidir
+   DA siyasətini və ya telemetriya redaktə düymələrini dəyişdirməzdən əvvəl (bax
    `docs/source/cbdc_lane_playbook.md`).
 
-## Telemetry & SLOs
+## Telemetriya və SLO
 
-- Dashboards: `dashboards/grafana/nexus_lanes.json`, `nexus_settlement.json`, plus
-  SDK-specific views (e.g., `android_operator_console.json`).
-- Alerts: `dashboards/alerts/nexus_audit_rules.yml` and Torii/Norito transport
-  rules (`dashboards/alerts/torii_norito_rpc_rules.yml`).
-- Metrics to watch:
-  - `nexus_lane_height{lane_id}` – alert on zero progress for three slots.
-  - `nexus_da_backlog_chunks{lane_id}` – alert above lane-specific thresholds
-    (default 64 public / 8 private).
-  - `nexus_settlement_latency_seconds{lane_id}` – alert when P99 exceeds 900 ms
-    (public) or 1200 ms (private).
-  - `torii_request_failures_total{scheme="norito_rpc"}` – alert if 5-minute error
-    ratio >2 %.
-  - `telemetry_redaction_override_total` – Sev 2 immediately; ensure overrides
-    have compliance tickets.
-- Run the telemetry remediation checklist in
-  [Nexus telemetry remediation plan](./nexus-telemetry-remediation) at least
-  quarterly and attach the filled form to operations review notes.
+- İdarə panelləri: `dashboards/grafana/nexus_lanes.json`, `nexus_settlement.json`, plus
+  SDK-ya xüsusi baxışlar (məsələn, `android_operator_console.json`).
+- Xəbərdarlıqlar: `dashboards/alerts/nexus_audit_rules.yml` və Torii/Norito nəqliyyat
+  qaydalar (`dashboards/alerts/torii_norito_rpc_rules.yml`).
+- Baxılacaq ölçülər:
+  - `nexus_lane_height{lane_id}` – üç yuva üçün sıfır irəliləyiş barədə xəbərdarlıq.
+  - `nexus_da_backlog_chunks{lane_id}` – zolağa aid hədlərin üstündə xəbərdarlıq
+    (standart 64 ictimai / 8 özəl).
+  - `nexus_settlement_latency_seconds{lane_id}` – P99 900ms-dən çox olduqda xəbərdarlıq
+    (ictimai) və ya 1200ms (özəl).
+  - `torii_request_failures_total{scheme="norito_rpc"}` – 5 dəqiqəlik xəta olduqda xəbərdarlıq
+    nisbət > 2%.
+  - `telemetry_redaction_override_total` – Sev2 dərhal; ləğv edilməsini təmin edin
+    uyğunluq biletləri var.
+- Telemetriyanın bərpası yoxlama siyahısını işə salın
+  [Nexus telemetriya remediasiya planı](./nexus-telemetry-remediation) ən azı
+  rüblük və doldurulmuş formanı əməliyyatların nəzərdən keçirilməsi qeydlərinə əlavə edin.
 
-## Incident matrix
+## Hadisə matrisi
 
-| Severity | Definition | Response |
+| Ciddilik | Tərif | Cavab |
 |----------|------------|----------|
-| Sev 1 | Data-space isolation breach, settlement halt >15 min, or governance vote corruption. | Page Nexus Primary + Release Engineering + Compliance, freeze admission, collect artefacts, publish comms ≤60 min, RCA ≤5 business days. |
-| Sev 2 | Lane backlog SLA breach, telemetry blind spot >30 min, failed manifest rollout. | Page Nexus Primary + SRE, mitigate ≤4 h, file follow-ups within 2 business days. |
-| Sev 3 | Non-blocking drift (docs, alerts). | Log in tracker, schedule fix inside the sprint. |
+| Sev1 | Məlumat məkanının izolyasiyasının pozulması, hesablaşmanın dayandırılması >15 dəqiqə və ya idarəetmədə səsvermə korrupsiyası. | Səhifə Nexus İbtidai + Buraxılış Mühəndisliyi + Uyğunluq, qəbulu dondurun, artefaktları toplayın, xəbərləri dərc edin ≤60dəq, RCA ≤5 iş günü. |
+| Sev2 | Zolaqlı gecikmə SLA pozuntusu, telemetriya kor nöqtəsi >30 dəqiqə, uğursuz manifest buraxılması. | Səhifə Nexus İbtidai + SRE, ≤4 saat azaldın, 2 iş günü ərzində təqibləri fayl edin. |
+| Sev3 | Bloklanmayan sürüşmə (sənədlər, xəbərdarlıqlar). | İzləyiciyə daxil olun, sprint daxilində düzəltməyi planlaşdırın. |
 
-Incident tickets must record affected lane/data-space IDs, manifest hashes,
-timeline, supporting metrics/logs, and follow-up tasks/owners.
+Hadisə biletləri təsirə məruz qalan zolaq/məlumat məkanı identifikatorlarını, manifest xeşlərini qeyd etməlidir,
+vaxt qrafiki, dəstəkləyici ölçülər/loglar və təqib tapşırıqları/sahibləri.
 
-## Evidence archive
+## Sübut arxivi
 
-- Store bundles/manifests/telemetry exports under `artifacts/nexus/<lane>/<date>/`.
-- Keep redacted configs + `--trace-config` output for each release.
-- Attach council minutes + signed decisions when config or manifest changes land.
-- Preserve weekly Prometheus snapshots relevant to Nexus metrics for 12 months.
-- Record runbook edits in `docs/source/project_tracker/nexus_config_deltas/README.md`
-  so auditors know when responsibilities changed.
+- `artifacts/nexus/<lane>/<date>/` altında paketləri/manifestləri/temetriya ixracını saxlayın.
+- Hər buraxılış üçün redaktə edilmiş konfiqurasiyaları + `--trace-config` çıxışını saxlayın.
+- Konfiqurasiya və ya manifest dəyişdirildikdə şura protokollarını + imzalanmış qərarları əlavə edin.
+- 12 ay ərzində Nexus ölçülərinə uyğun həftəlik Prometheus anlık görüntülərini qoruyun.
+- `docs/source/project_tracker/nexus_config_deltas/README.md`-də runbook redaktələrini qeyd edin
+  beləliklə, auditorlar məsuliyyətlərin nə vaxt dəyişdiyini bilirlər.
 
-## Related material
+## Əlaqədar material
 
-- Overview: [Nexus overview](./nexus-overview)
-- Specification: [Nexus spec](./nexus-spec)
-- Lane geometry: [Nexus lane model](./nexus-lane-model)
-- Transition & routing shims: [Nexus transition notes](./nexus-transition-notes)
-- Operator onboarding: [Sora Nexus operator onboarding](./nexus-operator-onboarding)
-- Telemetry remediation: [Nexus telemetry remediation plan](./nexus-telemetry-remediation)
+- İcmal: [Nexus icmalı](./nexus-overview)
+- Spesifikasiya: [Nexus spesifikasiyası](./nexus-spec)
+- Zolaq həndəsəsi: [Nexus zolaq modeli](./nexus-lane-model)
+- Keçid və marşrutlaşdırıcılar: [Nexus keçid qeydləri](./nexus-transition-notes)
+- Operatorun işə salınması: [Sora Nexus operatorun işə salınması](./nexus-operator-onboarding)
+- Telemetriyanın düzəldilməsi: [Nexus telemetriyanın bərpası planı](./nexus-telemetry-remediation)

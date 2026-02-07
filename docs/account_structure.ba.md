@@ -7,197 +7,162 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 01561366c9698c10d29ff3f49ad4c14b22b1796b5c7701cf98d200a140af1caf
 source_last_modified: "2026-01-28T17:11:30.635172+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Account Structure RFC
+# Иҫәп структураһы RFC
 
-**Status:** Accepted (ADDR-1)  
-**Audience:** Data model, Torii, Nexus, Wallet, Governance teams  
-**Related issues:** TBD
+**Статус:** Ҡабул ителгән (АДДР-1)  
+**Тамашасы:** Мәғлүмәттәр моделе, I18NT00000000030X, I18NT000000009X, Уоллет, идара итеү командалары  
+**Бәйләнешле мәсьәләләр:** ТБД
 
-## Summary
+## Һығымта
 
-This document describes the shipping account-addressing stack implemented in
-`AccountAddress` (`crates/iroha_data_model/src/account/address.rs`) and the
-companion tooling. It provides:
+Был документта 2019 йылда тормошҡа ашырылған ташыу иҫәп яҙмаһын хәл итеү стекаһы һүрәтләнә.
+I18NI000000072X (`crates/iroha_data_model/src/account/address.rs`) һәм 1990 й.
+иптәш инструменттар. Ул тәьмин итә:
 
-- A checksummed, human-facing **Iroha Base58 address (IH58)** produced by
-  `AccountAddress::to_ih58` that binds a chain discriminant to the account
-  controller and offers deterministic interop-friendly textual forms.
-- Domain selectors for implicit default domains and local digests, with a
-  reserved global-registry selector tag for future Nexus-backed routing (the
-  registry lookup is **not yet shipped**).
+- Тикшерелгән, кеше менән осрашҡан **I18NT0000000005X адресы буйынса (IH58)**
+  I18NI000000074X, тип бәйләй сылбыр дискриминант иҫәбенә
+  контроллер һәм детерминистик интероптрение-дуҫ текст формаларын тәҡдим итә.
+- Домен селекторҙары өсөн йәшерен домендар һәм локаль distests, менән
+  I18NT000000010X-арҡалы маршрутлаштырыу өсөн глобаль-реестр селекторы тегы һаҡлана (.
+  реестр эҙләү **әлегә ебәрелмәгән**).
 
-## Motivation
+## Мотивация
 
-Wallets and off-chain tooling rely on raw `alias@domain` routing aliases today. This
-has two major drawbacks:
+Балетс һәм сылбырҙан тыш инструменттар сеймалға таяна I18NI000000075X маршрутлаштырыу псевдонимы бөгөн. Ошо
+ике ҙур етешһеҙлектәре бар:
 
-1. **No network binding.** The string has no checksum or chain prefix, so users
-   can paste an address from the wrong network without immediate feedback. The
-   transaction will eventually be rejected (chain mismatch) or, worse, succeed
-   against an unintended account if the destination exists locally.
-2. **Domain collision.** Domains are namespace-only and can be reused on each
-   chain. Federation of services (custodians, bridges, cross-chain workflows)
-   becomes brittle because `finance` on chain A is unrelated to `finance` on
-   chain B.
+1. **Селтәр бәйләүе юҡ.** Стингтың чек суммаһы йәки сылбырлы префикс юҡ, шуға күрә ҡулланыусылар
+   тиҙ арала кире бәйләнешһеҙ дөрөҫ булмаған селтәрҙән адресты йәбештерә ала. 1990 й.
+   операция, ахыр сиктә, кире ҡағыласаҡ (сылбыр тап килмәү) йәки, насарыраҡ, уңышҡа өлгәшәсәк
+   ҡаршы ниәтләнмәгән иҫәпкә, әгәр ҙә тәғәйенләнеш урындағы бар.
+2. **Домен бәрелеш.** Домендар исемдәр киңлеге-тик һәм һәр береһе өҫтөндә ҡабаттан ҡулланырға мөмкин .
+   сип. Хеҙмәттәр федерацияһы (һаҡсылар, күперҙәр, сылбырлы эш ағымы)
+   2012 йылда I18NI0000076X X сылбырында I18NI0000000077X менән бәйле түгел.
+   сылбыр Б.
 
-We need a human-friendly address format that guards against copy/paste errors
-and a deterministic mapping from domain name to the authoritative chain.
+Беҙгә кеше-дуҫ адрес форматы кәрәк, тип һаҡсыларҙан һаҡлай күсермәһе/йәбештереү хаталары .
+һәм домен исеменән авторитетлы сылбырға тиклем детерминистик карта төҙөү.
 
-## Goals
+## Маҡсаттар
 
-- Describe the IH58 Base58 envelope implemented in the data model and the
-  canonical parsing/alias rules that `AccountId` and `AccountAddress` follow.
-- Encode the configured chain discriminant directly into each address and
-  define its governance/registry process.
-- Describe how to introduce a global domain registry without breaking current
-  deployments and specify normalization/anti-spoofing rules.
+- IH58 Bases58 конвертын һүрәтләгеҙ, мәғлүмәттәр моделендә тормошҡа ашырыла һәм
+  канонлы анализлау/плисталар ҡағиҙәләре, тип I18NI000000078X һәм `AccountAddress` эҙләп.
+- Конфигурацияланған сылбыр дискриминант туранан-тура һәр адресҡа кодексы һәм
+  уның идара итеү/реестр процесын билдәләү.
+- Ток өҙөлмәйенсә, глобаль домен реестрын индереү тураһында һүрәтләгеҙ
+  таратыу һәм нормалләштереү/спуфинг ҡағиҙәләрен билдәләү.
 
-## Non-goals
+## Гол булмағандар
 
-- Implementing cross-chain asset transfers. The routing layer only returns the
-  target chain.
-- Finalising governance for global domain issuance. This RFC focuses on the data
-  model and transport primitives.
+- Сылбырлы активтарҙы күсерергә тормошҡа ашырыу. Маршрутлаштырыу ҡатламы ғына ҡайтара
+  маҡсатлы сылбыр.
+- Глобаль домен сығарыу өсөн идара итеүҙе тамамлау. Был RFC мәғлүмәттәргә йүнәлтелгән
+  модель һәм транспорт примитивтары.
 
-## Background
+## Ерлек
 
-### Current routing alias
+### Ағымдағы маршрутлаштырыу псевдонимы
 
-```
-AccountId {
-    domain: DomainId,   // wrapper over Name (ASCII-ish string)
-    controller: AccountController // single PublicKey or multisig policy
-}
+I18NF000000057X
 
-Display: canonical IH58 literal (no `@domain` suffix)
-Parse accepts:
-- IH58 (preferred), `sora` compressed, or canonical hex (`0x...`) inputs, with
-  optional `@<domain>` suffixes for explicit routing hints.
-- `<label>@<domain>` aliases resolved through the account-alias resolver
-  (Torii installs one; plain data-model parsing requires a resolver to be set).
-- `<public_key>@<domain>` where `public_key` is the canonical multihash string.
-- `uaid:<hex>` / `opaque:<hex>` literals resolved via UAID/opaque resolvers.
+`ChainId` `AccountId`-тан ситтә йәшәй. Төйөндәр тикшерергә транзакция’I18NI000000082X .
+ҡабул итеү ваҡытында конфигурацияға ҡаршы (I18NI000000083X)
+һәм сит ил операцияларын кире ҡағыу, әммә иҫәп яҙмаһы үҙе юҡ
+селтәре кәңәше.
 
-Multihash hex is canonical: varint bytes are lowercase hex, payload bytes are uppercase hex,
-and `0x` prefixes are not accepted.
+### Домен идентификаторҙары
 
-This text form is now treated as an **account alias**: a routing convenience
-that points to the canonical [`AccountAddress`](#2-canonical-address-codecs).
-It remains useful for human readability and domain-scoped governance, but it is
-no longer considered the authoritative account identifier on-chain.
-```
+`DomainId` `Name` (нормалаштырылған телмәр) менән урап үтә һәм урындағы сылбырға өлкәлә.
+Һәр сылбыр `wonderland`, I18NI000000087X, һ.б.
 
-`ChainId` lives outside of `AccountId`. Nodes check the transaction’s `ChainId`
-against configuration during admission (`AcceptTransactionFail::ChainIdMismatch`)
-and reject foreign transactions, but the account string itself carries no
-network hint.
+### I18NT0000000011X контексы
 
-### Domain identifiers
+I18NT000000012X өсөн яуаплы компонентный координация (лайндар/мәғлүмәттәр-киңлектәр). Был
+әлеге ваҡытта сылбырлы домен маршрутлаштырыу төшөнсәһе юҡ.
 
-`DomainId` wraps a `Name` (normalized string) and is scoped to the local chain.
-Every chain can register `wonderland`, `finance`, etc. independently.
+## тәҡдим ителгән дизайн
 
-### Nexus context
+### 1. Детерминистик сылбырлы дискриминант
 
-Nexus is responsible for cross-component coordination (lanes/data-spaces). It
-currently has no concept of cross-chain domain routing.
+I18NI000000088X хәҙер фашлай:
 
-## Proposed Design
+I18NF000000058X
 
-### 1. Deterministic chain discriminant
+- **Сикләүҙәр:**
+  -Әүҙем селтәр буйынса үҙенсәлекле; ҡул ҡуйылған йәмәғәт реестры аша идара итеү
+    асыҡтан-асыҡ запас диапазондар (мәҫәлән, I18NI000000089X тест/дев, I18NI0000000000X
+    йәмәғәт бүленә, `0x8000–0xFFEF` идара итеү-раҫланған, `0xFFF0–0xFFFF`
+    запасы).
+  - Йүгереп торған сылбыр өсөн үҙгәрмәҫ. Уны үҙгәртеү өсөн ҡаты вилка һәм а кәрәк.
+    реестр яңыртыу.
+- **Идара итеү & реестр (планлаштырылған):** Күп ҡултамғалы идара итеү комплекты ихтыяр
+  ҡул ҡуйылған JSON реестр картаһы дискриминанттар кеше псевдонимы һәм
+  CAIP-2 идентификаторҙары. Был реестр әлегә ебәрелгән йөрөү ваҡыты өлөшө түгел.
+- **Ҡулланыу:** Дәүләт ҡабул итеү аша поход, I18NT0000000032X, SDKs, һәм янсыҡ APIs шулай
+  һәр компонент уны индерә йәки раҫлай ала. CAIP-2 экспозицияһы киләсәк булып ҡала
+  интероптаж бурысы.
 
-`iroha_config::parameters::actual::Common` now exposes:
+### 2. Каноник адрес кодектары
 
-```rust
-pub struct Common {
-    pub chain: ChainId,
-    pub chain_discriminant: u16, // globally coordinated
-    // ... existing fields
-}
-```
+Rust мәғлүмәттәре моделе бер канонлы файҙалы йөк күрһәтеүҙе фашлай .
+(I18NI000000093X) кеше менән бер нисә формат тип сығарырға мөмкин. IH58 100 й.
+бүлешергә һәм канонлы сығыш өсөн өҫтөнлөклө иҫәп форматы; ҡыҫылған
+I18NI000000094X формаһы икенсе иң яҡшы, Сора-тик вариант өсөн UX ҡайҙа кана алфавит .
+ҡиммәтен өҫтәй. Канонлы гекс отладка ярҙамы булып ҡала.
 
-- **Constraints:**
-  - Unique per active network; managed through a signed public registry with
-    explicit reserved ranges (e.g., `0x0000–0x0FFF` test/dev, `0x1000–0x7FFF`
-    community allocations, `0x8000–0xFFEF` governance-approved, `0xFFF0–0xFFFF`
-    reserved).
-  - Immutable for a running chain. Changing it requires a hard fork and a
-    registry update.
-- **Governance & registry (planned):** A multi-signature governance set will
-  maintain a signed JSON registry mapping discriminants to human aliases and
-  CAIP-2 identifiers. This registry is not yet part of the shipped runtime.
-- **Usage:** Threaded through state admission, Torii, SDKs, and wallet APIs so
-  every component can embed or validate it. CAIP-2 exposure remains a future
-  interop task.
+- **IH58 (I18NT000000006X Bases58)** – сылбырҙы һеңдергән база 58 конверт
+  дискриминант. Декодерҙар раҫлау префикс алдынан пропагандалау файҙалы йөкләмәһе .
+  канон формаһы.
+- **Сора-ҡыҫылған ҡараш** – Сора-тик алфавит **105 символдары ** төҙөлгән.
+  ярты киңлектәге イロハ шиғырҙы (шул иҫәптән ヰ һәм ヱ) 58-се символға ҡушыу
+  IH58 комплекты. Струналар I18NI000000095X hodneel менән башлана, Bech32м-алынған.
+  тикшерелгән сумма, һәм селтәр префиксын төшөрөп ҡалдырырға (Сора I18NT000000013X дозор менән аңлатыла).
 
-### 2. Canonical address codecs
+  I18NF000000059X
+- **Каноник гекс** – отладка-дуҫ I18NI0000000966X канонлы байт кодлау
+  конверт.
 
-The Rust data model exposes a single canonical payload representation
-(`AccountAddress`) that can be emitted as several human-facing formats. IH58 is
-the preferred account format for sharing and canonical output; the compressed
-`sora` form is a second-best, Sora-only option for UX where the kana alphabet
-adds value. Canonical hex remains a debugging aid.
+I18NI000000097X авто-асыҡлау IH58 (өҫтөнлөк), ҡыҫылған (I18NI000000098X, икенсе-иң яҡшы), йәки канон hex
+(Nexus ғына; яланғас гекс кире ҡағыла) индереүҙәр һәм ҡайтарыу һәм декодлы файҙалы йөк һәм асыҡланған
+`AccountAddressFormat`. 20022 өҫтәмәләр өсөн I18NI000000101X тип атала.
+адрестары һәм канонлы гекс формаһын һаҡлай, шуға күрә метамағлүмәттәр детерминистик ҡала
+тәүге күрһәтеүгә ҡарамаҫтан.
 
-- **IH58 (Iroha Base58)** – a Base58 envelope that embeds the chain
-  discriminant. Decoders validate the prefix before promoting the payload to
-  the canonical form.
-- **Sora-compressed view** – a Sora-only alphabet of **105 symbols** built by
-  appending the half-width イロハ poem (including ヰ and ヱ) to the 58-character
-  IH58 set. Strings start with the sentinel `sora`, embed a Bech32m-derived
-  checksum, and omit the network prefix (Sora Nexus is implied by the sentinel).
+#### 2.1 Баш байт макеты (ADDR-1a)
 
-  ```
-  IH58  : 123456789ABCDEFGHJKMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz
-  Iroha : ｲﾛﾊﾆﾎﾍﾄﾁﾘﾇﾙｦﾜｶﾖﾀﾚｿﾂﾈﾅﾗﾑｳヰﾉｵｸﾔﾏｹﾌｺｴﾃｱｻｷﾕﾒﾐｼヱﾋﾓｾｽ
-  ```
-- **Canonical hex** – a debugging-friendly `0x…` encoding of the canonical byte
-  envelope.
+Һәр канонлы файҙалы йөк `header · domain selector · controller` тип билдәләнә. 1990 й.
+I18NI000000103X - был бер байт, улар ниндәй анализатор ҡағиҙәләре байттарға ҡағыла, тип хәбәр итә
+эйәрергә:
 
-`AccountAddress::parse_any` auto-detects IH58 (preferred), compressed (`sora`, second-best), or canonical hex
-(`0x...` only; bare hex is rejected) inputs and returns both the decoded payload and the detected
-`AccountAddressFormat`. Torii now calls `parse_any` for ISO 20022 supplementary
-addresses and stores the canonical hex form so metadata remains deterministic
-regardless of the original representation.
+I18NF000000060X
 
-#### 2.1 Header byte layout (ADDR-1a)
+Шуға күрә беренсе байт аҫҡы декодерҙар өсөн схема метамағлүмәттәрен йыйып ала:
 
-Every canonical payload is laid out as `header · domain selector · controller`. The
-`header` is a single byte that communicates which parser rules apply to the bytes that
-follow:
+| Биттар | Ялан | Рөхсәт ителгән ҡиммәттәр | Хоҡуҡ боҙоу тураһында |
+|-----|-------|-----------------|-------------------- |
+| 7-5 | `addr_version` | `0` (v1). `1-7` ҡиммәттәре киләсәктә үҙгәрештәр өсөн һаҡлана. | `0-7`-тан ситтәге ҡиммәттәр `AccountAddressError::InvalidHeaderVersion` триггеры; тормошҡа ашырыуҙар бөгөн ярҙам итмәгәнсә нулдән тыш версияларҙы ҡабул итергә тейеш. |
+| 4-3 | `addr_class` | `0` = бер асҡыс, `1` = мультисиг. | Башҡа ҡиммәттәр `AccountAddressError::UnknownAddressClass` күтәрә. |
+| 2-1 | `norm_version` | `1` (Норм v1). Ҡиммәттәр I18NI000000115X, `2`, `3` һаҡлана. | Ҡиммәттәрҙән ситтә I18NI000000118X йыйыу I18NI000000119X. |
+| 0 | `ext_flag` | `0` булырға тейеш. | Ҡуйылған бит йыя I18NI000000122X. |
 
-```
-bit index:   7        5 4      3 2      1 0
-             ┌─────────┬────────┬────────┬────┐
-payload bit: │version  │ class  │  norm  │ext │
-             └─────────┴────────┴────────┴────┘
-```
+Rust кодеры I18NI000000123X бер асҡыс контроллерҙары өсөн яҙа (0 версияһы, 0-сы класлы, класлы.
+норма v1, оҙайтыу флагы таҙартылған) һәм I18NI000000124X мультисиг контроллерҙары өсөн (0 версияһы,
+1-се класлы, норма v1, оҙайтыу флагы таҙартылған).
 
-The first byte therefore packs the schema metadata for downstream decoders:
+#### 2.2 Домен селектор кодлауҙары (ADDR-1a)
 
-| Bits | Field | Allowed values | Error on violation |
-|------|-------|----------------|--------------------|
-| 7-5  | `addr_version` | `0` (v1). Values `1-7` are reserved for future revisions. | Values outside `0-7` trigger `AccountAddressError::InvalidHeaderVersion`; implementations MUST treat non-zero versions as unsupported today. |
-| 4-3  | `addr_class` | `0` = single key, `1` = multisig. | Other values raise `AccountAddressError::UnknownAddressClass`. |
-| 2-1  | `norm_version` | `1` (Norm v1). Values `0`, `2`, `3` are reserved. | Values outside `0-3` raise `AccountAddressError::InvalidNormVersion`. |
-| 0    | `ext_flag` | MUST be `0`. | Set bit raises `AccountAddressError::UnexpectedExtensionFlag`. |
+Домен селекторы шунда уҡ баш эйәреп, теглы союз булып тора:
 
-The Rust encoder writes `0x02` for single-key controllers (version 0, class 0,
-norm v1, extension flag cleared) and `0x0A` for multisig controllers (version 0,
-class 1, norm v1, extension flag cleared).
+| Тег | Мәғәнәһе | Түләү | Иҫкәрмәләр |
+|----|---------|----------|-------|
+| `0x00` | Ғәҙәттәгесә домен | бер ниндәй ҙә | Һөйләшеүҙәр конфигурацияланған `default_domain_name()`. |
+| `0x01` | Урындағы домен диегеты | 12 байт | Дайджест = `blake2s_mac(key = "SORA-LOCAL-K:v1", canonical_label)[0..12]`. |
+| `0x02` | Глобаль реестр яҙмаһы | 4 байт | Ҙур-андиан I18NI000001300Х; глобаль реестр караптарына тиклем һаҡлана. |
 
-#### 2.2 Domain selector encodings (ADDR-1a)
-
-The domain selector immediately follows the header and is a tagged union:
-
-| Tag | Meaning | Payload | Notes |
-|-----|---------|---------|-------|
-| `0x00` | Implicit default domain | none | Matches the configured `default_domain_name()`. |
-| `0x01` | Local domain digest | 12 bytes | Digest = `blake2s_mac(key = "SORA-LOCAL-K:v1", canonical_label)[0..12]`. |
-| `0x02` | Global registry entry | 4 bytes | Big-endian `registry_id`; reserved until the global registry ships. |
-
-Domain labels are canonicalised (UTS-46 + STD3 + NFC) before hashing. Unknown tags raise `AccountAddressError::UnknownDomainTag`. When validating an address against a domain, mismatched selectors raise `AccountAddressError::DomainMismatch`.
+Домен ярлыҡтары канонлаштырылған (UTS-46 + STD3 + NFC) хешлау алдынан. Билдәһеҙ тегтар `AccountAddressError::UnknownDomainTag` йыя. Доменға ҡаршы адресты раҫлауҙа, тап килмәгән селекторҙар `AccountAddressError::DomainMismatch`-ны күтәрә.
 
 ```
 domain selector
@@ -206,600 +171,574 @@ domain selector
 └──────────┴──────────────────────────────────────────────┘
 ```
 
-The selector is immediately adjacent to the controller payload, so a decoder can walk
-the wire format in order: read the tag byte, read the tag-specific payload, then move on
-to the controller bytes.
+Һайлаусы шунда уҡ контроллер файҙалы йөк менән йәнәшә, шуға күрә декодер йөрөй ала
+сым форматында тәртиптә: тег байт уҡыу, тег-специфик файҙалы йөк уҡыу, һуңынан күсергә
+контроллер байттарына тиклем.
 
-**Selector examples**
+**Һайлаусы миҫалдар**
 
-- *Implicit default* (`tag = 0x00`). No payload. Example canonical hex for the default
-  domain using the deterministic test key:
+- *Яҙылған ғәҙәттәгесә* (`tag = 0x00`). Файҙалы йөк юҡ. Миҫал өсөн канон гекс өсөн ғәҙәттәгесә
+  детерминистик тест асҡысын ҡулланып домен:
   `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29`.
-- *Local digest* (`tag = 0x01`). Payload is the 12-byte digest. Example (`treasury` seed
-  `0x01`): `0x0201b18fe9c1abbac45b3e38fc5d0001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c`.
-- *Global registry* (`tag = 0x02`). Payload is a big-endian `registry_id:u32`. The bytes
-  that follow the payload are identical to the implicit-default case; the selector simply
-  replaces the normalised domain string with a registry pointer. Example using
-  `registry_id = 0x0000_002A` (decimal 42) and the deterministic default controller:
+- *Урын даестр* (`tag = 0x01`). Түләү-был 12-байтлы дайджест. Миҫал (I18NI000000136X орлоҡ
+  `0x01`): I18NI000000138X.
+- *Глобаль реестр* (I18NI000000139X). Payload - ҙур-эндиан `registry_id:u32`. Байттар
+  тип, файҙалы йөк эйәреп, бер үк асыҡ булмаған осраҡтарлы осраҡ; селектор ябай ғына
+  нормалаштырылған домен телмәрен реестр күрһәткесе менән алмаштыра. Миҫал ҡулланыу
+  `registry_id = 0x0000_002A` (decimal42) һәм детерминистик контроллер:
   `0x02020000002a000120641297079357229f295938a4b5a333de35069bf47b9d0704e45805713d13c201`.  
-  Breakdown: `0x02` header, `0x02` selector tag, `00 00 00 2A` registry id, `0x00`
-  controller tag, `0x01` curve id, `0x20` key length, 32-byte Ed25519 key payload.
+  Һындырыу: `0x02` башлығы, I18NI000000144X селектор билдәһе, I18NI000000145X реестры id, I18NI00000000146X.
+  контроллер тег, `0x01` ҡойроғо id, I18NI000000148X асҡыс оҙонлоғо, 32-байт Ed25519 асҡыс файҙалы йөк.
 
-#### 2.3 Controller payload encodings (ADDR-1a)
+#### 2.3 Контроллер файҙалы йөк кодлау (ADDR-1a)
 
-The controller payload is another tagged union appended after the domain selector:
+Контроллер файҙалы йөк — домен һайлаусыһынан һуң тағы бер билдәләнгән союз:| Тег | Контроллер | Макет | Иҫкәрмәләр |
+|----|------------|---------|-------|
+| `0x00` | Яңғыҙ асҡыс | `curve_id:u8` · `key_len:u8` · `key_bytes` | `curve_id=0x01` карталары Ed25519 бөгөн. I18NI000000154X I18NI0000001555X менән сикләнгән; ҙурыраҡ ҡиммәттәр күтәреү I18NI000000156X (шулай итеп, бер асҡыс ML-DSA асыҡ асҡыстар, улар >255 байт, кодлау мөмкин түгел һәм мультисиг ҡулланырға тейеш). |
+| `0x01` | Күпсиг | `version:u8` · I18NI000000159X · `member_count:u8` · (I18NI000000161X · I18NI0000000162X · `key_len:u16` · `key_bytes`)\* | 255-кә тиклем ярҙам итә (`CONTROLLER_MULTISIG_MEMBER_MAX`). Билдәһеҙ ҡойроҡтар `AccountAddressError::UnknownCurve`X күтәрә; дөрөҫ формалаштырылған сәйәсәт күпереп тиклем I18NI000000167X. |
 
-| Tag | Controller | Layout | Notes |
-|-----|------------|--------|-------|
-| `0x00` | Single key | `curve_id:u8` · `key_len:u8` · `key_bytes` | `curve_id=0x01` maps to Ed25519 today. `key_len` is bounded to `u8`; larger values raise `AccountAddressError::KeyPayloadTooLong` (so single-key ML‑DSA public keys, which are >255 bytes, cannot be encoded and must use multisig). |
-| `0x01` | Multisig | `version:u8` · `threshold:u16` · `member_count:u8` · (`curve_id:u8` · `weight:u16` · `key_len:u16` · `key_bytes`)\* | Supports up to 255 members (`CONTROLLER_MULTISIG_MEMBER_MAX`). Unknown curves raise `AccountAddressError::UnknownCurve`; malformed policies bubble up as `AccountAddressError::InvalidMultisigPolicy`. |
+Күписле сәйәсәт шулай уҡ CTAP2-стиль CBOR картаһын һәм канонлы дисэстты фашлай, шулай итеп
+хост һәм SDKs контроллерҙы детерминистик яҡтан раҫлай ала. Күрергә
+Схема өсөн I18NI000000168X (ADDR-1c) өсөн,
+валидация ҡағиҙәләре, хеширование процедураһы, һәм алтын ҡорамалдар.
 
-Multisig policies also expose a CTAP2-style CBOR map and canonical digest so
-hosts and SDKs can verify the controller deterministically. See
-`docs/source/references/multisig_policy_schema.md` (ADDR-1c) for the schema,
-validation rules, hashing procedure, and golden fixtures.
+Бөтә төп байттар ҙа `PublicKey::to_bytes` X тарафынан ҡайтарылған тип кодлана; декодерҙар реконструкция I18NI000000170X осраҡтарын һәм күтәреү I18NI000000171X, әгәр байттар тура килмәһә, иғлан ителгән ҡойроҡ.
 
-All key bytes are encoded exactly as returned by `PublicKey::to_bytes`; decoders reconstruct `PublicKey` instances and raise `AccountAddressError::InvalidPublicKey` if the bytes do not match the declared curve.
+> **Ed25519 канон үтәү (ADDR-3a):* ҡойроғо `0x01` асҡыстары ҡул ҡуйыусы тарафынан сығарылған теүәл байт епкә асыҡларға тейеш һәм бәләкәй тәртиптәге подгруппала ятырға тейеш түгел. Төйөндәр хәҙер канон булмаған кодлауҙарҙы кире ҡаға (мәҫәлән, ҡиммәттәрҙе кәметкән модуле I18NI000000173X) һәм идентификация элементы кеүек көсһөҙ нөктәләр, шуға күрә SDKs адрестарҙы тапшырыр алдынан валидациялау хаталарын өҫтөн тап килтерергә тейеш.
 
-> **Ed25519 canonical enforcement (ADDR-3a):** curve `0x01` keys must decode to the exact byte string emitted by the signer and must not lie in the small-order subgroup. Nodes now reject non-canonical encodings (e.g., values reduced modulo `2^255-19`) and weak points such as the identity element, so SDKs should surface matching validation errors before submitting addresses.
+##### 2.3.1 Ҡырмыҫҡа идентификаторы реестры (ADDR-1d)
 
-##### 2.3.1 Curve identifier registry (ADDR-1d)
+| ID (`curve_id`) | Алгоритм | Функциональ ҡапҡа | Иҫкәрмәләр |
+|---------------|-------------|-------------|-------- |
+| `0x00` | Запас | — | ТҮГЕЛ, тип сығарылмаҫҡа; декодерҙар өҫтөндә I18NI000000176X. |
+| `0x01` | Ed25519 | — | Canonical v1 алгоритмы (I18NI000000178X); конфигурацияла ғәҙәттәгесә эшләй. |
+| `0x02` X | МЛ‐ДСА (Дилитий3) | — | Дилитий3 асыҡ асҡыс байттарын ҡуллана (1952 байт). Яңғыҙлыҡ адрестар ML-DSA кодлай алмай, сөнки I18NI000000180X `u8`; мультисиг ҡуллана I18NI0000000182X оҙонлоғо. |
+| `0x03` | BLS12‐381 (нормаль) | `bls` | G1 (48 байт), G2-лә ҡултамғалар (96 байт). |
+| `0x04` | secp256к1 | — | Детерминистик ECDSA өҫтөндә SHA‐256; асыҡ асҡыстар 33‐байтлы SEC1 ҡыҫылған формаһын ҡуллана һәм ҡултамғалар канонический 64‐байт `r∥s`X макетын ҡуллана. |
+| `0x05` | BLS12‐381 (бәләкәй) | `bls` | G2 (96 байт), G1-ҙә ҡултамғалар (48 байт) йәмәғәт асҡыстары. |
+| `0x0A` | 2012 йылда ГОСТ Р 34.10‐2012 (256, А йыйылмаһы) | `gost` | I18NI000000191X функцияһы өҫтөндә булғанда ғына бар. |
+| `0x0B` | 2012 йылда ГОСТ Р 34.10 (256, В комплекты) | `gost` | I18NI0000000194X функцияһы өҫтөндә булғанда ғына бар. |
+| I18NI000000195X | 2012 йылда ГОСТ Р 34.10 (256, С. `gost` | I18NI000000197X функцияһы ҡасан ғына бар. |
+| `0x0D` | 2012 йылда ГОСТ Р 34.10 (512, А комплекты) | `gost` | I18NI000000200X функцияһы ҡасан ғына эшләй. |
+| `0x0E` | 2012 йылда ГОСТ Р 34.10 (512, В комплекты) | `gost` | I18NI000000203X функцияһы өҫтөндә генә бар. |
+| `0x0F` | SM2 | `sm` | DistID оҙонлоғо (u16 БЕ) + DistID байттар + 65‐байт SEC1 ҡыҫылмаған SM2 асҡысы; тик I18NI000000206X ҡасан ғына эшләй. |
 
-| ID (`curve_id`) | Algorithm | Feature gate | Notes |
-|-----------------|-----------|--------------|-------|
-| `0x00` | Reserved | — | MUST NOT be emitted; decoders surface `ERR_UNKNOWN_CURVE`. |
-| `0x01` | Ed25519 | — | Canonical v1 algorithm (`Algorithm::Ed25519`); enabled in the default config. |
-| `0x02` | ML‑DSA (Dilithium3) | — | Uses the Dilithium3 public key bytes (1952 bytes). Single‑key addresses cannot encode ML‑DSA because `key_len` is `u8`; multisig uses `u16` lengths. |
-| `0x03` | BLS12‑381 (normal) | `bls` | Public keys in G1 (48 bytes), signatures in G2 (96 bytes). |
-| `0x04` | secp256k1 | — | Deterministic ECDSA over SHA‑256; public keys use the 33‑byte SEC1 compressed form and signatures use the canonical 64‑byte `r∥s` layout. |
-| `0x05` | BLS12‑381 (small) | `bls` | Public keys in G2 (96 bytes), signatures in G1 (48 bytes). |
-| `0x0A` | GOST R 34.10‑2012 (256, set A) | `gost` | Available only when the `gost` feature is enabled. |
-| `0x0B` | GOST R 34.10‑2012 (256, set B) | `gost` | Available only when the `gost` feature is enabled. |
-| `0x0C` | GOST R 34.10‑2012 (256, set C) | `gost` | Available only when the `gost` feature is enabled. |
-| `0x0D` | GOST R 34.10‑2012 (512, set A) | `gost` | Available only when the `gost` feature is enabled. |
-| `0x0E` | GOST R 34.10‑2012 (512, set B) | `gost` | Available only when the `gost` feature is enabled. |
-| `0x0F` | SM2 | `sm` | DistID length (u16 BE) + DistID bytes + 65‑byte SEC1 uncompressed SM2 key; available only when `sm` is enabled. |
+Өҫтәмә ҡойроҡтар өсөн `0x06–0x09` слоттары ҡала; яңы индереү
+алгоритм юл картаһын яңыртыу һәм SDK/хужа ҡаплауҙы тап килтереүҙе талап итә. Кодерҙар
+I18NI000000208X менән теләһә ниндәй ярҙам ителмәгән алгоритмды кире ҡағырға тейеш, ә
+декодерҙар I18NI000000209X менән билдәһеҙ ids-та тиҙ уңышһыҙлыҡҡа осрай.
+етешһеҙлектәр менән ябылған тәртип.
 
-Slots `0x06–0x09` remain unassigned for additional curves; introducing a new
-algorithm requires a roadmap update and matching SDK/host coverage. Encoders
-MUST reject any unsupported algorithm with `ERR_UNSUPPORTED_ALGORITHM`, and
-decoders MUST fail fast on unknown ids with `ERR_UNKNOWN_CURVE` to preserve
-fail-closed behaviour.
+Каноник реестр (шул иҫәптән машина менән уҡыла торған JSON экспорты) 1990 йылдарҙа йәшәй.
+[`docs/source/references/address_curve_registry.md`] (I18NU000000065X).
+Ҡораллы ҡулланыу тейеш, тип ҡулланыу мәғлүмәттәр йыйылмаһы туранан-тура шулай ҡойроҡ идентификаторҙар ҡала
+эҙмә-эҙлекле SDKs һәм оператор эш ағымы буйынса.
 
-The canonical registry (including a machine-readable JSON export) lives under
-[`docs/source/references/address_curve_registry.md`](source/references/address_curve_registry.md).
-Tooling SHOULD consume that dataset directly so curve identifiers remain
-consistent across SDKs and operator workflows.
-
-- **SDK gating:** SDKs default to Ed25519-only validation/encoding. Swift exposes
-  compile-time flags (`IROHASWIFT_ENABLE_MLDSA`, `IROHASWIFT_ENABLE_GOST`,
-  `IROHASWIFT_ENABLE_SM`); the Java/Android SDK requires
-  `AccountAddress.configureCurveSupport(...)`; the JavaScript SDK uses
+- **SDK ҡапҡаһы:** SDKs Ed25519-тик раҫлау/кодлау өсөн ғәҙәттәгесә. Свифт фашлай
+  компиляция ваҡытында флагтар (`IROHASWIFT_ENABLE_MLDSA`, I18NI000000212X,
+  `IROHASWIFT_ENABLE_SM`); Java/Android SDK талап итә
+  `AccountAddress.configureCurveSupport(...)`; JavaScript SDK ҡуллана
   `configureCurveSupport({ allowMlDsa: true, allowGost: true, allowSm2: true })`.
-  secp256k1 support is available but not enabled by default in the JS/Android
-  SDKs; callers must opt in explicitly when emitting non‑Ed25519 controllers.
-- **Host gating:** `Register<Account>` rejects controllers whose signatories use algorithms
-  missing from the node’s `crypto.allowed_signing` list **or** curve identifiers absent from
-  `crypto.curves.allowed_curve_ids`, so clusters must advertise support (configuration +
-  genesis) before ML‑DSA/GOST/SM controllers can be registered. BLS controller
-  algorithms are always allowed when compiled (consensus keys rely on them),
-  and the default configuration enables Ed25519 + secp256k1.【crates/iroha_core/src/smartcontracts/isi/domain.rs:32】
+  secp256k1 ярҙамы бар, әммә JS/Android-та ғәҙәттәгесә эшләнмәй.
+  СДК-лар; шылтыратыусылар асыҡтан-асыҡ ҡабул итергә тейеш, ҡасан сығарғанда non‐ы Ed25519 контроллерҙары.
+- **Эш ҡапҡаһы:** I18NI000000216X контроллерҙарҙы кире ҡаға, улар ҡул ҡуйған алгоритмдар ҡуллана
+  18NI000000217X исемлеге төйөндән юғалмай.
+  I18NI000000218X, шуға күрә кластерҙар реклама ярҙам итергә тейеш (конфигурация +
+  генез) ML-DSA/GOST/SM контроллерҙары алдынан теркәлергә мөмкин. БЛС контроллеры
+  алгоритмдар һәр ваҡыт компиляцияланғанда рөхсәт ителә (консенсус асҡыстары уларға таяна),
+  һәм ғәҙәттәгесә конфигурация Ed25519 + secp256k1.【крат/ироха_ядро/срк/смарт контракттар/isi/domain.rs:32】
 
-##### 2.3.2 Multisig controller guidance
+##### 2.3.2 Күписиг контроллер етәкселеге
 
-`AccountController::Multisig` serialises policies via
-`crates/iroha_data_model/src/account/controller.rs` and enforces the schema
-documented in [`docs/source/references/multisig_policy_schema.md`](source/references/multisig_policy_schema.md).
-Key implementation details:
+I18NI000000219X сериялы сәйәсәт аша .
+I18NI000000220X һәм схеманы үтәй
+документлаштырылған [`docs/source/references/multisig_policy_schema.md`] (I18NU000000066X).
+Төп тормошҡа ашырыу реквизиттары:
 
-- Policies are normalised and validated by `MultisigPolicy::validate()` before
-  being embedded. Thresholds must be ≥ 1 and ≤ Σ weight; duplicate members are
-  removed deterministically after sorting by `(algorithm || 0x00 || key_bytes)`.
-- The binary controller payload (`ControllerPayload::Multisig`) encodes
-  `version:u8`, `threshold:u16`, `member_count:u8`, then each member’s
-  `(curve_id, weight:u16, key_len:u16, key_bytes)`. This is exactly what
-  `AccountAddress::canonical_bytes()` writes to IH58 (preferred)/sora (second-best) payloads.
-- Hashing (`MultisigPolicy::digest_blake2b256()`) uses Blake2b-256 with the
-  `iroha-ms-policy` personalization string so governance manifests can bind to a
-  deterministic policy ID that matches the controller bytes embedded in IH58.
-- Fixture coverage lives in `fixtures/account/address_vectors.json` (cases
-  `addr-multisig-*`). Wallets and SDKs should assert the canonical IH58 strings
-  below to confirm their encoders match the Rust implementation.
+- Сәйәсәт нормалаштырылған һәм раҫланған I18NI0000000222X тиклем .
+  һеңдерелгән. Сәйәхәттәр ≥1 һәм ≤Σ ауырлығы булырға тейеш; дубликаттар булып тора
+  I18NI000000223X менән сорттарға бүлгәндән һуң детерминистик рәүештә сығарыла.
+- Бинар контроллер файҙалы йөк (I18NI000000224X) кодтары
+  I18NI000000225X, `threshold:u16`, I18NI000000227X, һуңынан һәр ағзаның’s
+  `(curve_id, weight:u16, key_len:u16, key_bytes)`. Был тап шулай
+  `AccountAddress::canonical_bytes()` IH58 (өҫтөнлөк)/сора (икенсе-иң яҡшы) файҙалы йөктәргә яҙа.
+- Хэшинг (`MultisigPolicy::digest_blake2b256()`) Blake2b-256 ҡулланыла.
+  I18NI000000231X персонализация теҙмә, шулай итеп, идара итеү маскировкалары бәйләй ала
+  детерминистик сәйәсәт идентификаторы, тип тап килә контроллер байттар IH58 индерелгән.
+- Fixtur ҡаплау йәшәй I18NI000000232X (осраҡтар
+  `addr-multisig-*`). Балетс һәм SDKs канонлы IH58 ҡылдарҙы раҫларға тейеш.
+  аҫта раҫлау өсөн, уларҙы кодерҙар тура килә Rust тормошҡа ашырыу.
 
-| Case ID | Threshold / members | IH58 literal (prefix `0x02F1`) | Sora compressed (`sora`) literal | Notes |
-|---------|---------------------|--------------------------------|-------------------------|-------|
-| `addr-multisig-council-threshold3` | `≥3` weight, members `(2,1,1)` | `SRfSHsrH3tEmYaaAYyD248F3vfT1oQ3WEGS22MaD8W9bLefF7rsoKLYGcpbcM9EcSus5ZhCAZU7ztn2BCsyeCAdfRncAVmVsipd4ibk6CBLF3Nrzcw8P7VKJg6mtFgEhWVTjfDkUMoc63oeEmaWyV6cyiphwk8ZgKAJUe4TyVtmKm1WWcg7qZ6i` | `sora3vﾑ2zkaoUwﾋﾅGﾘﾚyﾂe3ﾖfﾙヰｶﾘﾉwｷnoWﾛYicaUr3ﾔｲﾖ2Ado3TﾘYQﾉJqﾜﾇｳﾑﾐd8dDjRGｦ3Vﾃ9HcﾀMヰR8ﾎﾖgEqGｵEｾDyc5ﾁ1ﾔﾉ31sUﾑﾀﾖaｸxﾘ3ｲｷMEuFｺｿﾉBQSVQnxﾈeJzrXLヰhｿｹ5SEEﾅPﾂﾗｸdヰﾋ1bUGHｲVXBWNNJ6K` | Council-domain governance quorum. |
-| `addr-multisig-wonderland-threshold2` | `≥2`, members `(1,2)` | `3xsmkps1KPBn9dtpE5qHRhHEZCpiAe8d9j6H9A42TV6kc1TpaqdwnSksKgQrsSEHznqvWKBMc1os69BELzkLjsR7EV2gjV14d9JMzo97KEmYoKtxCrFeKFAcy7ffQdboV1uRt` | `sora2ﾖZﾘeｴAdx3ﾂﾉﾔXhnｹﾀ2ﾉｱﾋxﾅﾄﾌヱwﾐmﾊvEﾐCﾏﾎｦ1ﾑHﾋso2GKﾔﾕﾁwﾂﾃP6ﾁｼﾙﾖｺ9ｻｦbﾈ4wFdﾑFヰ3HaﾘｼMｷﾌHWtｷﾋLﾙﾖQ4D3XﾊﾜXmpktﾚｻ5ﾅﾅﾇ1gkﾏsCFQGH9` | Dual-signature wonderland example (weight 1 + 2). |
-| `addr-multisig-default-quorum3` | `≥3`, members `(1,1,1,1)` | `nA2bDNhMqXz7ERkHNoEWbvJGyR1aDRsw32LaUWLgbK3vcpzohmdFCLvdotxUWWDY3aZeX4ptLk4Z6TjF5ossnJm8VrNo6daxmGTkqUyP4MxJxiNyPFxsEE5DLnsoLWUcxaWNpZ76tmkbiGS31Gv8tejKpuiHUMaQ1s5ohWyZvDnpycNkBK8AEfGJqn5yc9zAzfWbVhpDwkPj8ScnzvH1Echr5` | `soraﾐ38ﾅｴｸﾜ8ﾃzwBrqﾘｺ4yﾄv6kqJp1ｳｱﾛｿrzﾄﾃﾘﾒRﾗtV9ｼﾔPｽcヱEﾌVVVｼﾘｲZAｦﾓﾅｦeﾒN76vﾈcuｶuﾛL54rzﾙﾏX2zMﾌRLﾃﾋpﾚpｲcHﾑﾅﾃﾔzｵｲVfAﾃﾚﾎﾚCヰﾔｲｽｦw9ﾔﾕ8bGGkﾁ6sNｼaｻRﾖﾜYﾕﾚU18ﾅHヰﾌuMeﾊtﾂrｿj95Ft8ﾜ3fﾄkNiｴuﾈrCﾐQt8ヱｸｸmﾙﾒgUbﾑEKTTCM` | Implicit-default domain quorum used for base governance.
+| Идентификатор осрағы | Сәйәх / ағзалары | IH58 туранан-тура (префикс `0x02F1`) | Сора ҡыҫылған (`sora`) туранан-тура | Иҫкәрмәләр |
+|-------------------------------------------------------------------------------|-----------|
+| `addr-multisig-council-threshold3` | `≥3` ауырлығы, ағзалары I18NI000000238X | `SRfSHsrH3tEmYaaAYyD248F3vfT1oQ3WEGS22MaD8W9bLefF7rsoKLYGcpbcM9EcSus5ZhCAZU7ztn2BCsyeCAdfRncAVmVsipd4ibk6CBLF3Nrzcw8P7VKJg6mtFgEhWVTjfDkUMoc63oeEmaWyV6cyiphwk8ZgKAJUe4TyVtmKm1WWcg7qZ6i` | `sora3vﾑ2zkaoUwﾋﾅGﾘﾚyﾂe3ﾖfﾙヰｶﾘﾉwｷnoWﾛYicaUr3ﾔｲﾖ2Ado3TﾘYQﾉJqﾜﾇｳﾑﾐd8dDjRGｦ3Vﾃ9HcﾀMヰR8ﾎﾖgEqGｵEｾDyc5ﾁ1ﾔﾉ31sUﾑﾀﾖaｸxﾘ3ｲｷMEuFｺｿﾉBQSVQnxﾈeJzrXLヰhｿｹ5SEEﾅPﾂﾗｸdヰﾋ1bUGHｲVXBWNNJ6K` | Совет-домен идара итеү кворум. |
+| `addr-multisig-wonderland-threshold2` | `≥2`, ағзалары I18NI000000243X | `3xsmkps1KPBn9dtpE5qHRhHEZCpiAe8d9j6H9A42TV6kc1TpaqdwnSksKgQrsSEHznqvWKBMc1os69BELzkLjsR7EV2gjV14d9JMzo97KEmYoKtxCrFeKFAcy7ffQdboV1uRt` | `sora2ﾖZﾘeｴAdx3ﾂﾉﾔXhnｹﾀ2ﾉｱﾋxﾅﾄﾌヱwﾐmﾊvEﾐCﾏﾎｦ1ﾑHﾋso2GKﾔﾕﾁwﾂﾃP6ﾁｼﾙﾖｺ9ｻｦbﾈ4wFdﾑFヰ3HaﾘｼMｷﾌHWtｷﾋLﾙﾖQ4D3XﾊﾜXmpktﾚｻ5ﾅﾅﾇ1gkﾏsCFQGH9` | Ике ҡултамғаһы мөғжизәһе миҫалы (ауырлыҡ 1 + 2). |
+| `addr-multisig-default-quorum3` | `≥3`, ағзалары I18NI000000248X | `nA2bDNhMqXz7ERkHNoEWbvJGyR1aDRsw32LaUWLgbK3vcpzohmdFCLvdotxUWWDY3aZeX4ptLk4Z6TjF5ossnJm8VrNo6daxmGTkqUyP4MxJxiNyPFxsEE5DLnsoLWUcxaWNpZ76tmkbiGS31Gv8tejKpuiHUMaQ1s5ohWyZvDnpycNkBK8AEfGJqn5yc9zAzfWbVhpDwkPj8ScnzvH1Echr5` | `soraﾐ38ﾅｴｸﾜ8ﾃzwBrqﾘｺ4yﾄv6kqJp1ｳｱﾛｿrzﾄﾃﾘﾒRﾗtV9ｼﾔPｽcヱEﾌVVVｼﾘｲZAｦﾓﾅｦeﾒN76vﾈcuｶuﾛL54rzﾙﾏX2zMﾌRLﾃﾋpﾚpｲcHﾑﾅﾃﾔzｵｲVfAﾃﾚﾎﾚCヰﾔｲｽｦw9ﾔﾕ8bGGkﾁ6sNｼaｻRﾖﾜYﾕﾚU18ﾅHヰﾌuMeﾊtﾂrｿj95Ft8ﾜ3fﾄkNiｴuﾈrCﾐQt8ヱｸｸmﾙﾒgUbﾑEKTTCM` | База идара итеү өсөн ҡулланылған асыҡ булмаған домен кворумы.
 
-#### 2.4 Failure rules (ADDR-1a)
+#### 2.4 Уңышһыҙлыҡ ҡағиҙәләре (ADDR-1a)
 
-- Payloads shorter than the required header + selector or with leftover bytes emit `AccountAddressError::InvalidLength` or `AccountAddressError::UnexpectedTrailingBytes`.
-- Headers that set the reserved `ext_flag` or advertise unsupported versions/classes MUST be rejected using `UnexpectedExtensionFlag`, `InvalidHeaderVersion`, or `UnknownAddressClass`.
-- Unknown selector/controller tags raise `UnknownDomainTag` or `UnknownControllerTag`.
-- Oversized or malformed key material raises `KeyPayloadTooLong` or `InvalidPublicKey`.
-- Multisig controllers exceeding 255 members raise `MultisigMemberOverflow`.
-- IME/NFKC conversions: half-width Sora kana can be normalised to their full-width forms without breaking decoding, but the ASCII `sora` sentinel and IH58 digits/letters MUST stay ASCII. Full-width or case-folded sentinels surface `ERR_MISSING_COMPRESSED_SENTINEL`, full-width ASCII payloads raise `ERR_INVALID_COMPRESSED_CHAR`, and checksum mismatches bubble up as `ERR_CHECKSUM_MISMATCH`. Property tests in `crates/iroha_data_model/src/account/address.rs` cover these paths so SDKs and wallets can rely on deterministic failures.
-- Torii and SDK parsing of `address@domain` aliases now emit the same `ERR_*` codes when IH58 (preferred)/sora (second-best) inputs fail before alias fallback (e.g., checksum mismatch, domain digest mismatch), so clients can relay structured reasons without guessing from prose strings.
-- Local selector payloads shorter than 12 bytes surface `ERR_LOCAL8_DEPRECATED`, preserving a hard cutover from legacy Local‑8 digests.
-- Domainless IH58 (preferred)/sora (second-best) literals resolve the embedded selector via the domain-selector resolver; if none is installed (or the selector cannot be resolved) parsing fails with `ERR_DOMAIN_SELECTOR_UNRESOLVED`. The implicit default selector resolves to the configured default domain label without requiring a resolver.
+- Кәрәкле башлыҡтан ҡыҫҡараҡ + селектор йәки ҡалған байттар менән I18NI000000251X йәки `AccountAddressError::UnexpectedTrailingBytes` Emit.
+- Башлыҡ, тип билдәләнгән I18NI0000000253X йәки реклама unported версиялары/класстары I18NI0000000254X ҡулланып кире ҡағыла, I18NI00000002555, йәки I18NI00000000000256X.
+- Билдәһеҙ селектор/контроллер тегтары `UnknownDomainTag` йәки `UnknownControllerTag` йыя.
+- Ҙур йәки дөрөҫ булмаған төп материал `KeyPayloadTooLong` йәки `InvalidPublicKey` күтәрә.
+- 255 ағзанан ашыу күп контроллерҙар `MultisigMemberOverflow` йыя.
+- IME/NFKC конверсиялар: ярты киңлектә Сора кана уларҙы тулы киңлек формаларына нормалаштырырға мөмкин, өҙөлмәйенсә, әммә ASCII `sora` дозор һәм IH58 цифр/хәрефтәр ASCII ҡалырға тейеш. Тулы киңлектә йәки кейс-йыйылған һаҡсылар өҫтө `ERR_MISSING_COMPRESSED_SENTINEL`, тулы киңлектәге ASCII файҙалы йөкләмәләр `ERR_INVALID_COMPRESSED_CHAR` күтәрелә, һәм чек суммаһы тап килмәүҙәр күперткеләп I18NI00000002655X. `crates/iroha_data_model/src/account/address.rs`-тағы мөлкәт һынауҙары был юлдарҙы ҡаплай, шуға күрә SDKs һәм янсыҡтар детерминистик етешһеҙлектәргә таяна ала.
+- I18NT00000000034X һәм SDK анализлау I18NI0000000267X псевдоним хәҙер шул уҡ `ERR_*` кодтарын сығара, ҡасан IH58 (өҫтөнлөк)/сора (икенсе-иң яҡшы) индереүҙәр псевдонимдар алдынан етешһеҙлектәр (мәҫәлән, чек-стукнос реле структуралы сәбәптәре проза ҡылдарынан фаразламай.
+- Урындағы селектор файҙалы йөкләмәләр ҡыҫҡа 12 байт өҫтө `ERR_LOCAL8_DEPRECATED`, ҡаты өҙөклөктө һаҡлап ҡалыу мираҫы Урындағы 8 дигести.
+- Доменһыҙ IH58 (өҫтөнлөк)/сора (икенсе-иң яҡшы) литералдар домен-һайлаусы хәл итеүсеһе аша встроенный селекторҙы хәл итә; әгәр бер ниндәй ҙә ҡуйылған (йәки селектор хәл итеү мөмкин түгел) анализлау етешһеҙлектәре менән I18NI0000000270X. Йәшерен селектор асыҡланмаған хәл итә, конфигурацияланған ғәҙәттәге домен ярлығына хәл итеү, резолютор талап итмәй.
 
-#### 2.5 Normative binary vectors
+#### 2.5 Норматив бинар векторҙар
 
-- **Implicit default domain (`default`, seed byte `0x00`)**  
-  Canonical hex: `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29`.  
-  Breakdown: `0x02` header, `0x00` selector (implicit default), `0x00` controller tag, `0x01` curve id (Ed25519), `0x20` key length, followed by the 32-byte key payload.
-- **Local domain digest (`treasury`, seed byte `0x01`)**  
-  Canonical hex: `0x0201b18fe9c1abbac45b3e38fc5d0001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c`.  
-  Breakdown: `0x02` header, selector tag `0x01` plus digest `b1 8f e9 c1 ab ba c4 5b 3e 38 fc 5d`, followed by the single-key payload (`0x00` tag, `0x01` curve id, `0x20` length, 32-byte Ed25519 key).
+- **Имплицит ғәҙәттәгесә домен (I18NI000000271X, орлоҡ байт I18NI000000272X)**  
+  Канон hex: I18NI000000273X.  
+  18NI00000274X башлығы, I18NI0000000275X селекторы (имплициты умолчанию), I18NI000000276X контроллер тегы, I18NI00000002777 ҡойроғо (Ed25519), `0x20` асҡысы, унан һуң 32-бют төп файҙалы йөк.
+- *Урындағы домен һеңдергән (I18NI000000279X, орлоҡ `0x01`)*****  
+  Канон hex: I18NI000000281X.  
+  өҙөклөк: I18NI000000282X башлығы, селектор тегы I18NI00000000283X плюс I18NI0000000284X, унан һуң бер асҡыслы файҙалы йөк (I18NI0000000285X билдәһе, I18NI00000000000000000000000000000000000000000287Х оҙонлоғонда, оҙонлоғо, 32-байт Ed25519 асҡысы).Блок һынауҙары (I18NI0000288X) V1 векторҙарын `AccountAddress::parse_any` аша түбәндә раҫлай, инструменттарҙы алты, IH58 (өҫтөнлөклө) һәм ҡыҫылған (`sora`, икенсе-иң яҡшы) формалары буйынса канонлы файҙалы йөкләмәләргә таяна алыуын гарантиялай. `cargo run -p iroha_data_model --example address_vectors` менән киңәйтелгән ҡоролма комплектын тергеҙергә.
 
-Unit tests (`account::address::tests::parse_any_accepts_all_formats`) assert the V1 vectors below via `AccountAddress::parse_any`, guaranteeing that tooling can rely on the canonical payload across hex, IH58 (preferred), and compressed (`sora`, second-best) forms. Regenerate the extended fixture set with `cargo run -p iroha_data_model --example address_vectors`.
+| Домен | Орлоҡ байт | Канон гекс | Ҡыҫылған (`sora`) |
+|-----------|-----------------------------------------------------------------. ----------------------------------------|-------------- |
+| ғәҙәттәгесә | `0x00` | `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` | `sora2QGﾈkﾀﾍrNﾒBﾎwﾍwﾙwﾗXHwﾜCﾘﾂY8ryGUﾈﾎyQｲHyヰD8ｲﾁYVY9VF8` |
+| ҡаҙна | `0x01` | `0x0201b18fe9c1abbac45b3e38fc5d0001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c` | `sora5ｻu6rﾀCヰTGwﾏ1ﾅヱﾌQｲﾖﾇqCｦヰﾓZQCZRDSSﾅMｱﾙヱｹﾁｸ8ｾeﾄﾛ6C8bZuwﾗｹCZｦRSLQFU` |
+| мөғжизәле ил | `0x02` | I18NI000000300X | `sora5ｻwﾓyRｿqﾏnMﾀﾙヰKoﾒﾇﾓQｺﾛyｼ3ｸFHB2F5LyPﾐTMZkｹｼw67ﾋVﾕｻr8ﾉGﾇeEnｻVRNKCS` |
+| ироха | I18NI000000302X | `0x0201de8b36819700c807083608e2000120ed4928c628d1c2c6eae90338905995612959273a5c63f93636c14614ac8737d1` | `sora5ｻﾜxﾀ7Vｱ7QFeｷMﾂLﾉﾃﾏﾓﾀTﾚgSav3Wnｱｵ4ｱCKｷﾛMﾘzヰHiﾐｱ6ﾃﾉﾁﾐZmﾇ2fiﾎX21P4L` |
+| альфа | I18NI000000305X | `0x020146be2154ae86826a3fef0ec0000120ca93ac1705187071d67b83c7ff0efe8108e8ec4530575d7726879333dbdabe7c` | `sora5ｻ9JヱﾈｿuwU6ｴpﾔﾂﾈRqRTds1HﾃﾐｶLVﾍｳ9ﾔhｾNｵVｷyucEﾒGﾈﾏﾍ9sKeﾉDzrｷﾆ742WG1` |
+| омега | I18NI000000308X | I18NI000000309X | `sora5ｻ3zrﾌuﾚﾄJﾑXQhｸTyN8pzwRkWxmjVﾗbﾚﾕヰﾈoｽｦｶtEEﾊﾐ6GPｿﾓﾊｾEhvPｾｻ3XAJ73F` |
+| идара итеү | `0x06` | `0x0201989eb45a80940d187e2c908f0001208a875fff1eb38451577acd5afee405456568dd7c89e090863a0557bc7af49f17` | `sora5ｻiｵﾁyVﾕｽbFpDHHuﾇﾉdﾗｲﾓﾄRﾋAW3frUCｾ5ｷﾘTwdﾚnｽtQiLﾏｼｶﾅXgｾZmﾒヱH58H4KP` |
+| валидаторҙар | `0x07` | `0x0201e4ffa58704c69afaeb7cc2d7000120ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c` | `sora5ｻﾀLDH6VYﾑNAｾgﾉVﾜtxﾊRXLｹﾍﾔﾌLd93GﾔGeｴﾄYrs1ﾂHｸkYxｹwｿyZﾗxyﾎZoXT1S4N` |
+| тикшеренүсе | `0x08` | `0x02013b35422c65c2a83c99c523ad0001201398f62c6d1a457c51ba6a4b5f3dbd2f69fca93216218dc8997e416bd17d93ca` | `sora5ｻ4nmｻaﾚﾚPvNLgｿｱv6MHDeEyﾀovﾉJcpvrﾖ6ﾈCQcCNﾇﾜhﾚﾖyFdTwｸｶHEｱ9rWU8FMB` |
+| соранета | `0x09` | `0x0201047d9ea7f5d5dbec3f7bfc58000120fd1724385aa0c75b64fb78cd602fa1d991fdebf76b13c58ed702eac835e9f618` | I18NI00000322Х |
+| kitsune | `0x0A` | `0x0201e91933de397fd7723dc9a76c00012043a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c` | `sora5ｻﾚｺヱkfFJfSﾁｼJwﾉLvbpSｷﾔMWFMrbｳｸｲｲyヰKGJﾉｻ4ｹﾕrｽhｺｽzSDヰXAN62AD7RGNS` |
+| да | `0x0B` | `0x02016838cf5bb0ce0f3d4f380e1c00012066be7e332c7a453332bd9d0a7f7db055f5c5ef1a06ada66d98b39fb6810c473a` | `sora5ｻNﾒ5SﾐRﾉﾐﾃ62ｿ1ｶｷWFKyF1BcAﾔvｼﾐHqﾙﾐPﾏｴヰ5tｲﾕvnﾙT6ﾀW7mﾔ7ﾇﾗﾂｳ25CXS93` |
 
-| Domain      | Seed byte | Canonical hex                                                                 | Compressed (`sora`) |
-|-------------|-----------|-------------------------------------------------------------------------------|------------|
-| default     | `0x00`    | `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` | `sora2QGﾈkﾀﾍrNﾒBﾎwﾍwﾙwﾗXHwﾜCﾘﾂY8ryGUﾈﾎyQｲHyヰD8ｲﾁYVY9VF8` |
-| treasury    | `0x01`    | `0x0201b18fe9c1abbac45b3e38fc5d0001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c` | `sora5ｻu6rﾀCヰTGwﾏ1ﾅヱﾌQｲﾖﾇqCｦヰﾓZQCZRDSSﾅMｱﾙヱｹﾁｸ8ｾeﾄﾛ6C8bZuwﾗｹCZｦRSLQFU` |
-| wonderland  | `0x02`    | `0x0201b8ae571b79c5a80f5834da2b0001208139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394` | `sora5ｻwﾓyRｿqﾏnMﾀﾙヰKoﾒﾇﾓQｺﾛyｼ3ｸFHB2F5LyPﾐTMZkｹｼw67ﾋVﾕｻr8ﾉGﾇeEnｻVRNKCS` |
-| iroha       | `0x03`    | `0x0201de8b36819700c807083608e2000120ed4928c628d1c2c6eae90338905995612959273a5c63f93636c14614ac8737d1` | `sora5ｻﾜxﾀ7Vｱ7QFeｷMﾂLﾉﾃﾏﾓﾀTﾚgSav3Wnｱｵ4ｱCKｷﾛMﾘzヰHiﾐｱ6ﾃﾉﾁﾐZmﾇ2fiﾎX21P4L` |
-| alpha       | `0x04`    | `0x020146be2154ae86826a3fef0ec0000120ca93ac1705187071d67b83c7ff0efe8108e8ec4530575d7726879333dbdabe7c` | `sora5ｻ9JヱﾈｿuwU6ｴpﾔﾂﾈRqRTds1HﾃﾐｶLVﾍｳ9ﾔhｾNｵVｷyucEﾒGﾈﾏﾍ9sKeﾉDzrｷﾆ742WG1` |
-| omega       | `0x05`    | `0x0201390d946885bc8416b3d30c9d0001206e7a1cdd29b0b78fd13af4c5598feff4ef2a97166e3ca6f2e4fbfccd80505bf1` | `sora5ｻ3zrﾌuﾚﾄJﾑXQhｸTyN8pzwRkWxmjVﾗbﾚﾕヰﾈoｽｦｶtEEﾊﾐ6GPｿﾓﾊｾEhvPｾｻ3XAJ73F` |
-| governance  | `0x06`    | `0x0201989eb45a80940d187e2c908f0001208a875fff1eb38451577acd5afee405456568dd7c89e090863a0557bc7af49f17` | `sora5ｻiｵﾁyVﾕｽbFpDHHuﾇﾉdﾗｲﾓﾄRﾋAW3frUCｾ5ｷﾘTwdﾚnｽtQiLﾏｼｶﾅXgｾZmﾒヱH58H4KP` |
-| validators  | `0x07`    | `0x0201e4ffa58704c69afaeb7cc2d7000120ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c` | `sora5ｻﾀLDH6VYﾑNAｾgﾉVﾜtxﾊRXLｹﾍﾔﾌLd93GﾔGeｴﾄYrs1ﾂHｸkYxｹwｿyZﾗxyﾎZoXT1S4N` |
-| explorer    | `0x08`    | `0x02013b35422c65c2a83c99c523ad0001201398f62c6d1a457c51ba6a4b5f3dbd2f69fca93216218dc8997e416bd17d93ca` | `sora5ｻ4nmｻaﾚﾚPvNLgｿｱv6MHDeEyﾀovﾉJcpvrﾖ6ﾈCQcCNﾇﾜhﾚﾖyFdTwｸｶHEｱ9rWU8FMB` |
-| soranet     | `0x09`    | `0x0201047d9ea7f5d5dbec3f7bfc58000120fd1724385aa0c75b64fb78cd602fa1d991fdebf76b13c58ed702eac835e9f618` | `sora5ｱｸヱVQﾂcﾁヱRﾓcApｲﾁﾅﾒvﾌﾏfｾNnﾛRJsｿDhﾙuHaﾚｺｦﾌﾍﾈeﾆﾎｺN1UUDｶ6ﾎﾄﾛoRH8JUL` |
-| kitsune     | `0x0A`    | `0x0201e91933de397fd7723dc9a76c00012043a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c` | `sora5ｻﾚｺヱkfFJfSﾁｼJwﾉLvbpSｷﾔMWFMrbｳｸｲｲyヰKGJﾉｻ4ｹﾕrｽhｺｽzSDヰXAN62AD7RGNS` |
-| da          | `0x0B`    | `0x02016838cf5bb0ce0f3d4f380e1c00012066be7e332c7a453332bd9d0a7f7db055f5c5ef1a06ada66d98b39fb6810c473a` | `sora5ｻNﾒ5SﾐRﾉﾐﾃ62ｿ1ｶｷWFKyF1BcAﾔvｼﾐHqﾙﾐPﾏｴヰ5tｲﾕvnﾙT6ﾀW7mﾔ7ﾇﾗﾂｳ25CXS93` |
+Ҡабаттан ҡаралған: Мәғлүмәттәр моделе WG, Криптография WG — ADDR-1a өсөн раҫланған даирәһе.
 
-Reviewed-by: Data Model WG, Cryptography WG — scope approved for ADDR-1a.
+##### Сора I18NT0000000000014X һылтанма псевдонимы
 
-##### Sora Nexus reference aliases
+Сора I18NT0000000015X селтәрҙәре I18NI000000329X тиклем ғәҙәттәгесә.
+(`iroha_config::parameters::defaults::common::CHAIN_DISCRIMINANT`). 1990 й.
+Шуға күрә 18NI0000000331X һәм I18NI000000000332Х ярҙамсылары сыға
+һәр канонлы файҙалы йөк өсөн эҙмә-эҙлекле текст формалары. Һайланған ҡорамалдар 2012 йылдан алып.
+I18NI000000333X (генерацияланған
+Torii) тиҙ һылтанма өсөн түбәндә күрһәтелгән:
 
-Sora Nexus networks default to `chain_discriminant = 0x02F1`
-(`iroha_config::parameters::defaults::common::CHAIN_DISCRIMINANT`). The
-`AccountAddress::to_ih58` and `to_compressed_sora` helpers therefore emit
-consistent textual forms for every canonical payload. Selected fixtures from
-`fixtures/account/address_vectors.json` (generated via
-`cargo xtask address-vectors`) are shown below for quick reference:
+| Иҫәп / селектор | IH58 туранан-тура (префикс I18NI000000335X) | Сора ҡыҫылған (Torii) туранан-тура |
+|------------------|--------------------------------------------------------------|
+| I18NI000000337X домены (мемплицит селектор, орлоҡ Torii) | `RnuaJGGDL8HNkN8bwHwBTU32fTWQmbRoM3QZBJintx5RqTU7GgPJmNiA` | I18NI000000340X (эксплуатациялау асыҡ маршрутлаштырыу кәңәштәрен биргәндә I18NI0000000341X суффиксы) |
+| I18NI000000342X (урындағы һеңдерелгән селектор, орлоҡ `0x01`) | `34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r` | `sora5ｻu6rﾀCヰTGwﾏ1ﾅヱﾌQｲﾖﾇqCｦヰﾓZQCZRDSSﾅMｱﾙヱｹﾁｸ8ｾeﾄﾛ6C8bZuwﾗｹCZｦRSLQFU` |
+| Глобаль реестр күрһәткесе (I18NI000000346X, I18NI000000347X-ға тиң) | `3oE9sLeRGP49Cu7mQ1nF4wtKAm29BG4TGLiRsaXe7mhbMP5WZ113nNW1N6RbqF` | `sorakXｹ6NｻﾍﾀﾖSﾜﾖｱ3ﾚ5WﾘﾋQﾅｷｦxgﾛｸcﾁｵﾋkﾋvﾏ8SPﾓﾀｹdｴｴｲW9iCM6AEP` |
 
-| Account / selector | IH58 literal (prefix `0x02F1`) | Sora compressed (`sora`) literal |
-|--------------------|--------------------------------|-------------------------|
-| `default` domain (implicit selector, seed `0x00`) | `RnuaJGGDL8HNkN8bwHwBTU32fTWQmbRoM3QZBJintx5RqTU7GgPJmNiA` | `sora2QGﾈkﾀﾍrNﾒBﾎwﾍwﾙwﾗXHwﾜCﾘﾂY8ryGUﾈﾎyQｲHyヰD8ｲﾁYVY9VF8` (optional `@default` suffix when providing explicit routing hints) |
-| `treasury` (local digest selector, seed `0x01`) | `34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r` | `sora5ｻu6rﾀCヰTGwﾏ1ﾅヱﾌQｲﾖﾇqCｦヰﾓZQCZRDSSﾅMｱﾙヱｹﾁｸ8ｾeﾄﾛ6C8bZuwﾗｹCZｦRSLQFU` |
-| Global registry pointer (`registry_id = 0x0000_002A`, equivalent to `treasury`) | `3oE9sLeRGP49Cu7mQ1nF4wtKAm29BG4TGLiRsaXe7mhbMP5WZ113nNW1N6RbqF` | `sorakXｹ6NｻﾍﾀﾖSﾜﾖｱ3ﾚ5WﾘﾋQﾅｷｦxgﾛｸcﾁｵﾋkﾋvﾏ8SPﾓﾀｹdｴｴｲW9iCM6AEP` |
+Был ептәр CLI (`iroha tools address convert`), I18NT0000000035X тарафынан сығарылғандар менән тап килә.
+яуаптар (I18NI000000351X), һәм SDK ярҙамсылары, шуға күрә UX күсермәһе/йәбештереү
+ағымдар уларға һүҙмә-һүҙ таяна ала. I18NI000000352X ҡушымтаһы асыҡ маршрутлаштырыу тураһында һүҙ барғанда ғына; ялғау канонлы сығыштың бер өлөшө түгел.
 
-These strings match the ones emitted by the CLI (`iroha tools address convert`), Torii
-responses (`address_format=ih58|compressed`), and SDK helpers, so UX copy/paste
-flows can rely on them verbatim. Append `<address>@<domain>` only when you need an explicit routing hint; the suffix is not part of the canonical output.
+#### 2.6 Тура псевдонимдар өсөн үҙ-ара эш итеү (планлаштырылған)
 
-#### 2.6 Textual aliases for interoperability (planned)
+- **Сылбыр-сылбырлау стиле:** I18NI0000000353X өсөн журналдар һәм кеше
+  инеү. Батырҙар префиксты анализларға, встроенный сылбырҙы раҫларға һәм блокты блокировать итергә тейеш.
+  тап килмәү.
+- **CAIP-10 формаһы:** Сылбыр-агностик өсөн I18NI0000000354X
+  интеграциялары. Был карта ** әлегә тормошҡа ашырылмай ** ебәрелгән
+  инструменттары.
+- **Машина ярҙамсылары:** Ҡаршы, TypeScript/JavaScript, Python өсөн кодектарҙы баҫтырыу.
+  һәм Котлин IH58 һәм ҡыҫылған форматтарҙы ҡаплай (I18NI000000355X,
+  `AccountAddress::parse_any`, һәм уларҙы SDK эквиваленттары). CAIP-10 ярҙамсылары
+  киләсәк эш.
 
-- **Chain-alias style:** `ih:<chain-alias>:<alias@domain>` for logs and human
-  entry. Wallets must parse the prefix, verify the embedded chain, and block
-  mismatches.
-- **CAIP-10 form:** `iroha:<caip-2-id>:<ih58-addr>` for chain-agnostic
-  integrations. This mapping is **not yet implemented** in the shipped
-  toolchains.
-- **Machine helpers:** Publish codecs for Rust, TypeScript/JavaScript, Python,
-  and Kotlin covering IH58 and compressed formats (`AccountAddress::to_ih58`,
-  `AccountAddress::parse_any`, and their SDK equivalents). CAIP-10 helpers are
-  future work.
+#### 2.7 Детерминистик IH58 псевдонимы
 
-#### 2.7 Deterministic IH58 alias
+- **Префикс картаһы:** IH58 селтәре префиксы булараҡ I18NI0000000357X-ты ҡабатлағыҙ.
+  I18NI000000358X X (ҡара: I18NI000000359X X)
+  I18NI000000360X һәм 14-се бит, ике байт ҡиммәттәре өсөн 6‐битле префикс (бер байт) сығара.
+  ҙурыраҡ селтәрҙәр өсөн форма. Абруйлы заданиелар 1990 йылда йәшәй.
+  [I18NI000000361X] (source/references/address_prefix_registry.md);
+  SDKs MUST тап килгән JSON реестрын синхронлаштырыу өсөн һаҡларға, бәрелештәрҙән ҡотолоу өсөн.
+- **Иҫәп яҙмаһы материалы:** IH58 2012 йылға төҙөлгән канонлы файҙалы йөктө кодлай.
+  I18NI000000362X — баш байт, домен һайлаусыһы һәм
+  контроллер файҙалы йөк. Өҫтәмә хешинг аҙымы юҡ; IH58 һеңдерә
+  бинар контроллер файҙалы йөк (бер асҡыс йәки мультисиг) нисек етештерелгән Rust
+  кодер, түгел, CTAP2 картаһы өсөн ҡулланылған мультисиг сәйәсәте distests.
+- **Конкодлау:** I18NI0000000363X prefix байттарҙы канон менән берләштерә
+  файҙалы йөк һәм 16-битлы тикшерелгән сумманы Blake2b-512-нән нығытылған .
+  I18NI000000364X префикс (I18NI000000365X). Һөҙөмтә I18NI000000366XX аша Bases58-кодланған.
+  CLI/SDK ярҙамсылары шул уҡ процедураны фашлай, ә I18NI000000367X .
+  I18NI000000368X аша кире ҡайтара.
 
-- **Prefix mapping:** Reuse the `chain_discriminant` as the IH58 network prefix.
-  `encode_ih58_prefix()` (see `crates/iroha_data_model/src/account/address.rs`)
-  emits a 6‑bit prefix (single byte) for values `<64` and a 14‑bit, two-byte
-  form for larger networks. The authoritative assignments live in
-  [`address_prefix_registry.md`](source/references/address_prefix_registry.md);
-  SDKs MUST keep the matching JSON registry in sync to avoid collisions.
-- **Account material:** IH58 encodes the canonical payload built by
-  `AccountAddress::canonical_bytes()`—header byte, domain selector, and
-  controller payload. There is no additional hashing step; IH58 embeds the
-  binary controller payload (single key or multisig) as produced by the Rust
-  encoder, not the CTAP2 map used for multisig policy digests.
-- **Encoding:** `encode_ih58()` concatenates the prefix bytes with the canonical
-  payload and appends a 16-bit checksum derived from Blake2b-512 with the fixed
-  prefix `IH58PRE` (`b"IH58PRE" || prefix || payload`). The result is Base58-encoded via `bs58`.
-  CLI/SDK helpers expose the same procedure, and `AccountAddress::parse_any`
-  reverses it via `decode_ih58`.
+#### 2.8 Норматив тексты һынау векторҙары
 
-#### 2.8 Normative textual test vectors
+I18NI0000000369X X58 (өҫтөнлөк) һәм ҡыҫылған (I18NI000000370X, икенсе иң яҡшы)
+һәр канонлы файҙалы йөк өсөн литералдар. Һығымталар:
 
-`fixtures/account/address_vectors.json` contains full IH58 (preferred) and compressed (`sora`, second-best)
-literals for every canonical payload. Highlights:
+- *I18NI000000371X (Сора I18NT000000016X, I18NI000000372X префиксы).**  
+  IH58 I18NI000000373X, ҡыҫылған (I18NI000000374X)
+  `sora2QG…U4N5E5`. I18NT000000036X был теүәл ептәрҙе сығара I18NI000000376X’s
+  I18NI000000377X тормошҡа ашырыу (канон IH58) һәм `AccountAddress::to_compressed_sora`.
+- **I18NI000000379Х (реестр селекторы → ҡаҙна).**  
+  IH58 I18NI000000380X, ҡыҫылған (I18NI000000381X)
+  `sorakX…CM6AEP`. Күрһәтергә, тип реестр селекторҙары һаман да декод
+  шул уҡ канон файҙалы йөк тейешле локаль һеңдерелгән.
+- **Уңышһыҙлыҡ осрағы (`ih58-prefix-mismatch`).**  
+  IH58 туранан-тура кодланған prefix I18NI0000000384X төйөн буйынса кодланған
+  Ғәҙәттәгесә префикс уңышын көтөү
+  I18NI000000385X
+  домен маршрутлаштырыу алдынан тырышлыҡ һалына. I18NI000000386X матчы
+  күнекмәләрҙе үҙгәртеп ҡороу асыҡлау өҫтөндә Blake2b тикшерелгән сумма.
 
-- **`addr-single-default-ed25519` (Sora Nexus, prefix `0x02F1`).**  
-  IH58 `RnuaJGGDL8HNkN8bwHwBTU32fTWQmbRoM3QZBJintx5RqTU7GgPJmNiA`, compressed (`sora`)
-  `sora2QG…U4N5E5`. Torii emits these exact strings from `AccountId`’s
-  `Display` implementation (canonical IH58) and `AccountAddress::to_compressed_sora`.
-- **`addr-global-registry-002a` (registry selector → treasury).**  
-  IH58 `3oE9sLeRGP49Cu7mQ1nF4wtKAm29BG4TGLiRsaXe7mhbMP5WZ113nNW1N6RbqF`, compressed (`sora`)
-  `sorakX…CM6AEP`. Demonstrates that registry selectors still decode to
-  the same canonical payload as the corresponding local digest.
-- **Failure case (`ih58-prefix-mismatch`).**  
-  Parsing an IH58 literal encoded with prefix `NETWORK_PREFIX + 1` on a node
-  expecting the default prefix yields
-  `AccountAddressError::UnexpectedNetworkPrefix { expected: 753, found: 754 }`
-  before domain routing is attempted. The `ih58-checksum-mismatch` fixture
-  exercises tampering detection over the Blake2b checksum.
+#### 2.9
 
-#### 2.9 Compliance fixtures
+ADDR‐2 суднолар реплейлы ҡоролма өйөмдәре ҡаплай ыңғай һәм кире
+канонлы гекс буйынса сценарийҙар, IH58 (өҫтөнлөклө), ҡыҫылған (I18NI000000387X, ярым/тулы киңлек), асыҡтан-асыҡ
+ғәҙәттәге селекторҙар, глобаль реестр псевдонимы, һәм күп ҡултамғалы контроллерҙар. 1990 й.
+канонлы JSON йәшәй I18NI0000000388X һәм була ала
+регенерацияланған:
 
-ADDR‑2 ships a replayable fixture bundle covering positive and negative
-scenarios across canonical hex, IH58 (preferred), compressed (`sora`, half-/full-width), implicit
-default selectors, global registry aliases, and multisignature controllers. The
-canonical JSON lives in `fixtures/account/address_vectors.json` and can be
-regenerated with:
+I18NF000000062X
 
-```
-cargo xtask address-vectors --out fixtures/account/address_vectors.json
-# verify without writing:
-cargo xtask address-vectors --verify
-```
+Реп-хок тәжрибәләре өсөн (төрлө юлдар/форматтары) миҫал бинар һаман да.
+асыҡ:
 
-For ad-hoc experiments (different paths/formats) the example binary is still
-available:
+I18NF000000063X
 
-```
-cargo run -p iroha_data_model --example account_address_vectors > fixtures/account/address_vectors.json
-```
+I18NI000000389X-тағы руст блогы һынауҙары
+һәм I18NI000000390X, JS менән бергә,
+Свифт, һәм Андроид йүгән (I18NI000000391X,
+I18NI000000392Х,
+I18NI000000393X, 2019 йыл.
+ҡулланыу шул уҡ ҡоролма гарантиялау өсөн кодек паритеты буйынса SDKs һәм I18NT0000000037X ҡабул итеү.
 
-Rust unit tests in `crates/iroha_data_model/tests/account_address_vectors.rs`
-and `crates/iroha_torii/tests/account_address_vectors.rs`, together with the JS,
-Swift, and Android harnesses (`javascript/iroha_js/test/address.test.js`,
-`IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift`,
-`java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java`),
-consume the same fixture to guarantee codec parity across SDKs and Torii admission.
+### 3. Глобаль уникаль домендар & нормалләштереү
 
-### 3. Globally unique domains & normalization
+Шулай уҡ ҡарағыҙ: [`docs/source/references/address_norm_v1.md`] (I18NU000000068X)
+өсөн канон нормаль v1 торбаһы ҡулланылған I18NT0000000038X, мәғлүмәт моделе, һәм SDKs.
 
-See also: [`docs/source/references/address_norm_v1.md`](source/references/address_norm_v1.md)
-for the canonical Norm v1 pipeline used across Torii, the data model, and SDKs.
+I18NI0000000395X-ты теглы кортеж булараҡ үҙгәртеп ҡороу:
 
-Redefine `DomainId` as a tagged tuple:
+I18NF000000064X
 
-```
-DomainId {
-    name: Name,
-    authority: GlobalDomainAuthority, // new enum
-}
+I18NI000000396X X урап, ғәмәлдәге Исем өсөн домендар идара итеүсе ағымдағы сылбыр.
+Ҡасан домен аша теркәлгән глобаль реестр, беҙ һаҡлау хужаһы .
+сылбыр’дискриминант. Дисплей / анализлау әлегә үҙгәрешһеҙ ҡала, әммә был
+киңәйтелгән структура маршрутлаштырыу ҡарарҙары рөхсәт итә.
 
-enum GlobalDomainAuthority {
-    LocalChain,                  // default for the local chain
-    External { chain_discriminant: u16 },
-}
-```
+#### 3.1 Нормалләштереү & spoofing оборона
 
-`LocalChain` wraps the existing Name for domains managed by the current chain.
-When a domain is registered through the global registry, we persist the owning
-chain’s discriminant. Display / parsing stays unchanged for now, but the
-expanded structure allows routing decisions.
+Норма v1 билдәләй, канон торбаһы һәр компонент ҡулланырға тейеш, домен алдынан .
+исеме һаҡлана йәки I18NI000000397X-ға һеңдерелә. Тулы проходка
+йәшәй [`docs/source/references/address_norm_v1.md`] (source/references/address_norm_v1.md X);
+18NT0000000039X, SDK һәм идара итеү
+ҡоралдар тормошҡа ашырырға тейеш.
 
-#### 3.1 Normalization & spoofing defenses
-
-Norm v1 defines the canonical pipeline every component must use before a domain
-name is persisted or embedded into an `AccountAddress`. The full walkthrough
-lives in [`docs/source/references/address_norm_v1.md`](source/references/address_norm_v1.md);
-the summary below captures the steps that wallets, Torii, SDKs, and governance
-tools must implement.
-
-1. **Input validation.** Reject empty strings, whitespace, and the reserved
-   delimiters `@`, `#`, `$`. This matches the invariants enforced by
+1. **Идвижный раҫлау.** Буш ҡылдарҙы кире ҡағыу, аҡ лом, һәм запас
+   I18NI000000399X, I18NI000000400X, I18NI000000401X. Был инварианттарға тап килә.
    `Name::validate_str`.
-2. **Unicode NFC composition.** Apply ICU-backed NFC normalisation so canonically
-   equivalent sequences collapse deterministically (e.g., `e\u{0301}` → `é`).
-3. **UTS-46 normalisation.** Run the NFC output through UTS‑46 with
-   `use_std3_ascii_rules = true`, `transitional_processing = false`, and
-   DNS-length enforcement enabled. The result is a lower-case A-label sequence;
-   inputs that violate STD3 rules fail here.
-4. **Length limits.** Enforce the DNS-style bounds: each label MUST be 1–63
-   bytes and the full domain MUST NOT exceed 255 bytes after step 3.
-5. **Optional confusable policy.** UTS‑39 script checks are tracked for
-   Norm v2; operators can enable them early, but failing the check must abort
-   processing.
+2. **Берҙәм NFC составы.** Ҡулланыу ИВЛ-ярҙам NFC нормалаштырыу шулай канонлы
+   эквивалентлы эҙмә-эҙлеклелек детерминистик тарҡалыу (мәҫәлән, I18NI000000403X → `é`).
+3. **UTS-46 нормалләштереү.** УТС-46 аша НФК сығышын эшләтә.
+   I18NI000000405X, I18NI000000406X, һәм
+   DNS-оҙонлоғо үтәлеше өҫтөндә. Һөҙөмтәлә бәләкәй осраҡта А-ярлыҡ эҙмә-эҙлеге барлыҡҡа килә;
+   STD3 ҡағиҙәләрен боҙған индереүҙәр бында уңышһыҙлыҡҡа осрай.
+4. **Оҙонлоҡ сиктәре.** DNS-стиль сиктәрен үтәгеҙ: һәр ярлыҡ 1–63 булырға тейеш.
+   байт һәм тулы домен 3-сө аҙымдан һуң 255 байттан артмаҫҡа тейеш.
+5. **Факультатив буталсыҡ сәйәсәт.** UTS‐39 скрипт чектары өсөн күҙәтелә.
+   Норма v2; операторҙар уларҙы иртә мөмкинлек бирә ала, әммә чекты эшләтеп ебәрергә тейеш
+   эшкәртеү.
 
-If every stage succeeds, the lower-case A-label string is cached and used for
-address encoding, configuration, manifests, and registry lookups. Local digest
-selectors derive their 12-byte value as `blake2s_mac(key = "SORA-LOCAL-K:v1",
-canonical_label)[0..12]` using the step 3 output. All other attempts (mixed
-case, upper-case, raw Unicode input) are rejected with structured
-`ParseError`s at the boundary where the name was supplied.
+Әгәр һәр этап уңышҡа өлгәшһә, бәләкәй генә А-ярыш еп кэшлана һәм 2012 йыл өсөн ҡулланыла.
+адресы кодлау, конфигурация, манифест һәм реестр эҙләү. Урындағы дайджест
+селекторҙар үҙҙәренең 12-байт ҡиммәтен `blake2s_mac тип ала(асҡыс = "I18NT00000000055X-LOCAL-K:v1",
+3-сө аҙымды ҡулланып, канонлы_марк)[0..12]` ҡулланып. Ҡалған бөтә тырышлыҡтар (ҡатнашыусы
+осраҡта, юғары шарап, сеймал Юникод индереү) структуралы менән кире ҡағыла
+I18NI0000007Xs сигендә, унда исем бирелгән.
 
-Canonical fixtures demonstrating these rules — including punycode round-trips
-and invalid STD3 sequences — are listed in
-`docs/source/references/address_norm_v1.md` and are mirrored in the SDK CI
-vector suites tracked under ADDR‑2.
+Был ҡағиҙәләрҙе күрһәтеүсе канонлы ҡорамалдар — шул иҫәптән rovycode түңәрәк сәйәхәт
+һәм дөрөҫ булмаған STD3 эҙмә-эҙлеклелеге — 2012 йылда бирелгән.
+I18NI000000408X һәм SDK CI көҙгөһөндә.
+вектор люкстары ADDR‐2 аҫтында күҙәтелә.
 
-### 4. Nexus domain registry & routing
+### 4. I18NT00000000017X домен реестры һәм маршрутлаштырыу- **Реестр схемаһы:** I18NT0000000018X X-сы картаһы I18NI000000409X картаһын үтәй.
+  унда I18NI000000410X сылбырлы дискриминант, өҫтәмә метамағлүмәттәрҙе үҙ эсенә ала (RPC
+  ос нөктәләре), һәм хакимлыҡҡа дәлил (мәҫәлән, идара итеү күп ҡултамға).
+- **Синк механизмы:**
+  - Сылбырҙар тапшыра ҡул ҡуйылған домен дәғүәләре I18NT000000000019X (йәки генез ваҡытында йәки аша
+    идара итеү инструкцияһы).
+  - I18NT0000000020X ваҡыт-ваҡыт баҫтырып сығара ( JSON плюс опциональ Меркл тамыр)
+    өҫтөндә HTTPS һәм контент-адресланған һаҡлау (мәҫәлән, IPFS). Клиенттар штанга
+    һуңғы манифест һәм раҫлау ҡултамғалары.
+- **Тик ҡарашлы ағым:**
+  - I18NT000000040X транзакцияға һылтанма яһай `DomainId`.
+  - Әгәр домен локаль билдәһеҙ булһа, I18NT000000041X кэш I18NT000000021X манифестын эҙләй.
+  - Әгәр манифест сит ил сылбырын күрһәтһә, операция менән кире ҡағыла.
+    детерминистик I18NI000000412X хатаһы һәм дистанцион сылбырлы мәғлүмәт.
+  - Әгәр ҙә домен I18NT000000022X-тан юғалһа, I18NT000000042X I18NI000000413X ҡайтарыуҙары.
+- **Ышаныс якорь & әйләнеш:** Идара итеү асҡыстары ҡултамғаһы күренә; әйләнеш йәки
+  кире ҡағыу яңы манифест яҙмаһы булараҡ баҫылып сыға. Клиенттар асыҡ күренә .
+  TTLs (мәҫәлән, 24h) һәм был тәҙрәнән тыш иҫке мәғлүмәттәр менән кәңәшләшеүҙән баш тарта.
+- **Утмаһыҙ режимдар:** Әгәр асыҡ эҙләү етешһеҙлектәре, I18NT0000000043X кире кэшлана
+  TTL эсендәге мәғлүмәттәр; үткән TTL ул I18NI000000414X һәм отказ сығара
+  эҙмә-эҙлекһеҙ хәлдән ҡотолоу өсөн домендар араһындағы маршрутлаштырыу.
 
-- **Registry schema:** Nexus maintains a signed map `DomainName -> ChainRecord`
-  where `ChainRecord` includes the chain discriminant, optional metadata (RPC
-  endpoints), and a proof of authority (e.g., governance multi-signature).
-- **Sync mechanism:**
-  - Chains submit signed domain claims to Nexus (either during genesis or via
-    governance instruction).
-  - Nexus publishes periodic manifests (signed JSON plus optional Merkle root)
-    over HTTPS and content-addressed storage (e.g., IPFS). Clients pin the
-    latest manifest and verify signatures.
-- **Lookup flow:**
-  - Torii receives a transaction referencing `DomainId`.
-  - If the domain is unknown locally, Torii queries the cached Nexus manifest.
-  - If the manifest indicates a foreign chain, the transaction is rejected with
-    a deterministic `ForeignDomain` error and the remote chain info.
-  - If the domain is missing from Nexus, Torii returns `UnknownDomain`.
-- **Trust anchors & rotation:** Governance keys sign manifests; rotation or
-  revocation is published as a new manifest entry. Clients enforce manifest
-  TTLs (e.g., 24h) and refuse to consult stale data beyond that window.
-- **Failure modes:** If manifest retrieval fails, Torii falls back to cached
-  data within TTL; past TTL it emits `RegistryUnavailable` and refuses
-  cross-domain routing to avoid inconsistent state.
+### 4.1 Реестр үҙгәрмәй, псевдоним, һәм ҡәбер таштары (ADDR-7c)
 
-### 4.1 Registry immutability, aliases, and tombstones (ADDR-7c)
+I18NT0000000023X баҫтырып сығара ** Ҡушымта-тик асыҡ ** шулай һәр домен йәки псевдоним заданиеһы
+аудит һәм яңынан уйнау мөмкин. Операторҙар тейеш дауалау өйөм һүрәтләнгән һүрәтләнгән .
+[адрес манифест runbook](source/runbooks/address_manifest_ops.md) тип
+берҙән-бер сығанаҡ хәҡиҡәт: әгәр ҙә манифест юҡ йәки етешһеҙлектәр раҫлау, I18NT0000000044X тейеш
+зыян күргән доменды хәл итеүҙән баш тарта.
 
-Nexus publishes an **append-only manifest** so every domain or alias assignment
-can be audited and replayed. Operators must treat the bundle described in the
-[address manifest runbook](source/runbooks/address_manifest_ops.md) as the
-sole source of truth: if a manifest is missing or fails validation, Torii must
-refuse to resolve the affected domain.
+Автоматлаштырыу ярҙамы: I18NI000000415X
+тикшерелгән сумманы ҡабатлай, схема, һәм алдағы-элекке тикшерелгән тикшерелгән яҙылған
+runbook. Команда продукцияһын үҙгәртеү билеттарын индереү өсөн күрһәтеү өсөн I18NI000000416X .
+һәм `previous_digest` бәйләнеше раҫланды, өйөмдө баҫтырғансы.
 
-Automation support: `cargo xtask address-manifest verify --bundle <current_dir> --previous <previous_dir>`
-replays the checksum, schema, and previous-digest checks spelled out in the
-runbook. Include the command output in change tickets to show the `sequence`
-and `previous_digest` linkage was validated before publishing the bundle.
+#### Манифест башы & ҡултамға контракт
 
-#### Manifest header & signature contract
+| Ялан | Талап |
+|------|--------------|
+| `version` | Әлеге ваҡытта I18NI000000419X. Ҡабул итеү тик тап килгән спец яңыртыу менән. |
+| `sequence` | Өҫтәү **таҙа ** бер баҫма. I18NT000000045X кэштары айырмалар йәки регрессиялар менән ҡабаттан ҡарауҙан баш тарта. |
+| `generated_ms` + I18NI0000000422X | Кэш яңылыҡ булдырыу (24h ҡағиҙәһеҙ). Әгәр ҙә TTL сираттағы баҫмаға тиклем тамамланһа, I18NT000000046XX `RegistryUnavailable`-ға әйләндерә. |
+| `previous_digest` | BLAKE3 үҙләштереү (гекс) алдан асыҡ тән. Тикшереүселәр уны I18NI000000425X менән яңынан иҫәпләй, был үҙгәрешлелекте иҫбатлай. |
+| `signatures` | Манифесттарға Sigstore (I18NI000000427X) аша ҡул ҡуйыла. Ops `cosign verify-blob --bundle manifest.sigstore manifest.json` йүгерергә һәм идара итеү үҙенсәлеген үтәү/эмиссия сикләүҙәрен үтәү алдынан ролл-аут. |
 
-| Field | Requirement |
-|-------|-------------|
-| `version` | Currently `1`. Bump only with a matching spec update. |
-| `sequence` | Increment by **exactly** one per publication. Torii caches refuse revisions with gaps or regressions. |
-| `generated_ms` + `ttl_hours` | Establish cache freshness (default 24 h). If the TTL expires before the next publication, Torii flips to `RegistryUnavailable`. |
-| `previous_digest` | BLAKE3 digest (hex) of the prior manifest body. Verifiers recompute it with `b3sum` to prove immutability. |
-| `signatures` | Manifests are signed via Sigstore (`cosign sign-blob`). Ops must run `cosign verify-blob --bundle manifest.sigstore manifest.json` and enforce the governance identity/issuer constraints before rollout. |
+Релиз автоматлаштырыу I18NI000000429X һәм `checksums.sha256`
+JSON тәне менән бер рәттән. Файлдарҙы бергә тотоғоҙ, ҡасан көҙгө I18NT0000000003X йәки .
+HTTP ос нөктәләре, шулай итеп, аудиторҙар тикшерелгән аҙымдарҙы ҡабатлай ала һүҙмә-һүҙ.
 
-The release automation emits `manifest.sigstore` and `checksums.sha256`
-alongside the JSON body. Keep the files together when mirroring to SoraFS or
-HTTP endpoints so auditors can replay the verification steps verbatim.
+#### Яныу типтары
 
-#### Entry types
+| Тип | Маҡсат | Кәрәкле яландар |
+|-----|---------|----------------- |
+| `global_domain` | Домен глобаль теркәлгән һәм сылбырлы дискриминант һәм IH58 префиксына картаға төшөрөргә тейеш тип иғлан итә. | `{ "domain": "<label>", "chain": "sora:nexus:global", "ih58_prefix": 753, "selector": "global" }` |
+| `tombstone` | Прязка псевдоним/һайлаусы даими. Кәрәк ҡасан юйып Урындағы‐8 үҙләштереү йәки домен алып ташлау. | `{ "selector": {…}, "reason_code": "LOCAL8_RETIREMENT" \| …, "ticket": "<governance id>", "replaces_sequence": <number> }` |
 
-| Type | Purpose | Required fields |
-|------|---------|-----------------|
-| `global_domain` | Declares that a domain is registered globally and should map to a chain discriminant and IH58 prefix. | `{ "domain": "<label>", "chain": "sora:nexus:global", "ih58_prefix": 753, "selector": "global" }` |
-| `tombstone` | Retires an alias/selector permanently. Required when erasing Local‑8 digests or removing a domain. | `{ "selector": {…}, "reason_code": "LOCAL8_RETIREMENT" \| …, "ticket": "<governance id>", "replaces_sequence": <number> }` |
+I18NI0000000435X яҙмалары теләк буйынса I18NI000000436X йәки `sorafs_cid` .
+ҡултамғалы сылбырлы метамағлүмәттәрҙә янсыҡтарҙы күрһәтеү, әммә канон кортежы ҡала
+`{domain, chain, discriminant/ih58_prefix}`. I18NI000000439X рекордтары ****
+селектор пенсияға сығыу һәм билет/идара итеү артефакт, тип рөхсәт ителә
+үҙгәреш шулай аудит эҙ реконструктив офлайн.
 
-`global_domain` entries may optionally include a `manifest_url` or `sorafs_cid`
-to point wallets at signed chain metadata, but the canonical tuple remains
-`{domain, chain, discriminant/ih58_prefix}`. `tombstone` records **must** cite
-the selector being retired and the ticket/governance artefact that authorised
-the change so the audit trail is reconstructable offline.
+#### Псевдоним/ҡәбер таш эш ағымы & телеметрия
 
-#### Alias/tombstone workflow & telemetry
-
-1. **Detect drift.** Use `torii_address_local8_total{endpoint}`,
+1. **Детектор дрейф.** I18NI000000440X ҡулланыу,
    `torii_address_local8_domain_total{endpoint,domain}`,
    `torii_address_collision_total{endpoint,kind="local12_digest"}`,
    `torii_address_collision_domain_total{endpoint,domain}`,
-   `torii_address_domain_total{endpoint,domain_kind}`, and
-   `torii_address_invalid_total{endpoint,reason}` (rendered in
-   `dashboards/grafana/address_ingest.json`) to confirm Local submissions and
-   Local-12 collisions stay at zero before proposing a tombstone. The
-   per-domain counters let owners prove that only dev/test domains emit Local‑8
-   traffic (and that Local‑12 collisions map to known staging domains) while
-   includes the **Domain Kind Mix (5m)** panel so SREs can graph how much
-   `domain_kind="local12"` traffic remains, and the `AddressLocal12Traffic`
-   alert fires whenever production still sees Local-12 selectors despite the
-   retirement gate.
-2. **Derive canonical digests.** Run
-   `iroha tools address convert <address> --format json --expect-prefix 753`
-   (or consume `fixtures/account/address_vectors.json` via
-   `scripts/account_fixture_helper.py`) to capture the exact `digest_hex`.
-   The CLI accepts IH58, `sora…`, and canonical `0x…` literals; append
-   `@<domain>` only when you need to preserve a label for manifests.
-   The JSON summary surfaces that domain via the `input_domain` field, and
-   `--append-domain` replays the converted encoding as `<address>@<domain>` for
-   manifest diffs (this suffix is metadata, not a canonical account id).
-   For newline-oriented exports use
-   `iroha tools address normalize --input <file> --only-local` to mass-convert Local
-   selectors into canonical IH58 (preferred), compressed (`sora`, second-best), hex, or JSON forms while skipping
-   non-local rows. When auditors need spreadsheet-friendly evidence, run
-   `iroha tools address audit --input <file> --format csv` to emit a CSV summary
-   (`input,status,format,domain_kind,…`) that highlights Local selectors,
-   canonical encodings, and parse failures in the same file.
-3. **Append manifest entries.** Draft the `tombstone` record (and the follow-up
-   `global_domain` record when migrating to the global registry) and validate
-   the manifest with `cargo xtask address-vectors` before requesting signatures.
-4. **Verify & publish.** Follow the runbook checklist (hashes, Sigstore,
-   sequence monotonicity) before mirroring the bundle to SoraFS. Torii now
-   canonicalizes IH58 (preferred)/sora (second-best) literals immediately after the bundle lands.
-5. **Monitor & rollback.** Keep the Local‑8 and Local‑12 collision panels at
-   zero for 30 days; if regressions appear, republish the previous manifest
-   only in the affected non-production environment until telemetry stabilises.
+   I18NI00000444ХХ, һәм
+   I18NI000000445X 1990 йылда төшөрөлгән.
+   Torii) Урындағы тапшырыуҙарҙы раҫлау өсөн һәм
+   Урындағы-12 бәрелештәр ҡәбер ташын тәҡдим иткәнсе нулдә ҡала. 1990 й.
+   domean счетчиктары хужаларға иҫбатларға рөхсәт итеү, тип тик dev/һынау домендары урындағы 8
+   трафик (һәм был Урындағы 12 бәрелешкән карта билдәле стажировка домендары) шул уҡ ваҡытта
+   үҙ эсенә **Домен һынлы микс (5м)** панель шулай SREs графиг ала, күпме .
+   I18NI000000447X трафик ҡалдыҡтары, һәм ToriiX
+   иҫкәртмә янғындар ҡасан етештереү һаман да күрә урындағы-12 селекторҙары ҡарамаҫтан,
+   пенсия ҡапҡаһы.
+2. **Канонический дайджесттарҙы сығарыу.** Йүгерергә
+   `iroha tools address convert <address> --format json --expect-prefix 753` XX
+   (йәки ҡулланыу I18NI00000000450X аша
+   I18NI000000451X) теүәл I18NI000000452X-ты тотоу өсөн.
+   CLI ҡабул итә IH58, `sora…`, һәм канон I18NI000000454X литералдар; ҡушымта
+   I18NI000000455X тик һеҙгә кәрәк булғанда, манифест өсөн ярлыҡ һаҡларға.
+   JSON йыйнаҡ өҫтө, тип домен аша I18NI00000000456X ялан, һәм
+   I18NI0000000457X 2012 йыл өсөн I18NI0000000458X тип үҙгәртелгән кодлауҙы яңынан уйнай.
+   асыҡ диффтар (был ялғау метамағлүмәттәр булып тора, канонлы иҫәп id түгел).
+   Яңы линияға йүнәлтелгән экспорт ҡулланыу өсөн
+   I18NI0000000459X XX локаль күпләп үҙгәртеп ҡороу өсөн
+   селекторҙар канонлы IH58 (өҫтөнлөклө), ҡыҫылған (I18NI000000460X, икенсе иң яҡшы), гекс, йәки JSON формалары, ә һикереп .
+   урындағы булмаған рәттәр. Ҡасан аудиторҙар кәрәк таблица-дуҫ дәлилдәр, йүгерә
+   I18NI000000461X CSV резюме сығарыу өсөн
+   (I18NI000000462X) Урындағы селекторҙарҙы айырып күрһәтеүсе,
+   канонлы кодлауҙар, һәм анализ етешһеҙлектәре бер үк файл.
+3. **Предмет манифест яҙмалары.** I18NI000000463X рекордын төҙөгөҙ (һәм эҙмә-эҙлеклелек
+   I18NI0000000464X рекорды глобаль реестрға күсеп килгәндә) һәм раҫлау
+   ҡултамғалар һорағансы I18NI000000465X менән манифест.
+4. **Тегеү & баҫтырып сығарыу.** runbook тикшерелгән исемлеген үтәргә (хеш, Sigstore,
+   эҙмә-эҙлеклелек монотонлылығы) I18NT000000004X тиклем өйөмөн көҙгөләү алдынан. I18NT000000047X хәҙер
+   каноникализировать IH58 (өҫтөнлөк)/сора (икенсе-иң яҡшы) литералдар шунда уҡ өйөм ерҙәренән һуң.
+5. **Монитор & кире ҡағыу.** Урындағы 8 һәм урындағы 12 бәрелеш панелдәрен һаҡлағыҙ.
+   30 көн өсөн нуль; әгәр регрессиялар барлыҡҡа килһә, алдағы манифестты яңынан баҫтырыу
+   тик зарарланған етештерелмәгән мөхиттә тик телеметрия тотороҡланғансы.
 
-All of the steps above are mandatory evidence for ADDR‑7c: manifests without
-the `cosign` signature bundle or without matching `previous_digest` values must
-be rejected automatically, and operators must attach the verification logs to
-their change tickets.
+Үрҙәге бөтә аҙымдар ҙа мотлаҡ дәлилдәр булып тора ADDR‐7c: 2012 йылғы булмағанда күренә.
+I18NI000000000466X ҡултамғаһы өйөмө йәки тап килтермәйенсә I18NI00000000467X ҡиммәттәре тейеш
+автоматик рәүештә кире ҡағыла, һәм операторҙар тикшерелгән журналдарҙы беркетергә тейеш.
+уларҙы үҙгәртеү билеттары.
 
-### 5. Wallet & API ergonomics
+### 5. Батыр & API эргономика
 
-- **Display defaults:** Wallets show the IH58 address (short, checksummed)
-  plus the resolved domain as a label fetched from the registry. Domains are
-  clearly marked as descriptive metadata that may change, while IH58 is the
-  stable address.
-- **Input canonicalization:** Torii and SDKs accept IH58 (preferred)/sora (second-best)/0x
-  addresses plus `alias@domain`, `public_key@domain`, `uaid:…`, and
-  `opaque:…` forms, then canonicalize to IH58 for output. There is no
-  strict-mode toggle; raw phone/email identifiers must be kept off-ledger
-  via UAID/opaque mappings.
-- **Error prevention:** Wallets parse IH58 prefixes and enforce chain-discriminant
-  expectations. Chain mismatches trigger hard failures with actionable diagnostics.
-- **Codec libraries:** Official Rust, TypeScript/JavaScript, Python, and Kotlin
-  libraries provide IH58 encoding/decoding plus compressed (`sora`) support to
-  avoid fragmented implementations. CAIP-10 conversions are not shipped yet.
+- **Дисплей ғәҙәттәгесә:** Ҡанаттар IH58 адресын күрһәтә (ҡыҫҡа, чемпионат)
+  плюс хәл ителгән доменды реестрҙан алынған ярлыҡ булараҡ. Домендар -
+  асыҡ билдәләнгән тасуири метамағлүмәттәр, үҙгәрергә мөмкин, ә IH58 был
+  тотороҡло адрес.
+- **Интюра каноникизация:** I18NT0000000048X һәм SDKs IH58 (өҫтөнлөк)/сора (икенсе-иң яҡшы)/0x ҡабул итә.
+  адрестары плюс I18NI0000000468X, I18NI000000469X, I18NI000000470X, һәм
+  `opaque:…` формалары, һуңынан етештереү өсөн IH58 канонлы. Юҡ юҡ.
+  ҡәтғи режимлы переключатель; сей телефон/электрон почта идентификаторҙары офф-леджер һаҡларға тейеш
+  аша UAID/pacaque карталары.
+- **Хаталарҙы иҫкәртергә:** Ҡанаттар IH58 префикстарын анализлау һәм сылбыр-дискриминантты үтәргә
+  өмөттәре. Сылбыр тап килмәүе ҡаты етешһеҙлектәрҙе ғәмәлгә яраҡлы диагностика менән башлай.
+- **Кодек китапханалары:** Рәсми тут, ТипСкрипт/JavaScript, Python һәм Котлин
+  китапханалар IH58 кодлау/декодирование плюс ҡыҫылған тәьмин итә (I18NI000000472X) ярҙам
+  тарҡау тормошҡа ашырыуҙарҙан ҡасығыҙ. CAIP-10 конверсия әлегә ебәрелмәй.
 
-#### Accessibility & Safe Sharing Guidance
+#### Ҡулланыу мөмкинлеге & Хәүефһеҙлек менән уртаҡлашыу йүнәлеше- Продукция өҫтө өсөн тормошҡа ашырыу йүнәлеше 2012 йылда тура эфирҙа күҙәтелә.
+  `docs/portal/docs/reference/address-safety.md`; был тикшерелгән исемлеккә һылтанма ҡасан
+  был талаптарҙы янсыҡҡа йәки тикшеренүсе UX-ҡа яраҡлаштырыу.
+- **Хәүефһеҙ бүлешергә ағымдар:** Өҫтөн күсереп йәки күрһәтеү адрестары ғәҙәттәгесә IH58 формаһы һәм фашлау эргә-тирәләге “бүлешергә” ғәмәл, тип тәҡдим итә, тулы строка һәм QR-код алынған бер үк файҙалы йөк, шулай уҡ ҡулланыусылар раҫлай ала чек суммаһы визуаль йәки сканерлау. Ҡасан ҡыҫҡартыу ҡотолғоһоҙ (мәҫәлән, бәләкәй экрандар), старт һәм осонда епте һаҡлап, асыҡ эллипс өҫтәй, һәм тулы адресты һаҡлау аша мөмкин күсермә-будкаға осраҡлы ҡырҡып иҫкәртергә.
+- **IME һаҡлау саралары:** Адрес индереүҙәр IME/IME-стиль клавиатураларҙан композиция артефакттарын кире ҡаға. ASCII-тик яҙманы үтәү, рәт иҫкәртмә тәҡдим ҡасан тулы киңлек йәки Кана персонаждары асыҡланған, һәм ябай текст пастаһы зонаһын тәҡдим итә, тип өҙөп, билдәләрҙе берләштереү алдынан валидация, шулай итеп, япон һәм ҡытай ҡулланыусылар үҙ IME өҙөп була, алға китеш юғалтмайынса.
+- **Экран-уҡыусы ярҙам:** визуаль йәшерен ярлыҡтарҙы тәьмин итеү (I18NI00000000000474X/I18NI000000475X), тип һүрәтләй алдынғы Bases58 цифрҙары һәм IH58 файҙалы йөктө 4 йәки 8-характерь төркөмдәренә өлөш индерә, шуға күрә ярҙамсы технологиялар төркөмләнгән персонаждар урынына йүгерә-стринг урынына. Иғлан күсермәһе/бүлешергә уңыш аша әҙәпле тере төбәктәр һәм тәьмин итеү QR алдан ҡарау үҙ эсенә тасуири альт тексы (“IH58 адресы өсөн <әлиә> сылбырында 0x02F1”).
+- **Сора-тик ҡыҫылған ҡулланыу:** Һәр ваҡыт I18NI000000476X ҡыҫылған ҡарашты “Сора-тик” тип атау һәм күсермәләү алдынан уны асыҡ раҫлау артында ҡапҡа. SDKs һәм янсыҡтар ҡыҫылған сығыш күрһәтеүҙән баш тартырға тейеш, ҡасан сылбыр дискриминант түгел, Sora I18NT000000024X ҡиммәте һәм йүнәлтергә тейеш ҡулланыусылар өсөн IH58 өсөн селтәр-ара күсермәләр ҡотолоу өсөн дөрөҫ маршрутлаштырыу аҡса.
 
-- Implementation guidance for product surfaces is tracked live in
-  `docs/portal/docs/reference/address-safety.md`; reference that checklist when
-  adapting these requirements to wallet or explorer UX.
-- **Safe sharing flows:** Surfaces that copy or display addresses default to the IH58 form and expose an adjacent “share” action that presents both the full string and a QR code derived from the same payload so users can verify the checksum visually or by scanning. When truncation is unavoidable (e.g., small screens), retain the start and end of the string, add clear ellipses, and keep the full address accessible via copy-to-clipboard to prevent accidental clipping.
-- **IME safeguards:** Address inputs MUST reject composition artefacts from IME/IME-style keyboards. Enforce ASCII-only entry, present an inline warning when full-width or Kana characters are detected, and offer a plain-text paste zone that strips combining marks before validation so Japanese and Chinese users can disable their IME without losing progress.
-- **Screen-reader support:** Provide visually hidden labels (`aria-label`/`aria-describedby`) that describe the leading Base58 prefix digits and chunk the IH58 payload into 4- or 8-character groups, so assistive technology reads grouped characters instead of a run-on string. Announce copy/share success via polite live regions and ensure QR previews include descriptive alt text (“IH58 address for <alias> on chain 0x02F1”).
-- **Sora-only compressed usage:** Always label the `sora…` compressed view as “Sora-only” and gate it behind an explicit confirmation before copying. SDKs and wallets must refuse to display compressed output when the chain discriminant is not the Sora Nexus value and should direct users back to IH58 for inter-network transfers to avoid misrouting funds.
+## тормошҡа ашырыу тикшерелгән исемлек
 
-## Implementation Checklist
+- **IH58 конверт:** Префикс I18NI0000000477ХХХ-ны компакт ҡулланып кодлай.
+  6-/14-бит схемаһы I18NI000000478X, тән канон байттары булып тора
+  (I18NI000000479X X), ә чек-сум тәүге ике байт булып тора
+  Блейк2б-512(I18NI000000480X || префикс || тән). Тулы файҙалы йөк база58-
+  I18NI000000481X аша кодланған.
+- **Билдә килешеп:** Ҡул ҡуйылған JSON (һәм өҫтәмә Меркл тамыр) баҫтырыу
+  I18NI000000482X 24h TTL һәм
+  әйләнеш асҡыстары.
+- **Домен сәйәсәте:** ASCII I18NI000000483X бөгөн; әгәр ҙә i18n мөмкинлек бирә, UTS-46 өсөн ҡулланыу өсөн .
+  нормалләштереү һәм UTS-39 өсөн буталсыҡ чектар. 1990 йылдарҙа был йүнәлештәге эшмәкәрлекте үҫтереүҙең max (63) һәм
+  дөйөм (255) оҙонлоғо.
+- **Текстуаль ярҙамсылар:** Судно IH58 ↔ ҡыҫылған (I18NI0000000484X) рустта,
+  TypeScript/JavaScript, Python, һәм Котлин менән уртаҡ һынау векторҙары (CAIP-10
+  карталар киләсәктә эш булып ҡала).
+- **CLI инструменттар:** I18NI000000485X аша детерминистик оператор эш ағымын тәьмин итеү
+  (ҡара: I18NI000000486X), был ҡабул итә IH58/I18NI0000000487X/I18NI000000488ХХХХ һәм
+  опциональ I18NI0000000489X ярлыҡтары, IH58 сығышына стандарттар Sora I18NT0000000025X префикс (I18NI000000490X) ҡулланып.
+  һәм тик Сора-тик ҡыҫылған алфавит сығара, ҡасан операторҙар асыҡтан-асыҡ уны һорап,
+  `--format compressed` йәки JSON резюме режимы. Команда префикс өмөттәрен үтәй
+  анализ, бирелгән домен (I18NI000000492X JSON) һәм I18NI000000493X флагы.
+  үҙгәртелә үҙгәртелгән кодлау I18NI0000000494X шулай асыҡ диффтар эргономик булып ҡала.
+- **Валлет/тикшерер UX:** [адрес дисплей йүнәлештәре] (source/sns/address_display_guidelines.md)
+  ADDR-6 менән ебәрелгән-ике күсермә төймәләре тәҡдим итә, IH58 QR файҙалы йөк булараҡ һаҡлау, һәм иҫкәртергә
+  ҡулланыусылар, тип ҡыҫылған I18NI00000004955 формаһы Сора-тик һәм IME яңынан яҙыу һиҙгер.
+- **I18NT000000000049X интеграцияһы:** Cache I18NT000000026X X-тың TTL-ды хөрмәт итеүен күрһәтә
+  I18NI000000496X/I18NI000000497X/I18NI000000498X быуат детерминистик, һәм
+  фашлау I18NI0000000499X каноникалы I18NI000000500X,
+  I18NI000000501X, I18NI000000502X/I18NI000000503X литрҙар, йәки адрестарҙы кодлау.
+  IH58 хәл ителгән доменды һәм сығанаҡты ҡайтарғанда.
 
-- **IH58 envelope:** Prefix encodes the `chain_discriminant` using the compact
-  6-/14-bit scheme from `encode_ih58_prefix()`, the body is the canonical bytes
-  (`AccountAddress::canonical_bytes()`), and the checksum is the first two bytes
-  of Blake2b-512(`b"IH58PRE"` || prefix || body). The full payload is Base58-
-  encoded via `bs58`.
-- **Registry contract:** Signed JSON (and optional Merkle root) publishing
-  `{discriminant, ih58_prefix, chain_alias, endpoints}` with 24h TTL and
-  rotation keys.
-- **Domain policy:** ASCII `Name` today; if enabling i18n, apply UTS-46 for
-  normalization and UTS-39 for confusable checks. Enforce max label (63) and
-  total (255) lengths.
-- **Textual helpers:** Ship IH58 ↔ compressed (`sora…`) codecs in Rust,
-  TypeScript/JavaScript, Python, and Kotlin with shared test vectors (CAIP-10
-  mappings remain future work).
-- **CLI tooling:** Provide a deterministic operator workflow via `iroha tools address convert`
-  (see `crates/iroha_cli/src/address.rs`), which accepts IH58/`sora…`/`0x…` literals and
-  optional `<address>@<domain>` labels, defaults to IH58 output using the Sora Nexus prefix (`753`),
-  and only emits the Sora-only compressed alphabet when operators explicitly request it with
-  `--format compressed` or the JSON summary mode. The command enforces prefix expectations on
-  parse, records the provided domain (`input_domain` in JSON), and the `--append-domain` flag
-  replays the converted encoding as `<address>@<domain>` so manifest diffs remain ergonomic.
-- **Wallet/explorer UX:** Follow the [address display guidelines](source/sns/address_display_guidelines.md)
-  shipped with ADDR-6—offer dual copy buttons, keep IH58 as the QR payload, and warn
-  users that the compressed `sora…` form is Sora-only and susceptible to IME rewrites.
-- **Torii integration:** Cache Nexus manifests respecting TTL, emit
-  `ForeignDomain`/`UnknownDomain`/`RegistryUnavailable` deterministically, and
-  expose `POST /v1/accounts/resolve` to canonicalize `alias@domain`,
-  `public_key@domain`, `uaid:`/`opaque:` literals, or encoded addresses into
-  IH58 while returning the resolved domain and source.
+### I18NT00000000050X яуап форматтары
 
-### Torii response formats
+- I18NI000000504X ҡабул итә опциональ I18NI000000505X эҙләү параметры һәм
+  `POST /v1/accounts/query` JSON конверт эсендә шул уҡ ҡырҙы ҡабул итә.
+  Ярҙамсы ҡиммәттәр:
+  - I18NI000000507X (поруез) — яуаптар канон IH58 Bases58 файҙалы йөктәр сығара (мәҫәлән,
+    `RnuaJGGDL8HNkN8bwHwBTU32fTWQmbRoM3QZBJintx5RqTU7GgPJmNiA` X).
+  - I18NI000000509X — яуаптар Сора-тик I18NI000000510X ҡыҫылған ҡарашты сығара, ә
+    фильтрҙар/юл параметрҙарын канонлы тотоу.
+- Дөрөҫ булмаған ҡиммәттәр ҡайтарыу I18NI000000511X (I18NI000000512X). Был мөмкинлек бирә
+  янсыҡтар һәм тикшеренүселәр Сора-тик UX өсөн ҡыҫылған ҡылдар һорау, ә
+  IH58-ҙе үҙ-ара эш итеү өсөн ғәҙәттәгесә һаҡлау.
+- Активтар эйәһе исемлеге (I18NI000000513X) һәм уларҙы JSON
+  конверт аналогы (`POST …/holders/query`) шулай уҡ `address_format` X.
+  `items[*].account_id` яланы ҡасан ғына лицензиялар сығара.
+  параметр/конверт яланы I18NI000000517X тип ҡуйыла, иҫәптәрҙе көҙгөләй
+  ос нөктәләре шулай тикшеренүселәр каталогтар буйынса эҙмә-эҙлекле сығыш тәҡдим итә ала.
+- **Һынау:** Кодер/декодер өсөн берәмек һынауҙарын өҫтәү, дөрөҫ булмаған сылбыр
+  уңышһыҙлыҡтар, һәм асыҡ эҙләүҙәр; I18NT000000051X һәм SDK-ла интеграция ҡаплауын өҫтәү
+  өсөн IH58 ағымдары тамамлана.
 
-- `GET /v1/accounts` accepts an optional `address_format` query parameter and
-  `POST /v1/accounts/query` accepts the same field inside the JSON envelope.
-  Supported values are:
-  - `ih58` (default) — responses emit canonical IH58 Base58 payloads (e.g.,
-    `RnuaJGGDL8HNkN8bwHwBTU32fTWQmbRoM3QZBJintx5RqTU7GgPJmNiA`).
-  - `compressed` — responses emit the Sora-only `sora…` compressed view while
-    keeping filters/path parameters canonical.
-- Invalid values return `400` (`QueryExecutionFail::Conversion`). This allows
-  wallets and explorers to request compressed strings for Sora-only UX while
-  keeping IH58 as the interoperable default.
-- Asset holder listings (`GET /v1/assets/{definition_id}/holders`) and their JSON
-  envelope counterpart (`POST …/holders/query`) also honour `address_format`.
-  The `items[*].account_id` field emits compressed literals whenever the
-  parameter/envelope field is set to `compressed`, mirroring the accounts
-  endpoints so explorers can present consistent output across directories.
-- **Testing:** Add unit tests for encoder/decoder round-trips, wrong-chain
-  failures, and manifest lookups; add integration coverage in Torii and SDKs
-  for IH58 flows end to end.
+## Хаталар коды теркәүе
 
-## Error Code Registry
+Адресы кодерҙар һәм декодерҙар етешһеҙлектәрҙе фашлай аша
+`AccountAddressError::code_str()`. Түбәндәге таблицалар тотороҡло кодтар тәьмин итә .
+тип, SDKs, янсыҡтар, һәм I18NT000000000052X ер өҫтө кеше-уҡыу өсөн бер рәттән өҫкә сығырға тейеш
+хәбәрҙәр, плюс тәҡдим ителгән төҙәтеү йүнәлеше.
 
-Address encoders and decoders expose failures through
-`AccountAddressError::code_str()`. The following tables provide the stable codes
-that SDKs, wallets, and Torii surfaces should surface alongside human-readable
-messages, plus recommended remediation guidance.
+### Канон төҙөлөшө
 
-### Canonical Construction
+| Код | Уңышһыҙлыҡ | Тәҡдим ителгән төҙәтеү |
+|-----|---------|-------------------------|
+| `ERR_UNSUPPORTED_ALGORITHM` | Encoder теркәү алгоритмы ала, реестр йәки төҙөү функциялары ярҙамында раҫланмаған. | Реестрҙа һәм конфигурацияла мөмкинлек бирелгән ҡойроҡтарға сикләү иҫәбенә төҙөү. |
+| `ERR_KEY_PAYLOAD_TOO_LONG` | Төп файҙалы йөк оҙонлоғо ҡул ҡуйыу ярҙам сигенән артып китә. | Яңғыҙ асҡыс контроллерҙары `u8` оҙонлоғо менән генә сикләнә; ҙур асыҡ асҡыстар өсөн мультисиг ҡулланыу (мәҫәлән, ML‐DSA). |
+| `ERR_INVALID_HEADER_VERSION` | Адрес баш версияһы ярҙам диапазонынан ситтә. | V1 адрестары өсөн I18NI000000523X версияһы Emit баш версияһы; яңы версияларҙы ҡабул иткәнсе кодерҙарҙы яңыртыу. |
+| `ERR_INVALID_NORM_VERSION` | Нормалләштереү версияһы флагы танылмай. | Ҡулланыу нормалләштереү версияһы I18NI000000525X һәм ҡотолоу өсөн запас биттар. |
+| `ERR_INVALID_IH58_PREFIX` | Һорау IH58 селтәре префиксын кодлап булмай. | Сылбыр реестрында баҫылған инклюзив `0..=16383` диапазоны эсендә префиксты һайлағыҙ. |
+| `ERR_CANONICAL_HASH_FAILURE` | Каноник файҙалы йөк хеширование уңышһыҙлыҡҡа осраған. | Операцияны яңынан эшләп ҡарағыҙ; әгәр хата һаҡланһа, уны хешинг стекаһында эске ҡомаҡ тип ҡабул итә. |
 
-| Code | Failure | Recommended Remediation |
-|------|---------|-------------------------|
-| `ERR_UNSUPPORTED_ALGORITHM` | Encoder received a signing algorithm not supported by the registry or build features. | Restrict account construction to curves enabled in the registry and configuration. |
-| `ERR_KEY_PAYLOAD_TOO_LONG` | Signing key payload length exceeds the supported limit. | Single-key controllers are limited to `u8` lengths; use multisig for large public keys (e.g., ML‑DSA). |
-| `ERR_INVALID_HEADER_VERSION` | Address header version is outside the supported range. | Emit header version `0` for V1 addresses; upgrade encoders before adopting new versions. |
-| `ERR_INVALID_NORM_VERSION` | Normalisation version flag is not recognised. | Use normalisation version `1` and avoid toggling reserved bits. |
-| `ERR_INVALID_IH58_PREFIX` | Requested IH58 network prefix cannot be encoded. | Pick a prefix within the inclusive `0..=16383` range published in the chain registry. |
-| `ERR_CANONICAL_HASH_FAILURE` | Canonical payload hashing failed. | Retry the operation; if the error persists, treat it as an internal bug in the hashing stack. |
+### Формат декодлау һәм авто асыҡлау
 
-### Format Decoding and Auto Detection
+| Код | Уңышһыҙлыҡ | Тәҡдим ителгән төҙәтеү |
+|-----|---------|-------------------------|
+| `ERR_INVALID_IH58_ENCODING` | IH58 телмәрендә алфавиттан ситтәге персонаждар бар. | Адресты тәьмин итеү ҡулланыла баҫылған IH58 алфавиты һәм күсермәһе ваҡытында ҡыҫҡартылған түгел/йәбештереү. |
+| `ERR_INVALID_LENGTH` | Түләү йөкләмәһе тура килмәй, көтөлгән канон күләме өсөн селектор/контроллер. | Һайланған домен һайлаусыһы һәм контроллер планировкаһы өсөн тулы канон файҙалы йөктө тәьмин итегеҙ. |
+| `ERR_CHECKSUM_MISMATCH` | IH58 (өҫтөнлөк) йәки ҡыҫылған (`sora`, икенсе иң яҡшы) тикшерелгән сумманы раҫлау уңышһыҙлыҡҡа осраны. | Адресты ышаныслы сығанаҡтан тергеҙергә; был, ғәҙәттә, күсермә/йәбештереү хатаһын күрһәтә. |
+| `ERR_INVALID_IH58_PREFIX_ENCODING` | IH58 префикс байттары дөрөҫ формалашҡан. | Ҡабаттан кодлау адрес менән тейешле кодер; алдынғы Base58 байттарын ҡул менән үҙгәртмәгеҙ. |
+| `ERR_INVALID_HEX_ADDRESS` | Канонлы гексадецималь форма асыҡлай алманы. | Рәсми кодер етештергән `0x`-префиксацияланған, тигеҙ оҙонлоҡтағы гекс еп тәьмин итеү. |
+| `ERR_MISSING_COMPRESSED_SENTINEL` | Ҡыҫылған форма `sora` менән башланмай. | Префикс ҡыҫылған Сора адрестары менән кәрәкле һаҡсы уларҙы тотторғансы декодерҙарға. |
+| `ERR_COMPRESSED_TOO_SHORT` | Ҡыҫылған епкә файҙалы йөк һәм чек суммаһы өсөн етерлек һандар етешмәй. | Ҡулланма тулы ҡыҫылған еп сығарылған кодер урынына ҡыҫҡартылған өҙөктәр. |
+| `ERR_INVALID_COMPRESSED_CHAR` | Ҡыҫылған алфавиттан ситтәге персонаждар осраған. | 105 глиф менән персонажды баҫылған ярым киңлектә/тулы киңлектәге таблицаларҙан алмаштырығыҙ. |
+| `ERR_INVALID_COMPRESSED_BASE` | Кодер ярҙам ителмәгән рдикс ҡулланырға тырышҡан. | Кодерға ҡаршы хата бирегеҙ; ҡыҫылған алфавит V1-ҙә 105-се радиксҡа нығытыла. |
+| `ERR_INVALID_COMPRESSED_DIGIT` | Һанлы ҡиммәте ҡыҫылған алфавит күләменән артып китә. | Һәр һанды тәьмин итеү I18NI000000542X сиктәрендә, кәрәк булғанда адресты тергеҙеү. |
+| `ERR_UNSUPPORTED_ADDRESS_FORMAT` | Авто-асыҡлау индереү форматын таный алманы. | IH58 (өҫтөнлөклө), ҡыҫылған (`sora`), йәки канон I18NI000000545X hex ептәр, уларҙы саҡырғанда, анализлау. |
 
-| Code | Failure | Recommended Remediation |
-|------|---------|-------------------------|
-| `ERR_INVALID_IH58_ENCODING` | IH58 string contains characters outside the alphabet. | Ensure the address uses the published IH58 alphabet and has not been truncated during copy/paste. |
-| `ERR_INVALID_LENGTH` | Payload length does not match the expected canonical size for the selector/controller. | Supply the full canonical payload for the selected domain selector and controller layout. |
-| `ERR_CHECKSUM_MISMATCH` | IH58 (preferred) or compressed (`sora`, second-best) checksum validation failed. | Regenerate the address from a trusted source; this typically indicates a copy/paste error. |
-| `ERR_INVALID_IH58_PREFIX_ENCODING` | IH58 prefix bytes are malformed. | Re-encode the address with a compliant encoder; do not alter the leading Base58 bytes manually. |
-| `ERR_INVALID_HEX_ADDRESS` | Canonical hexadecimal form failed to decode. | Provide a `0x`-prefixed, even-length hex string produced by the official encoder. |
-| `ERR_MISSING_COMPRESSED_SENTINEL` | Compressed form does not start with `sora`. | Prefix compressed Sora addresses with the required sentinel before handing them to decoders. |
-| `ERR_COMPRESSED_TOO_SHORT` | Compressed string lacks sufficient digits for payload and checksum. | Use the full compressed string emitted by the encoder instead of truncated snippets. |
-| `ERR_INVALID_COMPRESSED_CHAR` | Character outside the compressed alphabet encountered. | Replace the character with a valid Base‑105 glyph from the published half-width/full-width tables. |
-| `ERR_INVALID_COMPRESSED_BASE` | Encoder attempted to use an unsupported radix. | File a bug against the encoder; the compressed alphabet is fixed to radix 105 in V1. |
-| `ERR_INVALID_COMPRESSED_DIGIT` | Digit value exceeds the compressed alphabet size. | Ensure each digit is within `0..105)`, regenerating the address if necessary. |
-| `ERR_UNSUPPORTED_ADDRESS_FORMAT` | Auto-detection could not recognise the input format. | Provide IH58 (preferred), compressed (`sora`), or canonical `0x` hex strings when invoking parsers. |
+### Домен һәм селтәр раҫлау| Код | Уңышһыҙлыҡ | Тәҡдим ителгән төҙәтеү |
+|-----|---------|-------------------------|
+| `ERR_DOMAIN_MISMATCH` | Домен һайлаусыһы көтөлгән доменға тап килмәй. | Адрес ҡулланыу өсөн тәғәйенләнгән домен йәки яңыртыу көтөү. |
+| `ERR_INVALID_DOMAIN_LABEL` | Домен ярлығы нормалләштереү тикшерелгән етешһеҙлектәр. | Canonicalize домен ҡулланып, UTS-46 күсешһеҙ эшкәртелеү алдынан кодлау алдынан. |
+| `ERR_UNEXPECTED_NETWORK_PREFIX` | Decoded IH58 селтәре префикс конфигурацияланған ҡиммәтенән айырыла. | Маҡсатлы сылбырҙан адресҡа йәки көтөлгән дискриминант/префиксты көйләү. |
+| `ERR_UNKNOWN_ADDRESS_CLASS` | Адрес класы биттары танылмай. | Яңы класты аңлаған релизға декодерҙы яңыртыу йәки баш биттары менән үҙгәртеп ҡороуҙан ҡотолорға. |
+| `ERR_UNKNOWN_DOMAIN_TAG` | Домен селектор тегы билдәһеҙ. | Яңыртыу өсөн релиз, тип ярҙам итә яңы селектор тип, йәки ҡотолорға ҡулланыу эксперименталь файҙалы йөкләмәләр V1 төйөндәрендә. |
+| I18NI0000051X | Запасҡа оҙайтыу биты ҡуйылған. | Асыҡ запас биттар; улар ҡапҡалы булып ҡала, тик киләсәктә АБИ уларҙы таныштыра. |
+| `ERR_UNKNOWN_CONTROLLER_TAG` | Контроллер файҙалы йөк билдәһе танылмаған. | Яңыртыу декодер яңы контроллер төрҙәрен таныу өсөн уларҙы анализлау алдынан. |
+| `ERR_UNEXPECTED_TRAILING_BYTES` | Канонлы файҙалы йөкләмәләрҙә расшифровканан һуң штаб-фатирлы байттар бар ине. | Каноник файҙалы йөктө тергеҙергә; тик документлаштырылған оҙонлоҡ ҡына булырға тейеш. |
 
-### Domain and Network Validation
+### Контроллер түләүле раҫлау
 
-| Code | Failure | Recommended Remediation |
-|------|---------|-------------------------|
-| `ERR_DOMAIN_MISMATCH` | Domain selector does not match the expected domain. | Use an address issued for the intended domain or update the expectation. |
-| `ERR_INVALID_DOMAIN_LABEL` | Domain label failed normalisation checks. | Canonicalise the domain using UTS-46 non-transitional processing before encoding. |
-| `ERR_UNEXPECTED_NETWORK_PREFIX` | Decoded IH58 network prefix differs from the configured value. | Switch to an address from the target chain or adjust the expected discriminant/prefix. |
-| `ERR_UNKNOWN_ADDRESS_CLASS` | Address class bits are not recognised. | Upgrade the decoder to a release that understands the new class, or avoid tampering with the header bits. |
-| `ERR_UNKNOWN_DOMAIN_TAG` | Domain selector tag is unknown. | Update to a release that supports the new selector type, or avoid using experimental payloads on V1 nodes. |
-| `ERR_UNEXPECTED_EXTENSION_FLAG` | Reserved extension bit was set. | Clear reserved bits; they remain gated until a future ABI introduces them. |
-| `ERR_UNKNOWN_CONTROLLER_TAG` | Controller payload tag not recognised. | Upgrade the decoder to recognise new controller types before parsing them. |
-| `ERR_UNEXPECTED_TRAILING_BYTES` | Canonical payload contained trailing bytes after decoding. | Regenerate the canonical payload; only the documented length should be present. |
+| Код | Уңышһыҙлыҡ | Тәҡдим ителгән төҙәтеү |
+|-----|---------|-------------------------|
+| I18NI0000054X | Төп байттар иғлан ителгән ҡойроҡҡа тап килмәй. | Асҡыс байттарын тәьмин итеү өсөн кодланған тап һайланған ҡойроҡ өсөн кәрәк (мәҫәлән, 32-байт Ed25519). |
+| `ERR_UNKNOWN_CURVE` | Ҡыйыулыҡ идентификаторы теркәлмәгән. | Ҡулланыу ҡойроғо ID I18NI000000556X (Ed25519) өҫтәмә ҡойроҡтар раҫланған һәм реестрҙа баҫылып сыҡҡанға тиклем. |
+| I18NI0000057X | Күписле контролер иғлан итә, күберәк ағзалар ярҙам итеү. | Кодлау алдынан мультисиг ағзалығын документлаштырылған сиккә кәметергә. |
+| I18NI0000058X X | Күписле сәйәсәт файҙалы йөкләмәһе уңышһыҙлыҡҡа осраған раҫлау (ваҡиға/ауырлыҡ/схема). | Сәйәсәтте тергеҙергә, шулай итеп, ул ҡәнәғәтләндерә CTAP2 схемаһы, ауырлыҡ сиктәре, һәм сик сикләүҙәре. |
 
-### Controller Payload Validation
+## Альтернативалар ҡаралған
 
-| Code | Failure | Recommended Remediation |
-|------|---------|-------------------------|
-| `ERR_INVALID_PUBLIC_KEY` | Key bytes do not match the declared curve. | Ensure the key bytes are encoded exactly as required for the selected curve (e.g., 32-byte Ed25519). |
-| `ERR_UNKNOWN_CURVE` | Curve identifier is not registered. | Use curve ID `1` (Ed25519) until additional curves are approved and published in the registry. |
-| `ERR_MULTISIG_MEMBER_OVERFLOW` | Multisig controller declares more members than supported. | Reduce the multisig membership to the documented limit before encoding. |
-| `ERR_INVALID_MULTISIG_POLICY` | Multisig policy payload failed validation (threshold/weights/schema). | Rebuild the policy so that it satisfies the CTAP2 schema, weight bounds, and threshold constraints. |
+- **Саф Base58Check (Биткоин стилендәге).** Ябайыраҡ чемпионерҙар суммаһы, әммә көсһөҙөрәк хаталарҙы асыҡлау
+  512 битлы хешты ҡыҫҡарта IH58 чемпионаты (I18NI000000059X чемпионатҡа ҡарағанда) ҡарағанда.
+  һәм 16-битлы дискриминанттар өсөн асыҡ префикс семантикаһы етешмәй.
+- **Төкөр ҡылында сылбырлы исемде индереү (мәҫәлән, I18NI000000560X).**
+- **Тик тик I18NT0000000027X маршрутлаштырыу адрестарын үҙгәртмәйенсә.** Ҡулланыусылар һаман да булыр ине
+  күсермә/йәбештереү ике мәғәнәле ҡылдар; беҙ адрестың үҙен контекст йөрөтөүен теләйбеҙ.
+- **Бех32м конверт.** QR-дуҫ һәм кеше уҡый торған префикс тәҡдим итә, әммә
+  IH58-ҙе тормошҡа ашырыуҙан айырылыр ине (I18NI000000561X)
+  һәм бөтә ҡорамалдарҙы/СДК-ларҙы яңынан тыуҙырыуҙы талап итә. Хәҙерге юл картаһы IH58 + тота +
+  ҡыҫылған (`sora`) ярҙам итеү, шул уҡ ваҡытта киләсәктә тикшеренеүҙе дауам итеү
+  Bech32м/QR ҡатламдары (CAIP-10 картаһы кисектерелә).
 
-## Alternatives Considered
+## Асыҡ һорауҙар .
 
-- **Pure Base58Check (Bitcoin-style).** Simpler checksum but weaker error detection
-  than the Blake2b-derived IH58 checksum (`encode_ih58` truncates a 512-bit hash)
-  and lacks explicit prefix semantics for 16-bit discriminants.
-- **Embedding chain name in the domain string (e.g., `finance@chain`).** Breaks
-- **Rely solely on Nexus routing without changing addresses.** Users would still
-  copy/paste ambiguous strings; we want the address itself to carry context.
-- **Bech32m envelope.** QR-friendly and offers a human-readable prefix, but
-  would diverge from the shipping IH58 implementation (`AccountAddress::to_ih58`)
-  and require recreating all fixtures/SDKs. The current roadmap keeps IH58 +
-  compressed (`sora`) support while continuing research into future
-  Bech32m/QR layers (CAIP-10 mapping is deferred).
+- Раҫлау, тип `u16` дискриминанттары плюс запас диапазондары оҙайлы ихтыяжды ҡаплай;
+  башҡаса баһалау I18NI000000564X cuternt кодлау менән.
+- Финаллаштырыу күп ҡултамғалар менән идара итеү процесы өсөн реестр яңыртыу һәм нисек
+  ҡайтарыуҙар/ваҡыты менән бүленгән бүленә.
+- Билдәләү өсөн теүәл манифест ҡултамға схемаһы (мәҫәлән, Ed25519 мульти-сиг) һәм
+  транспорт хәүефһеҙлеге (HTTPS пиннинг, IPFS хеш форматында) I18NT0000000028X таратыу өсөн.
+- Билдәләү өсөн, ярҙам итеү өсөн домен псевдонимдар/миграциялар өсөн йүнәлткән һәм нисек .
+  уларҙы детерминизмды өҙөп ташламайынса өҫкә күтәрергә.
+- нисек I18NT0000000000000X/I18NT0000000056X контракттары IH58 ярҙамсыларына (I18NI000000565X X,
+  `parse_address()`) һәм сылбырҙа һаҡлау ҡасан да булһа CAIP-10 фашларға тейешме.
+  карталар (бөгөн IH58 канонлы).
+- Тышҡы реестрҙарҙа I18NT000000008X сылбырҙарын теркәүҙе тикшерергә (мәҫәлән, IH58 реестры,
+  CAIP исемдәр киңлеге каталогы) киңерәк экосистема тура килтереп.
 
-## Open Questions
+## Киләһе аҙымдар
 
-- Confirm that `u16` discriminants plus reserved ranges cover long-term demand;
-  otherwise evaluate `u32` with varint encoding.
-- Finalize the multi-signature governance process for registry updates and how
-  revocations/expired allocations are handled.
-- Define the exact manifest signature scheme (e.g., Ed25519 multi-sig) and
-  transport security (HTTPS pinning, IPFS hash format) for Nexus distribution.
-- Determine whether to support domain aliases/redirects for migrations and how
-  to surface them without breaking determinism.
-- Specify how Kotodama/IVM contracts access IH58 helpers (`to_address()`,
-  `parse_address()`) and whether on-chain storage should ever expose CAIP-10
-  mappings (today IH58 is canonical).
-- Explore registering Iroha chains in external registries (e.g., IH58 registry,
-  CAIP namespace directory) for broader ecosystem alignment.
-
-## Next Steps
-
-1. IH58 encoding landed in `iroha_data_model` (`AccountAddress::to_ih58`,
-   `parse_any`); continue porting fixtures/tests to every SDK and purge any
-   Bech32m placeholders.
-2. Extend configuration schema with `chain_discriminant` and derive sensible
-  defaults for existing test/dev setups. **(Done: `common.chain_discriminant`
-  now ships in `iroha_config`, defaulting to `0x02F1` with per-network
-  overrides.)**
-3. Draft the Nexus registry schema and proof-of-concept manifest publisher.
-4. Collect feedback from wallet providers and custodians on human-factor aspects
-   (HRP naming, display formatting).
-5. Update documentation (`docs/source/data_model.md`, Torii API docs) once the
-   implementation path is committed.
-6. Ship official codec libraries (Rust/TS/Python/Kotlin) with normative test
-   vectors covering success and failure cases.
+1. IH58 кодлау I18NI000000567X (`AccountAddress::to_ih58`,
+   `parse_any` X); дауам портлау ҡорамалдар/тестар һәр SDK һәм таҙартыу теләһә ниндәй
+   Bech32м урын хужалары.
+2. I18NI000000570X менән конфигурация схемаһын киңәйтеү һәм аҡыллы алыу
+  ғәҙәттәгесә, ғәмәлдәге тест/дев настройкалар. **(Эш: I18NI000000571X
+  Хәҙер `iroha_config`-тағы суднолар, I18NI0000000573X-ҡа тиклем ғәҙәттәгесә, пер-селтәр менән
+  өҫтөнлөк итә.)**
+3. Nexus реестр схемаһын һәм концепцияны иҫбатлаусы манифест нәшриәтен төҙөй.
+4. Кеше-фактор аспекттары буйынса янсыҡ провайдерҙары һәм һаҡсыларҙан кире бәйләнеш йыйыу
+   (HRP исем ҡушыу, дисплей форматлау).
+5. Яңыртыу документацияһы (I18NI000000574X, I18NT0000000053X API docs) бер тапҡыр .
+   тормошҡа ашырыу юлы үтә.
+6. Судно рәсми кодек китапханалары (Раст/ТС/Питон/Котлин) норматив һынау менән
+   уңыш һәм уңышһыҙлыҡ осраҡтарын ҡаплаған векторҙар.

@@ -7,37 +7,38 @@ generator: scripts/sync_docs_i18n.py
 source_hash: c7cdc46bcd87af7924817a94900c8fad2c23570607f4065f19d8a42d259fe83f
 source_last_modified: "2026-01-22T14:35:37.691079+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Data Availability Rent & Incentive Policy (DA-7)
+# གནད་སྡུད་ཐོབ་ཚུགསཔ་ ཁང་གླ་དང་ སྐུལ་སློང་གི་སྲིད་བྱུས། (DA-7)
 
-_Status: Drafting — Owners: Economics WG / Treasury / Storage Team_
+_Status: ཟིན་བྲིས་ — ཇོ་བདག་: དཔལ་འབྱོར་ WG / དངུལ་ཁང་ / གསོག་འཇོག་སྡེ་ཚན་_
 
-Roadmap item **DA-7** introduces an explicit XOR-denominated rent for every blob
-submitted to `/v1/da/ingest`, plus bonuses that reward PDP/PoTR execution and
-egress served to fetch clients. This document defines the initial parameters,
-their data-model representation, and the calculation workflow used by Torii,
-SDKs, and Treasury dashboards.
+རོ་ཌི་མེཔ་རྣམ་གྲངས་ **DA-7** གིས་ བློ་སྟོབས་ག་ར་གི་དོན་ལུ་ ཨེགསི་ཨོ་ཨར་-སྟོནམ་ཨིན།
+`/v1/da/ingest` དང་ PDP/PoTR ལག་ལེན་འཐབ་ཐངས་དང་ PDP/PoTR ལག་ལེན་འཐབ་ཐངས་དང་ བྱིན་རླབས་ཚུ་ལུ་ ཕུལ་ཡོདཔ་ཨིན།
+eregs གིས་ མཁོ་མངགས་འབད་མི་ཚུ་འབག་འོང་ནུག། ཡིག་ཆ་འདི་གིས་འགོ་བཙུགས་ཚད་བཟུང་ཚུ་ངེས་འཛིན་འབདཝ་ཨིན།
+དེ་ཚུ་གི་གནས་སྡུད་-དཔེ་ཚད་ཀྱི་ངོ་ཚབ་དང་ Torii གིས་ལག་ལེན་འཐབ་མི་ རྩིས་སྟོན་ལཱ་གི་རྒྱུན་རིམ་འདི་,
+SDKs, དང་ དངུལ་ཁང་གི་ བརྡ་རྟགས་བཀོད་ཆས།
 
-## Policy structure
+## སྲིད་བྱུས།
 
-The policy is encoded as [`DaRentPolicyV1`](/crates/iroha_data_model/src/da/types.rs)
-within the data model. Torii and governance tooling persist the policy in
-Norito payloads so that rent quotes and incentive ledgers can be recomputed
-deterministically. The schema exposes five knobs:
+སྲིད་བྱུས་འདི་ [`DaRentPolicyV1`](/crates/iroha_data_model/src/da/types.rs) ཟེར་བཀོད་ཡོདཔ་ཨིན།
+གནས་སྡུད་དཔེ་ཚད་ནང་། Torii དང་གཞུང་སྐྱོང་ལག་ཆ་འདི་སྤྱི་ལོ་༢༠༡༨ ལོར་སྲིད་བྱུས་འདི་གནས་ཡུན་རིངམ་སྦེ་གནས་ཡོད།
+Norito གླ་ཆ་དང་ ཁང་གླའི་ཚིག་བརྗོད་དང་ སྐུལ་སློང་རྩིས་ཁྲ་ཚུ་ ལོག་རྩིས་རྐྱབ་ཚུགས།
+གཏན་འབེབས་བཟོ་ནི། ལས་འཆར་འདི་གིས་ མཛུབ་མོ་ལྔ་སྟོན་ནི།
 
-| Field | Description | Default |
-|-------|-------------|---------|
-| `base_rate_per_gib_month` | XOR charged per GiB per month of retention. | `250_000` micro-XOR (0.25 XOR) |
-| `protocol_reserve_bps` | Share of the rent routed to the protocol reserve (basis points). | `2_000` (20 %) |
-| `pdp_bonus_bps` | Bonus percentage per successful PDP evaluation. | `500` (5 %) |
-| `potr_bonus_bps` | Bonus percentage per successful PoTR evaluation. | `250` (2.5 %) |
-| `egress_credit_per_gib` | Credit paid when a provider serves 1 GiB of DA data. | `1_500` micro-XOR |
+| ཕིལཌ་ | འགྲེལ་བཤད་ | སྔོན་སྒྲིག་ |
+|----------------------------|-------------|
+| `base_rate_per_gib_month` | XOR གིས་ ཟླཝ་རེ་ལུ་ GiB རེ་ལུ་ གླ་ཆ་སྤྲོད་ཡོདཔ། | `250_000` མའི་ཀོ་རོ་-ཨེགསི་ཨོ་ཨར་ (༠.༢༥ XOR) |
+| `protocol_reserve_bps` | མཐུན་སྒྲིག་གསོག་འཇོག་ལུ་འགྲུལ་བསྐྱོད་འབད་ཡོད་པའི་ཁང་གླ་གི་བགོ་བཤའ་རྐྱབས་ (གཞི་རྟེན་ས་ཚིགས་)། | `2_000` (༢༠%) |
+| `pdp_bonus_bps` | མཐར་འཁྱོལ་ཅན་གྱི་ PDP བརྟག་ཞིབ་རེ་ལུ་ བོནསི་བརྒྱ་ཆ་། | `500` (༥%) |
+| `potr_bonus_bps` | མཐར་འཁྱོལ་ཅན་གྱི་ PoTR བརྟག་དཔྱད་རེ་ལུ་ བོནསི་བརྒྱ་ཆ་། | `250` (༢.༥%) |
+| `egress_credit_per_gib` | བྱིན་མི་གིས་ 1GiB གི་ DA གནས་སྡུད་ལུ་ ཞབས་ཏོག་བྱིན་པའི་སྐབས་ བུ་ལོན་སྤྲོད་ཡོདཔ། | `1_500` མའི་ཀོ་རོ་-XOR |
 
-All basis-point values are validated against `BASIS_POINTS_PER_UNIT` (10 000).
-Policy updates must travel through governance, and every Torii node exposes the
-active policy via the `torii.da_ingest.rent_policy` configuration section
-(`iroha_config`). Operators can override the defaults in `config.toml`:
+གཞི་རྟེན་དོན་ཚན་ཆ་མཉམ་ `BASIS_POINTS_PER_UNIT` (10000) ལུ་བདེན་དཔྱད་འབད་ཡོདཔ་ཨིན།
+སྲིད་བྱུས་དུས་མཐུན་ཚུ་ གཞུང་སྐྱོང་བརྒྱུད་དེ་ འགྱོ་དགོཔ་དང་ Torii མཐུད་མཚམས་རེ་རེ་གིས་ ཕྱིར་བཏོན་འབདཝ་ཨིན།
+ཤུགས་ལྡན་སྲིད་བྱུས། `torii.da_ingest.rent_policy` རིམ་སྒྲིག་དབྱེ་ཚད།
+(I 18NI00000036X). བཀོལ་སྤྱོད་པ་ཚུ་གིས་ `config.toml` ནང་ལུ་ སྔོན་སྒྲིག་ཚུ་ བཀག་ཆ་འབད་ཚུགས།
 
 ```toml
 [torii.da_ingest.rent_policy]
@@ -48,28 +49,28 @@ potr_bonus_bps = 250                          # 2.5% PoTR bonus
 egress_credit_per_gib_micro = 1500            # 0.0015 XOR/GiB egress credit
 ```
 
-CLI tooling (`iroha app da rent-quote`) accepts the same Norito/JSON policy inputs
-and emits artefacts that mirror the active `DaRentPolicyV1` without reaching
-back into Torii state. Supply the policy snapshot used for an ingest run so the
-quote remains reproducible.
+CLI ལག་ཆས་ (`iroha app da rent-quote`) གིས་ Norito/JSON སྲིད་བྱུས་ཀྱི་ཨིན་པུཊི་ཚུ་ ཆ་འཇོག་འབདཝ་ཨིན།
+དང་ ཅ་ལག་ཚུ་ བཏོནམ་ཨིན།
+ཕྱིར་ལོག་ Torii གནས་སྟངས་ནང་། འདི་བཟོས་པའི་གཡོག་བཀོལ་ནིའི་དོན་ལུ་ལག་ལེན་འཐབ་མི་ སྲིད་བྱུས་ཀྱི་པར་འདི་བཀྲམ་སྤེལ་འབད།
+ཚིག་བརྗོད་འདི་ བསྐྱར་བཟོ་འབད་ཚུགསཔ་ཨིན།
 
-### Persisting rent quote artefacts
+###
 
-Run `iroha app da rent-quote --gib <size> --months <months> --quote-out <path>` to
-emit both the on-screen summary and a pretty-printed JSON artefact. The file
-records `policy_source`, the inlined `DaRentPolicyV1` snapshot, the computed
-`DaRentQuote`, and a derived `ledger_projection` (serialized via
-[`DaRentLedgerProjection`](/crates/iroha_data_model/src/da/types.rs)) making it suitable for treasury dashboards and ledger ISI
-pipelines. When `--quote-out` points at a nested directory the CLI creates any
-missing parents, so operators can standardise locations such as
-`artifacts/da/rent_quotes/<timestamp>.json` alongside other DA evidence bundles.
-Attach the artefact to rent approvals or reconciliation runs so the XOR
-breakdown (base rent, reserve, PDP/PoTR bonuses, and egress credits) is
-reproducible. Pass `--policy-label "<text>"` to override the automatically
-derived `policy_source` description (file paths, embedded default, etc.) with a
-human-readable tag such as a governance ticket or manifest hash; the CLI trims
-this value and rejects empty/whitespace-only strings so the recorded evidence
-remains auditable.
+Prometheus ལུ་གཡོག་བཀོལ།
+གསལ་གཞི་གུ་ཡོད་པའི་བཅུད་བསྡུས་དང་ མཛེས་ཆ་ཅན་གྱི་ JSON ཅ་ཆས་གཉིས་ཆ་ར་ བཏོནམ་ཨིན། ཡིག་སྣོད་འདི།
+ཐོ་བཀོད་ཚུ་ `policy_source`, ནང་ཐིག་ `DaRentPolicyV1` པར་ལེན་འདི་ རྩིས་སྟོན་འབད་ཡོདཔ་ཨིན།
+`DaRentQuote`, དང་ འབྱུང་ཁུངས་ `ledger_projection` (རིམ་སྒྲིག་བརྒྱུད་དེ་ རིམ་སྒྲིག་འབད་ཡོདཔ།
+[`DaRentLedgerProjection`](/crates/iroha_data_model/src/da/types.rs)) བང་མཛོད་ཀྱི་ བརྡ་རྟགས་དང་ ལག་དེབ་ཨའི་ཨེསི་ཨའི་ བཟོ་ནིའི་དོན་ལུ་ བཟོ་དགོ།
+མདོང་ལམ་ཚུ། `--quote-out` གིས་ ནེསི་ཊེཊི་སྣོད་ཐོ་ནང་ ས་ཚིགས་ཚུ་ སི་ཨེལ་ཨའི་གིས་ གང་རུང་ཅིག་གསར་བསྐྲུན་འབདཝ་ཨིན།
+ཕ་མ་བརླག་སྟོར་ཞུགས་ཡོདཔ་ལས་ བཀོལ་སྤྱོད་པ་ཚུ་གིས་ ས་གནས་ཚུ་ ཚད་ལྡན་བཟོ་ཚུགས།
+`artifacts/da/rent_quotes/<timestamp>.json` DA སྒྲུབ་བྱེད་ཀྱི་མཉམ་དུ་ཡོད།
+ཁང་གླའི་ཆ་འཇོག་དང་ ཡང་ན་ མཐུན་སྒྲིག་ལུ་ ཅ་རྙིང་ཚུ་ མཉམ་སྦྲགས་འབད།
+བརྡལ་བཤིག་ (གཞི་རྟེན་ཁང་གླ་དང་ གསོག་འཇོག་ PDP/PoTR བུན་གཡར་དང་ ཕྱིར་ཐོན་བུ་ལོན་) ཨིན།
+བསྐྱར་བཟོ་འབད་ཚུགསཔ། རང་བཞིན་གྱིས་བཀག་ཆ་འབད་ནིའི་དོན་ལས་ `--policy-label "<text>"` འདི་སྤྲོད།
+files Norito འགྲེལ་བཤད་ (ཡིག་སྣོད་འགྲུལ་ལམ་, བཙུགས་ཡོད་པའི་སྔོན་སྒྲིག་ ལ་སོགས་པ་ཚུ་) དང་གཅིག་ཁར།
+མི་ལྷག་ཐུབ་པའི་རྟགས་ དཔེར་ན་ གཞུང་སྐྱོང་གི་ཤོག་འཛིན་ཡང་ན་ ཧེ་ཤི་གསལ་སྟོན་འབདཝ་ཨིན། the CLI ཊིམ།
+འདི་གནས་གོང་དང་ སྟོངམ་/དཀརཔོ་ས་སྟོང་རྐྱངམ་ཅིག་ཡིག་རྒྱུན་ཚུ་ ངོས་ལེན་འབདཝ་ཨིནམ་ལས་ ཐོ་བཀོད་འབད་ཡོད་པའི་སྒྲུབ་བྱེད་འདི་ཨིན།
+ལྷག་ལུས་རྩིས་ཞིབ་འབད་བཏུབ།
 
 ```json
 {
@@ -87,21 +88,19 @@ remains auditable.
     "egress_credit_per_gib": { "micro": 1500 }
   }
 }
-```
+```ལག་དེབ་ཀྱི་དམིགས་ཚད་ཀྱི་དབྱེ་ཚན་འདི་གིས་ ཐད་ཀར་དུ་ DA ཁང་གླ་ལེན་མི་ ISIs ནང་ལུ་ འབྱིན་དོ་ཡོདཔ་ཨིན།
+མཐུན་སྒྲིག་གསོག་འཇོག་གི་དོན་ལུ་ ངེས་འཛིན་འབད་ཡོད་པའི་ XOR deltas འདི་ བྱིན་མི་ བྱིན་མི་དངུལ་སྤྲོད་ཚུ་ དང་།
+བེ་སི་པོག་ཨོར་ཅེསི་ཊར་གྱི་ཨང་རྟགས་མ་དགོ་པར་ བདེན་ཁུངས་རེ་རེ་ལུ་ བོནསི་ཆུ་རྫིང་ཚུ།
 
-The ledger projection section feeds directly into the DA rent ledger ISIs: it
-defines the XOR deltas destined for the protocol reserve, provider payouts, and
-the per-proof bonus pools without requiring bespoke orchestration code.
+### ཁང་གླའི་ལག་དེབ་འཆར་གཞི།
 
-### Generating rent ledger plans
-
-Run `iroha app da rent-ledger --quote <path> --payer-account <id> --treasury-account <id> --protocol-reserve-account <id> --provider-account <id> --pdp-bonus-account <id> --potr-bonus-account <id> --asset-definition xor#sora`
-to convert a persisted rent quote into executable ledger transfers. The command
-parses the embedded `ledger_projection`, emits Norito `Transfer` instructions
-that collect the base rent into the treasury, routes the reserve/provider
-portions, and pre-funds the PDP/PoTR bonus pools directly from the payer. The
-output JSON mirrors the quote metadata so CI and treasury tooling can reason
-about the same artefact:
+`iroha app da rent-ledger --quote <path> --payer-account <id> --treasury-account <id> --protocol-reserve-account <id> --provider-account <id> --pdp-bonus-account <id> --potr-bonus-account <id> --asset-definition xor#sora` གཡོག་བཀོལ།
+འཕྲོ་མཐུད་དེ་ཡོད་པའི་ཁང་གླ་གི་ཚིག་བརྗོད་འདི་ ལག་ལེན་འཐབ་བཏུབ་པའི་ ལག་དེབ་སྤྲོད་ལེན་ལུ་གཞི་བསྒྱུར་འབད་ནི། བརྡ་བཀོད་འདི།
+བཙུགས་ཏེ་ `ledger_projection` གིས་ Norito `Transfer` བཀོད་རྒྱ་ཚུ་ བཏོནམ་ཨིན།
+གཞི་རྟེན་ཁང་གླ་འདི་ དངུལ་ཁང་ནང་བསྡུ་ལེན་འབདཝ་ཨིན།
+ཆ་ཤས་དང་ སྔོན་འགྲོའི་དངུལ་ཕོགས་ PDP/PoTR bonus འདི་ དངུལ་སྤྲོད་མི་ལས་ ཐད་ཀར་དུ་ མ་དངུལ་བྱིནམ་ཨིན། ཚིག༌ཕྲད
+ཐོན་འབྲས་ JSON གིས་ ཚིག་བརྗོད་མེ་ཊ་ཌེ་ཊ་འདི་ མེ་བཏེགས་ཏེ་ CI དང་ བང་མཛོད་ལག་ཆས་ཚུ་གིས་ རྒྱུ་མཚན་བཀོད་ཚུགས།
+དེ་དང་འདྲ་བའི་ཅ་དངོས་:
 
 ```json
 {
@@ -122,11 +121,11 @@ about the same artefact:
 }
 ```
 
-The final `egress_credit_per_gib_micro_xor` field lets dashboards and payout
-schedulers align egress reimbursements with the rent policy that produced the
-quote without recomputing the policy math in scripting glue.
+མཐའ་མའི་Norito field གིས་ བརྡ་དོན་བཀོད་སྒྲིག་དང་ གླ་ཆ་སྤྲོད་བཅུགཔ་ཨིན།
+དུས་ཚོད་བཀོད་མི་ཚུ་གིས་ ཁང་གླའི་སྲིད་བྱུས་དང་གཅིག་ཁར་ ཕྱིར་ཐོན་ཚུ་ ཕྲང་སྒྲིག་འབདཝ་ཨིན།
+ཡིག་ཆ་བཟོ་བའི་སྐབས་ སྲིད་བྱུས་ཨང་རྩིས་འདི་ ལོག་རྩིས་མ་རྐྱབ་པར་ ལུང་འདྲེན་འབད་ནི།
 
-## Example quote
+## དཔེ་ཚད།
 
 ```rust
 use iroha_data_model::da::types::DaRentPolicyV1;
@@ -143,64 +142,62 @@ assert_eq!(quote.potr_bonus.as_micro(), 187_500);         // PoTR success bonus
 assert_eq!(quote.egress_credit_per_gib.as_micro(), 1_500);
 ```
 
-The quote is reproducible across Torii nodes, SDKs, and Treasury reports because
-it uses deterministic Norito structures instead of ad-hoc math. Operators can
-attach the JSON/CBOR encoded `DaRentPolicyV1` to governance proposals or rent
-audits to prove which parameters were in force for any given blob.
+ཚིག་བརྗོད་འདི་ Torii མཐུད་མཚམས་ ཨེསི་ཌི་ཀེ་ཨེསི་ དེ་ལས་ དངུལ་ཁང་གི་སྙན་ཞུ་ཚུ་ནང་ བསྐྱར་བཟོ་འབད་ཚུགས།
+དེ་གིས་ དུས་ཚོད་ཀྱི་ཨང་རྩིས་ཀྱི་ཚབ་ལུ་ གཏན་འབེབས་ Norito བཟོ་བཀོད་ཚུ་ལག་ལེན་འཐབ་ཨིན། བཀོལ་སྤྱོད་པ་ཚུ་འབད་ཚུགས།
+JSON/CBOR ལུ་ གཞུང་སྐྱོང་གྲོས་འཆར་ཡང་ན་ ཁང་གླ་ལུ་ མཉམ་སྦྲགས་འབད་ཡོདཔ་ཨིན།
+རྩིས་ཞིབ་འབད་དེ་ བློ་སྤོབས་ག་ཅི་རང་འབད་རུང་ ཚད་གཞི་ག་འདི་ ལག་ལེན་འཐབ་ཡོདཔ་ཨིན་ན་ བདེན་ཁུངས་བཀལ་ནི།
 
-## Bonuses and reserves
+## བོནསི་དང་ གསོག་འཇོག་།
 
-- **Protocol reserve:** `protocol_reserve_bps` funds the XOR reserve that backs
-  emergency re-replication and slashing refunds. Treasury tracks this bucket
-  separately to ensure ledger balances match the configured rate.
-- **PDP/PoTR bonuses:** Each successful proof evaluation receives an additional
-  payout derived from `base_rent × bonus_bps`. When the DA scheduler emits proof
-  receipts it includes the basis-point tags so incentives can be replayed.
-- **Egress credit:** Providers record GiB served per manifest, multiply by
-  `egress_credit_per_gib`, and submit the receipts via `iroha app da prove-availability`.
-  The rent policy keeps the per-GiB amount in sync with governance.
+- **ཁྱབ་སྤེལ་གྱི་གསོག་འཇོག་:** `protocol_reserve_bps` རྒྱབ་ལྗོངས།
+  གློ་བུར་གྱི་འདྲ་བཤུས་དང་ བརྡལ་བཤིག་གཏང་མི་ ལོག་སྤྲོད་ནི། དངུལ་ཁང་གིས་ བཱ་ཀེཊ་འདི་ འཚོལ་ཞིབ་འབདཝ་ཨིན།
+  སོ་སོ་སྦེ་ ལག་དེབ་ལྷག་ལུས་ཚུ་ རིམ་སྒྲིག་འབད་ཡོད་པའི་གནས་གོང་དང་མཐུན་སྒྲིག་འབད་ནི་ལུ་ སོ་སོ་སྦེ་བཞག་དགོ།
+- **PoTR བོནསི་ཚུ་:** མཐར་འཁྱོལ་ཅན་གྱི་བདེན་དཔྱད་བརྟག་དཔྱད་རེ་རེ་གིས་ ཁ་སྐོང་ཐོབ་ཨིན།
+  གླ་ཆ་ `base_rent × bonus_bps` ལས་ཐོན་ཡོད། DA ལས་རིམ་བཟོ་མི་གིས་ བདེན་ཁུངས་བཏོན་པའི་སྐབས།
+  ཐོབ་མི་ཚུ་ཡང་ གཞི་རྟེན་ས་ཚིགས་ཀྱི་ངོ་རྟགས་ཚུ་ཚུདཔ་ལས་ སེམས་ཤུགས་ཚུ་ ལོག་སྟེ་རྩེད་ཚུགས།
+- **Ered bread:** ཞབས་ཏོག་བྱིན་མི་ཚུ་གིས་ གསལ་སྟོན་རེ་ལུ་ཕྱག་ཞུ་མི་ GiB ཐོ་བཀོད་འབདཝ་ཨིན།
+  `egress_credit_per_gib`, དང་ `iroha app da prove-availability` བརྒྱུད་དེ་ འབབ་ཁུངས་ཚུ་བཙུགས།
+  ཁང་གླའི་སྲིད་བྱུས་འདི་གིས་ གཞུང་སྐྱོང་དང་མཉམ་པའི་ གི་བི་དངུལ་ཚད་འདི་ བཞགཔ་ཨིན།
 
-## Operational flow
+## བཀོལ་སྤྱོད།
 
-1. **Ingest:** `/v1/da/ingest` loads the active `DaRentPolicyV1`, quotes rent
-   based on blob size and retention, and embeds the quote into the Norito
-   manifest. The submitter signs a statement that references the rent hash and
-   the storage ticket id.
-2. **Accounting:** Treasury ingest scripts decode the manifest, call
-   `DaRentPolicyV1::quote`, and populate rent ledgers (base rent, reserve,
-   bonuses, and expected egress credits). Any discrepancy between recorded rent
-   and recomputed quotes fails CI.
-3. **Proof rewards:** When PDP/PoTR schedulers mark a success they emit a receipt
-   containing the manifest digest, proof kind, and the XOR bonus derived from
-   the policy. Governance can audit the payouts by recomputing the same quote.
-4. **Egress reimbursement:** Fetch orchestrators submit signed egress summaries.
-   Torii multiplies the GiB count by `egress_credit_per_gib` and issues payment
-   instructions against the rent escrow.
+1. **Iness:** `/v1/da/ingest` ཤུགས་ལྡན་ `DaRentPolicyV1`, disetive, disporties ཁང་གླའི་ཁང་གླ།
+   བརྡ་འཕྲིན་གྱི་ཚད་དང་ བཀག་འཛིན་ དེ་ལས་ Norito གི་ ལུང་འདྲེན་འདི་ བཙུགསཔ་ཨིན།
+   གསལ༌སྟོན༌འབད༌ནི། ཕུལ་མི་གིས་ ཁང་གླའི་ཧེ་ཤི་དང་ གཞི་བསྟུན་འབད་མི་ གསལ་བསྒྲགས་ཅིག་ མཚན་རྟགས་བཀོད་ཡོདཔ་ཨིན།
+   བསག་མཛོད་ཀྱི་ཤོག་འཛིན་ id.
+2. **རྩིས་ཁྲ་:** དངུལ་ཁང་ནང་ ཡིག་གཟུགས་ཚུ་གིས་ གསལ་སྟོན་འདི་ ཌི་ཀོཌི་ ཌི་ཀོཌི་ འབོད་བརྡ།
+   `DaRentPolicyV1::quote`, དང་མི་རློབས་ཀྱི་ཁང་གླའི་ལག་དེབ་ (གཞི་རྟེན་ཁང་གླ་ གསོག་འཇོག་།
+   bonuse, དང་རེ་བ་བསྐྱེད་པའི་ eregse བུ་ལོན་)། ཐོ་བཀོད་འབད་ཡོད་པའི་ཁང་གླ་གི་བར་ན་ མ་མཐུན།
+   དང་ ལོག་རྩིས་སྟོན་འབད་ཡོད་པའི་ཚིག་བརྗོད་ཚུ་ CI འཐུས་ཤོར་འབྱུང་འོང་།
+3. **ནད་རྟགས་ཀྱི་ཁེ་ཕན།:** PDP/PoTR དུས་ཚོད་ཀྱི་རེ་རེར་མཐར་འཁྱོལ་རྟགས་བཀོད་པའི་སྐབས་ ཁོང་གིས་ འབབ་ཁུངས་ཅིག་བཏོནམ་ཨིན།
+   གསལ་སྟོན་གྱི་ བཞུ་བཅོས་དང་ བདེན་ཁུངས་ཀྱི་རིགས་ དེ་ལས་ XOR བྱིན་རླབས་ལས་ ཐོན་ཡོདཔ་ཨིན།
+   སྲིད་བྱུས་འདི་། གཞུང་སྐྱོང་གིས་ ཚིག་བརྗོད་གཅིགཔོ་འདི་ ལོག་སྟེ་རྩིས་སྟོན་ཐོག་ལས་ གླ་ཆ་ཚུ་ རྩིས་ཞིབ་འབད་ཚུགས།
+4. ** ཕྱིར་ཐོན་དངུལ་ཕོགས་:** ཕེཆ་སྙན་ཆའི་སྡེ་ཚན་ཚུ་གིས་ མཚན་རྟགས་བཀོད་ཡོད་པའི་ ཕྱིར་ཐོན་བཅུད་བསྡུས་ཚུ་ བཙུགས།
+   Torii `egress_credit_per_gib` གིས་ ཇི་བི་གྱངས་ཁ་དང་ གནད་དོན་ཚུ་ བསྒྱུར་བཅོས་འབད་ཡོདཔ་ཨིན།
+   ཁང་གླའི་བཀག་འཛིན་ལུ་རྒྱབ་འགལ་གྱི་བཀོད་རྒྱ་ཚུ།
 
-## Telemetry
-
-Torii nodes expose rent usage via the following Prometheus metrics (labels:
+## བརྒྱུད་འཕྲིན་ནི།Torii nodes གིས་ འོག་གི་ Prometheus མེ་ཊིགསི་བརྒྱུད་དེ་ ཁང་གླའི་ལག་ལེན་ཚུ་ གསལ་སྟོན་འབདཝ་ཨིན།
 `cluster`, `storage_class`):
 
-- `torii_da_rent_gib_months_total` — GiB-months quoted by `/v1/da/ingest`.
-- `torii_da_rent_base_micro_total` — base rent (micro XOR) accrued at ingest.
-- `torii_da_protocol_reserve_micro_total` — protocol reserve contributions.
-- `torii_da_provider_reward_micro_total` — provider-side rent payouts.
-- `torii_da_pdp_bonus_micro_total` and `torii_da_potr_bonus_micro_total` —
-  PDP/PoTR bonus pools sourced from the ingest quote.
+- `torii_da_rent_gib_months_total` — གི་བི་ཟླཝ་ཚུ་ `/v1/da/ingest` གིས་ བཀོད་ཡོདཔ་ཨིན།
+- `torii_da_rent_base_micro_total` — གཞི་རྟེན་ཁང་གླ་ (མའི་ཀོརོ་ཨེགསི་ཨོ་ཨར་) འདི་ བཟའ་སྤྱོད་ལུ་ བསྡུ་བསྒྱོམ་འབད་ཡོདཔ་ཨིན།
+- `torii_da_protocol_reserve_micro_total` — མཐུན་སྒྲིག་གསོག་འཇོག་ཕན་འདེབས་ཚུ།
+- `torii_da_provider_reward_micro_total` — སྤྲོད་པའི་ཕྱོགས་ཀྱི་ཁང་གླ་སྤྲོད་ཐངས།
+- `torii_da_pdp_bonus_micro_total` དང་ `torii_da_potr_bonus_micro_total` —
+  PDP/PoTR bonus pools ཚུ་ བཙུགས་ཏེ་ཡོད་པའི་ ཚིག་བརྗོད་ལས་ འབྱུང་ཁུངས་བཟོ་ཡོདཔ།
 
-Economics dashboards rely on these counters to ensure ledger ISIs, reserve taps,
-and PDP/PoTR bonus schedules all match the policy parameters in force for each
-cluster and storage class. The SoraFS Capacity Health Grafana board
-(`dashboards/grafana/sorafs_capacity_health.json`) now renders dedicated panels
-for rent distribution, PDP/PoTR bonus accrual, and GiB-month capture, allowing
-Treasury to filter by Torii cluster or storage class when reviewing ingest
-volume and payouts.
+དཔལ་འབྱོར་གྱི་ བརྡ་དོན་བཀོད་སྒྲིག་ཚུ་གིས་ རྩིས་ཁྲ་འདི་ཚུ་ལུ་ བརྟེན་ཏེ་ ISIs དང་ གསོག་འཇོག་འབད་ནི།
+དང་ PDP/PoTR གི་བཱོན་དུས་ཚོད་ཚུ་ཆ་མཉམ་ཆ་མཉམ་ལུ་ སྲིད་བྱུས་ཚད་གཞི་ཚུ་དང་མཐུན་སྒྲིག་འབདཝ་ཨིན།
+ཀླད་ཀོར་དང་ བསག་མཛོད་ཀྱི་དབྱེ་བ། SoraFS ཤུགས་ལྡན་གསོ་བ་ Grafana བང་ཁྲི།
+(`dashboards/grafana/sorafs_capacity_health.json`) ད་ལྟོ་བློ་གཏད་ཅན་གྱི་པེ་ནཱལ་ཚུ་བཟོཝ་ཨིན།
+ཁང་གླ་བགོ་བཀྲམ་གྱི་དོན་ལུ་ PDP/PoTR གི་བུན་གཡར་དང་ GiB-ཟླཝ་བཟུང་མི་འདི་གིས་ འབད་བཅུགཔ་ཨིན།
+བག་ལེབ་བསྐྱར་ཞིབ་འབད་བའི་སྐབས་ Torii ཀླད་ཀོར་ཡང་ན་ གསོག་འཇོག་དབྱེ་རིམ་གྱིས་ ཚགས་མ་བཙུགས་ནིའི་དངུལ་ཁང་།
+འབོར་ཚད་དང་ གླ་ཆ་ཚུ།
 
-## Next steps
+## ཤུལ་མམ་གྱི་གོམ་པ།
 
-- ✅ `/v1/da/ingest` receipts now embed `rent_quote` and the CLI/SDK surfaces display the quoted
-  base rent, reserve share, and PDP/PoTR bonuses so submitters can review the XOR obligations before
-  committing payloads.
-- Integrate the rent ledger with the forthcoming DA reputation/order-book feeds
-  to prove that high-availability providers are receiving the correct payouts.
+- ✅ `/v1/da/ingest` བྱུང་འཛིན་ཚུ་གིས་ ད་ལྟོ་ `rent_quote` དང་ CLI/SDK ཁ་ཐོག་ཚུ་གིས་ ལུང་འདྲེན་འབད་ཡོད་པའི་བཀྲམ་སྟོན་འབདཝ་ཨིན།
+  གཞི་རྟེན་ཁང་གླ་དང་ གསོག་འཇོག་བགོ་བཤའ་ དེ་ལས་ PDP/PoTR བུན་གཡར་ཚུ་ ཕུལ་མི་ཚུ་གིས་ XOR འགན་ཁུར་ཚུ་ ཧེ་མ་ལས་ བསྐྱར་ཞིབ་འབད་ཚུགས།
+  གླ་ཆ་སྤྲོད་ནི།
+- ཁང་གླའི་ལག་དེབ་འདི་ འོང་ནི་ཨིན་མི་ ཌི་ཨེ་གི་མིང་གཏམ་/གོ་རིམ་-ཀི་དེབ་ཀྱི་ ཕིཌ་ཚུ་དང་མཉམ་ཅིག་མཉམ་བསྡོམས་འབད།
+  མཐོ་བའི་ཐོབ་ཚུགས་པའི་བྱིན་མི་ཚུ་གིས་ གླ་ཆ་འོས་འབབ་ཅན་ཚུ་ ཐོབ་དོ་ཡོདཔ་སྦེ་ བདེན་ཁུངས་བཀལ་ནི།

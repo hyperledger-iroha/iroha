@@ -8,35 +8,37 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SNS Payment & Settlement Plan
 sidebar_label: Payment & settlement plan
 description: Playbook for routing SNS registrar revenue, reconciling steward/treasury splits, and producing evidence bundles.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-> Canonical source: [`docs/source/sns/payment_settlement_plan.md`](../../../source/sns/payment_settlement_plan.md).
+> Kanonik manba: [`docs/source/sns/payment_settlement_plan.md`](../../../source/sns/payment_settlement_plan.md).
 
-Roadmap task **SN-5 — Payment & Settlement Service** introduces a deterministic
-payment layer for the Sora Name Service. Every registration, renewal, or refund
-must emit a structured Norito payload so treasury, stewards, and governance can
-replay the financial flows without spreadsheets. This page distills the spec
-for portal audiences.
+Yo'l xaritasi vazifasi **SN-5 — To'lov va hisob-kitob xizmati** deterministikni taqdim etadi
+Sora Name Service uchun to'lov qatlami. Har bir ro'yxatdan o'tish, yangilash yoki pulni qaytarish
+tuzilgan Norito foydali yukni chiqarishi kerak, shuning uchun xazina, boshqaruvchilar va boshqaruv
+moliyaviy oqimlarni jadvallarsiz takrorlang. Ushbu sahifa spetsifikatsiyani distillaydi
+portal auditoriyasi uchun.
 
-## Revenue model
+## Daromad modeli
 
-- Base fee (`gross_fee`) derives from the registrar pricing matrix.  
-- Treasury receives `gross_fee × 0.70`, stewards receive the remainder minus
-  referral bonuses (capped at 10 %).  
-- Optional holdbacks allow governance to pause steward payouts during disputes.  
-- Settlement bundles expose a `ledger_projection` block with the concrete
-  `Transfer` ISIs so automation can post XOR movements straight into Torii.
+- Asosiy to'lov (`gross_fee`) ro'yxatga oluvchining narxlash matritsasidan olinadi.  
+- G'aznachilik `gross_fee × 0.70` oladi, styuardlar qolgan minusni oladi
+  yo'llanma bonuslari (cheklangan 10%).  
+- Ixtiyoriy cheklashlar boshqaruvga nizolar paytida boshqaruvchi to'lovlarni to'xtatib turish imkonini beradi.  
+- O'rnatish to'plamlari beton bilan `ledger_projection` blokini ochib beradi
+  `Transfer` ISI, shuning uchun avtomatlashtirish XOR harakatlarini to'g'ridan-to'g'ri Torii ga joylashtirishi mumkin.
 
-## Services & automation
+## Xizmatlar va avtomatlashtirish
 
-| Component | Purpose | Evidence |
-|-----------|---------|----------|
-| `sns_settlementd` | Applies policy, signs bundles, surfaces `/v1/sns/settlements`. | JSON bundle + hash. |
-| Settlement queue & writer | Idempotent queue + ledger submitter driven by `iroha_cli app sns settlement ledger`. | Bundle hash ↔ tx hash manifest. |
-| Reconciliation job | Daily diff + monthly statement under `docs/source/sns/reports/`. | Markdown + JSON digest. |
-| Refund desk | Governance-approved refunds via `/settlements/{id}/refund`. | `RefundRecordV1` + ticket. |
+| Komponent | Maqsad | Dalil |
+|----------|---------|----------|
+| `sns_settlementd` | Siyosatni qo'llaydi, to'plamlar, yuzalar `/v1/sns/settlements` belgilari. | JSON to'plami + xesh. |
+| Hisob-kitob navbati & yozuvchi | Idempotent navbat + `iroha_cli app sns settlement ledger` tomonidan boshqariladigan daftar topshiruvchisi. | To‘plam xesh ↔ tx xesh manifesti. |
+| Yarashtirish ishi | `docs/source/sns/reports/` ostida kunlik farq + oylik hisobot. | Markdown + JSON dayjesti. |
+| To'lovni qaytarish stoli | `/settlements/{id}/refund` orqali boshqaruv tomonidan tasdiqlangan toʻlovlar. | `RefundRecordV1` + chipta. |
 
-CI helpers mirror these flows:
+CI yordamchilari ushbu oqimlarni aks ettiradi:
 
 ```bash
 # Quote & ledger projection
@@ -49,27 +51,27 @@ iroha_cli app sns settlement ledger --bundle artifacts/sns/settlements/2026-05/m
 iroha_cli app sns settlement reconcile --period 2026-05 --out docs/source/sns/reports/settlement_202605.md
 ```
 
-## Observability & reporting
+## Kuzatish va hisobot berish
 
-- Dashboards: `dashboards/grafana/sns_payment_settlement.json` for treasury vs
-  steward totals, referral payouts, queue depth, and refund latency.
-- Alerts: `dashboards/alerts/sns_payment_settlement_rules.yml` monitors pending
-  age, reconciliation failures, and ledger drift.
-- Statements: daily digests (`settlement_YYYYMMDD.{json,md}`) roll into monthly
-  reports (`settlement_YYYYMM.md`) which are uploaded both to Git and the
-  governance object store (`s3://sora-governance/sns/settlements/<period>/`).
-- Governance packets bundle dashboards, CLI logs, and approvals before council
-  sign-off.
+- Boshqaruv panellari: `dashboards/grafana/sns_payment_settlement.json` xazina va boshqalar uchun
+  styuard jami, yo'llanma to'lovlari, navbat chuqurligi va to'lovni qaytarish kechikishi.
+- Ogohlantirishlar: `dashboards/alerts/sns_payment_settlement_rules.yml` monitorlari kutilmoqda
+  yoshi, yarashuvdagi muvaffaqiyatsizliklar va daftarning o'zgarishi.
+- Bayonotlar: kunlik dayjestlar (`settlement_YYYYMMDD.{json,md}`) har oyga aylanadi
+  hisobotlar (`settlement_YYYYMM.md`) ham Git, ham
+  boshqaruv ob'ektlari do'koni (`s3://sora-governance/sns/settlements/<period>/`).
+- Boshqaruv paketlari boshqaruv paneli, CLI jurnallari va kengashda tasdiqlashlar to'plami
+  ro'yxatdan o'tish.
 
-## Rollout checklist
+## Chiqarish nazorat ro'yxati
 
-1. Prototype quote + ledger helpers and capture a staging bundle.
-2. Launch `sns_settlementd` with queue + writer, wire dashboards, and exercise
-   alert tests (`promtool test rules ...`).
-3. Deliver refund helper plus monthly statement template; mirror artefacts into
+1. Iqtibos prototipi + daftar yordamchilari va staging to'plamini suratga oling.
+2. `sns_settlementd`ni navbat + yozuvchi, sim asboblar paneli va mashqlar bilan ishga tushiring
+   ogohlantirish testlari (`promtool test rules ...`).
+3. To'lovni qaytarish yordamchisini va oylik hisobot shablonini yetkazib berish; aks ettirilgan artefaktlar
    `docs/portal/docs/sns/reports/`.
-4. Run a partner rehearsal (full month of settlements) and capture the
-   governance vote marking SN-5 as complete.
+4. Hamkor mashqini o'tkazing (to'liq oylik hisob-kitoblar) va qo'lga oling
+   boshqaruv ovozi SN-5ni tugallangan deb belgilash.
 
-Refer back to the source document for the exact schema definitions, open
-questions, and future amendments.
+Aniq sxema ta'riflari uchun manba hujjatiga qayting, oching
+savollar va kelajakdagi tuzatishlar.

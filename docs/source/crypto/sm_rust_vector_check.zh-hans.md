@@ -7,22 +7,23 @@ generator: scripts/sync_docs_i18n.py
 source_hash: ce2f95b8b287c18c39232418333fbefdd300c030391be9dbfa4e29a3fd5f3e14
 source_last_modified: "2025-12-29T18:16:35.946190+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-//! Notes on verifying SM2 Annex D vectors using RustCrypto crates.
+//！使用 RustCrypto crate 验证 SM2 附件 D 向量的注意事项。
 
-# SM2 Annex D Vector Verification (RustCrypto)
+# SM2 附件 D 矢量验证 (RustCrypto)
 
-This walkthrough captures the steps we used to validate (and debug) the GM/T 0003 Annex D example with RustCrypto’s `sm2` crate. The canonical Annex Example 1 data (identity `ALICE123@YAHOO.COM`, message `"message digest"`, and the published `(r, s)`) is now recorded in `crates/iroha_crypto/tests/fixtures/sm_known_answers.toml`. OpenSSL/Tongsuo/gmssl happily verify the signature (see `sm_vectors.md`), but RustCrypto’s `sm2 v0.13.3` still rejects the point with `signature::Error`, so CLI parity is confirmed while the Rust harness remains pending an upstream fix.
+本演练介绍了我们使用 RustCrypto 的 `sm2` 包验证（和调试）GM/T 0003 附录 D 示例的步骤。规范附件示例 1 数据（身份 `ALICE123@YAHOO.COM`、消息 `"message digest"` 和已发布的 `(r, s)`）现在记录在 `crates/iroha_crypto/tests/fixtures/sm_known_answers.toml` 中。 OpenSSL/Tongsuo/gmssl 愉快地验证签名（参见 `sm_vectors.md`），但 RustCrypto 的 `sm2 v0.13.3` 仍然拒绝 `signature::Error` 的点，因此 CLI 奇偶性得到确认，而 Rust 工具仍然等待上游修复。
 
-## Temporary crate
+## 临时板条箱
 
 ```bash
 cargo new /tmp/sm2_verify --bin
 cd /tmp/sm2_verify
 ```
 
-`Cargo.toml`:
+`Cargo.toml`：
 
 ```toml
 [package]
@@ -35,7 +36,7 @@ hex = "0.4"
 sm2 = "0.13.3"
 ```
 
-`src/main.rs`:
+`src/main.rs`：
 
 ```rust
 use hex::FromHex;
@@ -64,14 +65,14 @@ fn main() {
 }
 ```
 
-## Findings
+## 调查结果
 
-- Verifying against the canonical Annex Example 1 `(r, s)` currently fails because `sm2::VerifyingKey::from_sec1_bytes` returns `signature::Error`; track upstream/root cause (likely due to curve-parameter mismatch in the crate’s current release).
-- The harness compiles cleanly with `sm2 v0.13.3` and will become an automated regression test once RustCrypto (or a patched fork) accepts the Annex Example 1 point/signature pair.
-- OpenSSL/Tongsuo/gmssl verification succeeds with the commands in `sm_vectors.md`; LibreSSL (macOS default) still lacks SM2/SM3 support, hence the local gap.
+- 根据规范附件示例 1 `(r, s)` 进行验证当前失败，因为 `sm2::VerifyingKey::from_sec1_bytes` 返回 `signature::Error`；跟踪上游/根本原因（可能是由于板条箱当前版本中的曲线参数不匹配）。
+- 该工具可以使用 `sm2 v0.13.3` 进行干净的编译，一旦 RustCrypto（或修补后的分叉）接受附件示例 1 点/签名对，它将成为自动回归测试。
+- 使用 `sm_vectors.md` 中的命令 OpenSSL/Tongsuo/gmssl 验证成功； LibreSSL（macOS 默认）仍然缺乏 SM2/SM3 支持，因此存在本地差距。
 
-## Next steps
+## 后续步骤
 
-1. Re-test once `sm2` exposes an API that accepts the Annex Example 1 point (or after upstream confirms the curve parameters) so the harness can pass locally.
-2. Keep a CLI sanity check (OpenSSL/Tongsuo/gmssl) in CI pipelines to guard the canonical Annex Example until the RustCrypto fix lands.
-3. Promote the harness into Iroha’s regression suite after both RustCrypto and OpenSSL parity checks succeed.
+1. 一旦 `sm2` 公开接受附件示例 1 点的 API（或在上游确认曲线参数后），请重新测试，以便线束可以在本地通过。
+2. 在 CI 管道中保持 CLI 健全性检查 (OpenSSL/Tongsuo/gmssl)，以保护规范的附件示例，直到 RustCrypto 修复落地。
+3. 在 RustCrypto 和 OpenSSL 奇偶校验成功后，将工具提升到 Iroha 的回归套件中。

@@ -7,53 +7,54 @@ generator: scripts/sync_docs_i18n.py
 source_hash: e77b792e19fbfa8e1efeddd042adbe68a48287a582a1be76aa518af7830774e2
 source_last_modified: "2026-01-05T09:28:11.996979+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# SoraFS Chunking → Manifest Pipeline
+# SoraFS Chunking → Manifest quvur liniyasi
 
-This companion to the quickstart traces the end-to-end pipeline that turns raw
-bytes into Norito manifests suitable for the SoraFS Pin Registry. The content is
-adapted from [`docs/source/sorafs/manifest_pipeline.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/manifest_pipeline.md);
-consult that document for the canonical specification and changelog.
+Tez ishga tushirishning ushbu hamkori xom-ashyoga aylanib ketadigan quvur liniyasini kuzatib boradi
+SoraFS Pin registriga mos keladigan Norito manifestiga baytlarni kiriting. Tarkib shunday
+[`docs/source/sorafs/manifest_pipeline.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/manifest_pipeline.md) dan moslashtirilgan;
+kanonik spetsifikatsiya va o'zgarishlar jurnali uchun ushbu hujjatga murojaat qiling.
 
-## 1. Chunk deterministically
+## 1. Deterministik ravishda bo'lak
 
-SoraFS uses the SF-1 (`sorafs.sf1@1.0.0`) profile: a FastCDC-inspired rolling
-hash with a 64 KiB minimum chunk size, 256 KiB target, 512 KiB maximum, and a
-`0x0000ffff` break mask. The profile is registered in
+SoraFS SF-1 (`sorafs.sf1@1.0.0`) profilidan foydalanadi: FastCDC-dan ilhomlangan prokat
+64KiB minimal boʻlak hajmi, 256KiB maqsadli, maksimal 512KiB va
+`0x0000ffff` sindirish niqobi. Profil ro'yxatdan o'tgan
 `sorafs_manifest::chunker_registry`.
 
-### Rust helpers
+### Zangga qarshi yordamchilar
 
-- `sorafs_car::CarBuildPlan::single_file` – Emits chunk offsets, lengths, and
-  BLAKE3 digests while preparing CAR metadata.
-- `sorafs_car::ChunkStore` – Streams payloads, persists chunk metadata, and
-  derives the 64 KiB / 4 KiB Proof-of-Retrievability (PoR) sampling tree.
-- `sorafs_chunker::chunk_bytes_with_digests` – Library helper behind both CLIs.
+- `sorafs_car::CarBuildPlan::single_file` - bo'laklarni ofsetlarni, uzunliklarni va
+  BLAKE3 CAR metamaʼlumotlarini tayyorlashda hazm qiladi.
+- `sorafs_car::ChunkStore` - foydali yuklarni uzatadi, parcha metama'lumotlarini saqlaydi va
+  64KiB / 4KiB Retrievability Proof-of-Retrievability (PoR) namuna olish daraxtini oladi.
+- `sorafs_chunker::chunk_bytes_with_digests` - Ikkala CLI ortidagi kutubxona yordamchisi.
 
-### CLI tooling
+### CLI vositalari
 
 ```bash
 cargo run -p sorafs_chunker --bin sorafs-chunk-dump -- ./payload.bin \
   > chunk-plan.json
 ```
 
-The JSON contains the ordered offsets, lengths, and chunk digests. Persist the
-plan when constructing manifests or orchestrator fetch specifications.
+JSON buyurtma qilingan ofsetlarni, uzunliklarni va parcha dayjestlarini o'z ichiga oladi. Davom eting
+manifestlarni qurishda rejalashtirish yoki orkestrni olib kelish spetsifikatsiyalari.
 
-### PoR witnesses
+### PoR guvohlari
 
-`ChunkStore` exposes `--por-proof=<chunk>:<segment>:<leaf>` and
-`--por-sample=<count>` so auditors can request deterministic witness sets. Pair
-those flags with `--por-proof-out` or `--por-sample-out` to record the JSON.
+`ChunkStore` `--por-proof=<chunk>:<segment>:<leaf>` va
+`--por-sample=<count>`, shuning uchun auditorlar deterministik guvohlar to'plamini so'rashlari mumkin. Juftlash
+JSONni yozib olish uchun `--por-proof-out` yoki `--por-sample-out` bayroqlari.
 
-## 2. Wrap a manifest
+## 2. Manifestni o'rash
 
-`ManifestBuilder` combines chunk metadata with governance attachments:
+`ManifestBuilder` boshqaruv qo'shimchalari bilan parcha metama'lumotlarini birlashtiradi:
 
-- Root CID (dag-cbor) and CAR commitments.
-- Alias proofs and provider capability claims.
-- Council signatures and optional metadata (e.g., build IDs).
+- Root CID (dag-cbor) va CAR majburiyatlari.
+- Taxallus dalillari va provayder qobiliyatiga oid da'volar.
+- Kengash imzolari va ixtiyoriy metama'lumotlar (masalan, qurish identifikatorlari).
 
 ```bash
 cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
@@ -64,57 +65,57 @@ cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
   --json-out=payload.report.json
 ```
 
-Important outputs:
+Muhim natijalar:
 
-- `payload.manifest` – Norito-encoded manifest bytes.
-- `payload.report.json` – Human/automation readable summary, including
-  `chunk_fetch_specs`, `payload_digest_hex`, CAR digests, and alias metadata.
-- `payload.manifest_signatures.json` – Envelope containing manifest BLAKE3
-  digest, chunk-plan SHA3 digest, and sorted Ed25519 signatures.
+- `payload.manifest` – Norito kodlangan manifest baytlari.
+- `payload.report.json` - Inson/avtomatlashtirish o'qilishi mumkin bo'lgan xulosa, shu jumladan
+  `chunk_fetch_specs`, `payload_digest_hex`, CAR dayjestlari va taxallus metamaʼlumotlari.
+- `payload.manifest_signatures.json` - BLAKE3 manifestini o'z ichiga olgan konvert
+  dayjest, parcha-reja SHA3 dayjest va tartiblangan Ed25519 imzo.
 
-Use `--manifest-signatures-in` to verify envelopes supplied by external
-signatories before writing them back out, and `--chunker-profile-id` or
-`--chunker-profile=<handle>` to lock the registry selection.
+Tashqi konvertlar tomonidan taqdim etilgan konvertlarni tekshirish uchun `--manifest-signatures-in` dan foydalaning
+ularni qayta yozishdan oldin imzolaganlar va `--chunker-profile-id` yoki
+Ro'yxatga olish kitobini tanlashni bloklash uchun `--chunker-profile=<handle>`.
 
-## 3. Publish and pin
+## 3. Nashr qiling va mahkamlang
 
-1. **Governance submission** – Provide the manifest digest and signature
-   envelope to the council so the pin can be admitted. External auditors should
-   store the chunk-plan SHA3 digest alongside the manifest digest.
-2. **Pin payloads** – Upload the CAR archive (and optional CAR index) referenced
-   in the manifest to the Pin Registry. Ensure the manifest and CAR share the
-   same root CID.
-3. **Record telemetry** – Persist the JSON report, PoR witnesses, and any fetch
-   metrics in release artifacts. These records feed operator dashboards and
-   help reproduce issues without downloading large payloads.
+1. **Boshqaruvni taqdim etish** – Manifest dayjest va imzoni taqdim eting
+   kengashga konvert, shuning uchun pinni qabul qilish mumkin. Tashqi auditorlar kerak
+   manifest dayjest bilan bir qatorda bo'lak rejasi SHA3 dayjestini saqlang.
+2. **Foydali yuklarni pin qilish** – havola qilingan CAR arxivini (va ixtiyoriy CAR indeksini) yuklang
+   Pin registriga manifestda. Manifest va CARni baham ko'rishiga ishonch hosil qiling
+   bir xil ildiz CID.
+3. **Telemetriyani yozib oling** – JSON hisoboti, PoR guvohlari va har qanday yuklanishni davom ettirish
+   reliz artefaktlaridagi ko'rsatkichlar. Bu yozuvlar operator asboblar panelini va
+   katta yuklarni yuklab olmasdan muammolarni qayta ishlab chiqarishga yordam beradi.
 
-## 4. Multi-provider fetch simulation
+## 4. Ko'p provayderni olish simulyatsiyasi
 
-`cargo run -p sorafs_car --bin sorafs_fetch -- --plan=payload.report.json \
+`yuk tashish -p sorafs_car --bin sorafs_fetch -- --plan=payload.report.json \
   --provider=alpha=providers/alpha.bin --provider=beta=providers/beta.bin#4@3 \
   --output=payload.bin --json-out=fetch_report.json`
 
-- `#<concurrency>` increases per-provider parallelism (`#4` above).
-- `@<weight>` tunes scheduling bias; defaults to 1.
-- `--max-peers=<n>` caps the number of providers scheduled for a run when
-  discovery yields more candidates than desired.
-- `--expect-payload-digest` and `--expect-payload-len` guard against silent
-  corruption.
-- `--provider-advert=name=advert.to` verifies provider capabilities before
-  using them in the simulation.
-- `--retry-budget=<n>` overrides the per-chunk retry count (default: 3) so CI
-  can surface regressions faster when testing failure scenarios.
+- `#<concurrency>` provayder uchun parallellikni oshiradi (yuqorida `#4`).
+- `@<weight>` sozlamalarni rejalashtirish tarafkashligi; sukut bo'yicha 1.
+- `--max-peers=<n>` qachon ishga tushirish uchun rejalashtirilgan provayderlar sonini cheklaydi
+  kashfiyot kutilganidan ko'ra ko'proq nomzodlarni beradi.
+- `--expect-payload-digest` va `--expect-payload-len` jimlikdan himoya qiladi
+  korruptsiya.
+- `--provider-advert=name=advert.to` oldin provayder imkoniyatlarini tekshiradi
+  simulyatsiyada ulardan foydalanish.
+- `--retry-budget=<n>` har bir parcha qayta urinishlar sonini bekor qiladi (standart: 3), shuning uchun CI
+  muvaffaqiyatsizlik stsenariylarini sinab ko'rishda regressiyalarni tezroq ko'rsatishi mumkin.
 
-`fetch_report.json` surfaces aggregated metrics (`chunk_retry_total`,
-`provider_failure_rate`, etc.) suitable for CI assertions and observability.
+`fetch_report.json` jamlangan ko'rsatkichlarni ko'rsatadi (`chunk_retry_total`,
+`provider_failure_rate` va boshqalar) CI tasdiqlari va kuzatilishi uchun mos.
 
-## 5. Registry updates & governance
+## 5. Ro'yxatga olish kitobini yangilash va boshqarish
 
-When proposing new chunker profiles:
+Yangi chunker profillarini taklif qilishda:
 
-1. Author the descriptor in `sorafs_manifest::chunker_registry_data`.
-2. Update `docs/source/sorafs/chunker_registry.md` and related charters.
-3. Regenerate fixtures (`export_vectors`) and capture signed manifests.
-4. Submit the charter compliance report with governance signatures.
+1. `sorafs_manifest::chunker_registry_data` da deskriptor muallifi.
+2. `docs/source/sorafs/chunker_registry.md` va tegishli nizomlarni yangilang.
+3. Armaturalarni qayta tiklang (`export_vectors`) va imzolangan manifestlarni yozib oling.
+4. Ustavga muvofiqlik hisobotini boshqaruv imzolari bilan taqdim eting.
 
-Automation should prefer canonical handles (`namespace.name@semver`) and fall
+Avtomatlashtirish kanonik tutqichlarni (`namespace.name@semver`) afzal ko'rishi va tushishi kerak

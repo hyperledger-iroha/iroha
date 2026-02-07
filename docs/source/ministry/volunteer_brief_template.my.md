@@ -9,70 +9,69 @@ source_last_modified: "2025-12-29T18:16:35.984008+00:00"
 translation_last_reviewed: 2026-02-07
 title: Volunteer Brief Template
 summary: Structured template for roadmap item MINFO-3a covering balanced briefs, fact tables, conflict disclosures, and moderation tags.
+translator: machine-google-reviewed
 ---
 
-# Volunteer Brief Template (MINFO-3a)
+# စေတနာ့ဝန်ထမ်း အတိုချုံး နမူနာပုံစံ (MINFO-3a)
 
-Roadmap reference: **MINFO-3a — Balanced brief templates & conflict disclosure.**
+လမ်းပြမြေပုံရည်ညွှန်း- **MINFO-3a — ဟန်ချက်ညီသော အတိုချုံး နမူနာပုံစံများနှင့် ပဋိပက္ခထုတ်ဖော်ခြင်း။**
 
-Volunteer brief submissions summarise positions that citizen panels want governance to review when blacklist changes or other Ministry enforcement motions are proposed. MINFO-3a requires that every brief follows a deterministic structure so the transparency pipeline can (1) render comparable fact tables, (2) confirm that conflicts-of-interest are disclosed, and (3) drop or flag off-topic submissions automatically. This page defines the canonical fields, CSV-style fact table layout, and moderation tags expected by the tooling shipped in `cargo xtask ministry-transparency`.
+စေတနာ့ဝန်ထမ်း တင်ပြချက်များသည် အမည်ပျက်စာရင်း အပြောင်းအလဲများ သို့မဟုတ် အခြားသော ဝန်ကြီးဌာနမှ ပြဋ္ဌာန်းထားသော အဆိုပြုချက်များကို အဆိုပြုသည့်အခါ နိုင်ငံသားအဖွဲ့များက အုပ်ချုပ်ရေးကို ပြန်လည်သုံးသပ်လိုသည့် ရာထူးများကို အကျဉ်းချုပ်ဖော်ပြပါသည်။ MINFO-3a သည် အတိုချုံးတိုင်းသည် အဆုံးအဖြတ်ရှိသော ဖွဲ့စည်းပုံကို လိုက်နာရန် လိုအပ်ပြီး ပွင့်လင်းမြင်သာမှု ပိုက်လိုင်းသည် (၁) နှိုင်းယှဉ်နိုင်သော အချက်ပြဇယားများ၊ (၂) အကျိုးစီးပွားဆိုင်ရာ ပဋိပက္ခများကို ထုတ်ဖော်ကြောင်း အတည်ပြုရန်နှင့် (၃) ခေါင်းစဉ်မဲ့ တင်ပြမှုများကို အလိုအလျောက် လွှတ်ချခြင်း သို့မဟုတ် အလံပြခြင်းတို့ကို လုပ်ဆောင်ရန် လိုအပ်ပါသည်။ ဤစာမျက်နှာသည် `cargo xtask ministry-transparency` တွင် တင်ပို့သည့် tooling မှမျှော်လင့်ထားသော CSV ပုံစံ အချက်အလက်ဇယားအပြင်အဆင်နှင့် ထိန်းညှိပေးသည့် တဂ်များကို ဤစာမျက်နှာတွင် သတ်မှတ်ဖော်ပြပါသည်။
 
-> **Norito schema:** the `iroha_data_model::ministry::VolunteerBriefV1` struct (version `1`) is now the authoritative schema for all submissions. Tooling and portal validators call `VolunteerBriefV1::validate` before publishing a brief or referencing it in panel summaries.
+> **Norito schema-** `iroha_data_model::ministry::VolunteerBriefV1` struct (ဗားရှင်း `1`) သည် ယခုအခါ တင်ပြမှုအားလုံးအတွက် တရားဝင် schema ဖြစ်သည်။ အတိုချုံးကို မထုတ်ဝေမီ သို့မဟုတ် ဘောင်အကျဉ်းချုပ်များတွင် ကိုးကားခြင်းမပြုမီ ကိရိယာတန်ဆာပလာနှင့် ပေါ်တယ်တရားဝင်စစ်ဆေးသူများသည် `VolunteerBriefV1::validate` ကိုခေါ်ဆိုပါ။
 
-## Submission payload structure
+## Submission payload တည်ဆောက်ပုံ
 
-| Section | Fields | Requirements |
-|---------|--------|--------------|
-| **Envelope** | `version` (u16) | Must be `1`. The version guard allows the Ministry to evolve the schema without ambiguity. |
-| **Identity & stance** | `brief_id` (string, unique per calendar year), `proposal_id` (links to the blacklist or policy motion), `language` (BCP-47), `stance` (`support`/`oppose`/`context`), `submitted_at` (RFC 3339) | All fields required. `stance` feeds dashboards and must match the allowed vocabulary. |
-| **Author info** | `author.name`, `author.organization` (optional), `author.contact`, `author.no_conflicts_certified` (bool) | `author.contact` is redacted from public dashboards but stored in the raw artefact. Set `no_conflicts_certified: true` only if the author attests that no disclosures apply. |
-| **Summary** | `summary.title`, `summary.abstract`, `summary.requested_action` | Textual overview surfaced beside the fact table. Limit `summary.abstract` to ≤2 000 characters. |
-| **Fact table** | `fact_table` array (see next section) | Required even for short briefs. The CLI and transparency ingest job reject submissions without a fact table. |
-| **Disclosures** | `disclosures` array OR `author.no_conflicts_certified: true` | Each disclosure row must include `type` (`financial`, `employment`, `governance`, `family`, `other`), `entity`, `relationship`, and `details`. |
-| **Moderation metadata** | `moderation.off_topic` (bool), `moderation.tags` (array of enum strings), `moderation.notes` | Used by reviewers to suppress astroturfing or unrelated submissions. Off-topic entries do not contribute to dashboards. |
+| ပုဒ်မ | လယ်ကွင်းများ | လိုအပ်ချက်များ |
+|---------|--------|-----------------|
+| **စာအိတ်** | `version` (u16) | `1` ဖြစ်ရမည်။ version guard သည် ဝန်ကြီးဌာနအား ရှင်းရှင်းလင်းလင်းမရှိဘဲ schema ကို ပြောင်းလဲလုပ်ဆောင်နိုင်စေပါသည်။ |
+| **အထောက်အထားနှင့် ရပ်တည်ချက်** | `brief_id` (စာတန်း၊ ပြက္ခဒိန်နှစ်အလိုက် ထူးခြားသော)၊ `proposal_id` (အမည်ပျက်စာရင်း သို့မဟုတ် မူဝါဒအဆိုပြုချက်သို့ လင့်ခ်များ)၊ `language` (BCP-47)၊ `stance` (`support`/`oppose`/`context`), `submitted_at` (RFC3339) | နယ်ပယ်အားလုံး လိုအပ်သည်။ `stance` သည် ဒက်ရှ်ဘုတ်များကို ကျွေးမွေးပြီး ခွင့်ပြုထားသော ဝေါဟာရနှင့် ကိုက်ညီရပါမည်။ |
+| **ရေးသားသူ အချက်အလက်** | `author.name`, `author.organization` (ချန်လှပ်), `author.contact`, `author.no_conflicts_certified` (bool) | `author.contact` ကို အများသူငှာ ဒက်ရှ်ဘုတ်များမှ ပြန်လည်ပြင်ဆင်ထားသော်လည်း အကြမ်းထည်တွင် သိမ်းဆည်းထားသည်။ ဖော်ပြချက်များနှင့် သက်ဆိုင်ခြင်းမရှိကြောင်း စာရေးသူမှ သက်သေပြမှသာ `no_conflicts_certified: true` ကို သတ်မှတ်ပါ။ |
+| **အနှစ်ချုပ်** | `summary.title`, `summary.abstract`, `summary.requested_action` | စာသားဆိုင်ရာ ခြုံငုံသုံးသပ်ချက်သည် အချက်အလက်ဇယားဘေးတွင် ပေါ်လာသည်။ `summary.abstract` ကို စာလုံးရေ ≤2000 ကန့်သတ်ထားသည်။ |
+| **အချက်အလက်ဇယား** | `fact_table` array (နောက်အပိုင်းကိုကြည့်ပါ) | အတိုချုံးများအတွက်ပင် လိုအပ်ပါသည်။ CLI နှင့် ပွင့်လင်းမြင်သာမှုတို့သည် အချက်အလက်ဇယားမပါဘဲ တင်ပြချက်များကို ငြင်းပယ်သည့်အလုပ်ဖြစ်သည်။ |
+| **ထုတ်ဖော်ချက်များ** | `disclosures` ခင်းကျင်း OR `author.no_conflicts_certified: true` | ထုတ်ဖော်ရေးအတန်းတစ်ခုစီတွင် `type` (`financial`၊ `employment`၊ `governance`၊ `family`၊ `other`), I180NI300၊ `relationship` နှင့် `details`။ |
+| **Moderation metadata** | `moderation.off_topic` (bool), `moderation.tags` (enum strings များ), `moderation.notes` | astroturfing သို့မဟုတ် မသက်ဆိုင်သော တင်ပြမှုများကို နှိမ်နှင်းရန် ပြန်လည်သုံးသပ်သူများ အသုံးပြုသည်။ ခေါင်းစဉ်မဟုတ်သော ထည့်သွင်းမှုများသည် ဒက်ရှ်ဘုတ်များတွင် မပါဝင်ပါ။ |
 
-## Fact table specification
+## အချက်အလက်ဇယားသတ်မှတ်ချက်
 
-Each `fact_table` row captures a machine-readable claim. Store the rows as JSON objects with the following fields:
+`fact_table` အတန်းတိုင်းသည် စက်ဖတ်နိုင်သော အရေးဆိုမှုကို ဖမ်းယူပါသည်။ အတန်းများကို JSON အရာဝတ္ထုများအဖြစ် အောက်ပါအကွက်များဖြင့် သိမ်းဆည်းပါ-| လယ် | ဖော်ပြချက် |
+|--------|-------------|
+| `claim_id` | တည်ငြိမ်သော အမှတ်အသား (ဥပမာ၊ `VB-2026-04-F1`)။ |
+| `claim` | အချက်အလက် သို့မဟုတ် အကျိုးသက်ရောက်မှုကို ဝါကျတစ်ကြောင်းတည်း ဖော်ပြချက်။ |
+| `status` | `corroborated`, `disputed`, `context-only` များထဲမှ တစ်ခု။ |
+| `impact` | `governance`၊ `technical`၊ `compliance`၊ `community` တစ်ခု သို့မဟုတ် တစ်ခုထက်ပိုသော အခင်းအကျင်း။ |
+| `citations` | အလွတ်မဟုတ်သော ကြိုးတန်းများ။ URL များ၊ Torii case ID များ သို့မဟုတ် CID ရည်ညွှန်းချက်များကို လက်ခံပါသည်။ |
+| `evidence_digest` | ထောက်ခံချက်စာရွက်စာတမ်းများ၏ရွေးချယ်နိုင်သော BLAKE3 checksum။ |
 
-| Field | Description |
-|-------|-------------|
-| `claim_id` | Stable identifier (e.g., `VB-2026-04-F1`). |
-| `claim` | Single-sentence statement of fact or impact. |
-| `status` | One of `corroborated`, `disputed`, `context-only`. |
-| `impact` | Array containing one or more of `governance`, `technical`, `compliance`, `community`. |
-| `citations` | Non-empty array of strings. URLs, Torii case IDs, or CID references are accepted. |
-| `evidence_digest` | Optional BLAKE3 checksum of supporting documents. |
+အလိုအလျောက်စနစ်မှတ်စုများ-
+- ထုတ်ဝေမှုဆိုင်ရာ အမှတ်စာရင်းများတည်ဆောက်ရန်အတွက် ထည့်သွင်းထားသောအလုပ်သည် `fact_rows` နှင့် `fact_rows_with_citation` ကိုရေတွက်သည်။ ကိုးကားစရာမရှိသောအတန်းများသည် လူသားဖတ်နိုင်သောဇယားတွင် ပေါ်နေသေးသော်လည်း ပျောက်ဆုံးနေသောအထောက်အထားအဖြစ် ခြေရာခံထားသည်။
+- တောင်းဆိုချက်များကို တိုတိုတုတ်တုတ်ထားပြီး အုပ်ချုပ်မှုအဆိုပြုချက်များတွင် အသုံးပြုသည့် တူညီသောသတ်မှတ်လက္ခဏာများကို ကိုးကားပါသောကြောင့် အပြန်အလှန်ချိတ်ဆက်ခြင်းသည် အဆုံးအဖြတ်ဖြစ်သည်။
 
-Automation notes:
-- The ingest job counts `fact_rows` and `fact_rows_with_citation` to build publication scorecards. Rows without citations still appear in the human-readable table but are tracked as missing evidence.
-- Keep claims concise and reference the same identifiers used in governance proposals so cross-linking is deterministic.
+## ပဋိပက္ခထုတ်ဖော်ခြင်း လိုအပ်ချက်
 
-## Conflict disclosure requirements
+1. ငွေကြေး၊ အလုပ်အကိုင်၊ အုပ်ချုပ်မှု သို့မဟုတ် မိသားစုဆိုင်ရာ ဆက်စပ်မှုရှိသည့်အခါ အနည်းဆုံး ထုတ်ဖော်ထည့်သွင်းမှုတစ်ခု ပေးပါ။
+2. "မသိရသေးသော ပဋိပက္ခများ" ကို အတည်ပြုရန် `author.no_conflicts_certified: true` ကိုသုံးပါ။ တင်ပြချက်များတွင် ထုတ်ဖော်ထည့်သွင်းမှု သို့မဟုတ် `true` အသိအမှတ်ပြုလက်မှတ် ပါဝင်ရမည်။ မဟုတ်ပါက ၎င်းတို့ကို ထည့်သွင်းစဉ်တွင် အလံပြထားသည်။
+3. အများသူငှာ စာရွက်စာတမ်းများ ရှိသည့်အခါတိုင်း `disclosures[i].evidence` ကို ထည့်သွင်းပါ (ဥပမာ၊ လုပ်ငန်းဆောင်ရွက်ချက်များ၊ DAO မဲများ)။ အထောက်အထားသည် "မရှိ" လက်မှတ်များအတွက် ရွေးချယ်နိုင်သော်လည်း ပြင်းပြင်းထန်ထန် အကြံပြုထားသည်။
 
-1. Provide at least one disclosure entry when a financial, employment, governance, or familial tie exists.
-2. Use `author.no_conflicts_certified: true` to assert “no known conflicts.” Submissions must include either a disclosure entry or a `true` certification; otherwise, they’re flagged during ingest.
-3. Include `disclosures[i].evidence` whenever public documentation exists (e.g., corporate filings, DAO votes). Evidence is optional for “none” certifications but strongly recommended.
+## ထိန်းချုပ်ရေးတဂ်များနှင့် အကြောင်းအရာမဟုတ်သော ကိုင်တွယ်မှု
 
-## Moderation tags & off-topic handling
+စိစစ်သုံးသပ်သူများသည် တင်ပြမှုများကို ပွင့်လင်းမြင်သာမှု ပိုက်လိုင်းမ၀င်မီ အညွှန်းတပ်နိုင်သည်-
 
-Moderation reviewers can label submissions before they enter the transparency pipeline:
+- `moderation.off_topic: true` သည် `off_topic_rejections` ကောင်တာတစ်ခုတိုးနေစဉ် အစုလိုက်ရေတွက်ခြင်းမှ ဝင်ရောက်မှုကို ဖယ်ရှားသည်။ စာရင်းစစ်အတွက် အတန်းကို အကြမ်း မော်ကွန်းများတွင် ရနိုင်သေးသည်။
+- `moderation.tags` သည် enum တန်ဖိုးများကို လက်ခံသည်- `duplicate`, `needs-translation`, `needs-follow-up`, `spam`, `astroturf`, I180NI00 အတိုချုံး အပြည့်အစုံကို ပြန်လည်မဖတ်ဘဲ အောက်ခြေမှ သုံးသပ်သူများကို စမ်းသုံးကြည့်ရန် တဂ်က ကူညီပေးသည်။
+- `moderation.notes` သည် ထိန်းညှိဆုံးဖြတ်ခြင်းအတွက် တိုတောင်းသော မျှတမှု (အက္ခရာ ≤512 လုံး) ကို သိမ်းဆည်းထားသည်။
 
-- `moderation.off_topic: true` removes the entry from aggregate counts while incrementing an `off_topic_rejections` counter. The row is still available in raw archives for audit.
-- `moderation.tags` accepts enum values: `duplicate`, `needs-translation`, `needs-follow-up`, `spam`, `astroturf`, `policy-escalation`. Tags help downstream reviewers triage without re-reading the full brief.
-- `moderation.notes` stores a short justification for the moderation decision (≤512 characters).
+## တင်ပြမှုစာရင်း
 
-## Submission checklist
+1. ဤပုံစံခွက် သို့မဟုတ် အောက်တွင်ဖော်ပြထားသော အကူအညီပေးသူ CLI ကို အသုံးပြု၍ JSON ပေးဆောင်မှုအား ဖြည့်ပါ။
+2. အနည်းဆုံး အချက်အလက် ဇယားအတန်းကို ဖြည့်ပါ။ အတန်းတစ်ခုစီအတွက် ကိုးကားချက်များ ပါဝင်သည်။
+3. ထုတ်ဖော်မှုများကို ပံ့ပိုးပါ သို့မဟုတ် `author.no_conflicts_certified: true` ကို အတိအလင်း သတ်မှတ်ပါ။
+4. စိစစ်ရေးဆိုင်ရာ မက်တာဒေတာကို ပူးတွဲပါ (မူလ `off_topic: false`) သို့ ပြန်လည်သုံးသပ်သူများသည် လျင်မြန်စွာ စမ်းသပ်ကြည့်ရှုနိုင်ပါသည်။
+5. မတင်မီ `cargo xtask ministry-transparency ingest --volunteer <file>` သို့မဟုတ် Norito validator ဖြင့် payload ကိုအတည်ပြုပါ။
 
-1. Fill out the JSON payload using this template or the helper CLI described below.
-2. Populate at least one fact table row; include citations for each row.
-3. Provide disclosures or explicitly set `author.no_conflicts_certified: true`.
-4. Attach moderation metadata (default `off_topic: false`) so reviewers can triage quickly.
-5. Validate the payload with `cargo xtask ministry-transparency ingest --volunteer <file>` or any Norito validator before uploading.
+## အတည်ပြုခြင်း CLI (MINFO-3)
 
-## Validation CLI (MINFO-3)
-
-The repository now ships a dedicated validator for volunteer briefs:
+ယခုအခါ သိုလှောင်ရုံသည် စေတနာ့ဝန်ထမ်း အကျဉ်းချုံးများအတွက် သီးသန့်အတည်ပြုပေးသူအား ပို့ဆောင်ပေးနေပါပြီ-
 
 ```bash
 cargo xtask ministry-transparency volunteer-validate \
@@ -80,32 +79,30 @@ cargo xtask ministry-transparency volunteer-validate \
   --json-output artifacts/ministry/volunteer_lint_report.json
 ```
 
-Key behaviour:
+အဓိက အပြုအမူ-- တစ်ဦးချင်းစီ JSON အရာဝတ္ထုများ * သို့မဟုတ် * အကျဉ်းချုပ်များကိုလက်ခံပါ။ ပြေးမှုတစ်ခုတွင် ဖိုင်များစွာကို အလင်းတန်းပြရန် `--input` ကို အကြိမ်များစွာ ဖြတ်သန်းပါ။
+- အမှားများနှင့်သတိပေးချက်အရေအတွက်ကိုပြသသောအတိုချုပ်အကျဉ်းချုပ်ကိုထုတ်လွှတ်သည်; သတိပေးချက်များသည် အချည်းနှီးသော ကိုးကားမှုစာရင်းများ သို့မဟုတ် ရှည်လျားသောမှတ်စုများကို မီးမောင်းထိုးပြပြီး အမှားများသည် ထုတ်ဝေမှုကို ပိတ်ဆို့နေပါသည်။
+- လိုအပ်သောအကွက်များ (`brief_id`၊ `proposal_id`၊ `stance`၊ အချက်အလက်ဇယား အကြောင်းအရာများ၊ ထုတ်ဖော်မှုများ သို့မဟုတ် `no_conflicts_certified`) သည် ဤပုံစံပလိတ်နှင့် ကိုက်ညီပြီး အရေအတွက်တန်ဖိုးများသည် မှတ်တမ်းတင်ထားသော ဝေါဟာရများအတွင်းတွင် ရှိနေကြောင်း သေချာစေပါသည်။
+- `--json-output <path>` ကို သတ်မှတ်သောအခါ validator သည် အတိုချုံးတိုင်း (အဆိုပြုချက် ID၊ ရပ်တည်ချက်၊ အခြေအနေ၊ အမှားများ/သတိပေးချက်များ) ကို အကျဉ်းချုပ်ဖော်ပြသော စက်ဖတ်နိုင်သော မန်နီးဖက်စ်တစ်ခု ရေးသည်။ portal ၏ `npm run generate:volunteer-lint` ကွန်မန်းသည် အဆိုပြုချက်စာမျက်နှာတစ်ခုစီ၏ဘေးရှိ အလင်းတန်းအခြေအနေကိုပြသရန် ဤမန်နီးဖက်စ်ကိုအသုံးပြုသည်။
 
-- Accepts individual JSON objects *or* arrays of briefs; pass `--input` multiple times to lint several files in one run.
-- Emits a per-brief summary showing the number of errors and warnings; warnings highlight empty citation lists or overlong notes, while errors block publication.
-- Ensures required fields (`brief_id`, `proposal_id`, `stance`, fact table contents, disclosures or `no_conflicts_certified`) match this template and that enum values stay within the documented vocabularies.
-- When `--json-output <path>` is set the validator writes a machine-readable manifest summarising every brief (proposal id, stance, status, errors/warnings). The portal’s `npm run generate:volunteer-lint` command consumes this manifest to display lint status next to each proposal page.
+စေတနာ့ဝန်ထမ်းတင်ပြချက်များသည် **MINFO-3** နှင့် လိုက်လျောညီထွေရှိစေရန် ပေါ်တယ်လုပ်ငန်းအသွားအလာများ သို့မဟုတ် CI တွင် အမိန့်ကို ပေါင်းစပ်ထည့်သွင်းပါ။
 
-Integrate the command into portal workflows or CI to keep volunteer submissions compliant with **MINFO-3** before they reach the transparency ingest job.
+## ဥပမာ payload
 
-## Example payload
+အချက်အလက်ဇယားအတန်းများ၊ ထုတ်ဖော်မှုများနှင့် ထိန်းညှိပေးသည့် တဂ်များအပါအဝင် လူပြည့်နေသည့် ဥပမာအတွက် `docs/examples/ministry/volunteer_brief_template.json` ကို ကြည့်ပါ။ အောက်ပိုင်း ဒက်ရှ်ဘုတ်များသည် JSON အကြမ်းကို စားသုံးပြီး အလိုအလျောက် တွက်ချက်သည်-
 
-See `docs/examples/ministry/volunteer_brief_template.json` for a fully populated example, including fact table rows, disclosures, and moderation tags. Downstream dashboards consume the raw JSON and automatically calculate:
-
-- `total_briefs` (off-topic submissions excluded)
+- `total_briefs` (အကြောင်းအရာမဟုတ်သော တင်ပြချက်များကို ဖယ်ထုတ်ထားသည်)
 - `fact_rows` / `fact_rows_with_citation`
 - `disclosures_missing`
 - `off_topic_rejections`
 
-If new fields are required, update this document and the ingest summariser (`xtask/src/ministry.rs`) in the same change so the governance evidence remains reproducible.
+အကွက်အသစ်များ လိုအပ်ပါက၊ ဤစာရွက်စာတမ်းနှင့် ထည့်သွင်းထားသော အကျဉ်းချုပ် (`xtask/src/ministry.rs`) ကို တူညီသောပြောင်းလဲမှုတွင် အပ်ဒိတ်လုပ်ပါ။ သို့မှသာ အုပ်ချုပ်မှုဆိုင်ရာ အထောက်အထားများကို ဆက်လက်ထုတ်လုပ်နိုင်ပါသည်။
 
-## Publication SLA & portal surfacing (MINFO-3)
+## ထုတ်ဝေခြင်း SLA နှင့် ပေါ်တယ်မျက်နှာစာ (MINFO-3)
 
-To keep citizen submissions transparent, the portal now publishes briefs on a fixed cadence once they pass validation:
+နိုင်ငံသားတင်ပြမှုများကို ပွင့်လင်းမြင်သာမှုရှိစေရန်၊ ၎င်းတို့သည် တရားဝင်ကြောင်းအတည်ပြုပြီးသည်နှင့် ၎င်းတို့သည် ပုံသေပုံစံအကျဉ်းများပေါ်တွင် အကျဉ်းချုပ်များကို ထုတ်ဝေနေပြီဖြစ်သည်-
 
-1. **T+0–6 hours:** submissions land via the volunteer intake form or `cargo xtask ministry-transparency ingest`. Validators run `VolunteerBriefV1::validate`, reject malformed payloads, and emit lint reports (missing disclosures, duplicate fact IDs, etc.).
-2. **T+6–24 hours:** accepted briefs are queued for translation/triage. Moderation tags (`needs-translation`, `duplicate`, `policy-escalation`, …) are applied, and off-topic entries are archived but excluded from aggregate counts.
-3. **T+24–48 hours:** the portal publishes the brief alongside the corresponding proposal page. Each published proposal now links to “Volunteer Opinions” so reviewers can read support/oppose/context briefs without opening raw JSON.
+1. **T+0–6 နာရီ-** စေတနာ့ဝန်ထမ်း ဖြည့်သွင်းခြင်းဖောင် သို့မဟုတ် `cargo xtask ministry-transparency ingest` မှတစ်ဆင့် တင်ပြမှုများ။ မှန်ကန်သောစစ်ဆေးသူများသည် `VolunteerBriefV1::validate` ကိုလုပ်ဆောင်သည်၊ ပုံသဏ္ဍာန်မမှန်သောပေးဆောင်မှုများကို ငြင်းပယ်ကာ အလင်းတန်းအစီရင်ခံစာများ (ပျောက်ဆုံးနေသောထုတ်ပြန်ချက်များ၊ အချက်အလက်ပွားနေသော ID များစသည်ဖြင့်) ကိုထုတ်လွှတ်သည်။
+2. **T+6–24 နာရီ-** လက်ခံထားသော အတိုချုံးများကို ဘာသာပြန်ခြင်း/စမ်းသပ်မှုများအတွက် တန်းစီနေပါသည်။ ထိန်းညှိပေးသည့် တဂ်များ (`needs-translation`၊ `duplicate`၊ `policy-escalation`၊ …) ကို အသုံးပြုထားပြီး ခေါင်းစဉ်မဟုတ်သော ထည့်သွင်းမှုများကို သိမ်းဆည်းထားသော်လည်း အစုအဝေးအရေအတွက်များမှ ဖယ်ထုတ်ထားသည်။
+3. **T+24–48 နာရီ-** ပေါ်တယ်သည် သက်ဆိုင်ရာ အဆိုပြုချက် စာမျက်နှာနှင့်အတူ အကျဉ်းချုပ်ကို ထုတ်ဝေသည်။ ယခုထုတ်ဝေလိုက်သော အဆိုပြုချက်တစ်ခုစီသည် JSON အကြမ်းကိုဖွင့်စရာမလိုဘဲ သုံးသပ်သူများသည် ပံ့ပိုးမှု/ဆန့်ကျင်ခြင်း/အကြောင်းအရာအကျဉ်းများကို ဖတ်နိုင်စေရန် “စေတနာ့ဝန်ထမ်း သဘောထားများ” နှင့် ချိတ်ဆက်ထားပါသည်။
 
-If a submission is marked `policy-escalation` or `astroturf`, the SLA tightens to **12 hours** so governance can respond quickly. Operators can audit the SLA via the **Volunteer Briefs** page in the docs portal (`docs/portal/docs/ministry/volunteer-briefs.md`), which lists the latest publication windows, lint status, and links to Norito artefacts.
+တင်သွင်းမှုတစ်ခုအား `policy-escalation` သို့မဟုတ် `astroturf` ဟု အမှတ်အသားပြုပါက၊ SLA သည် **12 နာရီ** သို့ တင်းကျပ်ထားသောကြောင့် အုပ်ချုပ်ရေးသည် လျင်မြန်စွာ တုံ့ပြန်နိုင်သည်။ အော်ပရေတာများသည် နောက်ဆုံးထုတ်ဝေမှုပြတင်းပေါက်များ၊ အလင်းတန်းအခြေအနေနှင့် Norito တို့ကို လင့်ခ်များစာရင်းပြုစုထားသည့် docs portal (`docs/portal/docs/ministry/volunteer-briefs.md`) ရှိ **Volunteer Briefs** စာမျက်နှာမှတစ်ဆင့် SLA ကို စစ်ဆေးနိုင်သည်။

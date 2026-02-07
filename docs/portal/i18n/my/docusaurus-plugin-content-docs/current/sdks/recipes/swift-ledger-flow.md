@@ -7,27 +7,29 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Swift ledger flow recipe
 description: Use IrohaSwift to mint and transfer assets with the default dev network.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-import SampleDownload from '@site/src/components/SampleDownload';
+'@site/src/components/SampleDownload' မှ SampleDownload ကို တင်သွင်းပါ။
 
-> IrohaSwift’s encoder currently exposes mint/transfer helpers; asset-definition
-> registration still happens through the CLI. Run the CLI command in step 1 once
-> before executing the Swift sample.
+> IrohaSwift ၏ကုဒ်ပြောင်းကိရိယာသည် လက်ရှိတွင် mint/transfer helpers များကို ဖော်ထုတ်ပေးပါသည်။ ပိုင်ဆိုင်မှု-အဓိပ္ပါယ်
+> မှတ်ပုံတင်ခြင်းကို CLI မှတဆင့် ပြုလုပ်ဆဲဖြစ်သည်။ အဆင့် 1 တွင် CLI အမိန့်ကို တစ်ကြိမ်လုပ်ဆောင်ပါ။
+> Swift နမူနာကို မလုပ်ဆောင်မီ။
 
-<SampleDownload
+<နမူနာဒေါင်းလုဒ်လုပ်ပါ။
   href="/sdk-recipes/swift/Sources/LedgerFlow/main.swift"
   filename="Sources/LedgerFlow/main.swift"
-  description="Download the async/await example so you can open it in Xcode or paste it into your Swift package."
+  description="async/ait ဥပမာကို ဒေါင်းလုဒ်လုပ်ပါ၊ သို့မှသာ ၎င်းကို Xcode ဖြင့် ဖွင့်နိုင်သည် သို့မဟုတ် ၎င်းကို သင်၏ Swift ပက်ကေ့ဂျ်တွင် ကူးထည့်နိုင်ပါသည်။"
 />
 
-## 1. Register the asset (CLI)
+## 1. ပိုင်ဆိုင်မှု (CLI) ကို မှတ်ပုံတင်ပါ။
 
 ```bash
 iroha --config defaults/client.toml asset definition register --id coffee#wonderland
 ```
 
-## 2. Prepare credentials
+## 2. အထောက်အထားများကို ပြင်ဆင်ပါ။
 
 ```bash
 # raw 32-byte Ed25519 key in hex (use `iroha_cli tools crypto private-key export --raw` if needed)
@@ -36,15 +38,15 @@ export ADMIN_ACCOUNT="ih58..."
 export RECEIVER_ACCOUNT="ih58..."
 ```
 
-## 3. Add IrohaSwift to your package
+## 3. IrohaSwift ကို သင့်ပက်ကေ့ဂျ်တွင် ထည့်ပါ။
 
 ```swift title="Package.swift"
 .package(name: "IrohaSwift", path: "../../IrohaSwift")
 ```
 
-or use the Git URL (`https://github.com/hyperledger/iroha-swift`) in Xcode.
+သို့မဟုတ် Xcode တွင် Git URL (`https://github.com/hyperledger/iroha-swift`) ကိုသုံးပါ။
 
-## 4. Example program
+## 4. ဥပမာ ပရိုဂရမ်
 
 ```swift title="Sources/LedgerFlow/main.swift"
 import Foundation
@@ -109,11 +111,11 @@ struct LedgerFlow {
 }
 ```
 
-Build with `swift build -c release` and run using `swift run LedgerFlow`.
+`swift build -c release` ဖြင့် တည်ဆောက်ပြီး `swift run LedgerFlow` ကို အသုံးပြု၍ လုပ်ဆောင်ပါ။
 
-## 5. Verify parity
+## 5. တန်းတူညီမျှမှုကို အတည်ပြုပါ။
 
-- Inspect the transactions through `iroha --config defaults/client.toml transaction get --hash <hash>`.
-- Compare holdings with `iroha --config defaults/client.toml asset list filter '{"id":"coffee#wonderland##<account>"}'`.
-- Combine this recipe with the Rust/Python/JavaScript ones to confirm every SDK
-  produces the same hashes for the demo flow.
+- `iroha --config defaults/client.toml transaction get --hash <hash>` မှတစ်ဆင့် အရောင်းအ၀ယ်များကို စစ်ဆေးပါ။
+- ပိုင်ဆိုင်မှုများကို `iroha --config defaults/client.toml asset list filter '{"id":"coffee#wonderland##<account>"}'` နှင့် နှိုင်းယှဉ်ပါ။
+- SDK တိုင်းကို အတည်ပြုရန် ဤစာရွက်ကို Rust/Python/JavaScript တို့နှင့် ပေါင်းစပ်ပါ။
+  သရုပ်ပြစီးဆင်းမှုအတွက် တူညီသော hashe များကို ထုတ်လုပ်သည်။

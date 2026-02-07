@@ -6,64 +6,66 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: AI Moderation Calibration Report (2026-02)
 summary: Baseline calibration dataset, thresholds, and scoreboard for the first MINFO-1 governance release.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# AI Moderation Calibration Report - February 2026
+# AI მოდერაციის კალიბრაციის ანგარიში - 2026 წლის თებერვალი
 
-This report packages the inaugural calibration artefacts for **MINFO-1**. The
-dataset, manifest, and scoreboard were produced on 2026-02-05, reviewed by the
-Ministry council on 2026-02-10, and anchored in the governance DAG at height
+ეს ანგარიში შეფუთავს **MINFO-1**-ის საინაუგურაციო კალიბრაციის არტეფაქტებს. The
+მონაცემთა ნაკრები, მანიფესტი და ქულების დაფა მომზადდა 2026-02-05, განხილული იქნა ორგანიზაციის მიერ
+სამინისტროს საბჭო 2026-02-10 წწ
 `912044`.
 
-## Dataset Manifest
+## მონაცემთა ნაკრების მანიფესტი
 
-- **Dataset reference:** `c0956583-355a-43cc-9a60-e3a5d9a0f7d0`
-- **Slug:** `ai-moderation-calibration-202602`
-- **Entries:** manifest 480, chunk 12,800, metadata 920, audio 160
-- **Label mix:** safe 68%, suspect 19%, escalate 13%
-- **Artefact digest:** `9c4f86a3c099a48d0e3d7cfbf14d22bb9492960c41cba3858f0722519ff612ab`
-- **Distribution:** `sora://datasets/ministry/ai-moderation/calibration/2026-02.tar.zst`
+- **მონაცემთა მითითება:** `c0956583-355a-43cc-9a60-e3a5d9a0f7d0`
+- **სლაგ:** `ai-moderation-calibration-202602`
+- **ჩანაწერები:** manifest 480, ნაწილი 12,800, მეტამონაცემები 920, აუდიო 160
+- **ლეიბლის ნაზავი:** უსაფრთხო 68%, საეჭვო 19%, ესკალაცია 13%
+- **არტეფაქტის დაიჯესტი:** `9c4f86a3c099a48d0e3d7cfbf14d22bb9492960c41cba3858f0722519ff612ab`
+- **დისტრიბუცია:** `sora://datasets/ministry/ai-moderation/calibration/2026-02.tar.zst`
 
-The full manifest lives in `docs/examples/ai_moderation_calibration_manifest_202602.json`
-and contains the governance signature plus runner hash captured at release
-time.
+სრული მანიფესტი ცხოვრობს `docs/examples/ai_moderation_calibration_manifest_202602.json`-ში
+და შეიცავს მმართველობის ხელმოწერას და მორბენალ ჰეშს, რომელიც აღბეჭდილია გამოშვებისას
+დრო.
 
-## Scoreboard Summary
+## შედეგების შეჯამება
 
-Calibrations ran with opset 17 and the deterministic seed pipeline. The
-complete scoreboard JSON (`docs/examples/ai_moderation_calibration_scorecard_202602.json`)
-records the hashes and telemetry digests; the table below highlights the most
-important metrics.
+კალიბრაცია ჩატარდა opset 17-ით და დეტერმინისტული სათესლე მილსადენით. The
+სრული დაფა JSON (`docs/examples/ai_moderation_calibration_scorecard_202602.json`)
+აღრიცხავს ჰეშებსა და ტელემეტრიულ დისჯესტებს; ქვემოთ მოყვანილი ცხრილი ხაზს უსვამს ყველაზე მეტს
+მნიშვნელოვანი მეტრიკა.
 
-| Model (family) | Brier | ECE | AUROC | Precision@Quarantine | Recall@Escalate |
+| მოდელი (ოჯახი) | ბრიერი | ECE | AUROC | სიზუსტე@კარანტინი | Recall@Escalate |
 | -------------- | ----- | --- | ----- | -------------------- | --------------- |
-| ViT-H/14 Safety (vision) | 0.141 | 0.031 | 0.987 | 0.964 | 0.912 |
-| LLaVA-1.6 34B Safety (multimodal) | 0.118 | 0.028 | 0.978 | 0.942 | 0.904 |
-| Perceptual ensemble (perceptual) | 0.162 | 0.047 | 0.953 | 0.883 | 0.861 |
+| ViT-H/14 უსაფრთხოება (ხედვა) | 0.141 | 0.031 | 0.987 | 0.964 | 0.912 |
+| LLaVA-1.6 34B უსაფრთხოება (მულტიმოდალური) | 0.118 | 0.028 | 0.978 | 0.942 | 0.904 |
+| აღქმის ანსამბლი (აღქმადი) | 0.162 | 0.047 | 0.953 | 0.883 | 0.861 |
 
-Combined metrics: `Brier = 0.126`, `ECE = 0.034`, `AUROC = 0.982`. The verdict
-distribution across the calibration window was pass 91.2%, quarantine 6.8%,
-escalate 2.0%, matching the policy expectations recorded in the manifest
-summary. False-positive backlog remained at zero, and the drift score (7.1%)
-fell well below the 20% alert threshold.
+კომბინირებული მეტრიკა: `Brier = 0.126`, `ECE = 0.034`, `AUROC = 0.982`. განაჩენი
+კალიბრაციის ფანჯარაში განაწილება იყო 91.2%, საკარანტინო 6.8%,
+ესკალაცია 2.0%, ემთხვევა მანიფესტში დაფიქსირებულ პოლიტიკის მოლოდინებს
+შეჯამება. ცრუ დადებითი ჩამორჩენა დარჩა ნულზე, ხოლო დრიფტის ქულა (7.1%)
+დაეცა 20%-იანი გაფრთხილების ზღვარს.
 
-## Thresholds & Sign-off
+## ზღურბლები და შესვლა
 
 - `thresholds.quarantine = 0.42`
 - `thresholds.escalate = 0.78`
-- Governance motion: `MINFO-2026-02-07`
-- Signed by `ministry-council-seat-03` at `2026-02-10T11:33:12Z`
+- მართვის მოძრაობა: `MINFO-2026-02-07`
+- ხელი მოაწერა `ministry-council-seat-03`-ს `2026-02-10T11:33:12Z`-ზე
 
-CI stored the signed bundle in `artifacts/ministry/ai_moderation/2026-02/`
-alongside the moderation runner binaries. The manifest digest and scoreboard
-hashes above must be referenced during audits and appeals.
+CI ინახავდა ხელმოწერილ პაკეტს `artifacts/ministry/ai_moderation/2026-02/`-ში
+მოდერაციის მორბენალ ბინარებთან ერთად. მანიფესტის დაიჯესტი და ანგარიშის დაფა
+ზემოთ მოყვანილი ჰეშები უნდა იყოს მითითებული აუდიტისა და აპელაციების დროს.
 
-## Dashboards & Alerts
+## დაფები და გაფრთხილებები
 
-Moderation SREs should import the Grafana dashboard at
-`dashboards/grafana/ministry_moderation_overview.json` and the matching
-Prometheus alert rules in `dashboards/alerts/ministry_moderation_rules.yml`
-(test coverage lives under `dashboards/alerts/tests/ministry_moderation_rules.test.yml`).
-These artifacts emit alerts for ingest stalls, drift spikes, and quarantine
-queue growth, satisfying the monitoring requirements called out in
-the [AI Moderation Runner Specification](../../ministry/ai-moderation-runner.md).
+მოდერაციის SRE-ებმა უნდა შემოიტანონ Grafana დაფა
+`dashboards/grafana/ministry_moderation_overview.json` და შესატყვისი
+Prometheus გაფრთხილების წესები `dashboards/alerts/ministry_moderation_rules.yml`-ში
+(ტესტი დაფარვა მოქმედებს `dashboards/alerts/tests/ministry_moderation_rules.test.yml`-ის ქვეშ).
+ეს არტეფაქტები ავრცელებენ სიგნალიზაციას საკვების გადაყლაპვის, დრეიფტის და კარანტინის შესახებ
+რიგის ზრდა, რომელიც აკმაყოფილებს მონიტორინგის მოთხოვნებს
+[AI Moderation Runner Specification] (../../ministry/ai-moderation-runner.md).

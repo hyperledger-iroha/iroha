@@ -6,42 +6,44 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraFS SF1 Determinism Dry-Run
 summary: Checklist and expected digests for validating the canonical `sorafs.sf1@1.0.0` chunker profile.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# SoraFS SF1 Determinism Dry-Run
+# SoraFS SF1 ቆራጥነት ደረቅ አሂድ
 
-This report captures the baseline dry-run for the canonical
-`sorafs.sf1@1.0.0` chunker profile. Tooling WG should re-run the checklist
-below when validating fixture refreshes or new consumer pipelines. Record the
-outcome of each command in the table to maintain an auditable trail.
+ይህ ሪፖርት ለቀኖናዊነት የመነሻውን ደረቅ ሩጫ ይይዛል
+I18NI0000001X chunker መገለጫ። Tooling WG የማረጋገጫ ዝርዝሩን እንደገና ማስኬድ አለበት።
+ቋሚ ማደሻዎችን ወይም አዲስ የሸማች ቧንቧዎችን ሲያረጋግጡ ከታች። ይመዝገቡ
+በሠንጠረዡ ውስጥ ያለው የእያንዳንዱ ትዕዛዝ ውጤት ኦዲት ሊደረግ የሚችል ዱካ ለማቆየት።
 
-## Checklist
+#የማረጋገጫ ዝርዝር
 
-| Step | Command | Expected Outcome | Notes |
-|------|---------|------------------|-------|
-| 1 | `cargo test -p sorafs_chunker` | All tests pass; `vectors` parity test succeeds. | Confirms canonical fixtures compile and match Rust implementation. |
-| 2 | `ci/check_sorafs_fixtures.sh` | Script exits 0; reports manifest digests below. | Verifies fixtures regenerate cleanly and signatures remain attached. |
-| 3 | `cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles` | Entry for `sorafs.sf1@1.0.0` matches registry descriptor (`profile_id=1`). | Ensures registry metadata stays in sync. |
-| 4 | `cargo run --locked -p sorafs_chunker --bin export_vectors` | Regeneration succeeds without `--allow-unsigned`; manifest and signature files unchanged. | Provides determinism proof for chunk boundaries and manifests. |
-| 5 | `node scripts/check_sf1_vectors.mjs` | Reports no diff between TypeScript fixtures and Rust JSON. | Optional helper; ensure parity across runtimes (script maintained by Tooling WG). |
+| ደረጃ | ትዕዛዝ | የሚጠበቀው ውጤት | ማስታወሻ |
+|-------|--------|
+| 1 | I18NI0000002X | ሁሉም ፈተናዎች ያልፋሉ; `vectors` እኩልነት ፈተና ተሳክቷል። | የቀኖናዊ ዕቃዎችን ያጠናቅራል እና የዝገት ትግበራን ያዛምዳል። |
+| 2 | `ci/check_sorafs_fixtures.sh` | ስክሪፕት 0 ይወጣል; ከዚህ በታች የተገለጹትን መግለጫዎች ዘግቧል። | የቤት ዕቃዎች በንጽህና እንደገና መወለዳቸውን ያረጋግጣል እና ፊርማዎች እንደተያያዙ ይቆያሉ። |
+| 3 | `cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles` | ለI18NI0000006X ግጥሚያዎች የመመዝገቢያ ገላጭ (`profile_id=1`)። | የመመዝገቢያ ዲበ ውሂብ በማመሳሰል ውስጥ መቆየቱን ያረጋግጣል። |
+| 4 | `cargo run --locked -p sorafs_chunker --bin export_vectors` | ያለ I18NI0000009X ማደስ ይሳካል; አንጸባራቂ እና ፊርማ ፋይሎች አልተቀየሩም። | ለክንች ድንበሮች የመወሰኛ ማረጋገጫ ያቀርባል እና ይገለጣል። |
+| 5 | `node scripts/check_sf1_vectors.mjs` | በTyScript ቋሚዎች እና Rust JSON መካከል ምንም ልዩነት እንደሌለ ሪፖርት አድርጓል። | አማራጭ ረዳት; በሁሉም የሩጫ ጊዜዎች መካከል ያለውን እኩልነት ያረጋግጡ (ስክሪፕት በTooling WG ይጠበቃል)። |
 
-## Expected Digests
+## የሚጠበቁ የምግብ አዘገጃጀቶች
 
-- Chunk digest (SHA3-256): `13fa919c67e55a2e95a13ff8b0c6b40b2e51d6ef505568990f3bc7754e6cc482`
-- `manifest_blake3.json`: `c8c45c025ecee39b5ac5bf3db3dc1e2f97a7eaf7ea0aac72056eedd85439d4e4`
+- Chunk diest (SHA3-256): `13fa919c67e55a2e95a13ff8b0c6b40b2e51d6ef505568990f3bc7754e6cc482`
+- `manifest_blake3.json`፡ `c8c45c025ecee39b5ac5bf3db3dc1e2f97a7eaf7ea0aac72056eedd85439d4e4`
 - `sf1_profile_v1.json`: `d89a4fdc030b0c7c4911719ea133c780d9f4610b08eef1d6d0e0ca443391718e`
 - `sf1_profile_v1.ts`: `9a3bb8e4d96518b3a0a1301046b2d86a793991959ebdd8adda1fb2988e4292dc`
 - `sf1_profile_v1.go`: `0f0348b8751b0f85fe874afda3371af75b78fac5dad65182204dcb3cf3e4c0a1`
-- `sf1_profile_v1.rs`: `66b5956826c86589a24b71ca6b400cc1335323c6371f1cec9475f09af8743f61`
+- `sf1_profile_v1.rs`፡ `66b5956826c86589a24b71ca6b400cc1335323c6371f1cec9475f09af8743f61`
 
-## Sign-Off Log
+## የመለያ አጥፋ ምዝግብ ማስታወሻ
 
-| Date | Engineer | Checklist Result | Notes |
-|------|----------|------------------|-------|
-| 2026-02-12 | Tooling (LLM) | ❌ Failed | Step 1: `cargo test -p sorafs_chunker` fails `vectors` suite because fixtures are out of date. Step 2: `ci/check_sorafs_fixtures.sh` aborts—`manifest_signatures.json` missing in repo state (deleted in working tree). Step 4: `export_vectors` cannot verify signatures while the manifest file is absent. Recommend restoring the signed fixtures (or providing council key) and regenerating bindings so canonical handles are embedded as required by the tests. |
-| 2026-02-12 | Tooling (LLM) | ✅ Passed | Regenerated fixtures via `cargo run --locked -p sorafs_chunker --bin export_vectors -- --signing-key=000102…1f`, producing canonical handle-only alias lists and a fresh manifest digest `c8c45c025ecee39b5ac5bf3db3dc1e2f97a7eaf7ea0aac72056eedd85439d4e4`. Verified with `cargo test -p sorafs_chunker` and a clean `ci/check_sorafs_fixtures.sh` run (staged fixtures for the check). Step 5 pending until the Node parity helper lands. |
-| 2026-02-20 | Storage Tooling CI | ✅ Passed | Parliament envelope (`fixtures/sorafs_chunker/manifest_signatures.json`) fetched via `ci/check_sorafs_fixtures.sh`; script re-generated fixtures, confirmed manifest digest `c8c45c025ecee39b5ac5bf3db3dc1e2f97a7eaf7ea0aac72056eedd85439d4e4`, and re-ran the Rust harness (Go/Node steps execute when available) with no diffs. |
+| ቀን | ኢንጅነር | የማረጋገጫ ዝርዝር ውጤት | ማስታወሻ |
+|-------------|--------|------|
+| 2026-02-12 | መገልገያ (LLM) | ❌ አልተሳካም | ደረጃ 1፡ I18NI0000022X የ I18NI0000023X Suite አልተሳካም ምክንያቱም የቤት ዕቃዎች ጊዜያቸው ያለፈባቸው ናቸው። ደረጃ 2፡ I18NI0000024X ውርጃዎች—`manifest_signatures.json` በሪፖ ግዛት ውስጥ ጠፍቷል (በስራ ዛፍ ላይ ተሰርዟል)። ደረጃ 4፡ I18NI0000026X የሰነድ ፋይሉ በማይኖርበት ጊዜ ፊርማዎችን ማረጋገጥ አይችልም። የተፈረሙትን እቃዎች ወደነበሩበት መመለስ (ወይም የምክር ቤት ቁልፍ ማቅረብ) እና ማሰሪያዎችን እንደገና በማፍለቅ ቀኖናዊ እጀታዎች በፈተናዎቹ በሚፈለጉት መሰረት እንዲካተቱ ይመከራል። |
+| 2026-02-12 | መገልገያ (LLM) | ✅ አለፈ | በI18NI0000027X በኩል የታደሱ ዕቃዎች፣ ቀኖናዊ እጀታ-ብቻ ተለዋጭ ስም ዝርዝሮችን እና አዲስ አንጸባራቂ መፍጨት `c8c45c025ecee39b5ac5bf3db3dc1e2f97a7eaf7ea0aac72056eedd85439d4e4`። በ`cargo test -p sorafs_chunker` እና በንፁህ I18NI0000030X ሩጫ (ለቼኩ የተደረደሩ እቃዎች) የተረጋገጠ። ደረጃ 5 የመስቀለኛ ክፍል ረዳት እስኪያርፍ ድረስ በመጠባበቅ ላይ። |
+| 2026-02-20 | ማከማቻ Tooling CI | ✅ አለፈ | የፓርላማ ፖስታ (I18NI0000031X) በ `ci/check_sorafs_fixtures.sh` የተገኘ; ስክሪፕት ድጋሚ የመነጨ የቤት እቃዎች፣ የተረጋገጠ አንጸባራቂ መፍጨት `c8c45c025ecee39b5ac5bf3db3dc1e2f97a7eaf7ea0aac72056eedd85439d4e4` እና የዝገት ማሰሪያውን እንደገና አሂድ (Go/Node ደረጃዎች ሲገኝ ይፈጸማሉ) ያለ ምንም ልዩነት። |
 
-Tooling WG should append a dated row after running the checklist. If any step
-fails, file an issue linked here and include remediation details before
-approving new fixtures or profiles.
+የማረጋገጫ ዝርዝሩን ከጨረሰ በኋላ Tooling WG የቀኑን ረድፍ መያያዝ አለበት። ማንኛውም እርምጃ ከሆነ
+አልተሳካም፣ እዚህ ጋር የተያያዘ ችግር አስገባ እና ከዚህ በፊት የማሻሻያ ዝርዝሮችን አካትት።
+አዲስ መገልገያዎችን ወይም መገለጫዎችን ማጽደቅ።

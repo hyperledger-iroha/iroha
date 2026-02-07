@@ -7,96 +7,97 @@ generator: scripts/sync_docs_i18n.py
 source_hash: b11d23ecafbc158e0c83cdb6351085fde02f362cfc73a1a1a33555e90cc556ef
 source_last_modified: "2025-12-29T18:16:35.099277+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Norito SwiftUI Demo Contributor Guide
+# Norito SwiftUI demo ishtirokchilari uchun qoʻllanma
 
-This document captures the manual setup steps required to run the SwiftUI demo against a
-local Torii node and mock ledger. It complements `docs/norito_bridge_release.md` by
-focusing on day-to-day development tasks. For a deeper walkthrough of integrating the
-Norito bridge/Connect stack into Xcode projects, see `docs/connect_swift_integration.md`.
+Ushbu hujjat SwiftUI demo-ni a-ga qarshi ishlatish uchun zarur bo'lgan qo'lda sozlash bosqichlarini qamrab oladi
+mahalliy Torii tugun va soxta kitob. Bu `docs/norito_bridge_release.md` ni to'ldiradi
+kundalik rivojlanish vazifalariga e'tibor qaratish. Integratsiyani chuqurroq o'rganish uchun
+Norito ko'prigi/Stekni Xcode loyihalariga ulash, qarang `docs/connect_swift_integration.md`.
 
-## Environment setup
+## Atrof muhitni sozlash
 
-1. Install the Rust toolchain defined in `rust-toolchain.toml`.
-2. Install Swift 5.7+ and Xcode command line tools on macOS.
-3. (Optional) Install [SwiftLint](https://github.com/realm/SwiftLint) for linting.
-4. Run `cargo build -p irohad` to ensure the node compiles on your host.
-5. Copy `examples/ios/NoritoDemoXcode/Configs/demo.env.example` to `.env` and adjust the
-   values to match your environment. The app reads these variables on launch:
-   - `TORII_NODE_URL` — base REST URL (WebSocket URLs are derived from it).
-   - `CONNECT_SESSION_ID` — 32-byte session identifier (base64/base64url).
-   - `CONNECT_TOKEN_APP` / `CONNECT_TOKEN_WALLET` — tokens returned by `/v1/connect/session`.
-   - `CONNECT_CHAIN_ID` — chain identifier announced during the control handshake.
-   - `CONNECT_ROLE` — default role pre-selected in the UI (`app` or `wallet`).
-   - Optional helpers for manual testing: `CONNECT_PEER_PUB_B64`, `CONNECT_SHARED_KEY_B64`,
+1. `rust-toolchain.toml` da belgilangan Rust asboblar zanjirini o'rnating.
+2. MacOS’da Swift 5.7+ va Xcode buyruq qatori vositalarini o‘rnating.
+3. (Ixtiyoriy) Linting uchun [SwiftLint](https://github.com/realm/SwiftLint) ni o'rnating.
+4. Xostingizda tugunni kompilyatsiya qilish uchun `cargo build -p irohad` ni ishga tushiring.
+5. `examples/ios/NoritoDemoXcode/Configs/demo.env.example` dan `.env` ga nusxa oling va
+   muhitingizga mos keladigan qadriyatlar. Ilova ishga tushganda ushbu o'zgaruvchilarni o'qiydi:
+   - `TORII_NODE_URL` — asosiy REST URL (WebSocket URL manzillari undan olingan).
+   - `CONNECT_SESSION_ID` — 32 baytlik seans identifikatori (base64/base64url).
+   - `CONNECT_TOKEN_APP` / `CONNECT_TOKEN_WALLET` - `/v1/connect/session` tomonidan qaytarilgan tokenlar.
+   - `CONNECT_CHAIN_ID` — qoʻl siqish paytida eʼlon qilingan zanjir identifikatori.
+   - `CONNECT_ROLE` - UIda oldindan tanlangan standart rol (`app` yoki `wallet`).
+   - Qo'lda test qilish uchun qo'shimcha yordamchilar: `CONNECT_PEER_PUB_B64`, `CONNECT_SHARED_KEY_B64`,
      `CONNECT_APPROVE_ACCOUNT_ID`, `CONNECT_APPROVE_PRIVATE_KEY_B64`,
      `CONNECT_APPROVE_SIGNATURE_B64`.
 
-## Bootstrapping Torii + mock ledger
+## Bootstrapping Torii + soxta kitob
 
-The repository ships helper scripts that start a Torii node with an in-memory ledger pre-
-loaded with demo accounts:
+Repozitoriy xotira daftarchasi bilan Torii tugunini ishga tushiradigan yordamchi skriptlarni yuboradi.
+demo hisoblar bilan yuklangan:
 
 ```bash
 ./scripts/ios_demo/start.sh --config examples/ios/NoritoDemoXcode/Configs/SampleAccounts.json
 ```
 
-The script emits:
+Skript chiqaradi:
 
-- Torii node logs to `artifacts/torii.log`.
-- Ledger metrics (Prometheus format) to `artifacts/metrics.prom`.
-- Client access tokens to `artifacts/torii.jwt`.
+- Torii tugunlari `artifacts/torii.log` ga qayd qilinadi.
+- Buxgalteriya ko'rsatkichlari (Prometheus formati) dan `artifacts/metrics.prom` gacha.
+- `artifacts/torii.jwt` ga mijoz kirish tokenlari.
 
-`start.sh` keeps the demo peer running until you press `Ctrl+C`. It writes a ready-state
-snapshot to `artifacts/ios_demo_state.json` (the source of truth for the other artefacts),
-copies the active Torii stdout log, polls `/metrics` until a Prometheus scrape is
-available, and renders the configured accounts into `torii.jwt` (including private keys
-when the config provides them). The script accepts `--artifacts` to override the output
-directory, `--telemetry-profile` to match custom Torii configurations, and
-`--exit-after-ready` for non-interactive CI jobs.
+`start.sh` siz `Ctrl+C` tugmachasini bosmaguningizcha demo peer ishini davom ettiradi. U tayyor holatni yozadi
+`artifacts/ios_demo_state.json` ga surat (boshqa artefaktlar uchun haqiqat manbai),
+faol Torii stdout jurnalidan nusxa oladi, Prometheus qirilib ketguncha `/metrics` so'rovini oladi.
+mavjud va sozlangan hisoblarni `torii.jwt` ga (jumladan, shaxsiy kalitlarga) aylantiradi
+konfiguratsiya ularni taqdim etganda). Skript chiqishni bekor qilish uchun `--artifacts` ni qabul qiladi
+maxsus Torii konfiguratsiyalariga mos keladigan `--telemetry-profile` katalogi va
+Interaktiv bo'lmagan CI ishlari uchun `--exit-after-ready`.
 
-Each entry in `SampleAccounts.json` supports the following fields:
+`SampleAccounts.json` dagi har bir yozuv quyidagi maydonlarni qo'llab-quvvatlaydi:
 
-- `name` (string, optional) — stored as account metadata `alias`.
-- `public_key` (multihash string, required) — used as the account signatory.
-- `private_key` (optional) — included in `torii.jwt` for client credential generation.
-- `domain` (optional) — defaults to the asset domain if omitted.
-- `asset_id` (string, required) — asset definition to mint for the account.
-- `initial_balance` (string, required) — numeric amount minted into the account.
+- `name` (string, ixtiyoriy) — `alias` hisob metamaʼlumotlari sifatida saqlanadi.
+- `public_key` (multihash string, talab qilinadi) — hisob imzolovchi sifatida ishlatiladi.
+- `private_key` (ixtiyoriy) - mijoz hisob ma'lumotlarini yaratish uchun `torii.jwt` tarkibiga kiritilgan.
+- `domain` (ixtiyoriy) - agar o'tkazib yuborilsa, aktiv domeniga sukut bo'yicha.
+- `asset_id` (string, zarur) — hisob uchun aktiv taʼrifi.
+- `initial_balance` (string, talab qilinadi) - hisob raqamiga kiritilgan raqamli miqdor.
 
-## Running the SwiftUI demo
+## SwiftUI demosini ishga tushirish
 
-1. Build the XCFramework as described in `docs/norito_bridge_release.md` and bundle it
-   into the demo project (references expect `NoritoBridge.xcframework` in the project
-   root).
-2. Open the `NoritoDemoXcode` project in Xcode.
-3. Select the `NoritoDemo` scheme and target an iOS simulator or device.
-4. Ensure the `.env` file is referenced through the scheme's environment variables.
-   Populate the `CONNECT_*` values exported by `/v1/connect/session` so the UI is
-   pre-filled when the app launches.
-5. Verify hardware acceleration defaults: `App.swift` calls
-   `DemoAccelerationConfig.load().apply()` so the demo picks up either the
-   `NORITO_ACCEL_CONFIG_PATH` environment override or a bundled
-   `acceleration.{json,toml}`/`client.{json,toml}` file. Remove/adjust these inputs if you
-   want to force a CPU fallback before running.
-6. Build and launch the application. The home screen prompts for Torii URL/token if not
-   already set via `.env`.
-7. Initiate a "Connect" session to subscribe to account updates or approve requests.
-8. Submit an IRH transfer and inspect the on-screen log output along with Torii logs.
+1. `docs/norito_bridge_release.md` da tavsiflanganidek XCFramework ni yarating va uni birlashtiring
+   demo loyihasiga (ma'lumotnomalar loyihada `NoritoBridge.xcframework` kutilmoqda
+   ildiz).
+2. Xcode'da `NoritoDemoXcode` loyihasini oching.
+3. `NoritoDemo` sxemasini tanlang va iOS simulyatori yoki qurilmasini belgilang.
+4. `.env` fayliga sxemaning muhit oʻzgaruvchilari orqali havola qilinganligiga ishonch hosil qiling.
+   `/v1/connect/session` tomonidan eksport qilingan `CONNECT_*` qiymatlarini toʻldiring, shunda foydalanuvchi interfeysi boʻladi.
+   ilova ishga tushirilganda oldindan to'ldirilgan.
+5. Uskuna tezlashuvining standart sozlamalarini tekshiring: `App.swift` chaqiruvlari
+   `DemoAccelerationConfig.load().apply()`, shuning uchun demo ikkalasini ham tanlaydi
+   `NORITO_ACCEL_CONFIG_PATH` muhitni bekor qilish yoki to'plam
+   `acceleration.{json,toml}`/`client.{json,toml}` fayli. Agar kerak bo'lsa, ushbu kirishlarni olib tashlang/sozlang
+   ishga tushirishdan oldin protsessorni qayta tiklashga majburlamoqchi.
+6. Ilovani yarating va ishga tushiring. Bosh ekran Torii URL/tokenini so'raydi, agar bo'lmasa
+   allaqachon `.env` orqali o'rnatilgan.
+7. Hisob yangilanishlariga obuna bo'lish yoki so'rovlarni tasdiqlash uchun "Ulanish" seansini boshlang.
+8. IRH uzatishni yuboring va Torii jurnallari bilan birga ekrandagi jurnal chiqishini tekshiring.
 
-### Hardware acceleration toggles (Metal / NEON)
+### Uskuna tezlashuvi (Metal / NEON)
 
-`DemoAccelerationConfig` mirrors the Rust node configuration so developers can exercise
-Metal/NEON paths without hard-coding thresholds. The loader searches the following
-locations on launch:
+`DemoAccelerationConfig` Rust tugun konfiguratsiyasini aks ettiradi, shuning uchun ishlab chiquvchilar mashq qilishlari mumkin
+Qattiq kodlash chegaralari bo'lmagan metall/NEON yo'llari. Yuklovchi quyidagilarni qidiradi
+ishga tushirish joylari:
 
-1. `NORITO_ACCEL_CONFIG_PATH` (defined in `.env`/scheme arguments) — absolute path or
-   `tilde`-expanded pointer to an `iroha_config` JSON/TOML file.
-2. Bundled config files named `acceleration.{json,toml}` or `client.{json,toml}`.
-3. If neither source is available, the default settings (`AccelerationSettings()`) remain.
+1. `NORITO_ACCEL_CONFIG_PATH` (`.env`/sxema argumentlarida belgilangan) — mutlaq yo‘l yoki
+   `iroha_config` JSON/TOML fayliga `tilde` kengaytirilgan ko'rsatgich.
+2. `acceleration.{json,toml}` yoki `client.{json,toml}` nomli birlashtirilgan konfiguratsiya fayllari.
+3. Agar biron bir manba mavjud bo'lmasa, standart sozlamalar (`AccelerationSettings()`) qoladi.
 
-Example `acceleration.toml` snippet:
+Misol `acceleration.toml` parchasi:
 
 ```toml
 [accel]
@@ -105,35 +106,35 @@ merkle_min_leaves_metal = 256
 prefer_cpu_sha2_max_leaves_aarch64 = 128
 ```
 
-Leaving the fields `nil` inherits the workspace defaults. Negative numbers are ignored,
-and missing `[accel]` sections fall back to deterministic CPU behaviour. When running on
-a simulator without Metal support the bridge silently keeps the scalar path even if the
-config requests Metal.
+`nil` maydonlarini tark etish ish maydonining standart sozlamalarini meros qilib oladi. Salbiy raqamlar e'tiborga olinmaydi,
+va etishmayotgan `[accel]` bo'limlari protsessorning deterministik xatti-harakatiga qaytadi. Ishlayotganda
+Metall qo'llab-quvvatlamaydigan simulyator, ko'prik skaler yo'lni jimgina ushlab turadi, hatto bo'lsa ham
+konfiguratsiya so'rovlari Metal.
 
-## Integration tests
+## Integratsiya testlari
 
-- Integration tests reside in `Tests/NoritoDemoTests` (to be added once macOS CI is
-  available).
-- Tests spin up Torii using the scripts above and exercise WebSocket subscriptions, token
-  balances, and transfer flows via the Swift package.
-- Logs from test runs are stored in `artifacts/tests/<timestamp>/` alongside metrics and
-  sample ledger dumps.
+- Integratsiya testlari `Tests/NoritoDemoTests` da joylashgan (macOS CI o'rnatilgandan keyin qo'shiladi)
+  mavjud).
+- Yuqoridagi skriptlar yordamida testlar Torii ni aylantiradi va WebSocket obunalarini, tokenni ishlatadi.
+  balanslar va Swift to'plami orqali o'tkazma oqimlari.
+- Test sinovlari jurnallari `artifacts/tests/<timestamp>/` da ko'rsatkichlar va ko'rsatkichlar bilan birga saqlanadi.
+  daftarning namunalari.
 
-## CI parity checks
+## CI paritetini tekshirish
 
-- Run `make swift-ci` before sending a PR that touches the demo or shared fixtures. The
-  target executes fixture parity checks, validates the dashboard feeds, and renders the
-  summaries locally. In CI the same workflow depends on Buildkite metadata
-  (`ci/xcframework-smoke:<lane>:device_tag`) so dashboards can attribute results to the
-  correct simulator or StrongBox lane—verify the metadata is present if you adjust the
-  pipeline or agent tags.
-- When `make swift-ci` fails, follow the steps in `docs/source/swift_parity_triage.md`
-  and review the rendered `mobile_ci` output to determine which lane requires
-  regeneration or incident follow-up.
+- Demo yoki umumiy jihozlarga tegadigan PR yuborishdan oldin `make swift-ci` ni ishga tushiring. The
+  target moslamalar paritetini tekshirishni amalga oshiradi, asboblar panelidagi tasmalarni tasdiqlaydi va ko'rsatadi
+  mahalliy xulosalar. CIda bir xil ish jarayoni Buildkite metama'lumotlariga bog'liq
+  (`ci/xcframework-smoke:<lane>:device_tag`) shuning uchun asboblar paneli natijalarni
+  to'g'ri simulyator yoki StrongBox chizig'i - agar sozlashni o'rnatsangiz, metama'lumotlar mavjudligini tekshiring
+  quvur liniyasi yoki agent teglari.
+- `make swift-ci` bajarilmasa, `docs/source/swift_parity_triage.md` dagi amallarni bajaring.
+  va qaysi qator talab qilinishini aniqlash uchun ko'rsatilgan `mobile_ci` chiqishini ko'rib chiqing.
+  regeneratsiya yoki hodisani kuzatish.
 
-## Troubleshooting
+## Nosozliklarni bartaraf etish
 
-- If the demo cannot connect to Torii, verify the node URL and TLS settings.
-- Ensure the JWT token (if required) is valid and not expired.
-- Check `artifacts/torii.log` for server-side errors.
-- For WebSocket issues, inspect the client log window or the Xcode console output.
+- Agar demo Torii ga ulana olmasa, tugun URL manzili va TLS sozlamalarini tekshiring.
+- JWT tokeni (agar kerak bo'lsa) haqiqiy va muddati o'tmaganligiga ishonch hosil qiling.
+- Server tomonidagi xatolar uchun `artifacts/torii.log` ni tekshiring.
+- WebSocket muammolari uchun mijoz jurnali oynasini yoki Xcode konsolining chiqishini tekshiring.

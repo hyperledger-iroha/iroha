@@ -7,47 +7,52 @@ generator: scripts/sync_docs_i18n.py
 source_hash: f2dd292b7d15b449f3cec1b79343387a8c23beef3a163367bd5fa8ced8593aae
 source_last_modified: "2025-12-29T18:16:35.986892+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# MOCHI Bundle Tooling
+# MOCHI пакет инструмент
 
-MOCHI ships with a lightweight packaging workflow so developers can produce a
-portable desktop bundle without wiring bespoke CI scripts. The `xtask`
-subcommand handles compilation, layout, hashing, and (optionally) archive
-creation in one shot.
+MOCHI караптары менән еңел упаковка эш ағымы, шулай итеп, эшләүселәр етештерә ала
+портатив өҫтәл өйөмө проводкаһыҙ заказ буйынса CI сценарийҙары. `xtask`
+субкомандлы тотҡалар компиляция, макет, хеширование, һәм (специфика) архив
+бер кадрҙа ижад итеү.
 
-## Generating a bundle
+## генерациялау өйөм
 
 ```bash
 cargo xtask mochi-bundle
 ```
 
-By default the command builds release binaries, assembles the bundle under
-`target/mochi-bundle/`, and emits a `mochi-<os>-<arch>-release.tar.gz` archive
-alongside a deterministic `manifest.json`. The manifest lists every file with
-its size and SHA-256 hash so CI pipelines can re-run verification or publish
-attestations. The helper ensures both the `mochi` desktop shell and the
-workspace `kagami` binary are present so genesis generation works out of the
-box.
+Ғәҙәттәгесә, команда төҙөү бинарҙары төҙөй, 2 йәшкә тиклемге өйөмдө йыйып ала.
+`target/mochi-bundle/`, һәм `mochi-<os>-<arch>-release.tar.gz` архивы сығара
+детерминистик `manifest.json` менән бер рәттән. Манифестта һәр файл менән исемлектә .
+уның ҙурлығы һәм SHA-256 хеш шулай CI торбалар ҡабаттан тикшерергә йәки баҫтырып сығара ала
+аттестациялары. Ярҙамсы `mochi` өҫтәл ҡабығын да,
+эш урыны `kagami` бинар бар, шуға күрә генезия генерацияһы эшләй.
+ҡумта.
 
-### Flags
+### Флагтар
 
-| Flag                | Description                                                                 |
-|---------------------|-----------------------------------------------------------------------------|
-| `--out <dir>`       | Override the output directory (defaults to `target/mochi-bundle`).         |
-| `--profile <name>`  | Build with a specific Cargo profile (e.g., `debug` for tests).              |
-| `--no-archive`      | Skip the `.tar.gz` archive, leaving only the prepared folder.               |
-| `--kagami <path>`   | Use an explicit `kagami` binary instead of building `iroha_kagami`.         |
-| `--matrix <path>`   | Append bundle metadata to a JSON matrix for CI provenance tracking.         |
-| `--smoke`           | Run `mochi --help` from the packaged bundle as a basic execution gate.      |
-| `--stage <dir>`     | Copy the finished bundle (and archive, when present) into a staging folder. |
+| Флаг | Тасуирлама |
+|-------------------|---------------------------------------------------------------------------- |
+| `--out <dir>` | Сығыш каталогын өҫтөнән үткәрергә (`target/mochi-bundle` тиклем ғәҙәттәгесә).         |
+| `--profile <name>` | Һынауҙар өсөн аныҡ йөк профиле менән төҙөү (мәҫәлән, `debug`).              |
+| `--no-archive` | `.tar.gz` архивын үткәреп, әҙерләнгән папканы ғына ҡалдырығыҙ.               |
+| `--kagami <path>` | `iroha_kagami` төҙөү урынына `kagami` бинар асыҡтан-асыҡ ҡулланыу.         |
+| `--matrix <path>` | Ҡушымта өйөм метамағлүмәттәр JSON матрица өсөн CI провенанс күҙәтеү.         |
+| `--smoke` | Йүгереп `mochi --help` ҡапланған өйөмдән төп башҡарыу ҡапҡаһы булараҡ.      |
+| `--stage <dir>` | Әҙер өйөмөн (һәм архив, булғанда) стажировка папкаһына күсерергә. |
 
-`--stage` is intended for CI pipelines where each build agent uploads its
-artefacts to a shared location. The helper recreates the bundle directory and
-copies the generated archive into the staging directory so publish jobs can
-collect platform-specific outputs without shell scripting.
+```
+./bin/mochi --data-root ./data --profile four-peer-bft \
+    --torii-start 12000 --p2p-start 14000 \
+    --irohad /path/to/irohad --kagami /path/to/kagami
+``` CI торбалары өсөн тәғәйенләнгән, унда һәр төҙөү агенты тейәп, уның
+артефакттар дөйөм урынға. Ярҙамсы өйөм каталогы һәм
+күсермәләр генерацияланған архив стажировка каталогы шулай баҫтырып сығара ала
+платформаға хас сығыштарҙы ҡабырсаҡ сценарийҙарыһыҙ йыйыу.
 
-The layout inside the bundle is intentionally simple:
+Ҡапҡа эсендәге планировка аңлы рәүештә ябай:
 
 ```
 bin/mochi              # egui desktop executable
@@ -58,11 +63,11 @@ LICENSE                # repository licence
 manifest.json          # generated file manifest with SHA-256 digests
 ```
 
-### Runtime overrides
+### Йүгереп йөрөү өҫтөнлөктәре
 
-The packaged `mochi` executable accepts command-line overrides for the most
-common supervisor settings. Use these flags instead of editing
-`config/local.toml` when experimenting:
+Ҡапланған `mochi` башҡарыла торған ҡабул итә команда юлының өҫтөнлөктәре өсөн иң күп
+дөйөм етәксе параметрҙары. Был флагтарҙы мөхәррирләү урынына ҡулланығыҙ
+`config/local.toml` эксперимент үткәргәндә:
 
 ```
 ./bin/mochi --data-root ./data --profile four-peer-bft \
@@ -70,16 +75,16 @@ common supervisor settings. Use these flags instead of editing
     --irohad /path/to/irohad --kagami /path/to/kagami
 ```
 
-Any CLI value takes precedence over `config/local.toml` entries and environment
-variables.
+Теләһә ниндәй CLI ҡиммәте өҫтөнлөк ала `config/local.toml` яҙмалар һәм мөхит
+үҙгәртеүселәр.
 
-## Snapshot automation
+## Snapshot автоматлаштырыу
 
-`manifest.json` records the generation timestamp, target triple, Cargo profile,
-and the complete file inventory. Pipelines can diff the manifest to detect when
-new artefacts appear, upload the JSON alongside release assets, or audit the
-hashes before promoting a bundle to operators.
+`manifest.json` быуын ваҡыт маркаһы, маҡсатлы өсләтә, йөк профиле,
+һәм тулы файл инвентаризацияһы. Торбалар айыра ала, манифест асыҡлау өсөн, ҡасан
+яңы артефакттар барлыҡҡа килә, JSON тейәп, активтар менән бер рәттән, йәки аудит
+хештар операторҙарға өйөмөн пропагандалау алдынан.
 
-The helper is idempotent: re-running the command updates the manifest and
-overwrites the previous archive, keeping `target/mochi-bundle/` as the single
-source of truth for the latest bundle on the current machine.
+Ярҙамсы идемпотент: команданы яңынан эшләү манифест һәм
+өҫтөнә яҙылған алдағы архив, `target/mochi-bundle/` сингл булараҡ һаҡлау
+хәҡиҡәт сығанағы өсөн һуңғы өйөмдәге ағымдағы машина.

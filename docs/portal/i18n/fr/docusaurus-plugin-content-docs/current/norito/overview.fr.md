@@ -4,42 +4,40 @@ direction: ltr
 source: docs/portal/docs/norito/overview.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 # Vue d'ensemble de Norito
 
-Norito est la couche de serialisation binaire utilisee dans tout Iroha : elle definit comment les structures de donnees sont encodees sur le fil, persistees sur disque et echangees entre contrats et hotes. Chaque crate du workspace s'appuie sur Norito plutot que sur `serde` afin que des pairs sur du materiel different produisent des octets identiques.
+Norito est la couche de sérialisation binaire utilisée dans tout Iroha : elle définit comment les structures de données sont encodées sur le fil, persistantes sur disque et échangées entre contrats et hôtes. Chaque caisse du workspace s'appuie sur Norito plutôt que sur `serde` afin que des paires sur du matériel différent produisent des octets identiques.
 
-Cet apercu resume les elements cles et renvoie aux references canoniques.
+Cet apercu reprend les éléments clés et renvoie aux références canoniques.
 
-## Architecture en un coup d'oeil
+## Architecture en un coup d'œil
 
-- **En-tete + payload** - Chaque message Norito commence par un en-tete de negociation de features (flags, checksum) suivi du payload brut. Les layouts packes et la compression sont negocies via les bits de l'en-tete.
-- **Encodage deterministe** - `norito::codec::{Encode, Decode}` implementent l'encodage nu. Le meme layout est reutilise lors de l'enrobage des payloads dans des en-tetes afin que le hachage et la signature restent deterministes.
-- **Schema + derives** - `norito_derive` genere des implementations `Encode`, `Decode` et `IntoSchema`. Les structs/sequences packes sont actives par defaut et documentes dans `norito.md`.
-- **Registre multicodec** - Les identifiants pour les hashes, types de cle et descripteurs de payload vivent dans `norito::multicodec`. La table de reference est maintenue dans `multicodec.md`.
+- **En-tête + payload** - Chaque message Norito commence par une en-tête de négociation de fonctionnalités (drapeaux, checksum) suivi du payload brut. Les packs de mise en page et la compression sont négociés via les bits de l'en-tête.
+- **Encodage déterministe** - `norito::codec::{Encode, Decode}` implémente l'encodage nu. Le même layout est réutilisé lors de l'enrobage des payloads dans des en-têtes afin que le hachage et la signature restent déterministes.
+- **Schema + dérives** - `norito_derive` génère des implémentations `Encode`, `Decode` et `IntoSchema`. Les packs structs/sequences sont actifs par défaut et documentés dans `norito.md`.
+- **Registre multicodec** - Les identifiants pour les hashes, types de clé et descripteurs de payload vivent dans `norito::multicodec`. La table de référence est utilisée dans `multicodec.md`.
 
-## Outils
-
-| Tache | Commande / API | Notes |
+##Outils| Taché | Commandes / API | Remarques |
 | --- | --- | --- |
-| Inspecter l'en-tete/sections | `ivm_tool inspect <file>.to` | Affiche la version ABI, les flags et les entrypoints. |
-| Encoder/decoder en Rust | `norito::codec::{Encode, Decode}` | Implemente pour tous les types principaux du data model. |
-| Interop JSON | `norito::json::{to_json_pretty, from_json}` | JSON deterministe adosse aux valeurs Norito. |
-| Generer docs/specs | `norito.md`, `multicodec.md` | Documentation source de verite a la racine du repo. |
+| Inspecteur en tête/sections | `ivm_tool inspect <file>.to` | Affiche la version ABI, les flags et les points d'entrée. |
+| Encodeur/décodeur en Rust | `norito::codec::{Encode, Decode}` | Implémente pour tous les types principaux du modèle de données. |
+| Interopérabilité JSON | `norito::json::{to_json_pretty, from_json}` | JSON déterministe adosse aux valeurs Norito. |
+| Générer des documents/spécifications | `norito.md`, `multicodec.md` | Documentation source de vérité à la racine du repo. |
 
-## Workflow de developpement
+## Workflow de développement
 
-1. **Ajouter les derives** - Preferez `#[derive(Encode, Decode, IntoSchema)]` pour les nouvelles structures de donnees. Evitez les serialiseurs ecrits a la main sauf necessite absolue.
-2. **Valider les layouts packes** - Utilisez `cargo test -p norito` (et la matrice de features packes dans `scripts/run_norito_feature_matrix.sh`) pour garantir que les nouveaux layouts restent stables.
-3. **Regenerer les docs** - Quand l'encodage change, mettez a jour `norito.md` et la table multicodec, puis rafraichissez les pages du portail (`/reference/norito-codec` et cet apercu).
-4. **Garder les tests Norito-first** - Les tests d'integration doivent utiliser les helpers JSON Norito au lieu de `serde_json` afin d'exercer les memes chemins que la production.
+1. **Ajouter les dérives** - Préférez `#[derive(Encode, Decode, IntoSchema)]` pour les nouvelles structures de données. Evitez les sérialiseurs écrits à la main sauf nécessité absolue.
+2. **Valider les packs de layouts** - Utilisez `cargo test -p norito` (et la matrice de packs de fonctionnalités dans `scripts/run_norito_feature_matrix.sh`) pour garantir que les nouveaux layouts restent stables.
+3. **Regenerer les docs** - Quand l'encodage change, mettez à jour `norito.md` et la table multicodec, puis rafraichissez les pages du portail (`/reference/norito-codec` et cet apercu).
+4. **Garder les tests Norito-first** - Les tests d'intégration doivent utiliser les helpers JSON Norito au lieu de `serde_json` afin d'exercer les mèmes chemins que la production.
 
-## Liens rapides
-
-- Specification : [`norito.md`](https://github.com/hyperledger-iroha/iroha/blob/master/norito.md)
+## Liens rapides- Spécification : [`norito.md`](https://github.com/hyperledger-iroha/iroha/blob/master/norito.md)
 - Attributions multicodec : [`multicodec.md`](https://github.com/hyperledger-iroha/iroha/blob/master/multicodec.md)
-- Script de matrice de features : `scripts/run_norito_feature_matrix.sh`
-- Exemples de layout packe : `crates/norito/tests/`
+- Script de matrice de fonctionnalités : `scripts/run_norito_feature_matrix.sh`
+- Exemples de layout pack : `crates/norito/tests/`
 
-Associez cet apercu au guide de demarrage rapide (`/norito/getting-started`) pour un parcours pratique de compilation et d'execution de bytecode utilisant des payloads Norito.
+Associez cet apercu au guide de démarrage rapide (`/norito/getting-started`) pour un parcours pratique de compilation et d'exécution de bytecode utilisant des payloads Norito.

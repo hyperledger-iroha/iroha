@@ -7,15 +7,16 @@ generator: scripts/sync_docs_i18n.py
 source_hash: ce2f95b8b287c18c39232418333fbefdd300c030391be9dbfa4e29a3fd5f3e14
 source_last_modified: "2025-12-29T18:16:35.946190+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-//! Notes on verifying SM2 Annex D vectors using RustCrypto crates.
+//! RustCrypto qutilari yordamida SM2 D ilovasi vektorlarini tekshirish bo'yicha eslatmalar.
 
-# SM2 Annex D Vector Verification (RustCrypto)
+# SM2 Ilova D vektor tekshiruvi (RustCrypto)
 
-This walkthrough captures the steps we used to validate (and debug) the GM/T 0003 Annex D example with RustCrypto’s `sm2` crate. The canonical Annex Example 1 data (identity `ALICE123@YAHOO.COM`, message `"message digest"`, and the published `(r, s)`) is now recorded in `crates/iroha_crypto/tests/fixtures/sm_known_answers.toml`. OpenSSL/Tongsuo/gmssl happily verify the signature (see `sm_vectors.md`), but RustCrypto’s `sm2 v0.13.3` still rejects the point with `signature::Error`, so CLI parity is confirmed while the Rust harness remains pending an upstream fix.
+Ushbu ko'rsatma GM/T 0003 D ilovasini RustCrypto-ning `sm2` kassasi bilan tekshirish (va disk raskadrovka) uchun qo'llagan qadamlarimizni qamrab oladi. The canonical Annex Example 1 data (identity `ALICE123@YAHOO.COM`, message `"message digest"`, and the published `(r, s)`) is now recorded in `crates/iroha_crypto/tests/fixtures/sm_known_answers.toml`. OpenSSL/Tongsuo/gmssl imzoni mamnuniyat bilan tasdiqlaydi (qarang: `sm_vectors.md`), lekin RustCrypto-ning `sm2 v0.13.3` hali ham `signature::Error` bilan nuqtani rad etadi, shuning uchun CLI pariteti tasdiqlanadi, shu bilan birga Rust jabduqlari o'zgarmagan holda qoladi.
 
-## Temporary crate
+## Vaqtinchalik quti
 
 ```bash
 cargo new /tmp/sm2_verify --bin
@@ -64,14 +65,14 @@ fn main() {
 }
 ```
 
-## Findings
+## Topilmalar
 
-- Verifying against the canonical Annex Example 1 `(r, s)` currently fails because `sm2::VerifyingKey::from_sec1_bytes` returns `signature::Error`; track upstream/root cause (likely due to curve-parameter mismatch in the crate’s current release).
-- The harness compiles cleanly with `sm2 v0.13.3` and will become an automated regression test once RustCrypto (or a patched fork) accepts the Annex Example 1 point/signature pair.
-- OpenSSL/Tongsuo/gmssl verification succeeds with the commands in `sm_vectors.md`; LibreSSL (macOS default) still lacks SM2/SM3 support, hence the local gap.
+- `(r, s)` 1-misolining kanonik ilovasiga muvofiq tekshirish hozirda bajarilmaydi, chunki `sm2::VerifyingKey::from_sec1_bytes` `signature::Error`ni qaytaradi; yuqori oqim/asosiy sababni kuzatib boring (ehtimol, sandiqning joriy versiyasidagi egri parametr mos kelmasligi sababli).
+- Jabduqlar `sm2 v0.13.3` bilan toza kompilyatsiya qilinadi va RustCrypto (yoki yamalgan vilka) Ilova 1-misol nuqta/imzo juftligini qabul qilgandan so‘ng avtomatlashtirilgan regressiya testiga aylanadi.
+- OpenSSL/Tongsuo/gmssl tekshiruvi `sm_vectors.md` da buyruqlar bilan muvaffaqiyatli amalga oshiriladi; LibreSSL (macOS sukut bo'yicha) hali ham SM2/SM3-ni qo'llab-quvvatlamaydi, shuning uchun mahalliy bo'shliq.
 
-## Next steps
+## Keyingi qadamlar
 
-1. Re-test once `sm2` exposes an API that accepts the Annex Example 1 point (or after upstream confirms the curve parameters) so the harness can pass locally.
-2. Keep a CLI sanity check (OpenSSL/Tongsuo/gmssl) in CI pipelines to guard the canonical Annex Example until the RustCrypto fix lands.
-3. Promote the harness into Iroha’s regression suite after both RustCrypto and OpenSSL parity checks succeed.
+1. `sm2` 1-ilova misolini qabul qiladigan API ochilganda (yoki yuqori oqim egri chiziq parametrlarini tasdiqlagandan so‘ng) jabduqlar mahalliy darajada o‘tishi uchun qayta sinovdan o‘tkazing.
+2. RustCrypto tuzatmaguncha kanonik ilova misolini himoya qilish uchun CI quvurlarida CLI aql-idrok tekshiruvini (OpenSSL/Tongsuo/gmssl) saqlang.
+3. RustCrypto va OpenSSL paritet tekshiruvlari muvaffaqiyatli o‘tgandan so‘ng, Iroha regressiya to‘plamiga jabduqni ko‘taring.

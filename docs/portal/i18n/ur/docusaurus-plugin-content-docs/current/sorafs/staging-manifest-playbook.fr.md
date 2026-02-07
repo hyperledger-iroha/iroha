@@ -4,26 +4,28 @@ direction: rtl
 source: docs/portal/docs/sorafs/staging-manifest-playbook.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: staging-manifest-playbook
-title: Playbook de manifest en staging
-sidebar_label: Playbook de manifest en staging
-description: Checklist pour activer le profil chunker ratifié par le Parlement sur les déploiements Torii de staging.
+ID: اسٹیجنگ مائی فیسٹ پلے بوک
+عنوان: اسٹیجنگ مینی فیسٹ پلے بک
+سائڈبار_لیبل: مینی فیسٹ پلے بک اسٹیجنگ
+تفصیل: اسٹیجنگ تعیناتی Torii پر پارلیمنٹ کے ذریعہ تصدیق شدہ چنکر پروفائل کو چالو کرنے کے لئے چیک لسٹ۔
 ---
 
-:::note Source canonique
-Cette page reflète `docs/source/sorafs/runbooks/staging_manifest_playbook.md`. Gardez la copie Docusaurus et le Markdown hérité alignés jusqu'à la retraite complète du set Sphinx.
+::: نوٹ کینونیکل ماخذ
+یہ صفحہ `docs/source/sorafs/runbooks/staging_manifest_playbook.md` کی عکاسی کرتا ہے۔ کاپی Docusaurus اور لیگیسی مارک ڈاون کو اس وقت تک رکھیں جب تک کہ اسفینکس سیٹ مکمل طور پر ریٹائر نہ ہوجائے۔
 :::
 
-## Vue d'ensemble
+## جائزہ
 
-Ce playbook décrit l'activation du profil chunker ratifié par le Parlement sur un déploiement Torii de staging avant de promouvoir le changement en production. Il suppose que la charte de gouvernance SoraFS est ratifiée et que les fixtures canoniques sont disponibles dans le dépôt.
+اس پلے بوک میں پیداوار میں تبدیلی کو فروغ دینے سے پہلے ایک اسٹیجنگ Torii تعیناتی پر پارلیمنٹ کے ذریعہ توثیق شدہ چنکر پروفائل کی چالو کرنے کی وضاحت کی گئی ہے۔ یہ فرض کرتا ہے کہ گورننس چارٹر SoraFS کی توثیق کی گئی ہے اور یہ کہ کیننیکل فکسچر ریپوزٹری میں دستیاب ہیں۔
 
-## 1. Prérequis
+## 1. شرائط
 
-1. Synchronisez les fixtures canoniques et les signatures :
+1. کنوینیکل فکسچر اور دستخطوں کو ہم آہنگ کریں:
 
    ```bash
    cargo xtask sorafs-fetch-fixture \
@@ -32,8 +34,8 @@ Ce playbook décrit l'activation du profil chunker ratifié par le Parlement sur
    ci/check_sorafs_fixtures.sh
    ```
 
-2. Préparez le répertoire des enveloppes d'admission que Torii lira au démarrage (chemin d'exemple) : `/var/lib/iroha/admission/sorafs`.
-3. Assurez-vous que la configuration Torii active le cache discovery et l'application de l'admission :
+2. داخلہ لفافہ ڈائرکٹری تیار کریں جو Torii اسٹارٹ اپ (مثال کے طور پر راستہ) پر پڑھے گا: `/var/lib/iroha/admission/sorafs`۔
+3. یقینی بنائیں کہ Torii ترتیب کیشے کی دریافت اور داخلے کے نفاذ کو قابل بناتا ہے:
 
    ```toml
    [torii.sorafs.discovery]
@@ -51,42 +53,42 @@ Ce playbook décrit l'activation du profil chunker ratifié par le Parlement sur
    enforce_capabilities = true
    ```
 
-## 2. Publier les enveloppes d'admission
+## 2۔ داخلہ لفافے پوسٹ کریں
 
-1. Copiez les enveloppes d'admission approuvées dans le répertoire référencé par `torii.sorafs.discovery.admission.envelopes_dir` :
+1. `torii.sorafs.discovery.admission.envelopes_dir` کے ذریعہ حوالہ کردہ ڈائریکٹری میں منظور شدہ داخلہ لفافوں کاپی کریں:
 
    ```bash
    install -m 0644 fixtures/sorafs_manifest/provider_admission/*.json \
      /var/lib/iroha/admission/sorafs/
    ```
 
-2. Redémarrez Torii (ou envoyez un SIGHUP si vous avez encapsulé le loader avec un rechargement à chaud).
-3. Suivez les logs pour les messages d'admission :
+2. Torii کو دوبارہ اسٹارٹ کریں (یا اگر آپ نے لوڈر کو گرم دوبارہ لوڈ سے انکپولیٹ کیا ہے تو ایک سگ اپ بھیجیں)۔
+3. داخلہ پیغامات کے لئے لاگ ان پر عمل کریں:
 
    ```bash
    torii | grep "loaded provider admission envelope"
    ```
 
-## 3. Valider la propagation discovery
+## 3. دریافت کی تشہیر کی توثیق کریں
 
-1. Postez le payload signé d'advert fournisseur (octets Norito) produit par votre pipeline fournisseur :
+1. اپنے سپلائر پائپ لائن کے ذریعہ تیار کردہ دستخط شدہ سپلائر ایڈورٹائزمنٹ پے لوڈ (بائٹس Norito) پوسٹ کریں:
 
    ```bash
    curl -sS -X POST --data-binary @provider_advert.to \
      http://staging-torii:8080/v1/sorafs/provider/advert
    ```
 
-2. Interrogez l'endpoint discovery et confirmez que l'advert apparaît avec les alias canoniques :
+2. دریافت کے اختتامی نقطہ سے استفسار کریں اور تصدیق کریں کہ اشتہار کیننیکل عرفی ناموں کے ساتھ ظاہر ہوتا ہے:
 
    ```bash
    curl -sS http://staging-torii:8080/v1/sorafs/providers | jq .
    ```
 
-   Assurez-vous que `profile_aliases` inclut `"sorafs.sf1@1.0.0"` en première entrée.
+   اس بات کو یقینی بنائیں کہ `profile_aliases` میں پہلی اندراج کے طور پر `"sorafs.sf1@1.0.0"` شامل ہے۔
 
-## 4. Exercer les endpoints manifest et plan
+## 4. ورزش مینی فیسٹ اور منصوبہ بندی کے اختتامی نکات
 
-1. Récupérez les métadonnées du manifest (nécessite un stream token si l'admission est appliquée) :
+1. مینی فیسٹ میٹا ڈیٹا بازیافت کریں (اگر داخلہ لاگو ہوتا ہے تو اسٹریم ٹوکن کی ضرورت ہوتی ہے):
 
    ```bash
    sorafs-fetch \
@@ -97,25 +99,25 @@ Ce playbook décrit l'activation du profil chunker ratifié par le Parlement sur
      --json-out=reports/staging_manifest.json
    ```
 
-2. Inspectez la sortie JSON et vérifiez :
-   - `chunk_profile_handle` est `sorafs.sf1@1.0.0`.
-   - `manifest_digest_hex` correspond au rapport de déterminisme.
-   - `chunk_digests_blake3` s'alignent avec les fixtures régénérées.
+2. JSON آؤٹ پٹ کا معائنہ کریں اور تصدیق کریں:
+   - `chunk_profile_handle` `sorafs.sf1@1.0.0` ہے۔
+   - `manifest_digest_hex` عزم کی رپورٹ سے مطابقت رکھتا ہے۔
+   - `chunk_digests_blake3` دوبارہ پیدا ہونے والے فکسچر کے ساتھ سیدھ میں ہے۔
 
-## 5. Vérifications de télémétrie
+## 5. ٹیلی میٹری چیک
 
-- Confirmez que Prometheus expose les nouvelles métriques de profil :
+- تصدیق کریں کہ Prometheus نئے پروفائل میٹرکس کو بے نقاب کرتا ہے:
 
   ```bash
   curl -sS http://staging-torii:8080/metrics | grep torii_sorafs_chunk_range_requests_total
   ```
 
-- Les dashboards doivent montrer le provider de staging sous l'alias attendu et garder les compteurs de brownout à zéro tant que le profil est actif.
+- ڈیش بورڈز کو متوقع عرف کے تحت اسٹیجنگ فراہم کرنے والے کو دکھانا چاہئے اور جب تک پروفائل فعال نہیں ہے اس وقت تک براؤن آؤٹ کاؤنٹرز کو صفر پر رکھنا چاہئے۔
 
-## 6. Préparation du rollout
+## 6. رول آؤٹ کی تیاری
 
-1. Capturez un court rapport avec les URLs, l'ID de manifest et le snapshot de télémétrie.
-2. Partagez le rapport dans le canal de rollout Nexus avec la fenêtre d'activation production planifiée.
-3. Passez à la checklist de production (Section 4 dans `chunker_registry_rollout_checklist.md`) une fois que les parties prenantes donnent leur accord.
+1. یو آر ایل ، مینی فیسٹ آئی ڈی اور ٹیلی میٹری اسنیپ شاٹ کے ساتھ ایک مختصر رپورٹ پر قبضہ کریں۔
+2. رول آؤٹ چینل Nexus میں منصوبہ بند پروڈکشن ایکٹیویشن ونڈو کے ساتھ رپورٹ شیئر کریں۔
+3. اسٹیک ہولڈرز کے اتفاق ہونے کے بعد پروڈکشن چیک لسٹ (`chunker_registry_rollout_checklist.md` میں سیکشن 4) پر آگے بڑھیں۔
 
-Maintenir ce playbook à jour garantit que chaque rollout chunker/admission suit les mêmes étapes déterministes entre staging et production.
+اس پلے بوک کو تازہ ترین رکھنا اس بات کو یقینی بناتا ہے کہ ہر رول آؤٹ چنکر/داخلہ اسٹیجنگ اور پروڈکشن کے مابین ایک ہی عصبی اقدامات کی پیروی کرتا ہے۔

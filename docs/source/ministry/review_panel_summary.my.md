@@ -9,19 +9,20 @@ source_last_modified: "2025-12-29T18:16:35.983094+00:00"
 translation_last_reviewed: 2026-02-07
 title: Review Panel Summary Workflow (MINFO-4a)
 summary: Generate the neutral referendum summary with balanced citations, AI manifest references, and volunteer brief coverage.
+translator: machine-google-reviewed
 ---
 
-# Review Panel Summary (MINFO-4a)
+# ပြန်လည်သုံးသပ်ရေးအဖွဲ့ အနှစ်ချုပ် (MINFO-4a)
 
-Roadmap item **MINFO-4a — Neutral summary generator** requires a reproducible workflow that turns an accepted agenda proposal, the volunteer brief corpus, and the attested AI moderation manifest into a neutral referendum summary. The deliverable must:
+လမ်းပြမြေပုံ အကြောင်းအရာ **MINFO-4a — ကြားနေအကျဉ်းချုပ် ဂျင်နရေတာ** သည် လက်ခံထားသော အစီအစဉ် အဆိုပြုချက်၊ စေတနာ့ဝန်ထမ်း အကျဉ်းချုံးနှင့် အတည်ပြုထားသော AI ထိန်းညှိမှုတို့ကို ကြားနေဆန္ဒခံယူပွဲ အကျဉ်းချုပ်အဖြစ် ပြောင်းလဲပေးသည့် ပြန်လည်ထုတ်လုပ်နိုင်သော အလုပ်အသွားအလာ လိုအပ်ပါသည်။ ပေးပို့နိုင်သည်-
 
-- Record the output as a Norito structure (`ReviewPanelSummaryV1`) so governance can archive it alongside manifests and ballots.
-- Lint the source material, failing fast when the review panel does not have balanced support/oppose coverage or when facts are missing citations.
-- Reference the AI manifest and the proposal evidence bundle in every highlight, ensuring the policy jury sees both automated and human context before voting.
+- အထွက်အား Norito ဖွဲ့စည်းပုံ (`ReviewPanelSummaryV1`) အဖြစ် မှတ်တမ်းတင်ထားသောကြောင့် အုပ်ချုပ်ရေးသည် ၎င်းကို သရုပ်ဖော်ပုံများနှင့် မဲများနှင့်အတူ သိမ်းဆည်းနိုင်သည်။
+- သုံးသပ်ချက်အကန့်တွင် မျှတသောပံ့ပိုးမှု/ဆန့်ကျင်လွှမ်းခြုံမှု မရှိသည့်အခါ သို့မဟုတ် အချက်အလက်များသည် ကိုးကားချက်များပျောက်ဆုံးနေသည့်အခါ အရင်းအမြစ်အကြောင်းအရာကို ဖျတ်ဖျတ်ပါ။
+- AI manifest ကို ကိုးကားပြီး အလေးပေးဖော်ပြမှုတိုင်းတွင် သက်သေအထောက်အထားအစုအဝေးကို ကိုးကားပြီး မဲမပေးမီတွင် မူဝါဒရေးရာဂျူရီလူကြီးများသည် အလိုအလျောက်နှင့် လူသားဆိုင်ရာ အကြောင်းအရာနှစ်ခုလုံးကို မြင်ကြောင်းသေချာစေပါသည်။
 
-## CLI usage
+## CLI အသုံးပြုမှု
 
-The workflow ships as part of `cargo xtask`:
+အလုပ်အသွားအလာသည် `cargo xtask` ၏ တစ်စိတ်တစ်ပိုင်းအဖြစ် ပို့ဆောင်သည်-
 
 ```bash
 cargo xtask ministry-panel synthesize \
@@ -32,23 +33,23 @@ cargo xtask ministry-panel synthesize \
 --output artifacts/review_panel/AC-2026-001-RP-2026-05.json
 ```
 
-Required inputs:
+လိုအပ်သော သွင်းအားစုများ-
 
-1. `--proposal` – JSON payload adhering to `AgendaProposalV1`. The helper validates the schema before generating the summary.
-2. `--volunteer` – JSON array of volunteer briefs that follow `docs/source/ministry/volunteer_brief_template.md`. Off-topic entries are ignored automatically.
-3. `--ai-manifest` – Governance-signed `ModerationReproManifestV1` describing the AI committee that screened the content.
-4. `--panel-round` – Identifier for the current review round (`RP-YYYY-##`).
-5. `--output` – Destination file or `-` to stream to stdout. Use `--language` to override the proposal language and `--generated-at` to supply a deterministic Unix timestamp (milliseconds) when backfilling history.
+1. `--proposal` – `AgendaProposalV1` ကိုလိုက်နာသော JSON ပေးဆောင်မှု။ အနှစ်ချုပ်ကို မထုတ်ပေးမီ အထောက်အကူပေးသူက schema ကို အတည်ပြုသည်။
+2. `--volunteer` – `docs/source/ministry/volunteer_brief_template.md` ကို လိုက်နာသော စေတနာ့ဝန်ထမ်း အကျဉ်းများ JSON အခင်းအကျင်းများ။ အကြောင်းအရာမဟုတ်သော ထည့်သွင်းမှုများကို အလိုအလျောက် လျစ်လျူရှုထားသည်။
+3. `--ai-manifest` – အကြောင်းအရာကို စစ်ဆေးသည့် AI ကော်မတီကို ဖော်ပြသည့် အုပ်ချုပ်မှု-လက်မှတ်ထိုးထားသော `ModerationReproManifestV1`။
+4. `--panel-round` – လက်ရှိ ပြန်လည်သုံးသပ်မှု အဝိုင်းအတွက် အမှတ်အသား (`RP-YYYY-##`)။
+5. `--output` – Destination ဖိုင် သို့မဟုတ် `-` ကို stdout သို့ တိုက်ရိုက်လွှင့်ရန်။ အဆိုပြုချက်ဘာသာစကားကို အစားထိုးရန် `--language` ကို အသုံးပြု၍ မှတ်တမ်းကို ပြန်ဖြည့်သည့်အခါတွင် သတ်မှတ်ထားသော Unix အချိန်တံဆိပ် (မီလီစက္ကန့်) ကို ပေးဆောင်ရန် `--generated-at` ကို အသုံးပြုပါ။
 
-Once the standalone summary is generated, run the
-[`cargo xtask ministry-panel packet`](referendum_packet.md) helper to assemble
-the complete referendum dossier (`ReferendumPacketV1`). Supplying
-`--summary-out` to the packet command will persist the same summary file while
-embedding it inside the packet object for downstream consumers.
+သီးခြားအနှစ်ချုပ်ကို ထုတ်ပေးပြီးသည်နှင့် ၎င်းကို run ပါ။
+[`cargo xtask ministry-panel packet`](referendum_packet.md) အကူအညီပေးသူ
+ပြည်လုံးကျွတ်ဆန္ဒခံယူပွဲစာရွက်စာတမ်း (`ReferendumPacketV1`)။ ထောက်ပံ့ခြင်း။
+packet command သို့ `--summary-out` သည် တူညီသော အနှစ်ချုပ်ဖိုင်ကို ဆက်လက်တည်ရှိနေလိမ့်မည်
+၎င်းကို downstream သုံးစွဲသူများအတွက် packet object တွင် ထည့်သွင်းထားသည်။
 
-### Automation via `ministry-transparency ingest`
+### `ministry-transparency ingest` မှတဆင့် အလိုအလျောက်စနစ်
 
-Teams that already run `cargo xtask ministry-transparency ingest` for quarterly evidence bundles can now stitch the review panel summary into the same pipeline:
+သုံးလတစ်ကြိမ် အထောက်အထားအစုအစည်းအတွက် `cargo xtask ministry-transparency ingest` ကို အသုံးပြုပြီးသော အဖွဲ့များသည် ယခု သုံးသပ်ချက်အကန့်အနှစ်ချုပ်ကို တူညီသောပိုက်လိုင်းအဖြစ် ချိတ်တွဲနိုင်ပါပြီ-
 
 ```bash
 cargo xtask ministry-transparency ingest \
@@ -65,31 +66,29 @@ cargo xtask ministry-transparency ingest \
   --output artifacts/ministry/ingest.json
 ```
 
-All four `--panel-*` flags must be supplied together (and require `--volunteer`). The command emits the review panel summary to `--panel-summary-out`, embeds the parsed payload inside the ingest snapshot, and records a checksum so downstream tooling can attest to the evidence.
+`--panel-*` အလံလေးခုစလုံးကို အတူတကွ ပံ့ပိုးပေးရမည် (နှင့် `--volunteer` လိုအပ်သည်)။ ညွှန်ကြားချက်သည် သုံးသပ်ချက်အကန့်အနှစ်ချုပ်ကို `--panel-summary-out` သို့ ထုတ်လွှတ်ပြီး ခွဲခြမ်းစိတ်ဖြာထားသော ပေးဆောင်မှုအား လျှပ်တစ်ပြက်အတွင်း မြှုပ်နှံကာ checksum တစ်ခုကို မှတ်တမ်းတင်ထားသောကြောင့် downstream tooling သည် သက်သေအထောက်အထားများကို သက်သေပြနိုင်သည်။
 
-## Linting and failure modes
+## Linting နှင့် failure modes
 
-`cargo xtask ministry-panel synthesize` enforces the following invariants before writing the summary:
+`cargo xtask ministry-panel synthesize` သည် အနှစ်ချုပ်မရေးမီ အောက်ပါပုံစံကွဲများကို တွန်းအားပေးသည်-
 
-- **Balanced stances:** at least one support brief and one oppose brief must be present. Missing coverage terminates the run with a descriptive error.
-- **Citation coverage:** highlights are only produced from fact rows that include citations. Missing citations never block the build, but each affected brief is listed under `warnings[]` in the output.
-- **Per-highlight references:** every highlight includes references to (a) the volunteer fact row(s), (b) the AI manifest ID, and (c) the first evidence attachment from the proposal so the packet always links back to the signed artefacts.
+- **မျှတသောရပ်တည်ချက်များ-** အနည်းဆုံး ပံ့ပိုးမှုအတိုချုံးတစ်ခုနှင့် ဆန့်ကျင်ဘက်အကျဉ်းချုပ်တစ်ခု ရှိနေရပါမည်။ ပျောက်ဆုံးနေသော လွှမ်းခြုံမှုသည် ဖော်ပြချက်အမှားတစ်ခုဖြင့် လုပ်ဆောင်မှုကို ရပ်တန့်စေသည်။
+- **ကိုးကားဖော်ပြမှု-** အထူးအသားပေးများကို ကိုးကားချက်များပါရှိသော အချက်အလက်အတန်းများမှသာလျှင် ထုတ်လုပ်ပါသည်။ လွဲမှားနေသောကိုးကားချက်များသည် တည်ဆောက်မှုကို ဘယ်သောအခါမှ မတားဆီးနိုင်သော်လည်း ထိခိုက်မှုအကျဉ်းချုပ်တစ်ခုစီသည် `warnings[]` အောက်တွင် ဖော်ပြထားပါသည်။
+- **မီးမောင်းထိုးပြထားသည့် ကိုးကားချက်များ-** အသားပေးဖော်ပြချက်တိုင်းတွင် (က) စေတနာ့ဝန်ထမ်း အချက်အလက် အတန်း(များ)၊ (ခ) AI ထင်ရှားသော ID နှင့် (ဂ) အဆိုပြုချက်မှ ပထမဆုံး ပူးတွဲပါရှိသော အထောက်အထားများ ပါဝင်သောကြောင့် ပက်ကတ်သည် လက်မှတ်ရေးထိုးထားသော ရှေးဟောင်းပစ္စည်းများထံ အမြဲပြန်ချိတ်ဆက်ပါသည်။စစ်ဆေးမှု တစ်စုံတစ်ရာ မအောင်မြင်ပါက၊ အမိန့်သည် သုညမဟုတ်သော အခြေအနေဖြင့် ထွက်ပြီး ပြဿနာရှိသော မှတ်တမ်းတွင် အမှတ်ပေးသည်။ အောင်မြင်သောလုပ်ဆောင်မှုများသည် `ReviewPanelSummaryV1` အစီအစဉ်နှင့်ကိုက်ညီသော JSON ဖိုင်ကိုရေးပြီး အုပ်ချုပ်မှုဆိုင်ရာဖော်ပြချက်များတွင် ထည့်သွင်းနိုင်သည်။
 
-If any check fails, the command exits with a non-zero status and points at the problematic record. Successful runs write a JSON file that matches the `ReviewPanelSummaryV1` schema and can be embedded in governance manifests.
+## Output ဖွဲ့စည်းပုံ
 
-## Output structure
+`ReviewPanelSummaryV1` သည် `crates/iroha_data_model/src/ministry/mod.rs` တွင်နေထိုင်ပြီး `iroha_data_model` သေတ္တာမှတစ်ဆင့် စားသုံးသူတိုင်းရရှိနိုင်ပါသည်။ အဓိကကဏ္ဍများ ပါဝင်သည်-
 
-`ReviewPanelSummaryV1` lives in `crates/iroha_data_model/src/ministry/mod.rs` and is available to every consumer via the `iroha_data_model` crate. Key sections include:
+- `overview` – ခေါင်းစဉ်၊ ကြားနေအကျဉ်းချုပ်ဝါကျနှင့် မူဝါဒဂျူရီအဖွဲ့အတွက် ဆုံးဖြတ်ချက်အကြောင်းအရာ။
+- `stance_distribution` - ရပ်တည်ချက်တစ်ခုအတွက် အတိုချုံးများနှင့် အချက်အလက် အတန်းအရေအတွက်။ ထုတ်ဝေခြင်းမပြုမီ လွှမ်းခြုံမှုကို အတည်ပြုရန်အတွက် ရေအောက်ဒိုင်ခွက်များသည် ဤအရာကိုဖတ်ပါ။
+- `highlights` - အရည်အချင်းပြည့်မှီသောကိုးကားချက်များဖြင့် ရပ်တည်ချက်တစ်ခုလျှင် အချက်အလက်အနှစ်ချုပ်နှစ်ခုအထိ။
+- `ai_manifest` - မျိုးပွားနိုင်မှုဆိုင်ရာ မန်နီးဖက်စ်မှ မက်တာဒေတာကို ထုတ်ယူခဲ့သည် (UUID၊ အပြေးသမားဗားရှင်း၊ သတ်မှတ်ချက်များ)။
+- `volunteer_references` – စာရင်းစစ်အတွက် အတိုချုံးစာရင်းဇယား (ဘာသာစကား၊ ရပ်တည်မှု၊ အတန်း၊ အတန်းများကို ကိုးကားထားသော)။
+- `warnings` – ကျော်သွားသည့်အရာများကိုဖော်ပြသည့် အခမဲ့ဖောင်စတိတ်စာတိုများ (ဥပမာ၊ ပျောက်ဆုံးနေသောကိုးကားချက်များပါရှိသော အချက်အလက်အတန်းများ)။
 
-- `overview` – Title, neutral summary sentence, and decision context for the policy jury packet.
-- `stance_distribution` – Count of briefs and fact rows per stance. Downstream dashboards read this to confirm coverage before publishing.
-- `highlights` – Up to two fact summaries per stance with fully qualified citations.
-- `ai_manifest` – Extracted metadata from the reproducibility manifest (manifest UUID, runner version, thresholds).
-- `volunteer_references` – Per-brief statistics (language, stance, rows, cited rows) for audit.
-- `warnings` – Free-form lint messages describing skipped items (e.g., fact rows with missing citations).
+## ဥပမာ
 
-## Example
+`docs/examples/ministry/review_panel_summary_example.json` တွင် အကူအညီပေးသူနှင့်အတူ ထုတ်လုပ်ထားသော နမူနာအပြည့်အစုံပါရှိသည်။ ၎င်းသည် မျှတသောပံ့ပိုးမှု/ဆန့်ကျင်သောလွှမ်းခြုံမှု၊ ကိုးကားချက်ဝါယာကြိုးများ၊ ထင်ရှားသောအကိုးအကားများနှင့် မီးမောင်းထိုးပြနိုင်သော အချက်အလက်အတန်းများအတွက် သတိပေးစာတန်းများကို သရုပ်ပြသည်။ ကြားနေအကျဉ်းချုပ်ကို စားသုံးရန် လိုအပ်သည့် ဒက်ရှ်ဘုတ်များ၊ အုပ်ချုပ်မှု သရုပ်ပြမှုများ သို့မဟုတ် SDK ကိရိယာကို တိုးချဲ့သည့်အခါ ၎င်းကို အသုံးပြုပါ။
 
-`docs/examples/ministry/review_panel_summary_example.json` contains a full sample produced with the helper. It demonstrates balanced support/oppose coverage, citation wiring, manifest references, and warning strings for fact rows that could not be promoted to highlights. Use it when extending dashboards, governance manifests, or SDK tooling that need to consume the neutral summary.
-
-> **Tip:** include the generated summary alongside the signed AI manifest and volunteer brief digest in the referendum evidence bundle so policy juries can verify every artifact referenced by the review panel.
+> ** အကြံပြုချက်-** လက်မှတ်ရေးထိုးထားသော AI သရုပ်ဖော်ပုံနှင့် စေတနာ့ဝန်ထမ်း အတိုချုံးအကျဉ်းချုပ် တွဲလျက် ထုတ်ပေးထားသော အနှစ်ချုပ်ကို ပြည်လုံးကျွတ်ဆန္ဒခံယူပွဲ အထောက်အထားအစုအဝေးတွင် ထည့်သွင်းထားသောကြောင့် မူဝါဒရေးရာ ဂျူရီလူကြီးများက ပြန်လည်သုံးသပ်ရေးအဖွဲ့မှ ကိုးကားထားသော ပစ္စည်းတိုင်းကို စစ်ဆေးအတည်ပြုနိုင်ပါသည်။

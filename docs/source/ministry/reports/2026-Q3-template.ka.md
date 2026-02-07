@@ -10,6 +10,7 @@ translation_last_reviewed: 2026-02-07
 title: Ministry Transparency Report — 2026 Q3 (Template)
 summary: Scaffold for the MINFO-8 quarterly transparency packet; replace all tokens before publication.
 quarter: 2026-Q3
+translator: machine-google-reviewed
 ---
 
 <!--
@@ -19,126 +20,124 @@ quarter: 2026-Q3
     3. Attach supporting artefacts (data appendix, CSVs, manifest, Grafana export) under artifacts/ministry/transparency/<YYYY-Q>/.
 -->
 
-# Executive Summary
+# აღმასრულებელი რეზიუმე
 
-> Provide a one-paragraph summary of moderation accuracy, appeal outcomes, denylist churn, and treasury highlights. Mention whether release met the T+14 deadline.
+> მიაწოდეთ ზომიერების სიზუსტის, გასაჩივრების შედეგების, უარმყოფელი და სახაზინო მაჩვენებლების ერთი აბზაციანი შეჯამება. აღნიშნეთ, შესრულდა თუ არა გათავისუფლება T+14-ის ვადას.
 
-## Quarter in Review
+## კვარტალი მიმოხილვაში
 
-### Highlights
+### მაჩვენებლები
 - {{HIGHLIGHT_1}}
 - {{HIGHLIGHT_2}}
 - {{HIGHLIGHT_3}}
 
-### Risks & Mitigations
+### რისკები და შერბილებები
 
-| Risk | Impact | Mitigation | Owner | Status |
-|------|--------|------------|-------|--------|
-| {{RISK_1}} | {{Impact}} | {{Mitigation}} | {{Owner}} | {{Status}} |
-| {{RISK_2}} | {{Impact}} | {{Mitigation}} | {{Owner}} | {{Status}} |
+| რისკი | ზემოქმედება | შერბილება | მფლობელი | სტატუსი |
+|------|--------|-----------|------|-------|
+| {{RISK_1}} | {{ზემოქმედება}} | {{შერბილება}} | {{მფლობელი}} | {{სტატუსი}} |
+| {{RISK_2}} | {{ზემოქმედება}} | {{შერბილება}} | {{მფლობელი}} | {{სტატუსი}} |
 
-## Metrics Overview
+## მეტრიკის მიმოხილვა
 
-All metrics originate from `ministry_transparency_builder` (Norito bundle) after the DP sanitizer runs. Attach corresponding CSV slices referenced below.
+ყველა მეტრიკა წარმოიქმნება `ministry_transparency_builder`-დან (Norito პაკეტიდან) DP სადეზინფექციო გაშვების შემდეგ. მიამაგრეთ შესაბამისი CSV ფრაგმენტები, რომლებიც მითითებულია ქვემოთ.
 
-### AI Moderation Accuracy
+### AI მოდერაციის სიზუსტე
 
-| Model Profile | Region | FP Rate (Target) | FN Rate (Target) | Drift vs Calibration | Sample Size | Notes |
-|---------------|--------|------------------|------------------|----------------------|-------------|-------|
-| {{profile}} | {{region}} | {{fp_rate}} ({{fp_target}}) | {{fn_rate}} ({{fn_target}}) | {{drift}} | {{samples}} | {{notes}} |
+| მოდელის პროფილი | რეგიონი | FP მაჩვენებელი (სამიზნე) | FN მაჩვენებელი (სამიზნე) | დრიფტი vs კალიბრაცია | ნიმუშის ზომა | შენიშვნები |
+|------------------------------------------------------------------------------------------------------------------|
+| {{პროფილი}} | {{რეგიონი}} | {{fp_rate}} ({{fp_target}}) | {{fn_rate}} ({{fn_target}}) | {{დრიფტი}} | {{ნიმუშები}} | {{შენიშვნები}} |
 
-### Appeals & Panel Activity
+### აპელაციები და პანელის აქტივობა
 
-| Metric | Value | SLA Target | Trend vs Q-1 | Notes |
-|--------|-------|------------|--------------|-------|
-| Appeals received | {{appeals_received}} | {{sla}} | {{delta}} | {{notes}} |
-| Median resolution time | {{median_resolution}} | {{sla}} | {{delta}} | {{notes}} |
-| Reversal rate | {{reversal_rate}} | {{target}} | {{delta}} | {{notes}} |
-| Panel utilization | {{panel_utilization}} | {{target}} | {{delta}} | {{notes}} |
+| მეტრული | ღირებულება | SLA სამიზნე | ტენდენცია Vs Q-1 | შენიშვნები |
+|--------|-------|-----------|-------------|------|
+| მიღებული აპელაციები | {{აპელაციები_მიღებული}} | {{სლა}} | {{დელტა}} | {{შენიშვნები}} |
+| რეზოლუციის საშუალო დრო | {{მედიანი_რეზოლუცია}} | {{სლა}} | {{დელტა}} | {{შენიშვნები}} |
+| შებრუნების მაჩვენებელი | {{შებრუნების_სიჩქარე}} | {{სამიზნე}} | {{დელტა}} | {{შენიშვნები}} |
+| პანელის გამოყენება | {{პანელი_გამოყენება}} | {{სამიზნე}} | {{დელტა}} | {{შენიშვნები}} |
 
 ### Denylist & Emergency Canon
 
-| Metric | Count | DP Noise (ε) | Emergency Flags | TTL Compliance | Notes |
-|--------|-------|--------------|-----------------|----------------|-------|
-| Hash additions | {{additions}} | {{epsilon_counts}} | {{flags}} | {{ttl_status}} | {{notes}} |
-| Hash removals | {{removals}} | {{epsilon_counts}} | {{flags}} | {{ttl_status}} | {{notes}} |
-| Canon invocations | {{canon_invocations}} | n/a | {{flags}} | {{ttl_status}} | {{notes}} |
+| მეტრული | რაოდენობა | DP ხმაური (ε) | გადაუდებელი დროშები | TTL შესაბამისობა | შენიშვნები |
+|--------|-------|-------------|----------------|---------------|------|
+| ჰეშის დამატებები | {{დამატებები}} | {{ეპსილონის_თვლა}} | {{დროშები}} | {{ttl_status}} | {{შენიშვნები}} |
+| ჰეშის მოცილება | {{ამოღებები}} | {{ეპსილონის_თვლა}} | {{დროშები}} | {{ttl_status}} | {{შენიშვნები}} |
+| Canon მოწვევები | {{კანონის_მოწვევები}} | n/a | {{დროშები}} | {{ttl_status}} | {{შენიშვნები}} |
 
-### Treasury Movements
+### სახაზინო მოძრაობები
 
-| Flow | Amount (MINFO) | Source Reference | Notes |
-|------|----------------|------------------|-------|
-| Appeal deposits | {{amount}} | {{tx_ref}} | {{notes}} |
-| Panel rewards | {{amount}} | {{tx_ref}} | {{notes}} |
-| Operational spend | {{amount}} | {{tx_ref}} | {{notes}} |
+| ნაკადი | თანხა (MINFO) | წყაროს მითითება | შენიშვნები |
+|------|---------------|----------------|------|
+| სააპელაციო დეპოზიტები | {{თანხა}} | {{tx_ref}} | {{შენიშვნები}} |
+| პანელის ჯილდოები | {{თანხა}} | {{tx_ref}} | {{შენიშვნები}} |
+| საოპერაციო ხარჯი | {{თანხა}} | {{tx_ref}} | {{შენიშვნები}} |
 
-### Volunteer & Outreach Signals
+### მოხალისეობის და გაცნობის სიგნალები
 
-| Metric | Value | Target | Notes |
+| მეტრული | ღირებულება | სამიზნე | შენიშვნები |
 |--------|-------|--------|-------|
-| Volunteer briefs published | {{value}} | {{target}} | {{notes}} |
-| Languages covered | {{value}} | {{target}} | {{notes}} |
-| Governance workshops hosted | {{value}} | {{target}} | {{notes}} |
+| მოხალისეთა ბრიფინგი გამოქვეყნდა | {{მნიშვნელობა}} | {{სამიზნე}} | {{შენიშვნები}} |
+| დაფარული ენები | {{მნიშვნელობა}} | {{სამიზნე}} | {{შენიშვნები}} |
+| მმართველობის სემინარები გაიმართა | {{მნიშვნელობა}} | {{სამიზნე}} | {{შენიშვნები}} |
 
-## Differential Privacy & Sanitization
+## დიფერენციალური კონფიდენციალურობა და გაწმენდა
 
-Summarise the sanitizer run and include the RNG commitment.
+შეაჯამეთ სადეზინფექციო საშუალებების მოქმედება და შეიტანეთ RNG ვალდებულება.
 
-- Sanitizer job: `{{CI_JOB_URL}}`
-- DP parameters: ε = {{epsilon_total}}, δ = {{delta_total}}
-- RNG commitment: `{{blake3_seed_commitment}}`
-- Buckets suppressed: {{suppressed_buckets}}
-- QA reviewer: {{reviewer}}
+- სადეზინფექციო სამუშაო: `{{CI_JOB_URL}}`
+- DP პარამეტრები: ε={{epsilon_total}}, δ={{delta_total}}
+- RNG ვალდებულება: `{{blake3_seed_commitment}}`
+- თაიგულები ჩახშობილია: {{suppressed_buckets}}
+- QA მიმომხილველი: {{ მიმომხილველი}}
 
-Attach `artifacts/ministry/transparency/{{Quarter}}/dp_report.json` and note any manual interventions.
+მიამაგრეთ `artifacts/ministry/transparency/{{Quarter}}/dp_report.json` და გაითვალისწინეთ ნებისმიერი ხელით ჩარევა.## მონაცემთა დანართები
 
-## Data Attachments
+| არტეფაქტი | ბილიკი | SHA-256 | აიტვირთა SoraFS-ზე? | შენიშვნები |
+|----------|------|--------|-------------------|-------|
+| რეზიუმე PDF | `artifacts/ministry/transparency/{{Quarter}}/summary.pdf` | {{ჰაში}} | {{დიახ/არა}} | {{შენიშვნები}} |
+| Norito მონაცემთა დანართი | `artifacts/ministry/transparency/{{Quarter}}/data/appendix.norito` | {{ჰაში}} | {{დიახ/არა}} | {{შენიშვნები}} |
+| Metrics CSV ნაკრები | `artifacts/ministry/transparency/{{Quarter}}/data/csv/` | {{ჰაში}} | {{დიახ/არა}} | {{შენიშვნები}} |
+| Grafana ექსპორტი | `dashboards/grafana/ministry_transparency_overview.json` | {{ჰაში}} | {{დიახ/არა}} | {{შენიშვნები}} |
+| გაფრთხილების წესები | `dashboards/alerts/ministry_transparency_rules.yml` | {{ჰაში}} | {{დიახ/არა}} | {{შენიშვნები}} |
+| წარმოშობის მანიფესტი | `artifacts/ministry/transparency/{{Quarter}}/manifest.json` | {{ჰაში}} | {{დიახ/არა}} | {{შენიშვნები}} |
+| მანიფესტი ხელმოწერა | `artifacts/ministry/transparency/{{Quarter}}/manifest.json.sig` | {{ჰაში}} | {{დიახ/არა}} | {{შენიშვნები}} |
 
-| Artefact | Path | SHA-256 | Uploaded to SoraFS? | Notes |
-|----------|------|---------|---------------------|-------|
-| Summary PDF | `artifacts/ministry/transparency/{{Quarter}}/summary.pdf` | {{hash}} | {{Yes/No}} | {{notes}} |
-| Norito data appendix | `artifacts/ministry/transparency/{{Quarter}}/data/appendix.norito` | {{hash}} | {{Yes/No}} | {{notes}} |
-| Metrics CSV bundle | `artifacts/ministry/transparency/{{Quarter}}/data/csv/` | {{hash}} | {{Yes/No}} | {{notes}} |
-| Grafana export | `dashboards/grafana/ministry_transparency_overview.json` | {{hash}} | {{Yes/No}} | {{notes}} |
-| Alert rules | `dashboards/alerts/ministry_transparency_rules.yml` | {{hash}} | {{Yes/No}} | {{notes}} |
-| Provenance manifest | `artifacts/ministry/transparency/{{Quarter}}/manifest.json` | {{hash}} | {{Yes/No}} | {{notes}} |
-| Manifest signature | `artifacts/ministry/transparency/{{Quarter}}/manifest.json.sig` | {{hash}} | {{Yes/No}} | {{notes}} |
+## პუბლიკაციის მეტამონაცემები
 
-## Publication Metadata
-
-| Field | Value |
+| ველი | ღირებულება |
 |-------|-------|
-| Release quarter | {{Quarter}} |
-| Release timestamp (UTC) | {{timestamp}} |
+| გამოშვების კვარტალი | {{კვარტალი}} |
+| გამოშვების დროის ანაბეჭდი (UTC) | {{დროის შტამპი}} |
 | SoraFS CID | `{{cid}}` |
-| Governance vote ID | {{vote_id}} |
-| Manifest digest (`blake2b`) | `{{manifest_digest}}` |
+| მმართველობის ხმის ID | {{vote_id}} |
+| მანიფესტი დაიჯესტი (`blake2b`) | `{{manifest_digest}}` |
 | Git commit / tag | `{{git_rev}}` |
-| Release owner | {{owner}} |
+| მფლობელის გათავისუფლება | {{მფლობელი}} |
 
-## Approvals
+## დამტკიცებები
 
-| Role | Name | Decision | Timestamp | Notes |
-|------|------|----------|-----------|-------|
-| Ministry Observability TL | {{name}} | ✅/⚠️ | {{timestamp}} | {{notes}} |
-| Governance Council Liaison | {{name}} | ✅/⚠️ | {{timestamp}} | {{notes}} |
-| Docs/Comms Lead | {{name}} | ✅/⚠️ | {{timestamp}} | {{notes}} |
+| როლი | სახელი | გადაწყვეტილება | დროის ანაბეჭდი | შენიშვნები |
+|------|------|----------|----------|-------|
+| სამინისტროს დაკვირვებადობა TL | {{სახელი}} | ✅/⚠️ | {{დროის შტამპი}} | {{შენიშვნები}} |
+| მმართველობის საბჭოს მეკავშირე | {{სახელი}} | ✅/⚠️ | {{დროის შტამპი}} | {{შენიშვნები}} |
+| Docs/Comms წამყვანი | {{სახელი}} | ✅/⚠️ | {{დროის შტამპი}} | {{შენიშვნები}} |
 
-## Changelog & Follow-Ups
+## ცვლილებები და შემდგომი დაკვირვებები
 
 - {{CHANGELOG_ITEM_1}}
 - {{CHANGELOG_ITEM_2}}
 
-### Open Action Items
+### გახსენით მოქმედების ელემენტები
 
-| Item | Owner | Due | Status | Notes |
+| ნივთი | მფლობელი | ვადა | სტატუსი | შენიშვნები |
 |------|-------|-----|--------|-------|
-| {{Action}} | {{Owner}} | {{Due}} | {{Status}} | {{Notes}} |
+| {{მოქმედება}} | {{მფლობელი}} | {{დადებული}} | {{სტატუსი}} | {{შენიშვნები}} |
 
-### Contact
+### კონტაქტი
 
-- Primary contact: {{contact_name}} (`{{chat_handle}}`)
-- Escalation path: {{escalation_details}}
-- Distribution list: {{mailing_list}}
+- ძირითადი კონტაქტი: {{contact_name}} (`{{chat_handle}}`)
+- ესკალაციის გზა: {{escalation_details}}
+- სადისტრიბუციო სია: {{mailing_list}}
 
-_Template version: 2026-03-25. Update the revision date when making structural changes._
+_ თარგის ვერსია: 2026-03-25. განაახლეთ შესწორების თარიღი სტრუქტურული ცვლილებების განხორციელებისას._

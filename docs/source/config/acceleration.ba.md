@@ -7,39 +7,40 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 03275f401b49b62d8ccb361358235e5964b1ca791a68dcada0fd763bb6a4941b
 source_last_modified: "2026-01-31T19:25:45.072378+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-## Acceleration & Norito Heuristics Reference
+## Тиҙләтеү һәм Norito Эвристика һылтанмаһы
 
-The `[accel]` block in `iroha_config` threads through
-`crates/irohad/src/main.rs:1895` into `ivm::set_acceleration_config`. Every host
-applies the same knobs before instantiating the VM, so operators can deterministically
-pick which GPU backends are allowed while keeping scalar/SIMD fallbacks available.
-Swift, Android, and Python bindings load the same manifest via the bridge layer, so
-documenting these defaults unblocks WP6-C in the hardware-acceleration backlog.
+`[accel]` блок `iroha_config` ептәре аша .
+`crates/irohad/src/main.rs:1895` `ivm::set_acceleration_config`-ҡа. Һәр алып барыусы
+VM-ды экземплярь алдынан шул уҡ ручкаларҙы ҡуллана, шуға күрә операторҙар детерминистик рәүештә .
+ҡабул итеү, ниндәй GPU бекэндтар рөхсәт ителә, шул уҡ ваҡытта һаҡлау скаляр/SIMD fallbacks доступный.
+Свифт, Android һәм Python бәйләүҙәре күпер ҡатламы аша бер үк манифест йөкләй, шулай уҡ
+был ғәҙәттәгесә документлаштырыу WP6-C блокировканы асыу аппарат-тиҙләтеү артта ҡалған.
 
-### `accel` (hardware acceleration)
+### `accel` (аппарат тиҙләнеше)
 
-The table below mirrors `docs/source/references/peer.template.toml` and the
-`iroha_config::parameters::user::Acceleration` definition, exposing the environment
-variable that overrides each key.
+Түбәндәге таблицала `docs/source/references/peer.template.toml` һәм
+`iroha_config::parameters::user::Acceleration` билдәләмәһе, тирә-яҡ мөхитте фашлау
+үҙгәртеүсән, ул һәр асҡысты өҫтөн ҡуя.
 
-| Key | Env var | Default | Description |
-|-----|---------|---------|-------------|
-| `enable_simd` | `ACCEL_ENABLE_SIMD` | `true` | Enables SIMD/NEON/AVX execution. When `false`, the VM forces scalar backends for vector ops and Merkle hashing to ease deterministic parity captures. |
-| `enable_cuda` | `ACCEL_ENABLE_CUDA` | `true` | Enables the CUDA backend when it is compiled in and the runtime passes all golden-vector checks. |
-| `enable_metal` | `ACCEL_ENABLE_METAL` | `true` | Enables the Metal backend on macOS builds. Even when true, Metal self-tests can still disable the backend at runtime if parity mismatches occur. |
-| `max_gpus` | `ACCEL_MAX_GPUS` | `0` (auto) | Caps how many physical GPUs the runtime initialises. `0` means “match hardware fan-out” and is clamped by `GpuManager`. |
-| `merkle_min_leaves_gpu` | `ACCEL_MERKLE_MIN_LEAVES_GPU` | `8192` | Minimum leaves required before Merkle leaf hashing offloads to GPU. Values below this threshold keep hashing on the CPU to avoid PCIe overhead (`crates/ivm/src/byte_merkle_tree.rs:49`). |
-| `merkle_min_leaves_metal` | `ACCEL_MERKLE_MIN_LEAVES_METAL` | `0` (inherit global) | Metal-specific override for the GPU threshold. When `0`, Metal inherits `merkle_min_leaves_gpu`. |
-| `merkle_min_leaves_cuda` | `ACCEL_MERKLE_MIN_LEAVES_CUDA` | `0` (inherit global) | CUDA-specific override for the GPU threshold. When `0`, CUDA inherits `merkle_min_leaves_gpu`. |
-| `prefer_cpu_sha2_max_leaves_aarch64` | `ACCEL_PREFER_CPU_SHA2_MAX_AARCH64` | `0` (32 768 internally) | Caps the tree size where ARMv8 SHA-2 instructions should win over GPU hashing. `0` keeps the compiled-in default of `32_768` leaves (`crates/ivm/src/byte_merkle_tree.rs:59`). |
-| `prefer_cpu_sha2_max_leaves_x86` | `ACCEL_PREFER_CPU_SHA2_MAX_X86` | `0` (32 768 internally) | Same as above but for x86/x86_64 hosts using SHA-NI (`crates/ivm/src/byte_merkle_tree.rs:63`). |
+| Асҡыс | Env var | Ғәҙәттәгесә | Тасуирлама |
+|----|---------|----------|------------||
+| `enable_simd` | `ACCEL_ENABLE_SIMD` | `true` | SIMD/NEON/AVX башҡарыуын индереү. Ҡасан `false`, виртуаль көстәр скаляр бэкэндтар өсөн вектор опс һәм Меркл хеширование еңеләйтеү өсөн детерминистик паритет тотоу. |
+| `enable_cuda` | `ACCEL_ENABLE_CUDA` | `true` | CUDA бекэнд рөхсәт ҡасан ул төҙөлә һәм йөрөү ваҡыты бөтә алтын-вектор тикшерелгән үтә. |
+| `enable_metal` | `ACCEL_ENABLE_METAL` | `true` | Металл бэкэнд macOS төҙөүҙәр өҫтөндә эшләй. Хатта ҡасан дөрөҫ, металл үҙ-үҙеңде һынауҙар һаман да өҙөп була бэкэнд йүгерә ваҡытында, әгәр паритет тап килмәүҙәре осрай. |
+| `max_gpus` | `ACCEL_MAX_GPUS` | `0` (авто) | Ҡапҡалар нисә физик GPUs эшләү ваҡыты инициализацияһы. `0` тигәнде аңлата “матч аппарат фан-аут” һәм `GpuManager` менән ҡыҫтырылған. |
+| `merkle_min_leaves_gpu` | `ACCEL_MERKLE_MIN_LEAVES_GPU` | `8192` | Минималь япраҡтар кәрәк, әлегә Меркл япраҡлы хеширование йөкләүҙәр GPU. Ҡиммәттәр аҫтында был сикте һаҡлау хеширование процессорҙа ҡотолоу өсөн PCIe накладной (`crates/ivm/src/byte_merkle_tree.rs:49`). |
+| `merkle_min_leaves_metal` | `ACCEL_MERKLE_MIN_LEAVES_METAL` | `0` (ҡаралған глобаль) | Металл-специфик өҫтөнлөк өсөн GPU сиге. Ҡасан `0`, Металл мираҫы `merkle_min_leaves_gpu`. |
+| `merkle_min_leaves_cuda` | `ACCEL_MERKLE_MIN_LEAVES_CUDA` | `0` (ҡаршылыҡлы глобаль) | CUDA-специфик өҫтөнлөк өсөн GPU сиге. Ҡасан `0`, CUDA мираҫы `merkle_min_leaves_gpu`. |
+| `prefer_cpu_sha2_max_leaves_aarch64` | `ACCEL_PREFER_CPU_SHA2_MAX_AARCH64` | `0` (32768 эске) | Ҡапҡас ағас ҙурлығы, унда ARMv8 SHA-2 инструкциялары еңергә тейеш GPU хешинг. `0` `32_768` япраҡтары (`crates/ivm/src/byte_merkle_tree.rs:59`) компиляцияланған ғәҙәттәгесә һаҡлай. |
+| `prefer_cpu_sha2_max_leaves_x86` | `ACCEL_PREFER_CPU_SHA2_MAX_X86` | Norito (32768 эске) | Шул уҡ өҫтәге кеүек, әммә x86/x86_64 хост өсөн SHA-NI ҡулланып (`crates/ivm/src/byte_merkle_tree.rs:63`). |
 
-`enable_simd` also controls RS16 erasure coding (Torii DA ingest + tooling). Disable it to
-force scalar parity generation while keeping outputs deterministic across hardware.
+`enable_simd` шулай уҡ RS16 юйыу кодлауын контролдә тота (Torii DA ингест + инструменттар). Уны өҙөү өсөн .
+көс скаляр паритет генерацияһы, шул уҡ ваҡытта аппарат буйынса детерминистик сығыштарҙы һаҡлау.
 
-Example configuration:
+Миҫал конфигурацияһы:
 
 ```toml
 [accel]
@@ -53,17 +54,15 @@ merkle_min_leaves_cuda = 16384
 prefer_cpu_sha2_max_leaves_aarch64 = 65536
 ```
 
-Zero values for the last five keys mean “keep the compiled default”. Hosts must not
-set conflicting overrides (e.g., disabling CUDA while forcing CUDA-only thresholds),
-otherwise the request is ignored and the backend continues to follow the global policy.
+Һуңғы биш асҡыс өсөн нуль ҡиммәттәре “компиляцияланған ғәҙәттән тыш хәлде һаҡлау” тигәнде аңлата. Хужалар тейеш түгел
+ҡапма-ҡаршылыҡлы өҫтөнлөктәр ҡуйыла (мәҫәлән, CUDA-тик сиктәр мәжбүр иткәндә CUDA инвалидлыҡ итә, ә CUDA,
+юғиһә үтенес иғтибарға алынмай һәм бэкэнд глобаль сәйәсәтте үтәүен дауам итә.
 
-### Inspecting runtime state
-
-Run `cargo xtask acceleration-state [--format table|json]` to snapshot the applied
-configuration alongside the Metal/CUDA runtime health bits. The command pulls the
-current `ivm::acceleration_config`, parity status, and sticky error strings (if a
-backend was disabled) so operations can feed the result directly into parity
-dashboards or incident reviews.
+### Йөрөү ваҡыты буйынса дәүләтЙүгерергә `cargo xtask acceleration-state [--format table|json]` снимок өсөн ғариза
+конфигурация менән бер рәттән Металл/CUDA эшләү ваҡыты һаулыҡ биттары. Команда тарта
+Хәҙерге `ivm::acceleration_config`, паритет статусы, һәм йәбешкәк хата телмәрҙәре (әгәр а
+бекэнд инвалид булды) шуға күрә операциялар туранан-тура паритетҡа һөҙөмтәне туҡландыра ала
+приборҙар панелдәре йәки инцидент тикшерелгән.
 
 ```
 $ cargo xtask acceleration-state
@@ -85,25 +84,25 @@ Backend Supported  Configured  Available  ParityOK  Last error
 SIMD    yes        yes         yes        yes       -
 Metal   yes        yes         yes        yes       -
 CUDA    no         no          no         no        policy disabled (no CUDA libraries present)
-```
+``` X
 
-Use `--format json` when the snapshot needs to be ingested by automation (the JSON
-contains the same fields shown in the table).
+Ҡулланыу `--format json` ҡасан снимок кәрәк автоматлаштырыу аша ингестировать (JSON
+таблицала күрһәтелгән шул уҡ ҡырҙар бар).
 
-`acceleration_runtime_errors()` now calls out why SIMD fell back to scalar:
-`disabled by config`, `forced scalar override`, `simd unsupported on hardware`, or
-`simd unavailable at runtime` when detection succeeds but execution still runs
-without vectors. Clearing the override or re-enabling the policy drops the message
-on hosts that support SIMD.
+`acceleration_runtime_errors()` хәҙер SIMD ни өсөн скалярға кире төшкәнен саҡыра:
+`disabled by config`, `forced scalar override`, `simd unsupported on hardware`, йәки
+`simd unavailable at runtime` асыҡланғанда уңышҡа өлгәшкәндә, әммә башҡарыу һаман да эшләй
+векторҙарһыҙ. Ҡабул итеү йәки яңынан мөмкинлек бирә сәйәсәте тураһында хәбәрҙе төшөрә
+SIMD-ны яҡлаған алып барыусыларҙа.
 
-### Parity checks
+### Паритет чектары
 
-Flip `AccelerationConfig` between CPU-only and accel-on to prove deterministic results.
-The `poseidon_instructions_match_across_acceleration_configs` regression runs the
-Poseidon2/6 opcodes twice—first with `enable_cuda`/`enable_metal` set to `false`, then
-with both enabled—and asserts identical outputs plus CUDA parity when GPUs are present.【crates/ivm/tests/crypto.rs:100】
-Capture `acceleration_runtime_status()` alongside the run to record whether backends
-were configured/available in lab logs.
+Flip `AccelerationConfig` процессор араһында-тик һәм тиҙ-өҫтөндә детерминистик һөҙөмтәләрҙе иҫбатлау өсөн.
+`poseidon_instructions_match_across_acceleration_configs` регрессия йүгерә
+Poseidon2/6 опкодтар ике тапҡыр — беренсе тапҡыр `enable_cuda`/`enable_metal` X-ға `false` тиклем ҡуйылған, һуңынан
+100】
+Каптыр `acceleration_runtime_status()` йүгерә менән бер рәттән, фондтармы, юҡмы икәнлеген теркәү өсөн
+лаборатория журналдарында конфигурацияланған/доступный.
 
 ```rust
 let baseline = ivm::acceleration_config();
@@ -126,90 +125,106 @@ SIMD-enabled baseline on the same host while surfacing the `simd` status/error
 fields via `acceleration_runtime_status`/`acceleration_runtime_errors`.【crates/ivm/tests/acceleration_simd.rs:9】
 ```
 
-### GPU defaults & heuristics
+### GPU ғәҙәттәгесә & эвристика
 
-`MerkleTree` GPU offload kicks in at `8192` leaves by default, and the CPU SHA-2
-preference thresholds stay at `32_768` leaves per architecture. When neither CUDA nor
-Metal is available or has been disabled by health checks, the VM automatically falls
-back to SIMD/scalar hashing and the above numbers do not affect determinism.
+Norito GPU offload of foods `8192` ҡалдыра ғәҙәттәгесә, һәм процессор SHA-2.
+өҫтөнлөк сиктәре `32_768` япраҡтарында архитектурала ҡала. Ҡасан да CUDA ла, ни.
+Металл бар йәки һаулыҡ һаҡлау тикшерелгән өҙөлгән, ВМ автоматик рәүештә төшә .
+кире SIMD/скаляр хеширование һәм өҫтәге һандар детерминизмға йоғонто яһамай.
 
-`max_gpus` clamps the pool size fed into `GpuManager`. Setting `max_gpus = 1` on
-multi-GPU hosts keeps telemetry simple while still allowing acceleration. Operators can
-use this switch to reserve the remaining devices for FASTPQ or CUDA Poseidon jobs.
+`max_gpus` зажимдар бассейн күләме `GpuManager` XX. `max_gpus = 1` 1990 йылда ҡуйыу.
+күп GPU хужалары телеметрия ябай тота, шул уҡ ваҡытта тиҙләтеү мөмкинлеген бирә. Операторҙар ала
+был коммутатор FASTPQ йәки CUDA Poseidon эштәре өсөн ҡалған ҡоролмаларын һаҡлау өсөн ҡулланыу.
 
-### Next acceleration targets & budgets
+### Киләһе тиҙләтеү маҡсаттары & бюджеттар
 
-The latest FastPQ Metal trace (`fastpq_metal_bench_20k_latest.json`, 32 K rows × 16
-columns, 5 iters) shows Poseidon column hashing dominating ZK workloads:
+Һуңғы FastPQ металл эҙ (`fastpq_metal_bench_20k_latest.json`, 32K рәттәр × 16
+бағана, 5 iters) күрһәтә Посейдон бағана хеширование өҫтөнлөк ZK эш йөкләмәһе:
 
-- `poseidon_hash_columns`: CPU mean **3.64 s** vs. GPU mean **3.55 s** (1.03×).
-- `lde`: CPU mean **1.75 s** vs. GPU mean **1.57 s** (1.12×).
+- `poseidon_hash_columns`: процессор тигәнде аңлата **3.64s** ҡаршы GPU тигәнде аңлата **3.55s** (1.03×).
+- `lde`: процессор тигәнде аңлата **1.75s** ҡаршы GPU тигәнде аңлата **1.57s** (1.12×).
 
-IVM/Crypto will target these two kernels in the next accel sweep. Baseline budgets:
+IVM/Крипто был ике ядроға сираттағы аккалет һыпыртыуҙа маҡсатлы буласаҡ. База бюджеттары:
 
-- Keep scalar/SIMD parity at or below the CPU means above, and capture
-  `acceleration_runtime_status()` alongside each run so Metal/CUDA availability is
-  logged with the budget numbers.
-- Target ≥1.3× speedup for `poseidon_hash_columns` and ≥1.2× for `lde` once tuned Metal
-  and CUDA kernels land, without changing outputs or telemetry labels.
+- скаляр һаҡлау/SIMD паритетында йәки аҫтында процессор өҫтә тигәнде аңлата, һәм тотоу
+  `acceleration_runtime_status()` һәр йүгерә менән бергә шулай Металл/CUDA доступность
+  бюджет һандары менән логин.
+- ≥1,3× тиҙлекте `poseidon_hash_columns` өсөн маҡсатлы һәм ≥1,2× `lde` өсөн бер тапҡыр Metal Metal
+  һәм CUDA ядролары ер, етештереү йәки телеметрия ярлыҡтары үҙгәрмәйенсә.
 
-Attach the JSON trace and `cargo xtask acceleration-state --format json` snapshot to
-future lab runs so CI/regressions can assert both the budgets and backend health while
-comparing CPU-only vs. accel-on runs.
+Беркетергә JSON эҙ һәм `cargo xtask acceleration-state --format json` снимок .
+киләсәк лаборатория эшләй, шулай CI/регрессиялар раҫлай ала, бюджеттар һәм бэкэнд һаулыҡ, шул уҡ ваҡытта .
+сағыштырыу процессоры-тик ҡаршы.
 
-### Norito heuristics (compile-time defaults)
+### Norito эвристикаһы (компиляция-ваҡыт ғәҙәттәгесә)Norito’s макеты һәм ҡыҫыу эвристикаһы йәшәй `crates/norito/src/core/heuristics.rs`
+һәм һәр бинарға төҙөлә. Улар йөрөү ваҡытында конфигурациялана, әммә фашлау
+индереүҙәр SDK һәм оператор командалары ярҙам итә, нисек Norito үҙен бер тапҡыр тотасаҡ, тип күҙаллай GPU
+ҡыҫыу ядролары эшләй.
+Эш урыны хәҙер Norito төҙөй, `gpu-compression` функцияһы менән ғәҙәттәгесә эшләй,
+тимәк, GPU zstd бэкэндтар төҙөлә; эшләү ваҡыты һаман да аппаратҡа бәйле,
+ярҙамсы китапханаһы (`libgpuzstd_*`/`gpuzstd_cuda.dll`), һәм `allow_gpu_compression` XX
+конфиг флагы. `cargo build -p gpuzstd_metal --release` һәм 1990 йылдарҙа Металл ярҙамсыһын төҙөү һәм
+урыны `libgpuzstd_metal.dylib` тейәгес юлында. Хәҙерге Металл ярҙамсыһы ГПУ-ны етәкләй
+матч-табыу/эҙмә-эҙлеклелек генерациялау һәм знстд кадрын ҡуллана һәм детерминистик zstd .
+кодер (Хаффман/ФСЭ + кадр йыйыу) хужала; декод йәшниктәге кадрҙы ҡуллана
+декодер менән процессор zstd fallback өсөн ярҙам ителмәгән рамкалар тиклем GPU блок декод сымлы.
 
-Norito’s layout and compression heuristics live in `crates/norito/src/core/heuristics.rs`
-and are compiled into every binary. They are not configurable at runtime, but exposing
-the inputs helps SDK and operator teams predict how Norito will behave once GPU
-compression kernels are enabled.
-The workspace now builds Norito with the `gpu-compression` feature enabled by default,
-so GPU zstd backends are compiled in; runtime availability still depends on hardware,
-the helper library (`libgpuzstd_*`/`gpuzstd_cuda.dll`), and the `allow_gpu_compression`
-config flag. Build the Metal helper with `cargo build -p gpuzstd_metal --release` and
-place `libgpuzstd_metal.dylib` on the loader path. The current Metal helper runs GPU
-match-finding/sequence generation and uses the in-crate deterministic zstd frame
-encoder (Huffman/FSE + frame assembly) on the host; decode uses the in-crate frame
-decoder with a CPU zstd fallback for unsupported frames until GPU block decode is wired in.
+| Ялан | Ғәҙәттәгесә | Маҡсат |
+|-------|---------|----------|
+| `min_compress_bytes_cpu` | `256` байт | Был түбәндә, файҙалы йөкләмәләр skip zstd тулыһынса ҡотолоу өсөн накладной. |
+| `min_compress_bytes_gpu` | Norito байт (1МиБ) | Түләүҙәр йәки өҫтөндә был сиккә күсеү GPU zstd ҡасан `norito::core::hw::has_gpu_compression()` дөрөҫ. |
+| `zstd_level_small` / `zstd_level_large` | ```
+$ cargo xtask acceleration-state
+Acceleration Configuration
+--------------------------
+enable_simd: yes
+enable_metal: yes
+enable_cuda: no
+max_gpus: 1
+merkle_min_leaves_gpu: 8192
+merkle_min_leaves_metal: 8192
+merkle_min_leaves_cuda: auto
+prefer_cpu_sha2_max_leaves_aarch64: auto
+prefer_cpu_sha2_max_leaves_x86: auto
 
-| Field | Default | Purpose |
-|-------|---------|---------|
-| `min_compress_bytes_cpu` | `256` bytes | Below this, payloads skip zstd entirely to avoid overhead. |
-| `min_compress_bytes_gpu` | `1_048_576` bytes (1 MiB) | Payloads at or above this limit switch to GPU zstd when `norito::core::hw::has_gpu_compression()` is true. |
-| `zstd_level_small` / `zstd_level_large` | `1` / `3` | CPU compression levels for <32 KiB and ≥32 KiB payloads respectively. |
-| `zstd_level_gpu` | `1` | Conservative GPU level to keep latency consistent while filling command queues. |
-| `large_threshold` | `32_768` bytes | Size boundary between the “small” and “large” CPU zstd levels. |
-| `aos_ncb_small_n` | `64` rows | Below this row count adaptive encoders probe both AoS and NCB layouts to pick the smallest payload. |
-| `combo_no_delta_small_n_if_empty` | `2` rows | Prevents enabling u32/id delta encodings when 1–2 rows contain empty cells. |
-| `combo_id_delta_min_rows` / `combo_u32_delta_min_rows` | `2` | Deltas kick in only once there are at least two rows. |
-| `combo_enable_id_delta` / `combo_enable_u32_delta_names` / `combo_enable_u32_delta_bytes` | `true` | All delta transforms are enabled by default for well-behaved inputs. |
-| `combo_enable_name_dict` | `true` | Allows per-column dictionaries when hit ratios justify the memory overhead. |
-| `combo_dict_ratio_max` | `0.40` | Disable dictionaries when more than 40 % of rows are distinct. |
-| `combo_dict_avg_len_min` | `8.0` | Require average string length ≥8 before building dictionaries (short aliases stay inline). |
-| `combo_dict_max_entries` | `1024` | Hard cap on dictionary entries to guarantee bounded memory usage. |
+Backend Status
+--------------
+Backend Supported  Configured  Available  ParityOK  Last error
+SIMD    yes        yes         yes        yes       -
+Metal   yes        yes         yes        yes       -
+CUDA    no         no          no         no        policy disabled (no CUDA libraries present)
+``` X / `3` | Процессор ҡыҫыу кимәле өсөн <32KiB һәм ≥32KiB файҙалы йөкләмәләр ярашлы. |
+| `zstd_level_gpu` | `1` | Консерватив GPU кимәлендә латентлыҡ эҙмә-эҙлекле һаҡлау өсөн, шул уҡ ваҡытта команда сираттарын тултырыу. |
+| `large_threshold` | `32_768` байттар | Ҙурлыҡ сиге араһында “бәләкәй” һәм “ҙур” процессор zstd кимәлдәре. |
+| `aos_ncb_small_n` | `64` рәттәре | Был рәт адаптив кодерҙары аҫтында зонд һәм AoS һәм NCB макеттары иң бәләкәй файҙалы йөк йыйыу өсөн. |
+| `combo_no_delta_small_n_if_empty` | `2` рәттәре | 1–2 рәт булғанда буш күҙәнәктәр булғанда u32/ид дельта кодлауын мөмкинлек бирә. |
+| `combo_id_delta_min_rows` / `combo_u32_delta_min_rows` | `2` | Дельтас бер тапҡыр ғына тибеп, кәмендә ике рәт бар. |
+| `combo_enable_id_delta` / `combo_enable_u32_delta_names` / `combo_enable_u32_delta_bytes` | `true` | Бөтә дельта трансформациялары ла тәртипле индереүҙәр өсөн ғәҙәттәгесә эшләй. |
+| `combo_enable_name_dict` | `true` | Хит нисбәттәре хәтер накладнойын аҡлағанда, бағанаға һүҙлектәр рөхсәт итә. |
+| `combo_dict_ratio_max` | `0.40` | 40%-тан ашыу рәт айырым булғанда һүҙлектәр өҙөлгән. |
+| `combo_dict_avg_len_min` | `8.0` | Уртаса еп оҙонлоғо ≥8 һүҙлектәр төҙөү алдынан талап итә (ҡыҫҡа псевдонимдар рәттә ҡала). |
+| `combo_dict_max_entries` | `1024` | Ҡаты ҡапҡас һүҙлек яҙмалары буйынса гарантиялау өсөн сикләнгән хәтер ҡулланыу. |
 
-These heuristics keep GPU-enabled hosts aligned with CPU-only peers: the selector
-never makes a decision that would change the wire format, and the thresholds are fixed
-per release. When profiling uncovers better break-even points, Norito updates the
-canonical `Heuristics::canonical` implementation and `docs/source/benchmarks.md` plus
-`status.md` record the change alongside the versioned evidence.
+Был эвристика GPU-мөмкинлекле хосттарҙы процессор менән тура килтереп, тик тиҫтерҙәре: селектор .
+бер ҡасан да ҡарар ҡабул итеү, тип үҙгәртер ине сым форматында, һәм сиктәре нығытылған
+бер релиз. Ҡасан профилләштереү яҡшыраҡ өҙөлгән мәрәй асып, Norito яңыртыу .
+канон `Heuristics::canonical` тормошҡа ашырыу һәм `docs/source/benchmarks.md` плюс
+`status.md` версияланған дәлилдәр менән бер рәттән үҙгәреште теркәй.GPU zstd ярҙамсыһы шул уҡ `min_compress_bytes_gpu` өҙөклөктө үтәй, хатта ҡасан да булһа.
+туранан-тура шылтырата (мәҫәлән, `norito::core::gpu_zstd::encode_all` аша), шул тиклем бәләкәй
+файҙалы йөктәр һәр ваҡыт процессор юлында ҡала, ҡарамаҫтан, GPU доступность.
 
-The GPU zstd helper enforces the same `min_compress_bytes_gpu` cutoff even when
-called directly (for example via `norito::core::gpu_zstd::encode_all`), so small
-payloads always stay on the CPU path regardless of GPU availability.
+### Проблема һәм паритет тикшерелгән исемлеге
 
-### Troubleshooting and parity checklist
-
-- Snapshot runtime state with `cargo xtask acceleration-state --format json` and keep
-  the output alongside any failing logs; the report shows configured/available backends
-  plus parity/last-error strings.
-- Re-run the accel parity regression locally to rule out drift:
+- `cargo xtask acceleration-state --format json` менән Snapshot эшләү ваҡыты дәүләт
+  теләһә ниндәй етешһеҙлектәр журналдар менән бер рәттән сығыш; отчет күрһәтә конфигурацияланған/доступный бэкэндтар
+  плюс паритет/һуңғы хаталы ҡылдар.
+- Ҡабаттан йүгерергә локаль паритет регрессияһы локаль дрейф инҡар итеү өсөн:
   `cargo test -p ivm poseidon_instructions_match_across_acceleration_configs -- --nocapture`
-  (runs CPU-only then accel-on). Record `acceleration_runtime_status()` for the run.
-- If a backend fails self-tests, keep the node online in CPU-only mode (`enable_metal =
-  false`, `enable_cuda = false`) and open an incident with the captured parity output
-  instead of forcing the backend on. Results must remain deterministic across modes.
-- **CUDA parity smoke (lab NV hardware):** Run
+  (процессор йүгерә-тик шул саҡта accel-on өҫтөндә). Яҙма `acceleration_runtime_status()` өсөн йүгерергә.
+- Әгәр ҙә бэкэнд үҙ-үҙеңде тикшергәндән мәхрүм ителһә, төйөнде процессорҙы процессорҙа ғына һаҡларға (ҡуйылған_металл = enable_metal .
+  fland`, `enable_cuda = ялған`) һәм әсирлеккә алынған паритет сығышы менән инцидент асыу
+  урынына көсләп бэкэнд өҫтөндә. Һөҙөмтәләр режимдар буйынса детерминистик булып ҡалырға тейеш.
+- **CUDA паритет төтөнө (лаборатория НВ аппарат):** Йүгереп йөрөү
   `ACCEL_ENABLE_CUDA=1 cargo test -p ivm poseidon_instructions_match_across_acceleration_configs -- --nocapture`
-  on sm_8x hardware, capture `cargo xtask acceleration-state --format json`, and attach
-  the status snapshot (GPU model/driver included) to the benchmark artefacts.
+  sm_8x аппарат, тотоу `cargo xtask acceleration-state --format json`, һәм беркетергә
+  статус снимок (GPU моделе/водитель индерелгән) эталон артефакттар.

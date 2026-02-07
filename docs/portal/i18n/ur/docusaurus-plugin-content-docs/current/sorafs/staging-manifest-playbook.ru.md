@@ -4,25 +4,27 @@ direction: rtl
 source: docs/portal/docs/sorafs/staging-manifest-playbook.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: staging-manifest-playbook
-title: Плейбук манифеста для staging
-sidebar_label: Плейбук манифеста для staging
-description: Чеклист для включения профиля chunker, ратифицированного парламентом, на staging-развертываниях Torii.
+ID: اسٹیجنگ مائی فیسٹ پلے بوک
+عنوان: اسٹیجنگ کے لئے مینی فیسٹ پلے بک
+سائڈبار_لیبل: اسٹیجنگ کے لئے مینی فیسٹ پلے بک
+تفصیل: اسٹیجنگ تعیناتیوں Torii پر پارلیمنٹ سے متعلق چنکر پروفائل کو چالو کرنے کے لئے چیک لسٹ۔
 ---
 
-:::note Канонический источник
+::: نوٹ کینونیکل ماخذ
 :::
 
-## Обзор
+## جائزہ
 
-Этот плейбук описывает включение профиля chunker, ратифицированного парламентом, на staging-развертывании Torii перед продвижением изменений в прод. Предполагается, что устав управления SoraFS ратифицирован, а канонические fixtures доступны в репозитории.
+اس پلے بوک نے پروڈکشن میں تبدیلیوں کو آگے بڑھانے سے پہلے اسٹیجنگ تعیناتی Torii پر پارلیمنٹ سے متعلق چنکر پروفائل کو قابل بنانے کی وضاحت کی ہے۔ یہ فرض کیا جاتا ہے کہ گورننس چارٹر SoraFS کی توثیق کی گئی ہے اور کیننیکل فکسچر ریپوزٹری میں دستیاب ہیں۔
 
-## 1. Предварительные условия
+## 1. شرائط
 
-1. Синхронизируйте канонические fixtures и подписи:
+1. کنوینیکل فکسچر اور کیپشن کو ہم آہنگ کریں:
 
    ```bash
    cargo xtask sorafs-fetch-fixture \
@@ -31,8 +33,8 @@ description: Чеклист для включения профиля chunker, р
    ci/check_sorafs_fixtures.sh
    ```
 
-2. Подготовьте каталог admission envelopes, который Torii читает при старте (пример пути): `/var/lib/iroha/admission/sorafs`.
-3. Убедитесь, что конфиг Torii включает discovery cache и enforcement admission:
+2. داخلہ لفافے ڈائریکٹری تیار کریں ، جو Torii اسٹارٹ اپ (مثال کے طور پر راستہ) پر پڑھتا ہے: `/var/lib/iroha/admission/sorafs`۔
+3. اس بات کو یقینی بنائیں کہ Torii تشکیل میں دریافت کیشے اور نفاذ کا داخلہ شامل ہے:
 
    ```toml
    [torii.sorafs.discovery]
@@ -50,42 +52,42 @@ description: Чеклист для включения профиля chunker, р
    enforce_capabilities = true
    ```
 
-## 2. Публикация admission envelopes
+## 2۔ داخلہ لفافوں کی اشاعت
 
-1. Скопируйте утвержденные provider admission envelopes в каталог, указанный в `torii.sorafs.discovery.admission.envelopes_dir`:
+1. `torii.sorafs.discovery.admission.envelopes_dir` میں مخصوص ڈائریکٹری میں منظور شدہ فراہم کنندہ داخلہ لفافوں کاپی کریں:
 
    ```bash
    install -m 0644 fixtures/sorafs_manifest/provider_admission/*.json \
      /var/lib/iroha/admission/sorafs/
    ```
 
-2. Перезапустите Torii (или отправьте SIGHUP, если вы обернули загрузчик hot reload).
-3. Следите за логами admission:
+2. Torii کو دوبارہ شروع کریں (یا اگر آپ نے بوٹ لوڈر ہاٹ ریلوڈ لپیٹ لیا ہے تو SIGHUP بھیجیں)۔
+3. داخلے کے نوشتہ جات کی نگرانی کریں:
 
    ```bash
    torii | grep "loaded provider admission envelope"
    ```
 
-## 3. Проверка распространения discovery
+## 3. دریافت کی تقسیم کی جانچ کرنا
 
-1. Опубликуйте подписанный provider advert payload (байты Norito), сформированный вашим pipeline провайдера:
+1. اپنے فراہم کنندہ پائپ لائن کے ذریعہ تیار کردہ دستخط شدہ فراہم کنندہ کے اشتہار پے لوڈ (Norito بائٹس) کو شائع کریں:
 
    ```bash
    curl -sS -X POST --data-binary @provider_advert.to \
      http://staging-torii:8080/v1/sorafs/provider/advert
    ```
 
-2. Запросите endpoint discovery и убедитесь, что advert отображается с каноническими aliases:
+2. اختتامی نقطہ دریافت کی درخواست کریں اور یقینی بنائیں کہ اشتہار عرفی ناموں کے ساتھ دکھایا گیا ہے:
 
    ```bash
    curl -sS http://staging-torii:8080/v1/sorafs/providers | jq .
    ```
 
-   Убедитесь, что `profile_aliases` содержит `"sorafs.sf1@1.0.0"` первым элементом.
+   اس بات کو یقینی بنائیں کہ `profile_aliases` میں پہلے عنصر کے طور پر `"sorafs.sf1@1.0.0"` پر مشتمل ہے۔
 
-## 4. Проверка endpoints manifest и plan
+## 4. اختتامی مقامات کی جانچ پڑتال اور منصوبہ بندی
 
-1. Получите metadata manifest (требуется stream token, если admission enforced):
+1. میٹا ڈیٹا مینی فیسٹ حاصل کریں (اگر داخلہ نافذ کیا گیا ہو تو اسٹریم ٹوکن کی ضرورت ہے):
 
    ```bash
    sorafs-fetch \
@@ -96,25 +98,25 @@ description: Чеклист для включения профиля chunker, р
      --json-out=reports/staging_manifest.json
    ```
 
-2. Проверьте JSON-вывод и убедитесь, что:
-   - `chunk_profile_handle` равен `sorafs.sf1@1.0.0`.
-   - `manifest_digest_hex` совпадает с отчетом детерминизма.
-   - `chunk_digests_blake3` совпадают с регенерированными fixtures.
+2. JSON آؤٹ پٹ کو چیک کریں اور اس بات کو یقینی بنائیں کہ:
+   - `chunk_profile_handle` `sorafs.sf1@1.0.0` کے برابر ہے۔
+   - `manifest_digest_hex` عزم کی رپورٹ سے میل کھاتا ہے۔
+   - `chunk_digests_blake3` دوبارہ پیدا ہونے والے فکسچر سے ملتے ہیں۔
 
-## 5. Проверки телеметрии
+## 5. ٹیلی میٹری چیک
 
-- Убедитесь, что Prometheus публикует новые метрики профиля:
+- تصدیق کریں کہ Prometheus نئے پروفائل میٹرکس کو شائع کرتا ہے:
 
   ```bash
   curl -sS http://staging-torii:8080/metrics | grep torii_sorafs_chunk_range_requests_total
   ```
 
-- Дашборды должны показывать staging-провайдера под ожидаемым alias и держать счетчики brownout на нуле, пока профиль активен.
+- ڈیش بورڈز کو متوقع عرف کے تحت اسٹیجنگ فراہم کرنے والے کو دکھانا چاہئے اور براؤن آؤٹ کاؤنٹرز کو صفر پر رکھنا چاہئے جبکہ پروفائل فعال ہے۔
 
-## 6. Готовность к rollout
+## 6. رول آؤٹ کے لئے تیار ہے
 
-1. Сформируйте короткий отчет с URL-адресами, ID manifest и snapshot телеметрии.
-2. Поделитесь отчетом в канале Nexus rollout вместе с запланированным окном активации в продакшене.
-3. Переходите к продакшен-чеклисту (Section 4 в `chunker_registry_rollout_checklist.md`) после согласования со стейкхолдерами.
+1. یو آر ایل ، آئی ڈی مینی فیسٹ اور ٹیلی میٹری اسنیپ شاٹ کے ساتھ ایک مختصر رپورٹ تیار کریں۔
+2. پیداوار میں شیڈول ایکٹیویشن ونڈو کے ساتھ Nexus رول آؤٹ چینل میں رپورٹ شیئر کریں۔
+3. اسٹیک ہولڈرز کے ساتھ معاہدے کے بعد پروڈکشن چیک لسٹ (`chunker_registry_rollout_checklist.md` میں سیکشن 4) پر آگے بڑھیں۔
 
-Поддержание этого плейбука в актуальном состоянии гарантирует, что каждый rollout chunker/admission следует одним и тем же детерминированным шагам между staging и production.
+اس پلے بوک کو تازہ ترین رکھنا اس بات کو یقینی بناتا ہے کہ ہر رول آؤٹ چنکر/داخلہ اسٹیجنگ اور پروڈکشن کے مابین ایک ہی عصبی اقدامات کی پیروی کرتا ہے۔

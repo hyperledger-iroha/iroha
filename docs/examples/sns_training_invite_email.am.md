@@ -7,35 +7,36 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 5e9bf7a41f46d220502776b77d0e2cf86ba19874da9ea373ea440706e531b661
 source_last_modified: "2025-12-29T18:16:35.078745+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-Subject: [SNS Training] <suffix> cohort briefing — <date>
+ርዕሰ ጉዳይ፡ [የኤስኤንኤስ ስልጠና] < ቅጥያ> የቡድን ማጠቃለያ - <ቀን>
 
-Hi <name/team>,
+ሰላም <ስም/ቡድን>፣
 
-You are scheduled for the upcoming Sora Name Service training covering the
-<suffix> suffix launch.
+ለሚቀጥለው የሶራ ስም አገልግሎት ስልጠና መርሐግብር ተይዞለታል
+< ቅጥያ> ቅጥያ ማስጀመር።
 
-**Details**
-- **Date / Time:** <weekday, UTC offset + link to calendar invite>
-- **Duration:** 2 hours (includes labs + annex capture)
-- **Format:** Live workshop + breakout rooms
-- **Language:** <language> (simultaneous interpretation available: <yes/no>)
+*** ዝርዝሮች ***
+- ** ቀን / ሰዓት: ** <የሳምንቱ ቀን ፣ UTC ማካካሻ + የቀን መቁጠሪያ ግብዣ አገናኝ
+- ** የቆይታ ጊዜ፡** 2 ሰአታት (ላብራቶሪ + አባሪ ቀረጻን ያካትታል)
+- ** ቅርጸት: ** የቀጥታ ዎርክሾፕ + ልዩ ክፍሎች
+- ** ቋንቋ: ** <ቋንቋ> (በተመሳሳይ ጊዜ ትርጓሜ ይገኛል: <አዎ/ የለም>)
 
-**Pre-work (30 minutes)**
-1. Read `docs/source/sns/onboarding_kit.md`.
-2. Skim the KPI walkthrough (`docs/portal/docs/sns/kpi-dashboard.md`).
-3. Install the tooling listed in `docs/source/sns/training_collateral.md#13-lab-prerequisites`.
+**ቅድመ-ስራ (30 ደቂቃ)**
+1. `docs/source/sns/onboarding_kit.md` አንብብ።
+2. የKPI መራመጃውን (`docs/portal/docs/sns/kpi-dashboard.md`) ያንሸራትቱ።
+3. በ `docs/source/sns/training_collateral.md#13-lab-prerequisites` ውስጥ የተዘረዘሩትን መሳሪያዎች ይጫኑ.
 
-**What to expect**
-- KPI dashboard orientation and registrar SLA review.
-- Manifest + resolver exercises with live validation.
-- Dispute drill covering guardian + council workflows.
-- KPI annex automation via `cargo xtask sns-annex`.
+*** ምን ይጠበቃል ***
+- KPI ዳሽቦርድ አቅጣጫ እና ሬጅስትራር SLA ግምገማ.
+- ማንፌስት + ፈቺ ልምምዶች ከቀጥታ ማረጋገጫ ጋር።
+- ሙግት መሰርሰሪያ የሚሸፍን ሞግዚት + ምክር ቤት የስራ ሂደቶች.
+- KPI አባሪ አውቶሜሽን በ `cargo xtask sns-annex` በኩል።
 
-Please confirm attendance by replying to this email or accepting the calendar
-invite. If you cannot attend, nominate a delegate and copy governance so we can
-keep the readiness log accurate.
+እባክዎ ለዚህ ኢሜይል ምላሽ በመስጠት ወይም የቀን መቁጠሪያውን በመቀበል መገኘታቸውን ያረጋግጡ
+መጋበዝ። መሳተፍ ካልቻላችሁ ልዑካን ይሰይሙ እና እኛ እንድንችል አስተዳደርን ይቅዱ
+የዝግጁነት ምዝግብ ማስታወሻውን በትክክል ያስቀምጡ.
 
-Thanks,  
+አመሰግናለሁ  
 `sns-training@sora.org`

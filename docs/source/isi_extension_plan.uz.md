@@ -7,94 +7,93 @@ generator: scripts/sync_docs_i18n.py
 source_hash: f3502fc6de75095282d44ce778b00d1b0d554773de1861d1b92f7dc573dfafa2
 source_last_modified: "2025-12-29T18:16:35.969398+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# ISI Extension Plan (v1)
+# ISI kengaytirish rejasi (v1)
 
-This note signs off on the priority order for the new Iroha Special Instructions and captures
-non-negotiable invariants for each instruction ahead of implementation. The ordering matches
-security and operability risk first, UX throughput second.
+Ushbu eslatma yangi Iroha maxsus ko'rsatmalari va suratga olish uchun ustuvorlik tartibini tasdiqlaydi.
+amalga oshirishdan oldin har bir ko'rsatma uchun muhokama qilinmaydigan invariantlar. Buyurtma mos keladi
+birinchi navbatda xavfsizlik va ishlash xavfi, ikkinchidan UX o'tkazish qobiliyati.
 
 ## Priority Stack
 
-1. **RotateAccountSignatory** – Required for hygienic key rotation without destructive migrations.
-2. **DeactivateContractInstance** / **RemoveSmartContractBytes** – Provide deterministic contract
-   kill switches and storage reclamation for compromised deployments.
-3. **SetAssetKeyValue** / **RemoveAssetKeyValue** – Extend metadata parity to concrete asset
-   balances so observability tooling can tag holdings.
-4. **BatchMintAsset** / **BatchTransferAsset** – Deterministic fan-out helpers to keep payload size
-   and VM fallback pressure manageable.
+1. **RotateAccountSignatory** – buzg‘unchi migratsiyalarsiz kalitlarni gigienik aylantirish uchun talab qilinadi.
+2. **DeactivateContractInstance** / **RemoveSmartContractBytes** – Deterministik shartnomani taqdim eting
+   o'chirish kalitlari va buzilgan joylashtirishlar uchun saqlashni qayta tiklash.
+3. **SetAssetKeyValue** / **RemoveAssetKeyValue** – Metadata paritetini aniq aktivga kengaytiring
+   muvozanatni saqlaydi, shuning uchun kuzatuvchanlik vositalari xoldinglarni belgilashi mumkin.
+4. **BatchMintAsset** / **BatchTransferAsset** – yuk hajmini saqlab qolish uchun aniq fan-out yordamchilari
+   va VM orqaga qaytish bosimini boshqarish mumkin.
 
-## Instruction Invariants
+## Ko'rsatmalarning o'zgarmasligi
 
 ### SetAssetKeyValue / RemoveAssetKeyValue
-- Reuse the `AssetMetadataKey` namespace (`state.rs`) so canonical WSV keys stay stable.
-- Enforce JSON size and schema limits identically to account metadata helpers.
-- Emit `AssetEvent::MetadataInserted` / `AssetEvent::MetadataRemoved` with the affected `AssetId`.
-- Require the same permission tokens as existing asset metadata edits (definition owner OR
-  `CanModifyAssetMetadata`-style grants).
-- Abort if the asset record is missing (no implicit creation).
+- `AssetMetadataKey` nom maydonidan (`state.rs`) qayta foydalaning, shuning uchun kanonik WSV kalitlari barqaror qoladi.
+- JSON o'lchami va sxemasi chegaralarini hisob metadata yordamchilari bilan bir xil tarzda qo'llang.
+- Emit `AssetEvent::MetadataInserted` / `AssetEvent::MetadataRemoved` ta'sirlangan `AssetId` bilan.
+- Mavjud aktiv meta-ma'lumotlarini tahrirlash bilan bir xil ruxsat tokenlarini talab qiling (ta'rif egasi OR
+  `CanModifyAssetMetadata` uslubidagi grantlar).
+- Agar aktiv yozuvi yo'q bo'lsa, to'xtating (so'zsiz yaratilmaydi).
 
-### RotateAccountSignatory
-- Atomic swap of the signatory in `AccountId` while preserving account metadata and linked
-  resources (assets, triggers, roles, permissions, pending events).
-- Verify the current signatory matches the caller (or delegated authority via explicit token).
-- Reject if the new public key already backs another account in the same domain.
-- Update all canonical keys that embed the account ID and invalidate caches before commit.
-- Emit a dedicated `AccountEvent::SignatoryRotated` with old/new keys for audit trails.
-- Migration scaffold: introduce `AccountLabel` + `AccountRekeyRecord` (see `account::rekey`) so
-  existing accounts can be mapped to stable labels during a rolling upgrade without hash breaks.
+### RotateAccount Signatory
+- `AccountId` da imzolovchining atom almashinuvi, shu bilan birga hisob meta-ma'lumotlari va bog'langan
+  resurslar (aktivlar, triggerlar, rollar, ruxsatlar, kutilayotgan voqealar).
+- Joriy imzo qo'ygan shaxs qo'ng'iroq qiluvchiga (yoki aniq token orqali berilgan vakolatga) mos kelishini tekshiring.
+- Agar yangi ochiq kalit bir xil domendagi boshqa hisob qaydnomasini qo'llab-quvvatlasa, rad qiling.
+- Qabul qilishdan oldin hisob identifikatorini o'rnatadigan va keshlarni bekor qiladigan barcha kanonik kalitlarni yangilang.
+- Audit izlari uchun eski/yangi kalitlarga ega maxsus `AccountEvent::SignatoryRotated` chiqaring.
+- Migratsiya iskala: `AccountLabel` + `AccountRekeyRecord` (qarang: `account::rekey`) shuning uchun
+  mavjud hisoblarni xesh tanaffuslarsiz yangilash paytida barqaror teglar bilan taqqoslash mumkin.
 
-### DeactivateContractInstance
-- Remove or tombstone the `(namespace, contract_id)` binding while persisting provenance data
-  (who, when, reason code) for troubleshooting.
-- Require the same governance permission set as activation, with policy hooks to disallow
-  deactivation of core system namespaces without elevated approval.
-- Reject when the instance is already inactive to keep event logs deterministic.
-- Emit a `ContractInstanceEvent::Deactivated` that downstream watchers can consume.
-
-### RemoveSmartContractBytes
-- Allow pruning of stored bytecode by `code_hash` only when no manifests or active instances
-  reference the artifact; otherwise fail with a descriptive error.
-- Permission gate mirrors registration (`CanRegisterSmartContractCode`) plus an operator-level
-  guard (e.g., `CanManageSmartContractStorage`).
-- Verify the provided `code_hash` matches the stored body digest just before deletion to avoid
-  stale handles.
-- Emit `ContractCodeEvent::Removed` with hash and caller metadata.
+### Shartnoma misolini o'chirish
+- `(namespace, contract_id)` bog'lanishini olib tashlang yoki qabr toshini toshga qo'ying, shu bilan birga kelib chiqish ma'lumotlarini saqlang
+  (kim, qachon, sabab kodi) muammolarni bartaraf etish uchun.
+- Ruxsat bermaslik uchun siyosat ilgaklari bilan faollashtirish bilan bir xil boshqaruv ruxsatini talab qiling
+  yuqori ruxsatsiz asosiy tizim nom maydonlarini o'chirish.
+- Hodisa jurnallarini deterministik saqlash uchun misol allaqachon faol bo'lmaganda rad eting.
+- Quyi oqim kuzatuvchilari iste'mol qilishi mumkin bo'lgan `ContractInstanceEvent::Deactivated` chiqaring.### SmartContractBytesni olib tashlang
+- `code_hash` tomonidan saqlangan bayt kodini faqat manifest yoki faol misollar bo'lmaganda kesishga ruxsat bering
+  artefaktga murojaat qilish; aks holda tavsiflovchi xato bilan muvaffaqiyatsizlikka uchraydi.
+- Ruxsat eshigini ro'yxatdan o'tkazish (`CanRegisterSmartContractCode`) va operator darajasida
+  qo'riqchi (masalan, `CanManageSmartContractStorage`).
+- Taqdim etilgan `code_hash` o'chirishdan oldin saqlangan tana hazm qilishiga mos kelishini tekshiring.
+  eskirgan tutqichlar.
+- `ContractCodeEvent::Removed`-ni xesh va qo'ng'iroq qiluvchi metama'lumotlari bilan chiqaring.
 
 ### BatchMintAsset / BatchTransferAsset
-- All-or-nothing semantics: either every tuple succeeds or the instruction aborts without side
-  effects.
-- Input vectors must be deterministically ordered (no implicit sorting) and bounded by config
+- Hammasi yoki hech narsa semantikasi: yo har bir kortej muvaffaqiyatli bo'ladi yoki ko'rsatma yon tomonlarsiz bekor qilinadi
+  effektlar.
+- Kirish vektorlari aniq tartiblangan bo'lishi kerak (to'liq tartiblash yo'q) va konfiguratsiya bilan chegaralangan bo'lishi kerak
   (`max_batch_isi_items`).
-- Emit per-item asset events so downstream accounting stays consistent; batch context is additive,
-  not a replacement.
-- Permission checks reuse existing single-item logic per target (asset owner, definition owner,
-  or granted capability) before state mutation.
-- Advisory access sets must union all read/write keys to keep optimistic concurrency correct.
+- Har bir ob'ekt bo'yicha aktiv hodisalarini emissiya qilish, shuning uchun quyi oqim buxgalteriya hisobi izchil bo'lib qoladi; ommaviy kontekst qo'shimcha hisoblanadi,
+  almashtirish emas.
+- Ruxsat tekshiruvlari har bir maqsad uchun mavjud bitta elementli mantiqni qayta ishlatadi (aktiv egasi, ta'rif egasi,
+  yoki berilgan qobiliyat) holat mutatsiyasidan oldin.
+- Maslahat kirish to'plamlari optimistik parallellikni to'g'ri saqlash uchun barcha o'qish/yozish kalitlarini birlashtirishi kerak.
 
-## Implementation Scaffolding
+## Amalga oshirish iskala
 
-- Data model now carries `SetAssetKeyValue` / `RemoveAssetKeyValue` scaffolds for balance metadata
-  edits (`transparent.rs`).
-- Executor visitors expose placeholders that will gate permissions once host wiring lands
+- Ma'lumotlar modeli endi balans metama'lumotlari uchun `SetAssetKeyValue` / `RemoveAssetKeyValue` skafoldlarini olib yuradi
+  tahrirlar (`transparent.rs`).
+- Ijrochi tashrif buyuruvchilar simli erlarni mezbonlik qilgandan so'ng ruxsatnomalarni o'tkazadigan joy egalarini ko'rsatadi
   (`default/mod.rs`).
-- Rekey prototype types (`account::rekey`) provide a landing zone for rolling migrations.
-- World state includes `account_rekey_records` keyed by `AccountLabel` so we can stage label →
-  signatory migrations without touching the historical `AccountId` encoding.
+- Rekey prototip turlari (`account::rekey`) aylanma migratsiya uchun qo'nish zonasini ta'minlaydi.
+- Jahon holati `AccountLabel` tomonidan kalitlangan `account_rekey_records` ni o'z ichiga oladi, shuning uchun biz yorliqni joylashtirishimiz mumkin →
+  tarixiy `AccountId` kodlashiga tegmasdan imzolangan migratsiya.
 
-## IVM Syscall Drafting
+## IVM Syscall loyihasini tuzish
 
-- Host shims for `DeactivateContractInstance` / `RemoveSmartContractBytes` ship as
-  `SYSCALL_DEACTIVATE_CONTRACT_INSTANCE` (0x43) and
-  `SYSCALL_REMOVE_SMART_CONTRACT_BYTES` (0x44), both consuming Norito TLVs that mirror the
-  canonical ISI structs.
-- Extend `abi_syscall_list()` only after host handlers mirror `iroha_core` execution paths to keep
-  ABI hashes stable during development.
-- Update Kotodama lowering once syscall numbers stabilize; add golden coverage for the expanded
-  surface at the same time.
+- `DeactivateContractInstance` / `RemoveSmartContractBytes` uchun xost shimlari
+  `SYSCALL_DEACTIVATE_CONTRACT_INSTANCE` (0x43) va
+  `SYSCALL_REMOVE_SMART_CONTRACT_BYTES` (0x44), ikkalasi ham Norito TLV larni aks ettiradi
+  kanonik ISI tuzilmalari.
+- `abi_syscall_list()` ni faqat xost ishlovchilari `iroha_core` ijro yoʻllarini aks ettirgandan soʻng kengaytiring.
+  Rivojlanish jarayonida ABI xeshlari barqaror.
+- Kotodama ni yangilang, tizim qo'ng'irog'i raqamlari barqarorlashgandan keyin pasaytirish; kengaytirilgan uchun oltin qoplama qo'shing
+  bir vaqtning o'zida sirt.
 
-## Status
+## Holat
 
-The above ordering and invariants are ready for implementation. Follow-up branches should reference
-this document when wiring execution paths and syscall exposure.
+Yuqoridagi tartib va invariantlar amalga oshirishga tayyor. Kuzatuv filiallari murojaat qilishi kerak
+ijro yo'llari va tizim ta'sirini ulashda ushbu hujjat.

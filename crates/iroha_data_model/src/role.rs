@@ -61,6 +61,7 @@ mod model {
         /// This map is populated by the node at execution time (e.g. when a role is
         /// registered or a permission is granted/revoked). Clients typically
         /// don't provide it and start with an empty map.
+        #[norito(default)]
         pub permission_epochs: BTreeMap<Permission, u64>,
     }
 

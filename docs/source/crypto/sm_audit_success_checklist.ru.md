@@ -6,67 +6,68 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 624ef9305dc14d477a616923c80445094c692bc6a38d69465f679b54ccd52e92
 source_last_modified: "2026-01-03T18:07:57.081283+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% SM2/SM3/SM4 Audit Success Criteria
-% Iroha Crypto Working Group
+% критериев успеха аудита SM2/SM3/SM4
+% Iroha Рабочая группа по криптографии
 % 2026-01-30
 
-# Purpose
+# Цель
 
-This checklist captures the concrete criteria required for a successful
-completion of the SM2/SM3/SM4 external audit. It should be reviewed during
-kick-off, revisited at each status checkpoint, and used to confirm exit
-conditions before enabling SM signing for production validators.
+В этом контрольном списке отражены конкретные критерии, необходимые для успешного
+завершение внешнего аудита SM2/SM3/SM4. Его следует пересмотреть во время
+начальный этап, повторно посещаемый на каждой контрольной точке статуса и используемый для подтверждения выхода
+условия перед включением подписи SM для рабочих валидаторов.
 
-# Pre-Engagement Readiness
+# Предварительная готовность
 
-- [ ] Contract signed, including scope, deliverables, confidentiality, and
-      remediation support language.
-- [ ] Audit team receives repository mirror access, CI artefact bucket, and
-      documentation bundle listed in `docs/source/crypto/sm_audit_brief.md`.
-- [ ] Points of contact confirmed with backups for each role
-      (crypto, IVM, platform ops, security, docs).
-- [ ] Internal stakeholders align on target release date and freeze windows.
-- [ ] SBOM export (`cargo auditable` + CycloneDX) generated and shared.
-- [ ] OpenSSL/Tongsuo build provenance package prepared
-      (source tarball hash, build script, reproducibility notes).
-- [ ] Latest deterministic test outputs captured:
-      `scripts/sm_openssl_smoke.sh`, `cargo test -p iroha_crypto sm`, and
-      Norito round-trip fixtures.
-- [ ] Torii `/v1/node/capabilities` advert (via `iroha runtime capabilities`) recorded, verifying the `crypto.sm` manifest fields and acceleration policy snapshot.
+- [ ] Подписан контракт, включая объем работ, результаты, конфиденциальность и
+      язык поддержки исправлений.
+- [ ] Группа аудита получает доступ к зеркалу репозитория, корзину артефактов CI и
+      Пакет документации указан в `docs/source/crypto/sm_audit_brief.md`.
+- [ ] Контактные лица подтверждены резервными копиями для каждой роли.
+      (крипто, IVM, операции платформы, безопасность, документы).
+- [ ] Внутренние заинтересованные стороны согласовывают целевую дату выпуска и замораживают окна.
+- [ ] Экспорт SBOM (`cargo auditable` + CycloneDX) создан и опубликован.
+- [ ] Подготовлен пакет происхождения сборки OpenSSL/Tongsuo
+      (хэш исходного архива, сценарий сборки, примечания по воспроизводимости).
+- [ ] Получены последние результаты детерминированных испытаний:
+      `scripts/sm_openssl_smoke.sh`, `cargo test -p iroha_crypto sm` и
+      Norito светильники туда и обратно.
+- [ ] Записано объявление Torii `/v1/node/capabilities` (через `iroha runtime capabilities`), проверяются поля манифеста `crypto.sm` и снимок политики ускорения.
 
-# Engagement Execution
+# Выполнение задания
 
-- [ ] Kick-off workshop completed with shared understanding of goals,
-      timelines, and communication cadence.
-- [ ] Weekly status reports received and triaged; risk register updated.
-- [ ] Findings communicated within one business day of discovery when severity
-      is High or Critical.
-- [ ] Audit team validates determinism paths on ≥2 CPU architectures (x86_64,
-      aarch64) with matching outputs.
-- [ ] Side-channel review includes constant-time proofs or empirical testing
-      evidence for both Rust and FFI paths.
-- [ ] Compliance and documentation review confirms operator guidance matches
-      regulatory obligations.
-- [ ] Differential testing against reference implementations (RustCrypto,
-      OpenSSL/Tongsuo) executed with auditor oversight.
-- [ ] Fuzz harnesses evaluated; new seed corpora provided where gaps exist.
+- [ ] Начальный семинар завершился общим пониманием целей,
+      сроки и частота общения.
+- [ ] Еженедельные отчеты о состоянии получены и проверены; обновлен реестр рисков.
+- [ ] Результаты сообщаются в течение одного рабочего дня с момента обнаружения, если серьезность
+      высокий или критический.
+- [ ] Группа аудита проверяет пути детерминизма на ≥2 архитектурах ЦП (x86_64,
+      aarch64) с соответствующими выходными данными.
+- [ ] Обзор по побочным каналам включает доказательства в постоянное время или эмпирическое тестирование.
+      доказательства путей как Rust, так и FFI.
+- [ ] Проверка соответствия и документации подтверждает соответствие рекомендациям оператора.
+      нормативные обязательства.
+- [ ] Дифференциальное тестирование эталонных реализаций (RustCrypto,
+      OpenSSL/Tongsuo) выполнено под контролем аудитора.
+- [ ] Оценены жгуты Fuzz; новые семенные корпуса предоставляются там, где существуют пробелы.
 
-# Remediation & Exit
+# Исправление и выход
 
-- [ ] All findings categorised with severity, impact, exploitability, and
-      recommended remediation steps.
-- [ ] High/Critical issues receive patches or mitigations with auditor-approved
-      verification; residual risks documented.
-- [ ] Auditor supplies re-test validation evidencing fixed issues (diff, test
-      runs, or signed attestation).
-- [ ] Final report delivered: executive summary, detailed findings, methodology,
-      determinism verdict, compliance verdict.
-- [ ] Internal sign-off meeting concludes next steps, release adjustments,
-      and documentation updates.
-- [ ] `status.md` updated with audit outcome and outstanding remediation
-      follow-ups.
-- [ ] Post-mortem captured in `docs/source/crypto/sm_program.md` (lessons
-      learned, future hardening tasks).
+- [ ] Все результаты классифицированы по серьезности, влиянию, возможности использования и
+      рекомендуемые действия по исправлению ситуации.
+- [ ] Высокие/критические проблемы получают исправления или исправления, одобренные аудитором.
+      проверка; остаточные риски документированы.
+- [ ] Аудитор предоставляет повторную проверку, подтверждающую наличие исправленных проблем (разница, тест
+      или подписанное свидетельство).
+- [ ] Представлен окончательный отчет: краткое изложение, подробные выводы, методология,
+      вердикт детерминизма, вердикт соответствия.
+- [ ] На внутреннем совещании завершаются следующие шаги, вносятся коррективы,
+      и обновления документации.
+- [ ] `status.md` обновлен с результатами аудита и невыполненными исправлениями.
+      последующие действия.
+- [ ] Вскрытие, сделанное в `docs/source/crypto/sm_program.md` (уроки
+      изученные, будущие задачи по закалке).

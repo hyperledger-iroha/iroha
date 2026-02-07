@@ -8,19 +8,21 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraFS CI Recipes
 sidebar_label: CI Recipes
 description: Run the SoraFS CLI inside GitHub and GitLab pipelines with keyless signing.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
-:::
+::: ማስታወሻ ቀኖናዊ ምንጭ
+::
 
-# CI Recipes
+# CI የምግብ አዘገጃጀት መመሪያዎች
 
-SoraFS pipelines benefit from deterministic chunking, manifest signing, and
-proof verification. The `sorafs_cli` command surface keeps those steps portable
-across CI providers. This page highlights the canonical recipes and points to
-ready-to-use templates.
+SoraFS የቧንቧ መስመሮች በቆራጥነት መቆራረጥ፣ ግልጽ ፊርማ እና
+ማረጋገጫ ማረጋገጫ. የ`sorafs_cli` ትዕዛዝ ወለል እነዚያን ደረጃዎች ተንቀሳቃሽ ያደርጋቸዋል።
+በመላ CI አቅራቢዎች. ይህ ገጽ ቀኖናዊ የምግብ አዘገጃጀቶችን እና ነጥቦችን ያደምቃል
+ለመጠቀም ዝግጁ የሆኑ አብነቶች.
 
-## GitHub Actions (keyless)
+## GitHub ድርጊቶች (ቁልፍ የሌለው)
 
 ```yaml
 name: sorafs-artifacts
@@ -93,11 +95,11 @@ jobs:
           path: artifacts/
 ```
 
-Key points:
+ቁልፍ ነጥቦች፡-
 
-- No static signing keys are stored; OIDC tokens are fetched on-demand.
-- Artefacts (CAR, manifest, bundle, proof summaries) are uploaded for review.
-- The job reuses the same Norito schemas used in production rollouts.
+- ምንም የማይንቀሳቀሱ የመፈረሚያ ቁልፎች አይቀመጡም; OIDC ቶከኖች በፍላጎት ይመጣሉ።
+- ቅርሶች (CAR፣ መግለጫ፣ ጥቅል፣ የማረጋገጫ ማጠቃለያ) ለግምገማ ተሰቅለዋል።
+- ስራው በምርት ልቀቶች ውስጥ ጥቅም ላይ የዋለውን Norito መርሃግብሮችን እንደገና ይጠቀማል።
 
 ## GitLab CI
 
@@ -133,15 +135,15 @@ sorafs:publish:
       - artifacts/
 ```
 
-- Provision `SIGSTORE_ID_TOKEN` via GitLab’s workload identity federation or a
-  sealed secret before executing the publish stage.
-- Failure of any CLI step causes the pipeline to halt, preserving consistent
-  artefacts.
+- አቅርቦት `SIGSTORE_ID_TOKEN` በ GitLab የስራ ጫና መታወቂያ ፌዴሬሽን ወይም
+  የሕትመት ደረጃን ከመፈጸሙ በፊት የታሸገ ሚስጥር.
+- የማንኛውም የCLI እርምጃ አለመሳካት የቧንቧ መስመር እንዲቆም ያደርገዋል፣ ወጥነት ያለው ሆኖ እንዲቆይ ያደርጋል
+  ቅርሶች.
 
-## Additional resources
+## ተጨማሪ መገልገያዎች
 
-- End-to-end templates (includes Bash helpers, federated identity configuration,
-  and clean-up steps): `docs/examples/sorafs_ci.md`
-- CLI reference covering every option: `docs/source/sorafs_cli.md`
-- Governance/alias requirements prior to submission:
+- ከጫፍ እስከ ጫፍ አብነቶች (Bash ረዳቶችን ያካትታል, የተዋሃደ የማንነት ውቅር,
+  እና የማጽዳት እርምጃዎች): `docs/examples/sorafs_ci.md`
+- እያንዳንዱን አማራጭ የሚሸፍን CLI ማጣቀሻ: `docs/source/sorafs_cli.md`
+- ከማቅረቡ በፊት የአስተዳደር/ተለዋጭ ስም መስፈርቶች፡-
   `docs/source/sorafs/provider_admission_policy.md`

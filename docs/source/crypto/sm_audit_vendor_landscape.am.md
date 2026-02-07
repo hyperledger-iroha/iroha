@@ -7,99 +7,98 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 0f39199767280be0fdd582301cdc3e8929497cf372a96f9f300e718f827000a7
 source_last_modified: "2025-12-29T18:16:35.941305+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% SM Audit Vendor Landscape
-% Iroha Crypto Working Group
+% SM ኦዲት ሻጭ የመሬት ገጽታ
+% Iroha Crypto የስራ ቡድን
 % 2026-02-12
 
-# Overview
+# አጠቃላይ እይታ
 
-The Crypto Working Group needs a standing bench of independent reviewers who
-understand both Rust cryptography and the Chinese GM/T (SM2/SM3/SM4) standards.
-This note catalogues firms with relevant references and summarises the audit
-scope we typically request so request-for-proposal (RFP) cycles stay fast and
-consistent.
+የCrypto Working Group ገለልተኛ ገምጋሚዎች ቋሚ አግዳሚ ወንበር ያስፈልገዋል
+ሁለቱንም የ Rust cryptography እና የቻይንኛ GM/T (SM2/SM3/SM4) መመዘኛዎችን ይረዱ።
+ይህ ማስታወሻ ኩባንያዎችን ተዛማጅ ማጣቀሻዎችን ያቀርባል እና ኦዲቱን ያጠቃልላል
+ወሰን እኛ በተለምዶ የምንጠይቀው ስለዚህ የጥያቄ-ለፕሮፖዛል (RFP) ዑደቶች በፍጥነት ይቆያሉ እና
+ወጥነት ያለው.
 
-# Candidate Firms
+# እጩ ድርጅቶች
 
-## Trail of Bits (CN Cryptography Practice)
+## የቢትስ ዱካ (CN ክሪፕቶግራፊ ልምምድ)
 
-- Documented engagements: 2023 security review of Ant Group’s Tongsuo
-  (SM-enabled OpenSSL distribution) and repeated audits of Rust-based
-  blockchains such as Diem/Libra, Sui, and Aptos.
-- Strengths: dedicated Rust cryptography team, automated constant-time
-  analysis tooling, experience validating deterministic execution and hardware
-  dispatch policies.
-- Fit for Iroha: can extend the current SM audit SOW or perform independent
-  re-tests; comfortable operating with Norito fixtures and IVM syscall
-  surfaces.
+- የተመዘገቡ ተሳትፎዎች፡ የ2023 የAnt Group's Tongsuo የደህንነት ግምገማ
+  (SM-የነቃ የOpenSSL ስርጭት) እና በዝገት ላይ የተመሰረተ ተደጋጋሚ ኦዲቶች
+  እንደ Diem/Libra፣ Sui እና Aptos ያሉ blockchains።
+- ጥንካሬዎች-የተወሰነ የዝገት ክሪፕቶግራፊ ቡድን ፣ አውቶማቲክ ቋሚ ጊዜ
+  የትንተና መሣሪያ፣ የመወሰን አፈጻጸምን እና ሃርድዌርን የሚያረጋግጥ ልምድ
+  የመላኪያ ፖሊሲዎች.
+- ለIroha የሚመጥን፡ የአሁኑን SM ኦዲት SOW ማራዘም ወይም ራሱን ችሎ ማከናወን ይችላል
+  ድጋሚ ሙከራዎች; በ Norito ቋሚዎች እና IVM syscall ለመስራት ምቹ
+  ገጽታዎች.
 
-## NCC Group (APAC Cryptography Services)
+## NCC ቡድን (APAC ክሪፕቶግራፊ አገልግሎቶች)
 
-- Documented engagements: gm/T (SM) code examinations for regional payment
-  networks and HSM vendors; prior Rust reviews for Parity Substrate, Polkadot,
-  and Libra components.
-- Strengths: large APAC bench with bilingual reporting, ability to combine
-  compliance-style process checks with deep code review.
-- Fit for Iroha: ideal for second-opinion assessments or governance-driven
-  validation alongside Trail of Bits findings.
+- የተመዘገቡ ተሳትፎዎች፡ gm/T (SM) ኮድ ፈተናዎች ለክልል ክፍያ
+  ኔትወርኮች እና የኤች.ኤስ.ኤም.ኤም. የቅድሚያ Rust ግምገማዎች ለ Parity Substrate፣Polkadot፣
+  እና ሊብራ ክፍሎች.
+- ጥንካሬዎች-ትልቅ የ APAC አግዳሚ ወንበር ከሁለት ቋንቋ ተናጋሪ ጋር ፣ የመቀላቀል ችሎታ
+  ተገዢነት-ቅጥ ሂደት ፍተሻዎች ጥልቅ ኮድ ግምገማ.
+- ለIroha የሚመጥን፡ ለሁለተኛ-አስተያየት ግምገማዎች ወይም በአስተዳደር-ተኮር
+  ከBits ግኝቶች ጎን ለጎን ማረጋገጥ።
 
-## SECBIT Labs (Beijing)
+## SECBIT ቤተሙከራዎች (ቤጂንግ)
 
-- Documented engagements: maintainers of the open-source `libsm` Rust crate
-  used by Nervos CKB and CITA; audited Guomi enablement for Nervos, Muta, and
-  FISCO BCOS Rust components with bilingual deliverables.
-- Strengths: engineers who actively ship SM primitives in Rust, strong
-  property-testing capabilities, deep familiarity with domestic compliance
-  requirements.
-- Fit for Iroha: valuable when we need reviewers who can supply comparative
-  test vectors and implementation guidance alongside findings.
+- የተመዘገቡ ተሳትፎዎች፡ የክፍት ምንጭ `libsm` Rust crate ጠባቂዎች
+  በ Nervos CKB እና CITA ጥቅም ላይ ይውላል; ለNervos፣ Muta፣ እና የGuomi አቅምን ኦዲት አድርጓል
+  FISCO BCOS ዝገት አካላት ከሁለት ቋንቋ ተናጋሪዎች ጋር።
+- ጥንካሬዎች: የ SM primitives በዝገት ውስጥ በንቃት የሚልኩ መሐንዲሶች ፣ ጠንካራ
+  ንብረትን የመፈተሽ ችሎታዎች ፣ ከአገር ውስጥ ተገዢነት ጋር ጥልቅ መተዋወቅ
+  መስፈርቶች.
+- ለIroha የሚመጥን፡ ንጽጽር ማቅረብ የሚችሉ ገምጋሚዎች ስንፈልግ ዋጋ ያለው
+  ከግኝቶች ጎን ለጎን የቬክተሮችን እና የአተገባበር መመሪያዎችን ይፈትሹ.
 
-## SlowMist Security (Chengdu)
+## ስሎው ሚስት ደህንነት (ቼንግዱ)
 
-- Documented engagements: Substrate/Polkadot Rust security reviews including
-  Guomi forks for Chinese operators; routine assessments of SM2/SM3/SM4 wallet
-  and bridge code used by exchanges.
-- Strengths: blockchain-focused audit practice, integrated incident response,
-  guidance that spans core protocol code and operator tooling.
-- Fit for Iroha: helpful for validating SDK parity and operational touchpoints
-  in addition to core crates.
+- የተመዘገቡ ተሳትፎዎች፡- Substrate/Polkadot Rust Security ግምገማዎችን ጨምሮ
+  Guomi ሹካዎች ለቻይና ኦፕሬተሮች; የ SM2/SM3/SM4 የኪስ ቦርሳ መደበኛ ግምገማዎች
+  እና በመለዋወጦች ጥቅም ላይ የዋለ የድልድይ ኮድ.
+- ጥንካሬዎች፡ በብሎክቼይን ላይ ያተኮረ የኦዲት ልምምድ፣ የተቀናጀ የአደጋ ምላሽ፣
+  ዋናውን የፕሮቶኮል ኮድ እና ኦፕሬተር መሳሪያዎችን የሚያጠቃልል መመሪያ።
+- ለIroha የሚመጥን፡ የኤስዲኬን እኩልነት እና ተግባራዊ የመዳሰሻ ነጥቦችን ለማረጋገጥ ይረዳል
+  ከኮር ሳጥኖች በተጨማሪ.
 
-## Chaitin Tech (QAX 404 Security Lab)
+## Chaitin Tech (QAX 404 ሴኪዩሪቲ ቤተ ሙከራ)- የተመዘገቡ ተሳትፎዎች፡ ለGmSSL/Tongsuo ማጠንከሪያ እና SM2/SM3/ አስተዋፅዖ አበርካቾች
+  ለአገር ውስጥ የፋይናንስ ተቋማት የ SM4 ትግበራ መመሪያ; ተቋቋመ
+  የTLS ቁልል እና ምስጠራ ቤተ-መጻሕፍትን የሚሸፍን ዝገት ኦዲት ልምምድ።
+- ጥንካሬዎች-ጥልቅ ክሪፕቶናሊሲስ ዳራ ፣ መደበኛ ማረጋገጫን የማጣመር ችሎታ
+  በእጅ የሚገመገሙ ቅርሶች፣ የረጅም ጊዜ ተቆጣጣሪ ግንኙነቶች።
+- ለIroha የሚመጥን፡ የቁጥጥር መውጣት ወይም መደበኛ የማረጋገጫ ቅርሶች ሲኖሩ ተስማሚ
+  መደበኛውን የኮድ ግምገማ ሪፖርት ማጀብ ያስፈልጋል።
 
-- Documented engagements: contributors to GmSSL/Tongsuo hardening and SM2/SM3/
-  SM4 implementation guidance for domestic financial institutions; established
-  Rust audit practice covering TLS stacks and cryptographic libraries.
-- Strengths: deep cryptanalysis background, ability to pair formal verification
-  artefacts with manual review, long-standing regulator relationships.
-- Fit for Iroha: suitable when regulatory sign-off or formal proof artefacts
-  need to accompany the standard code review report.
+# የተለመደ የኦዲት ወሰን እና ማቅረቢያ
 
-# Typical Audit Scope & Deliverables
+- ** የዝርዝር ስምምነት:** የ SM2 ZA ስሌት ፣ ፊርማ ያረጋግጡ
+  ቀኖና፣ SM3 ንጣፍ/መጭመቂያ፣ እና SM4 ቁልፍ መርሐግብር እና IV አያያዝ
+  በጂኤም/ቲ 0003-2012፣ GM/T 0004-2012፣ እና GM/T 0002-2012 ላይ።
+- ** ቆራጥነት እና የቋሚ ጊዜ ባህሪ፡** ቅርንጫፎችን መመርመር፣ መፈለግ
+  ሰንጠረዦች፣ እና የሃርድዌር ባህሪ በሮች (ለምሳሌ፣ NEON፣ SM4 መመሪያዎች) ለማረጋገጥ
+  ዝገት እና የኤፍኤፍአይ መላክ በሚደገፉ ሃርድዌር ላይ የሚወሰን ሆኖ ይቆያል።
+- **FFI እና የአቅራቢ ውህደት፡** OpenSSL/Tongsuo bindingsን ይገምግሙ፣
+  PKCS # 11/HSM አስማሚዎች እና የስሕተት ስርጭት መንገዶች ለስምምነት ደህንነት።
+- **የሙከራ እና የማጠናቀቂያ ሽፋን፡** የፉዝ ማሰሪያዎችን፣ Norito የዙር ጉዞዎችን መገምገም፣
+  የሚወስን የጭስ ሙከራዎች፣ እና ክፍተቶች ባሉበት ልዩ ምርመራን ይመክራሉ
+  ብቅ ይላሉ።
+- ** ጥገኝነት እና የአቅርቦት ሰንሰለት ግምገማ፡** የግንባታ ፕሮቬንሽን፣ ሻጭን ያረጋግጡ
+  የ patch ፖሊሲዎች፣ የ SBOM ትክክለኛነት እና ሊባዙ የሚችሉ የግንባታ መመሪያዎች።
+- ** ሰነዶች እና ክዋኔዎች: *** ከዋኝ runbooks ፣ ማክበርን ያረጋግጡ
+  አጭር መግለጫዎች፣ የውቅረት ነባሪዎች እና የመመለሻ ሂደቶች።
+- ** የሚጠበቁትን ሪፖርት ማድረግ፡** የአስፈፃሚ ማጠቃለያ ከአደጋ ደረጃ፣ ዝርዝር
+  ግኝቶች በኮድ ማጣቀሻዎች እና የማሻሻያ መመሪያ፣ የድጋሚ ሙከራ እቅድ እና
+  የመወሰን ዋስትናዎችን የሚሸፍኑ ማረጋገጫዎች ።
 
-- **Specification conformance:** validate SM2 ZA calculation, signature
-  canonicalisation, SM3 padding/compression, and SM4 key schedule & IV handling
-  against GM/T 0003-2012, GM/T 0004-2012, and GM/T 0002-2012.
-- **Determinism and constant-time behaviour:** examine branching, lookup
-  tables, and hardware feature gates (e.g., NEON, SM4 instructions) to ensure
-  Rust and FFI dispatch remain deterministic across supported hardware.
-- **FFI and provider integration:** review OpenSSL/Tongsuo bindings,
-  PKCS#11/HSM adapters, and error propagation paths for consensus safety.
-- **Test and fixture coverage:** assess fuzz harnesses, Norito round-trips,
-  deterministic smoke tests, and recommend differential testing where gaps
-  appear.
-- **Dependency and supply-chain review:** confirm build provenance, vendor
-  patch policies, SBOM accuracy, and reproducible build instructions.
-- **Documentation and operations:** validate operator runbooks, compliance
-  briefs, configuration defaults, and rollback procedures.
-- **Reporting expectations:** executive summary with risk rating, detailed
-  findings with code references & remediation guidance, retest plan, and
-  attestations covering determinism guarantees.
+# ቀጣይ እርምጃዎች
 
-# Next Steps
-
-- Use this vendor roster during RFQ cycles; adjust the scope checklist above to
-  match the active SM milestone before issuing an RFP.
-- Record engagement outcomes in `docs/source/crypto/sm_audit_brief.md` and
-  surface status updates in `status.md` once contracts are executed.
+- በ RFQ ዑደቶች ጊዜ ይህንን የአቅራቢ ዝርዝር ይጠቀሙ; ከላይ ያለውን የፍተሻ ዝርዝር ያስተካክሉ
+  RFP ከማውጣትዎ በፊት ንቁውን የኤስ.ኤም.
+- የተሳትፎ ውጤቶችን በ `docs/source/crypto/sm_audit_brief.md` እና ይመዝግቡ
+  የገጽታ ሁኔታ ዝማኔዎች በ`status.md` አንዴ ኮንትራቶች ከተፈጸሙ።

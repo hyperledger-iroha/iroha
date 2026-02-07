@@ -7,40 +7,41 @@ generator: scripts/sync_docs_i18n.py
 source_hash: b9dc9862d4806d355fd83c885de92775712a7b32c68c010d29f4fc74229d054b
 source_last_modified: "2026-01-06T05:24:53.995808+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# NoritoBridge Release Packaging
+# NoritoBridge የሚለቀቅ ማሸጊያ
 
-This guide outlines the steps required to publish the `NoritoBridge` Swift bindings as
-an XCFramework that can be consumed from Swift Package Manager and CocoaPods. The
-workflow keeps the Swift artifacts in lock-step with the Rust crate releases that ship
-Iroha's Norito codec. For end-to-end instructions on consuming the published
-artifacts inside an app (Xcode project wiring, ChaChaPoly usage, etc.), see
+ይህ መመሪያ የ`NoritoBridge` Swift ማሰሪያዎችን ለማተም የሚያስፈልጉትን ደረጃዎች ይዘረዝራል።
+ከSwift Package Manager እና CocoaPods ሊበላ የሚችል XCFramework። የ
+የስራ ፍሰት የስዊፍት ቅርሶችን በቁልፍ እርምጃ ያቆያል የ Rust crate ያንን መርከብ ይለቀቃል
+Iroha's I18NT0000001X ኮዴክ። የታተመውን አጠቃቀም በተመለከተ ከጫፍ እስከ ጫፍ መመሪያዎችን ለማግኘት
+በመተግበሪያ ውስጥ ያሉ ቅርሶች (የXcode ፕሮጀክት ሽቦ፣ የቻቻፖሊ አጠቃቀም፣ ወዘተ)፣ ይመልከቱ
 `docs/connect_swift_integration.md`.
 
-> **Note:** CI automation for this flow will land once macOS builders with the required
-> Apple tooling come online (tracked in the Release Engineering macOS builder backlog).
-> Until then the steps below must be executed manually on a development Mac.
+> **ማስታወሻ:** ለዚህ ፍሰት CI አውቶሜትድ የማክሮስ ገንቢዎች ከተፈለገ በኋላ ያርፋል
+> የአፕል መገልገያ መስመር ላይ ይመጣል (በመለቀቅ ኢንጂነሪንግ ማክኦኤስ መገንቢያ የኋላ መዝገብ ውስጥ ተከታትሏል)።
+> እስከዚያ ድረስ ከታች ያሉት እርምጃዎች በልማት ማክ ላይ በእጅ መተግበር አለባቸው።
 
-## Prerequisites
+## ቅድመ ሁኔታዎች
 
-- A macOS host with the latest stable Xcode command line tools installed.
-- Rust toolchain that matches the workspace `rust-toolchain.toml`.
-- Swift toolchain 5.7 or newer.
-- CocoaPods (via Ruby gems) if publishing to the central specs repository.
-- Access to the Hyperledger Iroha release signing keys for tagging Swift artifacts.
+- የቅርብ ጊዜ የተረጋጋ የ Xcode ትዕዛዝ መስመር መሳሪያዎች የተጫነ የማክሮስ አስተናጋጅ።
+- ከስራ ቦታ `rust-toolchain.toml` ጋር የሚዛመድ ዝገት የመሳሪያ ሰንሰለት።
+- ፈጣን የመሳሪያ ሰንሰለት 5.7 ወይም ከዚያ በላይ።
+- CocoaPods (በ Ruby Gems በኩል) ወደ ማዕከላዊ ዝርዝሮች ማከማቻ ከታተመ።
+- የስዊፍት ቅርሶችን ለመሰየም የ I18NT0000000X Iroha የመልቀቂያ መፈረሚያ ቁልፎችን መድረስ።
 
-## Versioning model
+## የስሪት ሞዴል
 
-1. Determine the Rust crate version for the Norito codec (`crates/norito/Cargo.toml`).
-2. Tag the workspace with the release identifier (e.g. `v2.1.0`).
-3. Use the same semantic version for the Swift package and the CocoaPods podspec.
-4. When the Rust crate increments its version, repeat the process and publish a matching
-   Swift artifact. Versions may include metadata suffixes (e.g. `-alpha.1`) while testing.
+1. ለ Norito ኮዴክ (`crates/norito/Cargo.toml`) የ Rust crate ሥሪቱን ይወስኑ።
+2. የስራ ቦታውን በሚለቀቅ ለዪ (ለምሳሌ `v2.1.0`) መለያ ይስጡ።
+3. ለስዊፍት ጥቅል እና ለ CocoaPods podspec ተመሳሳይ የትርጉም ስሪት ይጠቀሙ።
+4. የ Rust crate ስሪቱን ሲጨምር, ሂደቱን ይድገሙት እና ተዛማጅ ያትሙ
+   ፈጣን ቅርስ። ስሪቶች በመሞከር ጊዜ የሜታዳታ ቅጥያዎችን (ለምሳሌ `-alpha.1`) ሊያካትቱ ይችላሉ።
 
-## Build steps
+## ደረጃዎችን ይገንቡ
 
-1. From the repository root, invoke the helper script to assemble the XCFramework:
+1. ከማከማቻ ስር፣ የXCFrameworkን ለመሰብሰብ የረዳት ስክሪፕቱን ጥራ፡
 
    ```bash
    ./scripts/build_norito_xcframework.sh --workspace-root "$(pwd)" \
@@ -48,13 +49,13 @@ artifacts inside an app (Xcode project wiring, ChaChaPoly usage, etc.), see
        --profile release
    ```
 
-   The script compiles the Rust bridge library for iOS and macOS targets and bundles the
-   resulting static libraries under a single XCFramework directory.
-   It also emits `dist/NoritoBridge.artifacts.json`, capturing the bridge version and
-   per-platform SHA-256 hashes (override the version with `NORITO_BRIDGE_VERSION` if
-   needed).
+   ስክሪፕቱ የRust bridge ላይብረሪውን ለiOS እና ለማክሮስ ኢላማዎች ያጠናቅራል እና እነዚህን ይጠቀለላል
+   በአንድ XCFramework ማውጫ ስር የተገኙ የማይንቀሳቀሱ ቤተ-መጻሕፍት።
+   እንዲሁም `dist/NoritoBridge.artifacts.json` ያመነጫል, የድልድዩን ስሪት እና
+   በፕላትፎርም SHA-256 hashes (ስሪቱን በI18NI0000019X ይሽሩት
+   ያስፈልጋል)።
 
-2. Zip the XCFramework for distribution:
+2. ለስርጭት የ XCFramework ዚፕ፡-
 
    ```bash
    ditto -c -k --sequesterRsrc --keepParent \
@@ -62,71 +63,71 @@ artifacts inside an app (Xcode project wiring, ChaChaPoly usage, etc.), see
      artifacts/NoritoBridge.xcframework.zip
    ```
 
-3. Update the Swift package manifest (`IrohaSwift/Package.swift`) to point to the new
-   version and checksum:
+3. ወደ አዲሱ ለመጠቆም የስዊፍት ጥቅል ዝርዝር መግለጫ (`IrohaSwift/Package.swift`) ያዘምኑ።
+   ስሪት እና ቼክ;
 
    ```bash
    swift package compute-checksum artifacts/NoritoBridge.xcframework.zip
    ```
 
-   Record the checksum in `Package.swift` when defining the binary target.
+   የሁለትዮሽ ኢላማውን ሲገልጹ ቼክሱን በ I18NI0000021X ይመዝግቡ።
 
-4. Update `IrohaSwift/IrohaSwift.podspec` with the new version, checksum, and archive
+4. `IrohaSwift/IrohaSwift.podspec`ን በአዲሱ ስሪት፣ ቼክሰም እና ማህደር አዘምን
    URL.
 
-5. **Regenerate headers if the bridge gained new exports.** The Swift bridge now exposes
-   `connect_norito_set_acceleration_config` so `AccelerationSettings` can toggle Metal /
-   GPU backends. Ensure `NoritoBridge.xcframework/**/Headers/connect_norito_bridge.h`
-   matches `crates/connect_norito_bridge/include/connect_norito_bridge.h` before zipping.
+5. ** ድልድዩ አዲስ ኤክስፖርት ካገኘ ራስጌዎችን ያድሱ።** የስዊፍት ድልድይ አሁን አጋልጧል።
+   `connect_norito_set_acceleration_config` ስለዚህ `AccelerationSettings` ብረት መቀየር ይችላል /
+   የጂፒዩ መደገፊያዎች። `NoritoBridge.xcframework/**/Headers/connect_norito_bridge.h` ያረጋግጡ
+   ዚፕ ከመደረጉ በፊት `crates/connect_norito_bridge/include/connect_norito_bridge.h` ይዛመዳል።
 
-6. Run the Swift validation suite before tagging:
+6. መለያ ከመስጠትዎ በፊት የስዊፍት ማረጋገጫ ስብስብን ያሂዱ፡-
 
    ```bash
    swift test --package-path IrohaSwift
    make swift-ci
    ```
 
-   The first command ensures the Swift package (including `AccelerationSettings`) stays
-   green; the second validates fixture parity, renders the parity/CI dashboards, and
-   exercises the same telemetry checks enforced in Buildkite (including the
-   `ci/xcframework-smoke:<lane>:device_tag` metadata requirement).
+   የመጀመሪያው ትእዛዝ የስዊፍት ጥቅል (`AccelerationSettings`ን ጨምሮ) መቆየቱን ያረጋግጣል።
+   አረንጓዴ; ሁለተኛው የቋሚነት እኩልነትን ያረጋግጣል፣ የፓርቲ/CI ዳሽቦርዶችን ይሰጣል፣ እና
+   በBuildkite (የእ.ኤ.አ.ን ጨምሮ) የተተገበሩትን ተመሳሳይ የቴሌሜትሪ ፍተሻዎችን ይሠራል
+   `ci/xcframework-smoke:<lane>:device_tag` ሜታዳታ መስፈርት)።
 
-7. Commit the generated artifacts in a release branch and tag the commit.
+7. የተፈጠሩትን ቅርሶች በሚለቀቅበት ቅርንጫፍ ውስጥ አስገባ እና ቃልህን መለያ ስጥ።
 
-## Publishing
+## ማተም
 
-### Swift Package Manager
+### የስዊፍት ጥቅል አስተዳዳሪ
 
-- Push the tag to the public Git repository.
-- Ensure the tag is reachable by the package index (Apple or the community mirror).
-- Consumers can now depend on `.package(url: "https://github.com/hyperledger/iroha", from: "<version>")`.
+- መለያውን ወደ ይፋዊ የጂት ማከማቻ ይግፉት።
+- መለያው በጥቅል መረጃ ጠቋሚ (አፕል ወይም የማህበረሰብ መስታወት) ሊደረስበት የሚችል መሆኑን ያረጋግጡ።
+- ሸማቾች አሁን በ `.package(url: "https://github.com/hyperledger/iroha", from: "<version>")` ላይ ሊመኩ ይችላሉ።
 
 ### CocoaPods
 
-1. Validate the pod locally:
+1. ፖድውን በአካባቢው ያረጋግጡ፡-
 
    ```bash
    pod lib lint IrohaSwift.podspec --allow-warnings
    ```
 
-2. Push the updated podspec:
+2. የዘመነውን podspec ን ይጫኑ፡-
 
    ```bash
    pod trunk push IrohaSwift.podspec
    ```
 
-3. Confirm the new version appears in the CocoaPods index.
+3. በ CocoaPods ኢንዴክስ ውስጥ አዲሱን ስሪት እንደታየ ያረጋግጡ።
 
-## CI considerations
+## CI ግምት
 
-- Create a macOS job that runs the packaging script, archives artifacts, and uploads the
-  generated checksum as a workflow output.
-- Gate releases on the Swift demo app building against the freshly produced framework.
-- Store build logs to assist in diagnosing failures.
+- የማሸጊያ ስክሪፕቱን የሚያሄድ፣ ቅርሶችን የሚያከማች እና የሚሰቀል የማክሮስ ስራ ይፍጠሩ
+  የተፈጠረ ቼክ እንደ የስራ ፍሰት ውጤት።
+- ጌት በስዊፍት ማሳያ መተግበሪያ ሕንፃ ላይ አዲስ ከተመረተው ማዕቀፍ ጋር ይለቀቃል።
+- ውድቀቶችን ለመመርመር የሚረዱ የግንባታ ምዝግብ ማስታወሻዎችን ያከማቹ።
 
-## Additional automation ideas
+## ተጨማሪ ራስ-ሰር ሀሳቦች
 
-- Use `xcodebuild -create-xcframework` directly once all required targets are exposed.
-- Integrate signing/notarisation for distribution outside developer machines.
-- Keep integration tests in lock-step with the packaged version by pinning the SPM
-  dependency to the release tag.
+- ሁሉም አስፈላጊ ኢላማዎች ከተጋለጡ በኋላ `xcodebuild -create-xcframework` በቀጥታ ይጠቀሙ።
+- ከገንቢ ማሽኖች ውጭ ለማሰራጨት ፊርማ/ማስታወሻን ያዋህዱ።
+- SPMን በመሰካት ከታሸገው ስሪት ጋር የመዋሃድ ሙከራዎችን በደረጃ ያቆዩ
+  የመልቀቂያ መለያ ላይ ጥገኛ.

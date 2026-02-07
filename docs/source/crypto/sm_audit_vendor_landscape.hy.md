@@ -7,99 +7,98 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 0f39199767280be0fdd582301cdc3e8929497cf372a96f9f300e718f827000a7
 source_last_modified: "2025-12-29T18:16:35.941305+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% SM Audit Vendor Landscape
-% Iroha Crypto Working Group
+% SM Audit Վաճառողի Լանդշաֆտ
+% Iroha Crypto աշխատանքային խումբ
 % 2026-02-12
 
-# Overview
+# Ընդհանուր ակնարկ
 
-The Crypto Working Group needs a standing bench of independent reviewers who
-understand both Rust cryptography and the Chinese GM/T (SM2/SM3/SM4) standards.
-This note catalogues firms with relevant references and summarises the audit
-scope we typically request so request-for-proposal (RFP) cycles stay fast and
-consistent.
+Crypto աշխատանքային խմբին անհրաժեշտ է անկախ վերանայողների մշտական նստարան, ովքեր
+հասկանալ ինչպես Rust ծածկագրությունը, այնպես էլ չինական GM/T (SM2/SM3/SM4) ստանդարտները:
+Այս նշումը կատալոգում է ընկերություններին համապատասխան հղումներով և ամփոփում աուդիտը
+շրջանակը, որը մենք սովորաբար պահանջում ենք, որպեսզի առաջարկի հարցում (RFP) ցիկլերը մնան արագ և
+հետեւողական.
 
-# Candidate Firms
+# Թեկնածու ընկերություններ
 
-## Trail of Bits (CN Cryptography Practice)
+## Բիթերի արահետ (CN ծածկագրման պրակտիկա)
 
-- Documented engagements: 2023 security review of Ant Group’s Tongsuo
-  (SM-enabled OpenSSL distribution) and repeated audits of Rust-based
-  blockchains such as Diem/Libra, Sui, and Aptos.
-- Strengths: dedicated Rust cryptography team, automated constant-time
-  analysis tooling, experience validating deterministic execution and hardware
-  dispatch policies.
-- Fit for Iroha: can extend the current SM audit SOW or perform independent
-  re-tests; comfortable operating with Norito fixtures and IVM syscall
-  surfaces.
+- Փաստաթղթավորված ներգրավվածություններ. Ant Group-ի Tongsuo-ի 2023 թվականի անվտանգության վերանայում
+  (SM-ով միացված OpenSSL բաշխում) և Rust-ի վրա հիմնված կրկնվող աուդիտ
+  բլոկչեյններ, ինչպիսիք են Diem/Libra, Sui և Aptos:
+- Ուժեղ կողմեր. Rust ծածկագրման հատուկ թիմ, ավտոմատացված մշտական ժամանակ
+  վերլուծության գործիքավորում, դետերմինիստական կատարման և սարքավորումների վավերացման փորձ
+  առաքման քաղաքականություն:
+- Հարմար է Iroha-ի համար. կարող է երկարացնել ընթացիկ SM աուդիտի SOW-ը կամ կատարել անկախ
+  կրկնակի թեստեր; հարմարավետ աշխատանք Norito հարմարանքներով և IVM syscall-ով
+  մակերեսներ.
 
 ## NCC Group (APAC Cryptography Services)
 
-- Documented engagements: gm/T (SM) code examinations for regional payment
-  networks and HSM vendors; prior Rust reviews for Parity Substrate, Polkadot,
-  and Libra components.
-- Strengths: large APAC bench with bilingual reporting, ability to combine
-  compliance-style process checks with deep code review.
-- Fit for Iroha: ideal for second-opinion assessments or governance-driven
-  validation alongside Trail of Bits findings.
+- Փաստաթղթավորված ներգրավումներ. gm/T (SM) ծածկագրի փորձաքննություններ տարածաշրջանային վճարման համար
+  ցանցեր և HSM մատակարարներ; նախորդ Rust ակնարկներ Parity Substrate-ի համար, Polkadot,
+  և Կշեռքի բաղադրիչները:
+- Ուժեղ կողմերը. մեծ APAC նստարան երկլեզու հաշվետվություններով, համատեղելու ունակություն
+  համապատասխանության ոճի գործընթացի ստուգումներ՝ խորը կոդի վերանայմամբ:
+- Հարմար է Iroha-ի համար. իդեալական է երկրորդ կարծիքի գնահատման կամ կառավարման վրա հիմնված
+  վավերացում Trail of Bits-ի բացահայտումների հետ մեկտեղ:
 
-## SECBIT Labs (Beijing)
+## SECBIT լաբորատորիաներ (Պեկին)
 
-- Documented engagements: maintainers of the open-source `libsm` Rust crate
-  used by Nervos CKB and CITA; audited Guomi enablement for Nervos, Muta, and
-  FISCO BCOS Rust components with bilingual deliverables.
-- Strengths: engineers who actively ship SM primitives in Rust, strong
-  property-testing capabilities, deep familiarity with domestic compliance
-  requirements.
-- Fit for Iroha: valuable when we need reviewers who can supply comparative
-  test vectors and implementation guidance alongside findings.
+- Փաստաթղթավորված ներգրավումներ՝ բաց կոդով `libsm` Rust crate-ի պահպանողներ
+  օգտագործվում է Nervos CKB-ի և CITA-ի կողմից; աուդիտ է ենթարկել Guomi-ի հնարավորությունները Nervos-ի, Muta-ի և
+  FISCO BCOS Rust բաղադրիչներ երկլեզու առաքումներով:
+- Ուժեղ կողմեր. ինժեներներ, ովքեր ակտիվորեն առաքում են SM պրիմիտիվներ Rust-ում, ուժեղ
+  սեփականության փորձարկման հնարավորություններ, ներքին համապատասխանության խորը ծանոթություն
+  պահանջները։
+- Հարմար է Iroha-ի համար. արժեքավոր է, երբ մեզ անհրաժեշտ են վերանայողներ, ովքեր կարող են ապահովել համեմատական
+  թեստային վեկտորները և կատարման ուղեցույցը բացահայտումների հետ մեկտեղ:
 
-## SlowMist Security (Chengdu)
+## SlowMist Security (Չենդու)
 
-- Documented engagements: Substrate/Polkadot Rust security reviews including
-  Guomi forks for Chinese operators; routine assessments of SM2/SM3/SM4 wallet
-  and bridge code used by exchanges.
-- Strengths: blockchain-focused audit practice, integrated incident response,
-  guidance that spans core protocol code and operator tooling.
-- Fit for Iroha: helpful for validating SDK parity and operational touchpoints
-  in addition to core crates.
+- Փաստաթղթավորված ներգրավումներ. Substrate/Polkadot Rust անվտանգության ակնարկներ, ներառյալ
+  Guomi պատառաքաղներ չինական օպերատորների համար; SM2/SM3/SM4 դրամապանակի սովորական գնահատումներ
+  և բորսաների կողմից օգտագործվող կամուրջի կոդը:
+- Ուժեղ կողմերը՝ բլոկչեյնի վրա հիմնված աուդիտի պրակտիկա, միջադեպերի ինտեգրված արձագանք,
+  ուղեցույց, որն ընդգրկում է հիմնական արձանագրության կոդը և օպերատորի գործիքավորումը:
+- Հարմար է Iroha-ի համար. օգտակար է SDK հավասարության և գործառնական հպման կետերը վավերացնելու համար
+  բացի միջուկային արկղերից:
 
-## Chaitin Tech (QAX 404 Security Lab)
+## Chaitin Tech (QAX 404 Security Lab)- Փաստաթղթավորված ներգրավվածություններ. GmSSL/Tongsuo կարծրացման և SM2/SM3/ ներդրողներ
+  SM4-ի իրականացման ուղեցույց ներքին ֆինանսական հաստատությունների համար. հաստատվել է
+  Rust աուդիտի պրակտիկա, որը ներառում է TLS կույտերը և ծածկագրային գրադարանները:
+- Ուժեղ կողմեր. խորը կրիպտովերլուծության նախապատմություն, պաշտոնական ստուգումը զուգակցելու ունակություն
+  արտեֆակտներ ձեռքով վերանայմամբ, կարգավորիչի երկարատև հարաբերություններով:
+- Հարմար է Iroha-ի համար. հարմար է կարգավորող ստորագրման կամ պաշտոնական ապացույցի արտեֆակտների դեպքում
+  անհրաժեշտ է ուղեկցել ստանդարտ օրենսգրքի վերանայման զեկույցը:
 
-- Documented engagements: contributors to GmSSL/Tongsuo hardening and SM2/SM3/
-  SM4 implementation guidance for domestic financial institutions; established
-  Rust audit practice covering TLS stacks and cryptographic libraries.
-- Strengths: deep cryptanalysis background, ability to pair formal verification
-  artefacts with manual review, long-standing regulator relationships.
-- Fit for Iroha: suitable when regulatory sign-off or formal proof artefacts
-  need to accompany the standard code review report.
+# Տիպիկ աուդիտի շրջանակ և առաքումներ
 
-# Typical Audit Scope & Deliverables
+- **Տեխնիկական համապատասխանություն.** վավերացնել SM2 ZA-ի հաշվարկը, ստորագրությունը
+  կանոնականացում, SM3 լիցքավորում/սեղմում և SM4 ստեղների ժամանակացույց և IV մշակում
+  GM/T 0003-2012, GM/T 0004-2012, GM/T 0002-2012 դեմ.
+- **Դետերմինիզմ և մշտական ժամանակի վարքագիծ.** ուսումնասիրել ճյուղավորումը, որոնումը
+  սեղաններ և ապարատային առանձնահատկությունների դարպասներ (օրինակ՝ NEON, SM4 հրահանգներ) ապահովելու համար
+  Rust-ը և FFI-ի տարածումը մնում են որոշիչ աջակցվող սարքաշարում:
+- **FFI և մատակարարի ինտեգրում.** վերանայել OpenSSL/Tongsuo կապերը,
+  PKCS#11/HSM ադապտերներ և սխալների տարածման ուղիներ՝ կոնսենսուսային անվտանգության համար:
+- **Փորձարկման և հարմարանքների ծածկույթ.** գնահատել մռայլ ամրագոտիները, Norito շրջագայություններ,
+  ծխի դետերմինիստական թեստեր և խորհուրդ են տալիս դիֆերենցիալ փորձարկում կատարել բացերի դեպքում
+  հայտնվել.
+- **Կախվածության և մատակարարման շղթայի վերանայում.** հաստատեք կառուցման ծագումը, վաճառող
+  կարկատել քաղաքականություն, SBOM ճշգրտություն և վերարտադրվող կառուցման հրահանգներ:
+- **Փաստաթղթեր և գործառնություններ.** վավերացնել օպերատորի մատյանները, համապատասխանությունը
+  համառոտագրեր, կազմաձևման լռելյայնություններ և վերադարձի ընթացակարգեր:
+- **Հաշվետվական ակնկալիքներ.** գործադիր ամփոփագիր ռիսկի վարկանիշով, մանրամասն
+  բացահայտումներ՝ ծածկագրի հղումներով և վերականգնման ուղեցույցով, վերստուգման պլանով և
+  դետերմինիզմի երաշխիքները ընդգրկող ատեստավորումներ։
 
-- **Specification conformance:** validate SM2 ZA calculation, signature
-  canonicalisation, SM3 padding/compression, and SM4 key schedule & IV handling
-  against GM/T 0003-2012, GM/T 0004-2012, and GM/T 0002-2012.
-- **Determinism and constant-time behaviour:** examine branching, lookup
-  tables, and hardware feature gates (e.g., NEON, SM4 instructions) to ensure
-  Rust and FFI dispatch remain deterministic across supported hardware.
-- **FFI and provider integration:** review OpenSSL/Tongsuo bindings,
-  PKCS#11/HSM adapters, and error propagation paths for consensus safety.
-- **Test and fixture coverage:** assess fuzz harnesses, Norito round-trips,
-  deterministic smoke tests, and recommend differential testing where gaps
-  appear.
-- **Dependency and supply-chain review:** confirm build provenance, vendor
-  patch policies, SBOM accuracy, and reproducible build instructions.
-- **Documentation and operations:** validate operator runbooks, compliance
-  briefs, configuration defaults, and rollback procedures.
-- **Reporting expectations:** executive summary with risk rating, detailed
-  findings with code references & remediation guidance, retest plan, and
-  attestations covering determinism guarantees.
+# Հաջորդ քայլերը
 
-# Next Steps
-
-- Use this vendor roster during RFQ cycles; adjust the scope checklist above to
-  match the active SM milestone before issuing an RFP.
-- Record engagement outcomes in `docs/source/crypto/sm_audit_brief.md` and
-  surface status updates in `status.md` once contracts are executed.
+- Օգտագործեք այս վաճառողների ցուցակը RFQ ցիկլերի ընթացքում; հարմարեցնել վերը նշված շրջանակի ստուգաթերթը
+  համապատասխանել ակտիվ SM-ի նշաձողին նախքան RFP-ն տրամադրելը:
+- Գրանցեք ներգրավվածության արդյունքները `docs/source/crypto/sm_audit_brief.md`-ում և
+  մակերեսի կարգավիճակի թարմացումներ `status.md`-ում՝ պայմանագրերը կատարելուց հետո:

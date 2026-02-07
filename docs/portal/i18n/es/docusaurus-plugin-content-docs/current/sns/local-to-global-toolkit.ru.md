@@ -4,24 +4,26 @@ direction: ltr
 source: docs/portal/docs/sns/local-to-global-toolkit.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 # Набор инструментов Local -> Global адресов
 
-Эта страница отражает `docs/source/sns/local_to_global_toolkit.md` из mono-repo. Она включает CLI helpers и runbooks, требуемые пунктом дорожной карты **ADDR-5c**.
+Esta página utiliza `docs/source/sns/local_to_global_toolkit.md` en mono-repo. Entre los asistentes y runbooks de CLI, hay tres puntos de tarjetas **ADDR-5c**.
 
-## Обзор
+## Objeto
 
 - `scripts/address_local_toolkit.sh` оборачивает CLI `iroha`, чтобы получить:
   - `audit.json` -- структурированный вывод `iroha tools address audit --format json`.
-  - `normalized.txt` -- преобразованные IH58 (предпочтительно) / compressed (`sora`) (второй выбор) literals для каждого Local-domain selector.
-- Используйте скрипт вместе с dashboard ingest адресов (`dashboards/grafana/address_ingest.json`)
-  и правилами Alertmanager (`dashboards/alerts/address_ingest_rules.yml`), чтобы доказать безопасность cutover Local-8 /
-  Local-12. Следите за панелями коллизий Local-8 и Local-12 и алертами
-  `AddressLocal8Resurgence`, `AddressLocal12Collision`, и `AddressInvalidRatioSlo` перед
-  продвижением изменений manifest.
-- Сверяйтесь с [Address Display Guidelines](address-display-guidelines.md) и
-  [Address Manifest runbook](../../../source/runbooks/address_manifest_ops.md) для UX и incident-response контекста.
+  - `normalized.txt` -- literales IH58 predeterminados (предпочтительно) / comprimidos (`sora`) (второй выбор) para el selector de dominio local.
+- Implementar el script en la dirección de ingesta del panel (`dashboards/grafana/address_ingest.json`)
+  y la aplicación Alertmanager (`dashboards/alerts/address_ingest_rules.yml`), que permite realizar la transición local-8 /
+  Local-12. Следите за панелями коллизий Local-8 y Local-12 y alertas
+  `AddressLocal8Resurgence`, `AddressLocal12Collision` y `AddressInvalidRatioSlo` antes
+  продвижением изменений manifiesto.
+- Сверяйтесь с [Pautas de visualización de direcciones](address-display-guidelines.md) и
+  [Runbook de manifiesto de dirección](../../../source/runbooks/address_manifest_ops.md) para el contexto de UX y respuesta a incidentes.
 
 ## Использование
 
@@ -29,24 +31,22 @@ generator: docs/portal/scripts/sync-i18n.mjs
 scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_examples.txt       --output-dir artifacts/address_migration       --network-prefix 753       --format ih58
 ```
 
-Опции:
+Opciones:
 
-- `--format compressed (`sora`)` для вывода `sora...` вместо IH58.
-- `--no-append-domain` для вывода bare literals.
+- `--format compressed (`sora`)` para el `sora...` para el IH58.
+- `--no-append-domain` para usar literales desnudos.
 - `--audit-only` чтобы пропустить шаг конвертации.
-- `--allow-errors` чтобы продолжать сканирование при ошибочных строках (поведение совпадает с CLI).
+- `--allow-errors` Para realizar el escaneo desde otras estaciones (compatible con CLI).Script выводит пути артефактов в конце выполнения. Приложите оба файла k
+ticket de gestión de cambios вместе с Grafana captura de pantalla, подтверждающим ноль
+Local-8 детекций и ноль Local-12 коллизий minимум за >=30 дней.
 
-Скрипт выводит пути артефактов в конце выполнения. Приложите оба файла к
-change-management ticket вместе с Grafana screenshot, подтверждающим ноль
-Local-8 детекций и ноль Local-12 коллизий минимум за >=30 дней.
+## Integración CI
 
-## Интеграция CI
-
-1. Запустите скрипт в отдельном job и загрузите outputs.
-2. Блокируйте merges, когда `audit.json` сообщает Local selectors (`domain.kind = local12`).
+1. Abra el script en el trabajo anterior y guarde las salidas.
+2. Блокируйте fusiones, когда `audit.json` сообщает Selectores locales (`domain.kind = local12`).
    со значением по умолчанию `true` (меняйте на `false` только в dev/test при диагностике регрессий) и
-   добавьте `iroha tools address normalize --fail-on-warning --only-local` в CI, чтобы попытки регрессии
-   падали до production.
+   Inserte `iroha tools address normalize --fail-on-warning --only-local` en CI, estas son las regresiones populares
+   падали до producción.
 
-См. исходный документ для деталей, evidence чеклистов и release-note snippet, который можно
-использовать при анонсе cutover для клиентов.
+См. Documento completo para detalles, listas de pruebas y fragmentos de notas de la versión, muchos ejemplos
+Utilice una transición previa para los clientes.

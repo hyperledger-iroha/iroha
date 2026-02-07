@@ -4,72 +4,72 @@ direction: rtl
 source: docs/portal/docs/sorafs/developer-sdk-index.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: developer-sdk-index
-title: Guides SDK SoraFS
-sidebar_label: Guides SDK
-description: Extraits par langage pour intégrer les artefacts SoraFS.
+ID: ڈویلپر-ایس ڈی کے انڈیکس
+عنوان: SDK گائڈز SoraFS
+سائڈبار_لیبل: ایس ڈی کے گائڈز
+تفصیل: نمونے SoraFS کو مربوط کرنے کے لئے فی زبان کے ٹکڑوں۔
 ---
 
-:::note Source canonique
+::: نوٹ کینونیکل ماخذ
 :::
 
-Utilisez ce hub pour suivre les helpers par langage livrés avec la toolchain SoraFS.
-Pour les snippets Rust, allez à [Rust SDK snippets](./developer-sdk-rust.md).
+SoraFS ٹولچین کے ساتھ فراہم کردہ زبان کے مددگاروں کو ٹریک کرنے کے لئے اس حب کا استعمال کریں۔
+زنگ کے ٹکڑوں کے لئے ، [مورچا SDK اسنیپٹس] (./developer-sdk-rust.md) پر جائیں۔
 
-## Helpers par langage
+## زبان کے ذریعہ مددگار
 
-- **Python** — `sorafs_multi_fetch_local` (tests smoke de l'orchestrateur local) et
-  `sorafs_gateway_fetch` (exercices E2E de gateway) acceptent désormais un
-  `telemetry_region` optionnel plus un override de `transport_policy`
-  (`"soranet-first"`, `"soranet-strict"` ou `"direct-only"`), en miroir des knobs de
-  rollout du CLI. Lorsqu'un proxy QUIC local démarre,
-  `sorafs_gateway_fetch` renvoie le manifest navigateur via
-  `local_proxy_manifest` afin que les tests transmettent le trust bundle aux
-  adaptateurs navigateur.
-- **JavaScript** — `sorafsMultiFetchLocal` reflète le helper Python, renvoyant les
-  bytes de payload et les résumés de reçus, tandis que `sorafsGatewayFetch` exerce
-  les gateways Torii, passe les manifests du proxy local et expose les mêmes
-  overrides télémétrie/transport que le CLI.
-- **Rust** — les services peuvent embarquer le scheduler directement via
-  `sorafs_car::multi_fetch` ; consultez la référence
-  [Rust SDK snippets](./developer-sdk-rust.md) pour les helpers proof-stream et
-  l'intégration de l'orchestrateur.
-- **Android** — `HttpClientTransport.sorafsGatewayFetch(…)` réutilise l'exécuteur HTTP
-  Torii et respecte `GatewayFetchOptions`. Combinez-le avec
-  `ClientConfig.Builder#setSorafsGatewayUri` et l'indice d'upload PQ
-  (`setWriteModeHint(WriteModeHint.UPLOAD_PQ_ONLY)`) lorsque les uploads doivent
-  rester sur des chemins PQ-only.
+- ** ازگر ** - `sorafs_multi_fetch_local` (مقامی آرکسٹریٹر دھواں ٹیسٹ) اور
+  `sorafs_gateway_fetch` (E2E گیٹ وے مشقیں) اب قبول کرتا ہے a
+  اختیاری `telemetry_region` پلس `transport_policy` کا ایک اوور رائڈ
+  (`"soranet-first"`, `"soranet-strict"` or `"direct-only"`), mirroring the knobs
+  سی ایل آئی رول آؤٹ۔ جب ایک مقامی کوئک پراکسی شروع ہوتا ہے ،
+  `sorafs_gateway_fetch` براؤزر کے منشور کے ذریعے واپس کرتا ہے
+  `local_proxy_manifest` تاکہ ٹیسٹ ٹرسٹ کے بنڈل کو منتقل کریں
+  براؤزر اڈیپٹر۔
+- ** جاوا اسکرپٹ ** - `sorafsMultiFetchLocal` ازگر کے مددگار کی عکاسی کرتا ہے ، لوٹ رہا ہے
+  پے لوڈ بائٹس اور رسید کے خلاصے ، جبکہ `sorafsGatewayFetch` ورزش کرتا ہے
+  Torii گیٹ ویز ، مقامی پراکسی ظاہر کرتا ہے اور اسی کو بے نقاب کرتا ہے
+  ٹیلی میٹری/ٹرانسپورٹ کو بطور سی ایل آئی۔
+- ** زنگ ** - خدمات شیڈولر کو براہ راست بھیج سکتی ہیں
+  `sorafs_car::multi_fetch` ؛ حوالہ سے مشورہ کریں
+  [مورچا SDK اسنیپٹس] (./developer-sdk-rust.md) پروف اسٹریم مددگاروں اور
+  آرکسٹریٹر کا انضمام۔
+- **Android** — `HttpClientTransport.sorafsGatewayFetch(…)` reuses HTTP executor
+  Torii اور احترام `GatewayFetchOptions`۔ اس کے ساتھ جوڑیں
+  `ClientConfig.Builder#setSorafsGatewayUri` اور PQ اپ لوڈ انڈیکس
+  (`setWriteModeHint(WriteModeHint.UPLOAD_PQ_ONLY)`) جب اپ لوڈ کرنا ضروری ہے
+  صرف پی کیو صرف راستوں پر رہیں۔
 
-## Scoreboard et knobs de politique
+## اسکور بورڈ اور پالیسی نوبس
 
-Les helpers Python (`sorafs_multi_fetch_local`) et JavaScript
-(`sorafsMultiFetchLocal`) exposent le scoreboard du scheduler basé télémétrie utilisé
-par le CLI :
-
-- Les binaires de production activent le scoreboard par défaut ; définissez
-  `use_scoreboard=True` (ou fournissez des entrées `telemetry`) lors du replay des
-  fixtures afin que le helper dérive l'ordre pondéré des providers à partir des
-  métadonnées d'advert et des snapshots de télémétrie récents.
-- Définissez `return_scoreboard=True` pour recevoir les poids calculés avec les
-  reçus de chunk afin que les logs CI capturent les diagnostics.
-- Utilisez les tableaux `deny_providers` ou `boost_providers` pour rejeter des peers
-  ou ajouter un `priority_delta` quand le scheduler sélectionne des providers.
-- Conservez la posture par défaut `"soranet-first"` sauf en cas de downgrade ; fournissez
-  `"direct-only"` seulement lorsqu'une région de conformité doit éviter les relays ou
-  lors d'une répétition du fallback SNNet-5a, et réservez `"soranet-strict"` aux pilotes
-  PQ-only avec approbation de gouvernance.
-- Les helpers gateway exposent aussi `scoreboardOutPath` et `scoreboardNowUnixSecs`.
-  Définissez `scoreboardOutPath` pour persister le scoreboard calculé (miroir du flag
-  CLI `--scoreboard-out`) afin que `cargo xtask sorafs-adoption-check` valide les artefacts
-  SDK, et utilisez `scoreboardNowUnixSecs` quand les fixtures ont besoin d'une valeur
-  `assume_now` stable pour des métadonnées reproductibles. Dans le helper JavaScript,
-  vous pouvez aussi définir `scoreboardTelemetryLabel`/`scoreboardAllowImplicitMetadata` ;
-  si le label est omis, il dérive `region:<telemetryRegion>` (avec fallback vers `sdk:js`).
-  Le helper Python émet automatiquement `telemetry_source="sdk:python"` chaque fois qu'il
-  persiste un scoreboard et garde les métadonnées implicites désactivées.
+ازگر (`sorafs_multi_fetch_local`) اور جاوا اسکرپٹ مددگار
+(`sorafsMultiFetchLocal`) استعمال شدہ ٹیلی میٹری پر مبنی شیڈیولر کے اسکور بورڈ کو بے نقاب کریں
+بذریعہ CLI:- پروڈکشن بائنریز اسکور بورڈ کو بطور ڈیفالٹ قابل بناتے ہیں۔ وضاحت کریں
+  `use_scoreboard=True` (یا ان پٹ فراہم کریں `telemetry`) جب دوبارہ چلاتے ہو
+  فکسچر تاکہ مددگار فراہم کرنے والوں کے وزن والے آرڈر کو رب سے حاصل کرے
+  میٹا ڈیٹا اور حالیہ ٹیلی میٹری اسنیپ شاٹس کو ایڈورٹ کریں۔
+- `return_scoreboard=True` کی وضاحت کریں کہ وزن کے ساتھ حساب شدہ وزن حاصل کریں
+  چنک موصول ہوا تاکہ سی آئی لاگ ان تشخیص کو حاصل کرے۔
+- ساتھیوں کو مسترد کرنے کے لئے میزیں `deny_providers` یا `boost_providers` کا استعمال کریں
+  یا جب شیڈولر فراہم کنندگان کا انتخاب کرتا ہے تو `priority_delta` شامل کریں۔
+- ڈیفالٹ کرنسی `"soranet-first"` کو رکھیں سوائے اس کے کہ ڈاؤن گریڈ کی صورت میں۔ فراہم کریں
+  Torii صرف اس صورت میں جب تعمیل خطے کو ریلے سے بچنا چاہئے یا
+  پائلٹوں کے لئے SNNET-5A فال بیک ، اور ریزرو `"soranet-strict"` کی تکرار کے دوران
+  PQ- صرف گورننس کی منظوری کے ساتھ۔
+- گیٹ وے مددگار بھی `scoreboardOutPath` اور `scoreboardNowUnixSecs` کو بے نقاب کرتے ہیں۔
+  حساب کتاب اسکور بورڈ (پرچم کے آئینے کو برقرار رکھنے کے لئے `scoreboardOutPath` کی وضاحت کریں
+  CLI `--scoreboard-out`) تاکہ `cargo xtask sorafs-adoption-check` نمونے کی توثیق کرے
+  SDK ، اور `scoreboardNowUnixSecs` استعمال کریں جب فکسچر کو کسی قدر کی ضرورت ہوتی ہے
+  تولیدی میٹا ڈیٹا کے لئے مستحکم `assume_now`۔ جاوا اسکرپٹ ہیلپر میں ،
+  آپ `scoreboardTelemetryLabel`/`scoreboardAllowImplicitMetadata` بھی سیٹ کرسکتے ہیں۔
+  اگر لیبل کو خارج کردیا گیا ہے تو ، اس سے `region:<telemetryRegion>` (`sdk:js` پر فال بیک کے ساتھ) اخذ کیا گیا ہے۔
+  ازگر کا مددگار ہر بار خود بخود `telemetry_source="sdk:python"` جاری کرتا ہے
+  اسکور بورڈ پر برقرار رہتا ہے اور میٹا ڈیٹا کو غیر فعال کرتا رہتا ہے۔
 
 ```python
 result = sorafs_multi_fetch_local(

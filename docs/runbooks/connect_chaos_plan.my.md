@@ -7,141 +7,137 @@ generator: scripts/sync_docs_i18n.py
 source_hash: b1d414173d2f43d403a6a1ba5cd59a645cb0b94f5765e69a00f7078b1e96b1cd
 source_last_modified: "2025-12-29T18:16:35.913527+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Connect Chaos & Fault Rehearsal Plan (IOS3 / IOS7)
+# Chaos & Fault Rehearsal Plan (IOS3 / IOS7) ကို ချိတ်ဆက်ပါ။
 
-This playbook defines the repeatable chaos drills that satisfy the IOS3/IOS7
-roadmap action _“plan joint chaos rehearsal”_ (`roadmap.md:1527`). Pair it with
-the Connect preview runbook (`docs/runbooks/connect_session_preview_runbook.md`)
-when staging cross-SDK demos.
+ဤပြခန်းစာအုပ်သည် IOS3/IOS7 ကို ကျေနပ်စေသည့် ထပ်ခါတလဲလဲ ပရမ်းပတာလေ့ကျင့်မှုများကို သတ်မှတ်ဖော်ပြပါသည်။
+လမ်းပြမြေပုံလုပ်ဆောင်ချက် _“ပူးတွဲမငြိမ်မသက် အစမ်းလေ့ကျင့်မှု အစီအစဉ်”_ (`roadmap.md:1527`)။ ၎င်းကိုတွဲပါ။
+ချိတ်ဆက်မှု အကြိုကြည့်ရှုမှု ပြေးစာအုပ် (`docs/runbooks/connect_session_preview_runbook.md`)
+Cross-SDK သရုပ်ပြများကို အဆင့်မြှင့်တင်သည့်အခါ။
 
-## Goals & Success Criteria
-- Exercise the shared Connect retry/back-off policy, offline queue limits, and
-  telemetry exporters under controlled faults without mutating production code.
-- Capture deterministic artefacts (`iroha connect queue inspect` output,
-  `connect.*` metrics snapshots, Swift/Android/JS SDK logs) so governance can
-  audit every drill.
-- Prove that wallets and dApps honour config changes (manifest drifts, salt
-  rotation, attestation failures) by surfacing the canonical `ConnectError`
-  category and redaction-safe telemetry events.
+## ရည်မှန်းချက် နှင့် အောင်မြင်မှု သတ်မှတ်ချက်
+- မျှဝေထားသော ချိတ်ဆက်မှု ပြန်လည်ကြိုးစားခြင်း/နောက်ပြန်ပိတ်ခြင်း မူဝါဒ၊ အော့ဖ်လိုင်း တန်းစီခြင်း ကန့်သတ်ချက်တို့ကို ကျင့်သုံးပါ။
+  တယ်လီမီတာပို့ကုန်များသည် ထုတ်လုပ်မှုကုဒ်ကို ပြောင်းလဲခြင်းမရှိဘဲ ထိန်းချုပ်ထားသော ချို့ယွင်းချက်များအောက်တွင် ရှိနေသည်။
+- အဆုံးအဖြတ်ပေးသော ပစ္စည်းများကို ဖမ်းယူပါ (`iroha connect queue inspect` အထွက်၊
+  `connect.*` မက်ထရစ်များ လျှပ်တစ်ပြက်ရိုက်ချက်များ၊ Swift/Android/JS SDK မှတ်တမ်းများ) ထို့ကြောင့် အုပ်ချုပ်မှု လုပ်နိုင်သည်
+  လေ့ကျင့်မှုတိုင်းကို စစ်ဆေးပါ။
+- ပိုက်ဆံအိတ်များနှင့် dApps များသည် config အပြောင်းအလဲများကို ဂုဏ်ပြုကြောင်း သက်သေပြပါ (ပျံ့လွင့်မှုများ၊ ဆား
+  Canonical `ConnectError` ကို ကျော်လွှားခြင်းဖြင့် လည်ပတ်ခြင်း၊ သက်သေမအောင်မြင်ခြင်း)
+  အမျိုးအစားနှင့် တုံ့ပြန်ခြင်း-ဘေးကင်းသော တယ်လီမီတာ ဖြစ်ရပ်များ။
 
-## Prerequisites
-1. **Environment bootstrap**
-   - Start the demo Torii stack: `scripts/ios_demo/start.sh --telemetry-profile full`.
-   - Launch at least one SDK sample (`examples/ios/NoritoDemoXcode/NoritoDemoXcode`,
-     `examples/ios/NoritoDemo`, Android `demo-connect`, JS `examples/connect`).
-2. **Instrumentation**
-   - Enable SDK diagnostics (`ConnectQueueDiagnostics`, `ConnectQueueStateTracker`,
-     `ConnectSessionDiagnostics` in Swift; `ConnectQueueJournal` + `ConnectQueueJournalTests`
-     equivalents in Android/JS).
-   - Ensure the CLI `iroha connect queue inspect --sid <sid> --metrics` resolves
-     the queue path produced by the SDK (`~/.iroha/connect/<sid>/state.json` and
-     `metrics.ndjson`).
-   - Wire telemetry exporters so the following time series are visible in
-     Grafana and via `scripts/swift_status_export.py telemetry`: `connect.queue_depth`,
-     `connect.queue_dropped_total`, `connect.reconnects_total`,
-     `connect.resume_latency_ms`, `swift.connect.frame_latency`,
-     `android.telemetry.redaction.salt_version`.
-3. **Evidence folders** – create `artifacts/connect-chaos/<date>/` and store:
-   - raw logs (`*.log`), metrics snapshots (`*.json`), dashboard exports
-     (`*.png`), CLI outputs, and PagerDuty IDs.
+## လိုအပ်ချက်များ
+1. **ပတ်ဝန်းကျင် bootstrap**
+   - ဒီမို Torii စတက်ခ်- `scripts/ios_demo/start.sh --telemetry-profile full` ကို စတင်ပါ။
+   - အနည်းဆုံး SDK နမူနာ (`examples/ios/NoritoDemoXcode/NoritoDemoXcode`၊
+     `examples/ios/NoritoDemo`၊ Android `demo-connect`၊ JS `examples/connect`)။
+2. **တူရိယာ**
+   - SDK ရောဂါရှာဖွေမှုများကို ဖွင့်ပါ (`ConnectQueueDiagnostics`၊ `ConnectQueueStateTracker`၊
+     Swift တွင် `ConnectSessionDiagnostics`; `ConnectQueueJournal` + `ConnectQueueJournalTests`
+     Android/JS တွင် ညီမျှသည်)။
+   - CLI `iroha connect queue inspect --sid <sid> --metrics` ဖြေရှင်းကြောင်း သေချာပါစေ။
+     SDK (`~/.iroha/connect/<sid>/state.json` နှင့်
+     `metrics.ndjson`)။
+   - ဝါယာကြိုး တယ်လီမီတာ တင်ပို့သူများ ဖြစ်သောကြောင့် အောက်ပါ အချိန်စီးရီးများကို မြင်နိုင်သည်
+     Grafana နှင့် `scripts/swift_status_export.py telemetry`: `connect.queue_depth`၊
+     `connect.queue_dropped_total`, `connect.reconnects_total`၊
+     `connect.resume_latency_ms`, `swift.connect.frame_latency`၊
+     `android.telemetry.redaction.salt_version`။
+3. **အထောက်အထားဖိုင်တွဲများ** – `artifacts/connect-chaos/<date>/` ကို ဖန်တီးပြီး သိမ်းဆည်းပါ-
+   - ကုန်ကြမ်းမှတ်တမ်းများ (`*.log`)၊ မက်ထရစ်များ လျှပ်တစ်ပြက်ရိုက်ချက်များ (`*.json`)၊ ဒက်ရှ်ဘုတ် တင်ပို့မှု
+     (`*.png`)၊ CLI အထွက်များနှင့် PagerDuty ID များ။
 
-## Scenario Matrix
+## Scenario Matrix| ID | ပြတ်ရွေ့ | ဆေးထိုးအဆင့် | မျှော်လင့်ထားသောအချက်များ | အထောက်အထား |
+|----|-------|-----------------|-----------------|----------------|
+| C1 | WebSocket ပြတ်တောက်ပြီး ပြန်လည်ချိတ်ဆက် | `/v1/connect/ws` ကို ပရောက်စီတစ်ခု၏ နောက်ကွယ်တွင် ခြုံပါ (ဥပမာ၊ `kubectl -n demo port-forward svc/torii 18080:8080` + `toxiproxy-cli toxic add ... timeout`) သို့မဟုတ် ဝန်ဆောင်မှုကို ယာယီပိတ်ပါ (`kubectl scale deploy/torii --replicas=0` အတွက် ≤60s)။ ပိုက်ဆံအိတ်ကို ဘောင်များ ဆက်ပို့ရန် အတင်းအကြပ် အော့ဖ်လိုင်း တန်းစီခြင်းများကို ဖြည့်ပါ။ | `connect.reconnects_total` တိုးမှုများ၊ `connect.resume_latency_ms` တိုးသွားသော်လည်း - ပြတ်တောက်မှုဝင်းဒိုးအတွက် ဒက်ရှ်ဘုတ်မှတ်ချက်။- ပြန်လည်ချိတ်ဆက်မှု + ယိုထုတ်သည့်စာတိုများပါသည့် နမူနာမှတ်တမ်း ကောက်နုတ်ချက်။ |
+| C2 | အော့ဖ်လိုင်းတန်းစီလျှံမှု / TTL သက်တမ်းကုန် | တန်းစီကန့်သတ်ချက်များကို လျှော့ချရန် နမူနာကို ဖာထေးပါ (Swift- `ConnectQueueJournal.Configuration(maxRecordsPerQueue: 4, maxBytesPerQueue: 4096, retentionInterval: 30)` တွင် `ConnectSessionDiagnostics`၊ Android/JS နှင့် သက်ဆိုင်သော တည်ဆောက်မှုများကို အသုံးပြုသည်)။ dApp သည် တောင်းဆိုမှုများကို တန်းစီစောင့်ဆိုင်းနေချိန်တွင် ≥2× `retentionInterval` အတွက် ပိုက်ဆံအိတ်ကို ဆိုင်းငံ့လိုက်ပါ။ | `connect.queue_dropped_total{reason="overflow"}` နှင့် `{reason="ttl"}` တိုးခြင်း၊ `connect.queue_depth` ကန့်သတ်ချက်အသစ်တွင် ကုန်းပြင်မြင့်၊ SDKs မျက်နှာပြင် `ConnectError.QueueOverflow(limit: 4)` (သို့မဟုတ် `.QueueExpired`)။ `iroha connect queue inspect` သည် `state=Overflow` နှင့် `warn/drop` ရေစာများကို 100% ပြသည်။ | - မက်ထရစ်ကောင်တာများ၏ ဖန်သားပြင်ဓာတ်ပုံ။- CLI JSON အထွက်နှုန်း ပြည့်လျှံမှုကို ဖမ်းယူခြင်း။- `ConnectError` လိုင်းပါရှိသော Swift/Android မှတ်တမ်း အတိုအထွာ။ |
+| C3 | ပျံ့ / ဝန်ခံချက်ပယ်ချကြောင်းဖော်ပြ | Connect manifest ကို ပိုက်ဆံအိတ်များတွင် ဆောင်ရွက်ပေးခဲ့သည် (ဥပမာ၊ `docs/connect_swift_ios.md` နမူနာ မန်နီးဖက်စ်ကို မွမ်းမံပါ၊ သို့မဟုတ် Torii ဖြင့် `--connect-manifest-path` ဖြင့် `chain_id` သို့မဟုတ် `--connect-manifest-path` ဖြင့် စတင်ပါ) diff. dApp ၏ တောင်းဆိုချက်ကို ခွင့်ပြုချက်ရယူပြီး မူဝါဒမှတစ်ဆင့် ပိုက်ဆံအိတ်ကို ငြင်းပယ်ကြောင်း သေချာပါစေ။ | Torii သည် `HTTP 409` အတွက် `/v1/connect/session` နှင့် `manifest_mismatch`၊ SDKs သည် `ConnectError.Authorization.manifestMismatch(manifestVersion)` ကို ထုတ်လွှတ်သည်၊ တယ်လီမီတာက Grafana ကို မြှင့်ပေးသည် (18NI00000077X) အချည်းနှီးဖြစ်သည် (01) တန်းစီကျန်နေပါသည်။ | - Torii မှတ်တမ်း ကောက်နုတ်ချက် မကိုက်ညီမှု ထောက်လှမ်းမှုကို ပြသသည်။- ပေါ်လာသည့် အမှား၏ SDK ဖန်သားပြင်ဓာတ်ပုံ။- စမ်းသပ်မှုအတွင်း တန်းစီထားသောဘောင်များ မရှိကြောင်း မက်ထရစ် လျှပ်တစ်ပြက် ရိုက်ချက်။ |
+| C4 | သော့လည်ပတ်/ဆား-ဗားရှင်းအဖု| ချိတ်ဆက်ဆား သို့မဟုတ် AEAD သော့ကို ချိတ်ဆက်မှုအလယ်တွင် လှည့်ပါ။ dev stacks တွင်၊ Torii ကို `CONNECT_SALT_VERSION=$((old+1))` ဖြင့် ပြန်လည်စတင်ပါ (`docs/source/sdk/android/telemetry_schema_diff.md` တွင် Android redaction ဆားစမ်းသပ်မှုကို မှန်ကြည့်သည်)။ ဆားလည်ပတ်မှု မပြီးမချင်း ပိုက်ဆံအိတ်ကို အော့ဖ်လိုင်းမှာထားပါ၊ ထို့နောက် ပြန်စပါ။ | `ConnectError.Authorization.invalidSalt` ဖြင့် ပထမအကြိမ် ပြန်လည်စတင်ရန် ကြိုးပမ်းမှု မအောင်မြင်ပါ၊ တန်းစီနေသော flush (dApp သည် အကြောင်းပြချက် `salt_version_mismatch` ဖြင့် ကက်ရှ်ဘောင်များကို ချလိုက်သည်)၊ တယ်လီမီတာမှ `android.telemetry.redaction.salt_version` (Android) နှင့် `swift.connect.session_event{event="salt_rotation"}` တို့ကို ထုတ်ပေးပါသည်။ SID ပြန်လည်စတင်ပြီးနောက် ဒုတိယစက်ရှင် အောင်မြင်သည်။ | - ဆားခေတ်မတိုင်မီ/နောက်တွင် ပါရှိသည့် ဒက်ရှ်ဘုတ်မှတ်ချက်။- မမှန်ကန်သော ဆားအမှားနှင့် နောက်ဆက်တွဲအောင်မြင်မှု ပါဝင်သော မှတ်တမ်းများ။- `iroha connect queue inspect` အထွက်တွင် `state=Stalled` နှင့် နောက်တွင် အသစ်အသစ်သော `state=Active` ကို ပြသထားသည်။ || C5 | ထောက်ခံချက် / StrongBox ရှုံးနိမ့် | Android ပိုက်ဆံအိတ်များတွင် `ConnectApproval` ကို `attachments[]` + StrongBox အထောက်အထားထည့်သွင်းရန် စီစဉ်သတ်မှတ်ပါ။ အထောက်အထားကြိုးကြိုး (`scripts/android_keystore_attestation.sh` နှင့် `--inject-failure strongbox-simulated`) ကိုသုံးပါ သို့မဟုတ် dApp သို့မလွှဲပြောင်းမီ သက်သေခံချက် JSON ကို ချိုးဖျက်ပါ။ | DApp သည် `ConnectError.Authorization.invalidAttestation` ဖြင့် အတည်ပြုချက်ကို ပယ်ချသည်၊ Torii သည် ပျက်ကွက်ရသည့်အကြောင်းရင်းကို မှတ်တမ်းတင်ပြီး၊ ပို့ကုန်လုပ်ငန်းရှင်များက `connect.attestation_failed_total` ကို ထိမှန်ကာ တန်းစီသည် ချိုးဖောက်ဝင်ရောက်မှုကို ဖယ်ရှားပေးပါသည်။ Swift/JS dApps သည် စက်ရှင်ကို ဆက်လက်ရှင်သန်နေချိန်တွင် အမှားအယွင်းကို မှတ်တမ်းတင်ပါသည်။ | - ထိုးသွင်းထားသော ချို့ယွင်းမှု ID ပါရှိသော ကြိုးခွေမှတ်တမ်း။- SDK အမှားမှတ်တမ်း + တယ်လီမီတာ တန်ပြန်ဖမ်းယူမှု။- တန်းစီသည် မကောင်းတဲ့ဘောင်ကို ဖယ်ရှားခဲ့ကြောင်း အထောက်အထား (`recordsRemoved > 0`)။ |
 
-| ID | Fault | Injection steps | Expected signals | Evidence |
-|----|-------|-----------------|------------------|----------|
-| C1 | WebSocket outage & reconnect | Wrap `/v1/connect/ws` behind a proxy (e.g., `kubectl -n demo port-forward svc/torii 18080:8080` + `toxiproxy-cli toxic add ... timeout`) or temporarily block the service (`kubectl scale deploy/torii --replicas=0` for ≤60 s). Force the wallet to keep sending frames so offline queues fill. | `connect.reconnects_total` increments, `connect.resume_latency_ms` spikes but stays <1 s P95, queues enter `state=Draining` via `ConnectQueueStateTracker`. SDKs emit `ConnectError.Transport.reconnecting` once, then resume. | - `iroha connect queue inspect --sid <sid>` output showing non-zero `resume_attempts_total`.<br>- Dashboard annotation for outage window.<br>- Sample log excerpt with reconnect + drain messages. |
-| C2 | Offline queue overflow / TTL expiry | Patch the sample to shrink queue limits (Swift: instantiate `ConnectQueueJournal.Configuration(maxRecordsPerQueue: 4, maxBytesPerQueue: 4096, retentionInterval: 30)` inside `ConnectSessionDiagnostics`; Android/JS use corresponding constructors). Suspend the wallet for ≥2× `retentionInterval` while the dApp keeps enqueuing requests. | `connect.queue_dropped_total{reason="overflow"}` and `{reason="ttl"}` increment, `connect.queue_depth` plateaus at the new limit, SDKs surface `ConnectError.QueueOverflow(limit: 4)` (or `.QueueExpired`). `iroha connect queue inspect` shows `state=Overflow` with `warn/drop` watermarks at 100%. | - Screenshot of the metric counters.<br>- CLI JSON output capturing overflow.<br>- Swift/Android log snippet containing the `ConnectError` line. |
-| C3 | Manifest drift / admission rejection | Tamper with the Connect manifest served to wallets (e.g., modify `docs/connect_swift_ios.md` sample manifest, or start Torii with `--connect-manifest-path` pointing at a copy where `chain_id` or `permissions` differ). Have the dApp request approval and ensure the wallet rejects via policy. | Torii returns `HTTP 409` for `/v1/connect/session` with `manifest_mismatch`, SDKs emit `ConnectError.Authorization.manifestMismatch(manifestVersion)`, telemetry raises `connect.manifest_mismatch_total`, and queues remain empty (`state=Idle`). | - Torii log excerpt showing mismatch detection.<br>- SDK screenshot of surfaced error.<br>- Metrics snapshot proving no queued frames during the test. |
-| C4 | Key rotation / salt-version bump | Rotate the Connect salt or AEAD key mid-session. In dev stacks, restart Torii with `CONNECT_SALT_VERSION=$((old+1))` (mirrors the Android redaction salt test in `docs/source/sdk/android/telemetry_schema_diff.md`). Keep the wallet offline until salt rotation completes, then resume. | First resume attempt fails with `ConnectError.Authorization.invalidSalt`, queues flush (dApp drops cached frames with reason `salt_version_mismatch`), telemetry emits `android.telemetry.redaction.salt_version` (Android) and `swift.connect.session_event{event="salt_rotation"}`. Second session after SID refresh succeeds. | - Dashboard annotation with salt epoch before/after.<br>- Logs containing the invalid-salt error and subsequent success.<br>- `iroha connect queue inspect` output showing `state=Stalled` followed by fresh `state=Active`. |
-| C5 | Attestation / StrongBox failure | On Android wallets, configure `ConnectApproval` to include `attachments[]` + StrongBox attestation. Use the attestation harness (`scripts/android_keystore_attestation.sh` with `--inject-failure strongbox-simulated`) or tamper with the attestation JSON before handing to the dApp. | DApp rejects the approval with `ConnectError.Authorization.invalidAttestation`, Torii logs the failure reason, exporters bump `connect.attestation_failed_total`, and the queue purges the offending entry. Swift/JS dApps log the error while keeping the session alive. | - Harness log with injected failure ID.<br>- SDK error log + telemetry counter capture.<br>- Evidence that the queue removed the bad frame (`recordsRemoved > 0`). |
+## ဇာတ်လမ်းအသေးစိတ်
 
-## Scenario Details
-
-### C1 — WebSocket outage & reconnect
-1. Wrap Torii behind a proxy (toxiproxy, Envoy, or a `kubectl port-forward`) so
-   you can toggle availability without killing the entire node.
-2. Trigger a 45 s outage:
+### C1 — WebSocket ပြတ်တောက်ပြီး ပြန်လည်ချိတ်ဆက်ပါ။
+1. Torii ကို ပရောက်စီ (toxiproxy၊ Envoy သို့မဟုတ် `kubectl port-forward`) ၏နောက်တွင် ခြုံထားပါ
+   node တစ်ခုလုံးကို မသတ်ဘဲ ရရှိနိုင်မှုကို သင်ပြောင်းနိုင်သည်။
+2. 45s ပြတ်တောက်မှုကို ဖြစ်ပေါ်စေသည်-
    ```bash
    toxiproxy-cli toxic add connect-ws --type timeout --toxicity 1.0 --attribute timeout=45000
    sleep 45 && toxiproxy-cli toxic remove connect-ws --toxic timeout
    ```
-3. Observe telemetry dashboards and `scripts/swift_status_export.py telemetry
-   --json-out artifacts/connect-chaos/<date>/c1_metrics.json`.
-4. Dump queue state immediately after the outage:
+3. telemetry dashboards နှင့် `scripts/swift_status_export.py telemetry ကို ကြည့်ရှုပါ
+   --json-out artifacts/connect-chaos//c1_metrics.json`။
+4. ပြတ်တောက်ပြီးပြီးချင်း တန်းစီခြင်းကို စွန့်ပစ်ပါ-
    ```bash
    iroha connect queue inspect --sid "$SID" --metrics > artifacts/connect-chaos/<date>/c1_queue.txt
    ```
-5. Success = a single reconnect attempt, bounded queue growth, and automatic
-   drain after the proxy recovers.
+5. အောင်မြင်မှု = ပြန်လည်ချိတ်ဆက်ရန် ကြိုးပမ်းချက်တစ်ခု၊ ကန့်သတ်ထားသော လူတန်းကြီးထွားမှုနှင့် အလိုအလျောက်ဖြစ်သည်။
+   proxy ပြန်တက်လာပြီးနောက် ရေထုတ်လိုက်ပါ။
 
-### C2 — Offline queue overflow / TTL expiry
-1. Shrink queue thresholds in local builds:
-   - Swift: update the `ConnectQueueJournal` initializer inside your sample
-     (e.g., `examples/ios/NoritoDemoXcode/NoritoDemoXcode/ContentView.swift`)
-     to pass `ConnectQueueJournal.Configuration(maxRecordsPerQueue: 4, maxBytesPerQueue: 4096, retentionInterval: 30)`.
-   - Android/JS: pass the equivalent config object when constructing
-     `ConnectQueueJournal`.
-2. Suspend the wallet (simulator background or device airplane mode) for ≥60 s
-   while the dApp issues `ConnectClient.requestSignature(...)` calls.
-3. Use `ConnectQueueDiagnostics`/`ConnectQueueStateTracker` (Swift) or the JS
-   diagnostics helper to export the evidence bundle (`state.json`, `journal/*.to`,
-   `metrics.ndjson`).
-4. Success = overflow counters increment, SDK surfaces `ConnectError.QueueOverflow`
-   once, and the queue recovers after the wallet resumes.
+### C2 — အော့ဖ်လိုင်းတန်းစီလျှံမှု / TTL သက်တမ်းကုန်ဆုံး
+1. Local builds များတွင် တန်းစီရမည့် သတ်မှတ်ချက်များကို လျှော့ချပါ-
+   - Swift- သင်၏နမူနာအတွင်း၌ `ConnectQueueJournal` ကို အပ်ဒိတ်လုပ်ပါ။
+     (ဥပမာ၊ `examples/ios/NoritoDemoXcode/NoritoDemoXcode/ContentView.swift`)
+     `ConnectQueueJournal.Configuration(maxRecordsPerQueue: 4, maxBytesPerQueue: 4096, retentionInterval: 30)` အောင်မြင်ရန်။
+   - Android/JS- တည်ဆောက်သည့်အခါ တူညီသော config အရာဝတ္တုကို ဖြတ်သန်းပါ။
+     `ConnectQueueJournal`။
+2. ≥60s အတွက် ပိုက်ဆံအိတ် (simulator နောက်ခံ သို့မဟုတ် စက်လေယာဉ်ပျံမုဒ်) ကို ဆိုင်းငံ့ပါ။
+   dApp သည် `ConnectClient.requestSignature(...)` ခေါ်ဆိုမှုများကို ထုတ်နေစဉ်။
+3. `ConnectQueueDiagnostics`/`ConnectQueueStateTracker` (Swift) သို့မဟုတ် JS ကိုသုံးပါ
+   အထောက်အထားအစုအဝေးကို တင်ပို့ရန် ရောဂါရှာဖွေရေးအကူအညီပေးသူ (`state.json`၊ `journal/*.to`၊
+   `metrics.ndjson`)။
+4. အောင်မြင်မှု = overflow counters increment၊ SDK မျက်နှာပြင်များ `ConnectError.QueueOverflow`
+   တစ်ကြိမ်၊ ပိုက်ဆံအိတ်ပြန်စပြီးနောက် တန်းစီသည် ပြန်တက်လာသည်။
 
-### C3 — Manifest drift / admission rejection
-1. Make a copy of the admission manifest, e.g.:
+### C3 — ပျံ့လွင့်ခြင်း/ဝင်ခွင့် ငြင်းပယ်ခြင်းကို ဖော်ပြပါ။
+1. ဝင်ခွင့်ဖော်ပြချက် မိတ္တူကို ပြုလုပ်ပါ၊ ဥပမာ-
    ```bash
    cp configs/connect_manifest.json /tmp/manifest_drift.json
    sed -i '' 's/"chain_id": ".*"/"chain_id": "bogus-chain"/' /tmp/manifest_drift.json
    ```
-2. Launch Torii with `--connect-manifest-path /tmp/manifest_drift.json` (or
-   update the docker compose/k8s config for the drill).
-3. Attempt to start a session from the wallet; expect HTTP 409.
-4. Capture Torii + SDK logs plus `connect.manifest_mismatch_total` from
-   the telemetry dashboard.
-5. Success = rejection without queue growth, plus the wallet displays the shared
-   taxonomy error (`ConnectError.Authorization.manifestMismatch`).
-
-### C4 — Key rotation / salt bump
-1. Record the current salt version from telemetry:
+2. Torii ကို `--connect-manifest-path /tmp/manifest_drift.json` ဖြင့် စတင်ပါ (သို့မဟုတ်
+   လေ့ကျင့်ခန်းအတွက် docker compose/k8s config ကို အပ်ဒိတ်လုပ်ပါ။)
+3. ပိုက်ဆံအိတ်မှ session တစ်ခုစတင်ရန်ကြိုးစားပါ။ HTTP 409 ကို မျှော်လင့်ထားသည်။
+4. Torii + SDK မှတ်တမ်းများ အပေါင်း `connect.manifest_mismatch_total` မှ ရိုက်ယူပါ
+   တယ်လီမီတာ ဒက်ရှ်ဘုတ်။
+5. အောင်မြင်မှု = တန်းစီခြင်းမရှိဘဲ ငြင်းပယ်ခံရခြင်း၊ ပေါင်းထည့်ထားသော ပိုက်ဆံအိတ်သည် မျှဝေထားသည့်အရာကို ပြသသည်။
+   အဘိဓမ္မာဆိုင်ရာ အမှား (`ConnectError.Authorization.manifestMismatch`)။### C4 — သော့လှည့်ခြင်း / ဆားအဖု
+1. လက်ရှိ ဆားဗားရှင်းကို telemetry မှ မှတ်တမ်းတင်ပါ-
    ```bash
    scripts/swift_status_export.py telemetry --json-out artifacts/connect-chaos/<date>/c4_before.json
    ```
-2. Restart Torii with a new salt (`CONNECT_SALT_VERSION=$((OLD+1))` or update the
-   config map). Keep the wallet offline until the restart completes.
-3. Resume the wallet; the first resume should fail with an invalid-salt error
-   and `connect.queue_dropped_total{reason="salt_version_mismatch"}` increments.
-4. Force the app to drop cached frames by deleting the session directory
-   (`rm -rf ~/.iroha/connect/<sid>` or the platform-specific cache clear), then
-   restart the session with fresh tokens.
-5. Success = telemetry shows the salt bump, the invalid resume event is logged
-   once, and the next session succeeds without manual intervention.
+2. Torii ကို ဆားအသစ်ဖြင့် ပြန်စပါ (`CONNECT_SALT_VERSION=$((OLD+1))` သို့မဟုတ် အပ်ဒိတ်လုပ်ပါ။
+   config map)။ ပြန်လည်စတင်ခြင်း မပြီးမချင်း ပိုက်ဆံအိတ်ကို အော့ဖ်လိုင်းတွင်ထားပါ။
+3. ပိုက်ဆံအိတ်ကို ပြန်လည်စတင်ပါ။ ပထမကိုယ်ရေးရာဇဝင်သည် မမှန်ကန်သော ဆားအမှားတစ်ခုကြောင့် ကျရှုံးသင့်သည်။
+   နှင့် `connect.queue_dropped_total{reason="salt_version_mismatch"}` တိုးမြင့်မှုများ။
+4. စက်ရှင်လမ်းညွှန်ကို ဖျက်ခြင်းဖြင့် အက်ပ်အား ကက်ရှ်ဘောင်များကို ချခိုင်းပါ။
+   (`rm -rf ~/.iroha/connect/<sid>` သို့မဟုတ် ပလပ်ဖောင်းသတ်မှတ်ထားသော ကက်ရှ်ရှင်းလင်းခြင်း)၊ ထို့နောက်
+   တိုကင်အသစ်များဖြင့် session ကို ပြန်လည်စတင်ပါ။
+5. အောင်မြင်မှု = telemetry သည် ဆားအဖုအထစ်ကို ပြသသည်၊ မမှန်ကန်သော ကိုယ်ရေးရာဇဝင်ဖြစ်ရပ်ကို မှတ်တမ်းတင်ထားသည်။
+   တစ်ကြိမ်၊ လူကိုယ်တိုင်ဝင်ရောက်စွက်ဖက်မှုမရှိဘဲ နောက်ဆက်ရှင်သည် အောင်မြင်သည်။
 
-### C5 — Attestation / StrongBox failure
-1. Generate an attestation bundle using `scripts/android_keystore_attestation.sh`
-   (set `--inject-failure strongbox-simulated` to flip the signature bit).
-2. Have the wallet attach this bundle via its `ConnectApproval` API; the dApp
-   should validate and reject the payload.
-3. Verify telemetry (`connect.attestation_failed_total`, Swift/Android incident
-   metrics) and ensure the queue dropped the poisoned entry.
-4. Success = rejection is isolated to the bad approval, queues stay healthy,
-   and the attestation log is stored with the drill evidence.
+### C5 — အထောက်အထား/ StrongBox ကျရှုံးမှု
+1. `scripts/android_keystore_attestation.sh` ကို အသုံးပြု၍ သက်သေခံချက်အတွဲတစ်ခုကို ဖန်တီးပါ။
+   (လက်မှတ်ဘစ်ကိုလှန်ရန် `--inject-failure strongbox-simulated` ကို သတ်မှတ်ပါ။)
+2. ပိုက်ဆံအိတ်ကို ၎င်း၏ `ConnectApproval` API မှတစ်ဆင့် ဤအစုအဝေးကို ပူးတွဲပါရှိစေပါ။ dApp
+   payload ကိုအတည်ပြုပြီး ငြင်းပယ်သင့်သည်။
+3. တယ်လီမီတာကို အတည်ပြုပါ (`connect.attestation_failed_total`၊ Swift/Android ဖြစ်ရပ်မှန်
+   မက်ထရစ်များ) နှင့် လူတန်းသည် အဆိပ်သင့်သော ဝင်ရောက်မှုကို ကျဆင်းသွားကြောင်း သေချာပါစေ။
+4. အောင်မြင်မှု = အပယ်ခံရခြင်းသည် မကောင်းမှုကို ခွဲထုတ်ရန် စီတန်းကျန်းမာခြင်း၊
+   သက်သေအထောက်အထားများနှင့်အတူ သက်သေခံမှတ်တမ်းကို သိမ်းဆည်းထားသည်။
 
-## Evidence Checklist
-- `artifacts/connect-chaos/<date>/c*_metrics.json` exports from
-  `scripts/swift_status_export.py telemetry`.
-- CLI outputs (`c*_queue.txt`) from `iroha connect queue inspect`.
-- SDK + Torii logs with timestamps and SID hashes.
-- Dashboard screenshots with annotations for each scenario.
-- PagerDuty / incident IDs if Sev 1/2 alerts fired.
+## သက်သေစာရင်း
+- `artifacts/connect-chaos/<date>/c*_metrics.json` တို့မှ တင်ပို့သည်။
+  `scripts/swift_status_export.py telemetry`။
+- `iroha connect queue inspect` မှ CLI အထွက်များ (`c*_queue.txt`)။
+- အချိန်တံဆိပ်တုံးများနှင့် SID တွဲဆိုင်းများဖြင့် SDK + Torii မှတ်တမ်းများ။
+- အခြေအနေတစ်ခုစီအတွက် မှတ်စာများပါသော ဒက်ရှ်ဘုတ်စခရင်ပုံများ။
+- Sev1/2 သတိပေးချက်များ အလုပ်ဖြုတ်ပါက PagerDuty / အဖြစ်အပျက် ID များ။
 
-Completing the full matrix once per quarter satisfies the roadmap gate and
-shows that Swift/Android/JS Connect implementations respond deterministically
-across the highest-risk failure modes.
+လေးပုံတစ်ပုံလျှင် တစ်ကြိမ်လျှင် matrix အပြည့်ဖြည့်ခြင်းသည် လမ်းပြမြေပုံဂိတ်ကို ကျေနပ်စေသည်။
+Swift/Android/JS Connect အကောင်အထည်ဖော်မှုများသည် တိကျပြတ်သားစွာတုံ့ပြန်ကြောင်းပြသသည်။
+ဖြစ်နိုင်ခြေအမြင့်ဆုံးသော ကျရှုံးမှုမုဒ်များတစ်လျှောက်။

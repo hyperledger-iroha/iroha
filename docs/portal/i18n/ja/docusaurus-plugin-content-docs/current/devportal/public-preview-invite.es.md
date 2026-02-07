@@ -4,70 +4,72 @@ direction: ltr
 source: docs/portal/docs/devportal/public-preview-invite.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Playbook de invitaciones del preview publico
+# プレビュー公開の招待状のプレイブック
 
-## Objetivos del programa
+## プログラムの目的
 
-Este playbook explica como anunciar y ejecutar el preview publico una vez que el
-workflow de onboarding de revisores este activo. Mantiene honesto el roadmap DOCS-SORA al
-asegurar que cada invitacion se envie con artefactos verificables, guia de seguridad y un
-camino claro de feedback.
+エステ プレイブックの詳細な発表とプレビューの公開
+オンボーディングとエステ活動の見直しのワークフロー。 Mantiene 正直なロードマップ DOCS-SORA al
+確実に成果物を羨望の的に見ることができ、安全性を保証することができます
+カミノクラロデフィードバック。
 
-- **Audiencia:** lista curada de miembros de la comunidad, partners y maintainers que
-  firmaron la politica de uso aceptable del preview.
-- **Limites:** tamano de ola por defecto <= 25 revisores, ventana de acceso de 14 dias, respuesta
-  a incidentes en 24h.
+- **対象読者:** 共同体メンバーのリスト、パートナーおよびメンテナーのリスト
+  政府の政治政策のプレビューが受け入れられます。
+- **制限:** タマノ デ オラ ポル ディフェクト <= 25 修正、ベンタナ デ アクセソ デ 14 ディアス、レスプエスタ
+  24時間いつでも事件が起きる。
 
-## Checklist de gate de lanzamiento
+## ランサミエント門のチェックリスト
 
-Completa estas tareas antes de enviar cualquier invitacion:
+より良い招待状を記入してください:
 
-1. Ultimos artefactos de preview cargados en CI (`docs-portal-preview`,
-   manifest de checksum, descriptor, bundle SoraFS).
-2. `npm run --prefix docs/portal serve` (gateado por checksum) probado en el mismo tag.
-3. Tickets de onboarding de revisores aprobados y enlazados a la ola de invitaciones.
-4. Docs de seguridad, observabilidad e incidentes validados
-   ([`security-hardening`](./security-hardening.md),
-   [`observability`](./observability.md),
-   [`incident-runbooks`](./incident-runbooks.md)).
-5. Formulario de feedback o plantilla de issue preparada (incluye campos de severidad,
-   pasos de reproduccion, screenshots e info de entorno).
-6. Texto del anuncio revisado por Docs/DevRel + Governance.
+1. CI のプレビュー カルガドの究極の成果物 (`docs-portal-preview`、
+   チェックサム、記述子、バンドル SoraFS) のマニフェスト。
+2. `npm run --prefix docs/portal serve` (ゲートアド ポート チェックサム) エラー タグを禁止します。
+3. 招待状のオンボーディングと改訂のチケット。
+4. セキュリティ文書、事件の検証、監視
+   ([`security-hardening`](./security-hardening.md)、
+   [`observability`](./observability.md)、
+   [`incident-runbooks`](./incident-runbooks.md))。
+5. フィードバックや問題の準備の定式化 (重大な問題を含む)
+   再現手順、スクリーンショット、およびエンターノ情報)。
+6. Docs/DevRel + Governance の改訂テキスト。
 
-## Paquete de invitacion
+## 招待状を渡す
 
-Cada invitacion debe incluir:
+招待状の内容:
 
-1. **Artefactos verificados** - Proporciona enlaces al manifiesto/plan de SoraFS o a los
-   artefactos de GitHub mas el manifest de checksum y el descriptor. Referencia el comando
-   de verificacion explicitamente para que los revisores puedan ejecutarlo antes de levantar
-   el sitio.
-2. **Instrucciones de serve** - Incluye el comando de preview gateado por checksum:
+1. **Artefactos verificados** - Proporciona enlaces al manifyto/plan de SoraFS o a los
+   GitHub のマニフェストとチェックサムと記述子の成果物。コマンドの参照
+   レバンタルの安全性を確認するための明示的な見直し
+   エル・サイトオ。
+2. **サービスの指示** - チェックサムのプレビューコマンドが含まれています:
 
    ```bash
    DOCS_RELEASE_TAG=preview-<stamp> npm run --prefix docs/portal serve
    ```
 
-3. **Recordatorios de seguridad** - Indica que los tokens expiran automaticamente, los links
-   no deben compartirse y los incidentes deben reportarse de inmediato.
-4. **Canal de feedback** - Enlaza la plantilla/formulario y aclara expectativas de tiempos de respuesta.
-5. **Fechas del programa** - Proporciona fechas de inicio/fin, office hours o syncs, y la proxima
-   ventana de refresh.
+3. **Recordatorios de seguridad** - インディカ ケ ロス トークンの有効期限が自動的に切れ、リンクが失われる
+   事件や事件に関する報道は行われません。
+4. **フィードバックの連絡方法** - プラント/フォーミュラリオとアクララの期待値を確認します。
+5. **プログラムのスケジュール** - 開始/終了のプロポーシオナ、オフィス時間、同期、近くの時間
+   ベンタナ・デ・リフレッシュ。
 
-El email de muestra en
+メールでのメール
 [`docs/examples/docs_preview_invite_template.md`](../../../examples/docs_preview_invite_template.md)
-cubre estos requisitos. Actualiza los placeholders (fechas, URLs, contactos)
-antes de enviar.
+クブレ・エストス・リクイシトス。 Actualiza los プレースホルダー (フェチャ、URL、連絡先)
+アンビアル。
 
-## Exponer el host de preview
+## ホストのプレビューの説明者
 
-Solo promociona el host de preview una vez que el onboarding este completo y el ticket de cambio
-este aprobado. Consulta la [guia de exposicion del host de preview](./preview-host-exposure.md)
-para los pasos end-to-end de build/publish/verify usados en esta seccion.
+ソロプロモーションとプレビュー、オンボーディング、カンビオチケットの完了
+エステ・アプロバド。 [ホストのプレビューに関する説明](./preview-host-exposure.md) を参照してください。
+エンドツーエンドで構築/公開/検証を行うことができます。
 
-1. **Build y empaquetado:** Marca el release tag y produce artefactos deterministas.
+1. **エンパケタドを構築する:** マルカ エル リリース タグは、決定的な成果物を生み出します。
 
    ```bash
    cd docs/portal
@@ -86,17 +88,17 @@ para los pasos end-to-end de build/publish/verify usados en esta seccion.
      --out artifacts/sorafs/preview-descriptor.json
    ```
 
-   El script de pin escribe `portal.car`, `portal.manifest.*`, `portal.pin.proposal.json`,
-   y `portal.dns-cutover.json` bajo `artifacts/sorafs/`. Adjunta esos archivos a la ola de
-   invitaciones para que cada revisor pueda verificar los mismos bits.
+   `portal.car`、`portal.manifest.*`、`portal.pin.proposal.json`、を記述したスクリプト
+   y `portal.dns-cutover.json` バジョ `artifacts/sorafs/`。ラ・オラ・デの補助的なアーカイブ
+   招待状は、ミスモスのビットを検証するプエダ・パラ・ケ・カダ・リバイザーです。
 
-2. **Publicar el alias de preview:** Repite el comando sin `--skip-submit`
-   (proporciona `TORII_URL`, `AUTHORITY`, `PRIVATE_KEY[_FILE]`, y la prueba de alias emitida
-   por gobernanza). El script enlazara el manifest a `docs-preview.sora` y emitira
-   `portal.manifest.submit.summary.json` mas `portal.pin.report.json` para el bundle de evidencia.
+2. **プレビューの公開エイリアス:** コマンドを繰り返して `--skip-submit`
+   (proporciona `TORII_URL`, `AUTHORITY`, `PRIVATE_KEY[_FILE]`, y la prueba de alias Emida
+   ポル・ゴベルナンザ）。 El スクリプト enlazara el マニフェスト `docs-preview.sora` y Emiira
+   `portal.manifest.submit.summary.json` mas `portal.pin.report.json` は証拠のバンドルです。
 
-3. **Probar el despliegue:** Confirma que el alias resuelve y que el checksum coincide con el tag
-   antes de enviar invitaciones.
+3. **プロバーエルデスリーグ:** エイリアスの結果とチェックサムがタグと一致することを確認します
+   羨望の招待状。
 
    ```bash
    npm run probe:portal -- \
@@ -104,26 +106,24 @@ para los pasos end-to-end de build/publish/verify usados en esta seccion.
      --expect-release="$DOCS_RELEASE_TAG"
    ```
 
-   Mantener `npm run serve` (`scripts/serve-verified-preview.mjs`) a mano como fallback para
-   que los revisores puedan levantar una copia local si el edge de preview falla.
+   Mantener `npm run serve` (`scripts/serve-verified-preview.mjs`) マノ コモ フォールバック パラ
+   プエダン レヴァンタル ウナ コピア ローカル サイト エッジ デ プレビュー フォールアを確認してください。
 
-## Timeline de comunicaciones
+## コミュニケーションのタイムライン
 
-| Dia | Accion | Owner |
+|ダイヤ |アクシオン |オーナー |
 | --- | --- | --- |
-| D-3 | Finalizar copy de invitacion, refrescar artefactos, dry-run de verificacion | Docs/DevRel |
-| D-2 | Sign-off de gobernanza + ticket de cambio | Docs/DevRel + Governance |
-| D-1 | Enviar invitaciones usando la plantilla, actualizar tracker con lista de destinatarios | Docs/DevRel |
-| D | Kickoff call / office hours, monitorear dashboards de telemetria | Docs/DevRel + On-call |
-| D+7 | Digest de feedback de mitad de ola, triage de issues bloqueantes | Docs/DevRel |
-| D+14 | Cerrar ola, revocar acceso temporal, publicar resumen en `status.md` | Docs/DevRel |
+| D-3 |招待状の最終コピー、再作成アーティファクト、検証のドライラン |ドキュメント/開発リリース |
+| D-2 |サインオフ・デ・ゴベルナンサ + チケット・デ・カンビオ |ドキュメント/DevRel + ガバナンス |
+| D-1 |プランティラの招待状、目的地リストの実際のトラッカーを参照 |ドキュメント/開発リリース |
+| D |キックオフ コール / オフィス アワー、テレメトリのダッシュボードを監視 |ドキュメント/DevRel + オンコール |
+| D+7 |オラのフィードバックのダイジェスト、ブロカントの問題のトリアージ |ドキュメント/開発リリース |
+| D+14 | Cerrar ola、一時的な削除、公開再開 en `status.md` |ドキュメント/開発リリース |
 
-## Seguimiento de acceso y telemetria
-
-1. Registra cada destinatario, timestamp de invitacion y fecha de revocacion con el
-   preview feedback logger (ver
-   [`preview-feedback-log`](./preview-feedback-log)) para que cada ola comparta el mismo
-   rastro de evidencia:
+## テレメトリーへのアクセスを確保1.登録先の登録、招待のタイムスタンプ、および取り消しの連絡先
+   プレビュー フィードバック ロガー (ver
+   [`preview-feedback-log`](./preview-feedback-log)) 問題は解決します
+   証拠の記録:
 
    ```bash
    # Agrega un nuevo evento de invitacion a artifacts/docs_portal_preview/feedback_log.json
@@ -134,42 +134,42 @@ para los pasos end-to-end de build/publish/verify usados en esta seccion.
      --notes "wave-01 seed"
    ```
 
-   Los eventos soportados son `invite-sent`, `acknowledged`,
-   `feedback-submitted`, `issue-opened`, y `access-revoked`. El log vive en
-   `artifacts/docs_portal_preview/feedback_log.json` por defecto; adjuntalo al ticket de
-   la ola de invitaciones junto con los formularios de consentimiento. Usa el helper de
-   summary para producir un resumen auditable antes de la nota de cierre:
+   ロス イベントトス ソポルタドス ソン `invite-sent`、`acknowledged`、
+   `feedback-submitted`、`issue-opened`、y `access-revoked`。エル・ログ・ヴィベ・エン
+   `artifacts/docs_portal_preview/feedback_log.json` 欠陥あり。追加チケット
+   ラ・オラ・デ・インビタシオネス・ジュント・コン・ロス・デ・コンセントイミエント。アメリカ エル ヘルパー デ
+   プロデューサーと再開の監査可能な手順の概要:
 
    ```bash
    npm run --prefix docs/portal preview:summary -- --summary-json \
      > artifacts/docs_portal_preview/preview-20250303-summary.json
    ```
 
-   El summary JSON enumera invitaciones por ola, destinatarios abiertos, conteos de
-   feedback y el timestamp del evento mas reciente. El helper esta respaldado por
-   [`scripts/preview-feedback-log.mjs`](../../scripts/preview-feedback-log.mjs),
-   asi que el mismo workflow puede correr localmente o en CI. Usa la plantilla de digest en
+   概要 JSON 列挙型の招待状、目的地、コンテオス デ
+   イベントのタイムスタンプをフィードバックしてください。エル ヘルパー エスタ レスパルダード ポル
+   [`scripts/preview-feedback-log.mjs`](../../scripts/preview-feedback-log.mjs)、
+   ミスモ ワークフローは CI のローカル管理で発生します。アメリカの植物のダイジェスト版
    [`docs/examples/docs_preview_feedback_digest.md`](../../../examples/docs_preview_feedback_digest.md)
-   al publicar el recap de la ola.
-2. Etiqueta los dashboards de telemetria con el `DOCS_RELEASE_TAG` usado para la ola para que
-   los picos se puedan correlacionar con las cohortes de invitacion.
-3. Ejecuta `npm run probe:portal -- --expect-release=<tag>` despues del deploy para confirmar
-   que el entorno de preview anuncia la metadata correcta de release.
-4. Registra cualquier incidente en la plantilla del runbook y enlazalo a la cohorte.
+   ラオラの要約を公開します。
+2. `DOCS_RELEASE_TAG` に関するテレメトリア ダッシュボードのルール
+   ロス ピコ セ プエダン コルレラシオナル コン ラス コホーテス デ 招待。
+3. Ejecuta `npm run probe:portal -- --expect-release=<tag>` デプロイパラ確認
+   リリースのメタデータ修正をプレビュー通知します。
+4. ランブックおよびコホートのプラントに関する事件の登録。
 
-## Feedback y cierre
+## フィードバックとシエール
 
-1. Agrega feedback en un doc compartido o tablero de issues. Etiqueta items con
-   `docs-preview/<wave>` para que los owners del roadmap los consulten facilmente.
-2. Usa la salida summary del preview logger para poblar el reporte de la ola, luego resume
-   la cohorte en `status.md` (participantes, hallazgos principales, fixes planeados) y
-   actualiza `roadmap.md` si el hito DOCS-SORA cambio.
-3. Sigue los pasos de offboarding de
-   [`reviewer-onboarding`](./reviewer-onboarding.md): revoca acceso, archiva solicitudes y
-   agradece a los participantes.
-4. Prepara la siguiente ola refrescando artefactos, re-ejecutando los gates de checksum y
-   actualizando la plantilla de invitacion con nuevas fechas.
+1. 問題を文書で比較し、フィードバックを集約します。エチケットアイテムコン
+   `docs-preview/<wave>` は、オーナーのロードマップに関する相談を容易にします。
+2. アメリカのサリダの概要とプレビュー ロガーのポブラーとレポート、ルエゴの履歴書
+   la cohorte en `status.md` (参加者、ホールズゴス プリンシパル、修正プラナド) y
+   実際の `roadmap.md` シエルヒト DOCS-SORA カンビオ。
+3. オフボーディングを楽しむ
+   [`reviewer-onboarding`](./reviewer-onboarding.md): 同意の取り消し、アーカイブの要求 y
+   勝ち負けの参加者。
+4. チェックサムの再取得、再参照の情報を準備します。
+   実際のプランティーリャ デ 招待状コンヌエバス フェチャス。
 
-Aplicar este playbook de forma consistente mantiene el programa de preview auditable y
-le da a Docs/DevRel una forma repetible de escalar invitaciones a medida que el portal se
-acerca a GA.
+監査可能なプレビュー形式の一貫したプログラムのプレイブックを作成する
+Docs/DevRel を、ポータル サイトからの繰り返しのエスカレーション招待状に追加します。
+アセルカ、GA。

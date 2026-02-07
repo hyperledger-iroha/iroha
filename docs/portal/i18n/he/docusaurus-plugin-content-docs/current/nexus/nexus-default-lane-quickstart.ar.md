@@ -4,10 +4,12 @@ direction: rtl
 source: docs/portal/docs/nexus/nexus-default-lane-quickstart.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: nexus-default-lane-quickstart
+מזהה: nexus-default-lane-quickstart
 title: البدء السريع لـ lane الافتراضي (NX-5)
 sidebar_label: البدء السريع لـ lane الافتراضي
 description: اضبط وتحقق من fallback لـ lane الافتراضي في Nexus لكي تتمكن Torii و SDKs من حذف lane_id في lanes العامة.
@@ -21,14 +23,14 @@ description: اضبط وتحقق من fallback لـ lane الافتراضي في
 
 > **سياق خارطة الطريق:** NX-5 - تكامل lane العام الافتراضي. بيئة التشغيل تعرض الآن fallback `nexus.routing_policy.default_lane` كي تتمكن نقاط النهاية REST/gRPC في Torii وكل SDK من حذف `lane_id` بأمان عندما تنتمي الحركة إلى lane العام canonical. يوجه هذا الدليل المشغلين لإعداد الكتالوج، والتحقق من fallback في `/status`، واختبار سلوك العميل من البداية للنهاية.
 
-## المتطلبات المسبقة
+## ‏‎
 
 - نسخة Sora/Nexus من `irohad` (شغّل `irohad --sora --config ...`).
 - وصول إلى مستودع الإعدادات حتى تتمكن من تعديل أقسام `nexus.*`.
 - `iroha_cli` مهيأ للتحدث مع عنقود الهدف.
 - `curl`/`jq` (أو ما يعادله) لفحص حمولة `/status` في Torii.
 
-## 1. وصف كتالوج lane و dataspace
+## 1. מסלול טלפון ומרחב נתונים
 
 أعلن عن lanes و dataspaces التي يجب أن توجد على الشبكة. المقتطف أدناه (مقتطع من `defaults/nexus/config.toml`) يسجل ثلاث lanes عامة إضافة إلى aliases للـ dataspace المطابقة:
 
@@ -118,7 +120,7 @@ irohad --sora --config "${IROHA_CONFIG}"
 iroha_cli app nexus lane-report --summary
 ```
 
-Example output:
+פלט לדוגמה:
 
 ```
 Lane  Alias            Module           Status  Quorum  Validators  Detail
@@ -137,7 +139,7 @@ Lane  Alias            Module           Status  Quorum  Validators  Detail
 curl -s http://127.0.0.1:8080/status | jq '.nexus.routing_policy'
 ```
 
-Sample output:
+פלט לדוגמה:
 
 ```json
 {
@@ -158,12 +160,10 @@ curl -s http://127.0.0.1:8080/status \
         | {lane_id, alias, dataspace_alias, committed, manifest_ready, scheduler_utilization_pct}'
 ```
 
-هذا يؤكد أن لقطة TEU وبيانات alias ورايات manifest تتطابق مع الإعداد. نفس الحمولة تستخدمها لوحات Grafana لعرض lane-ingest.
-
-## 6. اختبار افتراضات العميل
+هذا يؤكد أن لقطة TEU وبيانات alias ورايات manifest تتطابق مع الإعداد. نفس الحمولة تستخدمها لوحات Grafana لعرض lane-ingest.## 6. اختبار افتراضات العميل
 
 - **Rust/CLI.** `iroha_cli` و crate عميل Rust يحذفان حقل `lane_id` عندما لا تمرر `--lane-id` / `LaneSelector`. لذلك يرجع queue router إلى `default_lane`. استخدم الأعلام الصريحة `--lane-id`/`--dataspace-id` فقط عند استهداف lane غير افتراضي.
-- **JS/Swift/Android.** أحدث إصدارات SDK تعامل `laneId`/`lane_id` كاختيارية وتعود إلى القيمة المعلنة في `/status`. حافظ على سياسة التوجيه متزامنة بين staging و production حتى لا تحتاج تطبيقات الهاتف لإعادة تهيئة طارئة.
+- **JS/Swift/Android.** أحدث إصدارات SDK تعامل `laneId`/`lane_id` كاختيارية وتعود إلى القيمة المعلنة ב-`/status`. حافظ على سياسة التوجيه متزامنة بين staging و production حتى لا تحتاج تطبيقات الهاتف لإعادة تهيئة طارئة.
 - **Pipeline/SSE tests.** مرشحات أحداث المعاملات تقبل الشرط `tx_lane_id == <u32>` (انظر `docs/source/pipeline.md`). اشترك في `/v1/pipeline/events/transactions` بهذا الشرط لإثبات أن الكتابات المرسلة بدون lane صريح تصل تحت معرف lane الاحتياطي.
 
 ## 7. المراقبة وروابط الحوكمة
@@ -171,4 +171,3 @@ curl -s http://127.0.0.1:8080/status \
 - `/status` ينشر ايضا `nexus_lane_governance_sealed_total` و `nexus_lane_governance_sealed_aliases` كي يتمكن Alertmanager من التحذير عندما تفقد lane manifest. ابق هذه التنبيهات مفعلة حتى في devnets.
 - خريطة القياس للـ scheduler ولوحة حوكمة lanes (`dashboards/grafana/nexus_lanes.json`) تتوقع حقول alias/slug من الكتالوج. إذا اعدت تسمية alias، اعد تسمية دلائل Kura المقابلة كي يحافظ المدققون على مسارات حتمية (متابعة تحت NX-1).
 - موافقات البرلمان لـ lanes الافتراضية يجب ان تتضمن خطة rollback. سجّل hash الـ manifest وأدلة الحوكمة بجانب هذا الدليل في runbook المشغل حتى لا تضطر الدورات المستقبلية لتخمين الحالة المطلوبة.
-

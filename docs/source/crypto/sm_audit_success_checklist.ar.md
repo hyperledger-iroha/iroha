@@ -6,67 +6,68 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 624ef9305dc14d477a616923c80445094c692bc6a38d69465f679b54ccd52e92
 source_last_modified: "2026-01-03T18:07:57.081283+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% SM2/SM3/SM4 Audit Success Criteria
-% Iroha Crypto Working Group
-% 2026-01-30
+% SM2/SM3/SM4 معايير نجاح التدقيق
+% Iroha مجموعة عمل التشفير
+%2026-01-30
 
-# Purpose
+#الغرض
 
-This checklist captures the concrete criteria required for a successful
-completion of the SM2/SM3/SM4 external audit. It should be reviewed during
-kick-off, revisited at each status checkpoint, and used to confirm exit
-conditions before enabling SM signing for production validators.
+تتضمن قائمة المراجعة هذه المعايير الملموسة المطلوبة لتحقيق النجاح
+الانتهاء من التدقيق الخارجي SM2/SM3/SM4. ينبغي مراجعتها خلال
+ركلة البداية، وإعادة النظر فيها عند كل نقطة تفتيش للحالة، واستخدامها لتأكيد الخروج
+الشروط قبل تمكين توقيع SM لمدققي الإنتاج.
 
-# Pre-Engagement Readiness
+# جاهزية ما قبل المشاركة
 
-- [ ] Contract signed, including scope, deliverables, confidentiality, and
-      remediation support language.
-- [ ] Audit team receives repository mirror access, CI artefact bucket, and
-      documentation bundle listed in `docs/source/crypto/sm_audit_brief.md`.
-- [ ] Points of contact confirmed with backups for each role
-      (crypto, IVM, platform ops, security, docs).
-- [ ] Internal stakeholders align on target release date and freeze windows.
-- [ ] SBOM export (`cargo auditable` + CycloneDX) generated and shared.
-- [ ] OpenSSL/Tongsuo build provenance package prepared
-      (source tarball hash, build script, reproducibility notes).
-- [ ] Latest deterministic test outputs captured:
-      `scripts/sm_openssl_smoke.sh`, `cargo test -p iroha_crypto sm`, and
-      Norito round-trip fixtures.
-- [ ] Torii `/v1/node/capabilities` advert (via `iroha runtime capabilities`) recorded, verifying the `crypto.sm` manifest fields and acceleration policy snapshot.
+- [ ] العقد الموقع، بما في ذلك النطاق والتسليمات والسرية و
+      لغة دعم العلاج.
+- [ ] يتلقى فريق التدقيق إمكانية الوصول إلى مرآة المستودع، ومجموعة عناصر CI، و
+      حزمة الوثائق مدرجة في `docs/source/crypto/sm_audit_brief.md`.
+- [ ] تم تأكيد نقاط الاتصال مع النسخ الاحتياطية لكل دور
+      (التشفير، IVM، عمليات النظام الأساسي، الأمان، المستندات).
+- [ ] يتوافق أصحاب المصلحة الداخليون مع تاريخ الإصدار المستهدف ويجمدون النوافذ.
+- [ ] تم إنشاء ومشاركة تصدير SBOM (`cargo auditable` + CycloneDX).
+- [ ] تم إعداد حزمة مصدر بناء OpenSSL/Tongsuo
+      (تجزئة tarball المصدر، وبناء البرنامج النصي، وملاحظات الاستنساخ).
+- [ ] تم التقاط أحدث مخرجات الاختبار الحتمي:
+      `scripts/sm_openssl_smoke.sh`، `cargo test -p iroha_crypto sm`، و
+      تركيبات Norito ذهابًا وإيابًا.
+- [ ] تم تسجيل إعلان Torii `/v1/node/capabilities` (عبر `iroha runtime capabilities`)، للتحقق من حقول البيان `crypto.sm` ولقطات سياسة التسريع.
 
-# Engagement Execution
+#تنفيذ الخطوبة
 
-- [ ] Kick-off workshop completed with shared understanding of goals,
-      timelines, and communication cadence.
-- [ ] Weekly status reports received and triaged; risk register updated.
-- [ ] Findings communicated within one business day of discovery when severity
-      is High or Critical.
-- [ ] Audit team validates determinism paths on ≥2 CPU architectures (x86_64,
-      aarch64) with matching outputs.
-- [ ] Side-channel review includes constant-time proofs or empirical testing
-      evidence for both Rust and FFI paths.
-- [ ] Compliance and documentation review confirms operator guidance matches
-      regulatory obligations.
-- [ ] Differential testing against reference implementations (RustCrypto,
-      OpenSSL/Tongsuo) executed with auditor oversight.
-- [ ] Fuzz harnesses evaluated; new seed corpora provided where gaps exist.
+- [ ] اكتملت ورشة العمل الأولية مع الفهم المشترك للأهداف،
+      الجداول الزمنية، وإيقاع الاتصالات.
+- [ ] استلام تقارير الحالة الأسبوعية وفرزها؛ تم تحديث سجل المخاطر.
+- [ ] يتم إبلاغ النتائج خلال يوم عمل واحد من اكتشافها عند خطورتها
+      عالية أو حرجة.
+- [ ] يقوم فريق التدقيق بالتحقق من صحة مسارات الحتمية على ≥2 بنيات وحدة المعالجة المركزية (x86_64،
+      aarch64) مع مخرجات مطابقة.
+- [ ] تتضمن مراجعة القناة الجانبية البراهين الثابتة أو الاختبارات التجريبية
+      دليل على كل من مسارات Rust و FFI.
+- [ ] تؤكد مراجعة الامتثال والوثائق على تطابق إرشادات المشغل
+      الالتزامات التنظيمية.
+- [ ] اختبار تفاضلي مقابل التطبيقات المرجعية (RustCrypto،
+      OpenSSL/Tongsuo) يتم تنفيذه بإشراف المدقق.
+- [ ] تم تقييم أحزمة الزغب؛ يتم توفير مجموعات البذور الجديدة حيثما توجد فجوات.
 
-# Remediation & Exit
+# العلاج والخروج
 
-- [ ] All findings categorised with severity, impact, exploitability, and
-      recommended remediation steps.
-- [ ] High/Critical issues receive patches or mitigations with auditor-approved
-      verification; residual risks documented.
-- [ ] Auditor supplies re-test validation evidencing fixed issues (diff, test
-      runs, or signed attestation).
-- [ ] Final report delivered: executive summary, detailed findings, methodology,
-      determinism verdict, compliance verdict.
-- [ ] Internal sign-off meeting concludes next steps, release adjustments,
-      and documentation updates.
-- [ ] `status.md` updated with audit outcome and outstanding remediation
-      follow-ups.
-- [ ] Post-mortem captured in `docs/source/crypto/sm_program.md` (lessons
-      learned, future hardening tasks).
+- [ ] جميع النتائج مصنفة حسب الخطورة، والتأثير، وقابلية الاستغلال، و
+      خطوات العلاج الموصى بها.
+- [ ] تتلقى المشكلات العالية/الحرجة تصحيحات أو عمليات تخفيف بموافقة المدقق
+      التحقق؛ تم توثيق المخاطر المتبقية.
+- [ ] يوفر المدقق التحقق من صحة إعادة الاختبار لإثبات المشكلات التي تم إصلاحها (الفرق، الاختبار
+      يعمل، أو شهادة موقعة).
+- [ ] تسليم التقرير النهائي: ملخص تنفيذي، النتائج التفصيلية، المنهجية،
+      حكم الحتمية، حكم الامتثال.
+- [ ] اجتماع التوقيع الداخلي يختتم الخطوات التالية، وتعديلات الإصدار،
+      وتحديثات الوثائق.
+- [ ] تم تحديث `status.md` بنتيجة التدقيق والمعالجة المتميزة
+      المتابعات.
+- [ ] تم التقاط تشريح الجثة في `docs/source/crypto/sm_program.md` (الدروس
+      المستفادة ، مهام تصلب المستقبل).

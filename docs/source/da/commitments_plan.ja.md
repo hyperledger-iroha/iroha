@@ -6,46 +6,47 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 2ea1b16b73a55e3e47dfe9d5bfc77dedce2e8fa9ff964d244856767f14931733
 source_last_modified: "2026-01-22T15:38:30.660808+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Sora Nexus Data Availability Commitments Plan (DA-3)
+# Sora Nexus データ可用性コミットメント プラン (DA-3)
 
-_Drafted: 2026-03-25 — Owners: Core Protocol WG / Smart Contract Team / Storage Team_
+_草案: 2026-03-25 — 所有者: コアプロトコルWG / スマートコントラクトチーム / ストレージチーム_
 
-DA-3 extends the Nexus block format so every lane embeds deterministic records
-describing the blobs accepted by DA-2. This note captures the canonical data
-structures, block pipeline hooks, light-client proofs, and Torii/RPC surfaces
-that must land before validators can rely on DA commitments during admission or
-governance checks. All payloads are Norito-encoded; no SCALE or ad-hoc JSON.
+DA-3 は Nexus ブロック形式を拡張し、すべてのレーンに確定的なレコードが埋め込まれるようにします。
+DA-2 によって受け入れられる BLOB について説明します。このメモは正規データをキャプチャします
+構造、ブロック パイプライン フック、ライト クライアント プルーフ、および Torii/RPC サーフェス
+バリデーターが入場時に DA コミットメントに依存できるようになる前に、着陸する必要があります。
+ガバナンスチェック。すべてのペイロードは Norito でエンコードされます。 SCALE またはアドホック JSON はありません。
 
-## Objectives
+## 目的
 
-- Carry per-blob commitments (chunk root + manifest hash + optional KZG
-  commitment) inside every Nexus block so peers can reconstruct availability
-  state without consulting off-ledger storage.
-- Provide deterministic membership proofs so light clients can verify that a
-  manifest hash was finalised in a given block.
-- Expose Torii queries (`/v1/da/commitments/*`) and proofs that let relays,
-  SDKs, and governance automation audit availability without replaying every
-  block.
-- Keep the existing `SignedBlockWire` envelope canonical by threading the new
-  structures through the Norito metadata header and block hash derivation.
+- BLOB ごとのコミットメントを実行 (チャンク ルート + マニフェスト ハッシュ + オプションの KZG)
+  コミットメント）をすべての Nexus ブロック内で実行できるため、ピアは可用性を再構築できます
+  簿外保管を参照せずに状態を維持します。
+- ライトクライアントがメンバーシップを検証できるように、確定的なメンバーシップ証明を提供します。
+  マニフェスト ハッシュが特定のブロックで確定されました。
+- Torii クエリ (`/v1/da/commitments/*`) とリレーを可能にする証明を公開します。
+  SDK とガバナンス自動化は、すべてをリプレイすることなく可用性を監査します。
+  ブロック。
+- 新しいエンベロープをスレッド化することで、既存の `SignedBlockWire` エンベロープを正規に保ちます。
+  Norito メタデータ ヘッダーとブロック ハッシュ導出による構造。
 
-## Scope Overview
+## 範囲の概要
 
-1. **Data model additions** in `iroha_data_model::da::commitment` plus block
-   header changes in `iroha_data_model::block`.
-2. **Executor hooks** so `iroha_core` ingests DA receipts emitted by Torii
-   (`crates/iroha_core/src/queue.rs` and `crates/iroha_core/src/block.rs`).
-3. **Persistence/indexes** so the WSV can answer commitment queries quickly
-   (`iroha_core/src/wsv/mod.rs`).
-4. **Torii RPC additions** for list/query/prove endpoints under
-   `/v1/da/commitments`.
-5. **Integration tests + fixtures** validating the wire layout and proof flow in
-   `integration_tests/tests/da/commitments.rs`.
+1. `iroha_data_model::da::commitment` plus ブロックの **データ モデルの追加**
+   `iroha_data_model::block` でヘッダーが変更されます。
+2. **Executor フック** により、`iroha_core` は、Torii によって発行された DA 受信を取り込みます
+   (`crates/iroha_core/src/queue.rs` および `crates/iroha_core/src/block.rs`)。
+3. **永続化/インデックス** により、WSV はコミットメント クエリに迅速に応答できます。
+   (`iroha_core/src/wsv/mod.rs`)。
+4. **Torii RPC 追加** (リスト/クエリ/証明エンドポイント用)
+   `/v1/da/commitments`。
+5. **統合テスト + 治具** でワイヤ レイアウトとプルーフ フローを検証します。
+   `integration_tests/tests/da/commitments.rs`。
 
-## 1. Data Model Additions
+## 1. データモデルの追加
 
 ### 1.1 `DaCommitmentRecord`
 
@@ -67,16 +68,16 @@ pub struct DaCommitmentRecord {
 }
 ```
 
-- `KzgCommitment` reuses the existing 48-byte point used under
-  `iroha_crypto::kzg`. Merkle lanes leave it empty; `kzg_bls12_381` lanes now
-  receive a deterministic BLAKE3-XOF commitment derived from the chunk root and
-  storage ticket so block hashes stay stable without an external prover.
-- `proof_scheme` is derived from the lane catalog; Merkle lanes reject stray KZG
-  payloads while `kzg_bls12_381` lanes require non-zero KZG commitments.
-- `proof_digest` anticipates DA-5 PDP/PoTR integration so the same record
-  enumerates the sampling schedule used to keep blobs live.
+- `KzgCommitment` は、以下で使用される既存の 48 バイト ポイントを再利用します。
+  `iroha_crypto::kzg`。マークルレーンは空のままにします。現在 `kzg_bls12_381` レーン
+  チャンク ルートから派生した決定論的な BLAKE3-XOF コミットメントを受け取り、
+  ストレージ チケットにより、外部証明者なしでもブロック ハッシュが安定した状態に保たれます。
+- `proof_scheme` はレーン カタログから派生します。マークルレーンは迷走KZGを拒否します
+  `kzg_bls12_381` レーンではゼロ以外の KZG コミットメントが必要です。
+- `proof_digest` は DA-5 PDP/PoTR 統合を予期しているため、同じレコード
+  BLOB をライブ状態に保つために使用されるサンプリング スケジュールを列挙します。
 
-### 1.2 Block header extension
+### 1.2 ブロックヘッダー拡張
 
 ```
 pub struct BlockHeader {
@@ -90,138 +91,132 @@ pub struct DaCommitmentBundle {
 }
 ```
 
-The bundle hash feeds into both the block hash and `SignedBlockWire` metadata.
-overhead.
+バンドル ハッシュは、ブロック ハッシュと `SignedBlockWire` メタデータの両方にフィードされます。
+オーバーヘッド。
 
-Implementation note: `BlockPayload` and the transparent `BlockBuilder` now expose
-`da_commitments` setters/getters (see `BlockBuilder::set_da_commitments` and
-`SignedBlock::set_da_commitments`), so hosts can attach a pre-built bundle
-before sealing a block. All helper constructors default the field to `None`
-until Torii threads real bundles through.
+実装メモ: `BlockPayload` と透過的な `BlockBuilder` が公開されるようになりました。
+`da_commitments` セッター/ゲッター (`BlockBuilder::set_da_commitments` および
+`SignedBlock::set_da_commitments`)、ホストは事前に構築されたバンドルを接続できます
+ブロックを封印する前に。すべてのヘルパー コンストラクターのデフォルトのフィールドは `None`
+Torii が実際のバンドルを通過するまで。
 
-### 1.3 Wire encoding
+### 1.3 ワイヤーエンコーディング- `SignedBlockWire::canonical_wire()` は、Norito ヘッダーを追加します。
+  既存のトランザクション リストの直後に `DaCommitmentBundle`。の
+  バージョン バイトは `0x01` です。
+- `SignedBlockWire::decode_wire()` は `version` が不明なバンドルを拒否します。
+  `norito.md` で説明されている Norito ポリシーと一致します。
+- ハッシュ導出の更新は `block::Hasher` にのみ存在します。ライトクライアントのデコード
+  Norito であるため、既存のワイヤ形式は新しいフィールドを自動的に取得します。
+  ヘッダーはその存在を宣伝します。
 
-- `SignedBlockWire::canonical_wire()` appends the Norito header for
-  `DaCommitmentBundle` immediately after the existing transaction list. The
-  version byte is `0x01`.
-- `SignedBlockWire::decode_wire()` rejects bundles whose `version` is unknown,
-  matching the Norito policy described in `norito.md`.
-- Hash derivation updates exist only in `block::Hasher`; light clients decoding
-  the existing wire format automatically gain the new field because the Norito
-  header advertises its presence.
+## 2. ブロック生産の流れ
 
-## 2. Block Production Flow
+1. Torii DA の取り込みは、署名されたレシートとコミットメント レコードを
+   DAスプール(`da-receipt-*.norito` / `da-commitment-*.norito`)。耐久性のある
+   受信ログは再起動時にカーソルをシードするため、再生された受信は引き続き順序付けされます
+   決定論的に。
+2. ブロックアセンブリはスプールからレシートをロードし、古くなった/すでに封印されたものをドロップします
+   コミットされたカーソルのスナップショットを使用してエントリを作成し、エントリごとに連続性を強制します。
+   `(lane, epoch)`。到達可能なレシートに一致するコミットメントがない場合、または
+   マニフェスト ハッシュを分岐すると、提案は黙って省略されるのではなく中止されます。
+3. 封印の直前に、ビルダーはコミットメントバンドルをスライスします。
+   レシート駆動セット、`(lane_id, epoch, sequence)` でソート、エンコード
+   Norito コーデックをバンドルし、`da_commitments_hash` をアップデートします。
+4. 完全なバンドルは WSV に保存され、内部のブロックと一緒に出力されます。
+   `SignedBlockWire`;コミットされたバンドルは受信カーソルを進めます (ハイドレートされた)
+   再起動時に Kura から）、ディスクの増加に合わせて古いスプール エントリを削除します。
 
-1. Torii DA ingest persists signed receipts and commitment records into the
-   DA spool (`da-receipt-*.norito` / `da-commitment-*.norito`). The durable
-   receipt log seeds cursors on restart so replayed receipts are still ordered
-   deterministically.
-2. Block assembly loads receipts from the spool, drops stale/already-sealed
-   entries using the committed cursor snapshot, and enforces contiguity per
-   `(lane, epoch)`. If a reachable receipt lacks a matching commitment or the
-   manifest hash diverges the proposal aborts instead of silently omitting it.
-3. Right before sealing, the builder slices the commitment bundle to the
-   receipt-driven set, sorts by `(lane_id, epoch, sequence)`, encodes the
-   bundle with the Norito codec, and updates `da_commitments_hash`.
-4. The full bundle is stored in the WSV and emitted alongside the block inside
-   `SignedBlockWire`; committed bundles advance the receipt cursors (hydrated
-   from Kura on restart) and prune stale spool entries to bound disk growth.
+ブロック アセンブリと `BlockCreated` 取り込みにより、各コミットメントが再検証されます。
+レーンカタログ: マークルレーンは漂遊 KZG コミットメントを拒否し、KZG レーンは
+ゼロ以外の KZG コミットメントとゼロ以外の `chunk_root`、および不明なレーンは
+落とした。 Torii の `/v1/da/commitments/verify` エンドポイントは同じガードをミラーリングします。
+そして、決定論的な KZG コミットメントをすべてのスレッドに取り込みます。
+`kzg_bls12_381` レコードにより、ポリシーに準拠したバンドルがブロック アセンブリに到達します。
 
-Block assembly and `BlockCreated` ingestion re-validate each commitment against
-the lane catalog: Merkle lanes reject stray KZG commitments, KZG lanes require a
-non-zero KZG commitment and non-zero `chunk_root`, and unknown lanes are
-dropped. Torii’s `/v1/da/commitments/verify` endpoint mirrors the same guard,
-and ingest now threads the deterministic KZG commitment into every
-`kzg_bls12_381` record so policy-compliant bundles reach block assembly.
+DA-2 取り込み計画で説明されているマニフェスト フィクスチャは、ソースとしても機能します。
+コミットメントバンドラーにとっての真実。 Torii テスト
+`manifest_fixtures_cover_all_blob_classes` は、すべてのマニフェストを再生成します。
+`BlobClass` バリアントであり、新しいクラスがフィクスチャを取得するまでコンパイルを拒否します。
+各 `DaCommitmentRecord` 内のエンコードされたマニフェスト ハッシュが、
+ゴールデン Norito/JSON ペア。【crates/iroha_torii/src/da/tests.rs:2902】
 
-The manifest fixtures described in the DA-2 ingest plan double as the source of
-truth for the commitment bundler. The Torii test
-`manifest_fixtures_cover_all_blob_classes` regenerates manifests for every
-`BlobClass` variant and refuses to compile until new classes gain fixtures,
-ensuring the encoded manifest hash inside each `DaCommitmentRecord` matches the
-golden Norito/JSON pair.【crates/iroha_torii/src/da/tests.rs:2902】
+ブロックの作成が失敗した場合、受信はキューに残るため、次のブロックが
+試みればそれらを拾うことができます。ビルダーは、最後に含まれた `sequence` を記録します。
+リプレイ攻撃を避けるためのレーン。
 
-If block creation fails the receipts remain in the queue so the next block
-attempt can pick them up; the builder records the last included `sequence` per
-lane to avoid replay attacks.
+## 3. RPC とクエリ サーフェス
 
-## 3. RPC & Query Surface
+Torii は 3 つのエンドポイントを公開します。|ルート |方法 |ペイロード |メモ |
+|----------|----------|----------|----------|
+| `/v1/da/commitments` | `POST` | `DaCommitmentQuery` (レーン/エポック/シーケンスによる範囲フィルター、ページネーション) |合計数、コミットメント、ブロック ハッシュを含む `DaCommitmentPage` を返します。 |
+| `/v1/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (レーン + マニフェスト ハッシュまたは `(epoch, sequence)` タプル)。 | `DaCommitmentProof` (レコード + マークル パス + ブロック ハッシュ) で応答します。 |
+| `/v1/da/commitments/verify` | `POST` | `DaCommitmentProof` |ブロック ハッシュ計算を再生し、含まれていることを検証するステートレス ヘルパー。 `iroha_crypto` に直接リンクできない SDK によって使用されます。 |
 
-Torii exposes three endpoints:
+すべてのペイロードは `iroha_data_model::da::commitment` の下に存在します。 Toriiルーターマウント
+既存の DA の隣にあるハンドラーは、トークン/mTLS を再利用するためにエンドポイントを取り込みます
+政策。
 
-| Route | Method | Payload | Notes |
-|-------|--------|---------|-------|
-| `/v1/da/commitments` | `POST` | `DaCommitmentQuery` (range filter by lane/epoch/sequence, pagination) | Returns `DaCommitmentPage` with total count, commitments, and block hash. |
-| `/v1/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (lane + manifest hash or `(epoch, sequence)` tuple). | Responds with `DaCommitmentProof` (record + Merkle path + block hash). |
-| `/v1/da/commitments/verify` | `POST` | `DaCommitmentProof` | Stateless helper that replays the block hash calculation and validates inclusion; used by SDKs that cannot link directly to `iroha_crypto`. |
+## 4. 包含証明とライトクライアント
 
-All payloads live under `iroha_data_model::da::commitment`. Torii routers mount
-the handlers next to the existing DA ingest endpoints to reuse token/mTLS
-policies.
+- ブロックプロデューサーは、シリアル化されたブロック上にバイナリマークルツリーを構築します。
+  `DaCommitmentRecord` リスト。ルートは `da_commitments_hash` をフィードします。
+- `DaCommitmentProof` は、ターゲット レコードと `(sibling_hash,
+  検証者がルートを再構築できるように、position)` エントリを追加します。証拠には次のものも含まれます
+  ブロック ハッシュと署名付きヘッダーにより、ライト クライアントがファイナリティを検証できます。
+- CLI ヘルパー (`iroha_cli app da prove-commitment`) は証明リクエスト/検証をラップします。
+  オペレータ用のサイクルおよびサーフェス Norito/hex 出力。
 
-## 4. Inclusion Proofs & Light Clients
+## 5. ストレージとインデックス作成
 
-- The block producer builds a binary Merkle tree over the serialized
-  `DaCommitmentRecord` list. The root feeds `da_commitments_hash`.
-- `DaCommitmentProof` packages the target record plus a vector of `(sibling_hash,
-  position)` entries so verifiers can reconstruct the root. Proofs also include
-  the block hash and signed header so light clients can verify finality.
-- CLI helpers (`iroha_cli app da prove-commitment`) wrap the proof request/verify
-  cycle and surface Norito/hex outputs for operators.
+WSV は、`manifest_hash` をキーとする専用の列ファミリーにコミットメントを保存します。
+セカンダリ インデックスは `(lane_id, epoch)` および `(lane_id, sequence)` をカバーするため、クエリは
+バンドル全体をスキャンすることは避けてください。各記録はそれを封印したブロックの高さを追跡します。
+これにより、キャッチアップ ノードがブロック ログからインデックスを迅速に再構築できるようになります。
 
-## 5. Storage & Indexing
+## 6. テレメトリーと可観測性
 
-WSV stores commitments in a dedicated column family keyed by `manifest_hash`.
-Secondary indexes cover `(lane_id, epoch)` and `(lane_id, sequence)` so queries
-avoid scanning full bundles. Each record tracks the block height that sealed it,
-allowing catch-up nodes to rebuild the index quickly from the block log.
+- `torii_da_commitments_total` は、ブロックが少なくとも 1 つを封印するたびに増加します
+  記録する。
+- `torii_da_commitment_queue_depth` は、バンドルされるのを待っているレシートを追跡します (
+  レーン）。
+- Grafana ダッシュボード `dashboards/grafana/da_commitments.json` ブロックを視覚化
+  DA-3 リリース ゲートが監査できるように、インクルージョン、キューの深さ、プルーフ スループットを設定します。
+  行動。
 
-## 6. Telemetry & Observability
+## 7. テスト戦略
 
-- `torii_da_commitments_total` increments whenever a block seals at least one
-  record.
-- `torii_da_commitment_queue_depth` tracks receipts waiting to be bundled (per
-  lane).
-- Grafana dashboard `dashboards/grafana/da_commitments.json` visualises block
-  inclusion, queue depth, and proof throughput so DA-3 release gates can audit
-  behaviour.
+1. `DaCommitmentBundle` エンコード/デコードおよびブロック ハッシュの **単体テスト**
+   導出の更新。
+2. `fixtures/da/commitments/` で正規をキャプチャする **ゴールデン フィクスチャ**
+   バイトとマークル証明をバンドルします。各バンドルはマニフェスト バイトを参照します
+   `fixtures/da/ingest/manifests/<blob_class>/manifest.{norito.hex,json}` から、つまり
+   `cargo test -p iroha_torii regenerate_da_ingest_fixtures -- --ignored --nocapture` を再生成しています
+   `ci/check_da_commitments.sh` がコミットメントを更新する前に、Norito ストーリーの一貫性を維持します。
+   証明。【fixture/da/ingest/README.md:1】
+3. **統合テスト** 2 つのバリデーターを起動し、サンプル BLOB を取り込み、
+   両方のノードがバンドルの内容とクエリ/証明に同意することを主張します。
+   応答。
+4. `integration_tests/tests/da/commitments.rs` の **ライトクライアント テスト**
+   (Rust) `/prove` を呼び出し、Torii と通信せずに証明を検証します。
+5. オペレーターを維持する **CLI スモーク** スクリプト `scripts/da/check_commitments.sh`
+   再現可能なツール。
 
-## 7. Testing Strategy
+## 8.展開計画|フェーズ |説明 |終了基準 |
+|------|-------------|------|
+| P0 — データ モデルのマージ | Land `DaCommitmentRecord`、ブロック ヘッダーの更新、および Norito コーデック。 |新しい器具を備えた `cargo test -p iroha_data_model` グリーン。 |
+| P1 — コア/WSV 配線 |キュー + ブロック ビルダー ロジックをスレッド化し、インデックスを永続化し、RPC ハンドラーを公開します。 | `cargo test -p iroha_core`、`integration_tests/tests/da/commitments.rs` はバンドル証明アサーションで合格します。 |
+| P2 — オペレーターツール | CLI ヘルパー、Grafana ダッシュボード、および証明検証ドキュメントの更新を提供します。 | `iroha_cli app da prove-commitment` は devnet に対して機能します。ダッシュボードにはライブデータが表示されます。 |
+| P3 — ガバナンスゲート | `iroha_config::nexus` でフラグが立てられたレーンで DA コミットメントを必要とするブロック バリデータを有効にします。 |ステータスエントリ + ロードマップ更新で DA-3 を 🈴 としてマークします。 |
 
-1. **Unit tests** for `DaCommitmentBundle` encoding/decoding and block hash
-   derivation updates.
-2. **Golden fixtures** under `fixtures/da/commitments/` capturing canonical
-   bundle bytes and Merkle proofs. Each bundle references the manifest bytes
-   from `fixtures/da/ingest/manifests/<blob_class>/manifest.{norito.hex,json}`, so
-   regenerating `cargo test -p iroha_torii regenerate_da_ingest_fixtures -- --ignored --nocapture`
-   keeps the Norito story consistent before `ci/check_da_commitments.sh` refreshes the commitment
-   proofs.【fixtures/da/ingest/README.md:1】
-3. **Integration tests** booting two validators, ingesting sample blobs, and
-   asserting that both nodes agree on the bundle contents and query/proof
-   responses.
-4. **Light-client tests** in `integration_tests/tests/da/commitments.rs`
-   (Rust) that call `/prove` and verify the proof without talking to Torii.
-5. **CLI smoke** script `scripts/da/check_commitments.sh` to keep operator
-   tooling reproducible.
+## 未解決の質問
 
-## 8. Rollout Plan
+1. **KZG とマークルのデフォルト** — 小さな BLOB は常に KZG コミットメントをスキップすべきか
+   ブロックサイズを減らすには？提案: `kzg_commitment` をオプションのままにし、ゲート経由でゲートする
+   `iroha_config::da.enable_kzg`。
+2. **シーケンス ギャップ** — 順序が乱れたレーンは許可されますか?現在の計画はギャップを拒否します
+   ガバナンスが緊急再生用に `allow_sequence_skips` を切り替えない限り。
+3. **ライトクライアント キャッシュ** — SDK チームは、軽量の SQLite キャッシュをリクエストしました。
+   証拠; DA-8に基づく追跡調査は保留中。
 
-| Phase | Description | Exit Criteria |
-|-------|-------------|---------------|
-| P0 — Data model merge | Land `DaCommitmentRecord`, block header updates, and Norito codecs. | `cargo test -p iroha_data_model` green with new fixtures. |
-| P1 — Core/WSV wiring | Thread queue + block builder logic, persist indexes, and expose RPC handlers. | `cargo test -p iroha_core`, `integration_tests/tests/da/commitments.rs` pass with bundle proof assertions. |
-| P2 — Operator tooling | Ship CLI helpers, Grafana dashboard, and proof verification doc updates. | `iroha_cli app da prove-commitment` works against devnet; dashboard displays live data. |
-| P3 — Governance gate | Enable block validator requiring DA commitments on the lanes flagged in `iroha_config::nexus`. | Status entry + roadmap update mark DA-3 as 🈴. |
-
-## Open Questions
-
-1. **KZG vs Merkle defaults** — Should small blobs always skip KZG commitments to
-   reduce block size? Proposal: keep `kzg_commitment` optional and gate via
-   `iroha_config::da.enable_kzg`.
-2. **Sequence gaps** — Do we allow out-of-order lanes? Current plan rejects gaps
-   unless governance toggles `allow_sequence_skips` for emergency replay.
-3. **Light-client cache** — SDK team requested a lightweight SQLite cache for
-   proofs; pending follow-up under DA-8.
-
-Answering these in implementation PRs moves DA-3 from 🈸 (this document) to 🈺
-once code work begins.
+実装 PR でこれらに答えると、DA-3 が 🈸 (このドキュメント) から 🈺 に移動します。
+コード作業が始まると。

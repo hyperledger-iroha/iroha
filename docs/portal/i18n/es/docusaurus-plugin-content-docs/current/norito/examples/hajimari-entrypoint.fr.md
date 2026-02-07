@@ -4,30 +4,32 @@ direction: ltr
 source: docs/portal/docs/norito/examples/hajimari-entrypoint.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-slug: /norito/examples/hajimari-entrypoint
-title: Squelette du point d'entrée Hajimari
-description: Structure minimale de contrat Kotodama avec un seul point d'entrée public et un gestionnaire d'état.
-source: crates/ivm/docs/examples/01_hajimari.ko
+babosa: /norito/examples/hajimari-entrypoint
+título: Squelette du point d'entrée Hajimari
+descripción: Estructura mínima de contrato Kotodama con un solo punto de entrada pública y un gestor de estado.
+fuente: crates/ivm/docs/examples/01_hajimari.ko
 ---
 
-Structure minimale de contrat Kotodama avec un seul point d'entrée public et un gestionnaire d'état.
+Estructura mínima de contrato Kotodama con un solo punto de entrada pública y un gestor de estado.
 
-## Parcours du registre
+## Rutas del registro
 
-- Compilez le contrat avec `koto_compile --abi 1` comme indiqué dans [Démarrage de Norito](/norito/getting-started#1-compile-a-kotodama-contract) ou via `cargo test -p ivm developer_portal_norito_snippets_compile`.
-- Effectuez un smoke-test du bytecode en local avec `ivm_run` / `developer_portal_norito_snippets_run` pour vérifier le log `info!` et le syscall initial avant de toucher un noeud.
-- Déployez l'artefact via `iroha_cli app contracts deploy` et confirmez le manifeste en suivant les étapes de [Démarrage de Norito](/norito/getting-started#4-deploy-via-iroha_cli).
+- Compile el contrato con `koto_compile --abi 1` como se indica en [Démarrage de Norito](/norito/getting-started#1-compile-a-kotodama-contract) o mediante `cargo test -p ivm developer_portal_norito_snippets_compile`.
+- Realice una prueba de humo del código de bytes en local con `ivm_run` / `developer_portal_norito_snippets_run` para verificar el registro `info!` y la llamada al sistema inicial antes de tocar un nuevo.
+- Implemente el artefacto a través de `iroha_cli app contracts deploy` y confirme el manifiesto en las siguientes etapas de [Démarrage de Norito](/norito/getting-started#4-deploy-via-iroha_cli).
 
-## Guides SDK associés
+## Guías SDK asociadas
 
-- [Quickstart SDK Rust](/sdks/rust)
-- [Quickstart SDK Python](/sdks/python)
-- [Quickstart SDK JavaScript](/sdks/javascript)
+- [Inicio rápido SDK Rust](/sdks/rust)
+- [Inicio rápido SDK Python](/sdks/python)
+- [Inicio rápido SDK JavaScript](/sdks/javascript)
 
-[Télécharger la source Kotodama](/norito-snippets/hajimari-entrypoint.ko)
+[Descargar la fuente Kotodama](/norito-snippets/hajimari-entrypoint.ko)
 
 ```text
 // Minimal initializer-style function inside a contract.

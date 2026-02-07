@@ -10,95 +10,96 @@ translation_last_reviewed: 2026-02-07
 id: nexus-bootstrap-plan
 title: Sora Nexus bootstrap & observability
 description: Operational plan for bringing the core Nexus validator cluster online before layering SoraFS and SoraNet services.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
-This page mirrors `docs/source/soranexus_bootstrap_plan.md`. Keep both copies aligned until localized versions land in the portal.
-:::
+::: ማስታወሻ ቀኖናዊ ምንጭ
+ይህ ገጽ `docs/source/soranexus_bootstrap_plan.md` ያንጸባርቃል። የተተረጎሙ ስሪቶች በፖርታሉ ውስጥ እስኪገቡ ድረስ ሁለቱንም ቅጂዎች በአንድ ላይ ያቆዩ።
+::
 
-# Sora Nexus Bootstrap & Observability Plan
+# Sora Nexus ቡትስትራፕ እና ታዛቢነት እቅድ
 
-## Objectives
-- Stand up the base Sora Nexus validator/observer network with governance keys, Torii APIs, and consensus monitoring.
-- Validate core services (Torii, consensus, persistence) before enabling SoraFS/SoraNet piggyback deployments.
-- Establish CI/CD workflows and observability dashboards/alerts to ensure network health.
+# አላማዎች
+- የሶራ Nexus አረጋጋጭ/ተመልካች አውታረ መረብ ከአስተዳደር ቁልፎች፣ I18NT0000013X ኤፒአይዎች እና የጋራ መግባባት ቁጥጥር ጋር መሰረቱን ይቁሙ።
+- የI18NT0000002X/SoraNet piggyback ማሰማራቶችን ከማንቃትዎ በፊት ዋና አገልግሎቶችን (Torii፣ ስምምነት፣ ጽናት) ያረጋግጡ።
+- የኔትወርክ ጤናን ለማረጋገጥ የሲአይ/ሲዲ የስራ ፍሰቶችን እና ታዛቢነት ዳሽቦርዶችን/ማንቂያዎችን ማቋቋም።
 
-## Prerequisites
-- Governance key material (council multisig, committee keys) available in HSM or Vault.
-- Baseline infrastructure (Kubernetes clusters or bare-metal nodes) in primary/secondary regions.
-- Updated bootstrap configuration (`configs/nexus/bootstrap/*.toml`) reflecting latest consensus parameters.
+## ቅድመ ሁኔታዎች
+- የአስተዳደር ቁልፍ ቁሳቁስ (የምክር ቤት መልቲሲግ፣ የኮሚቴ ቁልፎች) በHSM ወይም Vault ይገኛል።
+- የመጀመሪያ ደረጃ / ሁለተኛ ደረጃ ክልሎች ውስጥ የመሠረተ ልማት መሠረተ ልማት (የኩበርኔትስ ክላስተር ወይም ባዶ-ሜታል ኖዶች)።
+- የቅርብ ጊዜ የጋራ መግባባት መለኪያዎችን የሚያንፀባርቅ የተሻሻለ የቡትስትራፕ ውቅር (`configs/nexus/bootstrap/*.toml`)።
 
-## Network Environments
-- Operate two Nexus environments with distinct network prefixes:
-- **Sora Nexus (mainnet)** – production network prefix `nexus`, hosting canonical governance and SoraFS/SoraNet piggyback services (chain ID `0x02F1` / UUID `00000000-0000-0000-0000-000000000753`).
-- **Sora Testus (testnet)** – staging network prefix `testus`, mirroring mainnet configuration for integration testing and pre-release validation (chain UUID `809574f5-fee7-5e69-bfcf-52451e42d50f`).
-- Maintain separate genesis files, governance keys, and infrastructure footprints for each environment. Testus acts as the proving ground for all SoraFS/SoraNet rollouts before promotion to Nexus.
-- CI/CD pipelines should deploy to Testus first, execute automated smoke tests, and require manual promotion to Nexus once checks pass.
-- Reference configuration bundles live under `configs/soranexus/nexus/` (mainnet) and `configs/soranexus/testus/` (testnet), each containing sample `config.toml`, `genesis.json`, and Torii admission directories.
+## የአውታረ መረብ አከባቢዎች
+- ሁለት I18NT0000008X አካባቢዎችን ከተለዩ የአውታረ መረብ ቅድመ ቅጥያዎች ጋር ይስሩ።
+- ** Sora Nexus (ዋናኔት)** - የምርት አውታረ መረብ ቅድመ ቅጥያ `nexus`፣ ቀኖናዊ አስተዳደርን እና SoraFS/SoraNet piggyback አገልግሎቶችን (ሰንሰለት መታወቂያ `0x02F1` / UUID0028X/2090NI)።
+- ** Sora Testus (testnet) *** - የአውታረ መረብ ቅድመ-ቅጥያ `testus`, የማዋሃድ ሙከራ እና የቅድመ-መለቀቅ ማረጋገጫ (ሰንሰለት UUID `809574f5-fee7-5e69-bfcf-52451e42d50f`) የሚያንፀባርቅ የአውታረ መረብ ቅድመ ቅጥያ።
+- ለእያንዳንዱ አካባቢ የተለየ የዘፍጥረት ፋይሎችን፣ የአስተዳደር ቁልፎችን እና የመሠረተ ልማት አሻራዎችን ያቆዩ። Testus ወደ Nexus ከማስተዋወቅ በፊት ለሁሉም የSoraFS/SoraNet ልቀቶች እንደ ማረጋገጫ ሆኖ ያገለግላል።
+- CI/CD ቧንቧዎች መጀመሪያ ወደ Testus መዘርጋት፣ አውቶሜትድ የጭስ ሙከራዎችን ማድረግ እና ቼኮች ካለፉ በኋላ ወደ Nexus በእጅ ማስተዋወቅ አለባቸው።
+- የማጣቀሻ ውቅር ቅርቅቦች በ`configs/soranexus/nexus/` (ሜይንኔት) እና በ`configs/soranexus/testus/` (testnet) ስር ይኖራሉ፣ እያንዳንዱም ናሙና `config.toml`፣ `genesis.json` እና Torii የመግቢያ ማውጫዎችን ይይዛል።
 
-## Step 1 – Configuration Review
-1. Audit existing documentation:
-   - `docs/source/nexus/architecture.md` (consensus, Torii layout).
-   - `docs/source/nexus/deployment_checklist.md` (infra requirements).
-   - `docs/source/nexus/governance_keys.md` (key custody procedures).
-2. Validate genesis files (`configs/nexus/genesis/*.json`) align with current validator roster and staking weights.
-3. Confirm network parameters:
-   - Consensus committee size & quorum.
-   - Block interval / finality thresholds.
-   - Torii service ports and TLS certificates.
+## ደረጃ 1 - የውቅር ግምገማ
+1. ነባር ሰነዶችን ኦዲት ያድርጉ፡-
+   - `docs/source/nexus/architecture.md` (መግባባት፣ I18NT0000016X አቀማመጥ)።
+   - `docs/source/nexus/deployment_checklist.md` (የኢንፍራ መስፈርቶች).
+   - `docs/source/nexus/governance_keys.md` (ቁልፍ የጥበቃ ሂደቶች)።
+2. የዘፍጥረት ፋይሎችን ያረጋግጡ (`configs/nexus/genesis/*.json`) ከአሁኑ አረጋጋጭ ዝርዝር እና የክብደት ክብደት ጋር ይጣጣማሉ።
+3. የአውታረ መረብ መለኪያዎችን ያረጋግጡ፡-
+   - የስምምነት ኮሚቴ መጠን እና ምልአተ ጉባኤ።
+   - የጊዜ ክፍተት/የመጨረሻነት ገደቦችን አግድ።
+   - Torii የአገልግሎት ወደቦች እና የቲኤልኤስ የምስክር ወረቀቶች።
 
-## Step 2 – Bootstrap Cluster Deployment
-1. Provision validator nodes:
-   - Deploy `irohad` instances (validators) with persistent volumes.
-   - Ensure network firewall rules allow consensus & Torii traffic between nodes.
-2. Start Torii services (REST/WebSocket) on each validator with TLS.
-3. Deploy observer nodes (read-only) for extra resilience.
-4. Run bootstrap scripts (`scripts/nexus_bootstrap.sh`) to distribute genesis, start consensus, and register nodes.
-5. Execute smoke tests:
-   - Submit test transactions via Torii (`iroha_cli tx submit`).
-   - Verify block production/finality through telemetry.
-   - Check ledger replication across validators/observers.
+## ደረጃ 2 - የቡትስትራፕ ክላስተር ማሰማራት
+1. የአቅርቦት ማረጋገጫ አንጓዎች፡-
+   - የ `irohad` ምሳሌዎችን (አረጋጋጮችን) በቋሚ ጥራዞች ያሰማሩ።
+   - የአውታረ መረብ ፋየርዎል ደንቦች መግባባት እና Torii በአንጓዎች መካከል የሚፈቅዱ መሆኑን ያረጋግጡ።
+2. የTorii አገልግሎቶችን (REST/WebSocket) በእያንዳንዱ አረጋጋጭ በTLS ይጀምሩ።
+3. ለተጨማሪ የመቋቋም ችሎታ የተመልካቾችን ኖዶች (ተነባቢ-ብቻ) ያሰምሩ።
+4. ዘፍጥረትን ለማሰራጨት፣ መግባባት ለመጀመር እና አንጓዎችን ለመመዝገብ የቡትስትራፕ ስክሪፕቶችን (`scripts/nexus_bootstrap.sh`) ያሂዱ።
+5. የጭስ ሙከራዎችን ያከናውኑ;
+   - የሙከራ ግብይቶችን በI18NT0000020X (`iroha_cli tx submit`) ያስገቡ።
+   - በቴሌሜትሪ የማገድ ምርት/የመጨረሻውን ያረጋግጡ።
+   - የሒሳብ ማባዛትን በአረጋጋጮች/ታዛቢዎች ላይ ያረጋግጡ።
 
-## Step 3 – Governance & Key Management
-1. Load council multisig configuration; confirm governance proposals can be submitted and ratified.
-2. Securely store consensus/committee keys; configure automatic backups with access logging.
-3. Set up emergency key rotation procedures (`docs/source/nexus/key_rotation.md`) and verify runbook.
+## ደረጃ 3 - አስተዳደር እና ቁልፍ አስተዳደር
+1. የመጫን ምክር ቤት ባለብዙ-ሲግ ውቅር; የአስተዳደር ሀሳቦችን ማቅረብ እና ማፅደቅ እንደሚቻል ያረጋግጡ።
+2. የጋራ ስምምነት / ኮሚቴ ቁልፎችን በአስተማማኝ ሁኔታ ያከማቹ; አውቶማቲክ ምትኬዎችን ከመድረሻ ምዝግብ ማስታወሻ ጋር ያዋቅሩ።
+3. የአደጋ ጊዜ ቁልፍ የማዞሪያ ሂደቶችን (`docs/source/nexus/key_rotation.md`) ያዘጋጁ እና Runbook ያረጋግጡ።
 
-## Step 4 – CI/CD Integration
-1. Configure pipelines:
-   - Build & publish validator/Torii images (GitHub Actions or GitLab CI).
-   - Automated configuration validation (lint genesis, verify signatures).
-   - Deployment pipelines (Helm/Kustomize) for staging & production clusters.
-2. Implement smoke tests in CI (spin up ephemeral cluster, run canonical transaction suite).
-3. Add rollback scripts for failed deployments and document runbooks.
+## ደረጃ 4 - CI/CD ውህደት
+1. የቧንቧ መስመሮችን አዋቅር;
+   - አረጋጋጭ/I18NT0000021X ምስሎችን (GitHub Actions ወይም GitLab CI) ይገንቡ እና ያትሙ።
+   - ራስ-ሰር ውቅር ማረጋገጫ (ሊንት ጄኔሲስ ፣ ፊርማዎችን ያረጋግጡ)።
+   - የማሰማራት ቧንቧዎች (Helm/Kustomize) ለዝግጅት እና የምርት ስብስቦች።
+2. የጭስ ሙከራዎችን በCI ውስጥ ይተግብሩ (የኢፌመራል ክላስተር ይሽከረከሩ፣ ቀኖናዊ ግብይት ስብስብን ያካሂዱ)።
+3. ላልተሳካላቸው ማሰማራቶች የመመለሻ ስክሪፕቶችን ያክሉ እና Runbooksን ይመዝግቡ።
 
-## Step 5 – Observability & Alerts
-1. Deploy monitoring stack (Prometheus + Grafana + Alertmanager) per region.
-2. Collect core metrics:
-  - `nexus_consensus_height`, `nexus_finality_lag`, `torii_request_duration_seconds`, `validator_peer_count`.
-   - Logs via Loki/ELK for Torii & consensus services.
-3. Dashboards:
-   - Consensus health (block height, finality, peer status).
-   - Torii API latency/error rates.
-   - Governance transactions & proposal statuses.
-4. Alerts:
-   - Block production stall (>2 block intervals).
-   - Peer count drop below quorum.
-   - Torii error rate spikes.
-   - Governance proposal queue backlog.
+## ደረጃ 5 - ታዛቢነት እና ማንቂያዎች
+1. የክትትል ቁልል (Prometheus + Grafana + Alertmanager) በየክልሉ ያሰማሩ።
+2. ዋና መለኪያዎችን ሰብስብ፡-
+  - `nexus_consensus_height`፣ `nexus_finality_lag`፣ `torii_request_duration_seconds`፣ `validator_peer_count`።
+   - ለTorii እና የጋራ ስምምነት አገልግሎቶች በሎኪ/ኤልኬ በኩል ምዝግብ ማስታወሻዎች።
+3. ዳሽቦርዶች፡
+   - የጋራ መግባባት ጤና (የማገድ ቁመት, የመጨረሻነት, የአቻ ሁኔታ).
+   - Torii ኤፒአይ የቆይታ/የስህተት ተመኖች።
+   - የአስተዳደር ግብይቶች እና የፕሮፖዛል ሁኔታዎች።
+4. ማንቂያዎች፡-
+   - የምርት ድንኳን አግድ (> 2 የማገጃ ክፍተቶች).
+   - የእኩዮች ብዛት ከምልአተ ጉባኤው በታች ወድቋል።
+   - Torii የስህተት መጠን ሹል.
+   - የአስተዳደር ፕሮፖዛል ወረፋ የኋላ መዝገብ።
 
-## Step 6 – Validation & Handoff
-1. Run end-to-end validation:
-   - Submit governance proposal (e.g., parameter change).
-   - Process it through council approval to ensure governance pipeline works.
-   - Run ledger state diff to ensure consistency.
-2. Document runbook for on-call (incident response, failover, scaling).
-3. Communicate readiness to SoraFS/SoraNet teams; confirm piggyback deployments can point to Nexus nodes.
+## ደረጃ 6 - ማረጋገጫ እና እጅ ማውጣት
+1. ከጫፍ እስከ ጫፍ ማረጋገጫን ያሂዱ፡-
+   - የአስተዳደር ፕሮፖዛል ያቅርቡ (ለምሳሌ፣ የመለኪያ ለውጥ)።
+   - የአስተዳደር ቧንቧ ስራዎችን ለማረጋገጥ በምክር ቤቱ ይሁንታ ማስኬድ።
+   - ወጥነትን ለማረጋገጥ የሒሳብ መዝገብ ሁኔታን ያሂዱ።
+2. ለጥሪ (የአደጋ ምላሽ፣ አለመሳካት፣ ልኬት) የሰነድ መጽሐፍ።
+3. ዝግጁነትን ለ SoraFS/SoraNet ቡድኖች ማሳወቅ; የ piggyback ማሰማራቶችን ያረጋግጡ Nexus ኖዶችን ሊያመለክት ይችላል።
 
-## Implementation Checklist
-- [ ] Genesis/configuration audit completed.
-- [ ] Validator & observer nodes deployed with healthy consensus.
-- [ ] Governance keys loaded, proposal tested.
-- [ ] CI/CD pipelines running (build + deploy + smoke tests).
-- [ ] Observability dashboards live with alerting.
-- [ ] Handoff documentation delivered to downstream teams.
+## የትግበራ ማረጋገጫ ዝርዝር
+- [ ] የዘፍጥረት/የማዋቀር ኦዲት ተጠናቀቀ።
+- [] አረጋጋጭ እና የተመልካች አንጓዎች በጤናማ መግባባት ተሰማርተዋል።
+- [ ] የአስተዳደር ቁልፎች ተጭነዋል፣ ፕሮፖዛል ተፈትኗል።
+- [] CI/CD ቧንቧዎች እየሮጡ (ግንባታ + ማሰማራት + የጭስ ሙከራዎች)።
+- [] ተመልካችነት ዳሽቦርዶች ከማንቃት ጋር ይኖራሉ።
+- [ ] ለታችኛው ተፋሰስ ቡድኖች የተላከ የእጅ ማጥፋት ሰነድ።

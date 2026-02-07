@@ -4,50 +4,52 @@ direction: ltr
 source: docs/portal/docs/sns/local-to-global-toolkit.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# مجموعة ادوات عناوين Local -> Global
+# ローカル -> グローバル
 
-تعكس هذه الصفحة `docs/source/sns/local_to_global_toolkit.md` من المستودع الاحادي. وهي تجمع ادوات CLI و runbooks المطلوبة لبند خارطة الطريق **ADDR-5c**.
+عكس هذه الصفحة `docs/source/sns/local_to_global_toolkit.md` من المستودع الاحادي. **ADDR-5c** と、CLI および Runbook のバージョン。
 
-## نظرة عامة
+## いいえ
 
-- `scripts/address_local_toolkit.sh` يلف CLI الخاص بـ `iroha` لانتاج:
-  - `audit.json` -- خرج منظم من `iroha tools address audit --format json`.
-  - `normalized.txt` -- literals IH58 (المفضل) / compressed (`sora`) (الخيار الثاني) محولة لكل selector من نطاق Local.
-- استخدم السكربت مع لوحة ingest للعناوين (`dashboards/grafana/address_ingest.json`)
-  وقواعد Alertmanager (`dashboards/alerts/address_ingest_rules.yml`) لاثبات ان cutover Local-8 /
-  Local-12 امن. راقب لوحات التصادم Local-8 و Local-12 والتنبيهات
-  `AddressLocal8Resurgence`, `AddressLocal12Collision`, و `AddressInvalidRatioSlo` قبل
-  ترقية تغييرات manifest.
-- ارجع الى [Address Display Guidelines](address-display-guidelines.md) و
-  [Address Manifest runbook](../../../source/runbooks/address_manifest_ops.md) لسياق UX واستجابة الحوادث.
+- `scripts/address_local_toolkit.sh` CLI 番号 `iroha` 番号:
+  - `audit.json` -- テスト `iroha tools address audit --format json`。
+  - `normalized.txt` -- リテラル IH58 (المفضل) / 圧縮 (`sora`) (الخيار الثاني) セレクター ローカル。
+- パスワードを取得する (`dashboards/grafana/address_ingest.json`)
+  アラート マネージャー (`dashboards/alerts/address_ingest_rules.yml`) によるカットオーバー Local-8 /
+  ローカル-12 時間。ローカル 8 とローカル 12 を使用します。
+  `AddressLocal8Resurgence`、`AddressLocal12Collision`、`AddressInvalidRatioSlo`
+  マニフェスト。
+- [アドレス表示ガイドライン](address-display-guidelines.md)
+  [アドレス マニフェスト Runbook](../../../source/runbooks/address_manifest_ops.md) UX を参照してください。
 
-## الاستخدام
+## ああ
 
 ```bash
 scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_examples.txt       --output-dir artifacts/address_migration       --network-prefix 753       --format ih58
 ```
 
-الخيارات:
+意味:
 
-- `--format compressed (`sora`)` لخروج `sora...` بدلا من IH58.
-- `--no-append-domain` لاصدار literals بدون نطاق.
-- `--audit-only` لتخطي خطوة التحويل.
-- `--allow-errors` للاستمرار عند ظهور صفوف تالفة (مطابق لسلوك CLI).
+- `--format compressed (`sora`)` は `sora...` の IH58 です。
+- `--no-append-domain` لاصدار リテラル بدون نطاق。
+- `--audit-only` は。
+- `--allow-errors` للاستمرار عند ظهور صفوف تالفة (مطابق لسلوك CLI)。
 
-يطبع السكربت مسارات artefact في نهاية التشغيل. ارفق كلا الملفين مع
-تذكرة change-management ومع لقطة Grafana التي تثبت صفر
-اكتشافات Local-8 وصفر تصادمات Local-12 لمدة >=30 يوما.
+アーティファクトの存在。 और देखें
+変更管理の変更 Grafana 変更管理
+ローカル-8 ローカル-12 >=30 。
 
-## تكامل CI
+## CI
 
-1. شغل السكربت في job مخصص وارفع المخرجات.
-2. احظر عمليات الدمج عندما يبلغ `audit.json` عن Local selectors (`domain.kind = local12`).
-   على القيمة الافتراضية `true` (قم بالتحويل الى `false` فقط على بيئات dev/test عند
-   تشخيص التراجعات) واضف
-   `iroha tools address normalize --fail-on-warning --only-local` الى CI حتى تفشل
-   محاولات التراجع قبل الوصول الى production.
+1. ジョブを実行します。
+2. `audit.json` ローカル セレクター (`domain.kind = local12`)。
+   テスト `true` (テスト テスト `false` テスト 開発/テスト)
+   شخيص التراجعات) واضف
+   `iroha tools address normalize --fail-on-warning --only-local` CI 認証
+   制作を行っております。
 
-راجع المستند المصدر لمزيد من التفاصيل وقوائم الادلة و release-note snippet
-الذي يمكنك اعادة استخدامه عند اعلان cutover للعملاء.
+リリースノートの抜粋
+完全にカットオーバーです。

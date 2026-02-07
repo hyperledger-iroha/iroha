@@ -6,57 +6,59 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: SNS KPI dashboard
 description: Live Grafana panels that aggregate registrar, freeze, and revenue metrics for SN-8a.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Sora Name Service KPI Dashboard
+# Sora Name Service KPI хяналтын самбар
 
-The KPI dashboard gives stewards, guardians, and regulators a single place to
-review adoption, error, and revenue signals before the monthly annex cadence
-(SN-8a). The Grafana definition ships in the repository at
-`dashboards/grafana/sns_suffix_analytics.json` and the portal mirrors the same
-panels via an embedded iframe so the experience matches the internal Grafana
-instance.
+KPI хяналтын самбар нь нярав, асран хамгаалагч, зохицуулагч нарт нэг газар өгдөг
+Сар бүрийн хавсралтын хэмжүүрээс өмнө үрчлэлт, алдаа, орлогын дохиог хянана
+(SN-8a). Grafana тодорхойлолтыг хадгалах газарт илгээдэг
+`dashboards/grafana/sns_suffix_analytics.json` ба портал нь адилхан толин тусгалтай
+суулгагдсан iframe-ээр дамжуулан самбаруудыг ашигладаг тул туршлага нь дотоод Grafana-тэй таарч байна
+жишээ.
 
-## Filters & Data Sources
+## Шүүлтүүр ба мэдээллийн эх сурвалж
 
-- **Suffix filter** – drives the `sns_registrar_status_total{suffix}` queries so
-  `.sora`, `.nexus`, and `.dao` can be inspected independently.
-- **Bulk release filter** – scopes the `sns_bulk_release_payment_*` metrics so
-  finance can reconcile a specific registrar manifest.
-- **Metrics** – pulls from Torii (`sns_registrar_status_total`,
-  `torii_request_duration_seconds`), guardian CLI (`guardian_freeze_active`),
-  `sns_governance_activation_total`, and the bulk-onboarding helper metrics.
+- **Суффикс шүүлтүүр** – `sns_registrar_status_total{suffix}` асуулгыг удирддаг тул
+  `.sora`, `.nexus`, `.dao`-г бие даан шалгаж болно.
+- **Бөөнөөр гаргах шүүлтүүр** – `sns_bulk_release_payment_*` хэмжигдэхүүнийг хамрах тул
+  санхүү нь тодорхой бүртгэгчийн манифестийг нэгтгэж чадна.
+- **Metrics** – Torii (`sns_registrar_status_total`,
+  `torii_request_duration_seconds`), асран хамгаалагч CLI (`guardian_freeze_active`),
+  `sns_governance_activation_total`, мөн бөөнөөр суулгах туслах хэмжигдэхүүн.
 
-## Panels
+## Самбар
 
-1. **Registrations (last 24h)** – number of successful registrar events for the
-   selected suffix.
-2. **Governance activations (30d)** – charter/addendum motions recorded by the
+1. **Бүртгэл (сүүлийн 24 цаг)** – амжилттай бүртгүүлэгчийн арга хэмжээний тоо
+   сонгосон дагавар.
+2. **Засаглалын идэвхжүүлэлт (30d)** – дүрэм/нэмэлт саналууд
    CLI.
-3. **Registrar throughput** – per-suffix rate of successful registrar actions.
-4. **Registrar error modes** – 5 minute rate of error-labelled
-   `sns_registrar_status_total` counters.
-5. **Guardian freeze windows** – live selectors where `guardian_freeze_active`
-   reports an open freeze ticket.
-6. **Net payment units by asset** – totals reported by
-   `sns_bulk_release_payment_net_units` per asset.
-7. **Bulk requests per suffix** – manifest volumes per suffix id.
-8. **Net units per request** – ARPU-style calculation derived from the release
-   metrics.
+3. **Бүртгэгчийн нэвтрүүлэх чадвар** – бүртгэгчийн амжилттай үйлдлүүдийн дагавар бүрийн хувь.
+4. **Бүртгэгчийн алдааны горим** – алдааны шошготой 5 минутын хурд
+   `sns_registrar_status_total` тоолуур.
+5. **Guardian freeze windows** – `guardian_freeze_active` шууд сонгогчид
+   нээлттэй хөлдөөх тасалбарыг мэдээлдэг.
+6. **Хөрөнгөөр цэвэр төлбөрийн нэгж** – тайлагнасан нийт дүн
+   Хөрөнгийн `sns_bulk_release_payment_net_units`.
+7. **Дагавар бүрийн бөөн хүсэлт** – дагавар ID тус бүрийн манифест боть.
+8. **Хүсэлт тус бүрийн цэвэр нэгж** – хувилбараас гаргаж авсан ARPU загварын тооцоо
+   хэмжүүр.
 
-## Monthly KPI Review Checklist
+## Сар бүрийн KPI шалгах хяналтын хуудас
 
-The finance lead drives a recurring review on the first Tuesday of every month:
+Санхүүгийн удирдагч нь сар бүрийн эхний Мягмар гарагт давтагддаг тоймыг явуулдаг.
 
-1. Open the portal’s **Analytics → SNS KPI** page (or Grafana dashboard `sns-kpis`).
-2. Capture a PDF/CSV export of the registrar throughput and revenue tables.
-3. Compare suffixes for SLA breaches (error rate spikes, frozen selectors >72 h,
-   ARPU deltas >10 %).
-4. Log summaries + action items in the relevant annex entry under
+1. Порталын **Аналитик → SNS KPI** хуудсыг нээнэ үү (эсвэл Grafana хяналтын самбар `sns-kpis`).
+2. Бүртгүүлэгчийн дамжуулах чадвар болон орлогын хүснэгтийн PDF/CSV экспортыг авах.
+3. SLA зөрчлийн дагаваруудыг харьцуулна уу (алдааны давтамжийн өсөлт, царцсан сонгогч >72 цаг,
+   ARPU дельта >10%).
+4. Доорх хавсралтын холбогдох бичилтийн хураангуй + үйлдлийн зүйлийг бүртгэнэ
    `docs/source/sns/regulatory/<suffix>/YYYY-MM.md`.
-5. Attach the exported dashboard artefacts to the annex commit and link them in
-   the council agenda.
+5. Экспортолсон хяналтын самбарын олдворуудыг хавсралтад хавсаргаж, тэдгээрийг холбоно уу
+   зөвлөлийн хэлэлцэх асуудал.
 
-If the review uncovers SLA breaches, file a PagerDuty incident for the affected
-owner (registrar duty manager, guardian on-call, or steward program lead) and
-track the remediation in the annex log.
+Шалгалтаар SLA-ийн зөрчлийг илрүүлбэл, нөлөөлөлд өртсөн хүмүүст зориулж PagerDuty-ийн хэрэг үүсгэ
+эзэмшигч (бүртгэгч хариуцсан менежер, дуудлагаар асран хамгаалагч, эсвэл даамал хөтөлбөрийн удирдагч) болон
+засварын ажлыг хавсралтын бүртгэлээс хянах.

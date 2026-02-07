@@ -8,131 +8,131 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Preview invite tracker
 sidebar_label: Preview tracker
 description: Wave-by-wave status log for the checksum-gated docs portal preview program.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-This tracker records every docs portal preview wave so DOCS-SORA owners and
-governance reviewers can see which cohort is active, who approved the invites,
-and which artefacts still need attention. Update it whenever invites are sent,
-revoked, or deferred so the audit trail stays inside the repository.
+ይህ መከታተያ እያንዳንዱን የዶክ ፖርታል ቅድመ እይታ ሞገድ ይመዘግባል ስለዚህ DOCS-SORA ባለቤቶች እና
+የአስተዳደር ገምጋሚዎች የትኛው ቡድን ንቁ እንደሆነ፣ ግብዣዎቹን ማን እንዳፀደቀ፣
+እና የትኞቹ ቅርሶች አሁንም ትኩረት ያስፈልጋቸዋል. ግብዣዎች በሚላኩበት ጊዜ ያዘምኑት፣
+የኦዲት ዱካው በማከማቻው ውስጥ እንዲቆይ ተሰርዟል፣ ወይም ለሌላ ጊዜ አስተላልፏል።
 
-## Wave status
+## የሞገድ ሁኔታ
 
-| Wave | Cohort | Tracker issue | Approver(s) | Status | Target window | Notes |
+| ማዕበል | ስብስብ | የመከታተያ ጉዳይ | አጽዳቂ(ዎች) | ሁኔታ | የዒላማ መስኮት | ማስታወሻ |
 | --- | --- | --- | --- | --- | --- | --- |
-| **W0 – Core maintainers** | Docs + SDK maintainers validating checksum flow | `DOCS-SORA-Preview-W0` (GitHub/ops tracker) | Docs/DevRel lead + Portal TL | 🈴 Completed | Q2 2025 weeks 1–2 | Invites sent 2025‑03‑25, telemetry stayed green, exit summary published 2025‑04‑08. |
-| **W1 – Partners** | SoraFS operators, Torii integrators under NDA | `DOCS-SORA-Preview-W1` | Docs/DevRel lead + Governance liaison | 🈴 Completed | Q2 2025 week 3 | Invites ran 2025‑04‑12 → 2025‑04‑26 with all eight partners acked; evidence captured in [`preview-feedback/w1/log.md`](./preview-feedback/w1/log.md) and the exit digest in [`preview-feedback/w1/summary.md`](./preview-feedback/w1/summary.md). |
-| **W2 – Community** | Curated community waitlist (≤25 at a time) | `DOCS-SORA-Preview-W2` | Docs/DevRel lead + Community manager | 🈴 Completed | Q3 2025 week 1 (tentative) | Invites ran 2025‑06‑15 → 2025‑06‑29 with telemetry green throughout; evidence + findings captured in [`preview-feedback/w2/summary.md`](./preview-feedback/w2/summary.md). |
-| **W3 – Beta cohorts** | Finance/observability beta + SDK partner + ecosystem advocate | `DOCS-SORA-Preview-W3` | Docs/DevRel lead + Governance liaison | 🈴 Completed | Q1 2026 week 8 | Invites ran 2026‑02‑18 → 2026‑02‑28; digest + portal data generated via `preview-20260218` wave (see [`preview-feedback/w3/summary.md`](./preview-feedback/w3/summary.md)). |
+| ** W0 - ኮር ጠባቂዎች *** | የቼክሰም ፍሰትን የሚያረጋግጡ ሰነዶች + ኤስዲኬ ጠባቂዎች | `DOCS-SORA-Preview-W0` (GitHub/ops መከታተያ) | ሰነዶች/DevRel አመራር + ፖርታል TL | 🈴 ተጠናቀቀ | Q2 2025 ሳምንታት 1–2 | ግብዣዎች በ2025-03-25 ተልከዋል፣ ቴሌሜትሪ አረንጓዴ ሆኖ ቆይቷል፣ የመውጫ ማጠቃለያ በ2025-04-08 ታትሟል። |
+| ** W1 - አጋሮች *** | SoraFS ኦፕሬተሮች፣ Torii integrators በኤንዲኤ | `DOCS-SORA-Preview-W1` | ሰነዶች/DevRel አመራር + የአስተዳደር ግንኙነት | 🈴 ተጠናቀቀ | Q2 2025 ሳምንት 3 | ግብዣዎች 2025-04-12 → 2025-04-26 ተካሂደዋል ስምንቱም አጋሮች; በ[`preview-feedback/w1/log.md`](./preview-feedback/w1/log.md) እና በ[I18NI000000057X](./preview-feedback/w1/summary.md) ውስጥ የወጣውን ማስረጃ ተይዟል። |
+| ** W2 - ማህበረሰብ *** | የማህበረሰብ ተጠባባቂ ዝርዝር (≤25 በአንድ ጊዜ) | `DOCS-SORA-Preview-W2` | ሰነዶች/DevRel አመራር + የማህበረሰብ አስተዳዳሪ | 🈴 ተጠናቀቀ | Q3 2025 ሳምንት 1 (ጊዜያዊ) | ግብዣዎች 2025-06-15 → 2025-06-29 በቴሌሜትሪ አረንጓዴ ተካሂደዋል፤ በ[`preview-feedback/w2/summary.md`](./preview-feedback/w2/summary.md) የተያዙ ማስረጃዎች + ግኝቶች። |
+| ** W3 - የቅድመ-ይሁንታ ስብስቦች *** | ፋይናንስ/ተመልካች ቤታ + ኤስዲኬ አጋር + የስነምህዳር ጠበቃ | `DOCS-SORA-Preview-W3` | ሰነዶች/DevRel አመራር + የአስተዳደር ግንኙነት | 🈴 ተጠናቀቀ | Q1 2026 ሳምንት 8 | ግብዣዎች በ2026-02-18 → 2026-02-28; መፍጨት + በI18NI0000061X ሞገድ የመነጨ የፖርታል መረጃ ([`preview-feedback/w3/summary.md` ይመልከቱ](./preview-feedback/w3/summary.md ይመልከቱ))። |
 
-> Note: link each tracker issue to the corresponding preview request tickets and
-> archive them under the `docs-portal-preview` project so approvals remain
-> discoverable.
+> ማስታወሻ፡ እያንዳንዱን የመከታተያ ችግር ከተዛማጅ የቅድመ እይታ ጥያቄ ትኬቶች ጋር ያገናኙ እና
+> ማጽደቆች እንዲቀሩ በI18NI0000063X ፕሮጀክት ስር በማህደር ያስቀምጣቸዋል።
+> ሊገኝ የሚችል።
 
-## Active tasks (W0)
+## ንቁ ተግባራት (W0)
 
-- ✅ Preflight artefacts refreshed (GitHub Actions `docs-portal-preview` run 2025‑03‑24, descriptor verified via `scripts/preview_verify.sh` using tag `preview-2025-03-24`).
-- ✅ Telemetry baselines captured (`docs.preview.integrity`, `TryItProxyErrors` dashboards snapshot saved to the W0 tracker issue).
-- ✅ Outreach copy locked using [`docs/examples/docs_preview_invite_template.md`](../../../examples/docs_preview_invite_template.md) with preview tag `preview-2025-03-24`.
-- ✅ Intake requests logged for the first five maintainers (tickets `DOCS-SORA-Preview-REQ-01` … `-05`).
-- ✅ First five invites sent 2025‑03‑25 10:00–10:20 UTC after seven consecutive green telemetry days; acknowledgements stored in `DOCS-SORA-Preview-W0`.
-- ✅ Monitor telemetry + host office hours (daily check-ins through 2025‑03‑31; checkpoint log below).
-- ✅ Collect midpoint feedback / issues and tag them `docs-preview/w0` (see [W0 digest](./preview-feedback/w0/summary.md)).
-- ✅ Publish wave summary + invite exit confirmations (exit bundle dated 2025‑04‑08; see [W0 digest](./preview-feedback/w0/summary.md)).
-- ✅ W3 beta wave tracked; future waves scheduled as needed after governance review.
+- ✅ የቅድመ በረራ ቅርሶች ታድሰዋል (GitHub Actions `docs-portal-preview` ሩጫ 2025‑03‑24፣ ገላጭ በI18NI0000065X መለያ `preview-2025-03-24` የተረጋገጠ)።
+- ✅ የቴሌሜትሪ መነሻ መስመሮች ተይዘዋል (`docs.preview.integrity`፣ `TryItProxyErrors` ዳሽቦርዶች ቅጽበታዊ ገጽ እይታ በW0 መከታተያ ጉዳይ ላይ ተቀምጧል)።
+- ✅ የማውጫ ቅጅ ተቆልፏል [`docs/examples/docs_preview_invite_template.md`](../../../examples/docs_preview_invite_template.md) በቅድመ እይታ መለያ I18NI0000070X።
+- ✅ የመቀበያ ጥያቄዎች ለመጀመሪያዎቹ አምስት ጠባቂዎች ገብተዋል (ቲኬቶች `DOCS-SORA-Preview-REQ-01`… `-05`)።
+- ✅ የመጀመሪያዎቹ አምስት ግብዣዎች 2025‑03‑25 10፡00–10፡20 UTC ከሰባት ተከታታይ አረንጓዴ ቴሌሜትሪ ቀናት በኋላ ተልከዋል፤ በ `DOCS-SORA-Preview-W0` ውስጥ የተከማቹ ምስጋናዎች።
+- ✅ ቴሌሜትሪ + አስተናጋጅ የቢሮ ሰዓቶችን ይቆጣጠሩ (በየቀኑ ተመዝግበው መግባት እስከ 2025-03-31፤ የፍተሻ ነጥብ መዝገብ ከዚህ በታች)።
+- ✅ የመሃል ነጥብ ግብረመልስ/ ጉዳዮችን ሰብስብ እና `docs-preview/w0` መለያ ስጥ ([W0 diest](./preview-feedback/w0/summary.md ይመልከቱ))።
+- ✅ የሞገድ ማጠቃለያ + የመውጫ ማረጋገጫዎችን ጋብዝ (ከ2025-04-08 ከጥቅል ውጣ፤ [W0 ዲጀስት](./preview-feedback/w0/summary.md ይመልከቱ))።
+- ✅ W3 ቤታ ሞገድ ተከታትሏል; ከአስተዳደር ግምገማ በኋላ እንደ አስፈላጊነቱ የወደፊት ማዕበሎች.
 
-## W1 partner wave summary
+## W1 የአጋር ማዕበል ማጠቃለያ
 
-- ✅ **Legal & governance approvals.** Partner addendum signed 2025‑04‑05; approvals uploaded to `DOCS-SORA-Preview-W1`.
-- ✅ **Telemetry + Try it staging.** Change ticket `OPS-TRYIT-147` executed 2025‑04‑06 with Grafana snapshots for `docs.preview.integrity`, `TryItProxyErrors`, and `DocsPortal/GatewayRefusals` archived.
-- ✅ **Artefact + checksum prep.** `preview-2025-04-12` bundle verified; descriptor/checksum/probe logs stored under `artifacts/docs_preview/W1/preview-2025-04-12/`.
-- ✅ **Invite roster + dispatch.** All eight partner requests (`DOCS-SORA-Preview-REQ-P01…P08`) approved; invites sent 2025‑04‑12 15:00–15:21 UTC with acknowledgements logged per reviewer.
-- ✅ **Feedback instrumentation.** Daily office hours + telemetry checkpoints recorded; see [`preview-feedback/w1/summary.md`](./preview-feedback/w1/summary.md) for the digest.
-- ✅ **Final roster/exit log.** [`preview-feedback/w1/log.md`](./preview-feedback/w1/log.md) now records invite/ack timestamps, telemetry evidence, quiz exports, and artefact pointers as of 2025‑04‑26 so governance can replay the wave.
+- ✅ **የህግ እና የአስተዳደር ማፅደቆች።** የአጋር ማጠቃለያ 2025‑04‑05 ተፈርሟል። ማረጋገጫዎች ወደ I18NI0000075X ተሰቅለዋል።
+- ✅ **ቴሌሜትሪ + ደረጃውን ሞክር
+- ✅ **የአርቴፋክት + ቼክተም ዝግጅት** I18NI0000080X ጥቅል የተረጋገጠ; ገላጭ/Checksum/የመመርመሪያ ምዝግብ ማስታወሻዎች በ`artifacts/docs_preview/W1/preview-2025-04-12/` ስር ተከማችተዋል።
+- ✅ ** የስም ዝርዝር ይጋብዙ + መላኪያ።** ሁሉም ስምንቱ የአጋር ጥያቄዎች (`DOCS-SORA-Preview-REQ-P01…P08`) ጸድቀዋል። ግብዣዎች የተላኩ 2025-04-12 15:00–15:21UTC በእያንዳንዱ ገምጋሚ ​​ከተመዘገቡ ምስጋናዎች ጋር።
+- ✅ ** የግብረመልስ መሳሪያ።** ዕለታዊ የስራ ሰዓት + የቴሌሜትሪ ፍተሻ ነጥቦች ተመዝግበዋል፤ ለመፍጨት [`preview-feedback/w1/summary.md`](./preview-feedback/w1/summary.md) ይመልከቱ።
+- ✅ **የመጨረሻ የስም ዝርዝር/የመውጫ መዝገብ
 
-## Invite log — W0 core maintainers
+## የግብዣ ምዝግብ ማስታወሻ - W0 ዋና ጠባቂዎች
 
-| Reviewer ID | Role | Request ticket | Invite sent (UTC) | Expected exit (UTC) | Status | Notes |
+| የገምጋሚ መታወቂያ | ሚና | ትኬት ጠይቅ | ግብዣ ተልኳል (UTC) | የሚጠበቀው መውጫ (UTC) | ሁኔታ | ማስታወሻ |
 | --- | --- | --- | --- | --- | --- | --- |
-| docs-core-01 | Portal maintainer | `DOCS-SORA-Preview-REQ-01` | 2025‑03‑25 10:05 | 2025‑04‑08 10:00 | Active | Acked checksum verification; focusing on nav/sidebar review. |
-| sdk-rust-01 | Rust SDK lead | `DOCS-SORA-Preview-REQ-02` | 2025‑03‑25 10:08 | 2025‑04‑08 10:00 | Active | Testing SDK recipes + Norito quickstarts. |
-| sdk-js-01 | JS SDK maintainer | `DOCS-SORA-Preview-REQ-03` | 2025‑03‑25 10:12 | 2025‑04‑08 10:00 | Active | Validating Try it console + ISO flows. |
-| sorafs-ops-01 | SoraFS operator liaison | `DOCS-SORA-Preview-REQ-04` | 2025‑03‑25 10:15 | 2025‑04‑08 10:00 | Active | Auditing SoraFS runbooks + orchestration docs. |
-| observability-01 | Observability TL | `DOCS-SORA-Preview-REQ-05` | 2025‑03‑25 10:18 | 2025‑04‑08 10:00 | Active | Reviewing telemetry/incident appendices; owns Alertmanager coverage. |
+| ሰነዶች-ኮር-01 | ፖርታል ጠባቂ | `DOCS-SORA-Preview-REQ-01` | 2025-03-25 10:05 | 2025-04-08 10:00 | ንቁ | የታሸገ የቼክ ማረጋገጫ; በናቭ/የጎን አሞሌ ግምገማ ላይ በማተኮር። |
+| sdk-ዝገት-01 | ዝገት SDK አመራር | `DOCS-SORA-Preview-REQ-02` | 2025-03-25 10:08 | 2025-04-08 10:00 | ንቁ | የኤስዲኬ ምግብ አዘገጃጀት + Norito ፈጣን ጅምርዎችን በመሞከር ላይ። |
+| sdk-js-01 | JS SDK ጠባቂ | `DOCS-SORA-Preview-REQ-03` | 2025-03-25 10:12 | 2025-04-08 10:00 | ንቁ | በማረጋገጥ ላይ ኮንሶል ይሞክሩት + ISO ፍሰቶችን። |
+| sorafs-ops-01 | SoraFS ከዋኝ ግንኙነት | `DOCS-SORA-Preview-REQ-04` | 2025-03-25 10:15 | 2025-04-08 10:00 | ንቁ | SoraFS runbooks + የኦርኬስትራ ሰነዶችን ኦዲት ማድረግ። |
+| ታዛቢነት-01 | ታዛቢነት TL | `DOCS-SORA-Preview-REQ-05` | 2025-03-25 10:18 | 2025-04-08 10:00 | ንቁ | ቴሌሜትሪ / የክስተት መለዋወጫዎችን መገምገም; የ Alertmanager ሽፋን ባለቤት ነው። |
 
-All invites reference the same `docs-portal-preview` artefact (run 2025‑03‑24,
-tag `preview-2025-03-24`) and the verification transcript captured in
-`DOCS-SORA-Preview-W0`. Any additions/pauses must be logged in both the table
-above and the tracker issue before proceeding to the next wave.
+ሁሉም ግብዣዎች አንድ አይነት I18NI0000090X ጥበባትን ይጠቅሳሉ (2025-03-24 አሂድ፣
+መለያ `preview-2025-03-24`) እና የማረጋገጫ ግልባጭ ተይዟል።
+`DOCS-SORA-Preview-W0`. ማንኛውም ጭማሪ/አፍታ ማቆም በሁለቱም ሠንጠረዥ ውስጥ መግባት አለበት።
+ወደ ቀጣዩ ሞገድ ከመቀጠልዎ በፊት ከላይ እና የመከታተያ ጉዳይ.
 
-## Checkpoint log — W0
+## የፍተሻ ነጥብ መዝገብ - W0
 
-| Date (UTC) | Activity | Notes |
+| ቀን (UTC) | እንቅስቃሴ | ማስታወሻ |
 | --- | --- | --- |
-| 2025‑03‑26 | Telemetry baseline review + office hours | `docs.preview.integrity` + `TryItProxyErrors` remained green; office hours confirmed all reviewers completed checksum verification. |
-| 2025‑03‑27 | Midpoint feedback digest posted | Summary captured in [`preview-feedback/w0/summary.md`](./preview-feedback/w0/summary.md); two minor nav issues logged as `docs-preview/w0` labels, no incidents reported. |
-| 2025‑03‑31 | Final week telemetry spot check | Last pre-exit office hours; reviewers confirmed remaining docs tasks on track, no alerts fired. |
-| 2025‑04‑08 | Exit summary + invite closures | Acknowledged completed reviews, revoked temporary access, archived findings in [`preview-feedback/w0/summary.md`](./preview-feedback/w0/summary.md#exit-summary-2025-04-08); tracker updated before prepping W1. |
+| 2025-03-26 | ቴሌሜትሪ የመነሻ መስመር ግምገማ + የቢሮ ሰዓቶች | `docs.preview.integrity` + I18NI0000094X አረንጓዴ ቀረ; የቢሮ ሰአታት ሁሉም ገምጋሚዎች የቼክ ድምር ማረጋገጫ ማጠናቀቃቸውን አረጋግጠዋል። |
+| 2025-03-27 | የመካከለኛ ነጥብ ግብረመልስ ተለጠፈ | ማጠቃለያ በ [`preview-feedback/w0/summary.md`] (./preview-feedback/w0/summary.md) ተይዟል; ሁለት ጥቃቅን ጉዳዮች እንደ I18NI0000096X መለያዎች ገብተዋል፣ ምንም አይነት ክስተት አልተዘገበም። |
+| 2025-03-31 | የመጨረሻ ሳምንት የቴሌሜትሪ ቦታ ቼክ | የመጨረሻ የቅድመ-መውጣት የቢሮ ሰዓቶች; ገምጋሚዎች በትራክ ላይ የቀሩ ሰነዶችን ተግባራት አረጋግጠዋል፣ ምንም ማንቂያ አልተነሳም። |
+| 2025-04-08 | ውጣ ማጠቃለያ + ግብዣ መዝጊያዎች | እውቅና የተሰጣቸው የተጠናቀቁ ግምገማዎች፣ ጊዜያዊ መዳረሻ ተሰርዘዋል፣ በ[`preview-feedback/w0/summary.md`] (./preview-feedback/w0/summary.md#exit-summary-2025-04-08) ውስጥ የተመዘገቡ ግኝቶች; W1 ከመዘጋጀቱ በፊት መከታተያ ዘምኗል። |
 
-## Invite log — W1 partners
+## የግብዣ መዝገብ - W1 አጋሮች
 
-| Reviewer ID | Role | Request ticket | Invite sent (UTC) | Expected exit (UTC) | Status | Notes |
+| የገምጋሚ መታወቂያ | ሚና | ትኬት ጠይቅ | ግብዣ ተልኳል (UTC) | የሚጠበቀው መውጫ (UTC) | ሁኔታ | ማስታወሻ |
 | --- | --- | --- | --- | --- | --- | --- |
-| sorafs-op-01 | SoraFS operator (EU) | `DOCS-SORA-Preview-REQ-P01` | 2025‑04‑12 15:00 | 2025‑04‑26 15:00 | Completed | Delivered orchestrator ops feedback 2025‑04‑20; exit ack 15:05 UTC. |
-| sorafs-op-02 | SoraFS operator (JP) | `DOCS-SORA-Preview-REQ-P02` | 2025‑04‑12 15:03 | 2025‑04‑26 15:00 | Completed | Logged rollout guidance comments in `docs-preview/w1`; exit ack 15:10 UTC. |
-| sorafs-op-03 | SoraFS operator (US) | `DOCS-SORA-Preview-REQ-P03` | 2025‑04‑12 15:06 | 2025‑04‑26 15:00 | Completed | Dispute/blacklist edits filed; exit ack 15:12 UTC. |
-| torii-int-01 | Torii integrator | `DOCS-SORA-Preview-REQ-P04` | 2025‑04‑12 15:09 | 2025‑04‑26 15:00 | Completed | Try it auth walkthrough accepted; exit ack 15:14 UTC. |
-| torii-int-02 | Torii integrator | `DOCS-SORA-Preview-REQ-P05` | 2025‑04‑12 15:12 | 2025‑04‑26 15:00 | Completed | RPC/OAuth doc comments logged; exit ack 15:16 UTC. |
-| sdk-partner-01 | SDK partner (Swift) | `DOCS-SORA-Preview-REQ-P06` | 2025‑04‑12 15:15 | 2025‑04‑26 15:00 | Completed | Preview integrity feedback merged; exit ack 15:18 UTC. |
-| sdk-partner-02 | SDK partner (Android) | `DOCS-SORA-Preview-REQ-P07` | 2025‑04‑12 15:18 | 2025‑04‑26 15:00 | Completed | Telemetry/redaction review done; exit ack 15:22 UTC. |
-| gateway-ops-01 | Gateway operator | `DOCS-SORA-Preview-REQ-P08` | 2025‑04‑12 15:21 | 2025‑04‑26 15:00 | Completed | Gateway DNS runbook comments filed; exit ack 15:24 UTC. |
+| sorafs-op-01 | SoraFS ኦፕሬተር (ኢዩ) | `DOCS-SORA-Preview-REQ-P01` | 2025-04-12 15:00 | 2025-04-26 15:00 | ተጠናቀቀ | የተሰጠ ኦርኬስትራ ops ግብረመልስ 2025-04-20; መውጣት ack 15:05UTC. |
+| sorafs-op-02 | SoraFS ከዋኝ (JP) | `DOCS-SORA-Preview-REQ-P02` | 2025-04-12 15:03 | 2025-04-26 15:00 | ተጠናቀቀ | በ`docs-preview/w1` ውስጥ የታቀዱ መመሪያዎች አስተያየቶች ገብተዋል; መውጣት ack 15:10UTC. |
+| sorafs-op-03 | SoraFS ከዋኝ (US) | `DOCS-SORA-Preview-REQ-P03` | 2025-04-12 15:06 | 2025-04-26 15:00 | ተጠናቀቀ | ሙግት/ጥቁር መዝገብ ተካቷል፤ መውጣት ack 15:12UTC. |
+| torii-int-01 | Torii መቀላጠፊያ | `DOCS-SORA-Preview-REQ-P04` | 2025-04-12 15:09 | 2025-04-26 15:00 | ተጠናቀቀ | ይሞክሩት auth walkthrough ተቀባይነት አግኝቷል; መውጣት ack 15:14UTC. |
+| torii-int-02 | Torii መቀላጠፊያ | `DOCS-SORA-Preview-REQ-P05` | 2025-04-12 15:12 | 2025-04-26 15:00 | ተጠናቀቀ | RPC/OAuth ሰነድ አስተያየቶች ገብተዋል; መውጣት ack 15:16UTC. |
+| sdk-አጋር-01 | የኤስዲኬ አጋር (ስዊፍት) | `DOCS-SORA-Preview-REQ-P06` | 2025-04-12 15:15 | 2025-04-26 15:00 | ተጠናቀቀ | ቅድመ ዕይታ የታማኝነት ግብረመልስ ተዋህዷል; መውጣት ack 15:18UTC. |
+| sdk-አጋር-02 | የኤስዲኬ አጋር (አንድሮይድ) | `DOCS-SORA-Preview-REQ-P07` | 2025-04-12 15:18 | 2025-04-26 15:00 | ተጠናቀቀ | የቴሌሜትሪ / የመቀነስ ግምገማ ተከናውኗል; መውጣት ack 15:22UTC. |
+| ጌትዌይ-ops-01 | ጌትዌይ ኦፕሬተር | `DOCS-SORA-Preview-REQ-P08` | 2025-04-12 15:21 | 2025-04-26 15:00 | ተጠናቀቀ | ጌትዌይ ዲ ኤን ኤስ runbook አስተያየቶች ገብተዋል; መውጣት ack 15:24UTC. |
 
-## Checkpoint log — W1
+## የፍተሻ ነጥብ መዝገብ - W1
 
-| Date (UTC) | Activity | Notes |
+| ቀን (UTC) | እንቅስቃሴ | ማስታወሻ |
 | --- | --- | --- |
-| 2025‑04‑12 | Invite dispatch + artefact verification | All eight partners emailed with `preview-2025-04-12` descriptor/archive; acknowledgements stored in tracker. |
-| 2025‑04‑13 | Telemetry baseline review | `docs.preview.integrity`, `TryItProxyErrors`, and `DocsPortal/GatewayRefusals` dashboards reviewed — green across the board; office hours confirmed checksum verification completed. |
-| 2025‑04‑18 | Mid-wave office hours | `docs.preview.integrity` remained green; two doc nits logged under `docs-preview/w1` (nav wording + Try it screenshot). |
-| 2025‑04‑22 | Final telemetry spot check | Proxy + dashboards still healthy; no new issues raised, noted in tracker ahead of exit. |
-| 2025‑04‑26 | Exit summary + invite closures | All partners confirmed review completion, invites revoked, evidence archived in [`preview-feedback/w1/summary.md`](./preview-feedback/w1/summary.md#exit-summary-2025-04-26). |
+| 2025-04-12 | መላኪያ ይጋብዙ + አርቲፊሻል ማረጋገጫ | ሁሉም ስምንቱ አጋሮች ከ `preview-2025-04-12` ገላጭ/ መዝገብ ቤት ጋር ኢሜይል ተልኳል; በክትትል ውስጥ የተከማቹ ምስጋናዎች. |
+| 2025-04-13 | ቴሌሜትሪ የመነሻ መስመር ግምገማ | `docs.preview.integrity`, `TryItProxyErrors` እና `DocsPortal/GatewayRefusals` ዳሽቦርዶች ተገምግመዋል - በቦርዱ ላይ አረንጓዴ; የስራ ሰአታት የተረጋገጠ የቼክ ክፍያ ማረጋገጫ ተጠናቋል። |
+| 2025-04-18 | መካከለኛ-ማዕበል የቢሮ ሰዓቶች | `docs.preview.integrity` አረንጓዴ ቀረ; ሁለት ሰነዶች በ`docs-preview/w1` (nav wording + ይሞክሩት) ስር ገብተዋል። |
+| 2025-04-22 | የመጨረሻ ቴሌሜትሪ ቦታ ቼክ | ፕሮክሲ + ዳሽቦርዶች አሁንም ጤናማ ናቸው; ምንም አዲስ የተነሱ ችግሮች የሉም፣ ከመውጣቱ በፊት በክትትል ውስጥ ተጠቅሷል። |
+| 2025-04-26 | ውጣ ማጠቃለያ + ግብዣ መዝጊያዎች | ሁሉም አጋሮች ግምገማ መጠናቀቁን አረጋግጠዋል፣ ግብዣዎች ተሽረዋል፣ ማስረጃ በ[`preview-feedback/w1/summary.md`](./preview-feedback/w1/summary.md#exit-summary-2025-04-26) ተቀምጧል። |
 
-## W3 beta cohort recap
+## W3 የቅድመ-ይሁንታ ቡድን ስብስብ
 
-- ✅ Invites sent 2026‑02‑18 with checksum verification + acknowledgements logged the same day.
-- ✅ Feedback collected under `docs-preview/20260218` with governance issue `DOCS-SORA-Preview-20260218`; digest + summary generated via `npm run --prefix docs/portal preview:wave -- --wave preview-20260218`.
-- ✅ Access revoked 2026‑02‑28 after the final telemetry check; tracker + portal tables updated to show W3 as completed.
+- ✅ ግብዣዎች በ2026-02-18 ተልከዋል ከቼኩም ማረጋገጫ + ምስጋናዎች ጋር በተመሳሳይ ቀን።
+- ✅ በ`docs-preview/20260218` ከአስተዳደር ችግር ጋር የተሰበሰበ ግብረ መልስ `DOCS-SORA-Preview-20260218`; መፍጨት + ማጠቃለያ በ `npm run --prefix docs/portal preview:wave -- --wave preview-20260218` የመነጨ።
+- ✅ ከመጨረሻው የቴሌሜትሪ ፍተሻ በኋላ 2026-02-28 መዳረሻ ተሰርዟል። መከታተያ + ፖርታል ሠንጠረዦች W3 እንደተጠናቀቀ ለማሳየት ተዘምነዋል።
 
-## Invite log — W2 community
-
-| Reviewer ID | Role | Request ticket | Invite sent (UTC) | Expected exit (UTC) | Status | Notes |
+## የግብዣ መዝገብ - W2 ማህበረሰብ| የገምጋሚ መታወቂያ | ሚና | ትኬት ጠይቅ | ግብዣ ተልኳል (UTC) | የሚጠበቀው መውጫ (UTC) | ሁኔታ | ማስታወሻ |
 | --- | --- | --- | --- | --- | --- | --- |
-| comm-vol-01 | Community reviewer (SDK) | `DOCS-SORA-Preview-REQ-C01` | 2025‑06‑15 16:00 | 2025‑06‑29 16:00 | Completed | Ack 16:06 UTC; focusing on SDK quickstarts; exit confirmed 2025‑06‑29. |
-| comm-vol-02 | Community reviewer (Governance) | `REQ-C02` | 2025‑06‑15 16:03 | 2025‑06‑29 16:00 | Completed | Governance/SNS review done; exit confirmed 2025‑06‑29. |
-| comm-vol-03 | Community reviewer (Norito) | `REQ-C03` | 2025‑06‑15 16:06 | 2025‑06‑29 16:00 | Completed | Norito walkthrough feedback logged; exit ack 2025‑06‑29. |
-| comm-vol-04 | Community reviewer (SoraFS) | `REQ-C04` | 2025‑06‑15 16:09 | 2025‑06‑29 16:00 | Completed | SoraFS runbook review done; exit ack 2025‑06‑29. |
-| comm-vol-05 | Community reviewer (Accessibility) | `REQ-C05` | 2025‑06‑15 16:12 | 2025‑06‑29 16:00 | Completed | Accessibility/UX notes shared; exit ack 2025‑06‑29. |
-| comm-vol-06 | Community reviewer (Localization) | `REQ-C06` | 2025‑06‑15 16:15 | 2025‑06‑29 16:00 | Completed | Localization feedback logged; exit ack 2025‑06‑29. |
-| comm-vol-07 | Community reviewer (Mobile) | `REQ-C07` | 2025‑06‑15 16:18 | 2025‑06‑29 16:00 | Completed | Mobile SDK doc checks delivered; exit ack 2025‑06‑29. |
-| comm-vol-08 | Community reviewer (Observability) | `REQ-C08` | 2025‑06‑15 16:21 | 2025‑06‑29 16:00 | Completed | Observability appendix review done; exit ack 2025‑06‑29. |
+| comm-vol-01 | የማህበረሰብ ገምጋሚ ​​(ኤስዲኬ) | `DOCS-SORA-Preview-REQ-C01` | 2025-06-15 16:00 | 2025-06-29 16:00 | ተጠናቀቀ | Ack 16:06UTC; በኤስዲኬ ፈጣን ጅምር ላይ ማተኮር; መውጣት ተረጋገጠ 2025-06-29 |
+| comm-vol-02 | የማህበረሰብ ገምጋሚ ​​(መንግስት) | `REQ-C02` | 2025-06-15 16:03 | 2025-06-29 16:00 | ተጠናቀቀ | የአስተዳደር/ኤስኤንኤስ ግምገማ ተከናውኗል; መውጣት ተረጋገጠ 2025-06-29 |
+| comm-vol-03 | የማህበረሰብ ገምጋሚ ​​(I18NT0000002X) | `REQ-C03` | 2025-06-15 16:06 | 2025-06-29 16:00 | ተጠናቀቀ | Norito የእግረኛ ግብረመልስ ተመዝግቧል; መውጫ ack 2025-06-29 |
+| comm-vol-04 | የማህበረሰብ ገምጋሚ ​​(SoraFS) | `REQ-C04` | 2025-06-15 16:09 | 2025-06-29 16:00 | ተጠናቀቀ | SoraFS runbook ግምገማ ተከናውኗል; መውጫ ack 2025-06-29 |
+| comm-vol-05 | የማህበረሰብ ገምጋሚ ​​(ተደራሽነት) | `REQ-C05` | 2025-06-15 16:12 | 2025-06-29 16:00 | ተጠናቀቀ | ተደራሽነት/UX ማስታወሻዎች ተጋርተዋል; መውጫ ack 2025-06-29 |
+| comm-vol-06 | የማህበረሰብ ገምጋሚ ​​(አካባቢ ማድረግ) | `REQ-C06` | 2025-06-15 16:15 | 2025-06-29 16:00 | ተጠናቀቀ | የአካባቢ አስተያየት ተመዝግቧል; መውጫ ack 2025-06-29 |
+| comm-vol-07 | የማህበረሰብ ገምጋሚ ​​(ሞባይል) | `REQ-C07` | 2025-06-15 16:18 | 2025-06-29 16:00 | ተጠናቀቀ | የሞባይል ኤስዲኬ ሰነድ ቼኮች ተሰጥተዋል; መውጫ ack 2025-06-29 |
+| comm-vol-08 | የማህበረሰብ ገምጋሚ ​​(ታዛቢነት) | `REQ-C08` | 2025-06-15 16:21 | 2025-06-29 16:00 | ተጠናቀቀ | ታዛቢነት አባሪ ግምገማ ተከናውኗል; መውጫ ack 2025-06-29 |
 
-## Checkpoint log — W2
+## የፍተሻ ነጥብ መዝገብ - W2
 
-| Date (UTC) | Activity | Notes |
+| ቀን (UTC) | እንቅስቃሴ | ማስታወሻ |
 | --- | --- | --- |
-| 2025‑06‑15 | Invite dispatch + artefact verification | `preview-2025-06-15` descriptor/archive shared with 8 community reviewers; acknowledgements stored in tracker. |
-| 2025‑06‑16 | Telemetry baseline review | `docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals` dashboards green; Try it proxy logs show community tokens active. |
-| 2025‑06‑18 | Office hours & issue triage | Collected two suggestions (`docs-preview/w2 #1` tooltip wording, `#2` localization sidebar) — both routed to Docs. |
-| 2025‑06‑21 | Telemetry check + doc fixes | Docs addressed `docs-preview/w2 #1/#2`; dashboards still green, no incidents. |
-| 2025‑06‑24 | Final week office hours | Reviewers confirmed remaining feedback submissions; no alert fire. |
-| 2025‑06‑29 | Exit summary + invite closures | Acks recorded, preview access revoked, telemetry snapshots + artefacts archived (see [`preview-feedback/w2/summary.md`](./preview-feedback/w2/summary.md#exit-summary-2025-06-29)). |
-| 2025‑04‑15 | Office hours & issue triage | Two documentation suggestions logged under `docs-preview/w1`; no incidents or alerts triggered. |
+| 2025-06-15 | መላኪያ ይጋብዙ + አርቲፊሻል ማረጋገጫ | `preview-2025-06-15` ገላጭ/ማህደር ለ8 የማህበረሰብ ገምጋሚዎች ተጋርቷል፤ በክትትል ውስጥ የተከማቹ ምስጋናዎች. |
+| 2025-06-16 | ቴሌሜትሪ የመነሻ መስመር ግምገማ | `docs.preview.integrity`፣ `TryItProxyErrors`፣ `DocsPortal/GatewayRefusals` ዳሽቦርዶች አረንጓዴ; ይሞክሩት የተኪ ምዝግብ ማስታወሻዎች የማህበረሰብ ቶከኖች ንቁ መሆናቸውን ያሳያሉ። |
+| 2025-06-18 | የስራ ሰዓት እና የችግር መለያ | ሁለት የአስተያየት ጥቆማዎችን ሰብስቧል (`docs-preview/w2 #1` Tooltip wording፣ `#2` ለትርጉም የጎን አሞሌ) - ሁለቱም ወደ ሰነዶች ተወስደዋል። |
+| 2025-06-21 | ቴሌሜትሪ ቼክ + የሰነድ ጥገናዎች | ሰነዶች አድራሻ `docs-preview/w2 #1/#2`; ዳሽቦርዶች አሁንም አረንጓዴ ናቸው፣ ምንም ክስተቶች የሉም። |
+| 2025-06-24 | የመጨረሻ ሳምንት የስራ ሰዓት | ገምጋሚዎች የቀሩትን የግብረመልስ ግቤቶች አረጋግጠዋል; ምንም ማንቂያ እሳት. |
+| 2025-06-29 | ውጣ ማጠቃለያ + ግብዣ መዝጊያዎች | Acks ተመዝግቧል፣ ቅድመ እይታ መዳረሻ ተሽሯል፣ የቴሌሜትሪ ቅጽበተ-ፎቶዎች + ቅርሶች በማህደር ተቀምጠዋል ([`preview-feedback/w2/summary.md`](./preview-feedback/w2/summary.md#exit-summary-2025-06-29 ይመልከቱ))። |
+| 2025-04-15 | የስራ ሰዓት እና የችግር መለያ | በ `docs-preview/w1` ስር የተመዘገቡ ሁለት የሰነድ ጥቆማዎች; ምንም አይነት ክስተቶች ወይም ማንቂያዎች አልተነሱም። |
 
-## Reporting hooks
+## ሪፖርት ማድረግ መንጠቆዎች
 
-- Each Wednesday, update the tracker table above plus the active invite issue
-  with a short status note (invites sent, active reviewers, incidents).
-- When a wave closes, append the feedback summary path (for example,
-  `docs/portal/docs/devportal/preview-feedback/w0/summary.md`) and link it from
+- በእያንዳንዱ እሮብ፣ ከላይ ያለውን የመከታተያ ሰንጠረዥ እና ንቁ የግብዣ ጉዳይን ያዘምኑ
+  በአጭር የሁኔታ ማስታወሻ (የተላኩ ግብዣዎች፣ ንቁ ገምጋሚዎች፣ ክስተቶች)።
+- ማዕበል ሲዘጋ የግብረመልስ ማጠቃለያ መንገድን ጨምር (ለምሳሌ፡-
+  `docs/portal/docs/devportal/preview-feedback/w0/summary.md`) እና ከ ያገናኙት።
   `status.md`.
-- If any pause criteria from the [preview invite flow](./preview-invite-flow.md)
-  trigger, add the remediation steps here before resuming invites.
+- ከ[የቅድመ እይታ ግብዣ ፍሰት](./preview-invite-flow.md) ለአፍታ የሚያቆም መስፈርት ካለ
+  ቀስቅሴ፣ ግብዣዎችን ከመቀጠልዎ በፊት የማሻሻያ እርምጃዎችን እዚህ ያክሉ።

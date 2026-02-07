@@ -8,29 +8,31 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraFS Repair Automation & Auditor API
 sidebar_label: Repair Automation
 description: Governance policy, escalation lifecycle, and API expectations for SoraFS repair automation.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
-Mirrors `docs/source/sorafs_repair_plan.md`. Keep both versions in sync until the Sphinx set is retired.
+::: Каноник эх сурвалжийг анхаарна уу
+`docs/source/sorafs_repair_plan.md` толь. Сфинксийн багцыг ашиглах хүртэл хоёр хувилбарыг синхрончлолд байлга.
 :::
 
-## Governance Decision Lifecycle
-1. Escalated repairs create a slash proposal draft and open the dispute window.
-2. Governance voters submit approve/reject votes during the dispute window.
-3. At `escalated_at_unix + dispute_window_secs` the decision is computed deterministically: minimum voters, approvals exceed rejections, and the approval ratio meets the quorum threshold.
-4. Approved decisions open an appeal window; appeals recorded before `approved_at_unix + appeal_window_secs` mark the decision as appealed.
-5. Penalty caps apply to all proposals; submissions above the cap are rejected.
+## Засаглалын шийдвэрийн амьдралын мөчлөг
+1. Өргөтгөсөн засвар нь налуу саналын төслийг үүсгэж, маргааны цонхыг нээнэ.
+2. Засаглалын сонгогчид маргааны цонхоор батлах/татгалзах саналаа өгнө.
+3. `escalated_at_unix + dispute_window_secs`-д шийдвэр нь тодорхойлогддог: хамгийн бага сонгогчид, зөвшөөрлүүд нь татгалзсан тооноос давж, зөвшөөрлийн харьцаа нь чуулгын босгыг давсан байна.
+4. Батлагдсан шийдвэрүүд давж заалдах цонхыг нээнэ; `approved_at_unix + appeal_window_secs` өмнө бүртгэгдсэн давж заалдах гомдол нь шийдвэрийг давж заалдсан гэж тэмдэглэнэ.
+5. Бүх саналд торгуулийн дээд хязгаар хамаарна; дээд хязгаараас дээш мэдүүлэг татгалзсан байна.
 
-## Governance Escalation Policy
-The escalation policy is sourced from `governance.sorafs_repair_escalation` in `iroha_config` and is enforced for every repair slash proposal.
+## Засаглалыг өргөжүүлэх бодлого
+Өргөтгөх бодлогыг `iroha_config` дахь `governance.sorafs_repair_escalation`-аас авсан бөгөөд засварын налуу санал болгонд мөрддөг.
 
-| Setting | Default | Meaning |
+| Тохиргоо | Өгөгдмөл | Утга |
 |---------|---------|---------|
-| `quorum_bps` | 6667 | Minimum approval ratio (basis points) among counted votes. |
-| `minimum_voters` | 3 | Minimum number of distinct voters required to resolve a decision. |
-| `dispute_window_secs` | 86400 | Time after escalation before votes are finalized (seconds). |
-| `appeal_window_secs` | 604800 | Time after approval during which appeals are accepted (seconds). |
-| `max_penalty_nano` | 1,000,000,000 | Maximum slash penalty allowed for repair escalations (nano-XOR). |
+| `quorum_bps` | 6667 | Тоолсон саналын хамгийн бага зөвшөөрлийн харьцаа (суурь оноо). |
+| `minimum_voters` | 3 | Шийдвэр гаргахад шаардагдах хамгийн бага тооны ялгаатай сонгогчдын тоо. |
+| `dispute_window_secs` | 86400 | Санал хураалт дуусч дуусч дуусч буй хугацаа (секунд). |
+| `appeal_window_secs` | 604800 | Баталгаажсаны дараа давж заалдах гомдлыг хүлээн авах хугацаа (секунд). |
+| `max_penalty_nano` | 1,000,000,000 | Засварыг нэмэгдүүлэх (нано-XOR) -д зөвшөөрөгдсөн хамгийн дээд талбарын торгууль. |
 
-- Scheduler-generated proposals are capped at `max_penalty_nano`; auditor submissions above the cap are rejected.
-- Vote records are stored in `repair_state.to` with deterministic ordering (`voter_id` sorting) so all nodes derive the same decision timestamp and outcome.
+- Хуваарьлагчийн үүсгэсэн саналууд нь `max_penalty_nano`-ээр хязгаарлагдсан; дээд хязгаараас дээш аудиторын мэдүүлгийг үгүйсгэдэг.
+- Санал хураалтын бүртгэлийг `repair_state.to`-д тодорхой дарааллаар (`voter_id` ангилах) хадгалдаг тул бүх зангилаанууд ижил шийдвэрийн цаг, үр дүнг гаргадаг.

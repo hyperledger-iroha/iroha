@@ -4,29 +4,31 @@ direction: rtl
 source: docs/portal/docs/sorafs/orchestrator-ops.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: orchestrator-ops
-title: Runbook d’exploitation de l’orchestrateur SoraFS
-sidebar_label: Runbook orchestrateur
-description: Guide opérationnel pas à pas pour déployer, surveiller et revenir en arrière sur l’orchestrateur multi-source.
+المعرف: عمليات الأوركسترا
+العنوان: Runbook d’exploitation de l’orchesstrateur SoraFS
+Sidebar_label: منسق كتاب التشغيل
+الوصف: قم بتوجيه عملية التشغيل للنشر والمراقبة والتجديد بعد الوصول إلى المُنسق متعدد المصادر.
 ---
 
-:::note Source canonique
-Cette page reflète `docs/source/sorafs/runbooks/sorafs_orchestrator_ops.md`. Gardez les deux copies synchronisées jusqu’à ce que l’ensemble de documentation Sphinx hérité soit entièrement migré.
+:::ملاحظة المصدر الكنسي
+هذه الصفحة تعكس `docs/source/sorafs/runbooks/sorafs_orchestrator_ops.md`. قم بمزامنة النسختين حتى يتم هجرة مجموعة الوثائق التي ورثها أبو الهول بالكامل.
 :::
 
-Ce runbook guide les SRE dans la préparation, le déploiement et l’exploitation de l’orchestrateur de fetch multi-source. Il complète le guide développeur avec des procédures adaptées aux déploiements en production, y compris l’activation par étapes et la mise en liste noire des pairs.
+يرشد دليل التشغيل هذا SRE إلى الإعداد والنشر واستغلال منسق الجلب متعدد المصادر. يكتمل دليل التطوير باستخدام الإجراءات المعدلة لعمليات النشر في الإنتاج، ويتضمن التنشيط عبر الأشرطة والإعداد في القائمة السوداء للأزواج.
 
-> **Voir aussi :** Le [Runbook de déploiement multi-source](./multi-source-rollout.md) se concentre sur les vagues de déploiement à l’échelle du parc et le refus d’urgence des fournisseurs. Référez-vous-y pour la coordination gouvernance / staging tout en utilisant ce document pour les opérations quotidiennes de l’orchestrateur.
+> **راجع أيضًا:** يركز [Runbook de déploiment multisource](./multi-source-rollout.md) على غموض النشر في المنتزه ورفض استعجال الموردين. يرجى الرجوع إلى تنسيق الحوكمة / التدريج باستخدام هذا المستند للعمليات اليومية للمدير.
 
-## 1. Checklist pré-déploiement
+## 1. قائمة المراجعة قبل النشر
 
-1. **Collecter les entrées fournisseurs**
-   - Dernières annonces fournisseurs (`ProviderAdvertV1`) et instantané de télémétrie pour la flotte cible.
-   - Plan de payload (`plan.json`) dérivé du manifeste testé.
-2. **Générer un scoreboard déterministe**
+1. **اجمع المقبلات المجهزة**
+   - يعلن Dernières عن المزودين (`ProviderAdvertV1`) ولحظة عن بعد لقافلة السفن.
+   - خطة الحمولة (`plan.json`) مشتقة من بيان الاختبار.
+2. **إنشاء لوحة نتائج محددة**
 
    ```bash
    sorafs_fetch \
@@ -37,32 +39,28 @@ Ce runbook guide les SRE dans la préparation, le déploiement et l’exploitati
      --provider gamma=fixtures/provider-gamma.bin \
      --scoreboard-out artifacts/scoreboard.json \
      --json-out artifacts/session.summary.json
-   ```
+   ```- تحقق من أن `artifacts/scoreboard.json` هو كل مزود إنتاج مثل `eligible`.
+   - أرشفة JSON من خلال لوحة النتائج؛ يلجأ المدققون إلى أجهزة كمبيوتر إعادة محاولة القطع عند الحصول على شهادة طلب التغيير.
+3. **التشغيل الجاف مع التركيبات** — قم بتنفيذ نفس الأمر على التركيبات المنشورة في `docs/examples/sorafs_ci_sample/` للتأكد من أن ثنائي المنسق يتوافق مع الإصدار الموجود قبل لمس حمولة الإنتاج.
 
-   - Vérifiez que `artifacts/scoreboard.json` répertorie chaque fournisseur de production comme `eligible`.
-   - Archivez le JSON de synthèse avec le scoreboard ; les auditeurs s’appuient sur les compteurs de retry de chunks lors de la certification de la demande de changement.
-3. **Dry-run avec les fixtures** — Exécutez la même commande sur les fixtures publiques de `docs/examples/sorafs_ci_sample/` pour vous assurer que le binaire de l’orchestrateur correspond à la version attendue avant de toucher aux payloads de production.
+## 2. إجراء النشر بالخطوات1. ** Étape canari (42 fournisseurs) **
+   - أعد بناء لوحة النتائج وقم بالتنفيذ باستخدام `--max-peers=2` لتحديد المنسق بمجموعة صغيرة صغيرة.
+   - المراقبة:
+     -`sorafs_orchestrator_active_fetches`
+     -`sorafs_orchestrator_fetch_failures_total{reason!="retry"}`
+     -`sorafs_orchestrator_retries_total`
+   - احرص على بقاء مدة إعادة المحاولة بنسبة 1% فقط لجلب البيان بالكامل وعندما لا تتراكم الشيكات.
+2. **شريط مونتي أون تشارج (50% من الموردين)**
+   - قم بتعزيز `--max-peers` واتصل بلحظة قياس عن بعد حديثة.
+   - استمر في تنفيذ كل مرة مع `--provider-metrics-out` و`--chunk-receipts-out`. احتفظ بالقطع الأثرية لمدة تزيد عن 7 أيام.
+3. **اكتمل النشر**
+   - قم بحذف `--max-peers` (أو قم بإصلاح الرقم الإجمالي للموردين المؤهلين).
+   - تنشيط الوضع المنسق في عملاء النشر: توزيع لوحة النتائج المستمرة وتكوين JSON عبر نظام إدارة التكوين الخاص بك.
+   - قم بإعادة تشغيل اللوحات الخشبية لعرض `sorafs_orchestrator_fetch_duration_ms` p95/p99 والمخططات البيانية لإعادة المحاولة حسب المنطقة.
 
-## 2. Procédure de déploiement par étapes
+## 3. إنشاء قائمة سوداء وتعزيز الأزواج
 
-1. **Étape canari (≤2 fournisseurs)**
-   - Reconstruisez le scoreboard et exécutez avec `--max-peers=2` pour limiter l’orchestrateur à un petit sous-ensemble.
-   - Surveillez:
-     - `sorafs_orchestrator_active_fetches`
-     - `sorafs_orchestrator_fetch_failures_total{reason!="retry"}`
-     - `sorafs_orchestrator_retries_total`
-   - Poursuivez une fois que les taux de retry restent sous 1 % pour un fetch complet du manifeste et qu’aucun fournisseur n’accumule d’échecs.
-2. **Étape de montée en charge (50 % des fournisseurs)**
-   - Augmentez `--max-peers` et relancez avec un instantané de télémétrie récent.
-   - Persistez chaque exécution avec `--provider-metrics-out` et `--chunk-receipts-out`. Conservez les artefacts pendant ≥7 jours.
-3. **Déploiement complet**
-   - Supprimez `--max-peers` (ou fixez-le au nombre total de fournisseurs éligibles).
-   - Activez le mode orchestrateur dans les déploiements clients : distribuez le scoreboard persisté et le JSON de configuration via votre système de gestion de configuration.
-   - Mettez à jour les tableaux de bord pour afficher `sorafs_orchestrator_fetch_duration_ms` p95/p99 et les histogrammes de retry par région.
-
-## 3. Mise en liste noire et boosting des pairs
-
-Utilisez les overrides de politique de scoring du CLI pour trier les fournisseurs défaillants sans attendre les mises à jour de gouvernance.
+استخدم تجاوزات التقييم السياسي لـ CLI لمحاولة الموردين المتخلفين دون متابعة إجراءات الإدارة اليومية.
 
 ```bash
 sorafs_fetch \
@@ -74,36 +72,32 @@ sorafs_fetch \
   --deny-provider=beta \
   --boost-provider=gamma=5 \
   --json-out artifacts/override.summary.json
-```
+```- `--deny-provider` يحذف الاسم المستعار الذي يشير إلى الجلسة.
+- `--boost-provider=<alias>=<weight>` يزيد من مخزون المورد في المخطط. يتم إضافة القيم إلى لوحة النتائج ولا تنطبق على التنفيذ المحلي.
+- قم بتسجيل التجاوزات في تذكرة الحادث وانضم إلى طلعات JSON حتى يتمكن الجهاز المسؤول من تسوية حالة المشكلة في وقت لاحق.
 
-- `--deny-provider` retire l’alias indiqué de la session en cours.
-- `--boost-provider=<alias>=<weight>` augmente le poids du fournisseur dans le planificateur. Les valeurs s’ajoutent au poids normalisé du scoreboard et ne s’appliquent qu’à l’exécution locale.
-- Enregistrez les overrides dans le ticket d’incident et joignez les sorties JSON afin que l’équipe responsable puisse réconcilier l’état une fois le problème sous-jacent corrigé.
+لإجراء تغييرات دائمة، قم بتعديل مصدر القياس عن بعد (حدد الخطأ باعتباره معاقبًا) أو قم بتحديث الإعلان يوميًا باستخدام ميزانيات التدفق المنقحة قبل إلغاء تجاوزات CLI.
 
-Pour des changements permanents, modifiez la télémétrie source (marquez le fautif comme pénalisé) ou mettez à jour l’annonce avec des budgets de flux révisés avant de supprimer les overrides du CLI.
+## 4. تشخيص الألواح
 
-## 4. Diagnostic des pannes
+Lorsqu’un جلب صدى:
 
-Lorsqu’un fetch échoue:
+1. قم بالتقاط العناصر التالية قبل إعادة إطلاقها:
+   -`scoreboard.json`
+   -`session.summary.json`
+   -`chunk_receipts.json`
+   -`provider_metrics.json`
+2. افحص `session.summary.json` لسلسلة الأخطاء المحتملة:
+   - `no providers were supplied` → تحقق من طرق الموردين والإعلانات.
+   - `retry budget exhausted ...` → زيادة `--retry-budget` أو حذف الأزواج غير المستقرة.
+   - `no compatible providers available ...` → قم بمراجعة قدرات الموفر الفاشل.
+3. قم بتصحيح اسم المورد باستخدام `sorafs_orchestrator_provider_failures_total` وأنشئ تذكرة متابعة إذا تم رفع المقياس.
+4. أعد تشغيل خط الجلب باستخدام `--scoreboard-json` والتقط جهاز القياس عن بعد لإعادة إنتاج طريقة التحديد.
 
-1. Capturez les artefacts suivants avant de relancer:
-   - `scoreboard.json`
-   - `session.summary.json`
-   - `chunk_receipts.json`
-   - `provider_metrics.json`
-2. Inspectez `session.summary.json` pour la chaîne d’erreur lisible:
-   - `no providers were supplied` → vérifiez les chemins des fournisseurs et les annonces.
-   - `retry budget exhausted ...` → augmentez `--retry-budget` ou supprimez des pairs instables.
-   - `no compatible providers available ...` → auditez les métadonnées de capacité de plage du fournisseur fautif.
-3. Corrélez le nom du fournisseur avec `sorafs_orchestrator_provider_failures_total` et créez un ticket de suivi si la métrique monte en flèche.
-4. Rejouez le fetch hors ligne avec `--scoreboard-json` et la télémétrie capturée pour reproduire l’échec de manière déterministe.
+## 5. التراجعللتذكير بنشرة منسقة:
 
-## 5. Rollback
+1. قم بتوزيع التكوين الذي تم تحديده `--max-peers=1` (إلغاء تنشيط النظام متعدد المصادر) أو الرجوع إلى نظام جلب العملاء التاريخيين أحادي المصدر.
+2. قم بإلغاء التجاوز `--boost-provider` حتى تعود لوحة النتائج إلى مكان محايد.
+3. استمر في فحص مقاييس المُنسق خلال أقل من يوم للتأكد من عدم جلب أي بقايا في المجلد.
 
-Pour revenir sur un déploiement de l’orchestrateur:
-
-1. Distribuez une configuration qui définit `--max-peers=1` (désactive effectivement l’ordonnancement multi-source) ou revenez au chemin de fetch mono-source historique côté clients.
-2. Supprimez toute override `--boost-provider` afin que le scoreboard revienne à un poids neutre.
-3. Continuez à scruter les métriques de l’orchestrateur pendant au moins une journée pour confirmer qu’aucun fetch résiduel n’est en vol.
-
-Maintenir une capture disciplinée des artefacts et des déploiements par étapes garantit que l’orchestrateur multi-source peut être opéré en toute sécurité sur des flottes hétérogènes de fournisseurs tout en respectant les exigences d’observabilité et d’audit.
+حافظ على التقاط منضبط للعناصر وعمليات النشر من خلال خطوات تضمن أن المنسق متعدد المصادر يمكن تشغيله بأمان تام على أسطول الموردين المختلفين وفقًا لمتطلبات المراقبة والتدقيق.

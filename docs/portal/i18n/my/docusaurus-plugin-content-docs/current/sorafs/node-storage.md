@@ -8,34 +8,36 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraFS Node Storage Design
 sidebar_label: Node Storage Design
 description: Storage architecture, quotas, and lifecycle hooks for Torii nodes hosting SoraFS data.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
+::: Canonical Source ကို သတိပြုပါ။
 :::
 
-## SoraFS Node Storage Design (Draft)
+## SoraFS Node Storage Design (မူကြမ်း)
 
-This note refines how an Iroha (Torii) node can opt-in to the SoraFS data
-availability layer and dedicate a slice of local disk for storing and serving
-chunks. It complements the `sorafs_node_client_protocol.md` discovery spec and
-the SF-1b fixture work by outlining the storage-side architecture, resource
-controls, and configuration plumbing that must land in the node and gateway
-code paths. Practical operator drills live in the
-[Node Operations Runbook](./node-operations).
+ဤမှတ်စုသည် Iroha (Torii) node သည် SoraFS ဒေတာကို မည်သို့ဝင်ရောက်နိုင်သည်ကို သန့်စင်ပေးသည်
+ရရှိနိုင်မှုအလွှာကို သိမ်းဆည်းပြီး ဝန်ဆောင်မှုပေးရန်အတွက် စက်တွင်းဒစ်ချပ်တစ်ချပ်ကို အပ်နှံပါ။
+အတုံးများ။ ၎င်းသည် `sorafs_node_client_protocol.md` ရှာဖွေတွေ့ရှိမှု spec နှင့် အားဖြည့်ပေးပါသည်။
+SF-1b fixture သည် storage-side architecture၊ resource ကို အကြမ်းဖျင်းအားဖြင့် လုပ်ဆောင်သည်။
+ထိန်းချုပ်မှုများ၊ နှင့် node နှင့် gateway တွင် ဆင်းသက်ရမည့် ပိုက်လိုင်းဖွဲ့စည်းမှု
+ကုဒ်လမ်းကြောင်းများ။ လက်တွေ့အော်ပရေတာလေ့ကျင့်မှုများတွင် နေထိုင်ပါသည်။
+[Node Operations Runbook](./node-operations)။
 
-### Goals
+### ပန်းတိုင်
 
-- Allow any validator or auxiliary Iroha process to expose spare disk as a
-  SoraFS provider without affecting the core ledger responsibilities.
-- Keep the storage module deterministic and Norito-driven: manifests,
-  chunk plans, Proof-of-Retrievability (PoR) roots, and provider adverts are the
-  source of truth.
-- Enforce operator-defined quotas so a node cannot exhaust its own resources by
-  accepting too many pin or fetch requests.
-- Surface health/telemetry (PoR sampling, chunk fetch latency, disk pressure)
-  back to governance and clients.
+- မည်သည့် validator သို့မဟုတ် auxiliary Iroha လုပ်ငန်းစဉ်အား အပိုဒစ်တစ်ခုအဖြစ် ဖော်ထုတ်ခွင့်ပြုပါ
+  SoraFS ပံ့ပိုးပေးသူသည် ပင်မလယ်ဂျာတာဝန်များကို မထိခိုက်စေဘဲ။
+- သိုလှောင်မှု module ကို အဆုံးအဖြတ်ပေးပြီး Norito ဖြင့် မောင်းနှင်ထားသည်- manifests၊
+  အတုံးအခဲအစီအစဥ်များ၊ အထောက်အထားပြန်ယူနိုင်မှု (PoR) အမြစ်များနှင့် ဝန်ဆောင်မှုပေးသည့် ကြော်ငြာများဖြစ်သည်။
+  အမှန်တရား၏အရင်းအမြစ်။
+- အော်ပရေတာသတ်မှတ်ထားသော quotas အား တွန်းအားပေးခြင်းဖြင့် node တစ်ခုသည် ၎င်း၏ကိုယ်ပိုင်အရင်းအမြစ်များကို မကုန်ဆုံးနိုင်ပါ။
+  ပင်နံပါတ်များလွန်းခြင်း သို့မဟုတ် ထုတ်ယူရန် တောင်းဆိုချက်များကို လက်ခံခြင်း။
+- မျက်နှာပြင်ကျန်းမာရေး/ တယ်လီမီတာ (PoR နမူနာ၊ အတုံးလိုက်ယူဆောင်မှု တုံ့ပြန်ချိန်၊ ဒစ်ခ်ဖိအား)
+  အုပ်ချုပ်ရေးနှင့် ဖောက်သည်များထံ ပြန်သွားရန်။
 
-### High-level Architecture
+### အဆင့်မြင့်ဗိသုကာပညာ
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -64,28 +66,28 @@ code paths. Practical operator drills live in the
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
-Key modules:
+အဓိက မော်ဂျူးများ-
 
-- **Gateway**: exposes Norito HTTP endpoints for pin proposals, chunk fetch
-  requests, PoR sampling, and telemetry. It validates Norito payloads and
-  marshals requests into the chunk store. Reuses the existing Torii HTTP stack
-  to avoid a new daemon.
-- **Pin Registry**: the manifest pin state tracked in `iroha_data_model::sorafs`
-  and `iroha_core`. When a manifest is accepted the registry records the
-  manifest digest, chunk plan digest, PoR root, and provider capability flags.
-- **Chunk Storage**: disk-backed `ChunkStore` implementation that ingests
-  signed manifests, materialises chunk plans using `ChunkProfile::DEFAULT`, and
-  persists chunks under a deterministic layout. Each chunk is associated with a
-  content fingerprint and PoR metadata so sampling can re-validate without
-  re-reading the entire file.
-- **Quota/Scheduler**: enforces operator-configured limits (maximum disk bytes,
-  maximum outstanding pins, maximum parallel fetches, chunk TTL) and coordinates
-  IO so the node's ledger duties are not starved. The scheduler is also
-  responsible for serving PoR proofs and sampling requests with bounded CPU.
+- **Gateway**- ပင်နံပါတ် အဆိုပြုချက်များ အတွက် Norito HTTP အဆုံးမှတ်များကို ဖော်ထုတ်ပေးသည်၊
+  တောင်းဆိုချက်များ၊ PoR နမူနာယူခြင်းနှင့် တယ်လီမီတာ။ ၎င်းသည် Norito payloads နှင့် တရားဝင်သည်။
+  marshals သည် အတုံးလိုက်စတိုးဆိုင်သို့ တောင်းဆိုသည်။ ရှိပြီးသား Torii HTTP stack ကို ပြန်သုံးသည်။
+  daemon အသစ်ကိုရှောင်ရှားရန်။
+- **Pin Registry**- `iroha_data_model::sorafs` တွင် ခြေရာခံထားသော manifest pin အခြေအနေ
+  နှင့် `iroha_core`။ မန်နီးဖက်စ်ကို လက်ခံသောအခါ မှတ်ပုံတင်သည် မှတ်တမ်းတင်သည်။
+  သရုပ်ဖော်ချက်၊ အတုံးအတုံးအစီအစဥ်ဒစ်ဂျစ်၊ PoR အမြစ်နှင့် ဝန်ဆောင်မှုပေးနိုင်စွမ်း အလံများ။
+- **Chunk Storage**- ဒစ်ခ်ကျောထောက်နောက်ခံပြုထားသော `ChunkStore` ကို ထည့်သွင်းအသုံးပြုခြင်း
+  `ChunkProfile::DEFAULT` ကို အသုံးပြု၍ အစီအစဥ်များကို လက်မှတ်ရေးထိုးပြီး ၊
+  အဆုံးအဖြတ်ပေးသည့် အပြင်အဆင်အောက်တွင် အတုံးအခဲများ ရှိနေသည်။ အတုံးတစ်ခုစီသည် a နှင့်ဆက်စပ်နေသည်။
+  အကြောင်းအရာ လက်ဗွေနှင့် PoR မက်တာဒေတာ ဖြစ်သောကြောင့် နမူနာယူခြင်းမရှိဘဲ ပြန်လည်အတည်ပြုနိုင်သည်။
+  ဖိုင်တစ်ခုလုံးကို ပြန်ဖတ်သည်။
+- **Quota/Scheduler**- အော်ပရေတာ-ပြင်ဆင်ထားသော ကန့်သတ်ချက်များကို တွန်းအားပေးသည် (အမြင့်ဆုံး disk bytes၊
+  အထူးခြားဆုံး ပင်နံပါတ်များ၊ အများဆုံး အပြိုင်ဆွဲယူမှုများ၊ အတုံးအတုံးများ TTL) နှင့် သြဒိနိတ်များ
+  IO သည် node ၏ လယ်ဂျာတာဝန်များကို မငတ်စေရပါ။ အစီအစဉ်ဆွဲသူလည်းဖြစ်သည်။
+  ကန့်သတ်ထားသော CPU ဖြင့် PoR အထောက်အထားများနှင့် နမူနာတောင်းဆိုမှုများကို ဆောင်ရွက်ပေးရန်အတွက် တာဝန်ရှိသည်။
 
-### Configuration
+### ဖွဲ့စည်းမှု
 
-Add a new section to `iroha_config`:
+`iroha_config` သို့ ကဏ္ဍအသစ်တစ်ခု ထည့်ပါ-
 
 ```toml
 [sorafs.storage]
@@ -103,40 +105,40 @@ adverts:
   topics = ["sorafs.sf1.primary:global"]
 ```
 
-- `enabled`: participation toggle. When false the gateway returns a 503 for
-  storage endpoints and the node does not advertise in discovery.
-- `data_dir`: root directory for chunk data, PoR trees, and fetch telemetry.
-  Defaults to `<iroha.data_dir>/sorafs`.
-- `max_capacity_bytes`: hard limit for pinned chunk data. A background task
-  rejects new pins when the limit is reached.
-- `max_parallel_fetches`: concurrency cap enforced by the scheduler to balance
-  bandwidth/disk IO against validator workload.
-- `max_pins`: maximum number of manifest pins the node accepts before applying
-  eviction/back pressure.
-- `por_sample_interval_secs`: cadence for automatic PoR sampling jobs. Each job
-  samples `N` leaves (configurable per manifest) and emits telemetry events.
-  Governance can scale `N` deterministically by setting the capacity metadata
-  key `profile.sample_multiplier` (integer `1-4`). The value may be a single
-  number/string or an object with per-profile overrides, e.g.
-  `{"default":2,"sorafs.sf2@1.0.0":3}`.
-- `adverts`: structure used by the provider advert generator to fill
-  `ProviderAdvertV1` fields (stake pointer, QoS hints, topics). If omitted the
-  node uses defaults from the governance registry.
+- `enabled`- ပါဝင်မှုခလုတ်။ မှားယွင်းသောအခါတွင် တံခါးပေါက်သည် 503 ကို ပြန်ပေးသည်။
+  သိုလှောင်မှု အဆုံးမှတ်များနှင့် node သည် ရှာဖွေတွေ့ရှိမှုတွင် ကြော်ငြာမထားပါ။
+- `data_dir`- အတုံးဒေတာ၊ PoR သစ်ပင်များနှင့် တယ်လီမီတာကို ထုတ်ယူရန်အတွက် အမြစ်လမ်းညွှန်။
+  ပုံသေသည် `<iroha.data_dir>/sorafs` သို့ဖြစ်သည်။
+- `max_capacity_bytes`- ပင်ထိုးထားသော အတုံးအခဲဒေတာအတွက် ကန့်သတ်ချက်။ နောက်ခံအလုပ်တစ်ခု
+  ကန့်သတ်ချက်ပြည့်သွားသောအခါ ပင်အသစ်များကို ငြင်းပယ်သည်။
+- `max_parallel_fetches`- ဟန်ချက်ညီစေရန် အစီအစဉ်ဆွဲသူမှ ပြဋ္ဌာန်းထားသော ပေါင်းစပ်ငွေကြေးထုပ်
+  validator workload ကိုဆန့်ကျင်သော bandwidth/disk IO။
+- `max_pins`- လျှောက်ထားခြင်းမပြုမီ node မှ လက်ခံသော မန်နီးဖက်စ် ပင်နံပါတ် အများဆုံး
+  နှင်ထုတ်ခြင်း/နောက်ပြန်ဖိအားပေးခြင်း။
+- `por_sample_interval_secs`- အလိုအလျောက် PoR နမူနာအလုပ်များအတွက် cadence။ အလုပ်တိုင်း
+  နမူနာများ `N` အရွက်များ (ဖော်ပြချက်တစ်ခုလျှင် ပြင်ဆင်သတ်မှတ်နိုင်သည်) နှင့် တယ်လီမီတာ ဖြစ်ရပ်များကို ထုတ်လွှတ်သည်။
+  စွမ်းဆောင်ရည် မက်တာဒေတာကို သတ်မှတ်ခြင်းဖြင့် အုပ်ချုပ်ရေးသည် `N` ကို အဆုံးအဖြတ်ပေးနိုင်သည်
+  သော့ `profile.sample_multiplier` (ကိန်းပြည့် `1-4`)။ တန်ဖိုးသည် တစ်ခုတည်းဖြစ်နိုင်သည်။
+  နံပါတ်/စာကြောင်း သို့မဟုတ် ပရိုဖိုင်တစ်ခုစီတွင် ထပ်ရေးထားသော အရာတစ်ခု၊ ဥပမာ။
+  `{"default":2,"sorafs.sf2@1.0.0":3}`။
+- `adverts`- ဖြည့်စွက်ရန် ပံ့ပိုးပေးသူ ကြော်ငြာမီးစက်မှ အသုံးပြုသည့် ဖွဲ့စည်းပုံ
+  `ProviderAdvertV1` အကွက်များ (လောင်းကြေးညွှန်းကိန်း၊ QoS အရိပ်အမြွက်များ၊ အကြောင်းအရာများ)။ ချန်ထားခဲ့လျှင်
+  node သည် governance registry မှ ပုံသေများကို အသုံးပြုသည်။
 
-Config plumbing:
+ရေပိုက်ပြင်ဆင်ခြင်း-
 
-- `[sorafs.storage]` is defined in `iroha_config` as `SorafsStorage` and is
-  loaded from the node config file.
-- `iroha_core` and `iroha_torii` thread the storage config into the gateway
-  builder and chunk store at startup.
-- Dev/test env overrides exist (`SORAFS_STORAGE_*`, `SORAFS_STORAGE_PIN_*`), but
-  production deployments should rely on the config file.
+- `[sorafs.storage]` ကို `iroha_config` တွင် `SorafsStorage` အဖြစ်သတ်မှတ်ထားပြီး၊
+  node config ဖိုင်မှ တင်ထားသည်။
+- `iroha_core` နှင့် `iroha_torii` သည် storage config ကို gateway ထဲသို့ တွဲထည့်ပါ
+  စတင်ချိန်တွင် builder နှင့် chunk စတိုး။
+- Dev/test env overrides များ ရှိပါသည် (`SORAFS_STORAGE_*`, `SORAFS_STORAGE_PIN_*`)၊ သို့သော်
+  ထုတ်လုပ်ဖြန့်ကျက်မှုများသည် config ဖိုင်ပေါ်တွင် အားကိုးသင့်သည်။
 
-### CLI Utilities
+### CLI အသုံးအဆောင်များ
 
-While Torii’s HTTP surface is still being wired, the `sorafs_node` crate ships a
-thin CLI so operators can script ingestion/export drills against the persistent
-backend.【crates/sorafs_node/src/bin/sorafs-node.rs:1】
+Torii ၏ HTTP မျက်နှာပြင်သည် ဝိုင်ယာကြိုးတပ်ထားဆဲဖြစ်သော်လည်း `sorafs_node` သည် သေတ္တာတစ်လုံးကို ပို့ဆောင်ပေးသည်။
+ပါးလွှာသော CLI ဖြစ်သောကြောင့် အော်ပရေတာများသည် မြဲမြံစွာ ဆန့်ကျင်သည့် ဇာတ်ညွှန်းထည့်သွင်းခြင်း/တင်ပို့ခြင်းဆိုင်ရာ လေ့ကျင့်မှုများ ပြုလုပ်နိုင်သည်။
+နောက်ခံဖိုင်။ 【crates/sorafs_node/src/bin/sorafs-node.rs:1】
 
 ```bash
 cargo run -p sorafs_node --bin sorafs-node ingest \
@@ -146,106 +148,104 @@ cargo run -p sorafs_node --bin sorafs-node ingest \
   --plan-json-out ./plan.json
 ```
 
-- `ingest` expects a Norito-encoded manifest `.to` file plus the matching payload
-  bytes. It reconstructs the chunk plan from the manifest’s chunking profile,
-  enforces digest parity, persists chunk files, and optionally emits a
-  `chunk_fetch_specs` JSON blob so downstream tooling can sanity-check the
-  layout.
-- `export` accepts a manifest ID and writes the stored manifest/payload to disk
-  (with optional plan JSON) so fixtures remain reproducible across environments.
+- `ingest` သည် Norito-encoded manifest `.to` ဖိုင်နှင့် ကိုက်ညီသော payload ကို မျှော်လင့်သည်
+  ဘိုက် ၎င်းသည် manifest ၏ အတုံးအခဲပရိုဖိုင်မှ အတုံးအတုံးအစီအစဥ်ကို ပြန်လည်တည်ဆောက်သည်၊
+  digest parity ကို တွန်းအားပေးသည်၊ အတုံးဖိုင်များကို ဆက်လက်ထားရှိကာ a ကို ထုတ်လွှတ်နိုင်သည်။
+  `chunk_fetch_specs` JSON blob သည် downstream tooling သည် စိတ်ပိုင်းဆိုင်ရာ စစ်ဆေးနိုင်သည်
+  အပြင်အဆင်။
+- `export` သည် manifest ID တစ်ခုကို လက်ခံပြီး သိမ်းဆည်းထားသော manifest/payload ကို disk သို့ ရေးပေးသည်
+  (ချန်လှပ်ထားသော အစီအစဉ် JSON ဖြင့်) ထို့ကြောင့် ဆက်စပ်ပစ္စည်းများသည် ပတ်ဝန်းကျင်တစ်ခုလုံးတွင် ပြန်လည်ထုတ်လုပ်နိုင်ပါသည်။
 
-Both commands print a Norito JSON summary to stdout, making it easy to pipe into
-scripts. The CLI is covered by an integration test to ensure manifests and
-payloads round-trip cleanly before the Torii APIs land.【crates/sorafs_node/tests/cli.rs:1】
+ညွှန်ကြားချက်နှစ်ခုလုံးသည် Norito JSON အနှစ်ချုပ်ကို stdout သို့ ပိုက်ထည့်ရန် လွယ်ကူစေသည်၊
+ဇာတ်ညွှန်းများ CLI ကို ထင်ရှားစေပြီး သေချာစေရန် ပေါင်းစပ်စမ်းသပ်မှုတစ်ခုဖြင့် အကျုံးဝင်ပါသည်။
+Torii APIs များ မရောက်မီ အသွားအပြန် အသွားအပြန် သန့်ရှင်းသပ်ရပ်စွာ ပေးဆောင်သည်။ 【crates/sorafs_node/tests/cli.rs:1】
 
-> HTTP parity
+> HTTP တူညီမှု
 >
-> The Torii gateway now exposes read-only helpers backed by the same
-> `NodeHandle`:
+> Torii gateway သည် တူညီသော ကျောထောက်နောက်ခံပြုထားသော ဖတ်ရှုခြင်းအတွက်သာ အထောက်အကူများကို ထုတ်ဖော်ပြသသည်
+> `NodeHandle`-
 >
-> - `GET /v1/sorafs/storage/manifest/{manifest_id_hex}` — returns the stored
->   Norito manifest (base64) alongside digest/metadata.【crates/iroha_torii/src/sorafs/api.rs:1207】
-> - `GET /v1/sorafs/storage/plan/{manifest_id_hex}` — returns the deterministic
->   chunk plan JSON (`chunk_fetch_specs`) for downstream tooling.【crates/iroha_torii/src/sorafs/api.rs:1259】
+> - `GET /v1/sorafs/storage/manifest/{manifest_id_hex}` — သိမ်းဆည်းထားသည့်အရာကို ပြန်ပေးသည်။
+> Norito မန်နီးဖက်စ် (base64) ကို digest/metadata နှင့်အတူ။【crates/iroha_torii/src/sorafs/api.rs:1207】
+> - `GET /v1/sorafs/storage/plan/{manifest_id_hex}` — အဆုံးအဖြတ်ကို ပြန်ပေးသည်။
+ရေအောက်တူးလ်လုပ်ခြင်းအတွက် > အတုံးအခဲ JSON အစီအစဉ် (`chunk_fetch_specs`)။ 【crates/iroha_torii/src/sorafs/api.rs:1259】
 >
-> These endpoints mirror the CLI output so pipelines can switch from local
-> scripts to HTTP probes without changing parsers.【crates/iroha_torii/src/sorafs/api.rs:1207】【crates/iroha_torii/src/sorafs/api.rs:1259】
+> ဤအဆုံးမှတ်များသည် CLI အထွက်ကို ထင်ဟပ်နေသောကြောင့် ပိုက်လိုင်းများသည် ဒေသတွင်းမှ ပြောင်းနိုင်သည်။
+စီစဥ်ခြင်းများကို မပြောင်းလဲဘဲ HTTP probes သို့ scripts များ။【crates/iroha_torii/src/sorafs/api.rs:1207】【crates/iroha_torii/src/sorafs/api.rs:1259】
 
 ### Node Lifecycle
 
-1. **Startup**:
-   - If storage is enabled the node initialises the chunk store with the
-     configured directory and capacity. This includes verifying or creating the
-     PoR manifest database and replaying pinned manifests to warm caches.
-   - Register the SoraFS gateway routes (Norito JSON POST/GET endpoints for pin,
-     fetch, PoR sample, telemetry).
-   - Spawn the PoR sampling worker and quota monitor.
-2. **Discovery / Adverts**:
-   - Generate `ProviderAdvertV1` documents using current capacity/health, sign
-     them with the council-approved key, and publish via the discovery channel.
-     available.
-3. **Pin Workflow**:
-   - Gateway receives a signed manifest (including chunk plan, PoR root, council
-     signatures). Validate the alias list (`sorafs.sf1@1.0.0` required) and
-     ensure the chunk plan matches the manifest metadata.
-   - Check quotas. If capacity/pin limits would be exceeded respond with a
-     policy error (Norito structured).
-   - Stream chunk data into the `ChunkStore`, verifying digests as we ingest.
-     Update PoR trees and store manifest metadata in the registry.
-4. **Fetch Workflow**:
-   - Serve chunk range requests from disk. Scheduler enforces
-     `max_parallel_fetches` and returns `429` when saturated.
-   - Emit structured telemetry (Norito JSON) with latency, bytes served, and
-     error counts for downstream monitoring.
-5. **PoR Sampling**:
-   - Worker selects manifests proportional to weight (e.g., bytes stored) and
-     runs deterministic sampling using the chunk store's PoR tree.
-   - Persist results for governance audits and include summaries in provider
-     adverts / telemetry endpoints.
-6. **Eviction / Quota Enforcement**:
-   - When capacity is reached the node rejects new pins by default. Optionally,
-     operators may configure eviction policies (e.g., TTL-based, LRU) once the
-     governance model is agreed; for now the design assumes strict quotas and
-     operator-initiated unpin operations.
+1. **စတင်ခြင်း**-
+   - သိုလှောင်မှုကို ဖွင့်ထားပါက node သည် အတုံးစတိုးကို ခလုတ်ဖြင့် အစပြုသည်။
+     ပြင်ဆင်သတ်မှတ်ထားသော လမ်းညွှန်နှင့် စွမ်းရည်။ ၎င်းတွင် အတည်ပြုခြင်း သို့မဟုတ် ဖန်တီးခြင်းတို့ ပါဝင်သည်။
+     PoR မန်နီးဖက်စ် ဒေတာဘေ့စ်နှင့် နွေးထွေးသော ကက်ရှ်များအတွက် ပင်ထိုးထားသော မန်နီးဖက်စ်များကို ပြန်ဖွင့်ခြင်း။
+   - SoraFS ဂိတ်ဝေးလမ်းကြောင်းများကို မှတ်ပုံတင်ပါ (Norito JSON POST/ pin အတွက် အဆုံးမှတ်များကို ရယူပါ၊
+     ထုတ်ယူမှု၊ PoR နမူနာ၊ တယ်လီမီတာ)။
+   - PoR နမူနာလုပ်သားနှင့် ခွဲတမ်းမော်နီတာကို မွေးထုတ်ပေးပါ။
+2. **ရှာဖွေတွေ့ရှိမှု/ကြော်ငြာများ**-
+   - လက်ရှိစွမ်းဆောင်ရည်/ကျန်းမာရေး၊ လက္ခဏာကို အသုံးပြု၍ `ProviderAdvertV1` စာရွက်စာတမ်းများကို ထုတ်လုပ်ပါ။
+     ၎င်းတို့ကို ကောင်စီမှ အတည်ပြုထားသောသော့ဖြင့် ရှာဖွေတွေ့ရှိမှုချန်နယ်မှတစ်ဆင့် ထုတ်ဝေပါ။
+     ရရှိနိုင်
+3. **Pin Workflow**-
+   - Gateway သည် လက်မှတ်ရေးထိုးထားသော manifest ကိုလက်ခံရရှိသည် (အပိုင်းအစီအစဉ်၊ PoR အမြစ်၊ ကောင်စီအပါအဝင်၊
+     လက်မှတ်များ)။ အမည်များစာရင်း (`sorafs.sf1@1.0.0` လိုအပ်သည်) နှင့် အတည်ပြုပါ။
+     အပိုင်းအစီအစဉ်သည် ထင်ရှားသော မက်တာဒေတာနှင့် ကိုက်ညီကြောင်း သေချာပါစေ။
+   - ခွဲတမ်းကိုစစ်ဆေးပါ။ ပမာဏ/ပင်နံပါတ် ကန့်သတ်ချက်များကို ကျော်လွန်သွားပါက a ဖြင့် တုံ့ပြန်ပါ။
+     မူဝါဒအမှား (Norito ဖွဲ့စည်းတည်ဆောက်ထားသည်)။
+   - ကျွန်ုပ်တို့ထည့်သွင်းထားသည့်အတိုင်း အတိုချုံးအချက်အလက်များကို `ChunkStore` တွင် တိုက်ရိုက်ကြည့်ရှုပါ။
+     PoR သစ်ပင်များကို အပ်ဒိတ်လုပ်ပြီး မှတ်ပုံတင်ခြင်းတွင် မန်နီးဖက်စ် မက်တာဒေတာကို သိမ်းဆည်းပါ။
+4. **အလုပ်အသွားအလာကို ရယူရန်**-
+   - ဒစ်ခ်မှ အတုံးအကွာအဝေး တောင်းဆိုမှုများကို ဆောင်ရွက်ပေးပါ။ စီစဉ်ပေးသည်
+     `max_parallel_fetches` နှင့် ပြည့်သွားသောအခါ `429` ကို ပြန်ပေးသည်။
+   - ဖွဲ့စည်းတည်ဆောက်ထားသော တယ်လီမီတာ (Norito JSON) ကို latency၊ bytes ဆောင်ရွက်ပေးပြီး၊
+     ရေအောက်ပိုင်း စောင့်ကြည့်ခြင်းအတွက် အမှားအယွင်းများစွာရှိသည်။
+5. **PoR နမူနာ**-
+   - အလုပ်သမားသည် အလေးချိန်နှင့် အချိုးကျဖော်ပြသည်ကို ရွေးချယ်သည် (ဥပမာ၊ သိမ်းဆည်းထားသော ဘိုက်များ) နှင့်
+     အတုံးစတိုးဆိုင်၏ PoR သစ်ပင်ကို အသုံးပြု၍ အဆုံးအဖြတ်နမူနာကို လုပ်ဆောင်သည်။
+   - အုပ်ချုပ်မှုစာရင်းစစ်များအတွက် ဆက်လက်တည်ရှိနေပြီး ဝန်ဆောင်မှုပေးသူတွင် အကျဉ်းချုပ်များ ထည့်သွင်းပါ။
+     ကြော်ငြာများ / telemetry အဆုံးမှတ်များ။
+6. ** နှင်ထုတ်ခြင်း / ခွဲတမ်းအာဏာတည်ခြင်း**-
+   - စွမ်းရည်ရောက်ရှိသောအခါတွင် node သည် ပုံမှန်အားဖြင့် ပင်အသစ်များကို ငြင်းပယ်သည်။ လုပ်နိုင်သော၊
+     အော်ပရေတာများသည် နှင်ထုတ်ခြင်းဆိုင်ရာမူဝါဒများ (ဥပမာ၊ TTL အခြေပြု၊ LRU) ကို သတ်မှတ်ပြီးသည်နှင့်၊
+     အုပ်ချုပ်မှုပုံစံကို သဘောတူသည်။ ယခုအချိန်တွင် ဒီဇိုင်းသည် တင်းကျပ်သော ခွဲတမ်းများနှင့် ဖြစ်သည်ဟု ယူဆသည်။
+     အော်ပရေတာမှ အစပြုသော ပင်ဖြုတ်လုပ်ဆောင်ချက်များ။
 
-### Capacity Declaration & Scheduling Integration
+### စွမ်းဆောင်ရည် ကြေငြာချက်နှင့် အချိန်ဇယား ပေါင်းစပ်ခြင်း။- ယခု Torii သည် `/v1/sorafs/capacity/declare` မှ `CapacityDeclarationRecord` အပ်ဒိတ်များ
+  ထည့်သွင်းထားသော `CapacityManager` သို့၊ ထို့ကြောင့် node တစ်ခုစီသည် ၎င်း၏ in-memory view ကို တည်ဆောက်သည်။
+  အတုံးအခဲနှင့် လမ်းသွားများကို ခွဲဝေပေးသည်။ မန်နေဂျာသည် ဖတ်ရန်သာ လျှပ်တစ်ပြက်ရိုက်ချက်များကို ဖော်ထုတ်သည်။
+  Telemetry အတွက် (`GET /v1/sorafs/capacity/state`) နှင့် per-profile သို့မဟုတ် per-lane ကို ပြဋ္ဌာန်းသည်
+  အမှာစာအသစ်များလက်ခံခြင်းမပြုမီ ကြိုတင်မှာထားမှုများ။【crates/sorafs_node/src/capacity.rs:1】【crates/sorafs_node/src/lib.rs:60】
+- `/v1/sorafs/capacity/schedule` အဆုံးမှတ်သည် အုပ်ချုပ်ရေးမှထုတ်ပေးသော `ReplicationOrderV1` ကို လက်ခံသည်
+  ဝန်ဆောင်ခများ။ အဆိုပါအမိန့်သည် ဒေသတွင်းဝန်ဆောင်မှုပေးသူကို ပစ်မှတ်ထားသည့်အခါ မန်နေဂျာက စစ်ဆေးသည်။
+  အချိန်ဇယားဆွဲခြင်း ပွားခြင်း၊ chunker/lane စွမ်းရည်ကို စစ်ဆေးခြင်း၊ အချပ်ကို သိမ်းဆည်းခြင်းနှင့်
+  ကျန်ရှိသော စွမ်းရည်ကို ဖော်ပြသည့် `ReplicationPlan` ကို ပြန်ပေးသည် ထို့ကြောင့် တီးမှုတ်ကိရိယာများ
+  စားသုံးခြင်းဖြင့် ဆက်လက်လုပ်ဆောင်နိုင်သည်။ အခြားဝန်ဆောင်မှုပေးသူများအတွက် အမှာစာတစ်ခုဖြင့် အသိအမှတ်ပြုပါသည်။
+  Multi-operator လုပ်ငန်းအသွားအလာများကို ဖြေလျှော့ရန် `ignored` တုံ့ပြန်မှု။【crates/iroha_torii/src/routing.rs:4845】
+- ပြီးစီးမှုချိတ်များ (ဥပမာ၊ ထည့်သွင်းမှုအောင်မြင်ပြီးနောက် အစပျိုးလိုက်သည်) နှိပ်ပါ။
+  `POST /v1/sorafs/capacity/complete` မှတဆင့် ကြိုတင်မှာယူမှုများကို ထုတ်ပြန်ရန်
+  `CapacityManager::complete_order`။ တုံ့ပြန်မှုတွင် `ReplicationRelease` ပါဝင်သည်။
+  လျှပ်တစ်ပြက်ရိုက်ချက် (လက်ကျန်စုစုပေါင်းများ၊ chunker/lane အကြွင်းအကျန်များ) ထို့ကြောင့် orchestration tooling လုပ်နိုင်သည်
+  မဲမပေးဘဲ နောက်တဆင့်ကို တန်းစီပါ။ နောက်ဆက်တွဲအလုပ်က ဒီအကွက်ထဲကို ကြိုးချည်ပေးလိမ့်မယ်။
+  ပိုက်လိုင်းကို တစ်ကြိမ် စားသုံးမိပါက ယုတ္တိဗေဒမြေများကို သိမ်းဆည်းပါ။【crates/iroha_torii/src/routing.rs:4885】【crates/sorafs_node/src/capacity.rs:90】
+- ထည့်သွင်းထားသော `TelemetryAccumulator` မှတဆင့် ပြောင်းလဲနိုင်သည်။
+  `NodeHandle::update_telemetry`၊ နောက်ခံဝန်ထမ်းများသည် PoR/uptime နမူနာများကို မှတ်တမ်းတင်ခွင့်ပြုသည်။
+  နှင့် နောက်ဆုံးတွင် Canonical `CapacityTelemetryV1` ကို မထိဘဲ ပါ၀င်မှု များ ကို ရရှိ သည် ။
+  အချိန်ဇယားအတွင်းပိုင်း။ 【crates/sorafs_node/src/lib.rs:142】【crates/sorafs_node/src/telemetry.rs:1】
 
-- Torii now relays `CapacityDeclarationRecord` updates from `/v1/sorafs/capacity/declare`
-  to the embedded `CapacityManager`, so each node builds an in-memory view of its
-  committed chunker and lane allocations. The manager exposes read-only snapshots
-  for telemetry (`GET /v1/sorafs/capacity/state`) and enforces per-profile or per-lane
-  reservations before new orders are accepted.【crates/sorafs_node/src/capacity.rs:1】【crates/sorafs_node/src/lib.rs:60】
-- The `/v1/sorafs/capacity/schedule` endpoint accepts governance-issued `ReplicationOrderV1`
-  payloads. When the order targets the local provider the manager checks for
-  duplicate scheduling, verifies chunker/lane capacity, reserves the slice, and
-  returns a `ReplicationPlan` describing remaining capacity so orchestration tools
-  can proceed with ingestion. Orders for other providers are acknowledged with an
-  `ignored` response to ease multi-operator workflows.【crates/iroha_torii/src/routing.rs:4845】
-- Completion hooks (e.g., triggered after ingestion succeeds) hit
-  `POST /v1/sorafs/capacity/complete` to release reservations via
-  `CapacityManager::complete_order`. The response includes a `ReplicationRelease`
-  snapshot (remaining totals, chunker/lane residuals) so orchestration tooling can
-  queue the next order without polling. Follow-up work will wire this into the chunk
-  store pipeline once ingestion logic lands.【crates/iroha_torii/src/routing.rs:4885】【crates/sorafs_node/src/capacity.rs:90】
-- The embedded `TelemetryAccumulator` can be mutated through
-  `NodeHandle::update_telemetry`, letting background workers record PoR/uptime samples
-  and eventually derive canonical `CapacityTelemetryV1` payloads without touching the
-  scheduler internals.【crates/sorafs_node/src/lib.rs:142】【crates/sorafs_node/src/telemetry.rs:1】
+### ပေါင်းစည်းမှုနှင့် အနာဂတ်လုပ်ငန်း
 
-### Integrations & Future Work
+- **အုပ်ချုပ်မှု**- သိုလှောင်မှုတယ်လီမီတာဖြင့် `sorafs_pin_registry_tracker.md` ကို တိုးချဲ့ပါ။
+  (PoR အောင်မြင်မှုနှုန်း၊ ဒစ်အသုံးပြုမှု)။ ဝင်ခွင့်မူဝါဒများသည် အနည်းဆုံး လိုအပ်နိုင်သည်။
+  ကြော်ငြာများကို လက်ခံခြင်းမပြုမီ စွမ်းရည် သို့မဟုတ် အနည်းဆုံး PoR အောင်မြင်မှုနှုန်း။
+- **Client SDKs**- သိုလှောင်မှုပုံစံအသစ် (ဒစ်ခ်ကန့်သတ်ချက်များ၊ အမည်လွဲ) ကို ဖော်ထုတ်ပါ။
+  စီမံခန့်ခွဲမှု tooling သည် bootstrap node များကို programmatically လုပ်နိုင်သည် ။
+- **Telemetry**- ရှိပြီးသား မက်ထရစ်အကွက်များ (Prometheus /
+  OpenTelemetry) ထို့ကြောင့် သိုလှောင်မှုမက်ထရစ်များသည် ကြည့်ရှုနိုင်မှု ဒက်ရှ်ဘုတ်များတွင် ပေါ်လာပါသည်။
+- **လုံခြုံရေး**- သီးသန့် async task pool အတွင်းတွင် သိုလှောင်မှု module ကို run ပါ။
+  back-pressure နှင့် io_uring သို့မဟုတ် tokio's မှတဆင့် sandboxing အတုံးအခဲကို စဉ်းစားပါ။
+  အန္တရာယ်ရှိသောဖောက်သည်များအား အရင်းအမြစ်များ ကုန်ခန်းစေခြင်းမှ ကာကွယ်ရန် ကန့်သတ်ထားသော ရေကန်များ။
 
-- **Governance**: extend `sorafs_pin_registry_tracker.md` with storage telemetry
-  (PoR success rate, disk utilisation). Admission policies can require minimum
-  capacity or minimum PoR success rate before adverts are accepted.
-- **Client SDKs**: expose the new storage config (disk limits, alias) so
-  management tooling can bootstrap nodes programmatically.
-- **Telemetry**: integrate with the existing metrics stack (Prometheus /
-  OpenTelemetry) so storage metrics appear in observability dashboards.
-- **Security**: run the storage module inside a dedicated async task pool with
-  back-pressure and consider sandboxing chunk reads via io_uring or tokio's
-  bounded pools to prevent malicious clients from exhausting resources.
-
-This design keeps the storage module optional and deterministic while giving
-operators the knobs they need to participate in the SoraFS data availability
-layer. Implementing it will involve changes across `iroha_config`, `iroha_core`,
-`iroha_torii`, and the Norito gateway, plus the provider advert tooling.
+ဤဒီဇိုင်းသည် သိုလှောင်မှု module ကို ရွေးချယ်နိုင်စေပြီး ပေးနေစဉ်တွင် အဆုံးအဖြတ်ပေးသည်။
+SoraFS ဒေတာရရှိနိုင်မှုတွင် ၎င်းတို့ပါဝင်ရန် လိုအပ်သော ခလုတ်များကို အော်ပရေတာများ
+အလွှာ။ ၎င်းကို အကောင်အထည်ဖော်ရာတွင် `iroha_config`၊ `iroha_core`၊
+`iroha_torii` နှင့် Norito ဂိတ်ဝေးအပြင် ပံ့ပိုးသူကြော်ငြာကိရိယာတန်ဆာပလာ။

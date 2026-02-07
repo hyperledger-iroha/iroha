@@ -4,50 +4,52 @@ direction: ltr
 source: docs/portal/docs/intro.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Welcome to the SORA Nexus Developer Portal
+# እንኳን ወደ I18NT0000020X I18NT0000014X የገንቢ ፖርታል በደህና መጡ
 
-The SORA Nexus developer portal bundles interactive documentation, SDK
-tutorials, and API references for Nexus operators and Hyperledger Iroha
-contributors. It complements the main docs site by surfacing hands-on guides
-and generated specs directly from this repository. The landing page now carries
-themed Norito/SoraFS entry points, signed OpenAPI snapshots, and a dedicated
-Norito Streaming reference so contributors can find the streaming control-plane
-contract without digging through the root spec.
+የSORA Nexus የገንቢ ፖርታል በይነተገናኝ ሰነድ፣ ኤስዲኬ
+አጋዥ ስልጠናዎች፣ እና የኤፒአይ ማጣቀሻዎች ለNexus ኦፕሬተሮች እና Hyperledger Iroha
+አበርካቾች. በእጅ የሚሰሩ መመሪያዎችን በማንሳት ዋናውን የዶክመንቶች ጣቢያ ያሟላል።
+እና ከዚህ ማከማቻ በቀጥታ የመነጩ ዝርዝሮች። የማረፊያ ገጹ አሁን ይሸከማል
+ጭብጥ Norito/SoraFS የመግቢያ ነጥቦች፣የተፈረመ OpenAPI ቅጽበታዊ ገጽ እይታዎች እና የወሰኑ
+Norito የዥረት ማጣቀሻ አስተዋፅዖ አበርካቾች የዥረት መቆጣጠሪያ-አውሮፕላኑን ማግኘት ይችላሉ።
+በስሩ ዝርዝር ውስጥ ሳይቆፍሩ ውል.
 
-## What you can do here
+## እዚህ ምን ማድረግ ይችላሉ።
 
-- **Learn Norito** – start with the overview and quickstart to understand the
-  serialization model and bytecode tooling.
-- **Bootstrap SDKs** – follow quickstarts for JavaScript and Rust today; Python,
-  Swift, and Android guides will join them as recipes are migrated.
-- **Browse API references** – the Torii OpenAPI page renders the latest REST
-  specification, and configuration tables link back to the canonical Markdown
-  sources.
-- **Prepare deployments** – operational runbooks (telemetry, settlement, Nexus
-  overlays) are being ported from `docs/source/` and will land in this site as
-  the migration progresses.
+- ** Norito ይወቁ - በአጠቃላይ እይታ ይጀምሩ እና ለመረዳት በፍጥነት ይጀምሩ።
+  ተከታታይነት ያለው ሞዴል እና የባይቴኮድ መገልገያ።
+- ** የቡት ስታራፕ ኤስዲኬዎች *** - ዛሬ ለጃቫ ስክሪፕት እና ዝገት ፈጣን ጅምርን ይከተሉ። ፒዘን፣
+  የምግብ አዘገጃጀቶች ሲሰደዱ ስዊፍት እና አንድሮይድ መመሪያዎች ይቀላቀላቸዋል።
+- ** የኤፒአይ ማጣቀሻዎችን አስስ *** - የ Torii OpenAPI ገጽ የቅርብ ጊዜውን REST ያቀርባል
+  ዝርዝር መግለጫ እና የውቅረት ሰንጠረዦች ወደ ቀኖናዊው ማርክ ዳውን ይመለሳሉ
+  ምንጮች.
+- ** ማሰማራትን አዘጋጁ *** - የሚሰሩ የሩጫ መጽሐፍት (ቴሌሜትሪ ፣ ሰፈራ ፣ Nexus
+  ተደራቢዎች) ከ `docs/source/` ተልከዋል እና በዚህ ጣቢያ ላይ እንደሚታየው
+  ፍልሰት እየገፋ ይሄዳል።
 
-## Current status
+## ወቅታዊ ሁኔታ
 
-- ✅ Themed Docusaurus v3 landing with refreshed typography, gradient-driven
-  hero/cards, and resource tiles that include the Norito Streaming summary.
-- ✅ Torii OpenAPI plugin wired to `npm run sync-openapi`, with signed snapshot
-  checks and CSP guards enforced by `buildSecurityHeaders`.
-- ✅ Preview and probe coverage run in CI (`docs-portal-preview.yml` +
-  `scripts/portal-probe.mjs`), now gating the streaming doc, SoraFS quickstarts,
-  and the reference checklists before artifacts are published.
-- ✅ Norito, SoraFS, and SDK quickstarts plus reference sections are live in the
-  sidebar; new imports from `docs/source/` (streaming, orchestration, runbooks)
-  land here as they are authored.
+- ✅ ገጽታ ያለው I18NT0000001X v3 ማረፊያ ከታደሰ የፊደል አጻጻፍ ጋር፣ ቀስ በቀስ የሚመራ
+  ጀግና/ካርዶች፣ እና የNorito ዥረት ማጠቃለያን ያካተቱ የግብዓት ንጣፎች።
+- ✅ Torii OpenAPI ተሰኪ ወደ `npm run sync-openapi` ተሽሯል፣የተፈረመ ቅጽበታዊ ፎቶ
+  በ `buildSecurityHeaders` የተተገበሩ ቼኮች እና የሲኤስፒ ጠባቂዎች።
+- ✅ ቅድመ እይታ እና የፍተሻ ሽፋን በCI (`docs-portal-preview.yml` + ውስጥ ይሰራል)
+  `scripts/portal-probe.mjs`)፣ አሁን የዥረት ሰነዱን በማግኘት ላይ፣ SoraFS ፈጣን ጀማሪዎች፣
+  እና ቅርሶች ከመታተማቸው በፊት የማጣቀሻ ዝርዝሮች።
+- ✅ I18NT0000009X፣ SoraFS፣ እና ኤስዲኬ ፈጣን ጅምር እና የማጣቀሻ ክፍሎች በ
+  የጎን አሞሌ; ከ`docs/source/` (ዥረት፣ ኦርኬስትራ፣ runbooks) አዲስ ገቢዎች
+  እነሱ እንደተፃፉ እዚህ መሬት።
 
-## Getting involved
+#መሳተፍ
 
-- See `docs/portal/README.md` for local development commands (`npm install`,
-  `npm run start`, `npm run build`).
-- Content migration tasks are tracked alongside the `DOCS-*` roadmap items.
-  Contributions are welcome—port sections from `docs/source/` and add the page
-  to the sidebar.
-- If you add a generated artifact (specs, config tables), document the build
-  command so future contributors can refresh it easily.
+- ለአካባቢ ልማት ትዕዛዞች `docs/portal/README.md` ይመልከቱ (`npm install`፣
+  `npm run start`፣ `npm run build`)።
+- የይዘት ፍልሰት ተግባራት ከ`DOCS-*` የመንገድ ካርታ እቃዎች ጋር ክትትል ይደረግባቸዋል።
+  አስተዋጽዖዎች እንኳን ደህና መጡ-የወደብ ክፍሎች ከ`docs/source/` እና ገጹን ያክሉ
+  ወደ ጎን አሞሌ.
+- የመነጨ ቅርስ (ዝርዝር መግለጫዎች ፣ ሰንጠረዦችን ማዋቀር) ካከሉ ግንባታውን ይመዝግቡ
+  ወደፊት አስተዋጽዖ አበርካቾች በቀላሉ እንዲያድሱት ትእዛዝ ስጥ።

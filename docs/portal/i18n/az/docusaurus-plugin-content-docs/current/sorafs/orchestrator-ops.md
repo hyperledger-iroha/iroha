@@ -8,21 +8,23 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraFS Orchestrator Operations Runbook
 sidebar_label: Orchestrator Ops Runbook
 description: Step-by-step operational guide for rolling out, monitoring, and rolling back the multi-source orchestrator.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
+:::Qeyd Kanonik Mənbə
 :::
 
-This runbook guides SREs through preparing, rolling out, and operating the multi-source fetch orchestrator. It complements the developer guide with procedures tuned for production rollouts, including staged enablement and peer blacklisting.
+Bu runbook çox mənbəli gətirmə orkestratorunu hazırlamaq, yaymaq və işlətməklə SRE-lərə rəhbərlik edir. O, inkişaf etdirici bələdçisini mərhələli aktivləşdirmə və həmyaşıdların qara siyahısı daxil olmaqla istehsalın buraxılması üçün tənzimlənmiş prosedurlarla tamamlayır.
 
-> **See also:** The [Multi-Source Rollout Runbook](./multi-source-rollout.md) focuses on fleet-wide rollout waves and emergency provider denial. Reference it for governance / staging coordination while using this document for day-to-day orchestrator operations.
+> **Həmçinin bax:** [Multi-Source Rollout Runbook](./multi-source-rollout.md) donanmanın geniş yayılması dalğalarına və fövqəladə hallar təminatçısının rədd edilməsinə diqqət yetirir. Gündəlik orkestr əməliyyatları üçün bu sənəddən istifadə edərkən idarəetmə / səhnələşdirmə koordinasiyası üçün ona istinad edin.
 
-## 1. Pre-flight Checklist
+## 1. Uçuşdan əvvəl Yoxlama Siyahısı
 
-1. **Collect provider inputs**
-   - Latest provider adverts (`ProviderAdvertV1`) and telemetry snapshot for the target fleet.
-   - Payload plan (`plan.json`) derived from the manifest under test.
-2. **Render a deterministic scoreboard**
+1. **Provayder daxiletmələrini toplayın**
+   - Ən son provayder reklamları (`ProviderAdvertV1`) və hədəf donanması üçün telemetriya şəkli.
+   - Test edilən manifestdən əldə edilən faydalı yük planı (`plan.json`).
+2. **Deterministik hesab tablosunu göstərin**
 
    ```bash
    sorafs_fetch \
@@ -35,30 +37,30 @@ This runbook guides SREs through preparing, rolling out, and operating the multi
      --json-out artifacts/session.summary.json
    ```
 
-   - Validate that `artifacts/scoreboard.json` lists every production provider as `eligible`.
-   - Archive the summary JSON alongside the scoreboard; auditors rely on the chunk retry counters when certifying the change request.
-3. **Dry-run with fixtures** — Exercise the same command against the public fixtures in `docs/examples/sorafs_ci_sample/` to ensure the orchestrator binary matches the expected version before touching production payloads.
+   - `artifacts/scoreboard.json`-in hər bir istehsal provayderini `eligible` olaraq siyahıya aldığını təsdiqləyin.
+   - Xülasə JSON-u tablonun yanında arxivləşdirin; auditorlar dəyişiklik sorğusunu təsdiq edərkən yığın təkrar sınaq sayğaclarına etibar edirlər.
+3. **Aparatlarla quru qaçış** — İstehsal yüklərinə toxunmazdan əvvəl orkestrator binarının gözlənilən versiyaya uyğun olmasını təmin etmək üçün `docs/examples/sorafs_ci_sample/`-də ictimai qurğulara qarşı eyni əmri yerinə yetirin.
 
-## 2. Staged Rollout Procedure
+## 2. Mərhələli Yayılma Proseduru
 
-1. **Canary stage (≤2 providers)**
-   - Rebuild the scoreboard and run with `--max-peers=2` to clamp the orchestrator to a small subset.
+1. **Kanar mərhələsi (≤2 provayder)**
+   - Hesab tablosunu yenidən qurun və orkestratoru kiçik alt çoxluğa bağlamaq üçün `--max-peers=2` ilə işləyin.
    - Monitor:
      - `sorafs_orchestrator_active_fetches`
      - `sorafs_orchestrator_fetch_failures_total{reason!="retry"}`
      - `sorafs_orchestrator_retries_total`
-   - Proceed once retry rates remain below 1% for a complete manifest fetch and no provider accumulates failures.
-2. **Ramp stage (50% providers)**
-   - Increase `--max-peers` and rerun with a fresh telemetry snapshot.
-   - Persist every run with `--provider-metrics-out` and `--chunk-receipts-out`. Retain the artefacts for ≥7 days.
-3. **Full rollout**
-   - Remove `--max-peers` (or set it to the full eligible count).
-   - Enable orchestrator mode in client deployments: distribute the persisted scoreboard and configuration JSON via your configuration management system.
-   - Update dashboards to display `sorafs_orchestrator_fetch_duration_ms` p95/p99 and retry histograms per region.
+   - Tam manifest əldə etmək üçün təkrar cəhd dərəcələri 1%-dən aşağı qaldıqdan sonra davam edin və heç bir provayder uğursuzluqlar toplamır.
+2. **Eniş mərhələsi (50% təminatçılar)**
+   - `--max-peers`-i artırın və yeni telemetriya snapshot ilə təkrar işə salın.
+   - `--provider-metrics-out` və `--chunk-receipts-out` ilə hər qaçışda davam edin. Artefaktları ≥7 gün saxlayın.
+3. **Tam təqdimat**
+   - `--max-peers`-i çıxarın (və ya tam uyğun sayı təyin edin).
+   - Müştəri yerləşdirmələrində orkestr rejimini aktivləşdirin: konfiqurasiya idarəetmə sisteminiz vasitəsilə davamlı hesab tablosunu və konfiqurasiya JSON-u paylayın.
+   - `sorafs_orchestrator_fetch_duration_ms` p95/p99-u göstərmək üçün idarə panellərini yeniləyin və hər bölgə üzrə histoqramları yenidən sınayın.
 
 ## 3. Peer Blacklisting & Boosting
 
-Use the CLI’s scoring policy overrides to triage unhealthy providers without waiting for governance updates.
+İdarəetmə yeniləmələrini gözləmədən qeyri-sağlam provayderləri yoxlamaq üçün CLI-nin qiymətləndirmə siyasətindən istifadə edin.
 
 ```bash
 sorafs_fetch \
@@ -72,33 +74,33 @@ sorafs_fetch \
   --json-out artifacts/override.summary.json
 ```
 
-- `--deny-provider` removes the listed alias from consideration for the current session.
-- `--boost-provider=<alias>=<weight>` raises the provider’s scheduler weight. Values are additive to the normalised scoreboard weight and apply only to the local run.
-- Record overrides in the incident ticket and attach the JSON outputs so the owning team can reconcile state once the underlying issue is fixed.
+- `--deny-provider` sadalanan ləqəbi cari sessiya üçün nəzərdən silir.
+- `--boost-provider=<alias>=<weight>` provayderin planlaşdırıcı çəkisini artırır. Dəyərlər normallaşdırılmış cədvəl çəkisinə əlavədir və yalnız yerli qaçışa aiddir.
+- Hadisə biletində ləğvetmələri qeyd edin və JSON çıxışlarını əlavə edin ki, əsas problem həll edildikdən sonra sahibi komanda vəziyyəti barışdırsın.
 
-For permanent changes, amend the source telemetry (mark the offender penalised) or refresh the advert with updated stream budgets before clearing the CLI overrides.
+Daimi dəyişikliklər üçün mənbə telemetriyasını dəyişdirin (cinayətkarın cəzalandırıldığını qeyd edin) və ya CLI ləğvetmələrini silməzdən əvvəl reklamı yenilənmiş axın büdcələri ilə yeniləyin.
 
-## 4. Failure Triage
+## 4. Uğursuzluq Triajı
 
-When a fetch fails:
+Alma uğursuz olduqda:
 
-1. Capture the following artefacts before rerunning:
+1. Yenidən işə başlamazdan əvvəl aşağıdakı artefaktları çəkin:
    - `scoreboard.json`
    - `session.summary.json`
    - `chunk_receipts.json`
    - `provider_metrics.json`
-2. Inspect `session.summary.json` for the human-readable error string:
-   - `no providers were supplied` → verify provider paths and adverts.
-   - `retry budget exhausted ...` → increase `--retry-budget` or remove unstable peers.
-   - `no compatible providers available ...` → audit the offending provider’s range capability metadata.
-3. Correlate the provider name with `sorafs_orchestrator_provider_failures_total` and create a follow-up ticket if the metric spikes.
-4. Replay the fetch offline with `--scoreboard-json` and the captured telemetry to reproduce the failure deterministically.
+2. `session.summary.json`-də insan tərəfindən oxuna bilən xəta sətrini yoxlayın:
+   - `no providers were supplied` → provayder yollarını və reklamlarını yoxlayın.
+   - `retry budget exhausted ...` → `--retry-budget` artırın və ya qeyri-sabit həmyaşıdları çıxarın.
+   - `no compatible providers available ...` → pozan provayderin diapazon imkanları metadatasını yoxlayın.
+3. Provayder adını `sorafs_orchestrator_provider_failures_total` ilə əlaqələndirin və metrik sıçrayışlar olarsa, izləmə bileti yaradın.
+4. Uğursuzluğu deterministik şəkildə təkrar etmək üçün `--scoreboard-json` və çəkilmiş telemetriya ilə gətirməni oflayn rejimdə təkrarlayın.
 
-## 5. Rollback
+## 5. Geriyə qayıt
 
-To revert an orchestrator rollout:
+Orkestratorun təqdimatını geri qaytarmaq üçün:
 
-2. Remove any `--boost-provider` overrides so the scoreboard reverts to neutral weighting.
-3. Continue scraping the orchestrator metrics for at least one day to confirm no residual fetches are in-flight.
+2. Hesab lövhəsinin neytral çəkiyə qayıtması üçün hər hansı `--boost-provider` ləğvini silin.
+3. Uçuşda heç bir qalıq gətirmə olmadığını təsdiq etmək üçün ən azı bir gün orkestr göstəricilərini silməyə davam edin.
 
-Maintaining disciplined artefact capture and staged rollouts ensures the multi-source orchestrator can be operated safely across heterogeneous provider fleets while keeping observability and audit requirements intact.
+Artefaktların nizam-intizamlı tutulması və mərhələli buraxılışların saxlanması çoxmənbəli orkestratorun müşahidə qabiliyyətini və audit tələblərini toxunulmaz saxlayaraq, heterojen provayder donanmalarında təhlükəsiz şəkildə idarə olunmasını təmin edir.

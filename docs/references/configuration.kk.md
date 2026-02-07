@@ -7,27 +7,27 @@ generator: scripts/sync_docs_i18n.py
 source_hash: cff283a14bf65f185f81539f8fbcd78ddcc6447c5e9045e1b46493051febaf6a
 source_last_modified: "2025-12-29T18:16:35.913045+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Acceleration
+# Жеделдету
 
-The `[accel]` section controls optional hardware acceleration for IVM and helpers. All
-accelerated paths have deterministic CPU fallbacks; if a backend fails a golden
-self‑test at runtime it is disabled automatically and execution continues on CPU.
+`[accel]` бөлімі IVM және көмекшілер үшін қосымша аппараттық жеделдетуді басқарады. Барлығы
+жеделдетілген жолдардың детерминирленген процессорлық резервтері бар; егер сервер алтын түспесе
+орындау уақытында өзін-өзі тексеру ол автоматты түрде өшіріледі және орындау процессорда жалғасады.
 
-- `enable_cuda` (default: true) – Use CUDA when compiled and available.
-- `enable_metal` (default: true) – Use Metal on macOS when available.
-- `max_gpus` (default: 0) – Maximum GPUs to initialize; `0` means auto/no cap.
-- `merkle_min_leaves_gpu` (default: 8192) – Minimum leaves to offload Merkle
-  leaf hashing to GPU. Lower only for unusually fast GPUs.
-- Advanced (optional; usually inherit sensible defaults):
-  - `merkle_min_leaves_metal` (default: inherit `merkle_min_leaves_gpu`).
-  - `merkle_min_leaves_cuda` (default: inherit `merkle_min_leaves_gpu`).
-  - `prefer_cpu_sha2_max_leaves_aarch64` (default: 32768) – Prefer CPU SHA‑2 up to this many leaves on ARMv8 with SHA2.
-  - `prefer_cpu_sha2_max_leaves_x86` (default: 32768) – Prefer CPU SHA‑NI up to this many leaves on x86/x86_64.
+- `enable_cuda` (әдепкі: шын) – CUDA құрастырылған және қолжетімді болған кезде пайдаланыңыз.
+- `enable_metal` (әдепкі: шын) – Қол жетімді болған кезде macOS жүйесінде Metal пайдаланыңыз.
+- `max_gpus` (әдепкі: 0) – инициализацияланатын ең көп GPU; `0` автоматты/қалпақсыз дегенді білдіреді.
+- `merkle_min_leaves_gpu` (әдепкі: 8192) – Merkle жүктеп алу үшін ең аз жапырақтар
+  GPU-ге жапырақ хэштеу. Тек ерекше жылдам графикалық процессорлар үшін төмендетіңіз.
+- Кеңейтілген (міндетті емес; әдетте ақылға қонымды әдепкі мәндерді мұраға алады):
+  - `merkle_min_leaves_metal` (әдепкі: `merkle_min_leaves_gpu` мұра).
+  - `merkle_min_leaves_cuda` (әдепкі: мұра `merkle_min_leaves_gpu`).
+  - `prefer_cpu_sha2_max_leaves_aarch64` (әдепкі: 32768) – SHA2 бар ARMv8 жүйесінде осынша көп жапыраққа дейін SHA‑2 процессорын таңдау.
+  - `prefer_cpu_sha2_max_leaves_x86` (әдепкі: 32768) – x86/x86_64 жүйесінде осынша көп жапыраққа дейін SHA‑NI процессорына артықшылық беріңіз.
 
-Notes
-- Determinism first: acceleration never changes observable outputs; backends
-  run golden tests on init and fall back to scalar/SIMD when mismatches are detected.
-- Configure via `iroha_config`; avoid environment variables in production.
-
+Ескертпелер
+- Біріншіден детерминизм: жеделдету ешқашан байқалатын нәтижелерді өзгертпейді; серверлер
+  init жүйесінде алтын сынақтарды орындаңыз және сәйкессіздіктер анықталған кезде скаляр/SIMD күйіне оралыңыз.
+- `iroha_config` арқылы конфигурациялау; өндірісте қоршаған ортаның айнымалыларынан аулақ болыңыз.

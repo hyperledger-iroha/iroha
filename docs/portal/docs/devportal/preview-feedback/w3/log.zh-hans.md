@@ -11,30 +11,31 @@ id: preview-feedback-w3-log
 title: W3 beta invite log
 sidebar_label: W3 log
 description: Timeline for the 2026-02-18 preview invite wave.
+translator: machine-google-reviewed
 ---
 
-Events recorded below are mirrored in `artifacts/docs_portal_preview/feedback_log.json`
-and summarised in `preview-20260218-summary.json` / `preview-20260218-digest.md`.
+下面记录的事件镜像在 `artifacts/docs_portal_preview/feedback_log.json` 中
+并总结在 `preview-20260218-summary.json` / `preview-20260218-digest.md` 中。
 
-| Timestamp (UTC) | Event | Recipient | Notes |
-| --- | --- | --- | --- |
-| 2026‑02‑18 14:00 | invite-sent | finance-beta-01 | Finance pilot cohort |
-| 2026‑02‑18 14:08 | acknowledged | finance-beta-01 |  |
-| 2026‑02‑21 10:22 | feedback-submitted | finance-beta-01 | docs-preview/20260218#1 |
-| 2026‑02‑28 17:00 | access-revoked | finance-beta-01 |  |
-| 2026‑02‑18 14:05 | invite-sent | observability-ops-02 | Observability readiness |
-| 2026‑02‑18 14:20 | acknowledged | observability-ops-02 |  |
-| 2026‑02‑23 09:45 | feedback-submitted | observability-ops-02 | docs-preview/20260218#2 |
-| 2026‑02‑23 11:15 | issue-opened | observability-ops-02 | DOCS-SORA-Preview-20260218 |
-| 2026‑02‑28 17:05 | access-revoked | observability-ops-02 |  |
-| 2026‑02‑18 14:10 | invite-sent | partner-sdk-03 | SDK partner wave |
-| 2026‑02‑19 08:30 | acknowledged | partner-sdk-03 |  |
-| 2026‑02‑24 16:10 | feedback-submitted | partner-sdk-03 | docs-preview/20260218#3 |
-| 2026‑02‑28 17:10 | access-revoked | partner-sdk-03 |  |
-| 2026‑02‑18 14:15 | invite-sent | ecosystem-advocate-04 | Ecosystem advocate |
-| 2026‑02‑18 14:50 | acknowledged | ecosystem-advocate-04 |  |
-| 2026‑02‑26 12:35 | feedback-submitted | ecosystem-advocate-04 | docs-preview/20260218#4 |
-| 2026‑02‑28 17:15 | access-revoked | ecosystem-advocate-04 |  |
+|时间戳 (UTC) |活动 |收件人 |笔记|
+| ---| ---| ---| ---|
+| 2026-02-18 14:00 |发送邀请 |财务-beta-01 |金融试点队列|
+| 2026-02-18 14:08 |承认|财务-beta-01 |  |
+| 2026-02-21 10:22 |反馈已提交 |财务-beta-01 |文档预览/20260218#1 |
+| 2026-02-28 17:00 |访问权限被撤销 |财务-beta-01 |  |
+| 2026-02-18 14:05 |发送邀请 |可观察性-ops-02 |可观察性准备 |
+| 2026-02-18 14:20 |承认|可观察性-ops-02 |  |
+| 2026-02-23 09:45 |反馈已提交 |可观察性-ops-02 |文档预览/20260218#2 |
+| 2026-02-23 11:15 |问题已打开 |可观察性-ops-02 | DOCS-SORA-预览-20260218 |
+| 2026-02-28 17:05 |访问权限被撤销 |可观察性-ops-02 |  |
+| 2026-02-18 14:10 |发送邀请 |合作伙伴-sdk-03 | SDK合作伙伴浪潮|
+| 2026-02-19 08:30 |承认|合作伙伴-sdk-03 |  |
+| 2026-02-24 16:10 |反馈已提交 |合作伙伴-sdk-03 |文档预览/20260218#3 |
+| 2026-02-28 17:10 |访问权限被撤销 |合作伙伴-sdk-03 |  |
+| 2026-02-18 14:15 |发送邀请 |生态系统倡导者-04 |生态系统倡导者|
+| 2026-02-18 14:50 |承认|生态系统倡导者-04 |  |
+| 2026-02-26 12:35 |反馈已提交 |生态系统倡导者-04 |文档预览/20260218#4 |
+| 2026-02-28 17:15 |访问权限被撤销 |生态系统倡导者-04 |  |
 
-Use `npm run --prefix docs/portal preview:wave -- --wave preview-20260218 --invite-start 2026-02-18 --invite-end 2026-02-28 --report-date 2026-03-01`
-to regenerate the digest and portal data when updating this log.
+使用 `npm run --prefix docs/portal preview:wave -- --wave preview-20260218 --invite-start 2026-02-18 --invite-end 2026-02-28 --report-date 2026-03-01`
+更新此日志时重新生成摘要和门户数据。

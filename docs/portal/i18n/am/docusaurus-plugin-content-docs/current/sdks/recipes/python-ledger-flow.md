@@ -7,21 +7,23 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Python ledger flow recipe
 description: Reproduce the register → mint → transfer flow against the dev network using `iroha-python`.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-import SampleDownload from '@site/src/components/SampleDownload';
+ናሙና አውርድን ከ'@site/src/components/SampleDownload' አስመጣ;
 
-This Python snippet mirrors the [CLI ledger walkthrough](../../norito/ledger-walkthrough.md)
-and the [Rust recipe](./rust-ledger-flow.md). It uses the default Docker
-compose network plus the demo credentials bundled in `defaults/client.toml`.
+ይህ የፓይዘን ቅንጣቢ [CLI ledger walkthrough](../../norito/ledger-walkthrough.md) ያንጸባርቃል
+እና [የዝገት አዘገጃጀት](./rust-ledger-flow.md)። ነባሪውን I18NT0000002X ይጠቀማል
+በ`defaults/client.toml` ውስጥ የተጠቀለሉትን አውታረ መረብ እና የማሳያ ምስክርነቶችን አዘጋጅ።
 
-<SampleDownload
+<ናሙና አውርድ
   href="/sdk-recipes/python/ledger_flow.py"
-  filename="ledger_flow.py"
-  description="Download the script showcased in this recipe to run it without copying code by hand."
+  የፋይል ስም = "ledger_flow.py"
+  description="በእጅዎ ኮድ ሳይገለብጡ ለማስኬድ በዚህ የምግብ አሰራር ውስጥ የሚታየውን ስክሪፕት ያውርዱ።"
 />
 
-## Prerequisites
+## ቅድመ ሁኔታዎች
 
 ```bash
 pip install iroha-python
@@ -30,7 +32,7 @@ export RECEIVER_ACCOUNT="ih58..."
 export ADMIN_PRIVATE_KEY="802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
 ```
 
-## Example script
+## ምሳሌ ስክሪፕት።
 
 ```python title="ledger_flow.py"
 import os
@@ -100,12 +102,12 @@ for asset in result.items:
         print("Receiver holds", asset.value, "units of", asset.id.definition)
 ```
 
-Run with `python ledger_flow.py`. The output should report the transaction hash
-(from the receipt payload) followed by the new receiver balance. If the asset definition already exists,
-the register instruction is rejected while the mint/transfer continue to succeed.
+በ `python ledger_flow.py` ያሂዱ። ውጤቱ የግብይቱን ሃሽ ሪፖርት ማድረግ አለበት።
+(ከደረሰኝ ክፍያ) ከአዲሱ መቀበያ ቀሪ ሂሳብ በኋላ. የንብረት ፍቺው አስቀድሞ ካለ፣
+ሚንት/ዝውውሩ በተሳካ ሁኔታ ሲቀጥል የመመዝገቢያ መመሪያው ውድቅ ይሆናል።
 
-## Verify parity
+## ተመሳሳይነት ያረጋግጡ
 
-Use the same CLI commands from the Norito walkthrough to cross-check hashes and
-balances. When you run the JavaScript and Rust recipes, all three SDKs should
-agree on transaction hashes and Norito payloads for the shared flow.
+ተመሳሳይ የCLI ትዕዛዞችን ከNorito መራመጃ ሃሽ ለመፈተሽ ይጠቀሙ
+ሚዛኖች. የጃቫ ስክሪፕት እና የዝገት የምግብ አዘገጃጀቶችን ሲያሄዱ ሶስቱም ኤስዲኬዎች አለባቸው
+ለጋራ ፍሰት የግብይት ሃሽ እና I18NT0000001X ክፍያ ይስማሙ።

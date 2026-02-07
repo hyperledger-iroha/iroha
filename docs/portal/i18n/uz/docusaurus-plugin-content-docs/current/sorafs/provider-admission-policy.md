@@ -4,116 +4,118 @@ direction: ltr
 source: docs/portal/docs/sorafs/provider-admission-policy.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-> Adapted from [`docs/source/sorafs/provider_admission_policy.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/provider_admission_policy.md).
+> [`docs/source/sorafs/provider_admission_policy.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/provider_admission_policy.md) dan moslashtirilgan.
 
-# SoraFS Provider Admission & Identity Policy (SF-2b Draft)
+# SoraFS Provayderni qabul qilish va shaxsni aniqlash siyosati (SF-2b loyihasi)
 
-This note captures the actionable deliverables for **SF-2b**: defining and
-enforcing the admission workflow, identity requirements, and attestation
-payloads for SoraFS storage providers. It expands the high-level process
-outlined in the SoraFS Architecture RFC and breaks the remaining work into
-trackable engineering tasks.
+Ushbu eslatma **SF-2b** uchun amalda bo'ladigan natijalarni qamrab oladi: aniqlash va
+qabul ish jarayonini, shaxsni tasdiqlovchi talablarni va attestatsiyani amalga oshirish
+SoraFS saqlash provayderlari uchun foydali yuklar. Bu yuqori darajadagi jarayonni kengaytiradi
+SoraFS Arxitektura RFC-da tasvirlangan va qolgan ishni qismlarga ajratadi
+kuzatilishi mumkin bo'lgan muhandislik vazifalari.
 
-## Policy Goals
+## Siyosat maqsadlari
 
-- Ensure only vetted operators can publish `ProviderAdvertV1` records that the
-  network will accept.
-- Bind every advertisement key to a governance-approved identity document,
-  attested endpoints, and minimum stake contribution.
-- Provide deterministic verification tooling so Torii, gateways, and
-  `sorafs-node` enforce the same checks.
-- Support renewal and emergency revocation without breaking determinism or
-  tooling ergonomics.
+- Faqat tekshirilgan operatorlar `ProviderAdvertV1` yozuvlarini nashr qilishiga ishonch hosil qiling.
+  tarmoq qabul qiladi.
+- Har bir reklama kalitini hukumat tomonidan tasdiqlangan shaxsni tasdiqlovchi hujjatga bog'lash;
+  tasdiqlangan yakuniy nuqtalar va minimal ulush hissasi.
+- Torii, shlyuzlar va deterministik tekshirish vositalarini taqdim eting
+  `sorafs-node` bir xil tekshiruvlarni amalga oshiradi.
+- Determinizmni buzmasdan yangilanish va favqulodda bekor qilishni qo'llab-quvvatlash yoki
+  asboblar ergonomikasi.
 
-## Identity & Stake Requirements
+## Identifikatsiya va stavka talablari
 
-| Requirement | Description | Deliverable |
+| Talab | Tavsif | Yetkazib beriladi |
 |-------------|-------------|-------------|
-| Advertisement key provenance | Providers must register an Ed25519 keypair that signs every advert. The admission bundle stores the public key alongside a governance signature. | Extend `ProviderAdmissionProposalV1` schema with `advert_key` (32 bytes) and reference it from the registry (`sorafs_manifest::provider_admission`). |
-| Stake pointer | Admission requires a non-zero `StakePointer` pointing at an active staking pool. | Add validation in `sorafs_manifest::provider_advert::StakePointer::validate()` and surface errors in CLI/tests. |
-| Jurisdiction tags | Providers declare jurisdiction + legal contact. | Extend proposal schema with a `jurisdiction_code` (ISO 3166-1 alpha-2) and optional `contact_uri`. |
-| Endpoint attestation | Each advertised endpoint must be backed by an mTLS or QUIC certificate report. | Define `EndpointAttestationV1` Norito payload and store per endpoint inside the admission bundle. |
+| Reklama asosiy kelib chiqishi | Provayderlar har bir reklamani imzolaydigan Ed25519 tugmachalarini ro'yxatdan o'tkazishlari kerak. Qabul qilish to'plami umumiy kalitni boshqaruv imzosi bilan birga saqlaydi. | `ProviderAdmissionProposalV1` sxemasini `advert_key` (32 bayt) bilan kengaytiring va uni registrdan (`sorafs_manifest::provider_admission`) havola qiling. |
+| Stake pointer | Qabul qilish uchun faol staking hovuziga ishora qiluvchi nolga teng bo'lmagan `StakePointer` talab qilinadi. | `sorafs_manifest::provider_advert::StakePointer::validate()` da tekshirishni va CLI/testlarda yuzaki xatolarni qo'shing. |
+| Yurisdiktsiya teglari | Provayderlar yurisdiktsiyani e'lon qiladi + yuridik aloqa. | Taklif sxemasini `jurisdiction_code` (ISO 3166-1 alfa-2) va ixtiyoriy `contact_uri` bilan kengaytiring. |
+| Yakuniy nuqta attestatsiyasi | Har bir e'lon qilingan so'nggi nuqta mTLS yoki QUIC sertifikat hisoboti bilan ta'minlanishi kerak. | `EndpointAttestationV1` Norito foydali yukini aniqlang va har bir so'nggi nuqtani qabul qilish to'plami ichida saqlang. |
 
-## Admission Workflow
+## Qabul ish jarayoni
 
-1. **Proposal creation**
-   - CLI: add `cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission proposal …`
-     producing `ProviderAdmissionProposalV1` + attestation bundle.
-   - Validation: ensure required fields, stake > 0, canonical chunker handle in `profile_id`.
-2. **Governance endorsement**
-   - Council signs `blake3("sorafs-provider-admission-v1" || canonical_bytes)` using existing
-     envelope tooling (`sorafs_manifest::governance` module).
-   - Envelope is persisted to `governance/providers/<provider_id>/admission.json`.
-3. **Registry ingestion**
-   - Implement a shared verifier (`sorafs_manifest::provider_admission::validate_envelope`)
-     that Torii/gateways/CLI re-use.
-   - Update Torii admission path to reject adverts whose digest or expiry differs from the envelope.
-4. **Renewal & revocation**
-   - Add `ProviderAdmissionRenewalV1` with optional endpoint/stake updates.
-   - Expose a `--revoke` CLI path that records the revocation reason and pushes a governance event.
+1. **Taklif yaratish**
+   - CLI: `cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission proposal …` qo'shing
+     `ProviderAdmissionProposalV1` + attestatsiya to'plamini ishlab chiqarish.
+   - Tasdiqlash: `profile_id` da kerakli maydonlar, stavka > 0, kanonik chunker tutqichiga ishonch hosil qiling.
+2. **Boshqaruvni tasdiqlash**
+   - Kengash imzolari `blake3("sorafs-provider-admission-v1" || canonical_bytes)` mavjud yordamida
+     konvert asboblari (`sorafs_manifest::governance` moduli).
+   - Konvert `governance/providers/<provider_id>/admission.json` da saqlanadi.
+3. **Registrni kiritish**
+   - Umumiy tekshirgichni amalga oshirish (`sorafs_manifest::provider_admission::validate_envelope`)
+     Torii/shlyuzlar/CLI qayta foydalanish.
+   - Qabul qilish yo'lini Torii yangilang, bu esa konvertdan farqli bo'lgan reklamalarni rad etish.
+4. **Uzaytirish va bekor qilish**
+   - `ProviderAdmissionRenewalV1` ni ixtiyoriy so'nggi nuqta/stake yangilanishlari bilan qo'shing.
+   - `--revoke` CLI yo'lini bekor qilish sababini qayd eting va boshqaruv hodisasini ko'rsating.
 
-## Implementation Tasks
+## Amalga oshirish vazifalari
 
-| Area | Task | Owner(s) | Status |
+| Hudud | Vazifa | Ega(lar)i | Holati |
 |------|------|----------|--------|
-| Schema | Define `ProviderAdmissionProposalV1`, `ProviderAdmissionEnvelopeV1`, `EndpointAttestationV1` (Norito) under `crates/sorafs_manifest/src/provider_admission.rs`. Implemented in `sorafs_manifest::provider_admission` with validation helpers.【F:crates/sorafs_manifest/src/provider_admission.rs#L1】 | Storage / Governance | ✅ Completed |
-| CLI tooling | Extend `sorafs_manifest_stub` with subcommands: `provider-admission proposal`, `provider-admission sign`, `provider-admission verify`. | Tooling WG | ✅ |
+| Sxema | `crates/sorafs_manifest/src/provider_admission.rs` ostida `ProviderAdmissionProposalV1`, `ProviderAdmissionEnvelopeV1`, `EndpointAttestationV1` (Norito) ni aniqlang. `sorafs_manifest::provider_admission` da tekshirish yordamchilari bilan amalga oshirilgan.【F:crates/sorafs_manifest/src/provider_admission.rs#L1】 | Saqlash / Boshqarish | ✅ Tugallandi |
+| CLI asboblari | `sorafs_manifest_stub` ni quyi buyruqlar bilan kengaytiring: `provider-admission proposal`, `provider-admission sign`, `provider-admission verify`. | Asboblar WG | ✅ |
 
-The CLI flow now accepts intermediate certificate bundles (`--endpoint-attestation-intermediate`), emits
-canonical proposal/envelope bytes, and validates council signatures during `sign`/`verify`. Operators can
-provide advert bodies directly, or reuse signed adverts, and signature files may be supplied by pairing
-`--council-signature-public-key` with `--council-signature-file` for automation friendliness.
+CLI oqimi endi oraliq sertifikat paketlarini (`--endpoint-attestation-intermediate`) qabul qiladi, chiqaradi
+kanonik taklif/konvert baytlari va `sign`/`verify` davrida kengash imzolarini tasdiqlaydi. Operatorlar mumkin
+to'g'ridan-to'g'ri reklama organlarini taqdim eting yoki imzolangan reklamalarni qayta ishlating va imzo fayllari juftlashtirish orqali ta'minlanishi mumkin
+Avtomatlashtirish qulayligi uchun `--council-signature-public-key` `--council-signature-file` bilan.
 
-### CLI Reference
+### CLI ma'lumotnomasi
 
-Run each command via `cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission …`.
+Har bir buyruqni `cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission …` orqali bajaring.
 
 - `proposal`
-  - Required flags: `--provider-id=<hex32>`, `--chunker-profile=<namespace.name@semver>`,
+  - Kerakli bayroqlar: `--provider-id=<hex32>`, `--chunker-profile=<namespace.name@semver>`,
     `--stake-pool-id=<hex32>`, `--stake-amount=<amount>`, `--advert-key=<hex32>`,
-    `--jurisdiction-code=<ISO3166-1>`, and at least one `--endpoint=<kind:host>`.
-  - Per-endpoint attestation expects `--endpoint-attestation-attested-at=<secs>`,
-    `--endpoint-attestation-expires-at=<secs>`, a certificate via
-    `--endpoint-attestation-leaf=<path>` (plus optional `--endpoint-attestation-intermediate=<path>`
-    for each chain element) and any negotiated ALPN IDs
-    (`--endpoint-attestation-alpn=<token>`). QUIC endpoints may supply transport reports with
+    `--jurisdiction-code=<ISO3166-1>` va kamida bitta `--endpoint=<kind:host>`.
+  - Bitta yakuniy attestatsiya `--endpoint-attestation-attested-at=<secs>` ni kutadi,
+    `--endpoint-attestation-expires-at=<secs>`, orqali sertifikat
+    `--endpoint-attestation-leaf=<path>` (plyus ixtiyoriy `--endpoint-attestation-intermediate=<path>`
+    har bir zanjir elementi uchun) va har qanday kelishilgan ALPN identifikatorlari
+    (`--endpoint-attestation-alpn=<token>`). QUIC so'nggi nuqtalari transport hisobotlarini taqdim etishi mumkin
     `--endpoint-attestation-report[-hex]=…`.
-  - Output: canonical Norito proposal bytes (`--proposal-out`) and a JSON summary
-    (default stdout or `--json-out`).
+  - Chiqish: kanonik Norito taklif baytlari (`--proposal-out`) va JSON xulosasi
+    (standart stdout yoki `--json-out`).
 - `sign`
-  - Inputs: a proposal (`--proposal`), a signed advert (`--advert`), optional advert body
-    (`--advert-body`), retention epoch, and at least one council signature. Signatures can be provided
-    inline (`--council-signature=<signer_hex:signature_hex>`) or via files by combining
-    `--council-signature-public-key` with `--council-signature-file=<path>`.
-  - Produces a validated envelope (`--envelope-out`) and JSON report indicating digest bindings,
-    signer count, and input paths.
+  - Kirishlar: taklif (`--proposal`), imzolangan e'lon (`--advert`), ixtiyoriy reklama organi
+    (`--advert-body`), saqlash davri va kamida bitta kengash imzosi. Imzolar taqdim etilishi mumkin
+    inline (`--council-signature=<signer_hex:signature_hex>`) yoki fayllar orqali birlashtirish orqali
+    `--council-signature-public-key`, `--council-signature-file=<path>` bilan.
+  - Tasdiqlangan konvertni (`--envelope-out`) va dayjest ulanishlarini ko'rsatuvchi JSON hisobotini ishlab chiqaradi,
+    imzolovchilar soni va kirish yo'llari.
 - `verify`
-  - Validates an existing envelope (`--envelope`), optionally checking the matching proposal,
-    advert, or advert body. The JSON report highlights digest values, signature verification status,
-    and which optional artefacts matched.
+  - Mavjud konvertni (`--envelope`) tasdiqlaydi, ixtiyoriy ravishda mos keladigan taklifni tekshiradi,
+    reklama yoki reklama tanasi. JSON hisobotida dayjest qiymatlari, imzoni tekshirish holati,
+    va qaysi ixtiyoriy artefaktlar mos kelishi.
 - `renewal`
-  - Links a newly approved envelope to the previously ratified digest. Requires
-    `--previous-envelope=<path>` and the successor `--envelope=<path>` (both Norito payloads).
-    The CLI verifies that profile aliases, capabilities, and advert keys remain unchanged while
-    allowing stake, endpoints, and metadata updates. Outputs the canonical
-    `ProviderAdmissionRenewalV1` bytes (`--renewal-out`) plus a JSON summary.
+  - Yangi tasdiqlangan konvertni ilgari ratifikatsiya qilingan dayjest bilan bog'laydi. Talab qiladi
+    `--previous-envelope=<path>` va vorisi `--envelope=<path>` (ikkalasi ham Norito foydali yuklari).
+    CLI profil taxalluslari, imkoniyatlar va reklama kalitlari o'zgarishsiz qolishini tasdiqlaydi
+    stavkalar, so'nggi nuqtalar va metama'lumotlar yangilanishiga ruxsat berish. Kanonikni chiqaradi
+    `ProviderAdmissionRenewalV1` bayt (`--renewal-out`) va JSON xulosasi.
 - `revoke`
-  - Issues an emergency `ProviderAdmissionRevocationV1` bundle for a provider whose envelope must
-    be withdrawn. Requires `--envelope=<path>`, `--reason=<text>`, at least one
-    `--council-signature`, and optional `--revoked-at`/`--notes`. The CLI signs and validates the
-    revocation digest, writes the Norito payload via `--revocation-out`, and prints a JSON report
-    capturing the digest and signature count.
-| Verification | Implement shared verifier used by Torii, gateways, and `sorafs-node`. Provide unit + CLI integration tests.【F:crates/sorafs_manifest/src/provider_admission.rs#L1】【F:crates/iroha_torii/src/sorafs/admission.rs#L1】 | Networking TL / Storage | ✅ Completed |
-| Torii integration | Thread verifier into Torii advertisement ingestion, reject out-of-policy adverts, emit telemetry. | Networking TL | ✅ Completed | Torii now loads governance envelopes (`torii.sorafs.admission_envelopes_dir`), verifies digest/signature matches during ingestion, and surfaces admission telemetry.【F:crates/iroha_torii/src/sorafs/admission.rs#L1】【F:crates/iroha_torii/src/sorafs/discovery.rs#L1】【F:crates/iroha_torii/src/sorafs/api.rs#L1】 |
-| Renewal | Add renewal / revocation schema + CLI helpers, publish lifecycle guide in docs (see runbook below and CLI commands in `provider-admission renewal`/`revoke`).【crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L477】【docs/source/sorafs/provider_admission_policy.md:120】 | Storage / Governance | ✅ Completed |
-| Telemetry | Define `provider_admission` dashboards & alerts (missing renewal, envelope expiry). | Observability | 🟠 In progress | Counter `torii_sorafs_admission_total{result,reason}` exists; dashboards/alerts pending.【F:crates/iroha_telemetry/src/metrics.rs#L3798】【F:docs/source/telemetry.md#L614】 |
-### Renewal & Revocation Runbook
+  - Konverti kerak bo'lgan provayder uchun favqulodda `ProviderAdmissionRevocationV1` to'plamini chiqaradi
+    tortib olinsin. `--envelope=<path>`, `--reason=<text>`, kamida bitta talab qilinadi
+    `--council-signature` va ixtiyoriy `--revoked-at`/`--notes`. CLI imzolaydi va tasdiqlaydi
+    bekor qilish dayjesti, Norito foydali yukini `--revocation-out` orqali yozadi va JSON hisobotini chop etadi
+    dayjest va imzolar sonini olish.
+| Tekshirish | Torii, shlyuzlar va `sorafs-node` tomonidan foydalaniladigan umumiy tekshirgichni amalga oshiring. Birlik + CLI integratsiya testlarini taqdim eting.【F:crates/sorafs_manifest/src/provider_admission.rs#L1】【F:crates/iroha_torii/src/sorafs/admission.rs#L1】 | Tarmoq TL / Saqlash | ✅ Tugallandi |
+| Torii integratsiyasi | Tasdiqlagichni Torii reklama qabuliga o'tkazing, siyosatdan tashqari reklamalarni rad eting, telemetriyani chiqaring. | Networking TL | ✅ Tugallandi | Torii endi boshqaruv konvertlarini (`torii.sorafs.admission_envelopes_dir`) yuklaydi, qabul qilish vaqtida dayjest/imzo mosligini tekshiradi va kirishni yuzaga chiqaradi telemetriya.【F:crates/iroha_torii/src/sorafs/admission.rs#L1】【F:crates/iroha_torii/src/sorafs/discovery.rs#L1】【F:crates/iroha_torii/src/sorafs/api. |
+| Yangilash | Yangilash/bekor qilish sxemasi + CLI yordamchilarini qo‘shing, hujjatlarda hayot aylanishi bo‘yicha qo‘llanmani nashr eting (quyida runbook va CLI buyruqlariga qarang). `provider-admission renewal`/`revoke`).【crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L477】【docs/source/sorafs/provider_admission_policy.md: |120】 Saqlash / Boshqarish | ✅ Tugallandi |
+| Telemetriya | `provider_admission` asboblar paneli va ogohlantirishlarni aniqlang (yangilash etishmayotgan, konvertning amal qilish muddati). | Kuzatish mumkinligi | 🟠 Davom etmoqda | `torii_sorafs_admission_total{result,reason}` hisoblagichi mavjud; asboblar paneli/ogohlantirishlar kutilmoqda.【F:crates/iroha_telemetry/src/metrics.rs#L3798】【F:docs/source/telemetry.md#L614】 |
+### Yangilash va bekor qilish kitobi
 
-#### Scheduled renewal (stake/topology updates)
-1. Build the successor proposal/advert pair with `provider-admission proposal` and `provider-admission sign`, increasing `--retention-epoch` and updating stake/endpoints as required.
-2. Execute  
+#### Rejalashtirilgan yangilash (ulush/topologiya yangilanishlari)
+1. `provider-admission proposal` va `provider-admission sign` bilan voris taklifi/reklama juftligini yarating, `--retention-epoch` ni oshiring va kerak bo'lganda ulush/so'nggi nuqtalarni yangilang.
+2. Bajarmoq  
    ```bash
    cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission \
      renewal \
@@ -123,15 +125,15 @@ Run each command via `cargo run -p sorafs_manifest --bin sorafs_manifest_stub --
      --json-out=governance/providers/<id>/renewal.json \
      --notes="stake top-up 2025-03"
    ```
-   The command validates unchanged capability/profile fields via
-   `AdmissionRecord::apply_renewal`, emits `ProviderAdmissionRenewalV1`, and prints digests for the
-   governance log.【crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L477】【F:crates/sorafs_manifest/src/provider_admission.rs#L422】
-3. Replace the previous envelope in `torii.sorafs.admission_envelopes_dir`, commit the renewal Norito/JSON to the governance repository, and append the renewal hash + retention epoch to `docs/source/sorafs/migration_ledger.md`.
-4. Notify operators that the new envelope is live and monitor `torii_sorafs_admission_total{result="accepted",reason="stored"}` to confirm ingestion.
-5. Regenerate and commit the canonical fixtures via `cargo run -p sorafs_car --bin provider_admission_fixtures --features cli`; CI (`ci/check_sorafs_fixtures.sh`) validates the Norito outputs stay stable.
+   Buyruq orqali o'zgarmagan imkoniyatlar/profil maydonlarini tasdiqlaydi
+   `AdmissionRecord::apply_renewal`, `ProviderAdmissionRenewalV1` chiqaradi va uchun dayjestlarni chop etadi
+   boshqaruv jurnali.【crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L477】【F:crates/sorafs_manifest/src/provider_admission.rs#L422】
+3. Oldingi konvertni `torii.sorafs.admission_envelopes_dir` bilan almashtiring, Norito/JSON yangilanishini boshqaruv omboriga topshiring va `docs/source/sorafs/migration_ledger.md` ga yangilash xesh + saqlash davrini qo'shing.
+4. Operatorlarga yangi konvertning faol ekanligi haqida xabar bering va qabul qilishni tasdiqlash uchun `torii_sorafs_admission_total{result="accepted",reason="stored"}` ni kuzatib boring.
+5. `cargo run -p sorafs_car --bin provider_admission_fixtures --features cli` orqali kanonik moslamalarni qayta tiklang va bajaring; CI (`ci/check_sorafs_fixtures.sh`) Norito chiqishlarining barqarorligini tasdiqlaydi.
 
-#### Emergency revocation
-1. Identify the compromised envelope and issue a revocation:
+#### Favqulodda bekor qilish
+1. Buzilgan konvertni aniqlang va bekor qilish to'g'risida qaror chiqaring:
    ```bash
    cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission \
      revoke \
@@ -143,30 +145,28 @@ Run each command via `cargo run -p sorafs_manifest --bin sorafs_manifest_stub --
      --revocation-out=governance/providers/<id>/revocation.to \
      --json-out=governance/providers/<id>/revocation.json
    ```
-   The CLI signs the `ProviderAdmissionRevocationV1`, verifies the signature set via
-   `verify_revocation_signatures`, and reports the revocation digest.【crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L593】【F:crates/sorafs_manifest/src/provider_admission.rs#L486】
-2. Remove the envelope from `torii.sorafs.admission_envelopes_dir`, distribute the revocation Norito/JSON to admission caches, and record the reason hash in the governance minutes.
-3. Watch `torii_sorafs_admission_total{result="rejected",reason="admission_missing"}` to confirm caches drop the revoked advert; keep the revocation artefacts in incident retrospectives.
+   CLI `ProviderAdmissionRevocationV1` ga imzo qo'yadi, imzo to'plamini tasdiqlaydi
+   `verify_revocation_signatures` va bekor qilish dayjestini xabar qiladi.【crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L593】【F:crates/sorafs_manifest/src/provider_admission.rs#48】L
+2. `torii.sorafs.admission_envelopes_dir` dan konvertni olib tashlang, bekor qilish Norito/JSON ni qabul keshlariga tarqating va boshqaruv bayonnomasida xesh sababini yozib oling.
+3. Keshlar bekor qilingan reklamani tashlab yuborishini tasdiqlash uchun `torii_sorafs_admission_total{result="rejected",reason="admission_missing"}` ni tomosha qiling; bekor qilish artefaktlarini voqea retrospektivlarida saqlang.
 
-## Testing & Telemetry
-
-- Add golden fixtures for admission proposals and envelopes under
+## Sinov va telemetriya- Qabul qilish takliflari va konvertlar uchun oltin moslamalarni qo'shing
   `fixtures/sorafs_manifest/provider_admission/`.
-- Extend CI (`ci/check_sorafs_fixtures.sh`) to regenerate proposals and verify envelopes.
-- Generated fixtures include `metadata.json` with canonical digests; downstream tests assert
+- Takliflarni qayta tiklash va konvertlarni tekshirish uchun CI (`ci/check_sorafs_fixtures.sh`) ni kengaytiring.
+- Yaratilgan moslamalarga kanonik dayjestlarga ega `metadata.json` kiradi; quyi oqim sinovlari tasdiqlaydi
   `proposal_digest_hex` == `ca8e73a1f319ae83d7bd958ccb143f9b790c7e4d9c8dfe1f6ad37fa29facf936`.
-- Provide integration tests:
-  - Torii rejects adverts with missing or expired admission envelopes.
-  - CLI round-trips a proposal → envelope → verification.
-  - Governance renewal rotates endpoint attestation without changing provider ID.
-- Telemetry requirements:
-  - Emit `provider_admission_envelope_{accepted,rejected}` counters in Torii. ✅ `torii_sorafs_admission_total{result,reason}` now surfaces accepted/rejected outcomes.
-  - Add expiry warnings to observability dashboards (renewal due within 7 days).
+- Integratsiya testlarini taqdim eting:
+  - Torii qabul qilish konvertlari etishmayotgan yoki muddati o'tgan reklamalarni rad etadi.
+  - CLI taklifni → konvert → tekshirishni aylanib chiqadi.
+  - Boshqaruvni yangilash provayder identifikatorini o'zgartirmasdan oxirgi nuqta attestatsiyasini aylantiradi.
+- Telemetriya talablari:
+  - Torii da `provider_admission_envelope_{accepted,rejected}` hisoblagichlarini chiqaradi. ✅ `torii_sorafs_admission_total{result,reason}` endi qabul qilingan/rad etilgan natijalarni ko'rsatadi.
+  - Kuzatuv paneliga amal qilish muddati tugashi haqidagi ogohlantirishlarni qo'shing (yangilash 7 kun ichida amalga oshiriladi).
 
-## Next Steps
+## Keyingi qadamlar
 
-1. ✅ Finalised the Norito schema changes and landed validation helpers in
-   `sorafs_manifest::provider_admission`. No feature flags required.
-2. ✅ CLI workflows (`proposal`, `sign`, `verify`, `renewal`, `revoke`) are documented and exercised via integration tests; keep governance scripts in sync with the runbook.
-3. ✅ Torii admission/discovery ingest the envelopes and expose telemetry counters for acceptance/rejection.
-4. Focus on observability: finish the admission dashboards/alerts so renewals due within seven days raise warnings (`torii_sorafs_admission_total`, expiry gauges).
+1. ✅ Norito sxemasiga oʻzgartirishlar yakunlandi va tasdiqlovchi yordamchilar
+   `sorafs_manifest::provider_admission`. Hech qanday xususiyat bayroqlari shart emas.
+2. ✅ CLI ish oqimlari (`proposal`, `sign`, `verify`, `renewal`, `revoke`) integratsiya testlari orqali hujjatlashtiriladi va amalga oshiriladi; boshqaruv skriptlarini runbook bilan sinxronlashtiring.
+3. ✅ Torii qabul/kashfiyot konvertlarni qabul qilish va qabul qilish/rad etish uchun telemetriya hisoblagichlarini ochish.
+4. Kuzatish mumkinligiga e'tibor qarating: qabul qilish panellarini/ogohlantirishlarni tugating, shunda etti kun ichida yangilanishlar ogohlantirishlarni oshiradi (`torii_sorafs_admission_total`, amal qilish muddati o'lchagichlari).

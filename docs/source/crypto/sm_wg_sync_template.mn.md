@@ -7,39 +7,40 @@ generator: scripts/sync_docs_i18n.py
 source_hash: c5fe52a907606a67a09e0ff229adb94f91dda73d809d8a8344166862dc62def9
 source_last_modified: "2025-12-29T18:16:35.947414+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-//! Template for recording SM rollout decisions during Crypto WG syncs.
+//! Crypto WG синхрончлолын үед SM-г нэвтрүүлэх шийдвэрийг бүртгэх загвар.
 
-# SM Rollout – WG Sync Notes (Template)
+# SM Rollout – WG Sync Notes (Загвар)
 
-- **Date:** 2025-__-__
-- **Participants:** Crypto WG core, Release Eng, Security Review, SDK leads
-- **Facilitator:** ___________________
+- **Огноо:** 2025-__-__
+- **Оролцогчид:** Crypto WG гол, Release Eng, Security Review, SDK-ийн тэргүүлэгчид
+- **Зохиолуулагч:** ___________________
 
-## Agenda
-1. Lock refresh approval (`sm_lock_refresh_plan.md`)
-2. Deterministic policy & config knobs (SM-1/SM-3 tasks)
-3. Compliance brief status (SM-6a complete) & operator checklist updates (SM-6b)
-4. Dependency audit reviewers for `sm2`, `sm3`, `sm4`, `rfc6979`
+## Хэлэлцэх асуудал
+1. Сэргээх зөвшөөрлийг түгжих (`sm_lock_refresh_plan.md`)
+2. Тодорхойлогч бодлого ба тохиргооны товчлуурууд (SM-1/SM-3 даалгавар)
+3. Дагаж мөрдөх товч төлөв (SM-6a дууссан) ба операторын хяналтын хуудасны шинэчлэлтүүд (SM-6b)
+4. `sm2`, `sm3`, `sm4`, `rfc6979`-ийн хараат байдлын аудитын хянагчид
 
-## Decisions
-- [ ] Lock refresh approved? Details:
-- [ ] Deterministic policy affirmed? Notes:
-- [ ] Compliance brief owner + due date:
-- [ ] Audit reviewers assigned:
+## Шийдвэрүүд
+- [ ] Дахин түгжихийг зөвшөөрсөн үү? Дэлгэрэнгүй:
+- [ ] Детерминист бодлого батлагдсан уу? Тэмдэглэл:
+- [ ] Нийцлийн товч эзэмшигч + дуусах хугацаа:
+- [ ] Аудитын хянагчид томилогдсон:
 
-## Action Items
-| Item | Owner | Due | Status |
+## Үйлдлийн зүйлс
+| Зүйл | Эзэмшигч | Хугацаа | Статус |
 |------|-------|-----|--------|
-| Prepare Cargo.lock PR after approval | Release Eng | ████ | ☐ |
-| Verify Annex D OpenSSL checks | Crypto WG | ████ | ☐ |
-| Track compliance brief revisions & operator checklist addenda | Docs/Legal | ████ | ☐ |
+| Батлагдсаны дараа Cargo.lock PR бэлтгэх | Eng | гаргах ████ | ☐ |
+| Хавсралт D OpenSSL шалгалтыг баталгаажуулах | Crypto WG | ████ | ☐ |
+| Дагаж мөрдөх товч засвар, операторын хяналтын хуудасны нэмэлтийг хянах | Docs/Legal | ████ | ☐ |
 
-## Notes / Risks
-- _______________________________
-- _______________________________
+## Тэмдэглэл / Эрсдэл
+- _________________________________
+- _________________________________
 
-## Follow-up
-- Next review date:
-- Reporting back channel:
+## Дагаж мөрдөх
+- Дараагийн хяналтын огноо:
+- Сувгийг буцааж мэдээлэх:

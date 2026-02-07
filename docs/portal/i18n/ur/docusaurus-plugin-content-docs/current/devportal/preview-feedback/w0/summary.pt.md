@@ -4,61 +4,63 @@ direction: rtl
 source: docs/portal/docs/devportal/preview-feedback/w0/summary.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: preview-feedback-w0-summary
-title: Resumo de feedback do meio do W0
-sidebar_label: Feedback W0 (meio)
-description: Checkpoints, achados e acoes de meio de onda para a onda de preview de mantenedores core.
+ID: پیش نظارہ-فیڈ بیک-ڈبلیو 0 سمر
+عنوان: W0 مڈ فیڈ بیک کا خلاصہ
+سائڈبار_لیبل: تاثرات W0 (وسط)
+تفصیل: کور برقرار رکھنے والے پیش نظارہ لہر کے لئے چوکیاں ، نتائج اور وسط لہر کے اعمال۔
 ---
 
-| Item | Detalhes |
+| آئٹم | تفصیلات |
 | --- | --- |
-| Onda | W0 - Mantenedores core |
-| Data do resumo | 2025-03-27 |
-| Janela de revisao | 2025-03-25 -> 2025-04-08 |
-| Participantes | docs-core-01, sdk-rust-01, sdk-js-01, sorafs-ops-01, observability-01 |
-| Tag de artefato | `preview-2025-03-24` |
+| لہر | W0 - کور برقرار رکھنے والے |
+| خلاصہ تاریخ | 2025-03-27 |
+| جائزہ ونڈو | 2025-03-25-> 2025-04-08 |
+| شرکاء | DOCS-CORE-01 ، SDK-RUST-01 ، SDK-JS-01 ، SORAFS-OPS-01 ، مشاہدہ -01 |
+| نمونہ ٹیگ | `preview-2025-03-24` |
 
-## Destaques
+## جھلکیاں
 
-1. **Fluxo de checksum** - Todos os reviewers confirmaram que `scripts/preview_verify.sh`
-   teve sucesso contra o par descriptor/archive compartilhado. Nenhum override manual foi
-   necessario.
-2. **Feedback de navegacao** - Dois problemas menores de ordenacao do sidebar foram
-   registrados (`docs-preview/w0 #1-#2`). Ambos foram encaminhados para Docs/DevRel e nao
-   bloqueiam a onda.
-3. **Paridade de runbooks SoraFS** - sorafs-ops-01 pediu links cruzados mais claros entre
-   `sorafs/orchestrator-ops` e `sorafs/multi-source-rollout`. Issue de acompanhamento aberta;
-   tratar antes de W1.
-4. **Revisao de telemetria** - observability-01 confirmou que `docs.preview.integrity`,
-   `TryItProxyErrors` e os logs do proxy Try-it ficaram verdes; nenhum alerta disparou.
+1. ** چیکسم فلو ** - تمام جائزہ نگاروں نے تصدیق کی کہ `scripts/preview_verify.sh`
+   مشترکہ وضاحت کنندہ/محفوظ شدہ دستاویزات کی جوڑی کے خلاف کامیاب ہوا۔ کوئی دستی اوور رائڈز نہیں تھے
+   ضروری
+2. ** نیویگیشن فیڈ بیک ** - دو معمولی سائڈبار آرڈر کرنے والے مسائل تھے
+   رجسٹرڈ (`docs-preview/w0 #1-#2`)۔ دونوں کو دستاویزات/ڈیوریل کو ارسال کیا گیا تھا اور نہیں
+   لہر کو مسدود کریں۔
+3.
+   `sorafs/orchestrator-ops` اور `sorafs/multi-source-rollout`۔ فالو اپ مسئلہ کھلا ؛
+   W1 سے پہلے سلوک کریں۔
+4. ** ٹیلی میٹری کا جائزہ ** - مشاہدہ -01 نے تصدیق کی کہ `docs.preview.integrity` ،
+   `TryItProxyErrors` اور try-it پراکسی لاگز سبز ہوگئے۔ کوئی انتباہات ختم نہیں ہوئے۔
 
-## Itens de acao
+## ایکشن آئٹمز
 
-| ID | Descricao | Responsavel | Status |
+| ID | تفصیل | ذمہ دار | حیثیت |
 | --- | --- | --- | --- |
-| W0-A1 | Reordenar entradas do sidebar do devportal para destacar docs focados em reviewers (`preview-invite-*` agrupados). | Docs-core-01 | Concluido - o sidebar agora lista os docs de reviewers de forma contigua (`docs/portal/sidebars.js`). |
-| W0-A2 | Adicionar link cruzado explicito entre `sorafs/orchestrator-ops` e `sorafs/multi-source-rollout`. | Sorafs-ops-01 | Concluido - cada runbook agora aponta para o outro para que operadores vejam ambos os guias durante rollouts. |
-| W0-A3 | Compartilhar snapshots de telemetria + bundle de queries com o tracker de governanca. | Observability-01 | Concluido - bundle anexado ao `DOCS-SORA-Preview-W0`. |
+| W0-A1 | جائزہ لینے والے مرکوز دستاویزات (`preview-invite-*` ایک ساتھ گروپ کردہ) کو اجاگر کرنے کے لئے ڈیور پورٹل سائڈبار اندراجات کو دوبارہ ترتیب دیں۔ | DOCS-CORE-01 | ہو گیا - سائڈبار اب جائزہ لینے والے دستاویزات کی فہرست میں شامل ہے (`docs/portal/sidebars.js`)۔ |
+| W0-A2 | `sorafs/orchestrator-ops` اور `sorafs/multi-source-rollout` کے درمیان واضح کراس لنک شامل کریں۔ | sorafs-ops-01 | ہو گیا - اب ہر رن بک دوسرے کی طرف اشارہ کرتا ہے لہذا آپریٹرز رول آؤٹ کے دوران دونوں گائڈز دیکھتے ہیں۔ |
+| W0-A3 | گورننس ٹریکر کے ساتھ ٹیلی میٹری اسنیپ شاٹس + استفسار بنڈل شیئر کریں۔ | مشاہدہ -01 | مکمل - `DOCS-SORA-Preview-W0` سے منسلک بنڈل۔ |
 
-## Resumo de encerramento (2025-04-08)
+## اختتامی خلاصہ (2025-04-08)
 
-- Todos os cinco reviewers confirmaram a conclusao, limparam builds locais e sairam da janela
-  de preview; as revogacoes de acesso ficaram registradas em `DOCS-SORA-Preview-W0`.
-- Nenhum incidente ou alerta ocorreu durante a onda; os dashboards de telemetria ficaram
-  verdes durante todo o periodo.
-- As acoes de navegacao + links cruzados (W0-A1/A2) estao implementadas e refletidas nos docs
-  acima; a evidencia de telemetria (W0-A3) esta anexada ao tracker.
-- Bundle de evidencia arquivado: screenshots de telemetria, confirmacoes de convite e este
-  resumo estao linkados no issue do tracker.
+- پانچوں جائزہ نگاروں نے اس نتیجے کی تصدیق کی ، مقامی تعمیرات کو صاف کیا اور ونڈو سے باہر نکلا
+  پیش نظارہ ؛ `DOCS-SORA-Preview-W0` میں رسائی کی منسوخی ریکارڈ کی گئی۔
+- لہر کے دوران کوئی واقعہ یا انتباہ نہیں ہوا۔ ٹیلی میٹری ڈیش بورڈز تھے
+  پورے عرصے میں سبز
+- نیویگیشن ایکشنز + کراس لنکس (W0-A1/A2) دستاویزات میں نافذ اور عکاسی کرتے ہیں
+  اوپر ؛ ٹیلی میٹری ثبوت (W0-A3) ٹریکر کے ساتھ منسلک ہے۔
+- محفوظ شدہ شواہد کا بنڈل: ٹیلی میٹری اسکرین شاٹس ، تصدیقوں کو مدعو کریں اور یہ
+  خلاصہ ٹریکر کے مسئلے میں منسلک ہے۔
 
-## Proximos passos
+## اگلے اقدامات
 
-- Implementar os itens de acao do W0 antes de abrir W1.
-- Obter aprovacao legal e um slot de staging para o proxy, depois seguir os passos de preflight
-  da onda de parceiros descritos no [preview invite flow](../../preview-invite-flow.md).
+- W1 کھولنے سے پہلے W0 ایکشن آئٹمز کو نافذ کریں۔
+- پراکسی کے لئے قانونی منظوری اور اسٹیجنگ سلاٹ حاصل کریں ، پھر پریف لائٹ مراحل پر عمل کریں
+  [پیش نظارہ انوائٹ فلو] (../../preview-invite-flow.md) میں بیان کردہ شراکت داروں کی لہر سے۔
 
-_Este resumo esta linkado a partir do [preview invite tracker](../../preview-invite-tracker.md) para
-manter o roadmap DOCS-SORA rastreavel._
+_ یہ خلاصہ [پیش نظارہ انوائٹ ٹریکر] (../../preview-invite-tracker.md) سے منسلک ہے
+DOCS-SORA روڈ میپ کو ٹریک ایبل رکھیں ۔_

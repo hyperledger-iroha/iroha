@@ -7,111 +7,104 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 6a406b7656a87bb1469444db1cc2d2d5922f16660b53cc7eaef5b838199127e8
 source_last_modified: "2026-01-23T23:46:10.135119+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Global Feature Matrix
+# ကမ္ဘာလုံးဆိုင်ရာအင်္ဂါရပ် Matrix
 
-Legend: `◉` fully implemented · `○` mostly implemented · `▲` partially implemented · `△` implementation just started · `✖︎` not started
+ဒဏ္ဍာရီ- `◉` ကို အပြည့်အဝ အကောင်အထည်ဖော်ခဲ့သည် · `○` အများစုကို အကောင်အထည်ဖော်ခဲ့သည် · `▲` တစ်စိတ်တစ်ပိုင်းအကောင်အထည်ဖော်ထားသည် · `△` အကောင်အထည်ဖော်မှုကို စတင်လိုက်ပါပြီ · `✖︎` မစတင်ရသေးပါ
 
-## Consensus & Networking
+## အများဆန္ဒနှင့် ကွန်ရက်ချိတ်ဆက်ခြင်း။
 
-| Feature | Status | Notes | Evidence |
+| ထူးခြားချက် | အဆင့်အတန်း | မှတ်စုများ | အထောက်အထား |
 |---------|--------|-------|----------|
-| Multi-collector K/r support & first-commit-certificate-wins | ◉ | Deterministic collector selection, redundant fan-out, on-chain K/r parameters, and first-valid-commit-certificate acceptance shipped with tests. | status.md:255; status.md:314 |
-| Pacemaker backoff, RTT floor, deterministic jitter | ◉ | Configurable timers with jitter band wired through config, telemetry, and docs. | status.md:251 |
-| NEW_VIEW gating & highest QC tracking | ◉ | Control flow carries NEW_VIEW/Evidence, the highest QC adopts monotonically, handshake guards computed fingerprint. | status.md:210 |
-| availability evidence tracking (advisory) | ◉ | Availability evidence emitted and tracked; commit does not gate on availability in v1. | status.md:latest |
-| Reliable Broadcast (DA payload transport) | ◉ | RBC message flow (Init/Chunk/Ready/Deliver) is enabled when `da_enabled=true` as a transport/recovery path; availability evidence is tracked (advisory) while commit proceeds independently. | status.md:latest |
-| Commit QC state-root binding | ◉ | Commit QCs carry `parent_state_root`/`post_state_root`; there is no separate execution-QC gate. | status.md:latest |
-| Evidence propagation & audit endpoints | ◉ | ControlFlow::Evidence, Torii evidence endpoints, and negative tests landed. | status.md:176; status.md:760-761 |
-| RBC telemetry, readiness/delivered metrics | ◉ | `/v1/sumeragi/rbc*` endpoints and telemetry counters/histogram available for operators. | status.md:283-284; status.md:772 |
-| Consensus parameter advert & topology verification | ◉ | Nodes broadcast `(collectors_k, redundant_send_r)` and validate equality across peers. | status.md:255 |
-| Permissioned PRF-based rotation | ◉ | Permissioned leader/collector selection uses PRF seed + height/view over the canonical roster; prev-hash rotation remains a legacy helper. | status.md:latest |
+| စုဆောင်းသူအများအပြား K/r ပံ့ပိုးမှုနှင့် ပထမဦးစွာ commit-certificate-အနိုင်ရ | ◉ | သတ်မှတ်ထားသော စုဆောင်းသူရွေးချယ်မှု၊ မလိုအပ်သော ပန်ကာထွက်မှု၊ ကွင်းဆက် K/r ကန့်သတ်ချက်များ နှင့် စမ်းသပ်မှုများဖြင့် ပေးပို့ထားသော ပထမတရားဝင်-ကတိပြု-လက်မှတ် လက်ခံမှု။ | status.md:255; status.md:314 |
+| Pacemaker backoff၊ RTT ကြမ်းပြင်၊ အဆုံးစွန်သောတုန်လှုပ်ခြင်း | ◉ | config၊ telemetry နှင့် docs မှတဆင့် တုန်ခါနေသောကြိုးဖြင့် ကြိုးဖြင့် ချိန်ညှိနိုင်သော timers | status.md:251 |
+| NEW_VIEW ဂိတ်ပေါက်နှင့် အမြင့်ဆုံး QC ခြေရာခံခြင်း | ◉ | ထိန်းချုပ်မှုစီးဆင်းမှုတွင် NEW_VIEW/အထောက်အထားများပါရှိသည်။ အမြင့်ဆုံး QC သည် လက်ဆွဲနှုတ်ဆက်သည့်အစောင့်များကို တွက်ချက်ထားသော လက်ဗွေရာကို monotonically လက်ခံပါသည်။ | status.md:210 |
+| ရရှိနိုင်မှု အထောက်အထား ခြေရာခံခြင်း (အကြံပေး) | ◉ | ရရှိနိုင်သော အထောက်အထားများ ထုတ်လွှတ်ပြီး ခြေရာခံခြင်း၊ commit သည် v1 တွင်ရရှိနိုင်မှုအပေါ်တွင်တံခါးမရှိပေ။ | status.md:နောက်ဆုံးပေါ် |
+| ယုံကြည်စိတ်ချရသော အသံလွှင့်ခြင်း (DA payload transport) | ◉ | `da_enabled=true` ကို သယ်ယူပို့ဆောင်ရေး/ပြန်လည်ရယူရေးလမ်းကြောင်းအဖြစ် `da_enabled=true` ကို ပို့ဆောင်သည့်အခါတွင် RBC မက်ဆေ့ဂျ်စီးဆင်းမှု (Init/Chunk/Ready/Deliver) ကို ဖွင့်ထားသည်။ အမှီအခိုကင်းစွာဖြင့် ကတိကဝတ်ပြုနေစဉ်တွင် ရရှိနိုင်သောအထောက်အထားများကို ခြေရာခံသည် (အကြံပေးချက်)။ | status.md:နောက်ဆုံးပေါ် |
+| QC ပြည်နယ်-အမြစ်စည်းနှောင်ခြင်း | ◉ | ကတိပြု QC များသည် `parent_state_root`/`post_state_root` သယ်ဆောင်သည်။ သီးခြားလုပ်ဆောင်မှု-QC ဂိတ်မရှိပါ။ | status.md:နောက်ဆုံးပေါ် |
+| အထောက်အထား ဖြန့်ဝေခြင်းနှင့် စာရင်းစစ် အဆုံးမှတ်များ | ◉ | ControlFlow-:အထောက်အထား၊ Torii အထောက်အထား အဆုံးအဖြတ်များနှင့် အနုတ်လက္ခဏာစစ်ဆေးမှုများ ဆင်းသက်လာသည်။ | status.md:176; status.md:760-761 |
+| RBC တယ်လီမီတာ၊ အဆင်သင့်/ပေးပို့ထားသော မက်ထရစ်များ | ◉ | အော်ပရေတာများအတွက် `/v1/sumeragi/rbc*` အဆုံးမှတ်များနှင့် တယ်လီမီတာ ကောင်တာ/ဟစ်စတိုဂရမ်များ ရနိုင်ပါသည်။ | status.md:283-284; status.md:772 |
+| အများသဘောတူ ကန့်သတ်ချက် ကြော်ငြာ & topology အတည်ပြုခြင်း | ◉ | Nodes များသည် `(collectors_k, redundant_send_r)` ကို ထုတ်လွှင့်ပြီး ရွယ်တူများအကြား တန်းတူညီမျှမှုကို အတည်ပြုသည်။ | status.md:255 |
+| ခွင့်ပြုထားသော PRF အခြေခံလည်ပတ်မှု | ◉ | ခွင့်ပြုထားသော ခေါင်းဆောင်/စုဆောင်းသူ ရွေးချယ်မှုတွင် PRF မျိုးစေ့ + အမြင့်/မြင်ကွင်းကို အသုံးပြု၍ canonical စာရင်းဇယားအပေါ်၊ prev-hash လည်ပတ်မှုသည် အမွေအနှစ်အကူအညီအဖြစ် ကျန်ရှိနေပါသည်။ | status.md:နောက်ဆုံးပေါ် |
 
-## Pipeline, Kura & State
-
-| Feature | Status | Notes | Evidence |
+## ပိုက်လိုင်း၊ Kura & ပြည်နယ်| ထူးခြားချက် | အဆင့်အတန်း | မှတ်စုများ | အထောက်အထား |
 |---------|--------|-------|----------|
-| Quarantine lane caps & telemetry | ◉ | Config knobs, deterministic overflow handling, and telemetry counters implemented. | status.md:263 |
-| Pipeline worker pool knob | ◉ | `[pipeline].workers` threaded through state init with env parsing tests. | status.md:264 |
-| Snapshot query lane (stored/ephemeral cursors) | ◉ | Stored cursor mode with Torii integration and blocking worker pools. | status.md:265; status.md:371; status.md:501 |
-| Static DAG fingerprint recovery sidecars | ◉ | Sidecars stored in Kura, validated on startup, warnings emitted on mismatches. | status.md:106; status.md:349 |
-| Kura block store hash decoding hardening | ◉ | Hash reads switched to raw 32-byte handling with Norito-independent roundtrip tests. | status.md:608; status.md:668 |
-| Norito adaptive telemetry for codecs | ◉ | AoS vs NCB selection metrics added to Norito. | status.md:156 |
-| Snapshot WSV queries via Torii | ◉ | Torii snapshot query lane uses blocking worker pool, deterministic semantics. | status.md:501 |
-| Trigger by-call execution chaining | ◉ | Data triggers chain immediately after by-call execution with deterministic order. | status.md:668 |
+| Quarantine lane caps & telemetry | ◉ | Config knob များ၊ အဆုံးအဖြတ်ပေးသော overflow handling နှင့် telemetry ကောင်တာများကို အကောင်အထည်ဖော်ခဲ့သည်။ | status.md:263 |
+| ပိုက်လိုင်းလုပ်သား ရေကန်ဖု | ◉ | `[pipeline].workers` ကို env ပိုင်းခြားစိတ်ဖြာမှုစမ်းသပ်မှုများနှင့်အတူ state init မှတဆင့်ချည်ထားသည်။ | status.md:264 |
+| Snapshot query lane (သိမ်းဆည်းထားသော/မြင်သာသော ကာဆာများ) | ◉ | Torii ပေါင်းစပ်ခြင်းနှင့် အလုပ်သမားရေကန်များကို ပိတ်ဆို့ခြင်းတို့ဖြင့် သိမ်းဆည်းထားသော ကာဆာမုဒ်။ | status.md:265; status.md:371; status.md:501 |
+| Static DAG လက်ဗွေ ပြန်လည်ရယူရေး ဆိုက်ကား | ◉ | Kura တွင် သိမ်းဆည်းထားသည့် ဆိုက်ကားများကို စတင်ချိန်တွင် တရားဝင်ခွင့်ပြုထားပြီး မကိုက်ညီမှုများတွင် သတိပေးချက်များ ထုတ်လွှတ်သည်။ | status.md:106; status.md:349 |
+| Kura ဘလောက်စတိုးဆိုင် hash decoding hardening | ◉ | Hash သည် Norito လွတ်လပ်သော အသွားအပြန် စမ်းသပ်မှုများဖြင့် အကြမ်း 32-byte ကိုင်တွယ်မှုသို့ ပြောင်းခဲ့သည်။ | status.md:608; status.md:668 |
+| ကုဒ်ဒက်စ်များအတွက် Norito ◉ | AoS နှင့် NCB ရွေးချယ်မှု မက်ထရစ်များကို Norito သို့ ထည့်ထားသည်။ | status.md:156 |
+| Torii | မှတဆင့် Snapshot WSV မေးမြန်းချက် ◉ | Torii လျှပ်တစ်ပြက်မေးမြန်းချက်လမ်းကြောသည် အလုပ်သမားရေကူးကန်ကို ပိတ်ဆို့ခြင်း၊ အဆုံးအဖြတ်ပေးသော အယူအဆများကို အသုံးပြုသည်။ | status.md:501 |
+| ခေါ်ဆိုမှုဖြင့် ကွပ်မျက်ခြင်း သံကြိုးများ | ◉ | ခေါ်ဆိုမှုလုပ်ဆောင်ပြီးနောက် ဒေတာသည် ကွင်းဆက်ကို အဆုံးအဖြတ်ပေးသောအမိန့်ဖြင့် ချက်ချင်းစတင်သည်။ | status.md:668 |
 
 ## Norito Serialization & Tooling
 
-| Feature | Status | Notes | Evidence |
+| ထူးခြားချက် | အဆင့်အတန်း | မှတ်စုများ | အထောက်အထား |
 |---------|--------|-------|----------|
-| Norito JSON migration (workspace) | ◉ | Serde removed from production; inventory + guardrails keep the workspace Norito-only. | status.md:112; status.md:124 |
-| Serde deny-list & CI guardrails | ◉ | Guard workflows/scripts prevent new direct Serde usage across workspace. | status.md:218 |
-| Norito codec goldens & AoS/NCB tests | ◉ | AoS/NCB goldens, truncation tests, and doc sync added. | status.md:140-147; status.md:149-150; status.md:332; status.md:666 |
-| Norito feature matrix tooling | ◉ | `scripts/run_norito_feature_matrix.sh` supports downstream smoke tests; CI covers packed-seq/struct combos. | status.md:146; status.md:152 |
-| Norito language bindings (Python/Java) | ◉ | Python and Java Norito codecs maintained with sync scripts. | status.md:74; status.md:81 |
-| Norito Stage-1 SIMD structural classifiers | ◉ | NEON/AVX2 stage-1 classifiers with cross-arch goldens and randomized corpora tests. | status.md:241 |
+| Norito JSON ရွှေ့ပြောင်းခြင်း (အလုပ်နေရာ) | ◉ | Serde ကို ထုတ်လုပ်မှုမှ ဖယ်ရှားခဲ့သည်။ သိုလှောင်မှု + အကာအရံများသည် အလုပ်ခွင် Norito ကိုသာ သိမ်းဆည်းထားသည်။ | status.md:112; status.md:124 |
+| Serde deny-list & CI guardrails | ◉ | အလုပ်အသွားအလာ/ scripts များသည် အလုပ်နေရာအနှံ့ တိုက်ရိုက် Serde အသုံးပြုမှုအသစ်ကို တားဆီးသည်။ | status.md:218 |
+| Norito codec ရွှေရောင်များနှင့် AoS/NCB စမ်းသပ်မှုများ | ◉ | AoS/NCB ရွှေရောင်များ၊ ဖြတ်ပိုင်းစစ်ဆေးမှုများနှင့် doc စင့်ခ်လုပ်ခြင်းကို ထည့်သွင်းထားသည်။ | status.md:140-147; status.md:149-150; status.md:332; status.md:666 |
+| Norito အင်္ဂါရပ် matrix tooling | ◉ | `scripts/run_norito_feature_matrix.sh` သည် ရေအောက်မီးခိုးစမ်းသပ်မှုများကို ပံ့ပိုးပေးသည်။ CI သည် packed-seq/struct combo များကို အကျုံးဝင်သည်။ | status.md:146; status.md:152 |
+| Norito ဘာသာစကားပေါင်းစပ်မှုများ (Python/Java) | ◉ | Python နှင့် Java Norito ကုဒ်ဒစ်များကို ချိန်ကိုက်သည့် script များဖြင့် ထိန်းသိမ်းထားသည်။ | status.md:74; status.md:81 |
+| Norito Stage-1 SIMD ဖွဲ့စည်းတည်ဆောက်ပုံ အမျိုးအစားခွဲစက်များ | ◉ | Cross-arch ရွှေရောင်များနှင့် ကျပန်းလုပ်ဆောင်ထားသော ကော်ပိုရာစစ်ဆေးမှုများပါရှိသော NEON/AVX2 အဆင့်-1 အမျိုးအစားခွဲထွက်ပစ္စည်းများ။ | status.md:241 |
 
-## Governance & Runtime Upgrades
-
-| Feature | Status | Notes | Evidence |
+## အုပ်ချုပ်ရေးနှင့် အချိန်အဆင့်မြှင့်တင်မှုများ| ထူးခြားချက် | အဆင့်အတန်း | မှတ်စုများ | အထောက်အထား |
 |---------|--------|-------|----------|
-| Runtime upgrade admission (ABI gating) | ◉ | Active ABI set enforced at admission with structured errors and tests. | status.md:196 |
-| Protected namespace deploy gating | ▲ | Deploy metadata requirements and gating wired; policy/UX still evolving. | status.md:171 |
-| Torii governance read endpoints | ◉ | `/v1/gov/*` read APIs routed with router tests. | status.md:212 |
-| Verifying-key registry lifecycle & events | ◉ | VK register/update/deprecate, events, CLI filters, and retention semantics implemented. | status.md:236-239; status.md:595; status.md:603 |
+| Runtime အဆင့်မြှင့်တင်ခြင်း ဝင်ခွင့် (ABI gating) | ◉ | စနစ်ကျသော အမှားအယွင်းများနှင့် စမ်းသပ်မှုများဖြင့် ဝင်ခွင့်တွင် ပြဋ္ဌာန်းထားသည့် Active ABI အစုံ။ | status.md:196 |
+| ကာကွယ်ထားသော namespace သည် gating | ▲ | မက်တာဒေတာလိုအပ်ချက်များကို အသုံးချပြီး ကြိုးတပ်၍ ချိတ်ဆက်ပါ။ မူဝါဒ/UX သည် ပြောင်းလဲနေဆဲဖြစ်သည်။ | status.md:171 |
+| Torii အုပ်ချုပ်ရေး အဆုံးမှတ်များ ဖတ်ရန် | ◉ | `/v1/gov/*` သည် router စမ်းသပ်မှုများဖြင့် ဖြတ်သွားသော API များကို ဖတ်သည်။ | status.md:212 |
+| စစ်ဆေးခြင်း-သော့ မှတ်ပုံတင်ခြင်း ဘဝသံသရာနှင့် ဖြစ်ရပ်များ | ◉ | VK မှတ်ပုံတင်ခြင်း/မွမ်းမံခြင်း/ကန့်ကွက်ခြင်း၊ ဖြစ်ရပ်များ၊ CLI စစ်ထုတ်မှုများနှင့် ထိန်းသိမ်းခြင်းဆိုင်ရာ ဝေါဟာရများကို အကောင်အထည်ဖော်ခဲ့သည်။ | status.md:236-239; status.md:595; status.md:603 |
 
-## Zero-Knowledge Infrastructure
+## သုည-အသိပညာ အခြေခံအဆောက်အဦ
 
-| Feature | Status | Notes | Evidence |
+| ထူးခြားချက် | အဆင့်အတန်း | မှတ်စုများ | အထောက်အထား |
 |---------|--------|-------|----------|
-| Attachment storage APIs | ◉ | `POST/GET/LIST/DELETE` attachment endpoints with deterministic ids and tests. | status.md:231 |
-| Background prover worker & report TTL | ▲ | Prover stub behind feature flag; TTL GC and config knobs wired; full pipeline pending. | status.md:212; status.md:233 |
-| Envelope hash binding in CoreHost | ◉ | Verify envelope hashes bound through CoreHost and exposed via audit pulses. | status.md:250 |
-| Shielded root history gating | ◉ | Root snapshots threaded into CoreHost with bounded history and empty-root config. | status.md:303 |
-| ZK ballot execution & governance locks | ○ | Nullifier derivation, lock updates, verification toggles implemented; full proof lifecycle still maturing. | status.md:126-128; status.md:194-195 |
-| Proof attachment pre-verify & dedup | ◉ | Backend-tag sanity, deduplication, and proof records persisted pre-execution. | status.md:348; status.md:602 |
-| ZK Torii proof fetch endpoint | ◉ | `/v1/zk/proof/{backend}/{hash}` exposes proof records (status, height, vk_ref/commitment). | status.md:94 |
+| ပူးတွဲသိမ်းဆည်းမှု APIs | ◉ | `POST/GET/LIST/DELETE` အဆုံးအဖြတ်ပေးသော ids များနှင့် စမ်းသပ်မှုများပါရှိသော ပူးတွဲပါဖိုင်းအမှတ်များ။ | status.md:231 |
+| နောက်ခံသက်သေ အလုပ်သမား & အစီရင်ခံစာ TTL | ▲ | အလံနောက်ကွယ်ရှိ ဆောင်းပါးတို ၊ TTL GC နှင့် config ခလုတ်များ ကြိုးတပ်ထားခြင်း၊ ပိုက်လိုင်း အပြည့်အစုံကို ဆိုင်းငံ့ထားသည်။ | status.md:212; status.md:233 |
+| CoreHost | တွင် စာအိတ် hash binding ◉ | CoreHost မှတဆင့် ချိတ်ဆက်ထားသော စာအိတ်များကို စစ်ဆေးပြီး စာရင်းစစ် ပဲမျိုးစုံဖြင့် ဖော်ထုတ်ပါ။ | status.md:250 |
+| ဒိုင်းအမြစ်သမိုင်းဂိတ် | ◉ | ဘောင်ခတ်ထားသော မှတ်တမ်းနှင့် အမြစ်အချည်းနှီးသော ဖွဲ့စည်းမှုဖြင့် CoreHost သို့ ချည်ထားသော လျှပ်တစ်ပြက်ရိုက်ချက်များ။ | status.md:303 |
+| ZK မဲများကို ကွပ်မျက်ခြင်းနှင့် အုပ်ချုပ်မှုသော့ခလောက်များ | ○ | Nullifier ဆင်းသက်လာခြင်း၊ လော့ခ်မွမ်းမံမှုများ၊ အတည်ပြုခြင်းခလုတ်များကို အကောင်အထည်ဖော်ဆောင်ရွက်ခြင်း၊ အထောက်အထား အပြည့်ဖြင့် ဘဝသံသရာသည် ရင့်ကျက်ဆဲဖြစ်သည်။ | status.md:126-128; status.md:194-195 |
+| ပူးတွဲပါဖိုင်ကို အထောက်အထားကြိုတင်စစ်ဆေးပြီး & dedup | ◉ | Backend-tag sanity၊ ကူးယူခြင်းနှင့် အထောက်အထားမှတ်တမ်းများသည် ကြိုတင်လုပ်ဆောင်မှုကို ဆက်လက်လုပ်ဆောင်နေပါသည်။ | status.md:348; status.md:602 |
+| ZK Torii အထောက်အထား ရယူခြင်း အဆုံးမှတ် | ◉ | `/v1/zk/proof/{backend}/{hash}` သည် အထောက်အထားမှတ်တမ်းများ (အခြေအနေ၊ အရပ်၊ vk_ref/ကတိကဝတ်) ကိုဖော်ထုတ်သည်။ | status.md:94 |
 
-## IVM & Kotodama Integration
-
-| Feature | Status | Notes | Evidence |
+## IVM & Kotodama ပေါင်းစပ်မှု| ထူးခြားချက် | အဆင့်အတန်း | မှတ်စုများ | အထောက်အထား |
 |---------|--------|-------|----------|
-| CoreHost syscall→ISI bridge | ○ | Pointer TLV decoding and syscall queueing operational; coverage gaps/parity tests planned. | status.md:299-307; status.md:477-486 |
-| Pointer constructors & domain builtins | ◉ | Kotodama builtins emit typed Norito TLVs and SCALLs, with IR/e2e tests and docs. | status.md:299-301 |
-| Pointer-ABI strict validation & doc sync | ◉ | TLV policy enforced across host/IVM with golden tests and generated docs. | status.md:227; status.md:317; status.md:344; status.md:366; status.md:527 |
-| ZK syscall gating via CoreHost | ◉ | Per-op queues gate verified envelopes and enforce hash matching before ISI execution. | crates/iroha_core/src/smartcontracts/ivm/host.rs:213; crates/iroha_core/src/smartcontracts/ivm/host.rs:279 |
-| Kotodama pointer-ABI docs & grammar | ◉ | Grammar/docs synced with live constructors and SCALL mappings. | status.md:299-301 |
-| ISO 20022 schema-driven engine & Torii bridge | ◉ | Canonical ISO 20022 schemas embedded, deterministic XML parsing, and `/v1/iso20022/status/{MsgId}` API exposed. | status.md:65-70 |
+| CoreHost syscall →ISI တံတား | ○ | ညွှန်ပြသည့် TLV ကုဒ်ကုဒ်နှင့် syscall တန်းစီခြင်း လုပ်ငန်းလည်ပတ်မှု။ အကျုံးဝင်သော ကွာဟချက်/တူညီမှု စမ်းသပ်မှုများကို စီစဉ်ထားသည်။ | status.md:299-307; status.md:477-486 |
+| Pointer constructors & domain buildins | ◉ | Kotodama builtins သည် IR/e2e စမ်းသပ်မှုများနှင့် docs များဖြင့် ရိုက်ထည့်ထားသော Norito TLV နှင့် SCALL များကို ထုတ်လွှတ်သည်။ | status.md:299-301 |
+| Pointer-ABI တင်းကျပ်သော တရားဝင်အတည်ပြုချက်နှင့် doc ထပ်တူပြုခြင်း | ◉ | TLV မူဝါဒကို ရွှေရောင်စမ်းသပ်မှုများနှင့် ထုတ်လုပ်ထားသော စာရွက်စာတမ်းများဖြင့် လက်ခံသူ/IVM တွင် ပြဋ္ဌာန်းထားသည်။ | status.md:227; status.md:317; status.md:344; status.md:366; status.md:527 |
+| CoreHost | မှတဆင့် ZK syscall ဂိတ်ပေါက်ခြင်း။ ◉ | Per-op သည် ဂိတ်စစ်ဆေးထားသော စာအိတ်များကို စီတန်းပြီး ISI မလုပ်ဆောင်မီ hash ကိုက်ညီမှုကို တွန်းအားပေးသည်။ | crates/iroha_core/src/smartcontracts/ivm/host.rs:213; crates/iroha_core/src/smartcontracts/ivm/host.rs:279 |
+| Kotodama ညွှန်ပြချက်-ABI docs & သဒ္ဒါ | ◉ | တိုက်ရိုက်တည်ဆောက်သူများနှင့် SCALL မြေပုံဆွဲခြင်းများဖြင့် သဒ္ဒါ/စာရွက်စာတမ်းများကို ထပ်တူပြုထားသည်။ | status.md:299-301 |
+| ISO 20022 schema-driven engine & Torii တံတား | ◉ | ထည့်သွင်းထားသော Canonical ISO 20022 အစီအစဉ်များ၊ အဆုံးအဖြတ်ရှိသော XML ပိုင်းခြားစိတ်ဖြာခြင်းနှင့် `/v1/iso20022/status/{MsgId}` API တို့ကို ဖော်ထုတ်ထားသည်။ | status.md:65-70 |
 
 ## Hardware Acceleration
 
-| Feature | Status | Notes | Evidence |
+| ထူးခြားချက် | အဆင့်အတန်း | မှတ်စုများ | အထောက်အထား |
 |---------|--------|-------|----------|
-| SIMD tail/misalignment parity tests | ◉ | Randomized parity tests ensure SIMD vector ops match scalar semantics for arbitrary alignment. | status.md:243 |
-| Metal/CUDA fallback & self-tests | ◉ | GPU backends run golden self-tests and fall back to scalar/SIMD on mismatch; parity suites cover SHA-256/Keccak/AES. | status.md:244-246 |
+| SIMD tail/misalignment parity tests | ◉ | ကျပန်း တူညီမှု စမ်းသပ်မှုများသည် SIMD vector ops သည် မတရား ချိန်ညှိမှုအတွက် scalar semantics နှင့် ကိုက်ညီကြောင်း သေချာစေသည်။ | status.md:243 |
+| သတ္တု/CUDA တုံ့ပြန်မှုနှင့် ကိုယ်တိုင်စမ်းသပ်မှုများ | ◉ | GPU backend များသည် ရွှေရောင် ကိုယ်တိုင်စမ်းသပ်မှုများကို လုပ်ဆောင်ပြီး မကိုက်ညီသောကြောင့် scalar/SIMD သို့ ပြန်ရောက်သွားပါသည်။ parity suites များသည် SHA-256/Keccak/AES အကျုံးဝင်သည်။ | status.md:244-246 |
 
-## Network Time & Consensus Modes
+## ကွန်ရက်အချိန်နှင့် သဘောတူညီမှုမုဒ်များ
 
-| Feature | Status | Notes | Evidence |
+| ထူးခြားချက် | အဆင့်အတန်း | မှတ်စုများ | အထောက်အထား |
 |---------|--------|-------|----------|
-| Network Time Service (NTS) | ✖︎ | Design exists in `new_pipeline.md`; implementation not yet tracked in status updates. | new_pipeline.md |
-| Nominated PoS consensus mode | ✖︎ | Nexus design documents closed-set and NPoS modes; core implementation pending. | new_pipeline.md; nexus.md |
+| ကွန်ရက်အချိန်ဝန်ဆောင်မှု (NTS) | ✖︎ | ဒီဇိုင်းသည် `new_pipeline.md` တွင်ရှိပြီး၊ အဆင့်မြှင့်တင်မှုများတွင် အကောင်အထည်ဖော်မှုကို ခြေရာခံမရသေးပါ။ | new_pipeline.md |
+| အမည်စာရင်းတင်သွင်းထားသော PoS သဘောတူညီမှုမုဒ် | ✖︎ | Nexus ဒီဇိုင်းစာရွက်စာတမ်းများကို အပိတ်-အစုံနှင့် NPoS မုဒ်များ၊ အဓိက အကောင်အထည်ဖော်မှုကို ဆိုင်းငံ့ထားသည်။ | new_pipeline.md; Nexus.md |
 
-## Nexus Ledger Roadmap
-
-| Feature | Status | Notes | Evidence |
+## Nexus Ledger လမ်းပြမြေပုံ| ထူးခြားချက် | အဆင့်အတန်း | မှတ်စုများ | အထောက်အထား |
 |---------|--------|-------|----------|
-| Space Directory contract scaffold | ✖︎ | Global registry contract for DS manifests/governance not implemented yet. | nexus.md |
-| Data Space manifest format & lifecycle | ✖︎ | Norito manifest schema, versioning, and governance flow remain on the roadmap. | nexus.md |
-| DS governance & validator rotation | ✖︎ | On-chain procedures for DS membership/rotation still in design phase. | nexus.md |
-| Cross-DS anchoring & Nexus block composition | ✖︎ | Composition layer and anchoring commitments outlined but unimplemented. | nexus.md |
-| Kura/WSV erasure-coded storage | ✖︎ | Erasure-coded blob/snapshot storage for public/private DS not yet built. | nexus.md |
-| ZK/optimistic proof policy per DS | ✖︎ | Per-DS proof requirements and enforcement not tracked in code. | nexus.md |
-| Fee/quota isolation per Data Space | ✖︎ | DS-specific quotas and fee policy mechanisms remain future work. | nexus.md |
+| အာကာသလမ်းညွှန် ငြမ်း| ✖︎ | DS manifests/governance အတွက် ကမ္ဘာလုံးဆိုင်ရာ မှတ်ပုံတင်စာချုပ်ကို အကောင်အထည်မဖော်သေးပါ။ | Nexus.md |
+| ဒေတာအာကာသ ထင်ရှားသောဖော်မတ်နှင့် ဘဝစက်ဝန်း | ✖︎ | Norito သရုပ်ဖော်ပုံ၊ မူကွဲနှင့် အုပ်ချုပ်မှုစီးဆင်းမှုသည် လမ်းပြမြေပုံပေါ်တွင် ကျန်ရှိနေပါသည်။ | Nexus.md |
+| DS အုပ်ချုပ်မှုနှင့် တရားဝင်စနစ်လည်ပတ်မှု | ✖︎ | DS အဖွဲ့ဝင်ခြင်း/လည်ပတ်ခြင်းအတွက် ကွင်းဆက်လုပ်ငန်းစဉ်များသည် ဒီဇိုင်းအဆင့်တွင်ရှိနေဆဲဖြစ်သည်။ | Nexus.md |
+| Cross-DS ကိုယ်ထူကိုယ်ထ & Nexus ဘလောက်ဖွဲ့စည်းမှု | ✖︎ | ဖွဲ့စည်းမှုအလွှာနှင့် ကိုယ်ထူကိုယ်ထ ကတိကဝတ်များကို ဖော်ပြထားသော်လည်း အကောင်အထည်မဖော်ပါ။ | Nexus.md |
+| Kura/WSV ဖျက်-ကုဒ်ဖြင့် သိမ်းဆည်းခြင်း | ✖︎ | အများသူငှာ/ပုဂ္ဂလိက DS အတွက် Erasure-coded blob/snapshot သိုလှောင်မှုကို မတည်ဆောက်ရသေးပါ။ | Nexus.md |
+| DS | အလိုက် ZK/အကောင်းမြင်သက်သေမူဝါဒ ✖︎ | ကုဒ်တွင် ခြေရာခံမထားသော DS အထောက်အထား လိုအပ်ချက်များနှင့် ပြဋ္ဌာန်းချက်။ | Nexus.md |
+| ဒေတာနေရာ | တစ်ခုလျှင် အခကြေးငွေ/ခွဲတမ်းခွဲထုတ်ခြင်း။ ✖︎ | DS သီးသန့်ခွဲတမ်းများနှင့် အခကြေးငွေဆိုင်ရာ မူဝါဒယန္တရားများသည် အနာဂတ်တွင် လုပ်ဆောင်ဆဲဖြစ်သည်။ | Nexus.md |
 
 ## Chaos & Fault Injection
 
-| Feature | Status | Notes | Evidence |
+| ထူးခြားချက် | အဆင့်အတန်း | မှတ်စုများ | အထောက်အထား |
 |---------|--------|-------|----------|
-| Izanami chaosnet orchestration | ○ | Izanami workload now drives asset-definition, metadata, NFT, and trigger-repetition recipes with unit coverage for the new paths. | crates/izanami/src/instructions.rs; crates/izanami/src/instructions.rs#tests |
+| Izanami chaosnet orchestration | ○ | ယခု Izanami အလုပ်ဝန်သည် ပိုင်ဆိုင်မှု-အဓိပ္ပါယ်ဖွင့်ဆိုချက်၊ မက်တာဒေတာ၊ NFT၊ လမ်းကြောင်းအသစ်အတွက် ယူနစ်လွှမ်းခြုံမှုဖြင့် အစပျိုး-ထပ်တလဲလဲချက်ပြုတ်နည်းများကို မောင်းနှင်ပေးပါသည်။ | သေတ္တာများ/izanami/src/instructions.rs; crates/izanami/src/instructions.rs#tests |

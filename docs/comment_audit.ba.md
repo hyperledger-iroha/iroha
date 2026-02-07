@@ -7,11 +7,12 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 56951fb1e07d90ed062c24f6ef80b8e211b37be008becba9a1fdb16d522d5230
 source_last_modified: "2026-01-21T19:17:13.230513+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Comment Audit Notes
+# Комментарий Аудит иҫкәрмәләре
 
-Checked the following IVM modules and confirmed their inline/docs comments match the current behaviour (no code edits required):
+Түбәндәге I18NT000000000X модулдәрен тикшерҙе һәм уларҙы рәт/докторҙар комментарийҙары ағымдағы тәртипкә тап килә (кодтарҙы мөхәррирләү кәрәкмәй):
 
 - `crates/ivm/src/runtime.rs`
 
@@ -19,11 +20,11 @@ Checked the following IVM modules and confirmed their inline/docs comments match
 - `crates/ivm/src/register_file.rs`
 - `crates/ivm/src/registers.rs`
 - `crates/ivm/src/decoder.rs`
-- `crates/ivm/src/core_host.rs`
+- I18NI000000006X
 - `crates/ivm/src/ivm.rs`
-- `crates/ivm/src/vector.rs`
-- `crates/ivm/src/host.rs`
-- `crates/ivm_abi/src/syscalls.rs`
+- I18NI000000008X
+- `crates/ivm/src/host.rs` X
+- I18NI000000010X
 - `crates/ivm/src/parallel.rs`
 - `crates/ivm/src/mock_wsv.rs`
 - `crates/ivm/src/axt.rs`
@@ -31,12 +32,12 @@ Checked the following IVM modules and confirmed their inline/docs comments match
 - `crates/ivm/src/merkle_utils.rs`
 - `crates/ivm/src/gas.rs`
 - `crates/ivm/src/error.rs`
-- `crates/ivm/src/instruction.rs`
-- `crates/ivm/src/encoding.rs`
-- `crates/ivm/src/iso20022.rs`
+- I18NI000000018X
+- I18NI000000019X
+- I18NI000000020X
 - `crates/ivm/src/halo2.rs`
-- `crates/ivm/src/signature.rs`
-- `crates/ivm_abi/src/pointer_abi.rs`
-- `crates/ivm/src/ivm_cache.rs`
+- I18NI00000022Х
+- I18NI000000023X
+- I18NI000000024X
 
-Remaining workspace crates still need a pass if further comment updates become necessary.
+Ҡалған эш урыны йәшниктәре һаман да кәрәк пропуск, әгәр артабан комментарий яңыртыу кәрәк булып китә.

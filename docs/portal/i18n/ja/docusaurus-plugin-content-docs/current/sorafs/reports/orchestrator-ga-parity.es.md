@@ -4,86 +4,88 @@ direction: ltr
 source: docs/portal/docs/sorafs/reports/orchestrator-ga-parity.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Reporte de paridad GA del Orchestrator SoraFS
+# オーケストレーター SoraFS GA デル パリダーのレポート
 
-La paridad deterministica de multi-fetch ahora se rastrea por SDK para que los
-release engineers puedan confirmar que los bytes de payload, chunk receipts,
-provider reports y resultados de scoreboard permanezcan alineados entre
-implementaciones. Cada harness consume el bundle multi-provider canonico bajo
-`fixtures/sorafs_orchestrator/multi_peer_parity_v1/`, que empaqueta el plan SF1,
-provider metadata, telemetry snapshot y opciones del orchestrator.
+SDK によるマルチフェッチの決定性の確認
+リリース エンジニアはペイロードのバイト数、チャンクの受信を確認します。
+プロバイダーレポートとスコアボードの結果を永続的に表示
+実装。 Cada ハーネス消費エルバンドルマルチプロバイダー canonico bajo
+`fixtures/sorafs_orchestrator/multi_peer_parity_v1/`、ケ・エンパケタ・エル・プランSF1、
+プロバイダーのメタデータ、テレメトリ スナップショット、オーケストレーターのオプション。
 
-## Rust Baseline
+## Rust ベースライン
 
-- **Command:** `cargo test -p sorafs_orchestrator --test orchestrator_parity -- --nocapture`
-- **Scope:** Ejecuta el plan `MultiPeerFixture` dos veces via el orchestrator in-process,
-  verificando bytes de payload ensamblados, chunk receipts, provider reports y
-  resultados de scoreboard. La instrumentacion tambien rastrea concurrencia pico
-  y el tamano efectivo del working-set (`max_parallel x max_chunk_length`).
-- **Performance guard:** Cada ejecucion debe completar en 2 s en hardware CI.
-- **Working set ceiling:** Con el perfil SF1 el harness aplica `max_parallel = 3`,
-  dando una ventana <= 196608 bytes.
+- **コマンド:** `cargo test -p sorafs_orchestrator --test orchestrator_parity -- --nocapture`
+- **範囲:** プロセス中のエル オーケストレーターを介した計画 `MultiPeerFixture` の実行、
+  ペイロード アンサンブラドのバイト、チャンク レシート、プロバイダー レポートを検証します
+  スコアボードの結果。ピコのコンカレンシア・タンビエン・ラストレア・インストルメント
+  ワーキングセット (`max_parallel x max_chunk_length`) を有効にします。
+- **パフォーマンス ガード:** ハードウェア CI で 2 秒間で Cada の排出が完了します。
+- **作業セットの天井:** Con el perfil SF1 el ハーネス アプリケーション `max_parallel = 3`、
+  ダンド ウナ ベンタナ <= 196608 バイト。
 
-Sample log output:
+ログ出力の例:
 
 ```
 Rust orchestrator parity: duration_ms=142.63 total_bytes=1048576 max_inflight=3 peak_reserved_bytes=196608
 ```
 
-## JavaScript SDK Harness
+## JavaScript SDK ハーネス
 
-- **Command:** `npm run build:native && node --test javascript/iroha_js/test/sorafsOrchestrator.parity.test.js`
-- **Scope:** Reproduce el mismo fixture via `iroha_js_host::sorafsMultiFetchLocal`,
-  comparando payloads, receipts, provider reports y scoreboard snapshots entre
-  ejecuciones consecutivas.
-- **Performance guard:** Cada ejecucion debe finalizar en 2 s; el harness imprime la
-  duracion medida y el techo de bytes reservados (`max_parallel = 3`, `peak_reserved_bytes <= 196608`).
+- **コマンド:** `npm run build:native && node --test javascript/iroha_js/test/sorafsOrchestrator.parity.test.js`
+- **範囲:** `iroha_js_host::sorafsMultiFetchLocal` 経由でエル ミスモ フィクスチャを再現します。
+  コンパランドペイロード、レシート、プロバイダーレポート、およびスコアボードスナップショット全体
+  連続排出。
+- **パフォーマンス ガード:** 2 秒での Cada の排出と最終処理。エル・ハーネス・インプリメ・ラ
+  デュラシオン メディア y エル テクノ デ バイト リザーバド (`max_parallel = 3`、`peak_reserved_bytes <= 196608`)。
 
-Example summary line:
+概要行の例:
 
 ```
 JS orchestrator parity: duration_ms=187.42 total_bytes=1048576 max_parallel=3 peak_reserved_bytes=196608
 ```
 
-## Swift SDK Harness
+## Swift SDK ハーネス
 
-- **Command:** `swift test --package-path IrohaSwift --filter SorafsOrchestratorParityTests/testLocalFetchParityIsDeterministic`
-- **Scope:** Ejecuta la suite de paridad definida en `IrohaSwift/Tests/IrohaSwiftTests/SorafsOrchestratorParityTests.swift`,
-  reproduciendo el fixture SF1 dos veces a traves del bridge Norito (`sorafsLocalFetch`). El harness
-  verifica bytes de payload, chunk receipts, provider reports y entradas de scoreboard usando la
-  misma provider metadata deterministica y telemetry snapshots que las suites Rust/JS.
-- **Bridge bootstrap:** El harness descomprime `dist/NoritoBridge.xcframework.zip` bajo demanda y carga
-  el slice macOS via `dlopen`. Si el xcframework falta o no tiene bindings SoraFS, hace fallback a
-  `cargo build -p connect_norito_bridge --release` y linkea contra
-  `target/release/libconnect_norito_bridge.dylib`, sin setup manual en CI.
-- **Performance guard:** Cada ejecucion debe terminar en 2 s en hardware CI; el harness imprime la
-  duracion medida y el techo de bytes reservados (`max_parallel = 3`, `peak_reserved_bytes <= 196608`).
+- **コマンド:** `swift test --package-path IrohaSwift --filter SorafsOrchestratorParityTests/testLocalFetchParityIsDeterministic`
+- **範囲:** `IrohaSwift/Tests/IrohaSwiftTests/SorafsOrchestratorParityTests.swift` の定義済みファイルの出力、
+  SF1 フィクスチャを再現し、ブリッジ Norito (`sorafsLocalFetch`) を移動します。エルハーネス
+  ペイロードのバイト検証、チャンク受信、プロバイダー レポート、スコアボードのエントリの確認
+  Missma プロバイダーのメタデータは、Rust/JS スイートのテレメトリ スナップショットを決定します。
+- **ブリッジ ブートストラップ:** エル ハーネス ディスコンプライム `dist/NoritoBridge.xcframework.zip` バホ デマンダ y カーガ
+  `dlopen` 経由で macOS をスライスします。 xcframework falta にバインディング SoraFS がありません。フォールバックがあります。
+  `cargo build -p connect_norito_bridge --release` y リンクケア コントラ
+  `target/release/libconnect_norito_bridge.dylib`、CI セットアップ マニュアル。
+- **パフォーマンス ガード:** ハードウェア CI での 2 秒間の Cada の取り出しエル・ハーネス・インプリメ・ラ
+  デュラシオン メディア y エル テクノ デ バイト リザーバド (`max_parallel = 3`、`peak_reserved_bytes <= 196608`)。
 
-Example summary line:
+概要行の例:
 
 ```
 Swift orchestrator parity: duration_ms=183.54 total_bytes=1048576 max_parallel=3 peak_reserved_bytes=196608
 ```
 
-## Python Bindings Harness
+## Python バインディング ハーネス
 
-- **Command:** `python -m pytest python/iroha_python/tests/test_sorafs_orchestrator.py -k multi_fetch_fixture_round_trip`
-- **Scope:** Ejecuta el wrapper de alto nivel `iroha_python.sorafs.multi_fetch_local` y sus dataclasses
-  tipadas para que el fixture canonico fluya por la misma API que consumen los wheels. El test
-  reconstruye provider metadata desde `providers.json`, inyecta la telemetry snapshot y verifica
-  bytes de payload, chunk receipts, provider reports y contenido del scoreboard igual que las
-  suites Rust/JS/Swift.
-- **Pre-req:** Ejecuta `maturin develop --release` (o instala el wheel) para que `_crypto` exponga el
-  binding `sorafs_multi_fetch_local` antes de invocar pytest; el harness se auto-salta cuando el
-  binding no esta disponible.
-- **Performance guard:** El mismo presupuesto <= 2 s que la suite Rust; pytest registra el conteo de
-  bytes ensamblados y el resumen de participacion de providers para el artefacto de release.
+- **コマンド:** `python -m pytest python/iroha_python/tests/test_sorafs_orchestrator.py -k multi_fetch_fixture_round_trip`
+- **スコープ:** `iroha_python.sorafs.multi_fetch_local` および SUS データクラスの詳細なラッパーの取り出し
+  ティパダパラケエルフィクスチャカノニコフルヤポルラミスマAPIケ消費ロスホイール。エルテスト
+  `providers.json` のプロバイダー メタデータを再構築し、テレメトリ スナップショットと検証を実行
+  ペイロードのバイト数、チャンク受信、プロバイダーレポートとスコアボードの内容
+  Rust/JS/Swift スイート。
+- **事前要件:** Ejecuta `maturin develop --release` (ホイールの取り付け) para que `_crypto` exponga el
+  バインディング `sorafs_multi_fetch_local` 呼び出し元の pytest;エル ハーネス SE オート サルタクアンド エル
+  エスタに拘束力はありません。
+- **パフォーマンス ガード:** エル ミスモ プレスプエスト <= 2 秒以内、Rust; pytest レジストラ エル コンテオ
+  リリースに関連するプロバイダーの参加を再開するバイト数。
 
-El release gating debe capturar el summary output de cada harness (Rust, Python, JS, Swift) para que
-el reporte archivado pueda comparar receipts de payload y metricas de forma uniforme antes de
-promover un build. Ejecuta `ci/sdk_sorafs_orchestrator.sh` para correr cada suite de paridad
-(Rust, Python bindings, JS, Swift) en una sola pasada; los artefactos de CI deben adjuntar el
-extracto de log de ese helper mas el `matrix.md` generado (tabla de SDK/estado/duracion) al ticket
-release para que los reviewers auditen la matriz de paridad sin reejecutar la suite localmente.
+リリース ゲーティング デベ キャプチャ、サマリー出力、ハードウェア ハーネス (Rust、Python、JS、Swift) パラメータ
+ペイロードとメトリクスの領収書を比較し、均一な形式でレポートを保存します。
+プロムーバーを構築しません。 Ejecuta `ci/sdk_sorafs_orchestrator.sh` パラグラフ スイート デ パリダ
+(Rust、Python バインディング、JS、Swift) を使用してください。ロス・アーティファクトス・デ・CI デベン・アジャンタル・エル
+ヘルパー マス エル `matrix.md` ジェネラド (SDK/エスタド/デュラシオンのタブ) のチケットを抽出します。
+リリースパラケロスレビュアーは、ローカルのスイートでマトリスデパリダーを監査します。

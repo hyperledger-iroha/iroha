@@ -6,40 +6,41 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: c5fe52a907606a67a09e0ff229adb94f91dda73d809d8a8344166862dc62def9
 source_last_modified: "2026-01-03T18:07:57.090255+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-//! Template for recording SM rollout decisions during Crypto WG syncs.
+//! Modelo para registrar decisões de implementação de SM durante sincronizações do Crypto WG.
 
-# SM Rollout – WG Sync Notes (Template)
+# Implementação SM – Notas de sincronização WG (modelo)
 
-- **Date:** 2025-__-__
-- **Participants:** Crypto WG core, Release Eng, Security Review, SDK leads
-- **Facilitator:** ___________________
+- **Data:** 2025-__-__
+- **Participantes:** núcleo do Crypto WG, engenheiro de lançamento, revisão de segurança, líderes de SDK
+- **Facilitador:** ___________________
 
-## Agenda
-1. Lock refresh approval (`sm_lock_refresh_plan.md`)
-2. Deterministic policy & config knobs (SM-1/SM-3 tasks)
-3. Compliance brief status (SM-6a complete) & operator checklist updates (SM-6b)
-4. Dependency audit reviewers for `sm2`, `sm3`, `sm4`, `rfc6979`
+##Agenda
+1. Bloquear aprovação de atualização (`sm_lock_refresh_plan.md`)
+2. Política determinística e botões de configuração (tarefas SM-1/SM-3)
+3. Status do resumo de conformidade (SM-6a completo) e atualizações da lista de verificação do operador (SM-6b)
+4. Revisores de auditoria de dependência para `sm2`, `sm3`, `sm4`, `rfc6979`
 
-## Decisions
-- [ ] Lock refresh approved? Details:
-- [ ] Deterministic policy affirmed? Notes:
-- [ ] Compliance brief owner + due date:
-- [ ] Audit reviewers assigned:
+## Decisões
+- [] Atualização de bloqueio aprovada? Detalhes:
+- [ ] Política determinista afirmada? Notas:
+- [ ] Proprietário do resumo de conformidade + data de vencimento:
+- [ ] Revisores de auditoria designados:
 
-## Action Items
-| Item | Owner | Due | Status |
+## Itens de ação
+| Artigo | Proprietário | Vencimento | Estado |
 |------|-------|-----|--------|
-| Prepare Cargo.lock PR after approval | Release Eng | ████ | ☐ |
-| Verify Annex D OpenSSL checks | Crypto WG | ████ | ☐ |
-| Track compliance brief revisions & operator checklist addenda | Docs/Legal | ████ | ☐ |
+| Preparar Cargo.lock PR após aprovação | Liberação Eng | ████ | ☐ |
+| Verifique as verificações do OpenSSL do Anexo D | GT de criptografia | ████ | ☐ |
+| Rastreie revisões breves de conformidade e adendos à lista de verificação do operador | Documentos/Jurídico | ████ | ☐ |
 
-## Notes / Risks
+## Notas/Riscos
 - _______________________________
 - _______________________________
 
-## Follow-up
-- Next review date:
-- Reporting back channel:
+## Acompanhamento
+- Próxima data de revisão:
+- Canal de reporte:

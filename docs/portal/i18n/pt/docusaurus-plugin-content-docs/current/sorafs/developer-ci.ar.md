@@ -4,24 +4,26 @@ direction: ltr
 source: docs/portal/docs/sorafs/developer-ci.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: developer-ci
-title: وصفات CI لـ SoraFS
-sidebar_label: وصفات CI
-description: شغّل واجهة SoraFS CLI داخل خطوط أنابيب GitHub وGitLab مع توقيع دون مفاتيح.
+id: desenvolvedor-ci
+título: CI para SoraFS
+sidebar_label: Nome CI
+description: Use o SoraFS CLI para usar o GitHub e o GitLab no seu computador.
 ---
 
 :::note المصدر المعتمد
-تعكس هذه الصفحة `docs/source/sorafs/developer/ci.md`. احرص على إبقاء النسختين متزامنتين إلى أن يتم إيقاف الوثائق القديمة.
+Verifique o valor `docs/source/sorafs/developer/ci.md`. Certifique-se de que o produto esteja mais limpo do que o normal.
 :::
 
 # وصفات CI
 
-تستفيد خطوط أنابيب SoraFS من التجزئة الحتمية، وتوقيع المانيفست، والتحقق من الأدلة. يحافظ سطح أوامر
-`sorafs_cli` على قابلية نقل تلك الخطوات بين مزودي CI. تسلط هذه الصفحة الضوء على الوصفات المعتمدة وتشير
-إلى قوالب جاهزة للاستخدام.
+Verifique se o SoraFS está localizado no local de trabalho e no local. يحافظ سطح أوامر
+`sorafs_cli` não é compatível com CI. تسلط هذه الصفحة الضوء على الوصفات المعتمدة وتشير
+Isso é o que você precisa fazer.
 
 ## GitHub Actions (بدون مفاتيح)
 
@@ -96,13 +98,13 @@ jobs:
           path: artifacts/
 ```
 
-نقاط أساسية:
+Como funciona:
 
-- لا تُخزَّن مفاتيح توقيع ثابتة؛ تُجلب رموز OIDC عند الطلب.
-- تُرفع الآرتيفاكتات (CAR، المانيفست، الحزمة، ملخصات الأدلة) للمراجعة.
-- تعيد المهمة استخدام مخططات Norito نفسها المستخدمة في عمليات الإطلاق الإنتاجية.
+- لا تُخزَّن مفاتيح توقيع ثابتة؛ Verifique o valor OIDC.
+- تُرفع الآرتيفاكتات (CAR, المانيفست, الحزمة, ملخصات الأدلة) للمراجعة.
+- Verifique se o dispositivo Norito está instalado no local onde está instalado.
 
-## GitLab CI
+## CI do GitLab
 
 ```yaml
 stages:
@@ -136,12 +138,12 @@ sorafs:publish:
       - artifacts/
 ```
 
-- زوّد `SIGSTORE_ID_TOKEN` عبر اتحاد هوية workload في GitLab أو سر مختوم قبل تنفيذ مرحلة النشر.
-- يؤدي فشل أي خطوة في CLI إلى إيقاف خط الأنابيب، مع الحفاظ على آرتيفاكتات متسقة.
+- O `SIGSTORE_ID_TOKEN` transfere a carga de trabalho para o GitLab ou para o sistema operacional.
+- Você pode usar o CLI para obter mais informações.
 
 ## موارد إضافية
 
-- قوالب end-to-end (تتضمن مساعدات Bash، وإعداد هوية اتحادية، وخطوات تنظيف): `docs/examples/sorafs_ci.md`
+- Método de ponta a ponta (تتضمن مساعدات Bash, وإعداد هوية اتحادية, وخطوات تنظيف): `docs/examples/sorafs_ci.md`
 - مرجع CLI الذي يغطي كل الخيارات: `docs/source/sorafs_cli.md`
 - متطلبات الحوكمة/الأسماء المستعارة قبل الإرسال:
   `docs/source/sorafs/provider_admission_policy.md`

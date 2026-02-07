@@ -7,13 +7,14 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 59948351a84b27efe0d9741545d8f93c7525fa5f545605a0942d9f2f574f6f06
 source_last_modified: "2025-12-29T18:16:35.072823+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Docs Portal Preview Access Request (Template)
+# 文檔門戶預覽訪問請求（模板）
 
-Use this template when capturing reviewer details before granting access to the
-public preview environment. Copy the markdown into an issue or request form and
-replace the placeholder values.
+在授予訪問權限之前捕獲審閱者詳細信息時，請使用此模板
+公共預覽環境。將 markdown 複製到問題或請求表中，然後
+替換佔位符值。
 
 ```markdown
 ## Request Summary
@@ -44,9 +45,9 @@ replace the placeholder values.
 
 ---
 
-## Community-Specific Questions (W2+)
-- Motivation for preview access (one sentence):
-- Primary review focus (SDK, governance, Norito, SoraFS, other):
-- Weekly time commitment & availability window (UTC):
-- Localization or accessibility needs (yes/no + details):
-- Community Code of Conduct + preview acceptable-use addendum acknowledged (yes/no):
+## 社區特定問題 (W2+)
+- 預覽訪問的動機（一句話）：
+- 主要審查重點（SDK、治理、Norito、SoraFS、其他）：
+- 每週時間承諾和可用窗口（UTC）：
+- 本地化或可訪問性需求（是/否+詳細信息）：
+- 社區行為準則 + 預覽可接受使用附錄已確認（是/否）：

@@ -11,18 +11,19 @@ id: staging-manifest-playbook
 title: Staging Manifest Playbook
 sidebar_label: Staging Manifest Playbook
 description: Checklist for enabling the Parliament-ratified chunker profile on staging Torii deployments.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
+:::ескерту Канондық дереккөз
 :::
 
-## Overview
+## Шолу
 
-This playbook walks through enabling the Parliament-ratified chunker profile on a staging Torii deployment before promoting the change to production. It assumes the SoraFS governance charter has been ratified and the canonical fixtures are available in the repository.
+Бұл оқу кітапшасы өндіріске өзгертуді алға жылжытпас бұрын, Torii кезеңдік орналастыруында парламент ратификациялаған chunker профилін қосу арқылы жүреді. Ол SoraFS басқару жарғысы ратификацияланды және канондық құрылғылар репозиторийде қолжетімді деп болжайды.
 
-## 1. Prerequisites
+## 1. Пререквизиттер
 
-1. Sync the canonical fixtures and signatures:
+1. Канондық құрылғылар мен қолтаңбаларды синхрондаңыз:
 
    ```bash
    cargo xtask sorafs-fetch-fixture \
@@ -31,8 +32,8 @@ This playbook walks through enabling the Parliament-ratified chunker profile on 
    ci/check_sorafs_fixtures.sh
    ```
 
-2. Prepare the admission envelope directory that Torii will read at startup (example path): `/var/lib/iroha/admission/sorafs`.
-3. Ensure the Torii config enables the discovery cache and admission enforcement:
+2. Torii іске қосу кезінде оқитын қабылдау конверті каталогын дайындаңыз (мысал жолы): `/var/lib/iroha/admission/sorafs`.
+3. Torii конфигурациясының табу кэшіне және рұқсатты орындауға мүмкіндік беретініне көз жеткізіңіз:
 
    ```toml
    [torii.sorafs.discovery]
@@ -50,43 +51,43 @@ This playbook walks through enabling the Parliament-ratified chunker profile on 
    enforce_capabilities = true
    ```
 
-## 2. Publish Admission Envelopes
+## 2. Қабылдау конверттерін жариялау
 
-1. Copy the approved provider admission envelopes into the directory referenced by `torii.sorafs.discovery.admission.envelopes_dir`:
+1. `torii.sorafs.discovery.admission.envelopes_dir` сілтемесі бар анықтамалыққа провайдердің рұқсат беру хатқалталарын көшіріңіз:
 
    ```bash
    install -m 0644 fixtures/sorafs_manifest/provider_admission/*.json \
      /var/lib/iroha/admission/sorafs/
    ```
 
-2. Restart Torii (or send a SIGHUP if you wrapped the loader with on-the-fly reload).
-3. Tail the logs for admission messages:
+2. Torii қайта іске қосыңыз (немесе жүктегішті жедел қайта жүктеу арқылы ораған болсаңыз, SIGHUP жіберіңіз).
+3. Қабылдау хабарлары үшін журналдарды орналастырыңыз:
 
    ```bash
    torii | grep "loaded provider admission envelope"
    ```
 
-## 3. Validate Discovery Propagation
+## 3. Ашылу таралуын тексеру
 
-1. Post the signed provider advert payload (Norito bytes) produced by your
-   provider pipeline:
+1. Қол қойылған провайдер жарнамасының пайдалы жүктемесін (Norito байт) жіберіңіз.
+   провайдер құбыры:
 
    ```bash
    curl -sS -X POST --data-binary @provider_advert.to \
      http://staging-torii:8080/v1/sorafs/provider/advert
    ```
 
-2. Query the discovery endpoint and confirm the advert appears with canonical aliases:
+2. Табудың соңғы нүктесін сұраңыз және жарнаманың канондық бүркеншік аттармен көрсетілетінін растаңыз:
 
    ```bash
    curl -sS http://staging-torii:8080/v1/sorafs/providers | jq .
    ```
 
-   Ensure `profile_aliases` includes `"sorafs.sf1@1.0.0"` as the first entry.
+   `profile_aliases` бірінші жазба ретінде `"sorafs.sf1@1.0.0"` қосылғанына көз жеткізіңіз.
 
-## 4. Exercise Manifest & Plan Endpoints
+## 4. Жаттығу манифесті және соңғы нүктелерді жоспарлаңыз
 
-1. Fetch the manifest metadata (requires a stream token if admission is enforced):
+1. Манифест метадеректерін алыңыз (егер рұқсат күшіне енсе, ағын таңбалауышы қажет):
 
    ```bash
    sorafs-fetch \
@@ -97,25 +98,25 @@ This playbook walks through enabling the Parliament-ratified chunker profile on 
      --json-out=reports/staging_manifest.json
    ```
 
-2. Inspect the JSON output and verify:
-   - `chunk_profile_handle` is `sorafs.sf1@1.0.0`.
-   - `manifest_digest_hex` matches the determinism report.
-   - `chunk_digests_blake3` align with the regenerated fixtures.
+2. JSON шығысын тексеріңіз және мынаны тексеріңіз:
+   - `chunk_profile_handle` — `sorafs.sf1@1.0.0`.
+   - `manifest_digest_hex` детерминизм есебіне сәйкес келеді.
+   - `chunk_digests_blake3` қалпына келтірілген құрылғылармен туралаңыз.
 
-## 5. Telemetry Checks
+## 5. Телеметриялық тексерулер
 
-- Confirm Prometheus exposes the new profile metrics:
+- Prometheus жаңа профиль көрсеткіштерін көрсететінін растаңыз:
 
   ```bash
   curl -sS http://staging-torii:8080/metrics | grep torii_sorafs_chunk_range_requests_total
   ```
 
-- Dashboards should show the staging provider under the expected alias and keep brownout counters at zero while the profile is active.
+- Бақылау тақталары күтілетін бүркеншік аттың астындағы кезеңдік провайдерді көрсетуі және профиль белсенді болған кезде өшіру есептегіштерін нөлде ұстауы керек.
 
-## 6. Rollout Readiness
+## 6. Шығаруға дайындық
 
-1. Capture a short report with the URLs, manifest ID, and telemetry snapshot.
-2. Share the report in the Nexus rollout channel alongside the planned production activation window.
-3. Proceed to the production checklist (Section 4 in `chunker_registry_rollout_checklist.md`) once stakeholders sign off.
+1. URL мекенжайлары, манифест идентификаторы және телеметрия суреті бар қысқа есепті түсіріңіз.
+2. Жоспарланған өндірісті белсендіру терезесімен қатар Nexus шығару арнасында есепті бөлісіңіз.
+3. Мүдделі тараптар қол қойғаннан кейін өндірісті тексеру тізіміне өтіңіз (`chunker_registry_rollout_checklist.md` ішіндегі 4-бөлім).
 
-Keeping this playbook updated ensures every chunker/admission rollout follows the same deterministic steps across staging and production.
+Осы ойын кітабын жаңартылған күйде ұстау әрбір chunker/қабылдау релизінің кезең мен өндірісте бірдей детерминирленген қадамдарды орындайтынын қамтамасыз етеді.

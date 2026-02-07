@@ -4,102 +4,98 @@ direction: rtl
 source: docs/portal/docs/sorafs/provider-advert-multisource.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Adverts de provedores multi-origem e agendamento
+# إعلانات ثبت متعددة الأصول والأجندة
 
-Esta pagina resume a especificacao canonica em
+هذه الصفحة تستأنف ملفًا قانونيًا محددًا
 [`docs/source/sorafs/provider_advert_multisource.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/provider_advert_multisource.md).
-Use esse documento para schemas Norito verbatim e changelogs; a copia do portal
-mantem a orientacao para operadores, notas de SDK e referencias de telemetria perto do restante
-dos runbooks SoraFS.
+استخدم هذا المستند للمخططات Norito حرفيًا وسجلات التغيير؛ نسخة تفعل البوابة
+حماية توجيه المشغلين وملاحظات SDK ومراجع القياس عن بعد الخاصة بالباقي
+دوس رونبوكس SoraFS.
 
 ## Adicoes ao esquema Norito
 
-### Range capability (`CapabilityType::ChunkRangeFetch`)
-- `max_chunk_span` - maior span continuo (bytes) por requisicao, `>= 1`.
-- `min_granularity` - resolucao de seek, `1 <= valor <= max_chunk_span`.
-- `supports_sparse_offsets` - permite offsets nao contiguos em uma requisicao.
-- `requires_alignment` - quando true, offsets devem alinhar com `min_granularity`.
-- `supports_merkle_proof` - indica suporte a testemunhas PoR.
+### قدرة النطاق (`CapabilityType::ChunkRangeFetch`)
+- `max_chunk_span` - أكبر امتداد متواصل (بايت) حسب الحاجة، `>= 1`.
+- `min_granularity` - حل البحث، `1 <= valor <= max_chunk_span`.
+- `supports_sparse_offsets` - يسمح بإزاحة أي جزء مجاور مطلوب.
+- `requires_alignment` - عندما يكون صحيحًا، يتم الإزاحة من خلال `min_granularity`.
+- `supports_merkle_proof` - يشير إلى دعم testemunhas PoR.
 
-`ProviderCapabilityRangeV1::to_bytes` / `from_bytes` aplicam encoding canonico
-para que payloads de gossip permanecam deterministas.
+`ProviderCapabilityRangeV1::to_bytes` / `from_bytes` تشفير تطبيق كانونيكو
+من أجل تحديد حمولات القيل والقال بشكل دائم.
 
-### `StreamBudgetV1`
-- Campos: `max_in_flight`, `max_bytes_per_sec`, `burst_bytes` opcional.
+###`StreamBudgetV1`
+- الحرم الجامعي: `max_in_flight`، `max_bytes_per_sec`، `burst_bytes` اختياري.
 - Regras de validacao (`StreamBudgetV1::validate`):
-  - `max_in_flight >= 1`, `max_bytes_per_sec > 0`.
-  - `burst_bytes`, quando presente, deve ser `> 0` e `<= max_bytes_per_sec`.
+  - `max_in_flight >= 1`، `max_bytes_per_sec > 0`.
+  - `burst_bytes`، عند التقديم، يجب أن يكون `> 0` و`<= max_bytes_per_sec`.
 
-### `TransportHintV1`
-- Campos: `protocol: TransportProtocol`, `priority: u8` (janela 0-15 aplicada por
+###`TransportHintV1`
+- الحرم الجامعي: `protocol: TransportProtocol`، `priority: u8` (السنة 0-15 مطبقة
   `TransportHintV1::validate`).
-- Protocolos conhecidos: `torii_http_range`, `quic_stream`, `soranet_relay`,
+- البروتوكولات المحددة: `torii_http_range`، `quic_stream`، `soranet_relay`،
   `vendor_reserved`.
-- Entradas duplicadas de protocolo por provedor sao rejeitadas.
+- الإدخالات المكررة للبروتوكول من قبل مقدم الطلب.### أديكويس `ProviderAdvertBodyV1`
+- `stream_budget` اختياري: `Option<StreamBudgetV1>`.
+- `transport_hints` اختياري: `Option<Vec<TransportHintV1>>`.
+- Ambos os Campos Agora passam por `ProviderAdmissionProposalV1`، مغلفات الحكم،
+  تركيبات CLI وJSON للقياس عن بعد.
 
-### Adicoes a `ProviderAdvertBodyV1`
-- `stream_budget` opcional: `Option<StreamBudgetV1>`.
-- `transport_hints` opcional: `Option<Vec<TransportHintV1>>`.
-- Ambos os campos agora passam por `ProviderAdmissionProposalV1`, envelopes de governanca,
-  fixtures de CLI e JSON de telemetria.
+## Validacao e vinculacao com Governoranca
 
-## Validacao e vinculacao com governanca
+`ProviderAdvertBodyV1::validate` و`ProviderAdmissionProposalV1::validate`
+بيانات تعريف rejeitam مشوهة:
 
-`ProviderAdvertBodyV1::validate` e `ProviderAdmissionProposalV1::validate`
-rejeitam metadata malformada:
+- يمكن لإمكانات النطاق فك التشفير واحتساب حدود النطاق/الحجم التفصيلي.
+- تدفق الميزانيات / تلميحات النقل exigem um TLV `CapabilityType::ChunkRangeFetch`
+  مراسل وقائمة تلميحات لا فازيا.
+- بروتوكولات النقل المكررة والأولويات غير الصالحة تنطوي على أخطاء في التحقق
+  قبل الإعلانات Serem ثرثرة.
+- مغلفات القبول مقارنة الاقتراحات/الإعلانات لمجموعة البيانات الوصفية عبر
+  `compare_core_fields` حتى يتم الرد على حمولات القيل والقال المتباينة.
 
-- Range capabilities devem decodificar e cumprir limites de span/granularidade.
-- Stream budgets / transport hints exigem um TLV `CapabilityType::ChunkRangeFetch`
-  correspondente e lista de hints nao vazia.
-- Protocolos de transporte duplicados e prioridades invalidas geram erros de validacao
-  antes de adverts serem gossiped.
-- Admission envelopes comparam proposal/adverts para metadata de range via
-  `compare_core_fields` para que payloads de gossip divergentes sejam rejeitados cedo.
-
-A cobertura de regressao vive em
+تغطية التراجع في الحياة
 `crates/sorafs_manifest/src/{provider_advert,provider_admission}.rs`.
 
-## Tooling e fixtures
+## تركيبات الأدوات- تتضمن حمولات الإعلانات المثبتة البيانات الوصفية `range_capability`،
+  `stream_budget` و`transport_hints`. صالحة عبر ردود `/v1/sorafs/providers`
+  تركيبات القبول الإلكترونية. تتضمن ملفات JSON إمكانية التحليل أو الدفق
+  الميزانية ومصفوفات التلميحات لاستيعاب القياس عن بعد.
+- `cargo xtask sorafs-admission-fixtures` يعرض الميزانيات وتلميحات النقل في الداخل
+  تحتوي على ملفات JSON المصطنعة الخاصة بها حتى تصاحب لوحات المعلومات هذه الميزة.
+- تتضمن التركيبات `fixtures/sorafs_manifest/provider_admission/` أغورا:
+  - إعلانات canonicos متعددة الأصول،
+  - `multi_fetch_plan.json` لإعادة إنشاء خطة جلب من مجموعات SDK
+    حتمية متعددة الأقران
 
-- Payloads de adverts de provedor devem incluir metadata `range_capability`,
-  `stream_budget` e `transport_hints`. Valide via respostas de `/v1/sorafs/providers`
-  e admission fixtures; resumos JSON devem incluir a capability parseada, o stream
-  budget e arrays de hints para ingestao de telemetria.
-- `cargo xtask sorafs-admission-fixtures` mostra stream budgets e transport hints dentro
-  de seus artefatos JSON para que dashboards acompanhem a adocao da feature.
-- Fixtures sob `fixtures/sorafs_manifest/provider_admission/` agora incluem:
-  - adverts multi-origem canonicos,
-  - `multi_fetch_plan.json` para que suites de SDK reproduzam um plano de fetch
-    multi-peer deterministico.
+## التكامل مع الأوركسترا e Torii
 
-## Integracao com orchestrator e Torii
+- Torii `/v1/sorafs/providers` يعيد تحليل البيانات الوصفية للنطاق إلى جانب com
+  `stream_budget` و`transport_hints`. تحذيرات التخفيض عند حدوث ذلك
+  يقوم الباحثون بحذف البيانات الوصفية الجديدة، كما يتم تطبيق البوابة على نقاط نهاية النطاق
+  القيود المفروضة على العملاء مباشرة.
+- يا مُنسق متعدد الأصول (`sorafs_car::multi_fetch`) الآن يتم تطبيقه بحدود
+  النطاق، وتعزيز القدرات، وتدفق الميزانيات من خلال العمل. وحدة
+  تتضمن الاختبارات سيناريوهات كبيرة جدًا ومتناثرة واختناق.
+- `sorafs_car::multi_fetch` إرسال خط الانحدار (falhas de alinhamento،
+  المتطلبات المخفضة) لكي يتمكن المشغلون من تحديد مقدمي الخدمات المحددين
+  للجهلاء أثناء التخطيط.
 
-- Torii `/v1/sorafs/providers` retorna metadata de range parseada junto com
-  `stream_budget` e `transport_hints`. Avisos de downgrade disparam quando
-  provedores omitem a nova metadata, e endpoints de range do gateway aplicam as
-  mesmas restricoes para clientes diretos.
-- O orchestrator multi-origem (`sorafs_car::multi_fetch`) agora aplica limites de
-  range, alinhamento de capabilities e stream budgets ao atribuir trabalho. Unit
-  tests cobrem cenarios de chunk muito grande, sparse-seek e throttling.
-- `sorafs_car::multi_fetch` transmite sinais de downgrade (falhas de alinhamento,
-  requisicoes throttled) para que operadores rastreiem por que provedores especificos
-  foram ignorados durante o planejamento.
+## مرجع القياس عن بعدمجموعة أدوات الجلب Torii للطعام أو لوحة القيادة Grafana
+**SoraFS جلب إمكانية الملاحظة** (`dashboards/grafana/sorafs_fetch_observability.json`) e
+كأنظمة التنبيه المرتبطة (`dashboards/alerts/sorafs_fetch_rules.yml`).
 
-## Referencia de telemetria
-
-A instrumentacao de range fetch de Torii alimenta o dashboard Grafana
-**SoraFS Fetch Observability** (`dashboards/grafana/sorafs_fetch_observability.json`) e
-as regras de alerta associadas (`dashboards/alerts/sorafs_fetch_rules.yml`).
-
-| Metrica | Tipo | Labels | Descricao |
+| متريكا | تيبو | التسميات | وصف |
 |---------|------|--------|-----------|
-| `torii_sorafs_provider_range_capability_total` | Gauge | `feature` (`providers`, `supports_sparse_offsets`, `requires_alignment`, `supports_merkle_proof`, `stream_budget`, `transport_hints`) | Provedores que anunciam features de range capability. |
-| `torii_sorafs_range_fetch_throttle_events_total` | Counter | `reason` (`quota`, `concurrency`, `byte_rate`) | Tentativas de range fetch throttled agrupadas por politica. |
-| `torii_sorafs_range_fetch_concurrency_current` | Gauge | - | Streams ativos protegidos consumindo o budget compartilhado de concorrencia. |
+| `torii_sorafs_provider_range_capability_total` | مقياس | `feature` (`providers`، `supports_sparse_offsets`، `requires_alignment`، `supports_merkle_proof`، `stream_budget`، `transport_hints`) | Provedores que anunciam Features دي مجموعة القدرة. |
+| `torii_sorafs_range_fetch_throttle_events_total` | عداد | `reason` (`quota`، `concurrency`، `byte_rate`) | مجموعة المتدربين تجلب خنقًا سياسيًا. |
+| `torii_sorafs_range_fetch_concurrency_current` | مقياس | - | تدفقات الأنشطة المحمية التي تستهلك أو مشاركة الميزانية في المطابقة. |
 
-Exemplos de PromQL:
+أمثلة على PromQL:
 
 ```promql
 sum(rate(torii_sorafs_range_fetch_throttle_events_total[5m])) by (reason)
@@ -107,6 +103,6 @@ max(torii_sorafs_range_fetch_concurrency_current)
 torii_sorafs_provider_range_capability_total
 ```
 
-Use o contador de throttling para confirmar a aplicacao de quotas antes de ativar
-aos defaults do orchestrator multi-origem e alerte quando a concorrencia se aproximar
-dos maximos do stream budget da sua frota.
+استخدم أداة التحكم في الاختناق لتأكيد تطبيق الحصص قبل التنشيط
+الإعدادات الافتراضية لـ AOS تقوم بتنبيه منسق متعدد الأصول عند التزامن تقريبًا
+الحد الأقصى هو تدفق الميزانية من البداية.

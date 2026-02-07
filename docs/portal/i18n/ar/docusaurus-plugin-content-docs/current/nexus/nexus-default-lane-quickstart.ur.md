@@ -4,33 +4,35 @@ direction: rtl
 source: docs/portal/docs/nexus/nexus-default-lane-quickstart.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: nexus-default-lane-quickstart
-title: default lane کوئیک اسٹارٹ (NX-5)
-sidebar_label: default lane کوئیک اسٹارٹ
-description: Nexus کے default lane fallback کو configure اور verify کریں تاکہ Torii اور SDKs public lanes میں lane_id omit کر سکیں۔
+المعرف: nexus-default-lane-quickstart
+العنوان: المسار الافتراضي کوئیک استارتٹ (NX-5)
+Sidebar_label: المسار الافتراضي کوئیک استايرٹ
+الوصف: Nexus هو المسار الاحتياطي الافتراضي لتكوين المسار الاحتياطي Torii وSDK والممرات العامة لحذف معرف المسار.
 ---
 
-:::note Canonical Source
-یہ صفحہ `docs/source/quickstart/default_lane.md` کی عکاسی کرتا ہے۔ جب تک localization sweep پورٹل تک نہیں پہنچتی، دونوں کاپیوں کو aligned رکھیں۔
+:::ملاحظة المصدر الكنسي
+هذه هي الصفحة `docs/source/quickstart/default_lane.md`. عندما لا تكتمل عملية اكتساح التوطين، لا يتم محاذاة الفيديو بالكامل.
 :::
 
-# default lane کوئیک اسٹارٹ (NX-5)
+# المسار الافتراضي کوئیک استارتٹ (NX-5)
 
-> **Roadmap context:** NX-5 - default public lane integration۔ runtime اب `nexus.routing_policy.default_lane` fallback ظاہر کرتا ہے تاکہ Torii REST/gRPC endpoints اور ہر SDK اس وقت `lane_id` محفوظ طریقے سے omit کر سکیں جب ٹریفک canonical public lane سے تعلق رکھتا ہو۔ یہ گائیڈ operators کو catalog configure کرنے، `/status` میں fallback verify کرنے، اور end-to-end client behavior exercise کرنے میں رہنمائی کرتی ہے۔
+> **سياق خريطة الطريق:** NX-5 - تكامل المسار العام الافتراضي۔ وقت التشغيل هو `nexus.routing_policy.default_lane` الاحتياطي وحدد نقاط النهاية Torii REST/gRPC وSDK `lane_id` التي تم حذفها من خلال المسار العام الأساسي سے تعلق رکھتا ہو۔ يقوم مشغلو هذه الأجهزة بتكوين السجل، `/status`، والتحقق الاحتياطي من السجل، وممارسة سلوك العميل الشامل.
 
-## Prerequisites
+## المتطلبات الأساسية
 
-- `irohad` کا Sora/Nexus build ( `irohad --sora --config ...` چلائیں ).
-- configuration repository تک رسائی تاکہ `nexus.*` sections edit کیے جا سکیں۔
-- `iroha_cli` جو target cluster سے بات کرنے کے لئے configured ہو۔
-- Torii `/status` payload inspect کرنے کے لئے `curl`/`jq` (یا equivalent).
+- `irohad` کا Sora/Nexus build ( `irohad --sora --config ...` چلایں ).
+- مستودع التكوين يقوم بتحرير الأقسام `nexus.*` إلى أي مكان.
+- `iroha_cli` تم تكوين المجموعة المستهدفة جو.
+- Torii `/status` فحص الحمولة الصافية `curl`/`jq` (أو ما يعادلها).
 
-## 1. lane اور dataspace catalog بیان کریں
+## 1. كتالوج الممرات ومساحة البيانات
 
-network پر موجود ہونے والے lanes اور dataspaces کو declare کریں۔ نیچے والا snippet (`defaults/nexus/config.toml` سے) تین public lanes اور matching dataspace aliases register کرتا ہے:
+يتم الإعلان عن شبكة متاحة عبر الممرات ومساحات البيانات. نیچے ولا مقتطف (`defaults/nexus/config.toml` سے) تسجيل هذه الممرات العامة والأسماء المستعارة لمساحة البيانات المطابقة:
 
 ```toml
 [nexus]
@@ -73,11 +75,11 @@ description = "Zero-knowledge proofs and attachments"
 fault_tolerance = 1
 ```
 
-ہر `index` منفرد اور contiguous ہونا چاہیے۔ Dataspace ids 64-bit values ہیں؛ اوپر والے مثالیں وضاحت کے لئے lane indexes کے برابر numeric values استعمال کرتی ہیں۔
+ہر `index` منفردة ومتجاورة ہونا چاہیے. معرفات مساحة البيانات قيم 64 بت؛ استخدم المثال السابق ووضح فهارس الممرات لاستخدام القيم الرقمية.
 
-## 2. routing defaults اور optional overrides سیٹ کریں
+## 2. إعدادات التوجيه الافتراضية والتجاوزات الاختيارية
 
-`nexus.routing_policy` سیکشن fallback lane کو control کرتا ہے اور مخصوص instructions یا account prefixes کے لئے routing override کرنے دیتا ہے۔ اگر کوئی rule match نہ کرے تو scheduler ٹرانزیکشن کو configured `default_lane` اور `default_dataspace` پر route کرتا ہے۔ Router logic `crates/iroha_core/src/queue/router.rs` میں ہے اور Torii REST/gRPC surfaces پر پالیسی شفاف انداز میں apply کرتا ہے۔
+`nexus.routing_policy` المسار الاحتياطي الذي يتحكم في الكرتا وتعليمات خاصة أو بادئات الحساب لتجاوز التوجيه. إذا كانت مطابقة القاعدة لن تتمكن من جدولة الفرانزية وتكوين `default_lane` و`default_dataspace` على المسار الصحيح. يتم تطبيق منطق جهاز التوجيه `crates/iroha_core/src/queue/router.rs` وTorii REST/gRPC على أسطح شفافة شفافة.
 
 ```toml
 [nexus.routing_policy]
@@ -100,24 +102,24 @@ description = "Route contract deployments to the zk lane for proof tracking"
 ```
 
 
-## 3. پالیسی کے ساتھ node boot کریں
+## 3. تشغيل العقدة الثابتة
 
 ```bash
 IROHA_CONFIG=/path/to/nexus/config.toml
 irohad --sora --config "${IROHA_CONFIG}"
 ```
 
-node startup کے دوران derived routing policy لاگ کرتا ہے۔ کوئی بھی validation errors (missing indexes، duplicated aliases، invalid dataspace ids) gossip شروع ہونے سے پہلے سامنے آ جاتے ہیں۔
+بدء تشغيل العقدة ے دوران سياسة التوجيه المشتقة لاگ کرتا ہے۔ هناك أيضًا أخطاء في التحقق من الصحة (الفهارس المفقودة، الأسماء المستعارة المكررة، معرفات مساحة البيانات غير الصالحة) بدء القيل والقال منذ فترة طويلة.
 
-## 4. lane governance state کنفرم کریں
+## 4. حالة حوكمة الحارة کنفرم کریں
 
-node online ہونے کے بعد، CLI helper استعمال کریں تاکہ default lane sealed (manifest loaded) اور traffic کے لئے ready ہو۔ Summary view ہر lane کے لئے ایک row پرنٹ کرتا ہے:
+العقدة المتصلة بالإنترنت بعد ذلك، يستخدم مساعد CLI الممر الافتراضي مغلقًا (تم تحميل البيان) وحركة المرور جاهزة. عرض ملخص للحارة کے لئے صف پرنٹ کرتا ہے:
 
 ```bash
 iroha_cli app nexus lane-report --summary
 ```
 
-Example output:
+مثال الإخراج:
 
 ```
 Lane  Alias            Module           Status  Quorum  Validators  Detail
@@ -126,17 +128,17 @@ Lane  Alias            Module           Status  Quorum  Validators  Detail
    2  zk               parliament       sealed     03           05  manifest required
 ```
 
-اگر default lane `sealed` دکھائے تو external traffic allow کرنے سے پہلے lane governance runbook فالو کریں۔ `--fail-on-sealed` flag CI کے لئے مفید ہے۔
+إذا كان المسار الافتراضي `sealed` فإن حركة المرور الخارجية تسمح لك بإدارة دليل إدارة المسار فالو کریں. `--fail-on-sealed` العلم CI کے لئے مفید ہے.
 
-## 5. Torii status payloads inspect کریں
+## 5. فحص حمولات الحالة Torii
 
-`/status` response routing policy اور فی-lane scheduler snapshot دونوں expose کرتا ہے۔ `curl`/`jq` استعمال کر کے configured defaults کی تصدیق کریں اور چیک کریں کہ fallback lane telemetery produce کر رہا ہے:
+`/status` سياسة توجيه الاستجابة ولقطة جدولة المسار دونوں فضح کرتا ہے۔ `curl`/`jq` يؤدي استخدام الإعدادات الافتراضية التي تم تكوينها لتتبع البيانات وقياس المسافة للمسار الاحتياطي إلى ما يلي:
 
 ```bash
 curl -s http://127.0.0.1:8080/status | jq '.nexus.routing_policy'
 ```
 
-Sample output:
+إخراج العينة:
 
 ```json
 {
@@ -149,7 +151,7 @@ Sample output:
 }
 ```
 
-lane `0` کے لئے live scheduler counters دیکھنے کے لئے:
+حارة `0` لعدادات الجدولة المباشرة التالية:
 
 ```bash
 curl -s http://127.0.0.1:8080/status \
@@ -157,17 +159,16 @@ curl -s http://127.0.0.1:8080/status \
         | {lane_id, alias, dataspace_alias, committed, manifest_ready, scheduler_utilization_pct}'
 ```
 
-یہ کنفرم کرتا ہے کہ TEU snapshot، alias metadata، اور manifest flags configuration کے ساتھ align ہیں۔ یہی payload Grafana panels کے lane-ingest dashboard میں استعمال ہوتا ہے۔
+إنه يسجل لقطة TEU وبيانات تعريف الاسم المستعار وتكوين أعلام البيان الذي يتم محاذاة بشكل ثابت. يمكن استخدام لوحات الحمولة النافعة Grafana في لوحة القيادة الخاصة بمدخل المسار.
 
-## 6. client defaults exercise کریں
+## 6. تمرين افتراضيات العميل
 
-- **Rust/CLI.** `iroha_cli` اور Rust client crate `lane_id` field کو omit کرتے ہیں جب آپ `--lane-id` / `LaneSelector` pass نہیں کرتے۔ اس لئے queue router `default_lane` پر fallback کرتا ہے۔ Explicit `--lane-id`/`--dataspace-id` flags صرف non-default lane کو target کرتے وقت استعمال کریں۔
-- **JS/Swift/Android.** تازہ SDK releases `laneId`/`lane_id` کو optional مانتے ہیں اور `/status` میں اعلان کردہ value پر fallback کرتے ہیں۔ Routing policy کو staging اور production میں sync رکھیں تاکہ mobile apps کو emergency reconfigurations نہ کرنی پڑیں۔
-- **Pipeline/SSE tests.** transaction event filters `tx_lane_id == <u32>` predicates قبول کرتے ہیں (دیکھیں `docs/source/pipeline.md`). `/v1/pipeline/events/transactions` کو اس filter کے ساتھ subscribe کریں تاکہ یہ ثابت ہو کہ explicit lane کے بغیر بھیجی گئی writes fallback lane id کے تحت پہنچتی ہیں۔
+- **Rust/CLI.** حقل `iroha_cli` وصندوق عميل Rust `lane_id` الذي يحذف البطاقة عند `--lane-id` / `LaneSelector`. هذا هو جهاز توجيه قائمة الانتظار `default_lane` للرجوع الاحتياطي. تحدد إشارات `--lane-id`/`--dataspace-id` الصريحة المسار غير الافتراضي للهدف عند استخدام الكرت.
+- **JS/Swift/Android.** تُصدر SDK حاليًا `laneId`/`lane_id` وهي إدارة اختيارية و`/status` تُعلن عن القيمة الاحتياطية. تعمل سياسة التوجيه والتدريج والإنتاج على مزامنة تطبيقات الهاتف المحمول وعمليات إعادة التكوين في حالات الطوارئ.
+- **اختبارات الأنابيب/SSE.** عوامل تصفية حدث المعاملة `tx_lane_id == <u32>` مسندات قبول کرتے ہیں (دیکھیں `docs/source/pipeline.md`). `/v1/pipeline/events/transactions` الذي يقوم بالتصفية للاشتراك في ميزة التسجيل أو وجود ممر واضح يتم كتابة معرف المسار الاحتياطي فيه تحت القائمة.
 
-## 7. Observability اور governance hooks
+## 7. خطافات قابلية الملاحظة والحوكمة
 
-- `/status` `nexus_lane_governance_sealed_total` اور `nexus_lane_governance_sealed_aliases` بھی publish کرتا ہے تاکہ Alertmanager warn کر سکے جب کوئی lane اپنا manifest کھو دے۔ ان alerts کو devnets میں بھی enabled رکھیں۔
-- scheduler telemetry map اور lane governance dashboard (`dashboards/grafana/nexus_lanes.json`) catalog کے alias/slug fields expect کرتے ہیں۔ اگر آپ alias rename کریں تو متعلقہ Kura directories کو relabel کریں تاکہ auditors deterministic paths رکھ سکیں (NX-1 کے تحت track ہوتا ہے)۔
-- default lanes کے لئے parliament approvals میں rollback plan شامل ہونا چاہیے۔ manifest hash اور governance evidence کو اس quickstart کے ساتھ اپنے operator runbook میں record کریں تاکہ future rotations مطلوبہ state کا اندازہ نہ لگائیں۔
-
+- `/status` `nexus_lane_governance_sealed_total` و`nexus_lane_governance_sealed_aliases` ينشرون هذه الرسالة وتحذير مدير التنبيهات من خلال بيان المسار هذا. يمكن أيضًا تمكين التنبيهات الخاصة بشبكات التطوير.
+- خريطة القياس عن بعد للمجدول وكتالوج لوحة تحكم إدارة المسار (`dashboards/grafana/nexus_lanes.json`) وحقول الاسم المستعار/الحلقة الثابتة المتوقعة. إذا قمت بإعادة تسمية الاسم المستعار إلى أدلة Kura وإعادة تسمية المسارات الحتمية لمدققي الحسابات (NX-1 تحت المسار أوتا ہے).
+- الممرات الافتراضية التي تتطلب موافقات البرلمان تتضمن خطة التراجع التي تشمل ہونا چاہیے. دليل التجزئة والحوكمة الواضح الذي يعد بمثابة بداية سريعة لسجل التشغيل الخاص بالمشغل يسجل عمليات التناوب المستقبلية التي لا تتطلبها الحالة.

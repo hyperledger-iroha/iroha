@@ -4,57 +4,59 @@ direction: ltr
 source: docs/portal/docs/reference/publishing-checklist.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Publishing Checklist
+# དཔེ་སྐྲུན་ཡིག་ཆའི་ཐོ་ཡིག་།
 
-Use this checklist whenever you update the developer portal. It ensures that the
-CI build, GitHub Pages deployment, and manual smoke tests cover every section
-before a release or roadmap milestone lands.
+ཁྱོད་ཀྱིས་ གོང་འཕེལ་གཏང་མི་དྲྭ་ཚིགས་འདི་དུས་མཐུན་བཟོ་བའི་སྐབས་ ཞིབ་དཔྱད་ཐོ་ཡིག་འདི་ལག་ལེན་འཐབ། འདི་གིས་ ངེས་གཏན་བཟོཝ་ཨིན།
+CI བཟོ་བསྐྲུན་, གི་ཊི་ཧབ་ཤོག་ལེབ་བཀྲམ་སྤེལ་དང་ ལག་ཐོག་ལས་ དུ་ཁའི་བརྟག་དཔྱད་ཚུ་གིས་ དབྱེ་ཚན་ག་ར་ཁྱབ་ཚུགསཔ་ཨིན།
+བཏོན་གཏང་ནི་དང་ ཡང་ན་ ལམ་སྟོན་སབ་ཁྲ་གི་ས་ཆའི་ས་ཆ་ཚུ་ མ་འབད་བའི་ཧེ་མ་ཨིན།
 
-## 1. Local validation
+## 1. ས་གནས་བདེན་དཔྱད་པ།
 
-- `npm run sync-openapi -- --version=current --latest` (add one or more
-  `--mirror=<label>` flags when Torii OpenAPI changes for a frozen snapshot).
-- `npm run build` – confirm the `Build on Iroha with confidence` hero copy still
-  appears in `build/index.html`.
-- `./docs/portal/scripts/preview_verify.sh --build-dir build` – verify the
-  checksum manifest (add `--descriptor`/`--archive` when testing downloaded CI
-  artefacts).
-- `npm run serve` – launches the checksum-gated preview helper which verifies
-  the manifest before calling `docusaurus serve`, so reviewers never browse an
-  unsigned snapshot (the `serve:verified` alias remains for explicit calls).
-- Spot-check the markdown you touched via `npm run start` and the live reload
-  server.
+- `npm run sync-openapi -- --version=current --latest` (གཅིག་ཡང་ན་དེ་ལས་མང་།
+  I18NI0000000010 དར་ཆ་ཚུ་ Torii I18NT000000000 འདི་ གྱང་ཤུགས་ཅན་གྱི་པར་ལེན་ཅིག་གི་དོན་ལུ་བསྒྱུར་བཅོས་འབདཝ་ཨིན།)
+- `npm run build` – I18NI000000012X དཔའ་བོ་འདྲ་བཤུས་འདི་ད་ལྟོའི་ངེས་གཏན་བཟོ།
+  `build/index.html` ནང་ཐོན་ཡོད།
+- `./docs/portal/scripts/preview_verify.sh --build-dir build` – བདེན་བཤད་འབད།
+  བརྟག་དཔྱད་གསུམ་ལྡན་གྱི་གསལ་སྟོན་ (I18NI0000015X/`--archive` བརྟག་དཔྱད་ཕབ་ལེན་འབད་ཡོད་པའི་ CI བརྟག་དཔྱད་འབད་བའི་སྐབས་ཁ་སྐོང་འབད།
+  ཅ་རྙིང་།)
+- I18NI000000017X – ཞིབ་དཔྱད་བསྡོམས་ཀྱིས་ སྔོན་ལྟ་གྲོགས་རམ་འདི་ བདེན་དཔྱད་འབདཝ་ཨིན།
+  18NI00000018X ཟེར་སླབ་པའི་ཧེ་མ་ གསལ་བསྒྲགས་འབདཝ་ལས་ བསྐྱར་ཞིབ་འབད་མི་ཚུ་གིས་ ནམ་ཡང་ བརྡ་འཚོལ་མི་འབད།
+  Unigned པར་ལེན་ (`serve:verified` allias འདི་ གསལ་ཏོག་ཏོ་སྦེ་ འབོད་བརྡ་ཚུ་གི་དོན་ལུ་ ལྷག་ལུས་ཡོདཔ་ཨིན།)
+- ཁྱོད་ཀྱིས་ཨེབ་གཏང་འབད་མི་ མརཀ་ཌའོན་འདི་ I18NI000000020X བརྒྱུད་དེ་ དང་ ཐད་རི་བ་རི་ བསྐྱར་མངོན་གསལ་འབད།
+  སར་བར་.
 
-## 2. Pull request checks
+## 2. འཐེན་ཞུ་བ་ཞིབ་དཔྱད་ཚུ།
 
-- Verify the `docs-portal-build` job succeeded in `.github/workflows/check-docs.yml`.
-- Confirm `ci/check_docs_portal.sh` ran (CI logs show the hero smoke check).
-- Ensure the preview workflow uploaded a manifest (`build/checksums.sha256`) and
-  the preview verification script succeeded (CI logs show the
-  `scripts/preview_verify.sh` output).
-- Add the published preview URL from the GitHub Pages environment to the PR
-  description.
+- I18NI000000021X ལཱ་འདི་ I18NI000000022X ནང་མཇུག་བསྡུ་ཡོད་པའི་ལཱ་འདི་བདེན་སྦྱོར་འབད།
+- `ci/check_docs_portal.sh` ངེས་གཏན་བཟོ། (CI དྲན་ཐོ་ཚུ་གིས་ དཔའ་བོ་གི་ དུ་ཁའི་བརྟག་དཔྱད་སྟོནམ་ཨིན།)
+- སྔོན་ལྟའི་ལཱ་གི་རྒྱུན་རིམ་འདི་ གསལ་སྟོན་ཅིག་ སྐྱེལ་བཙུགས་འབད་ཡོདཔ་ངེས་གཏན་བཟོ།(I18NI0000024X) དང་།
+  སྔོན་ལྟའི་བདེན་དཔྱད་ཡིག་ཆ་འདི་མཐར་འཁྱོལ་ཅན་བཟོ་ཡོདཔ་ཨིན་ (སི་ཨའི་དྲན་ཐོ་ཚུ་གིས་ སྟོནམ་ཨིན།
+  `scripts/preview_verify.sh` ཐོན་འབྲས་).
+- དཔར་བསྐྲུན་འབད་ཡོད་པའི་སྔོན་ལྟའི་ཡུ་ཨར་ཨེལ་འདི་ གི་ཊི་ཧབ་ཤོག་ལེབ་མཐའ་འཁོར་ལས་ པི་ཨར་ལུ་ཁ་སྐོང་འབད།
+  འགྲེལ་བཤད།
 
-## 3. Section sign-off
+## 3. ཚན་པའི་རྟགས་བཀག་པ།
 
-| Section | Owner | Checklist |
-|---------|-------|-----------|
-| Homepage | DevRel | Hero copy renders, quickstart cards link to valid routes, CTA buttons resolve. |
-| Norito | Norito WG | Overview and getting-started guides reference the latest CLI flags and Norito schema docs. |
-| SoraFS | Storage Team | Quickstart runs to completion, manifest report fields documented, fetch simulation instructions verified. |
-| SDK guides | SDK leads | Rust/Python/JS guides compile the current examples and link to live repos. |
-| Reference | Docs/DevRel | Index lists the newest specs, Norito codec reference matches `norito.md`. |
-| Preview artifact | Docs/DevRel | `docs-portal-preview` artifact attached to the PR, smoke checks pass, link shared with reviewers. |
-| Security & Try it sandbox | Docs/DevRel · Security | OAuth device-code login configured (`DOCS_OAUTH_*`), `security-hardening.md` checklist executed, CSP/Trusted Types headers verified via `npm run build` or `npm run probe:portal`. |
+| དོན་ཚན་ | ཇོ་བདག་ | ཞིབ་དཔྱད་ཐོ་ཡིག་ |
+|--------------------------------------|
+| ཁྱིམ་ཤོག་ | ཌེབ་རེལ | དཔའ་བོ་འདྲ་བཤུས་བརྐྱབ་མི་ཚུ་ མགྱོགས་དྲགས་འགོ་བཙུགས་ཤོག་བྱང་ཚུ་ ནུས་ཅན་འགྲུལ་ལམ་ཚུ་ལུ་འབྲེལ་ལམ་ སི་ཊི་ཨེ་ཨེབ་རྟ་ཚུ་གིས་ བསལ་ཚུགས། |
+| I18NT0000001X | I18NT0000002X WG | སྤྱིར་བཏང་བལྟ་ཞིབ་དང་ ཐོབ་མི་ལམ་སྟོན་ཚུ་གིས་ སི་ཨེལ་ཨའི་རྒྱལ་དར་གསརཔ་དང་ I18NT0000003X ལས་འཆར་ཚུ་ གཞི་བསྟུན་འབདཝ་ཨིན། |
+| I18NT0000000X | བསག་མཛོད་སྡེ་ཚན། | མགྱོགས་འཕྲུལ་འདི་ མཇུག་བསྡུ་ནི་ལུ་ གཡོག་བཀོལ་ཏེ་ ཡིག་རྟགས་བཀོད་ཡོད་པའི་ སྙན་ཞུའི་ས་སྒོ་ཚུ་ གསལ་སྟོན་ བདེན་དཔྱད་འབད་ཡོད་པའི་ བརྡ་བཀོད་བཀོད་རྒྱ་ཚུ་ བདེན་དཔྱད་འབདཝ་ཨིན། |
+| SDK ལམ་སྟོན་ཚུ། | SDK འགོ་འཁྲིད་ | Rust/Python/JS ལམ་སྟོན་ཚུ་གིས་ ད་ལྟོའི་དཔེ་ཚུ་བསྡུ་སྒྲིག་འབད་དེ་ ཐད་རི་བ་རི་ repose འབྲེལ་མཐུད་འབདཝ་ཨིན། |
+| གཞི་བསྟུན་ | ཡིག་ཆ་/ཌི་ཝི་རེལ | ཟུར་ཐོ་འདི་གིས་ ཁྱད་ཚད་གསརཔ་ Norito ཀོ་ཌེཀ་གཞི་བསྟུན་ཚུ་དང་མཐུན་སྒྲིག་འབདཝ་ཨིན། |
+| སྔོན་ལྟའི་ཅ་ཆས། | ཡིག་ཆ་/ཌི་ཝི་རེལ | I18NI000000027X PR དང་མཉམ་སྦྲགས་འབད་དེ་ དུ་ཁའི་བརྟག་དཔྱད་ཆོག་ཐམ་ བསྐྱར་ཞིབ་པ་ཚུ་དང་གཅིག་ཁར་ འབྲེལ་མཐུད་འབད་ཡོདཔ་ཨིན། |
+| ཉེན་སྲུང་དང་ བྱེམ་སྒྲོམ་ | Docs/DevRel · ཉེན་སྲུང་། | OAuth ཐབས་འཕྲུལ་གྱི་ཨང་རྟགས་ནང་བསྐྱོད་རིམ་སྒྲིག་ (I18NI0000028X), `security-hardening.md` ཞིབ་དཔྱད་ཐོ་ཡིག་ལག་ལེན་འཐབ་ཡོདཔ་ཨིན་, CSP/Trusted Type མགོ་ཡིག་ཚུ་ I18NI000000000030X ཡང་ན་ I18NI0000031X བརྒྱུད་དེ་ བདེན་དཔྱད་འབད་ཡོདཔ་ཨིན། |
 
-Mark each row as part of your PR review, or note any follow-up tasks so status
-tracking stays accurate.
+ཁྱོད་རའི་ PR བསྐྱར་ཞིབ་ཀྱི་ཆ་ཤས་ཅིག་སྦེ་ གྲལ་ཐིག་རེ་རེ་ལུ་རྟགས་བཀལ།
+བརྟག་ཞིབ་འདི་ གཏན་གཏན་སྦེ་སྡོད།
 
-## 4. Release notes
+## 4. འཛིན་པའི་དྲན་ཐོ།
 
-- Include `https://docs.iroha.tech/` (or the environment URL
-  from the deployment job) in release notes and status updates.
-- Call out any new or changed sections explicitly so downstream teams know where
-  to re-run their own smoke tests.
+- ཚུད་སྒྲིག་འབད་ I18NI000000032X (ཡང་ན་ མཐའ་འཁོར་གྱི་ཡུ་ཨར་ཨེལ།
+  བཀྲམ་སྤེལ་གྱི་ལཱ་ལས་) གསར་བཏོན་དྲན་ཐོ་དང་ གནས་ཚད་དུས་མཐུན་ཚུ་ནང་)།
+- དབྱེ་ཚན་གསརཔ་དང་ ཡང་ན་ བསྒྱུར་བཅོས་འབད་མི་ཚུ་ གསལ་ཏོག་ཏོ་སྦེ་ ཁ་བརྡ་འབད།
+  རང་གི་ཐ་མག་བརྟག་དཔྱད་ཚུ་ ལོག་བཏང་ནི།

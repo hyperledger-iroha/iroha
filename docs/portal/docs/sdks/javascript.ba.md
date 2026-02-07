@@ -10,81 +10,36 @@ translation_last_reviewed: 2026-02-07
 title: JavaScript SDK quickstart
 description: Build transactions, stream events, and drive Connect previews with `@iroha/iroha-js`.
 slug: /sdks/javascript
+translator: machine-google-reviewed
 ---
 
-`@iroha/iroha-js` is the canonical Node.js package for interacting with Torii. It
-bundles Norito builders, Ed25519 helpers, pagination utilities, and a resilient
-HTTP/WebSocket client so you can mirror the CLI flows from TypeScript.
+`@iroha/iroha-js` — Torii менән үҙ-ара эш итеү өсөн канонлы Node.js пакеты. Был
+25519-сы ярҙамсылары, механиктар һәм ныҡлылыҡ
+HTTP/WebSocket клиент, шулай итеп, һеҙ көҙгө CLI ағымдарын TypeScript.
 
-## Installation
+## Ҡуйыу
 
-```bash
-npm install @iroha/iroha-js
-# Required once after install so the native bindings are compiled
-npm run build:native
-```
+I18NF000000018X
 
-The build step wraps `cargo build -p iroha_js_host`. Ensure the toolchain from
-`rust-toolchain.toml` is available locally before running `npm run build:native`.
+Төҙөү аҙымы I18NI000000038X XX. Ҡорал сылбырын тәьмин итеүҙән 2000 йылдан алып .
+I18NI000000039X урындағы кимәлдә I18NI000000040X эшләй.
 
-## Key management
+## Төп идара итеү
 
-```ts
-import {
-  generateKeyPair,
-  publicKeyFromPrivate,
-  signEd25519,
-  verifyEd25519,
-} from "@iroha/iroha-js";
+I18NF000000019X
 
-const { publicKey, privateKey } = generateKeyPair();
+## транзакциялар төҙөү
 
-const message = Buffer.from("hello iroha");
-const signature = signEd25519(message, privateKey);
+I18NT0000000003Х инструкция төҙөүселәр идентификаторҙарҙы, метамағлүмәттәрҙе һәм күләмдәрҙе нормаға килтерә.
+кодланған транзакциялар тура килә Rust/CLI файҙалы йөкләмәләр.
 
-console.assert(verifyEd25519(message, signature, publicKey));
+I18NF000000020X
 
-const derived = publicKeyFromPrivate(privateKey);
-console.assert(Buffer.compare(derived, publicKey) === 0);
-```
+## I18NT000000009X клиент конфигурацияһы
 
-## Build transactions
-
-Norito instruction builders normalise identifiers, metadata, and quantities so
-encoded transactions match the Rust/CLI payloads.
-
-```ts
-import {
-  buildMintAssetInstruction,
-  buildTransferAssetInstruction,
-  buildMintAndTransferTransaction,
-} from "@iroha/iroha-js";
-
-const mint = buildMintAssetInstruction({
-  assetId: "rose#wonderland#alice",
-  quantity: "10",
-});
-
-const transfer = buildTransferAssetInstruction({
-  sourceAssetId: "rose#wonderland#alice",
-  destinationAccountId: "ih58...",
-  quantity: "5",
-});
-
-const { signedTransaction } = buildMintAndTransferTransaction({
-  chainId: "test-chain",
-  authority: "ih58...",
-  mint: { assetId: "rose#wonderland#alice", quantity: "10" },
-  transfers: [{ destinationAccountId: "ih58...", quantity: "5" }],
-  privateKey: Buffer.alloc(32, 0x42),
-});
-```
-
-## Torii client configuration
-
-`ToriiClient` accepts retry/timeout knobs that mirror `iroha_config`. Use
-`resolveToriiClientConfig` to merge a camelCase config object (normalize
-`iroha_config` first), env overrides, and inline options.
+`ToriiClient` ҡабул итә ретия/тайм-аут ручкалар, улар көҙгө `iroha_config`. Файҙаланыу
+I18NI000000043X кадельКейс конфиг объектын берләштереү өсөн (нормалләштереү
+`iroha_config` беренсе), env өҫтөнлөк итә, һәм рәт варианттары.
 
 ```ts
 import { ToriiClient, resolveToriiClientConfig } from "@iroha/iroha-js";
@@ -115,31 +70,31 @@ const torii = new ToriiClient(
 );
 ```
 
-Environment variables for local dev:
+Тирә-яҡ мөхит үҙгәртеүселәре өсөн локаль dev:
 
-| Variable | Purpose |
-|----------|---------|
-| `IROHA_TORII_TIMEOUT_MS` | Request timeout (milliseconds). |
-| `IROHA_TORII_MAX_RETRIES` | Maximum retry attempts. |
-| `IROHA_TORII_BACKOFF_INITIAL_MS` | Initial retry backoff. |
-| `IROHA_TORII_BACKOFF_MULTIPLIER` | Exponential backoff multiplier. |
-| `IROHA_TORII_MAX_BACKOFF_MS` | Maximum retry delay. |
-| `IROHA_TORII_RETRY_STATUSES` | Comma-separated HTTP status codes to retry. |
-| `IROHA_TORII_RETRY_METHODS` | Comma-separated HTTP methods to retry. |
-| `IROHA_TORII_API_TOKEN` | Adds `X-API-Token`. |
-| `IROHA_TORII_AUTH_TOKEN` | Adds `Authorization: Bearer …` header. |
+| Үҙгәртеүсән | Маҡсат |
+|---------|----------|
+| `IROHA_TORII_TIMEOUT_MS` | Һорау тайм-аут (миллисекундтар). |
+| `IROHA_TORII_MAX_RETRIES` | Максималь ҡабаттан тырышлыҡтар. |
+| `IROHA_TORII_BACKOFF_INITIAL_MS` | Башланғыс яңынан backfy. |
+| `IROHA_TORII_BACKOFF_MULTIPLIER` | Экспоненциаль backoff множитель. |
+| `IROHA_TORII_MAX_BACKOFF_MS` | Максималь ҡабаттан әҙерәк тотҡарлыҡ. |
+| `IROHA_TORII_RETRY_STATUSES` | Комма-айырылған HTTP статусы кодтары ҡабаттан ҡарау өсөн. |
+| `IROHA_TORII_RETRY_METHODS` | Комма-айырылған HTTP ысулдарын ҡабаттан ҡарау өсөн. |
+| `IROHA_TORII_API_TOKEN` | `X-API-Token` өҫтәй. |
+| `IROHA_TORII_AUTH_TOKEN` | `Authorization: Bearer …` башын өҫтәй. |
 
-Retry profiles mirror Android defaults and are exported for parity checks:
-`DEFAULT_TORII_CLIENT_CONFIG`, `DEFAULT_RETRY_PROFILE_PIPELINE`,
-`DEFAULT_RETRY_PROFILE_STREAMING`. See `docs/source/sdk/js/torii_retry_policy.md`
-for the endpoint-to-profile mapping and the parameters governance audits during
+Ҡайтанан профилдәр көҙгө Android ғәҙәттәгесә һәм паритет тикшерергә экспортлана:
+I18NI000000056X, I18NI000000057X,
+`DEFAULT_RETRY_PROFILE_STREAMING`. Ҡара: I18NI000000059X
+өсөн, ос нөктәһе-профиль картаһы һәм параметрҙары менән идара итеү аудиттары ваҡытында 2012 йыл.
 JS4/JS7.
 
-## Iterable lists & pagination
+## Iterable исемлектәре & pagination
 
-Pagination helpers mirror the Python SDK ergonomics for `/v1/accounts`,
-`/v1/domains`, `/v1/assets/definitions`, NFTs, balances, asset holders, and the
-account transaction history.
+Пагинация ярҙамсылары I18NI000000060X өсөн Python SDK эргономикаһын көҙгөләй.
+I18NI000000061X, I18NI000000062X, НФТ, баланс, активтар эйәләре, һәм был
+иҫәп операцияһы тарихы.
 
 ```ts
 const { items, total } = await torii.listDomains({
@@ -178,22 +133,22 @@ const holders = await torii.listAssetHolders("rose#wonderland", {
 console.log(balances.items, txs.items, holders.items);
 ```
 
-## Offline allowances & verdict metadata
+## офлай
 
-Offline allowance responses expose the enriched ledger metadata up-front —
-`expires_at_ms`, `policy_expires_at_ms`, `refresh_at_ms`, `verdict_id_hex`,
-`attestation_nonce_hex`, and `remaining_amount` are returned alongside the raw
-record so dashboards don’t have to decode the embedded Norito payloads. The new
-countdown helpers (`deadline_kind`, `deadline_state`, `deadline_ms`,
-`deadline_ms_remaining`) highlight the next expiring deadline (refresh → policy
-→ certificate) so UI badges can warn operators whenever an allowance has
-<24 h remaining. The SDK
-mirrors the REST filters exposed by `/v1/offline/allowances`:
-`certificateExpiresBeforeMs/AfterMs`, `policyExpiresBeforeMs/AfterMs`,
-`verdictIdHex`, `attestationNonceHex`, `refreshBeforeMs/AfterMs`, and the
-`requireVerdict` / `onlyMissingVerdict` booleans. Invalid combinations (for
-example `onlyMissingVerdict` + `verdictIdHex`) are rejected locally before Torii
-is called.
+Офлайн пособие яуаптары фашлау байытылған баш кейеме метамағлүмәттәр өҫкә-алғы —
+I18NI000000063X, I18NI000000064X, I18NI000000065X, `verdict_id_hex`,
+I18NI000000067X, һәм I18NI00000000068X сеймал менән бергә ҡайтарыла
+рекорд шулай приборҙар таҡталары don’t тейеш, тип расшифровка встроенный I18NT0000000004X файҙалы йөк. Яңы
+18NI0000069X, I18NI000000070X, `deadline_ms`,
+I18NI000000072Х) сираттағы срокты айырып күрһәтә (яңыртыу → сәйәсәте
+→ сертификат) шулай итеп, UI значоктары операторҙарҙы иҫкәртергә мөмкин, ҡасан пособие бар
+<24 сәғәт ҡалған. СДК
+I18NI000000073X тарафынан фашланған REST фильтрҙарын көҙгөләй:
+`certificateExpiresBeforeMs/AfterMs`, I18NI000000075X,
+I18NI000000076X, `attestationNonceHex`, `refreshBeforeMs/AfterMs` һәм
+`requireVerdict` / I18NI000000080X бул. Дөрөҫ булмаған комбинациялар ( өсөн
+миҫал `onlyMissingVerdict` + `verdictIdHex`) урындағы кимәлдә Torii тиклем кире ҡағыла.
+тип атала.
 
 ```ts
 const { items: allowances } = await torii.listOfflineAllowances({
@@ -212,14 +167,14 @@ for (const entry of allowances) {
 }
 ```
 
-## Offline top-ups (issue + register)
+## офлайн топ-аптар (эш + регистр)
 
-Use the top-up helpers when you want to issue a certificate and immediately
-register it on-ledger. The SDK verifies the issued and registered certificate
-IDs match before returning, and the response includes both payloads. There is
-no dedicated top-up endpoint; the helper chains the issue + register calls. If
-you already have a signed certificate, call `registerOfflineAllowance` (or
-`renewOfflineAllowance`) directly.
+Ҡулланығыҙ, ярҙамсыларҙы тулыландырыу, ҡасан һеҙ теләйһегеҙ, сертификат бирергә һәм шунда уҡ
+уны теркәүҙә. SDK тикшерелгән һәм теркәлгән сертификат раҫлай
+Идентификаторҙар ҡайтҡансы тап килә, ә яуап ике файҙалы йөктө лә үҙ эсенә ала. Бында бар
+бағышланған өҫкө-өҫкә ос нөктәһе юҡ; ярҙамсы мәсьәләне сылбырлай + регистр шылтыратыуҙар. Әгәр
+һеҙ инде ҡул ҡуйылған сертификат, шылтыратыу I18NI0000000083X (йәки
+`renewOfflineAllowance` туранан-тура.
 
 ```ts
 const topUp = await torii.topUpOfflineAllowance({
@@ -241,42 +196,26 @@ const renewed = await torii.topUpOfflineAllowanceRenewal(
 console.log(renewed.registration.certificate_id_hex);
 ```
 
-## Torii queries & streaming (WebSockets)
+## I18NT000000011X эҙләүҙәр & потоковый (WebSockets)
 
-Query helpers expose status, Prometheus metrics, telemetry snapshots, and event
-streams using the Norito filter grammar. Streaming automatically upgrades to
-WebSockets and resumes when the retry budget allows.
+Һорау ярҙамсылары статусын фашлай, I18NT000000000000 метрикаһы, телеметрия снимоктары һәм ваҡиға
+I18NT000000005X фильтр грамматикаһы ярҙамында ағымдар. Ағым автоматик рәүештә яңыртыу өсөн .
+WebSockets һәм резюме ҡасан ҡайтанан тырышып бюджет мөмкинлек бирә.
 
-```ts
-const status = await torii.getSumeragiStatus();
-console.log(status?.leader_index);
+I18NF000000025X
 
-const metrics = await torii.getMetrics({ asText: true });
-console.log(metrics.split("\n").slice(0, 5));
+Ҡулланыу I18NI0000000085X, I18NI000000086X, йәки I18NI000000087X өсөн икенсеһе
+WebSocket остары. Бөтә стриминг ярҙамсылары өҫтөндә ҡабаттан тырышып тырышлыҡтар, шулай итеп, ҡармаҡ
+I18NI000000088X шылтыратыу приборҙар таҡталары һәм иҫкәртергә.
 
-const abort = new AbortController();
-for await (const event of torii.streamEvents({
-  filter: { Pipeline: { Block: {} } },
-  signal: abort.signal,
-})) {
-  console.log(event.id, event.data);
-  break;
-}
-abort.abort(); // closes the underlying WebSocket cleanly
-```
+## Эксплорер снимоктар & QR файҙалы йөкләмәләр
 
-Use `streamBlocks`, `streamTransactions`, or `streamTelemetry` for the other
-WebSocket endpoints. All streaming helpers surface retry attempts, so hook the
-`onReconnect` callback to feed dashboards and alerting.
-
-## Explorer snapshots & QR payloads
-
-Explorer telemetry provides typed helpers for the `/v1/explorer/metrics` and
-`/v1/explorer/accounts/{account_id}/qr` endpoints so dashboards can replay the
-same snapshots that power the portal. `getExplorerMetrics()` normalises the
-payload and returns `null` when the route is disabled. Pair it with
-`getExplorerAccountQr()` whenever you need IH58 (preferred)/sora (second-best) literals plus inline
-SVG for share buttons.
+Эксплорер телеметрия I18NI000000089X һәм
+I18NI000000090X ос нөктәләре, шуға күрә приборҙар таҡталары реплей мөмкин
+шул уҡ снимоктар, тип ҡөҙрәт портал. I18NI000000091X нормализацияһы
+файҙалы йөк һәм ҡайтарыу I18NI0000000092X ҡасан маршрут өҙөлгән. Уны пар менән
+I18NI00000000933Х ҡасан кәрәк IH58 (өҫтөнлөк)/сора (икенсе-иң яҡшы) литералдар плюс р.
+СВГ өсөн акциялар төймәләре.
 
 ```ts
 import { promises as fs } from "node:fs";
@@ -300,20 +239,20 @@ console.log(
 );
 ```
 
-Passing `addressFormat: "compressed"` mirrors Explorer’s default compressed
-selectors; omit the override for the preferred IH58 output or request `ih58_qr`
-when you need the QR-safe variant. The compressed literal is the second-best
-Sora-only option for UX. The helper always returns the canonical identifier,
-the selected literal, and metadata (network prefix, QR version/modules, error
-correction tier, and inline SVG), so CI/CD can publish the same payloads that
-the Explorer surfaces without calling bespoke converters.
+I18NI000000094X аша үткән Көҙгөләр Explorer’s стандарт ҡыҫылған
+селекторҙар; өҫтөнлөклө IH58 сығыш йәки үтенес өсөн өҫтөнлөктө үткәрмәү I18NI0000000955.
+ҡасан һеҙгә кәрәк QR-хәүефһеҙ вариант. Ҡыҫылған туранан-тура икенсе иң яҡшы .
+Сора-тик вариант өсөн UX. Ярҙам һәр ваҡыт канонлы идентификаторҙы кире ҡайтара,
+һайланған туранан-тура, һәм метамағлүмәттәр (селтәр префикс, QR версия/модулдәр, хата
+төҙәтеү ярус, һәм рәтле SVG), шуға күрә CI/CD шул уҡ файҙалы йөктәрҙе баҫтырып сығара ала, тип
+эксплуатациялаусы ер өҫтө өндәшмәйенсә, заказ буйынса конвертерҙар.
 
-## Connect sessions & queueing
+## Тоташтырыу сессиялары & сират
 
-The Connect helpers mirror `docs/source/connect_architecture_strawman.md`. The
-fastest path to a preview-ready session is `bootstrapConnectPreviewSession`,
-which stitches together deterministic SID/URI generation and the Torii
-registration call.
+Тоташтырыусы ярҙамсылары I18NI000000966X XX. 1990 й.
+тиҙ юл алдан ҡарау-әҙер сессия I18NI0000000097X,
+улар бергә һыҙылған детерминистик SID/URI быуын һәм I18NT000000012X
+теркәү шылтыратыу.
 
 ```ts
 import {
@@ -336,139 +275,69 @@ console.log("wallet QR", preview.walletUri);
 console.log("Connect tokens", tokens?.wallet, tokens?.app);
 ```
 
-- Pass `register: false` when you only need deterministic URIs for QR/deeplink
-  previews.
-- `generateConnectSid` stays available when you need to derive session ids
-  without minting URIs.
-- Directional keys and ciphertext envelopes come from the native bridge; when
-  unavailable the SDK falls back to the JSON codec and throws
+- QR/deeplink өсөн детерминистик URI ғына кәрәк булғанда I18NI000000098X үткән
+  алдан ҡарау.
+- I18NI0000000099X X сессия ids алыу кәрәк булғанда ҡала
+  УРИ-ны һуғыуһыҙ.
+- Йүнәлешле асҡыстар һәм шифрлы конверттар тыуған күперҙән килә; ҡасан
+  булмаған SDK кире JSON кодек һәм ташлай
   `ConnectQueueError.bridgeUnavailable`.
-- Offline buffers are stored as Norito `.to` blobs in IndexedDB. Monitor queue
-  state via the emitted `ConnectQueueError.overflow(limit)` /
-  `.expired(ttlMs)` errors and feed `connect.queue_depth` telemetry as outlined
-  in the roadmap.
+- офлайн буферҙар I18NT000000006X `.to` блобтары булараҡ һаҡлана IndexedDB. Сират мониторы
+  дәүләт аша сығарылған I18NI000000102X /
+  I18NI000000103X хаталары һәм туҡланыу I18NI0000000104X телеметрияһы тип билдәләнгән
+  юл картаһында.
 
-### Connect registry & policy snapshots
+### Тоташтырыу реестры & сәйәсәт снимок
 
-Platform operators can introspect and update the Connect registry without
-leaving Node.js. `iterateConnectApps()` pages through the registry, while
-`getConnectStatus()` and `getConnectAppPolicy()` expose the runtime counters and
-current policy envelope. `updateConnectAppPolicy()` accepts camelCase fields,
-so you can stage the same JSON payload that Torii expects.
+Платформа операторҙары үҙ-үҙенә эйә була ала һәм яңырта Connect реестры .
+ҡалдыра Node.js. `iterateConnectApps()` биттәр аша реестр, шул уҡ ваҡытта
+`getConnectStatus()` һәм `getConnectAppPolicy()` эшләй.
+ғәмәлдәге сәйәсәт конверты. `updateConnectAppPolicy()` кадельКейс ятҡылыҡтарын ҡабул итә,
+тимәк, һеҙ шул уҡ JSON файҙалы йөк һалырға мөмкин, тип I18NT0000000013X көтә.
 
-```ts
-const status = await torii.getConnectStatus();
-console.log("connect enabled:", status?.enabled ?? false);
-console.log("active sessions:", status?.sessionsActive ?? 0);
-console.log("buffered bytes:", status?.totalBufferBytes ?? 0);
+I18NF000000028X
 
-for await (const app of torii.iterateConnectApps({ limit: 100 })) {
-  console.log(app.appId, app.namespaces, app.policy?.relayEnabled ? "relay" : "wallet-only");
-}
+Һәр ваҡыт тотоп һуңғы I18NI00000000109X снимок ғариза биргәнсе
+мутациялар — идара итеү тикшерелгән исемлеге сәйәсәтте яңыртыуҙар башлана, тип дәлилдәр талап итә
+автопарктан’ағымдағы сиктәр.
 
-const policy = await torii.getConnectAppPolicy();
-if ((policy.wsPerIpMaxSessions ?? 0) < 5) {
-  await torii.updateConnectAppPolicy({
-    wsPerIpMaxSessions: 5,
-    pingIntervalMs: policy.pingIntervalMs ?? 30_000,
-    pingMissTolerance: policy.pingMissTolerance ?? 3,
-  });
-}
-```
+### WebSocket йыя
 
-Always capture the latest `getConnectStatus()` snapshot before applying
-mutations—the governance checklist requires evidence that policy updates start
-from the fleet’s current limits.
+I18NI000000110X канон йыя
+`/v1/connect/ws` URL (шул иҫәптән I18NI000000112X, `role`, һәм жетон параметрҙары), яңыртыуҙар
+I18NI000000114X / `https→wss`, һәм һуңғы URL-адресты WebSocket
+тормошҡа ашырыу һеҙ тәьмин итеү. Браузерҙар автоматик рәүештә глобаль ҡабаттан файҙаланыу .
+`WebSocket`. Node.js шылтыратыусылар I18NI000000117X кеүек конструктор үтергә тейеш:
 
-### Connect WebSocket dialling
+I18NF000000029X.
 
-`ToriiClient.openConnectWebSocket()` assembles the canonical
-`/v1/connect/ws` URL (including `sid`, `role`, and token parameters), upgrades
-`http→ws` / `https→wss`, and hands the final URL to whichever WebSocket
-implementation you supply. Browsers automatically reuse the global
-`WebSocket`. Node.js callers should pass a constructor such as `ws`:
+Ҡасан һеҙгә кәрәк тик URL, шылтыратыу I18NI000000118X йәки
+юғары кимәлдәге I18NI000000119X ярҙамсыһы һәм ҡабаттан ҡулланыу
+һөҙөмтәлә епкә ҡулланыусы транспорт/сиратта.
 
-```ts
-import WebSocket from "ws";
-import { ToriiClient } from "@iroha/iroha-js";
+Тулы CLI-ориентированный өлгө эҙләй? 1990 й.
+[Тоташыу алдан ҡарау рецепты](I18NU000000035X) үҙ эсенә ала
+йүгерергә яраҡлы сценарий плюс телеметрия етәкселеге, тип көҙгө юл картаһы тапшырыу өсөн
+документлаштырыу Тоташтырыу сираты + WebSocket ағымы.
 
-const torii = new ToriiClient(process.env.IROHA_TORII_URL ?? "https://torii.nexus.example");
-const preview = await torii.createConnectSessionPreview({ chainId: "sora-mainnet" });
-const session = await torii.createConnectSession({ sid: preview.sidBase64Url });
+### Сират телеметрия & иҫкәртмә
 
-const socket = torii.openConnectWebSocket({
-  sid: session.sid,
-  role: "wallet",
-  token: session.token_wallet,
-  WebSocketImpl: WebSocket,
-  protocols: ["iroha-connect"],
-});
+Сым сират метрикаһы туранан-тура ярҙамсы өҫтөнә инә, шуға күрә приборҙар таҡталары көҙгө ала
+юл картаһы КПИ-лар.
 
-socket.addEventListener("message", (event) => {
-  console.log("Connect payload", event.data);
-});
-socket.addEventListener("close", () => {
-  console.log("Connect socket closed");
-});
+I18NF000000030X
 
-socket.binaryType = "arraybuffer";
-socket.addEventListener("message", (event) => {
-  if (typeof event.data === "string") {
-    const control = JSON.parse(event.data);
-    console.log("[ws] control", control.kind);
-    return;
-  }
-  pendingFrames.enqueue(new Uint8Array(event.data));
-});
-```
+I18NI000000120X сират етешһеҙлектәрен дөйөм үҙгәртә
+I18NI000000121X таксономияһы шулай уртаҡ HTTP/WebSocket перехватчиктар сығара ала
+`connect.queue_depth` стандарты, I18NI000000123X, һәм
+`connect.queue_expired_total` метрикаһы бөтә юл картаһы буйлап һылтанма яһалған.
 
-When you only need the URL, call `torii.buildConnectWebSocketUrl(params)` or the
-top-level `buildConnectWebSocketUrl(baseUrl, params)` helper and reuse the
-resulting string in a custom transport/queue.
+## Стриминг күҙәтеүселәр & ваҡиға курсорҙары
 
-Looking for a complete CLI-oriented sample? The
-[Connect preview recipe](./recipes/javascript-connect-preview.md) includes a
-runnable script plus telemetry guidance that mirrors the roadmap deliverable for
-documenting the Connect queue + WebSocket flow.
-
-### Queue telemetry & alerting
-
-Wire queue metrics directly into the helper surfaces so dashboards can mirror
-the roadmap KPIs.
-
-```ts
-import { bootstrapConnectPreviewSession, ConnectQueueError } from "@iroha/iroha-js";
-
-async function dialWithTelemetry(client: ToriiClient) {
-  try {
-    const { session } = await bootstrapConnectPreviewSession(client, { chainId: "sora-mainnet" });
-    queueDepthGauge.record(session.queue_depth ?? 0);
-    // …open the WebSocket here…
-  } catch (error) {
-    if (error instanceof ConnectQueueError) {
-      if (error.kind === ConnectQueueError.KIND.OVERFLOW) {
-        queueOverflowCounter.add(1, { limit: error.limit ?? 0 });
-      } else if (error.kind === ConnectQueueError.KIND.EXPIRED) {
-        queueExpiryCounter.add(1, { ttlMs: error.ttlMs ?? 0 });
-      }
-      return;
-    }
-    throw error;
-  }
-}
-```
-
-`ConnectQueueError#toConnectError()` converts queue failures into the generic
-`ConnectError` taxonomy so shared HTTP/WebSocket interceptors can emit the
-standard `connect.queue_depth`, `connect.queue_overflow_total`, and
-`connect.queue_expired_total` metrics referenced throughout the roadmap.
-
-## Streaming watchers & event cursors
-
-`ToriiClient.streamEvents()` exposes `/v1/events/sse` as an async iterator with automatic
-retries, so Node/Bun CLIs can tail pipeline activity the same way the Rust CLI does.
-Persist the `Last-Event-ID` cursor alongside your runbook artefacts so operators can
-resume a stream without skipping events when a process restarts.
+I18NI000000125X I18NI000000126X автоматик менән асинк итератор булараҡ фашлай
+Ретиялар, шулай итеп, төйөн/Бунлы CLIs ҡойроҡ торба эшмәкәрлеге эшмәкәрлеге шул уҡ ысул менән Rust CLI эшләй.
+Персист I18NI000000127X курсоры менән бергә һеҙҙең runbook артефакттар, шулай итеп, операторҙар ала
+тергеҙергә ағым ағымы ваҡиғаларҙы үткәрмәйенсә, ҡасан процесс ҡабаттан эшләй башлай.
 
 ```ts
 import fs from "node:fs/promises";
@@ -498,133 +367,83 @@ for await (const event of torii.streamEvents({
 }
 ```
 
-- Switch `PIPELINE_STATUS` (for example `Pending`, `Applied`, or `Approved`) or set
-  `STREAM_FILTER_JSON` to replay the same filters the CLI accepts.
-- `STREAM_MAX_EVENTS=0 node ./recipes/streaming.mjs` keeps the iterator alive until a
-  signal is received; pass `STREAM_MAX_EVENTS=25` when you only need the first few events
-  for a smoke test.
-- `ToriiClient.streamSumeragiStatus()` mirrors the same interface for
-  `/v1/sumeragi/status/sse` so consensus telemetry can be tailed separately, and the
-  iterator honours `Last-Event-ID` the same way.
-- See `javascript/iroha_js/recipes/streaming.mjs` for a turnkey CLI (cursor persistence,
-  env-var filter overrides, and `extractPipelineStatusKind` logging) used in the JS4
-  streaming/WebSocket roadmap deliverable.
+- I18NI000000128X Switch
+  I18NI000000132X CLI ҡабул иткән шул уҡ фильтрҙарҙы ҡабатлау өсөн.
+- I18NI000000133X был итераторҙы тере тота, тик
+  сигнал ҡабул ителә; үткәреү I18NI000000134X, ҡасан һеҙгә кәрәк генә тәүге бер нисә ваҡиғалар .
+  төтөн анализы өсөн.
+- I18NI000000135X өсөн шул уҡ интерфейс көҙгөләй.
+  I18NI000000136XX шулай консенсус телеметрияһы айырым ҡойроҡло була ала, һәм
+  итератор `Last-Event-ID` XIX 1890 йылда ла шулай уҡ хөрмәт итә.
+- Ҡарағыҙ I18NI000000138X өсөн ток асҡыс CLI (курсор ныҡышмалы,
+  env-var фильтрҙары өҫтөнлөк итә, һәм I18NI000000139X логин) JS4-тә ҡулланыла.
+  потоковый/WebSocket юл картаһы тапшырыу.
 
-## UAID portfolios & Space Directory
+## UAID портфелдәре & Йыһан каталогы
 
-The Space Directory APIs surface the Universal Account ID (UAID) lifecycle. The
-helpers accept `uaid:<hex>` literals or raw 64-hex digests (LSB=1) and
-canonicalise them before submitting requests:
+Йыһан каталогы API-лар өҫтөндә дөйөм иҫәп идентификаторы (UAID) йәшәү циклы. 1990 й.
+ярҙамсылары ҡабул итә I18NI000000140X литерал йәки сеймал 64-гекс disists (LSB=1) һәм
+уларҙы үтенестәр тапшырыр алдынан канонлаштырығыҙ:
 
-- `getUaidPortfolio(uaid, { assetId })` aggregates balances per dataspace,
-  grouping asset holdings by canonical account IDs; pass `assetId` to filter the
-  portfolio down to a single asset instance.
-- `getUaidBindings(uaid, { addressFormat })` enumerates every dataspace ↔ account
-  binding (`addressFormat: "compressed"` returns the `sora…` literals).
-- `getUaidManifests(uaid, { dataspaceId })` returns each capability manifest,
-  lifecycle status, and bound accounts for auditing.
+- `getUaidPortfolio(uaid, { assetId })` агрегаттары мәғлүмәттәр киңлегенә баланстары,
+  төркөмләү активтар холдингы канон иҫәп идентификаторҙары буйынса; үткәреү I18NI000000142X фильтрлау өсөн
+  портфолио бер актив экземплярына тиклем.
+- I18NI000000143X һәр мәғлүмәт киңлеге ↔ иҫәп яҙмаһын иҫәпләп сыға
+  бәйләү (`addressFormat: "compressed"` I18NI000000145X литералдарын ҡайтара).
+- `getUaidManifests(uaid, { dataspaceId })` һәр мөмкинлекте ҡайтара, манифест,
+  тормош циклы статусы, һәм аудит өсөн бәйле иҫәп-хисап.Оператор өсөн дәлилдәр пакеттары, асыҡ баҫтырыу/ҡайтарала ағымдар, һәм SDK миграция .
+етәкселек, Универсаль иҫәп яҙмаһы буйынса ҡулланма (I18NI000000147X)
+был клиент ярҙамсылары менән бер рәттән, шулай итеп, портал һәм сығанаҡ документацияһы синхронизация ҡала.
 
-For operator evidence packs, manifest publish/revoke flows, and SDK migration
-guidance, follow the Universal Account Guide (`docs/source/universal_accounts_guide.md`)
-alongside these client helpers so the portal and source documentation remain in sync.
+I18NF000000032X
 
-```ts
-import { promises as fs } from "node:fs";
+Операторҙар шулай уҡ әйләндерә ала, йәки үтәй ғәҙәттән тыш хәлдәр инҡар итеү-еңеп ағымдарһыҙ .
+CLI-ға төшөү. Ике ярҙамсы ла ҡабул итә опциональ I18NI000000148X объект шулай
+оҙаҡ эшләгән тапшырыуҙарҙы `AbortController` менән туҡтатырға мөмкин; булмаған
+варианттары йәки I18NI000000150X индереүҙәр синхрон `TypeError` тиклем күтәрелә.
+запрос Torii хиттары:
 
-const uaid = "uaid:0f4d86b20839a8ddbe8a1a3d21cf1c502d49f3f79f0fa1cd88d5f24c56c0ab11";
+I18NF000000033X
 
-const portfolio = await torii.getUaidPortfolio(uaid, {
-  assetId: "cash#global::holder@global",
-});
-portfolio.dataspaces.forEach((entry) => {
-  console.log(entry.dataspace_alias ?? entry.dataspace_id, entry.accounts.length);
-});
+I18NI000000152X ҡабул итә йәки сеймал манифест JSON (тапировка
+`fixtures/space_directory/` буйынса ҡорамалдар йәки ниндәй ҙә булһа объект, улар сериализацияларға
+шул уҡ структура. `privateKey`, I18NI0000001555Х, йәки `privateKeyMultihash` картаһы.
+`ExposedPrivateKey` яланы I18NT000000015X көтә һәм ғәҙәттәгесә `ed25519`
+алгоритмы ҡасан бер ниндәй ҙә префикс бирелмәй. Ике үтенес тә бер тапҡыр ҡайтара I18NT0000000016X эҙләнеүҙәре
+инструкция (`202 Accepted`), был мәлдә баш китап сығарасаҡ
+тап килгән I18NI000000160X.
 
-const bindings = await torii.getUaidBindings(uaid, { addressFormat: "compressed" });
-console.log("bindings", bindings.dataspaces);
+## Идара итеү & ISO күпере
 
-const manifests = await torii.getUaidManifests(uaid, { dataspaceId: 11 });
-console.log("manifests", manifests.manifests[0].manifest.entries.length);
-```
-
-Operators can also rotate manifests or execute emergency deny-wins flows without
-dropping to the CLI. Both helpers accept an optional `{ signal }` object so
-long-running submissions can be cancelled with `AbortController`; non-object
-options or non-`AbortSignal` inputs raise a synchronous `TypeError` before the
-request hits Torii:
-
-```ts
-import { promises as fs } from "node:fs";
-import { Buffer } from "node:buffer";
-
-const manifest = JSON.parse(
-  await fs.readFile("fixtures/space_directory/capability/cbdc.manifest.json", "utf8"),
-);
-
-const controller = new AbortController();
-
-await torii.publishSpaceDirectoryManifest(
-  {
-    authority: "ih58...",
-    manifest,
-    privateKeyHex: process.env.SPACE_DIRECTORY_KEY_HEX,
-    reason: "Attester v2 rollout",
-  },
-  { signal: controller.signal },
-);
-
-await torii.revokeSpaceDirectoryManifest(
-  {
-    authority: "ih58...",
-    privateKey: Buffer.from(process.env.SPACE_DIRECTORY_KEY_SEED, "hex"),
-    uaid,
-    dataspaceId: 11,
-    revokedEpoch: 9216,
-    reason: "Emergency deny-wins",
-  },
-  { signal: controller.signal },
-);
-```
-
-`publishSpaceDirectoryManifest()` accepts either raw manifest JSON (matching the
-fixtures under `fixtures/space_directory/`) or any object that serialises to the
-same structure. `privateKey`, `privateKeyHex`, or `privateKeyMultihash` map to
-the `ExposedPrivateKey` field Torii expects and default to the `ed25519`
-algorithm when no prefix is supplied. Both requests return once Torii enqueues
-the instruction (`202 Accepted`), at which point the ledger will emit the
-matching `SpaceDirectoryEvent`.
-
-## Governance & ISO bridge
-
-`ToriiClient` exposes the governance APIs for inspecting contracts, staging
-proposals, submitting ballots (plain or ZK), rotating the council, and calling
+I18NI000000161X идара итеү API-ларҙы контракттарҙы тикшергән өсөн фашлай, сәхнәләштереү
+тәҡдимдәр, бюллетендәрҙе тапшырыу (ябай йәки З.К.), советты әйләндереп, шылтыратыу
 `governanceFinalizeReferendumTyped` /
-`governanceEnactProposalTyped` without hand-written DTOs. ISO&nbsp;20022 helpers
-follow the same pattern via `buildPacs008Message`/`buildPacs009Message` and the
-`submitIso*`/`waitForIsoMessageStatus` trio.
+Ҡулдан яҙылған ДТО-ларһыҙ `governanceEnactProposalTyped`. ISO 20022 ярҙамсылары
+`buildPacs008Message`/I18NI0000000165X һәм был ҡалыпты үтәргә
+I18NI0000166X/`waitForIsoMessageStatus` трио.
 
-See the [governance & ISO bridge recipe](./recipes/javascript-governance-iso.md)
-for CLI-ready samples plus pointers back to the full field guide in
+Ҡарағыҙ [идара итеү & ISO күпер рецепты](I18NU000000036X)
+өсөн CLI-әҙер өлгөләр плюс күрһәткестәр кире тулы ялан етәкселек
 `docs/source/sdk/js/governance_iso_examples.md`.
 
-## RBC sampling & delivery evidence
+## RBC үлсәү & тапшырыу дәлилдәре
 
-The JS roadmap also requires Roadrunner Block Commitment (RBC) sampling so operators can
-prove that the block they fetched through Sumeragi matches the chunk proofs they verify.
-Use the built-in helpers instead of building payloads by hand:
+JS юл картаһы шулай уҡ Roadrunner Блок йөкләмәһен талап итә (РБК) үлсәү, шулай итеп, операторҙар ала
+иҫбатлауынса, улар I18NT000000001X аша алынған блок улар раҫлай торған өлөшләтә дәлилдәргә тап килә.
+Ҡул менән файҙалы йөктәр төҙөү урынына төҙөлгән ярҙамсыларҙы ҡулланығыҙ:
 
-1. `getSumeragiRbcSessions()` mirrors `/v1/sumeragi/rbc/sessions`, and
-   `findRbcSamplingCandidate()` auto-selects the first delivered session with a block hash
-   (the integration suite falls back to it whenever
-   `IROHA_TORII_INTEGRATION_RBC_SAMPLE` is unset).
-2. `ToriiClient.buildRbcSampleRequest(session, overrides)` normalises `{blockHash,height,view}`
-   plus optional `{count,seed,apiToken}` overrides so malformed hex or negative integers never
-   reach Torii.
-3. `sampleRbcChunks()` POSTs the request to `/v1/sumeragi/rbc/sample`, returning chunk proofs
-   and Merkle paths (`samples[].chunkHex`, `chunkRoot`, `payloadHash`) you should archive with
-   the rest of your adoption evidence.
-4. `getSumeragiRbcDelivered(height, view)` captures the cohort’s delivery metadata so auditors
-   can replay the proof end-to-end.
+1. `getSumeragiRbcSessions()` X көҙгө `/v1/sumeragi/rbc/sessions`, һәм
+   I18NI000000171X авто-һайлай беренсе тапшырылған сеанс менән блок хеш
+   (интеграция люксы ҡасан да булһа, уға кире төшә
+   `IROHA_TORII_INTEGRATION_RBC_SAMPLE` необработанный).
+2. `ToriiClient.buildRbcSampleRequest(session, overrides)` I18NI000000174X нормализацияһы
+   Плю
+   етергә I18NT0000000017X.
+.
+   һәм Меркл юлдары (I18NI000000178X, I18NI000000179X, `payloadHash`) һеҙ архив менән тейеш.
+   ҡалған һеҙҙең тәрбиәгә алыу дәлилдәре.
+4. I18NI000000181X когортаның тапшырыу метамағлүмәттәрен тота, шулай итеп аудиторҙар
+   реплей оптаж осона тиклем.
 
 ```js
 import assert from "node:assert";
@@ -658,23 +477,23 @@ console.log(
 );
 ```
 
-Persist both responses under the artefact root you submit to governance. Override the
-auto-selected session via `RBC_SAMPLE_JSON='{"height":123,"view":4,"blockHash":"0x…"}'`
-whenever you need to probe a specific block, and treat failures to fetch RBC snapshots as a
-pre-flight gating error rather than silently downgrading to direct mode.
+Персистный ике яуап аҫтында артефакт тамыр һеҙ идара итеүгә тапшыра. Өҫтөнлөк
+автоһайланған сессия аша I18NI0000000182X
+Ҡасан ғына һеҙгә кәрәк, аныҡ блок тикшерергә, һәм дауалау етешһеҙлектәрен алыу өсөн эритроцит снимоктар а.
+осош алдынан ҡапҡа хатаһы түгел, ә өнһөҙ генә туранан-тура режимға тиклем түбәнәйтергә.
 
-## Testing & CI
+## Һынау & CI
 
-1. Cache cargo and npm artifacts.
-2. Run `npm run build:native`.
-3. Execute `npm test` (or `node --test` for smoke jobs).
+1. Кэш йөк һәм npm артефакттары.
+2. Йүгереп I18NI000000183X.
+3. `npm test` башҡарырға (йәки төтөн эш урындары өсөн I18NI000000185X).
 
-The reference GitHub Actions workflow lives in
+Һылтанма GitHub Actions эш ағымы 1990 йылда йәшәй.
 `docs/source/examples/iroha_js_ci.md`.
 
-## Next steps
+## Киләһе аҙымдар
 
-- Review the generated types in `javascript/iroha_js/index.d.ts`.
-- Explore the recipes under `javascript/iroha_js/recipes/`.
-- Pair `ToriiClient` with the Norito quickstart to inspect payloads alongside
-  SDK calls.
+- I18NI000000187X-тағы генерацияланған типтарҙы ҡабатлау.
+- `javascript/iroha_js/recipes/` XX рецептарын тикшерергә.
+- Пар I18NI0000000189X менән I18NT0000000007X frompart менән бер рәттән файҙалы йөктәрҙе тикшерергә
+  СДК шылтыратыуҙары.

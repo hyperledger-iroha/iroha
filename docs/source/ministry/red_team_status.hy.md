@@ -9,36 +9,37 @@ source_last_modified: "2025-12-29T18:16:35.979926+00:00"
 translation_last_reviewed: 2026-02-07
 title: Ministry Red-Team Status (MINFO-9)
 summary: Snapshot of the chaos drill program covering upcoming runs, last completed scenario, and remediation items.
+translator: machine-google-reviewed
 ---
 
-# Ministry Red-Team Status
+# նախարարության Կարմիր թիմային կարգավիճակ
 
-This page complements the [Moderation Red-Team Plan](moderation_red_team_plan.md)
-by tracking the near-term drill calendar, evidence bundles, and remediation
-status. Update it after every run alongside the artefacts captured under
+Այս էջը լրացնում է [Moderation Red-Team Plan] (moderation_red_team_plan.md)
+Հետևելով մոտաժամկետ վարժանքների օրացույցին, ապացույցների փաթեթներին և վերականգնմանը
+կարգավիճակը։ Թարմացրեք այն յուրաքանչյուր վազքից հետո՝ նկարահանված արտեֆակտների կողքին
 `artifacts/ministry/red-team/<YYYY-MM>/<scenario>/`.
 
-## Upcoming Drills
+## Առաջիկա վարժանքներ
 
-| Date (UTC) | Scenario | Owner(s) | Evidence Prep | Notes |
-|------------|---------|----------|---------------|-------|
-| 2026-11-12 | **Operation Blindfold** — Taikai mixed-mode smuggling rehearsal with gateway downgrade attempts | Security Engineering (Miyu Sato), Ministry Ops (Liam O’Connor) | `scripts/ministry/scaffold_red_team_drill.py` bundle `docs/source/ministry/reports/red_team/2026-11-operation-blindfold.md` + staging directory `artifacts/ministry/red-team/2026-11/operation-blindfold/` | Exercises GAR/Taikai overlap plus DNS failover; requires denylist Merkle snapshot before start and `export_red_team_evidence.py` run after dashboards are captured. |
+| Ամսաթիվ (UTC) | Սցենար | Սեփականատեր(ներ) | Ապացույցների նախապատրաստում | Ծանոթագրություններ |
+|------------|---------|---------|---------------|-------|
+| 2026-11-12 | **Operation Blindfold** — Taikai խառը ռեժիմով մաքսանենգության փորձեր` դարպասների վարկանիշի իջեցման փորձերով | Անվտանգության ճարտարագիտություն (Miyu Sato), նախարարության օպերացիա (Liam O'Connor) | `scripts/ministry/scaffold_red_team_drill.py` փաթեթ `docs/source/ministry/reports/red_team/2026-11-operation-blindfold.md` + բեմականացման գրացուցակ `artifacts/ministry/red-team/2026-11/operation-blindfold/` | Զորավարժություններ GAR/Taikai համընկնում և DNS ձախողում; պահանջում է denylist Merkle-ի լուսանկարը մեկնարկից առաջ և `export_red_team_evidence.py` գործարկումը վահանակների նկարահանումից հետո: |
 
-## Last Drill Snapshot
+## Վերջին պարապմունքի նկարը
 
-| Date (UTC) | Scenario | Evidence Bundle | Remediation & Follow-Ups |
-|------------|---------|-----------------|--------------------------|
-| 2026-08-18 | **Operation SeaGlass** — Gateway smuggling, governance replay, and alert brownout rehearsal | `artifacts/ministry/red-team/2026-08/operation-seaglass/` (Grafana exports, Alertmanager logs, `seaglass_evidence_manifest.json`) | **Open:** replay seal automation (`MINFO-RT-17`, owner: Governance Ops, due 2026-09-05); pin dashboard freeze to SoraFS (`MINFO-RT-18`, Observability, due 2026-08-25). **Closed:** logbook template updated to carry Norito manifest hashes. |
+| Ամսաթիվ (UTC) | Սցենար | Ապացույցների փաթեթ | Վերականգնում և Հետագայում |
+|------------|---------|---------------|-------------------------|
+| 2026-08-18 | **Operation SeaGlass** — Դարպասների մաքսանենգություն, կառավարման վերարտադրում և նախազգուշացման փորձեր | `artifacts/ministry/red-team/2026-08/operation-seaglass/` (Grafana արտահանումներ, Alertmanager տեղեկամատյաններ, `seaglass_evidence_manifest.json`) | **Բաց.** կրկնակի կնիքի ավտոմատացում (`MINFO-RT-17`, սեփականատեր. Governance Ops, ժամկետանց 2026-09-05); փին վահանակի սառեցում SoraFS-ին (`MINFO-RT-18`, դիտարկելիություն, 2026-08-25): **Փակ է.** գրանցամատյանի ձևանմուշը թարմացվել է Norito մանիֆեստի հեշերով: |
 
-## Tracking & Tooling
+## Հետևում և գործիքավորում
 
-- Use `scripts/ministry/moderation_payload_tool.py` to package injectible
-  payloads and denylist patches per scenario.
-- Record dashboard/log captures via `scripts/ministry/export_red_team_evidence.py`
-  immediately after each drill so the evidence manifest contains signed hashes.
-- CI guard `ci/check_ministry_red_team.sh` enforces that committed drill reports
-  do not contain placeholder text and that referenced artefacts exist before
-  merging.
+- Օգտագործեք `scripts/ministry/moderation_payload_tool.py` ներարկային փաթեթավորման համար
+  ծանրաբեռնվածություն և ժխտման կարկատաններ յուրաքանչյուր սցենարի համար:
+- Գրանցեք վահանակի/տեղեկամատյանների նկարները `scripts/ministry/export_red_team_evidence.py`-ի միջոցով
+  յուրաքանչյուր վարժումից անմիջապես հետո, որպեսզի ապացույցների մանիֆեստը պարունակի ստորագրված հեշեր:
+- CI պահակ `ci/check_ministry_red_team.sh`-ը պարտադրում է կատարված վարժության հաշվետվությունները
+  չեն պարունակում տեղապահի տեքստ, և որ նշված արտեֆակտները նախկինում գոյություն ունեն
+  միաձուլում.
 
-See `status.md` (§ *Ministry red-team status*) for the live summary referenced
-in weekly coordination calls.
+Տես՝ `status.md` (§ *Նախարարության կարմիր թիմի կարգավիճակ*) ուղիղ եթերում հղումով
+շաբաթական կոորդինացիոն զանգերում։

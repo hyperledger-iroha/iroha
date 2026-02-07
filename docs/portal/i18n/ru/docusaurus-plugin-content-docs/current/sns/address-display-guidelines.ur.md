@@ -4,116 +4,116 @@ direction: ltr
 source: docs/portal/docs/sns/address-display-guidelines.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-import ExplorerAddressCard from '@site/src/components/ExplorerAddressCard';
+импортируйте ExplorerAddressCard из @site/src/comComponents/ExplorerAddressCard;
 
-:::note مستند ماخذ
+:::примечание
 یہ صفحہ `docs/source/sns/address_display_guidelines.md` کی عکاسی کرتا ہے اور اب
 پورٹل کی کینونیکل کاپی ہے۔ سورس فائل ترجمہ PRs کے لئے برقرار رہتی ہے۔
 :::
 
-والٹس، ایکسپلوررز اور SDK مثالیں اکاؤنٹ ایڈریسز کو غیر متبدل payload سمجھیں۔
-Android کی ریٹیل والٹ مثال
-`examples/android/retail-wallet` میں مطلوبہ UX پیٹرن دکھایا گیا ہے:
+Используйте SDK для создания и редактирования полезной нагрузки.
+Android-устройства для Android
+`examples/android/retail-wallet` Информация о UX-файле:
 
-- **دو کاپی اہداف۔** دو واضح کاپی بٹنز دیں: IH58 (ترجیحی) اور صرف Sora والا
-  کمپریسڈ فارم (`sora...`، second‑best). IH58 ہمیشہ بیرونی شیئرنگ کے لئے محفوظ ہے اور QR
-  payload بناتا ہے۔ کمپریسڈ فارم میں inline وارننگ لازمی ہے کیونکہ یہ صرف
-  Sora-aware ایپس میں کام کرتا ہے۔ Android مثال دونوں Material بٹنز اور ٹول ٹپس
-  کو `examples/android/retail-wallet/src/main/res/layout/activity_main.xml` میں
-  وائر کرتی ہے، اور iOS SwiftUI ڈیمو `examples/ios/NoritoDemo/Sources/ContentView.swift`
-  کے اندر `AddressPreviewCard` کے ذریعے یہی UX دہراتا ہے۔
-- **Monospace، قابل انتخاب متن۔** دونوں strings کو monospace فونٹ اور
-  `textIsSelectable="true"` کے ساتھ رینڈر کریں تاکہ صارفین IME کے بغیر اقدار
-  دیکھ سکیں۔ قابلِ ترمیم فیلڈز سے بچیں: IME kana کو بدل سکتا ہے یا zero-width
+- **Возможно, что** вы можете увидеть: IH58 (ترجیحی) и Сора Ньяла.
+  کمپریسڈ فارم (`sora...`, второй лучший). IH58 ہمیشہ بیرونی شیئرنگ کے لئے محفوظ ہے اور QR
+  полезная нагрузка بناتا ہے۔ Используйте встроенные функции для создания и редактирования изображений.
+  Осознание соры ایپس میں کام کرتا ہے۔ Android-приложения Материалы
+  `examples/android/retail-wallet/src/main/res/layout/activity_main.xml` میں
+  Для iOS SwiftUI используйте `examples/ios/NoritoDemo/Sources/ContentView.swift`
+  Если у вас есть `AddressPreviewCard`, вы можете использовать UX-интерфейс ہے۔.
+- **Моноширинный формат, а также моноширинный формат** Можно использовать строки или моноширинный формат.
+  `textIsSelectable="true"` позволяет использовать IME для ввода данных
+  دیکھ سکیں۔ В качестве примера можно указать: IME-кана или параметр нулевой ширины.
   کوڈ پوائنٹس داخل کر سکتا ہے۔
-- **غیر ضمنی ڈیفالٹ ڈومین کے اشارے۔** جب selector ضمنی `default` ڈومین کی طرف
-  ہو تو ایک caption دکھائیں جو آپریٹرز کو یاد دلائے کہ suffix درکار نہیں۔
-  ایکسپلوررز کو بھی canonical ڈومین لیبل ہائی لائٹ کرنا چاہیے جب selector
-  digest encode کرے۔
-- **IH58 QR payloads۔** QR کوڈز کو IH58 string encode کرنا چاہیے۔ اگر QR
-  generation ناکام ہو تو خالی تصویر کے بجائے واضح error دکھائیں۔
-- **کلپ بورڈ پیغام۔** کمپریسڈ فارم کاپی کرنے کے بعد toast یا snackbar دکھائیں
-  جو صارفین کو یاد دلائے کہ یہ صرف Sora ہے اور IME سے خراب ہو سکتا ہے۔
+- **Воспользуйтесь селектором `default`, чтобы выбрать нужный вариант.
+  ہو تو ایک caption دکھائیں جو آپریٹرز کو یاد دلائے کہ суффикс درکار نہیں۔
+  Выберите канонический вариант выбора селектора
+  дайджест кодировать کرے۔
+- **Полезные данные QR IH58** Кодирование QR и кодирование строки IH58 QR-код
+  поколение ناکام ہو تو خالی تصویر کے بجائے واضح error دکھائیں۔
+- **کلپ بورڈ پیغام۔** کمپریسڈ فارم کاپی کرنے کے بعد тост یا закусочная دکھائیں
+  جو صارفین کو یاد دلائے کہ یہ صرف Сора ہے اور IME سے خراب ہو سکتا ہے۔
 
-ان گارڈ ریلز پر عمل Unicode/IME corruption روکتا ہے اور والٹ/ایکسپلورر UX کے لئے
-ADDR-6 roadmap acceptance معیار پورا کرتا ہے۔
+В случае повреждения Unicode/IME может возникнуть проблема с UX-интерфейсом или интерфейсом пользователя.
+Принятие дорожной карты ADDR-6 معیار پورا کرتا ہے۔
 
 ## اسکرین شاٹ فکسچرز
 
-لوکلائزیشن ریویوز کے دوران درج ذیل فکسچرز استعمال کریں تاکہ بٹن لیبلز، ٹول ٹپس
-اور وارننگز پلیٹ فارمز کے درمیان ہم آہنگ رہیں:
+Если вам нужна помощь в выборе места, где вы хотите لیبلز, ٹول ٹپس
+Вот несколько примеров того, как можно использовать:
 
-- Android ریفرنس: `/img/sns/address_copy_android.svg`
+- Версия Android: `/img/sns/address_copy_android.svg`
 
-  ![Android ڈوئل کاپی ریفرنس](/img/sns/address_copy_android.svg)
+  ![Android-версия приложения](/img/sns/address_copy_android.svg)
 
-- iOS ریفرنس: `/img/sns/address_copy_ios.svg`
+- Версия iOS: `/img/sns/address_copy_ios.svg`
 
   ![iOS ڈوئل کاپی ریفرنس](/img/sns/address_copy_ios.svg)
 
-## SDK helpers
+## помощники SDK
 
-ہر SDK ایک سہولت helper فراہم کرتا ہے جو IH58 اور کمپریسڈ فارم کے ساتھ وارننگ
-string دیتا ہے تاکہ UI لیئرز مستقل رہیں:
+Воспользуйтесь SDK-помощником, чтобы получить доступ к IH58 и использовать его в качестве помощника.
+Строка Для отображения пользовательского интерфейса:
 
 - JavaScript: `AccountAddress.displayFormats(networkPrefix?: number)`
-  (`javascript/iroha_js/src/address.js`)
-- JavaScript inspector: `inspectAccountId(...)` کمپریسڈ وارننگ string لوٹاتا ہے
-  اور اسے `warnings` میں شامل کرتا ہے جب کالرز `sora...` literal دیں، تاکہ والٹ/
-  ایکسپلورر ڈیش بورڈز paste/validation فلو میں Sora-only وارننگ دکھا سکیں، نہ کہ
+  (И18НИ00000026Х)
+- Инспектор JavaScript: `inspectAccountId(...)` کمپریسڈ وارننگ string لوٹاتا ہے
+  اور اسے `warnings` شامل کرتا ہے کالرز `sora...` literal دیں، کرتا والٹ/
+  Настройки вставки/проверки и проверки только для Sora.
   صرف تب جب وہ کمپریسڈ فارم خود بنائیں۔
-- Python: `AccountAddress.display_formats(network_prefix: int = 753)`
-- Swift: `AccountAddress.displayFormats(networkPrefix: UInt16 = 753)`
-- Java/Kotlin: `AccountAddress.displayFormats(int networkPrefix = 753)`
-  (`java/iroha_android/src/main/java/org/hyperledger/iroha/android/address/AccountAddress.java`)
+- Питон: `AccountAddress.display_formats(network_prefix: int = 753)`
+- Свифт: `AccountAddress.displayFormats(networkPrefix: UInt16 = 753)`
+- Java/Котлин: `AccountAddress.displayFormats(int networkPrefix = 753)`
+  (И18НИ00000033X)
 
-ان helpers کو استعمال کریں، UI لیئر میں encode لاجک دوبارہ مت لکھیں۔ JavaScript
-helper `domainSummary` میں `selector` payload (`tag`, `digest_hex`, `registry_id`,
-`label`) بھی دیتا ہے تاکہ UIs یہ ظاہر کر سکیں کہ selector Local-12 ہے یا رجسٹری
-سے بیکڈ ہے، بغیر raw payload دوبارہ parse کیے۔
+В помощниках можно настроить пользовательский интерфейс, чтобы кодировать файлы и использовать их. JavaScript
+helper `domainSummary` с полезной нагрузкой `selector` (`tag`, `digest_hex`, `registry_id`,
+`label`) Выберите селектор Local-12 или выберите селектор Local-12.
+Использование необработанной полезной нагрузки и синтаксический анализ данных
 
-## ایکسپلورر instrumentation ڈیمو
+## Инструменты
 
-<ExplorerAddressCard />
+Доступны телеметрия и доступность, а также зеркало и возможность:
 
-ایکسپلوررز کو والٹ کی telemetry اور accessibility کے کام کو mirror کرنا چاہیے:
-
-- کاپی بٹنز پر `data-copy-mode="ih58|compressed (`sora`)|qr"` لگائیں تاکہ فرنٹ اینڈز Torii
-  میٹرک `torii_address_format_total` کے ساتھ usage counters نکال سکیں۔ اوپر والا
-  ڈیمو کمپوننٹ `{mode,timestamp}` کے ساتھ `iroha:address-copy` ایونٹ بھیجتا ہے؛
-  اسے اپنے analytics/telemetry pipeline (مثلاً Segment یا NORITO-backed collector)
-  سے جوڑیں تاکہ dashboards سرور سائیڈ address format استعمال اور کلائنٹ کاپی
-  موڈز کو correlate کر سکیں۔ Torii domain counters
-  (`torii_address_domain_total{domain_kind}`) کو اسی فیڈ میں بھیجیں تاکہ Local-12
-  ریٹائرمنٹ ریویوز `address_ingest` Grafana بورڈ سے براہ راست 30 دن کا ثبوت
+- کاپی بٹنز پر `data-copy-mode="ih58|compressed (`sora`)|qr"` Обратите внимание на Torii
+  `torii_address_format_total` — счетчики использования. اوپر والا
+  Если у вас есть `{mode,timestamp}` или `iroha:address-copy`, выберите нужный вариант.
+  Конвейер аналитики/телеметрии (в сегменте یا, сборщик, поддерживаемый NORITO)
+  Использование информационных панелей. Использование формата адреса.
+  موڈز کو коррелирует کر سکیں۔ Torii счетчики домена
+  (`torii_address_domain_total{domain_kind}`) Если вам нужен локальный-12
+  ریٹائرمنٹ ریویوز `address_ingest` Grafana بورڈ سے براہ راست 30 дней в году.
   `domain_kind="local12"` برآمد کر سکیں۔
 - ہر کنٹرول کے لئے الگ `aria-label`/`aria-describedby` ہنٹس دیں جو بتائیں کہ
-  literal شیئر کرنے کے لئے محفوظ ہے (IH58) یا صرف Sora (کمپریسڈ)۔ ضمنی ڈومین
-  caption کو description میں شامل کریں تاکہ assistive technology وہی سیاق دکھائے
+  буквальный شیئر کرنے کے لئے محفوظ ہے (IH58) یا صرف Сора (کمپریسڈ)۔ ضمنی ڈومین
+  подпись и описание میں شامل کریں تاکہ вспомогательные технологии وہی سیاق دکھائے
   جو بصری طور پر نظر آتا ہے۔
-- ایک live region (مثلاً `<output aria-live="polite">...</output>`) رکھیں جو کاپی
-  نتائج اور وارننگز اعلان کرے، Swift/Android نمونوں میں موجود VoiceOver/TalkBack
+- Живой регион (مثلاً `<output aria-live="polite">...</output>`).
+  Поддержка Swift/Android Поддержка VoiceOver/TalkBack
   رویے کے مطابق۔
 
-یہ instrumentation ADDR-6b پوری کرتی ہے کیونکہ یہ دکھاتی ہے کہ آپریٹرز Local
-selectors کے غیر فعال ہونے سے پہلے Torii ingestion اور client-side copy modes
+یہ инструментарий ADDR-6b پوری کرتی ہے کیونکہ یہ دکھاتی ہے کہ آپریٹرز Local
+селекторы и режимы копирования на стороне клиента Torii
 دونوں کا مشاہدہ کر سکتے ہیں۔
 
-## Local -> Global migration toolkit
+## Инструментарий локальной -> глобальной миграции
 
-Local selectors کی audit اور conversion خودکار ہو۔ helper JSON audit رپورٹ اور
-IH58/کمپریسڈ لسٹ دونوں بناتا ہے جنہیں آپریٹرز readiness tickets کے ساتھ منسلک
-کرتے ہیں، جبکہ متعلقہ runbook Grafana dashboards اور Alertmanager قواعد کو لنک
-کرتا ہے جو strict-mode cutover کو gate کرتے ہیں۔
+Локальные селекторы и аудит и конверсия помощник по аудиту JSON رپورٹ اور
+IH58/کمپریسڈ لسٹ دونوں بناتا ہے جنہیں آپریٹرز билеты готовности کے ساتھ منسلک
+Используйте Runbook Grafana. Панели мониторинга и Alertmanager.
+Переключение строгого режима и ворота
 
-## بائنری layout کا فوری حوالہ (ADDR-1a)
+## Макет макета для макета (ADDR-1a)
 
-جب SDKs advanced address tooling (inspectors، validation hints، manifest builders)
-دکھائیں تو developers کو `docs/account_structure.md` میں موجود canonical wire
-فارمیٹ کی طرف بھیجیں۔ layout ہمیشہ `header · selector · controller` ہوتا ہے، جہاں
-header bits یہ ہیں:
+Расширенные инструменты адресации SDK (инспекторы, подсказки по проверке, построители манифестов).
+Разработчики могут использовать `docs/account_structure.md` для использования canonical Wire
+فارمیٹ کی طرف بھیجیں۔ макет ہمیشہ `header · selector · controller` ہوتا ہے، جہاں
+биты заголовка یہ ہیں:
 
 ```
 bit index:   7        5 4      3 2      1 0
@@ -122,14 +122,14 @@ payload bit: │version  │ class  │  norm  │ext │
              └─────────┴────────┴────────┴────┘
 ```
 
-- `addr_version = 0` (bits 7-5) موجودہ ہے؛ non-zero اقدار ریزرو ہیں اور
-  `AccountAddressError::InvalidHeaderVersion` اٹھانی چاہئیں۔
-- `addr_class` single (`0`) اور multisig (`1`) controllers میں فرق بتاتا ہے۔
-- `norm_version = 1` Norm v1 selector قواعد encode کرتا ہے؛ مستقبل کے norms اسی
-  2-bit فیلڈ کو دوبارہ استعمال کریں گے۔
-- `ext_flag` ہمیشہ `0` ہے؛ فعال bits غیر معاون payload extensions دکھاتے ہیں۔
+- `addr_version = 0` (биты 7–5) ненулевой اقدار ریزرو ہیں اور
+  `AccountAddressError::InvalidHeaderVersion` Дополнительная информация
+- Одиночные (`0`) и многоподписные (`1`) контроллеры `addr_class`.
+- `norm_version = 1` Селектор Norm v1 для кодирования کرتا ہے؛ Каковы нормы
+  2-битная версия может быть использована
+- `ext_flag` ہمیشہ `0` ہے؛ Дополнительные биты и расширения полезной нагрузки.
 
-selector فوراً header کے بعد آتا ہے:
+Селектор в заголовке, где находится:
 
 ```
 ┌──────────┬──────────────────────────────────────────────┐
@@ -137,35 +137,33 @@ selector فوراً header کے بعد آتا ہے:
 └──────────┴──────────────────────────────────────────────┘
 ```
 
-UIs اور SDKs کو selector کی قسم دکھانے کے لئے تیار ہونا چاہیے:
+Пользовательские интерфейсы и SDK, а также селектор и дополнительные функции:
 
 - `0x00` = ضمنی ڈیفالٹ ڈومین (کوئی payload نہیں)۔
-- `0x01` = لوکل digest (12-byte `blake2s_mac("SORA-LOCAL-K:v1", label)`).
-- `0x02` = گلوبل رجسٹری انٹری (`registry_id:u32` big-endian).
+- `0x01` = дайджест (12-байтовый `blake2s_mac("SORA-LOCAL-K:v1", label)`).
+- `0x02` = گلوبل رجسٹری انٹری (`registry_id:u32` с прямым порядком байтов).
 
-کینونیکل hex مثالیں جنہیں والٹ ٹولنگ docs/tests میں لنک یا embed کر سکتی ہے:
+Шестнадцатеричный набор документов и тестов для встраивания файлов:
 
-| Selector قسم | Canonical hex |
+| Селектор قسم | Канонический шестнадцатеричный |
 |---------------|---------------|
 | ضمنی ڈیفالٹ | `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
-| لوکل digest (`treasury`) | `0x0201b18fe9c1abbac45b3e38fc5d0001203b77a042f1de02f6d5f418f36a2a28ea` |
-| گلوبل رجسٹری (`android`) | `0x020200000059a6a47eb7c9aa415f77b18636a85a57837d5518ff5357ef63c35202` |
+| Дайджест (`treasury`) | `0x0201b18fe9c1abbac45b3e38fc5d0001203b77a042f1de02f6d5f418f36a2a28ea` |
+| گلوبل رجسٹری (`android`) | `0x020200000059a6a47eb7c9aa415f77b18636a85a57837d5518ff5357ef63c35202` |Селектор/состояние مکمل کے لئے `docs/source/references/address_norm_v1.md` اور
+Байтовая диаграмма `docs/account_structure.md` دیکھیں۔
 
-مکمل selector/state ٹیبل کے لئے `docs/source/references/address_norm_v1.md` اور
-مکمل byte diagram کے لئے `docs/account_structure.md` دیکھیں۔
+## Канонические формы نافذ کرنا
 
-## Canonical forms نافذ کرنا
+Для работы с рабочим процессом CLI в ADDR-5 используются следующие возможности:
 
-آپریٹرز کو ADDR-5 میں درج CLI workflow فالو کرنا چاہیے:
-
-1. `iroha tools address inspect` اب IH58، کمپریسڈ، اور canonical hex payloads کے ساتھ
-   structured JSON summary دیتا ہے۔ summary میں `kind`/`warning` والے `domain`
-   آبجیکٹ بھی ہوتے ہیں اور `input_domain` کے ذریعے دیے گئے ڈومین کو بھی echo
-   کرتا ہے۔ جب `kind` `local12` ہو تو CLI stderr پر وارننگ دیتا ہے اور JSON
-   summary وہی رہنمائی دہراتا ہے تاکہ CI pipelines اور SDKs اسے surface کر سکیں۔
-   جب بھی آپ convert شدہ encoding کو `<ih58>@<domain>` کی صورت میں replay کرنا
+1. `iroha tools address inspect` или IH58, а также канонические шестнадцатеричные полезные нагрузки.
+   структурированная сводка JSON دیتا ہے۔ Краткое описание `kind`/`warning` и `domain`
+   Если вы хотите использовать `input_domain`, вы можете использовать эхо.
+   کرتا ہے۔ `kind` `local12` поддерживает стандартный интерфейс командной строки и поддерживает JSON.
+   Краткое описание Конвейеры CI Конвейеры SDK и поверхность کر سکیں۔
+   Вы можете конвертировать или кодировать `<ih58>@<domain>` или воспроизводить повтор.
    چاہیں تو `--append-domain` دیں۔
-2. SDKs اسی وارننگ/summary کو JavaScript helper کے ذریعے دکھا سکتے ہیں:
+2. SDK и краткое описание помощника по JavaScript для использования:
 
    ```js
    import { inspectAccountId } from "@iroha/iroha-js";
@@ -176,69 +174,67 @@ UIs اور SDKs کو selector کی قسم دکھانے کے لئے تیار ہو
    }
    console.log(summary.ih58.value, summary.compressed (`sora`));
    ```
-  helper literal سے detect کیا گیا IH58 prefix محفوظ رکھتا ہے جب تک آپ
-  `networkPrefix` واضح طور پر فراہم نہ کریں؛ اس لئے non-default networks کے
-  summaries خاموشی سے default prefix کے ساتھ دوبارہ render نہیں ہوتے۔
+  вспомогательный литерал سے обнаружить کیا گیا Префикс IH58 محفوظ رکھتا ہے جب تک آپ
+  `networkPrefix` واضح طور پر فراہم نہ کریں؛ Доступны сети, отличные от сетей по умолчанию.
+  резюме خاموشی سے префикс по умолчанию کے ساتھ دوبارہ render نہیں ہوتے۔
 
-3. canonical payload کو `ih58.value` یا `compressed (`sora`)` فیلڈز سے reuse کر کے تبدیل
-   کریں (یا `--format` کے ذریعے دوسری encoding مانگیں)۔ یہ strings پہلے سے
+3. Каноническая полезная нагрузка — `ih58.value` или `compressed (`sora`)` — возможность повторного использования.
+   کریں (یا `--format` کے ذریعے دوسری кодирования مانگیں)۔ یہ струны پہلے سے
    بیرونی شیئرنگ کے لئے محفوظ ہیں۔
-4. manifests، registries اور customer-facing docs کو canonical فارم سے اپ ڈیٹ
-   کریں اور فریقین کو مطلع کریں کہ cutover مکمل ہونے پر Local selectors ریجیکٹ
+4. манифесты, реестры и документы, ориентированные на клиентов, а также канонические документы и документы.
+   Как сделать переход к локальным селекторам
    ہوں گے۔
 5. بلک ڈیٹا سیٹس کے لئے
    `iroha tools address audit --input addresses.txt --network-prefix 753` چلائیں۔ کمانڈ
-   newline-separated literals پڑھتی ہے ( `#` سے شروع ہونے والے comments نظرانداز
-   ہوتے ہیں، اور `--input -` یا کوئی فلیگ نہ ہو تو STDIN استعمال ہوتا ہے)، ہر
-   اندراج کے لئے canonical/IH58 (ترجیحی)/compressed (`sora`) (`sora`, second-best) summaries کے ساتھ JSON رپورٹ بناتی
-   rows ہوں تو `--allow-errors` استعمال کریں، اور جب آپریٹرز Local selectors کو
-   CI میں بلاک کرنے کے لئے تیار ہوں تو `--fail-on-warning` سے آٹومیشن گیٹ کریں۔
-6. اگر newline-to-newline rewrite چاہیے تو
-  Local-selector remediation spreadsheets کے لئے
-  استعمال کریں تاکہ `input,status,format,...` CSV برآمد ہو جو canonical encodings،
-  warnings اور parse failures کو ایک پاس میں نمایاں کرے۔ helper ڈیفالٹ طور پر
-  non-Local rows چھوڑ دیتا ہے، باقی entries کو مطلوبہ encoding (IH58 ترجیحی/compressed (`sora`) second‑best/hex/JSON)
-  میں بدلتا ہے، اور `--append-domain` پر اصل ڈومین محفوظ رکھتا ہے۔ `--allow-errors`
-  کے ساتھ جوڑیں تاکہ خراب literals والے dumps پر بھی scan جاری رہے۔
-7. CI/lint automation `ci/check_address_normalize.sh` چلا سکتی ہے، جو
-   `fixtures/account/address_vectors.json` سے Local selectors نکال کر
+   Литералы, разделенные новой строкой پڑھتی ہے ( `#` سے شروع ہونے والے комментариев نظرانداز
+   Если вы используете `--input -`, вы можете использовать стандартный стандартный ввод (STDIN) или
+   Используйте канонические/IH58 (ترجیحی)/сжатые (`sora`) (`sora`, второй лучший) сводные данные JSON رپورٹ بناتی
+   rows ہوں تو `--allow-errors` استعمال کریں، اور جب آپریٹرز Local selectors کو
+   CI может быть использован для `--fail-on-warning`, если вы хотите использовать его.
+6. Перезапись новой строки на новую строку
+  Таблицы исправлений локального выбора
+  Используйте `input,status,format,...` CSV для поддержки канонических кодировок.
+  предупреждения и сбои синтаксического анализа. помощник ڈیفالٹ طور پر
+  нелокальные строки, а также записи и кодировка (IH58 ترجیحی/compressed (`sora`) второй лучший/шестнадцатеричный/JSON)
+  Если вы хотите использовать `--append-domain`, вы можете использовать его в качестве примера. `--allow-errors`
+  Скачивание литералов и дампов, сканирование и сканирование.
+7. Автоматизация CI/lint `ci/check_address_normalize.sh`.
+   `fixtures/account/address_vectors.json` سے Локальные селекторы
    `iroha tools address normalize` سے تبدیل کرتی ہے، اور
    `iroha tools address audit --fail-on-warning` دوبارہ چلاتی ہے تاکہ ثابت ہو کہ
-   releases اب Local digests نہیں نکالتے۔
+   релизы اب Местные дайджесты نہیں نکالتے۔`torii_address_local8_total{endpoint}` کے ساتھ
+`torii_address_collision_total{endpoint,kind="local12_digest"}`,
+`torii_address_collision_domain_total{endpoint,domain}`, плата Grafana
+`dashboards/grafana/address_ingest.json` сигнал принудительного исполнения دیتے ہیں: جب
+производственные панели مسلسل 30 дней назад legit Местные материалы اور صفر
+Коллизии Local-12 или Torii Gate Local-8 в основной сети или жесткий отказ
+Доступ к Local-12 и поиск глобальных доменов, соответствующих записям реестра.
+Замораживание вывода вывода CLI и отображение строки предупреждения для оператора.
+Подсказки SDK и автоматизация, а также критерии выхода из дорожной карты.
+ہے؛ регрессионная диагностика Поддержка кластеров разработки/тестирования `false` کریں۔
+`torii_address_domain_total{domain_kind}` или Grafana (`dashboards/grafana/address_ingest.json`)
+Зеркало с пакетом доказательств ADDR-7.
+селекторы отключить کرے۔ Пакет менеджера оповещений
+(`dashboards/alerts/address_ingest_rules.yml`) Для ограждений можно использовать:
 
-`torii_address_local8_total{endpoint}` کے ساتھ
-`torii_address_collision_total{endpoint,kind="local12_digest"}`،
-`torii_address_collision_domain_total{endpoint,domain}`، اور Grafana board
-`dashboards/grafana/address_ingest.json` enforcement signal دیتے ہیں: جب
-production dashboards مسلسل 30 دن تک صفر legit Local submissions اور صفر
-Local-12 collisions دکھائیں تو Torii Local-8 gate کو mainnet پر hard-fail کرے
-گا، پھر Local-12 کو اس وقت جب global domains میں matching registry entries ہوں۔
-اس freeze کے لئے CLI output کو operator-facing نوٹس سمجھیں - وہی warning string
-SDK tooltips اور automation میں استعمال ہوتی ہے تاکہ roadmap exit criteria سے
-ہے؛ regressions diagnose کرتے وقت صرف dev/test clusters میں اسے `false` کریں۔
-`torii_address_domain_total{domain_kind}` کو Grafana (`dashboards/grafana/address_ingest.json`)
-میں mirror کرتے رہیں تاکہ ADDR-7 evidence pack یہ ثابت کر سکے کہ
-selectors کو disable کرے۔ Alertmanager pack
-(`dashboards/alerts/address_ingest_rules.yml`) تین guardrails شامل کرتا ہے:
-
-- `AddressLocal8Resurgence` اس وقت page کرتا ہے جب کوئی context نیا Local-8
-  increment رپورٹ کرے۔ strict-mode rollouts روکیں، dashboard میں offending SDK
-  کریں جب تک signal صفر نہ ہو جائے، پھر default (`true`) بحال کریں۔
-- `AddressLocal12Collision` تب فائر ہوتا ہے جب دو Local-12 labels ایک ہی digest
-  پر hash ہوں۔ manifest promotions روکیں، Local -> Global toolkit چلا کر digest
-  mapping آڈٹ کریں، اور Nexus governance کے ساتھ coordinate کریں اس سے پہلے کہ
-  registry entry دوبارہ جاری ہو یا downstream rollouts بحال ہوں۔
-- `AddressInvalidRatioSlo` خبردار کرتا ہے جب fleet-wide invalid ratio (Local-8/
-  strict-mode rejections کے بغیر) 10 منٹ تک 0.1% SLO سے بڑھ جائے۔
+- `AddressLocal8Resurgence` на странице с контекстом Local-8
+  приращение رپورٹ کرے۔ развертывание строгого режима, панель мониторинга, нарушение SDK
+  Выбор сигнала по умолчанию (`true`)
+- `AddressLocal12Collision` تب فائر ہوتا ہے جب دو Local-12 labels ایک ہی дайджест
+  پر хэш ہوں۔ Продвижение манифеста روکیں، Local -> Global Toolkit چلا کر
+  отображение آڈٹ کریں، اور Nexus управление کے ساتھ координата کریں اس سے پہلے کہ
+  запись в реестре دوبارہ جاری ہو یا нижестоящие развертывания
+- `AddressInvalidRatioSlo` خبردار کرتا ہے جب недопустимый коэффициент для всего парка (Local-8/
+  отклонение в строгом режиме (от 10 месяцев до 0,1 % SLO)
   `torii_address_invalid_total` استعمال کر کے متعلقہ context/reason کی نشاندہی
-  کریں اور owning SDK ٹیم کے ساتھ coordinate کر کے strict mode دوبارہ فعال کریں۔
+  Если у вас есть SDK или нет, вы можете координировать свои действия или использовать строгий режим.
 
 ### ریلیز نوٹ اسنیپٹ (والٹ اور ایکسپلورر)
 
-cutover کے وقت والٹ/ایکسپلورر ریلیز نوٹس میں درج ذیل bullet شامل کریں:
+Обрезка, в которой можно найти/переключить пулю, можно увидеть:
 
-> **Addresses:** `iroha tools address normalize --only-local --append-domain` helper شامل
-> کیا گیا اور اسے CI (`ci/check_address_normalize.sh`) میں وائر کیا گیا تاکہ
-> میں تبدیل کر سکیں، قبل اس کے کہ Local-8/Local-12 mainnet پر بلاک ہوں۔ کسی بھی
-> custom exports کو اپ ڈیٹ کریں تاکہ کمانڈ چلائی جائے اور normalized list کو
-> release evidence bundle کے ساتھ منسلک کریں۔
+> **Адреса:** `iroha tools address normalize --only-local --append-domain` помощник شامل
+> Установите флажок CI (`ci/check_address_normalize.sh`)
+> Доступ к основной сети Local-8/Local-12 или локальной сети Local-12. کسی بھی
+> Пользовательский экспорт или стандартизированный список, или нормализованный список.
+> опубликовать пакет доказательств کے ساتھ منسلک کریں۔

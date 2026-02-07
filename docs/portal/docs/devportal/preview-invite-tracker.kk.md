@@ -11,131 +11,130 @@ id: preview-invite-tracker
 title: Preview invite tracker
 sidebar_label: Preview tracker
 description: Wave-by-wave status log for the checksum-gated docs portal preview program.
+translator: machine-google-reviewed
 ---
 
-This tracker records every docs portal preview wave so DOCS-SORA owners and
-governance reviewers can see which cohort is active, who approved the invites,
-and which artefacts still need attention. Update it whenever invites are sent,
-revoked, or deferred so the audit trail stays inside the repository.
+Бұл трекер әрбір құжаттар порталын алдын ала қарау толқынын жазады, сондықтан DOCS-SORA иелері мен
+басқару шолушылары қай когорт белсенді екенін, шақыруларды кім мақұлдағанын көре алады,
+және қандай артефактілер әлі де назар аударуды қажет етеді. Шақырулар жіберілген сайын оны жаңартыңыз,
+кері қайтарылған немесе кейінге қалдырылған, сондықтан аудит ізі репозитарий ішінде қалады.
 
-## Wave status
+## Толқын күйі
 
-| Wave | Cohort | Tracker issue | Approver(s) | Status | Target window | Notes |
+| Толқын | Когорта | Трекер мәселесі | Бекітуші(лер) | Күй | Мақсатты терезе | Ескертпелер |
 | --- | --- | --- | --- | --- | --- | --- |
-| **W0 – Core maintainers** | Docs + SDK maintainers validating checksum flow | `DOCS-SORA-Preview-W0` (GitHub/ops tracker) | Docs/DevRel lead + Portal TL | 🈴 Completed | Q2 2025 weeks 1–2 | Invites sent 2025‑03‑25, telemetry stayed green, exit summary published 2025‑04‑08. |
-| **W1 – Partners** | SoraFS operators, Torii integrators under NDA | `DOCS-SORA-Preview-W1` | Docs/DevRel lead + Governance liaison | 🈴 Completed | Q2 2025 week 3 | Invites ran 2025‑04‑12 → 2025‑04‑26 with all eight partners acked; evidence captured in [`preview-feedback/w1/log.md`](./preview-feedback/w1/log.md) and the exit digest in [`preview-feedback/w1/summary.md`](./preview-feedback/w1/summary.md). |
-| **W2 – Community** | Curated community waitlist (≤25 at a time) | `DOCS-SORA-Preview-W2` | Docs/DevRel lead + Community manager | 🈴 Completed | Q3 2025 week 1 (tentative) | Invites ran 2025‑06‑15 → 2025‑06‑29 with telemetry green throughout; evidence + findings captured in [`preview-feedback/w2/summary.md`](./preview-feedback/w2/summary.md). |
-| **W3 – Beta cohorts** | Finance/observability beta + SDK partner + ecosystem advocate | `DOCS-SORA-Preview-W3` | Docs/DevRel lead + Governance liaison | 🈴 Completed | Q1 2026 week 8 | Invites ran 2026‑02‑18 → 2026‑02‑28; digest + portal data generated via `preview-20260218` wave (see [`preview-feedback/w3/summary.md`](./preview-feedback/w3/summary.md)). |
+| **W0 – Негізгі қызмет көрсетушілер** | Бақылау сомасы ағынын тексеретін Docs + SDK қолдаушылары | `DOCS-SORA-Preview-W0` (GitHub/ops трекер) | Docs/DevRel жетекші + Portal TL | 🈴 Аяқталды | 2 тоқсан 2025  1–2 апта | Шақырулар 2025‑03‑25 жіберілді, телеметрия жасыл күйінде қалды, шығу қорытындысы 2025‑04‑08 жарияланған. |
+| **W1 – Серіктестер** | SoraFS операторлары, NDA бойынша Torii интеграторлары | `DOCS-SORA-Preview-W1` | Docs/DevRel жетекші + Басқару байланысы | 🈴 Аяқталды | 2025 2 тоқсан  3 апта | Шақырулар 2025‑04‑12 → 2025‑04‑26 аралығында орындалды, барлық сегіз серіктес қабылданды; [`preview-feedback/w1/log.md`](./preview-feedback/w1/log.md) және шығу дайджесті [`preview-feedback/w1/summary.md`](./preview-feedback/w1/summary.md) ішінде алынған дәлелдер. |
+| **W2 – Қауымдастық** | Таңдалған қауымдастық күту тізімі (бір уақытта ≤25) | `DOCS-SORA-Preview-W2` | Docs/DevRel жетекші + Қауымдастық менеджері | 🈴 Аяқталды | 3 тоқсан 2025  1 апта (болжамды) | Шақырулар 2025‑06‑15 → 2025‑06‑29 аралығында телеметриялық жасыл түсті; дәлелдер + [`preview-feedback/w2/summary.md`](./preview-feedback/w2/summary.md) ішінде түсірілген тұжырымдар. |
+| **W3 – Бета когорты** | Қаржы/бақылау бета нұсқасы + SDK серіктесі + экожүйенің қорғаушысы | `DOCS-SORA-Preview-W3` | Docs/DevRel жетекші + Басқару байланысы | 🈴 Аяқталды | 2026 1 тоқсан 8 апта | Шақырулар 2026‑02‑18 → 2026‑02‑28; дайджест + `preview-20260218` толқыны арқылы жасалған портал деректері ([`preview-feedback/w3/summary.md`](./preview-feedback/w3/summary.md) қараңыз). |
 
-> Note: link each tracker issue to the corresponding preview request tickets and
-> archive them under the `docs-portal-preview` project so approvals remain
-> discoverable.
+> Ескертпе: әрбір трекер мәселесін сәйкес алдын ала қарау сұрау билеттерімен байланыстырыңыз және
+> оларды `docs-portal-preview` жобасы бойынша мұрағаттаңыз, осылайша мақұлдаулар қалады
+> табылуы мүмкін.
 
-## Active tasks (W0)
+## Белсенді тапсырмалар (W0)
 
-- ✅ Preflight artefacts refreshed (GitHub Actions `docs-portal-preview` run 2025‑03‑24, descriptor verified via `scripts/preview_verify.sh` using tag `preview-2025-03-24`).
-- ✅ Telemetry baselines captured (`docs.preview.integrity`, `TryItProxyErrors` dashboards snapshot saved to the W0 tracker issue).
-- ✅ Outreach copy locked using [`docs/examples/docs_preview_invite_template.md`](../../../examples/docs_preview_invite_template.md) with preview tag `preview-2025-03-24`.
-- ✅ Intake requests logged for the first five maintainers (tickets `DOCS-SORA-Preview-REQ-01` … `-05`).
-- ✅ First five invites sent 2025‑03‑25 10:00–10:20 UTC after seven consecutive green telemetry days; acknowledgements stored in `DOCS-SORA-Preview-W0`.
-- ✅ Monitor telemetry + host office hours (daily check-ins through 2025‑03‑31; checkpoint log below).
-- ✅ Collect midpoint feedback / issues and tag them `docs-preview/w0` (see [W0 digest](./preview-feedback/w0/summary.md)).
-- ✅ Publish wave summary + invite exit confirmations (exit bundle dated 2025‑04‑08; see [W0 digest](./preview-feedback/w0/summary.md)).
-- ✅ W3 beta wave tracked; future waves scheduled as needed after governance review.
+- ✅ Ұшу алдындағы артефактілер жаңартылды (GitHub Actions `docs-portal-preview` 2025‑03‑24 жұмыс істейді, дескриптор `preview-2025-03-24` тегі арқылы `scripts/preview_verify.sh` арқылы расталды).
+- ✅ Телеметрияның негізгі көрсеткіштері түсірілді (`docs.preview.integrity`, `TryItProxyErrors` бақылау тақталарының суреті W0 трекер мәселесіне сақталған).
+- ✅ Аутрич көшірмесі `preview-2025-03-24` алдын ала қарау тегі бар [`docs/examples/docs_preview_invite_template.md`](../../../examples/docs_preview_invite_template.md) арқылы құлыпталған.
+- ✅ Алғашқы бес қызмет көрсетуші үшін тіркелген қабылдау сұраулары (билеттер `DOCS-SORA-Preview-REQ-01` … `-05`).
+- ✅ Алғашқы бес шақыру 2025‑03‑25 10:00–10:20 UTC қатарынан жеті жасыл телеметрия күнінен кейін жіберілді; `DOCS-SORA-Preview-W0` ішінде сақталған растаулар.
+- ✅ Телеметрияны бақылаңыз + хосттың жұмыс уақыты (күнделікті тіркелу 2025‑03‑31 дейін; төмендегі бақылау пунктінің журналы).
+- ✅ Орташа пікірді/мәселелерді жинап, оларды `docs-preview/w0` белгілеңіз ([W0 дайджест](./preview-feedback/w0/summary.md) қараңыз).
+- ✅ Толқынның қорытындысын + шақыру туралы растауларды жариялау (шығу жинағы 2025‑04‑08; [W0 дайджест](./preview-feedback/w0/summary.md) қараңыз).
+- ✅ W3 бета толқыны бақыланады; басқаруды тексеруден кейін қажет болған жағдайда жоспарланған болашақ толқындар.
 
-## W1 partner wave summary
+## W1 серіктес толқынының қорытындысы
 
-- ✅ **Legal & governance approvals.** Partner addendum signed 2025‑04‑05; approvals uploaded to `DOCS-SORA-Preview-W1`.
-- ✅ **Telemetry + Try it staging.** Change ticket `OPS-TRYIT-147` executed 2025‑04‑06 with Grafana snapshots for `docs.preview.integrity`, `TryItProxyErrors`, and `DocsPortal/GatewayRefusals` archived.
-- ✅ **Artefact + checksum prep.** `preview-2025-04-12` bundle verified; descriptor/checksum/probe logs stored under `artifacts/docs_preview/W1/preview-2025-04-12/`.
-- ✅ **Invite roster + dispatch.** All eight partner requests (`DOCS-SORA-Preview-REQ-P01…P08`) approved; invites sent 2025‑04‑12 15:00–15:21 UTC with acknowledgements logged per reviewer.
-- ✅ **Feedback instrumentation.** Daily office hours + telemetry checkpoints recorded; see [`preview-feedback/w1/summary.md`](./preview-feedback/w1/summary.md) for the digest.
-- ✅ **Final roster/exit log.** [`preview-feedback/w1/log.md`](./preview-feedback/w1/log.md) now records invite/ack timestamps, telemetry evidence, quiz exports, and artefact pointers as of 2025‑04‑26 so governance can replay the wave.
+- ✅ **Құқықтық және басқаруды мақұлдау.** Серіктес қосымшасына қол қойылған 2025‑04‑05; мақұлдаулар `DOCS-SORA-Preview-W1` ішіне жүктеп салынған.
+- ✅ **Телеметрия + Қоюға тырысыңыз.** `OPS-TRYIT-147` билетін `docs.preview.integrity`, `docs.preview.integrity`, I18NI00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000 мұрағатталған.
+- ✅ **Артефакт + бақылау сомасын дайындау.** `preview-2025-04-12` жинағы расталды; `artifacts/docs_preview/W1/preview-2025-04-12/` астында сақталған дескриптор/бақылау сомасы/зерттеу журналдары.
+- ✅ **Тізімді шақыру + жөнелту.** Барлық сегіз серіктес сұраулары (`DOCS-SORA-Preview-REQ-P01…P08`) мақұлданды; шақырулар 2025‑04‑12 15:00–15:21UTC аралығында жіберілді, әр рецензент үшін растаулар тіркелді.
+- ✅ **Кері байланыс аспаптары.** Күнделікті жұмыс уақыты + телеметриялық бақылау нүктелері жазылған; дайджест үшін [`preview-feedback/w1/summary.md`](./preview-feedback/w1/summary.md) қараңыз.
+- ✅ **Қорытынды тізім/шығу журналы.** [`preview-feedback/w1/log.md`](./preview-feedback/w1/log.md) енді шақыру/қабылдау уақыт белгілерін, телеметрия дәлелдерін, викториналарды экспорттауды және 2025-04-26 жағдайдағы артефакт көрсеткіштерін жазады, осылайша басқару толқынын қайталай алады.
 
-## Invite log — W0 core maintainers
+## Шақыру журналы — W0 негізгі қызметшілері
 
-| Reviewer ID | Role | Request ticket | Invite sent (UTC) | Expected exit (UTC) | Status | Notes |
+| Шолушының идентификаторы | Рөл | Билет сұрау | Шақыру жіберілді (UTC) | Күтілетін шығу (UTC) | Күй | Ескертпелер |
 | --- | --- | --- | --- | --- | --- | --- |
-| docs-core-01 | Portal maintainer | `DOCS-SORA-Preview-REQ-01` | 2025‑03‑25 10:05 | 2025‑04‑08 10:00 | Active | Acked checksum verification; focusing on nav/sidebar review. |
-| sdk-rust-01 | Rust SDK lead | `DOCS-SORA-Preview-REQ-02` | 2025‑03‑25 10:08 | 2025‑04‑08 10:00 | Active | Testing SDK recipes + Norito quickstarts. |
-| sdk-js-01 | JS SDK maintainer | `DOCS-SORA-Preview-REQ-03` | 2025‑03‑25 10:12 | 2025‑04‑08 10:00 | Active | Validating Try it console + ISO flows. |
-| sorafs-ops-01 | SoraFS operator liaison | `DOCS-SORA-Preview-REQ-04` | 2025‑03‑25 10:15 | 2025‑04‑08 10:00 | Active | Auditing SoraFS runbooks + orchestration docs. |
-| observability-01 | Observability TL | `DOCS-SORA-Preview-REQ-05` | 2025‑03‑25 10:18 | 2025‑04‑08 10:00 | Active | Reviewing telemetry/incident appendices; owns Alertmanager coverage. |
+| docs-core-01 | Портал жүргізушісі | `DOCS-SORA-Preview-REQ-01` | 2025-03-25 10:05 | 2025-04-08 10:00 | Белсенді | Бекітілген бақылау сомасын тексеру; шарлау/бүйірлік тақтаны шолуға назар аудару. |
+| sdk-rust-01 | Rust SDK жетекші | `DOCS-SORA-Preview-REQ-02` | 2025-03-25 10:08 | 2025-04-08 10:00 | Белсенді | SDK рецептерін сынау + Norito жылдам іске қосу. |
+| sdk-js-01 | JS SDK қолдаушысы | `DOCS-SORA-Preview-REQ-03` | 2025‑03‑25 10:12 | 2025-04-08 10:00 | Белсенді | Тексерілу Консоль + ISO ағындарын қолданып көріңіз. |
+| sorafs-ops-01 | SoraFS оператор байланысы | `DOCS-SORA-Preview-REQ-04` | 2025-03-25 10:15 | 2025-04-08 10:00 | Белсенді | SoraFS runbooks + оркестрлік құжаттарын тексеру. |
+| бақылау мүмкіндігі-01 | Бақылау мүмкіндігі TL | `DOCS-SORA-Preview-REQ-05` | 2025-03-25 10:18 | 2025-04-08 10:00 | Белсенді | Телеметрия/инцидтік қосымшаларды қарау; Alertmanager қамтуына ие. |
 
-All invites reference the same `docs-portal-preview` artefact (run 2025‑03‑24,
-tag `preview-2025-03-24`) and the verification transcript captured in
-`DOCS-SORA-Preview-W0`. Any additions/pauses must be logged in both the table
-above and the tracker issue before proceeding to the next wave.
+Барлық шақырулар бірдей `docs-portal-preview` артефактіне сілтеме жасайды (2025‑03‑24 іске қосу,
+тегі `preview-2025-03-24`) және растау транскрипті түсірілген
+`DOCS-SORA-Preview-W0`. Кез келген толықтырулар/кідіртулер кестенің екеуінде де тіркелуі керек
+жоғарыда және келесі толқынға өту алдында трекер мәселесі.
 
-## Checkpoint log — W0
+## Бақылау пунктінің журналы — W0
 
-| Date (UTC) | Activity | Notes |
+| Күні (UTC) | Әрекет | Ескертпелер |
 | --- | --- | --- |
-| 2025‑03‑26 | Telemetry baseline review + office hours | `docs.preview.integrity` + `TryItProxyErrors` remained green; office hours confirmed all reviewers completed checksum verification. |
-| 2025‑03‑27 | Midpoint feedback digest posted | Summary captured in [`preview-feedback/w0/summary.md`](./preview-feedback/w0/summary.md); two minor nav issues logged as `docs-preview/w0` labels, no incidents reported. |
-| 2025‑03‑31 | Final week telemetry spot check | Last pre-exit office hours; reviewers confirmed remaining docs tasks on track, no alerts fired. |
-| 2025‑04‑08 | Exit summary + invite closures | Acknowledged completed reviews, revoked temporary access, archived findings in [`preview-feedback/w0/summary.md`](./preview-feedback/w0/summary.md#exit-summary-2025-04-08); tracker updated before prepping W1. |
+| 2025-03-26 | Телеметриялық базалық шолу + жұмыс уақыты | `docs.preview.integrity` + `TryItProxyErrors` жасыл болып қалды; жұмыс уақыты барлық шолушылардың бақылау сомасын тексеруді аяқтағанын растады. |
+| 2025-03-27 | Орташа кері байланыс дайджесті жарияланды | [`preview-feedback/w0/summary.md`](./preview-feedback/w0/summary.md) ішінде түсірілген жиынтық; екі шағын навигация мәселесі `docs-preview/w0` жапсырмалары ретінде тіркелді, оқиғалар туралы хабарланбады. |
+| 2025-03-31 | Соңғы аптадағы телеметриялық нүктені тексеру | Шығу алдындағы соңғы жұмыс уақыты; шолушылар жолда қалған құжаттар тапсырмаларын растады, ешқандай ескертулер жіберілмеді. |
+| 2025-04-08 | Шығу қорытындысы + жабылуларды шақыру | [`preview-feedback/w0/summary.md`](./preview-feedback/w0/summary.md#exit-summary-2025-04-08) ішінде расталған аяқталған шолулар, уақытша қол жеткізуді қайтарып алу, мұрағатталған қорытындылар; трекер W1 дайындамас бұрын жаңартылды. |
 
-## Invite log — W1 partners
+## Шақыру журналы — W1 серіктестері
 
-| Reviewer ID | Role | Request ticket | Invite sent (UTC) | Expected exit (UTC) | Status | Notes |
+| Шолушының идентификаторы | Рөл | Билет сұрау | Шақыру жіберілді (UTC) | Күтілетін шығу (UTC) | Күй | Ескертпелер |
 | --- | --- | --- | --- | --- | --- | --- |
-| sorafs-op-01 | SoraFS operator (EU) | `DOCS-SORA-Preview-REQ-P01` | 2025‑04‑12 15:00 | 2025‑04‑26 15:00 | Completed | Delivered orchestrator ops feedback 2025‑04‑20; exit ack 15:05 UTC. |
-| sorafs-op-02 | SoraFS operator (JP) | `DOCS-SORA-Preview-REQ-P02` | 2025‑04‑12 15:03 | 2025‑04‑26 15:00 | Completed | Logged rollout guidance comments in `docs-preview/w1`; exit ack 15:10 UTC. |
-| sorafs-op-03 | SoraFS operator (US) | `DOCS-SORA-Preview-REQ-P03` | 2025‑04‑12 15:06 | 2025‑04‑26 15:00 | Completed | Dispute/blacklist edits filed; exit ack 15:12 UTC. |
-| torii-int-01 | Torii integrator | `DOCS-SORA-Preview-REQ-P04` | 2025‑04‑12 15:09 | 2025‑04‑26 15:00 | Completed | Try it auth walkthrough accepted; exit ack 15:14 UTC. |
-| torii-int-02 | Torii integrator | `DOCS-SORA-Preview-REQ-P05` | 2025‑04‑12 15:12 | 2025‑04‑26 15:00 | Completed | RPC/OAuth doc comments logged; exit ack 15:16 UTC. |
-| sdk-partner-01 | SDK partner (Swift) | `DOCS-SORA-Preview-REQ-P06` | 2025‑04‑12 15:15 | 2025‑04‑26 15:00 | Completed | Preview integrity feedback merged; exit ack 15:18 UTC. |
-| sdk-partner-02 | SDK partner (Android) | `DOCS-SORA-Preview-REQ-P07` | 2025‑04‑12 15:18 | 2025‑04‑26 15:00 | Completed | Telemetry/redaction review done; exit ack 15:22 UTC. |
-| gateway-ops-01 | Gateway operator | `DOCS-SORA-Preview-REQ-P08` | 2025‑04‑12 15:21 | 2025‑04‑26 15:00 | Completed | Gateway DNS runbook comments filed; exit ack 15:24 UTC. |
+| sorafs-op-01 | SoraFS операторы (ЕО) | `DOCS-SORA-Preview-REQ-P01` | 2025-04-12 15:00 | 2025-04-26 15:00 | Аяқталды | Оркестр жұмысының кері байланысы 2025‑04‑20 жеткізілді; шығу 15:05UTC. |
+| sorafs-op-02 | SoraFS операторы (JP) | `DOCS-SORA-Preview-REQ-P02` | 2025-04-12 15:03 | 2025-04-26 15:00 | Аяқталды | `docs-preview/w1` жүйесіндегі енгізу нұсқаулығының түсініктемелері тіркелді; шығу уақыты 15:10UTC. |
+| sorafs-op-03 | SoraFS операторы (АҚШ) | `DOCS-SORA-Preview-REQ-P03` | 2025-04-12 15:06 | 2025-04-26 15:00 | Аяқталды | Дау/қара тізімді өңдеулер жіберілді; шығу 15:12UTC. |
+| torii-int-01 | Torii интегратор | `DOCS-SORA-Preview-REQ-P04` | 2025-04-12 15:09 | 2025-04-26 15:00 | Аяқталды | Байқап көріңіз, аутентификациялық қадам қабылданды; шығу 15:14UTC. |
+| torii-int-02 | Torii интегратор | `DOCS-SORA-Preview-REQ-P05` | 2025-04-12 15:12 | 2025-04-26 15:00 | Аяқталды | RPC/OAuth құжатының түсініктемелері тіркелді; шығу 15:16UTC. |
+| sdk-partner-01 | SDK серіктесі (Swift) | `DOCS-SORA-Preview-REQ-P06` | 2025-04-12 15:15 | 2025-04-26 15:00 | Аяқталды | Алдын ала қарау тұтастығы туралы пікір біріктірілді; шығу 15:18UTC. |
+| sdk-partner-02 | SDK серіктесі (Android) | `DOCS-SORA-Preview-REQ-P07` | 2025-04-12 15:18 | 2025-04-26 15:00 | Аяқталды | Телеметрия/редакцияны тексеру орындалды; шығу 15:22UTC. |
+| Gateway-ops-01 | Шлюз операторы | `DOCS-SORA-Preview-REQ-P08` | 2025-04-12 15:21 | 2025-04-26 15:00 | Аяқталды | Gateway DNS runbook түсініктемелері жіберілді; шығу 15:24UTC. |
 
-## Checkpoint log — W1
+## Бақылау пунктінің журналы — W1
 
-| Date (UTC) | Activity | Notes |
+| Күні (UTC) | Әрекет | Ескертпелер |
 | --- | --- | --- |
-| 2025‑04‑12 | Invite dispatch + artefact verification | All eight partners emailed with `preview-2025-04-12` descriptor/archive; acknowledgements stored in tracker. |
-| 2025‑04‑13 | Telemetry baseline review | `docs.preview.integrity`, `TryItProxyErrors`, and `DocsPortal/GatewayRefusals` dashboards reviewed — green across the board; office hours confirmed checksum verification completed. |
-| 2025‑04‑18 | Mid-wave office hours | `docs.preview.integrity` remained green; two doc nits logged under `docs-preview/w1` (nav wording + Try it screenshot). |
-| 2025‑04‑22 | Final telemetry spot check | Proxy + dashboards still healthy; no new issues raised, noted in tracker ahead of exit. |
-| 2025‑04‑26 | Exit summary + invite closures | All partners confirmed review completion, invites revoked, evidence archived in [`preview-feedback/w1/summary.md`](./preview-feedback/w1/summary.md#exit-summary-2025-04-26). |
+| 2025‑04‑12 | Шақыру жөнелту + артефакті тексеру | Барлық сегіз серіктес `preview-2025-04-12` дескрипторы/мұрағатымен электрондық пошта арқылы жіберілді; трекерде сақталған растаулар. |
+| 2025-04-13 | Телеметриялық базалық шолу | `docs.preview.integrity`, `TryItProxyErrors` және `DocsPortal/GatewayRefusals` бақылау тақталары қаралды — барлық тақтада жасыл; жұмыс уақыты расталған бақылау сомасын тексеру аяқталды. |
+| 2025-04-18 | Орташа толқынды жұмыс уақыты | `docs.preview.integrity` жасыл болып қалды; `docs-preview/w1` астында жүйеге кірген екі құжат nit (нав мәтіні + Скриншотты пайдаланып көріңіз). |
+| 2025-04-22 | Соңғы телеметриялық нүктені тексеру | Прокси + бақылау тақталары әлі де сау; жаңа мәселелер көтерілген жоқ, шығу алдында трекерде атап өтілді. |
+| 2025-04-26 | Шығу қорытындысы + жабылуларды шақыру | Барлық серіктестер тексерудің аяқталғанын растады, шақырулар кері қайтарылды, дәлелдер [`preview-feedback/w1/summary.md`](./preview-feedback/w1/summary.md#exit-summary-2025-04-26) ішінде мұрағатталды. |
 
-## W3 beta cohort recap
+## W3 бета когортасының қорытындысы
 
-- ✅ Invites sent 2026‑02‑18 with checksum verification + acknowledgements logged the same day.
-- ✅ Feedback collected under `docs-preview/20260218` with governance issue `DOCS-SORA-Preview-20260218`; digest + summary generated via `npm run --prefix docs/portal preview:wave -- --wave preview-20260218`.
-- ✅ Access revoked 2026‑02‑28 after the final telemetry check; tracker + portal tables updated to show W3 as completed.
+- ✅ 2026‑02‑18 жіберілген шақырулар бақылау сомасын растау + сол күні тіркелген растаулар.
+- ✅ Кері байланыс `DOCS-SORA-Preview-20260218` басқару мәселесімен `docs-preview/20260218` бойынша жиналған; дайджест + `npm run --prefix docs/portal preview:wave -- --wave preview-20260218` арқылы жасалған қорытынды.
+- ✅ Соңғы телеметриялық тексеруден кейін 2026‑02‑28 рұқсаты жойылды; трекер + портал кестелері W3-ті аяқталған ретінде көрсету үшін жаңартылды.
 
-## Invite log — W2 community
-
-| Reviewer ID | Role | Request ticket | Invite sent (UTC) | Expected exit (UTC) | Status | Notes |
+## Шақыру журналы — W2 қауымдастығы| Шолушының идентификаторы | Рөл | Билет сұрау | Шақыру жіберілді (UTC) | Күтілетін шығу (UTC) | Күй | Ескертпелер |
 | --- | --- | --- | --- | --- | --- | --- |
-| comm-vol-01 | Community reviewer (SDK) | `DOCS-SORA-Preview-REQ-C01` | 2025‑06‑15 16:00 | 2025‑06‑29 16:00 | Completed | Ack 16:06 UTC; focusing on SDK quickstarts; exit confirmed 2025‑06‑29. |
-| comm-vol-02 | Community reviewer (Governance) | `REQ-C02` | 2025‑06‑15 16:03 | 2025‑06‑29 16:00 | Completed | Governance/SNS review done; exit confirmed 2025‑06‑29. |
-| comm-vol-03 | Community reviewer (Norito) | `REQ-C03` | 2025‑06‑15 16:06 | 2025‑06‑29 16:00 | Completed | Norito walkthrough feedback logged; exit ack 2025‑06‑29. |
-| comm-vol-04 | Community reviewer (SoraFS) | `REQ-C04` | 2025‑06‑15 16:09 | 2025‑06‑29 16:00 | Completed | SoraFS runbook review done; exit ack 2025‑06‑29. |
-| comm-vol-05 | Community reviewer (Accessibility) | `REQ-C05` | 2025‑06‑15 16:12 | 2025‑06‑29 16:00 | Completed | Accessibility/UX notes shared; exit ack 2025‑06‑29. |
-| comm-vol-06 | Community reviewer (Localization) | `REQ-C06` | 2025‑06‑15 16:15 | 2025‑06‑29 16:00 | Completed | Localization feedback logged; exit ack 2025‑06‑29. |
-| comm-vol-07 | Community reviewer (Mobile) | `REQ-C07` | 2025‑06‑15 16:18 | 2025‑06‑29 16:00 | Completed | Mobile SDK doc checks delivered; exit ack 2025‑06‑29. |
-| comm-vol-08 | Community reviewer (Observability) | `REQ-C08` | 2025‑06‑15 16:21 | 2025‑06‑29 16:00 | Completed | Observability appendix review done; exit ack 2025‑06‑29. |
+| comm-vol-01 | Қауымдастық шолушысы (SDK) | `DOCS-SORA-Preview-REQ-C01` | 2025-06-15 16:00 | 2025-06-29 16:00 | Аяқталды | Акт 16:06UTC; SDK жылдам іске қосуларына назар аудару; шығу расталды 2025-06-29. |
+| comm-vol-02 | Қоғамдастық шолушысы (Басқару) | `REQ-C02` | 2025-06-15 16:03 | 2025-06-29 16:00 | Аяқталды | Басқару/SNS шолуы жасалды; шығу расталды 2025-06-29. |
+| comm-vol-03 | Қауымдастық шолушысы (Norito) | `REQ-C03` | 2025-06-15 16:06 | 2025-06-29 16:00 | Аяқталды | Norito шолу арқылы кері байланыс тіркелді; шығу акті 2025‑06‑29. |
+| comm-vol-04 | Қауымдастық шолушысы (SoraFS) | `REQ-C04` | 2025-06-15 16:09 | 2025-06-29 16:00 | Аяқталды | SoraFS runbook шолуы жасалды; шығу акті 2025‑06‑29. |
+| comm-vol-05 | Қауымдастық шолушысы (Арнайы мүмкіндіктер) | `REQ-C05` | 2025-06-15 16:12 | 2025-06-29 16:00 | Аяқталды | Қол жетімділік/UX жазбалары ортақ; шығу акті 2025‑06‑29. |
+| comm-vol-06 | Қауымдастық шолушысы (локализация) | `REQ-C06` | 2025-06-15 16:15 | 2025-06-29 16:00 | Аяқталды | Локализация туралы кері байланыс тіркелді; шығу акті 2025‑06‑29. |
+| comm-vol-07 | Қауымдастық шолушысы (Мобильді) | `REQ-C07` | 2025-06-15 16:18 | 2025-06-29 16:00 | Аяқталды | Мобильді SDK құжат тексерулері жеткізілді; шығу акті 2025‑06‑29. |
+| comm-vol-08 | Қауымдастық шолушысы (Байқау мүмкіндігі) | `REQ-C08` | 2025-06-15 16:21 | 2025-06-29 16:00 | Аяқталды | Бақылау мүмкіндігі қосымшасына шолу жасалды; шығу акті 2025‑06‑29. |
 
-## Checkpoint log — W2
+## Бақылау пунктінің журналы — W2
 
-| Date (UTC) | Activity | Notes |
+| Күні (UTC) | Әрекет | Ескертпелер |
 | --- | --- | --- |
-| 2025‑06‑15 | Invite dispatch + artefact verification | `preview-2025-06-15` descriptor/archive shared with 8 community reviewers; acknowledgements stored in tracker. |
-| 2025‑06‑16 | Telemetry baseline review | `docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals` dashboards green; Try it proxy logs show community tokens active. |
-| 2025‑06‑18 | Office hours & issue triage | Collected two suggestions (`docs-preview/w2 #1` tooltip wording, `#2` localization sidebar) — both routed to Docs. |
-| 2025‑06‑21 | Telemetry check + doc fixes | Docs addressed `docs-preview/w2 #1/#2`; dashboards still green, no incidents. |
-| 2025‑06‑24 | Final week office hours | Reviewers confirmed remaining feedback submissions; no alert fire. |
-| 2025‑06‑29 | Exit summary + invite closures | Acks recorded, preview access revoked, telemetry snapshots + artefacts archived (see [`preview-feedback/w2/summary.md`](./preview-feedback/w2/summary.md#exit-summary-2025-06-29)). |
-| 2025‑04‑15 | Office hours & issue triage | Two documentation suggestions logged under `docs-preview/w1`; no incidents or alerts triggered. |
+| 2025-06-15 | Шақыру жөнелту + артефакті тексеру | `preview-2025-06-15` дескрипторы/мұрағат 8 қауымдастық шолушысымен ортақ; трекерде сақталған растаулар. |
+| 2025-06-16 | Телеметриялық базалық шолу | `docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals` бақылау тақталары жасыл; Байқап көріңіз прокси журналдары белсенді қауымдастық таңбалауыштарын көрсетеді. |
+| 2025-06-18 | Жұмыс уақыты және мәселенің триажы | Екі ұсыныс жиналды (`docs-preview/w2 #1` құралдар кеңесі мәтіні, `#2` локализацияның бүйірлік тақтасы) — екеуі де құжаттарға бағытталды. |
+| 2025-06-21 | Телеметрияны тексеру + құжатты түзету | `docs-preview/w2 #1/#2` мекенжайы бойынша құжаттар; бақылау тақталары әлі жасыл, ешқандай оқиға жоқ. |
+| 2025-06-24 | Соңғы аптаның жұмыс уақыты | Рецензенттер қалған кері байланыс жіберулерді растады; ескерту өрт жоқ. |
+| 2025-06-29 | Шығу қорытындысы + жабылуларды шақыру | Жазбалар жазылды, алдын ала қарау рұқсаты қайтарылды, телеметрия суреттері + мұрағатталған артефактілер ([`preview-feedback/w2/summary.md`](./preview-feedback/w2/summary.md#exit-summary-2025-06-29) қараңыз). |
+| 2025-04-15 | Жұмыс уақыты және мәселенің триажы | `docs-preview/w1` астында тіркелген екі құжаттама ұсынысы; ешқандай оқиғалар немесе ескертулер іске қосылмаған. |
 
-## Reporting hooks
+## Есеп беру ілмектері
 
-- Each Wednesday, update the tracker table above plus the active invite issue
-  with a short status note (invites sent, active reviewers, incidents).
-- When a wave closes, append the feedback summary path (for example,
-  `docs/portal/docs/devportal/preview-feedback/w0/summary.md`) and link it from
+- Әр сәрсенбі сайын жоғарыдағы трекер кестесін және белсенді шақыру мәселесін жаңартыңыз
+  қысқаша күй жазбасымен (шақырулар, белсенді шолушылар, оқиғалар).
+- Толқын жабылғанда, кері байланыс жиынтық жолын қосыңыз (мысалы,
+  `docs/portal/docs/devportal/preview-feedback/w0/summary.md`) және оны мына жерден байланыстырыңыз
   `status.md`.
-- If any pause criteria from the [preview invite flow](./preview-invite-flow.md)
-  trigger, add the remediation steps here before resuming invites.
+- [Шақыру ағынын алдын ала қарау] (./preview-invite-flow.md) кез келген кідірту шарты болса
+  триггер, шақыруларды жалғастырмас бұрын осы жерге түзету қадамдарын қосыңыз.

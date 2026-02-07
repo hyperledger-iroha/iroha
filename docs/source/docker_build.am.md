@@ -7,23 +7,24 @@ generator: scripts/sync_docs_i18n.py
 source_hash: a5ac4be3d387269898112d465ec404490f67c6c2b9267c0a0781d0de70cf783d
 source_last_modified: "2025-12-29T18:16:35.951567+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Docker Builder Image
+# Docker ገንቢ ምስል
 
-This container is defined in `Dockerfile.build` and bundles all toolchain
-dependencies required for CI and local release builds. The image now runs as a
-non-root user by default, so Git operations continue to work with Arch Linux’s
-`libgit2` package without resorting to the global `safe.directory` workaround.
+ይህ መያዣ በ`Dockerfile.build` ውስጥ ይገለጻል እና ሁሉንም የመሳሪያ ሰንሰለት ይጠቀለላል
+ለ CI እና ለአካባቢያዊ ልቀት ግንባታዎች የሚያስፈልጉ ጥገኝነቶች። ምስሉ አሁን እንደ ሀ
+ሥር ያልሆነ ተጠቃሚ በነባሪ፣ ስለዚህ Git ክወናዎች ከአርክ ሊኑክስ ጋር መስራታቸውን ቀጥለዋል።
+የ`libgit2` ጥቅል ወደ አለምአቀፉ `safe.directory` መፍትሄ ሳይጠቀም።
 
-## Build arguments
+## ክርክሮችን ይገንቡ
 
-- `BUILDER_USER` – login name created inside the container (default: `iroha`).
-- `BUILDER_UID` – numeric user id (default: `1000`).
-- `BUILDER_GID` – primary group id (default: `1000`).
+- `BUILDER_USER` - የመግቢያ ስም በመያዣው ውስጥ ተፈጠረ (ነባሪ፡ `iroha`)።
+- `BUILDER_UID` - የቁጥር ተጠቃሚ መታወቂያ (ነባሪ፡ `1000`)።
+- `BUILDER_GID` - ዋና የቡድን መታወቂያ (ነባሪ፡ `1000`)።
 
-When you mount the workspace from your host, pass matching UID/GID values so
-generated artifacts remain writable:
+የስራ ቦታውን ከአስተናጋጅዎ ላይ ሲሰቅሉ የሚዛመዱ የUID/GID እሴቶችን ይለፉ
+የተፈጠሩ ቅርሶች ሊጻፉ ይችላሉ፡-
 
 ```bash
 docker build \
@@ -34,14 +35,14 @@ docker build \
   -t iroha-builder .
 ```
 
-The toolchain directories (`/usr/local/rustup`, `/usr/local/cargo`, `/opt/poetry`)
-are owned by the configured user so Cargo, rustup, and Poetry commands remain fully
-functional once the container drops root privileges.
+የመሳሪያ ሰንሰለት ማውጫዎች (`/usr/local/rustup`፣ `/usr/local/cargo`፣ `/opt/poetry`)
+የካርጎ፣ ሩትስፕ እና የግጥም ትዕዛዞች ሙሉ በሙሉ እንዲቆዩ በተዋቀረው ተጠቃሚ የተያዙ ናቸው።
+መያዣው የስር መብቶችን ከጣለ በኋላ ይሠራል።
 
-## Running builds
+## ሩጫ ይገነባል።
 
-Attach your workspace to `/workspace` (the container `WORKDIR`) when invoking the
-image. Example:
+የስራ ቦታዎን በሚጠሩበት ጊዜ ከ `/workspace` (መያዣው `WORKDIR`) ጋር ያያይዙት።
+ምስል. ምሳሌ፡-
 
 ```bash
 docker run --rm -it \
@@ -50,22 +51,22 @@ docker run --rm -it \
   cargo build --workspace
 ```
 
-The image keeps the `docker` group membership so nested Docker commands (e.g.
-`docker buildx bake`) remain available for CI workflows that mount the host PID
-and socket. Adjust group mappings as needed for your environment.
+ምስሉ የ`docker` ቡድን አባልነትን ያቆያል ስለዚህ Docker ትዕዛዞችን (ለምሳሌ፦
+`docker buildx bake`) አስተናጋጁን PID ለሚሰቅሉ ለ CI የስራ ፍሰቶች ዝግጁ ሆኖ ይቆያል
+እና ሶኬት. ለአካባቢዎ እንደ አስፈላጊነቱ የቡድን ካርታዎችን ያስተካክሉ።
 
-## Iroha 2 vs Iroha 3 artefacts
+## Iroha 2 vs Iroha 3 ቅርሶች
 
-The workspace now emits separate binaries per release line to avoid collisions:
-`iroha3`/`iroha3d` (default) and `iroha2`/`iroha2d` (Iroha 2). Use the helpers to
-produce the desired pair:
+የስራ ቦታ አሁን ግጭቶችን ለማስወገድ በየልቀት መስመር የተለያዩ ሁለትዮሾችን ይለቃል፡
+`iroha3`/`iroha3d` (ነባሪ) እና `iroha2`/`iroha2d` (Iroha 2)። ረዳቶቹን ይጠቀሙ
+ተፈላጊውን ጥንድ ማምረት;
 
-- `make build` (or `BUILD_PROFILE=deploy bash scripts/build_line.sh --i3`) for Iroha 3
-- `make build-i2` (or `BUILD_PROFILE=deploy bash scripts/build_line.sh --i2`) for Iroha 2
+- `make build` (ወይም `BUILD_PROFILE=deploy bash scripts/build_line.sh --i3`) ለ Iroha 3
+- `make build-i2` (ወይም `BUILD_PROFILE=deploy bash scripts/build_line.sh --i2`) ለ Iroha 2
 
-The selector pins the feature sets (`telemetry` + `schema-endpoint` plus the
-line-specific `build-i{2,3}` flag) so Iroha 2 builds cannot accidentally pick up
-Iroha 3-only defaults.
+መራጩ የባህሪ ስብስቦችን (`telemetry` + `schema-endpoint` እና
+መስመር-ተኮር `build-i{2,3}` ባንዲራ) ስለዚህ Iroha 2 ግንባታዎች በድንገት ማንሳት አይችሉም
+Iroha 3-ብቻ ነባሪዎች።
 
-Release bundles built via `scripts/build_release_bundle.sh` pick the correct binary
-names automatically when `--profile` is set to `iroha2` or `iroha3`.
+በ`scripts/build_release_bundle.sh` በኩል የተገነቡ ጥቅሎችን ይልቀቁ ትክክለኛውን ሁለትዮሽ ይምረጡ
+`--profile` ወደ `iroha2` ወይም `iroha3` ሲዋቀር በራስ ሰር ስሞች።

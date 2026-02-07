@@ -7,20 +7,21 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 727a648141405b0c8f12a131ff903d3e7ce5b74a7f899dd99fe9aa6490b55ef2
 source_last_modified: "2025-12-29T18:16:35.080764+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# SoraFS Capacity Simulation Toolkit
+# SoraFS 容量模拟工具包
 
-This directory ships the reproducible artefacts for the SF-2c capacity marketplace
-simulation. The toolkit exercises quota negotiation, failover handling, and slashing
-remediation using the production CLI helpers and a lightweight analysis script.
+该目录为 SF-2c 容量市场提供可复制的制品
+模拟。该工具包执行配额协商、故障转移处理和削减
+使用生产 CLI 帮助程序和轻量级分析脚本进行修复。
 
-## Prerequisites
+## 先决条件
 
-- Rust toolchain capable of running `cargo run` for workspace members.
-- Python 3.10+ (standard library only).
+- Rust 工具链能够为工作区成员运行 `cargo run`。
+- Python 3.10+（仅限标准库）。
 
-## Quickstart
+## 快速入门
 
 ```bash
 # 1. Generate canonical CLI artefacts
@@ -30,39 +31,39 @@ remediation using the production CLI helpers and a lightweight analysis script.
 ./analyze.py --artifacts ./artifacts
 ```
 
-The `run_cli.sh` script invokes `sorafs_manifest_stub capacity` to build:
+`run_cli.sh` 脚本调用 `sorafs_manifest_stub capacity` 来构建：
 
-- Deterministic provider declarations for the quota negotiation fixture set.
-- A replication order matching the negotiation scenario.
-- Telemetry snapshots for the failover window.
-- A dispute payload capturing the slashing request.
+- 配额谈判固定集的确定性提供商声明。
+- 与协商场景匹配的复制顺序。
+- 故障转移窗口的遥测快照。
+- 捕获削减请求的争议有效负载。
 
-The script writes Norito bytes (`*.to`), base64 payloads (`*.b64`), Torii request
-bodies, and human-readable summaries (`*_summary.json`) under the chosen artifact
-directory.
+该脚本写入 Norito 字节 (`*.to`)、base64 有效负载 (`*.b64`)、Torii 请求
+所选工件下的正文和人类可读的摘要 (`*_summary.json`)
+目录。
 
-`analyze.py` consumes the generated summaries, produces an aggregated report
-(`capacity_simulation_report.json`), and emits a Prometheus textfile
-(`capacity_simulation.prom`) carrying:
+`analyze.py` 使用生成的摘要，生成汇总报告
+(`capacity_simulation_report.json`)，并发出 Prometheus 文本文件
+(`capacity_simulation.prom`)携带：
 
-- `sorafs_simulation_quota_*` gauges describing negotiated capacity and allocation
-  share per provider.
-- `sorafs_simulation_failover_*` gauges highlighting downtime deltas and the selected
-  replacement provider.
-- `sorafs_simulation_slash_requested` recording the remediation percentage extracted
-  from the dispute payload.
+- `sorafs_simulation_quota_*` 描述协商容量和分配的仪表
+  每个提供商的份额。
+- `sorafs_simulation_failover_*` 仪表突出显示停机时间增量和所选内容
+  替代提供商。
+- `sorafs_simulation_slash_requested` 记录提取的修复百分比
+  来自争议有效负载。
 
-Import the Grafana bundle in `dashboards/grafana/sorafs_capacity_simulation.json`
-and point it at a Prometheus datasource that scrapes the generated textfile (for
-example via the node-exporter textfile collector). The runbook at
-`docs/source/sorafs/runbooks/sorafs_capacity_simulation.md` walks through the full
-workflow, including Prometheus configuration tips.
+在 `dashboards/grafana/sorafs_capacity_simulation.json` 中导入 Grafana 包
+并将其指向 Prometheus 数据源，该数据源会抓取生成的文本文件（例如
+例如通过节点导出器文本文件收集器）。运行手册位于
+`docs/source/sorafs/runbooks/sorafs_capacity_simulation.md` 完整走一遍
+工作流程，包括 Prometheus 配置提示。
 
-## Fixtures
+## 赛程
 
-- `scenarios/quota_negotiation/` — Provider declaration specs and replication order.
-- `scenarios/failover/` — Telemetry windows for the primary outage and failover lift.
-- `scenarios/slashing/` — Dispute spec referencing the same replication order.
+- `scenarios/quota_negotiation/` — 提供商声明规范和复制顺序。
+- `scenarios/failover/` — 主要中断和故障转移提升的遥测窗口。
+- `scenarios/slashing/` — 引用相同复制顺序的争议规范。
 
-These fixtures are validated in `crates/sorafs_car/tests/capacity_simulation_toolkit.rs`
-to guarantee they remain in sync with the CLI schema.
+这些装置在 `crates/sorafs_car/tests/capacity_simulation_toolkit.rs` 中进行了验证
+以保证它们与 CLI 模式保持同步。

@@ -4,65 +4,67 @@ direction: ltr
 source: docs/portal/docs/devportal/incident-runbooks.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Runbooks de incidentes e drills de rollback
+# インシデントのランブックとロールバックの訓練
 
-## Proposito
+## プロポジト
 
-O item do roadmap **DOCS-9** exige playbooks acionaveis mais um plano de ensaio para que
-operadores do portal consigam recuperar falhas de envio sem adivinhacao. Esta nota cobre tres
-incidentes de alto sinal - deploys falhos, degradacao de replicacao e quedas de analytics - e
-documenta os drills trimestrais que provam que o rollback de alias e a validacao sintetica
-continuam funcionando end to end.
+O 項目のロードマップ **DOCS-9** のプレイブックを実行するための計画を実行する
+オペラドールは、ポータルコンシガム回復ファルハスデエンヴィオセムアディヴィンハカオを行います。エスタ ノタ コブレ トレス
+大規模な事件 - ファルホスの展開、レプリカの劣化、および分析の実行 - 電子
+ドキュメンタ OS は、エイリアスと有効性を検証するためのロールバックをトリメストレイスで実行します。
+エンドツーエンドの連続機能。
 
-### Material relacionado
+### 素材関係
 
-- [`devportal/deploy-guide`](./deploy-guide) - workflow de packaging, signing e promocao de alias.
-- [`devportal/observability`](./observability) - release tags, analytics e probes referenciados abaixo.
+- [`devportal/deploy-guide`](./deploy-guide) - パッケージ化、プロモーションのエイリアスの署名のワークフロー。
+- [`devportal/observability`](./observability) - タグ、分析、プローブをリリースし、参照します。
 - `docs/source/sorafs_node_client_protocol.md`
   e [`sorafs/pin-registry-ops`](../sorafs/pin-registry-ops)
-  - telemetria do registro e limites de escalonamento.
-- `docs/portal/scripts/sorafs-pin-release.sh` e helpers `npm run probe:*`
-  referenciados nos checklists.
+  - テレメトリはエスカロナメントの制限を登録します。
+- `docs/portal/scripts/sorafs-pin-release.sh` e ヘルパー `npm run probe:*`
+  参照番号チェックリスト。
 
-### Telemetria e tooling compartilhados
+### Telemetria とツールの互換性
 
-| Sinal / Tool | Proposito |
+|サイナル / ツール |プロポジト |
 | ------------- | ------- |
-| `torii_sorafs_replication_sla_total` (met/missed/pending) | Detecta bloqueios de replicacao e violacoes de SLA. |
-| `torii_sorafs_replication_backlog_total`, `torii_sorafs_replication_completion_latency_epochs` | Quantifica profundidade do backlog e latencia de completacao para triage. |
-| `torii_sorafs_gateway_refusals_total`, `torii_sorafs_manifest_submit_total{status="error"}` | Mostra falhas do gateway que frequentemente seguem um deploy ruim. |
-| `npm run probe:portal` / `npm run probe:tryit-proxy` | Probes sinteticos que gateiam releases e validam rollbacks. |
-| `npm run check:links` | Gate de links quebrados; usado apos cada mitigacao. |
-| `sorafs_cli manifest submit ... --alias-*` (usado por `scripts/sorafs-pin-release.sh`) | Mecanismo de promocao/reversao de alias. |
-| `Docs Portal Publishing` Grafana board (`dashboards/grafana/docs_portal.json`) | Agrega telemetria de refusals/alias/TLS/replicacao. Alertas do PagerDuty referenciam estes paineis como evidencia. |
+| `torii_sorafs_replication_sla_total` (一致/失敗/保留中) | SLA の複製と不正行為のブロックを検出します。 |
+| `torii_sorafs_replication_backlog_total`、`torii_sorafs_replication_completion_latency_epochs` |トリアージの完了までのバックログと遅延を定量化します。 |
+| `torii_sorafs_gateway_refusals_total`、`torii_sorafs_manifest_submit_total{status="error"}` |ほとんどのファルハスは、ゲートウェイを頻繁に実行し、ルールをデプロイします。 |
+| `npm run probe:portal` / `npm run probe:tryit-proxy` | Gateiam がリリースする検証ロールバックをプローブします。 |
+| `npm run check:links` |ゲート デ リンクス ケブラドス。米国アポス カダ ミティガカオ。 |
+| `sorafs_cli manifest submit ... --alias-*` (`scripts/sorafs-pin-release.sh` からの米国) |プロモーション/別名のメカニズム。 |
+| `Docs Portal Publishing` Grafana ボード (`dashboards/grafana/docs_portal.json`) |拒否/エイリアス/TLS/レプリカオのテレメトリアの集合体。 PagerDuty に関するアラートは、痛みを伴う証拠を参照します。 |
 
-## Runbook - Deploy falho ou artefato ruim
+## Runbook - ファルホとアルティファト ルイムのデプロイ
 
-### Condicoes de disparo
+### コンディコエス デ ディスパロ
 
-- Probes de preview/producao falham (`npm run probe:portal -- --expect-release=...`).
-- Alertas Grafana em `torii_sorafs_gateway_refusals_total` ou
-  `torii_sorafs_manifest_submit_total{status="error"}` apos um rollout.
-- QA manual nota rotas quebradas ou falhas do proxy Try it imediatamente apos
-  a promocao do alias.
+- プレビュー/ファルハムのプローブ (`npm run probe:portal -- --expect-release=...`)。
+- アラート Grafana em `torii_sorafs_gateway_refusals_total` ou
+  `torii_sorafs_manifest_submit_total{status="error"}` アポ UM ロールアウト。
+- QA マニュアルは、プロキシを実行する必要はありません。今すぐ試してみてください。
+  プロモーションのエイリアス。
 
-### Contencao imediata
+### すぐにコンテンサオ
 
-1. **Congelar deploys:** marcar o pipeline CI com `DEPLOY_FREEZE=1` (input do workflow
-   GitHub) ou pausar o job Jenkins para que nenhum artefato seja enviado.
-2. **Capturar artefatos:** baixar `build/checksums.sha256`,
-   `portal.manifest*.{json,to,bundle,sig}`, e a saida dos probes do build com falha para que
-   o rollback referencie os digests exatos.
-3. **Notificar stakeholders:** storage SRE, lead Docs/DevRel, e o duty officer de
-   governanca para awareness (especialmente quando `docs.sora` esta impactado).
+1. **Congelar のデプロイ:** marcar o パイプライン CI com `DEPLOY_FREEZE=1` (ワークフローの入力)
+   GitHub) あなたの仕事は Jenkins が最も優れたものであることを示しています。
+2. **キャプチャー アーティファト:** baixar `build/checksums.sha256`、
+   `portal.manifest*.{json,to,bundle,sig}`、つまり dos プローブが com falha para que をビルドすると言いました
+   o ロールバック参照 OS は exatos をダイジェストします。
+3. **著名な関係者:** ストレージ SRE、ドキュメント/DevRel リード、当直責任者
+   ガバナンカ パラ意識 (especialmente quando `docs.sora` esta Impactado)。
 
-### Procedimento de rollback
+### ロールバックの手順
 
-1. Identifique o manifest last-known-good (LKG). O workflow de producao os armazena em
-   `artifacts/devportal/<release>/sorafs/portal.manifest.to`.
-2. Re-vincule o alias a esse manifest com o helper de shipping:
+1. マニフェストの最後に確認された正常な状態 (LKG) を識別します。アルマゼナの生産ワークフロー
+   `artifacts/devportal/<release>/sorafs/portal.manifest.to`。
+2. 発送ヘルパーのマニフェストのエイリアスを再設定します。
 
 ```bash
 cd docs/portal
@@ -99,124 +101,118 @@ cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
   --summary-out artifacts/.../sorafs/rollback.submit.json
 ```
 
-3. Registre o resumo do rollback no ticket do incidente junto com os digests do
-   manifest LKG e do manifest com falha.
+3. レジストリまたはレスモをロールバックし、チケットを発行せずにイベントを実行し、COMOS ダイジェストを実行します
+   マニフェスト LKG はマニフェスト com falha を実行します。
 
-### Validacao
+### バリダカオ1.`npm run probe:portal -- --expect-release=${LKG_TAG}`。
+2.`npm run check:links`。
+3. `sorafs_cli manifest verify-signature ...` と `sorafs_cli proof verify ...`
+   (展開の確認) 継続的なマニフェストの再現を確認する
+   バテンド・コム・オー・カー・アーキバード。
+4. `npm run probe:tryit-proxy` は、プロキシ Try-It ステージング ボルトを保証します。
 
-1. `npm run probe:portal -- --expect-release=${LKG_TAG}`.
-2. `npm run check:links`.
-3. `sorafs_cli manifest verify-signature ...` e `sorafs_cli proof verify ...`
-   (veja o guia de deploy) para confirmar que o manifest repromovido continua
-   batendo com o CAR arquivado.
-4. `npm run probe:tryit-proxy` para garantir que o proxy Try-It staging voltou.
+### 事件後
 
-### Pos-incidente
+1. 原因を特定するためにパイプラインを展開し、保管する。
+2. 「教訓」としてのプリエンチャ em [`devportal/deploy-guide`](./deploy-guide)
+   com novos pontos、se houver.
+3. テスト ファルハダ スイート (プローブ、リンク チェッカーなど) の Abra 欠陥。
 
-1. Reative o pipeline de deploy apenas depois de entender a causa raiz.
-2. Preencha as entradas "Lessons learned" em [`devportal/deploy-guide`](./deploy-guide)
-   com novos pontos, se houver.
-3. Abra defects para a suite de testes falhada (probe, link checker, etc.).
+## ランブック - 複製のデグラダカオ
 
-## Runbook - Degradacao de replicacao
+### コンディコエス デ ディスパロ
 
-### Condicoes de disparo
-
-- Alerta: `sum(torii_sorafs_replication_sla_total{outcome="met"}) /
+- アラート: `sum(torii_sorafs_replication_sla_total{outcome="met"}) /
   clamp_min(sum(torii_sorafs_replication_sla_total{outcome=~"met|missed"}), 1) <
-  0.95` por 10 minutos.
-- `torii_sorafs_replication_backlog_total > 10` por 10 minutos (veja
-  `pin-registry-ops.md`).
-- Governanca reporta alias lento apos um release.
+  10 分あたり 0.95 秒。
+- `torii_sorafs_replication_backlog_total > 10` ポル 10 分 (veja
+  `pin-registry-ops.md`)。
+- Governanca reporta 別名 lento apos um リリース。
 
-### Triage
+### トリアージ
 
-1. Inspecione dashboards de [`sorafs/pin-registry-ops`](../sorafs/pin-registry-ops) para
-   confirmar se o backlog esta localizado em uma classe de storage ou em um fleet de providers.
-2. Cruze logs do Torii por warnings `sorafs_registry::submit_manifest` para determinar se
-   as submissions estao falhando.
-3. Amostre a saude das replicas via `sorafs_cli manifest status --manifest ...` (lista
-   resultados por provider).
+1. [`sorafs/pin-registry-ops`](../sorafs/pin-registry-ops) パラメタのダッシュボードを検査する
+   バックログのローカル化とストレージの管理、プロバイダーのフリートの確認を行います。
+2. Cruze ログに Torii por warnings `sorafs_registry::submit_manifest` para determinar se
+   提出物として estao falhando。
+3. `sorafs_cli manifest status --manifest ...` 経由でレプリカを再生する (lista
+   プロバイダーによる結果）。
 
-### Mitigacao
+### ミティガカオ
 
-1. Reemita o manifest com maior contagem de replicas (`--pin-min-replicas 7`) usando
-   `scripts/sorafs-pin-release.sh` para que o scheduler distribua carga em um set maior
-   de providers. Registre o novo digest no log do incidente.
-2. Se o backlog estiver preso a um provider unico, desabilite-o temporariamente via o
-   scheduler de replicacao (documentado em `pin-registry-ops.md`) e envie um novo
-   manifest forcando os outros providers a atualizar o alias.
-3. Quando a frescura do alias for mais critica que a paridade de replicacao, re-vincule o
-   alias a um manifest quente ja em staging (`docs-preview`), depois publique um manifest de
-   acompanhamento quando o SRE limpar o backlog.
+1. レプリカの感染マニフェストの再発行 (`--pin-min-replicas 7`)
+   `scripts/sorafs-pin-release.sh` パラケオ スケジューラ配布カーガ セット メイン
+   プロバイダー。新規ダイジェストを登録し、ログは発生しません。
+2. プロバイダー unico のバックログを事前に確認し、o 経由で一時的にデサビリテを実行する
+   レプリカのスケジューラ (ドキュメント em `pin-registry-ops.md`) をもう一度羨望の的に見る
+   cando os outros プロバイダーのマニフェストは、エイリアスまたはエイリアスを提供します。
+3. Quando a frescura do alias for mais crica que a paridade de replicacao, re-vincule o
+   別名、マニフェスト クエンテ、ステージング (`docs-preview`)、公開マニフェスト デポイ
+   コンパンハメント、SRE リンパー、バックログ。
 
-### Recuperacao e fechamento
+### 回復とフェチャメント
 
-1. Monitore `torii_sorafs_replication_sla_total{outcome="missed"}` para garantir que o
-   contador estabilize.
-2. Capture a saida `sorafs_cli manifest status` como evidencia de que cada replica voltou
-   a conformidade.
-3. Abra ou atualize o post-mortem do backlog de replicacao com proximos passos
-   (scaling de providers, tuning do chunker, etc.).
+1. 保証付き `torii_sorafs_replication_sla_total{outcome="missed"}` を監視します
+   コンタドールが安定する。
+2. Saida `sorafs_cli manifest status` como evidencia de que cada レプリカ ボルトをキャプチャします。
+   コンフィダード。
+3. アブラは、過去のレプリカのバックログを事後処理して実際に作成します
+   (プロバイダーのスケーリング、チャンカーのチューニングなど)。
 
-## Runbook - Queda de analytics ou telemetria
+## Runbook - 分析とテレメトリの実行手順
 
-### Condicoes de disparo
+### コンディコエス デ ディスパロ
 
-- `npm run probe:portal` passa, mas dashboards param de ingerir eventos do
-  `AnalyticsTracker` por >15 minutos.
-- Privacy review aponta um aumento inesperado de eventos descartados.
-- `npm run probe:tryit-proxy` falha em paths `/probe/analytics`.
+- `npm run probe:portal` パス、マス ダッシュボード パラメータの設定イベント
+  `AnalyticsTracker` 時間 > 15 分。
+- プライバシー レビューはイベントを報告するためのものです。
+- `npm run probe:tryit-proxy` ファルハエムパス `/probe/analytics`。
 
-### Resposta
+### レスポスタ1. ビルドの入力を検証します: `DOCS_ANALYTICS_ENDPOINT` e
+   `DOCS_ANALYTICS_SAMPLE_RATE` アーティファト リリースはありません (`build/release.json`)。
+2. `npm run probe:portal` com `DOCS_ANALYTICS_ENDPOINT` apontando para o を再実行します。
+   コレクターは、ペイロードを発行するためのトラッカーの確認のためのステージングを行います。
+3. SE OS コレクターがダウンし、`DOCS_ANALYTICS_ENDPOINT=""` を再構築することが定義されています
+   パラケオトラッカーファカショートサーキット。ナリンハの停電を登録する
+   ド・テンポ・ド・インシデンテ。
+4. `scripts/check-links.mjs` の指紋を `checksums.sha256` から有効にします。
+   (サイトマップを検証するための分析 *nao* 開発ブロック)。
+5. Quando コレクター Voltar、`npm run test:widgets` パラ Exercitar OS 単体テストに参加
+   再公開する前に分析のヘルパーを実行します。
 
-1. Verifique inputs de build: `DOCS_ANALYTICS_ENDPOINT` e
-   `DOCS_ANALYTICS_SAMPLE_RATE` no artefato do release (`build/release.json`).
-2. Reexecute `npm run probe:portal` com `DOCS_ANALYTICS_ENDPOINT` apontando para o
-   collector de staging para confirmar que o tracker ainda emite payloads.
-3. Se os collectors estiverem down, defina `DOCS_ANALYTICS_ENDPOINT=""` e rebuild
-   para que o tracker faca short-circuit; registre a janela de outage na linha
-   do tempo do incidente.
-4. Valide que `scripts/check-links.mjs` ainda faz fingerprint de `checksums.sha256`
-   (quedas de analytics *nao* devem bloquear a validacao do sitemap).
-5. Quando o collector voltar, rode `npm run test:widgets` para exercitar os unit tests
-   do helper de analytics antes de republish.
+### 事件後
 
-### Pos-incidente
+1. Atualize [`devportal/observability`](./observability) com novaslimitacoes do Collector
+   あなたはアモスストラジェムを要求しています。
+2. 分析フォーラムの管理と管理の強化
+   政治だ。
 
-1. Atualize [`devportal/observability`](./observability) com novas limitacoes do collector
-   ou requisitos de amostragem.
-2. Abra um aviso de governanca se dados de analytics foram perdidos ou redigidos fora
-   da politica.
+## 回復力を訓練する
 
-## Drills trimestrais de resiliencia
+**primeira terca-feira de cada trimestre** の期間にわたる訓練を実行する (1 月/4 月/7 月/終了)
+主要なインフラストラクチャを今すぐに確認してください。アルマゼン アルテファトス エム
+`artifacts/devportal/drills/<YYYYMMDD>/`。
 
-Execute os dois drills durante a **primeira terca-feira de cada trimestre** (Jan/Abr/Jul/Out)
-ou imediatamente apos qualquer mudanca maior de infraestrutura. Armazene artefatos em
-`artifacts/devportal/drills/<YYYYMMDD>/`.
-
-| Drill | Passos | Evidencia |
+|ドリル |パソス |証拠 |
 | ----- | ----- | -------- |
-| Ensaio de rollback de alias | 1. Repetir o rollback de "Deploy falho" usando o manifest de producao mais recente.<br/>2. Re-vincular a producao assim que os probes passarem.<br/>3. Registrar `portal.manifest.submit.summary.json` e logs de probes na pasta do drill. | `rollback.submit.json`, saida de probes, e release tag do ensaio. |
-| Auditoria de validacao sintetica | 1. Rodar `npm run probe:portal` e `npm run probe:tryit-proxy` contra producao e staging.<br/>2. Rodar `npm run check:links` e arquivar `build/link-report.json`.<br/>3. Anexar screenshots/exports de paineis Grafana confirmando o sucesso dos probes. | Logs de probes + `link-report.json` referenciando o fingerprint do manifest. |
+|別名ロールバックの説明 | 1. 「ファルホのデプロイ」のロールバックを繰り返し、最近の制作マニフェストを実行します。<br/>2.必要に応じてプローブを再採取します。<br/>3.レジストラ `portal.manifest.submit.summary.json` は、パスタやドリルのプローブのログを記録します。 | `rollback.submit.json`、プローブは、タグを解放すると言いました。 |
+|オーディトリア デ バリダカオ シンテティカ | 1. Rodar `npm run probe:portal` および `npm run probe:tryit-proxy` コントラプロダクションステージング。<br/>2. Rodar `npm run check:links` および arquivar `build/link-report.json`。<br/>3. Anexar のスクリーンショット/エクスポートは Grafana を確認し、プローブを成功させます。 |プローブのログ + `link-report.json` 参照、フィンガープリントのマニフェスト。 |
 
-Escalone drills perdidos para o manager de Docs/DevRel e a revisao de governanca de SRE,
-pois o roadmap exige evidencia trimestral determinista de que o rollback de alias e os
-probes do portal continuam saudaveis.
+Escalone は、ドキュメント/DevRel マネージャーの権限で SRE ガバナンスの見直しを行います。
+ロードマップの証拠を示すトリメストラル決定論的なロールバックとエイリアス EOS
+プローブはポータルを継続的に実行します。
 
-## Coordenacao PagerDuty e on-call
-
-- O servico PagerDuty **Docs Portal Publishing** e dono dos alertas gerados a partir de
-  `dashboards/grafana/docs_portal.json`. As regras `DocsPortal/GatewayRefusals`,
-  `DocsPortal/AliasCache`, e `DocsPortal/TLSExpiry` paginam o primary de Docs/DevRel
-  com Storage SRE como secundario.
-- Quando a pagina tocar, inclua o `DOCS_RELEASE_TAG`, anexe screenshots dos paineis Grafana
-  afetados e linke a saida de probe/link-check nas notas do incidente antes de iniciar
-  a mitigacao.
-- Depois da mitigacao (rollback ou redeploy), reexecute `npm run probe:portal`,
-  `npm run check:links`, e capture snapshots Grafana recentes mostrando as metricas
-  de volta aos thresholds. Anexe toda a evidencia ao incidente do PagerDuty
-  antes de resolver.
-- Se dois alertas dispararem ao mesmo tempo (por exemplo expiracao de TLS mais backlog),
-  triage refusals primeiro (parar o publishing), execute o procedimento de rollback e
-  depois resolva TLS/backlog com Storage SRE na ponte.
+## オンコールで PagerDuty を調整します- PagerDuty **ドキュメント ポータル公開** のサービスを提供し、一部のアラートを通知します
+  `dashboards/grafana/docs_portal.json`。 `DocsPortal/GatewayRefusals` として、
+  `DocsPortal/AliasCache`、`DocsPortal/TLSExpiry` Docs/DevRel のプライマリページ
+  com ストレージ SRE como secundario。
+- `DOCS_RELEASE_TAG` を含むページを開く、Grafana の別紙スクリーンショット
+  不正行為は、事件発生前に調査/リンクチェックに関連するものではありません
+  ミティガカオ。
+- Depois da mitigacao (ロールバックまたは再デプロイ)、`npm run probe:portal` を再実行、
+  `npm run check:links`、スナップショットをキャプチャ Grafana メトリカとしての最新のモストランド
+  de volta aos しきい値。 PagerDuty で発生した証拠を添付する別紙
+  アンテ・デ・リゾルバー。
+- 管理テンポの違いによるアラートの発生 (TLS のバックログの期限切れの例)、
+  トリアージ拒否のプライマリ (出版パラレル)、ロールバック手順の実行
+  resolva TLS/バックログ com ストレージ SRE をデポジットします。

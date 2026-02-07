@@ -7,62 +7,63 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 8de31f9e066b729fda8324b8847badba23de926888574d02a44fb0e6d4472f77
 source_last_modified: "2026-01-16T17:12:51.444585+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Norito Codec Reference
+# I18NT0000001X ཀོ་ཌེག་གཞི་བསྟུན།
 
-Norito is Iroha’s canonical serialization layer. Every on-wire message, on-disk
-payload, and cross-component API uses Norito so nodes agree on identical bytes
-even when they run on different hardware. This page summarises the moving parts
-and points to the full specification in `norito.md`.
+Norito འདི་ Iroha གི་ ཀེ་ནོ་ནིག་རིམ་སྒྲིག་བང་རིམ་ཨིན། གློག་ཐག་ནང་འཕྲིན་དོན་རེ་རེ་བཞིན་ ཌིཀསི།
+པེ་ལོཌི་དང་ དང་ ཕར་ཚུར་ཆ་ཤས་ཨེ་པི་ཨའི་གིས་ I18NT000000003X ལག་ལེན་འཐབ་དོ་ཡོདཔ་ལས་ nodes གིས་ བཱའིཊིསི་གཅིག་མཚུངས་ལུ་ ཆ་འཇོག་འབདཝ་ཨིན།
+དེ་ཚུ་གིས་ མཐུན་རྐྱེན་སོ་སོ་ཚུ་གུ་གཡོག་བཀོལ་བའི་སྐབས་ལུ་ཡང་། ཤོག་ལེབ་འདི་གིས་ སྤོ་བཤུད་ཆ་ཤས་ཚུ་ བཅུད་བསྡུས་འབདཝ་ཨིན།
+དང་ `norito.md` ནང་ ཁྱད་ཚད་ཆ་ཚང་ལུ་སྟོནམ་ཨིན།
 
-## Core layout
+## སྒྲིག་བསྒྲགས།
 
-| Component | Purpose | Source |
+| ཆ་ཤས་ | དམིགས་ཡུལ། | ཡོང་ཁུངས། |
 | --- | --- | --- |
-| **Header** | Frames payloads with magic/version/schema hash, CRC64, length, and compression tag; v1 requires `VERSION_MINOR = 0x00` and validates header flags against the supported mask (default `0x00`). | `norito::header` — see `norito.md` (“Header & Flags”, repository root) |
-| **Bare payload** | Deterministic value encoding used for hashing/comparison. On-wire transport always uses a header; bare bytes are internal-only. | `norito::codec::{Encode, Decode}` |
-| **Compression** | Optional Zstd (and experimental GPU acceleration) selected via the header compression byte. | `norito.md`, “Compression negotiation” |
+| **མགོ་ཡིག་** | ཕྲེམ་ཚུ་ མགུ་སྐོར་/ཐོན་རིམ་/ལས་རིམ་ཧེ་ཤི་, CRC64, རིང་ཚད་, དང་ བསྡམ་བཞག་ངོ་རྟགས་ཚུ་དང་གཅིག་ཁར་ བྱིནམ་ཨིན། v1 ལུ་ I18NI0000008X དགོཔ་ཨིནམ་དང་ རྒྱབ་སྐྱོར་གྱི་གདོང་ཁེབས་ལུ་ མགོ་ཡིག་གི་དར་ཆ་ཚུ་ བདེན་དཔྱད་འབདཝ་ཨིན། (སྔོན་སྒྲིག་ I18NI0000009X) | I18NI000000010X — I18NI000000011X ལུ་བལྟ། (“མགོ་ཡིག་དང་རྒྱལ་དར་”, མཛོད་ཁང་གི་རྩ་བ་) |
+| **བར་གྱི་པེ་ལེསི་** | ཧེང་/ག་བསྡུར་གྱི་དོན་ལུ་ལག་ལེན་འཐབ་མི་ གཏན་འབེབས་གནས་གོང་ཨིན་ཀོ་ཌིང་། Onon wire སྐྱེལ་འདྲེན་གྱིས་ཨ་རྟག་རང་ མགོ་ཡིག་ལག་ལེན་འཐབ་ཨིན། བེ་རེ་བཱའིཊི་ཚུ་ ནང་ན་རྐྱངམ་ཅིག་ཨིན། | `norito::codec::{Encode, Decode}` |
+| **གནོདཔ་བཀལ་** | གདམ་ཁ་ཅན་གྱི་ Zstd (དང་ བརྟག་དཔྱད་ཀྱི་ GPU མགྱོགས་ཚད་) མགོ་ཡིག་བསྡམ་བཞག་བཱའིཊི་བརྒྱུད་དེ་ གདམ་ཁ་རྐྱབ་ཡོདཔ་ཨིན། | `norito.md`, “བརྟན་འཇགས་གྲོས་བསྟུན་” |
 
-The layout flag registry (packed-struct, packed-seq, field bitset, compact
-lengths) lives in `norito::header::flags`. V1 defaults to flags `0x00` but
-accepts explicit header flags within the supported mask; unknown bits are
-rejected. `norito::header::Flags` is retained for internal inspection and
-future versions.
+བཀོད་སྒྲིག་དར་ཐོ་ཐོ་བཀོད་ (ཐུམ་སྒྲིལ་-བཟོ་བཀོད་ སྦུང་ཚད་-སེག་ ས་སྒོའི་བིཊི་སེཊི་ བསྡུ་སྒྲིག་།
+རིང་ཚད་) `norito::header::flags` ནང་སྡོད་ཡོད། V1 གིས་ དར་ཆ་ `0x00` ལུ་སྔོན་སྒྲིག་འབདཝ་ཨིན།
+དང་ལེན་འབད་མི་ གསལ་རི་རི་ མགོ་ཡིག་དར་ཆ་ཚུ་ རྒྱབ་སྐྱོར་ཁ་རས་ནང་འཁོད་ལུ་ཨིན། མ་ཤེས་པའི་བིཊི་ཚུ་
+ཁ༌བཀག༌འབད༌ཡོདཔ༌ I18NI000000016X འདི་ ནང་འཁོད་བརྟག་དཔྱད་དང་ དང་།
+མ་འོངས་པའི་ཐོན་རིམ་ཚུ།
 
-## Derive support
+## རྒྱབ་སྐྱོར།
 
-`norito_derive` ships `Encode`, `Decode`, `IntoSchema`, and JSON helper derives.
-Key conventions:
+I18NI000000000017X, `Encode`, I18NI0000000019X, I18NI0000000020X, དང་ JSON གྲོགས་རམ་པ་ཚུ་ འཐོབ་ཚུགས།
+གཙོ་བོའི་ཆིངས་ཡིག།
 
-- Derives generate both AoS and packed code paths; v1 defaults to the AoS
-  layout (flags `0x00`) unless header flags opt into packed variants.
-  Implementation lives in `crates/norito_derive/src/derive_struct.rs`.
-- Layout-affecting features (`packed-struct`, `packed-seq`, `compact-len`) are
-  opt-in via header flags and must be encoded/decoded consistently across peers.
-- JSON helpers (`norito::json`) provide deterministic Norito-backed JSON for
-  open APIs. Use `norito::json::{to_json_pretty, from_json}` — never `serde_json`.
+- ཌེ་རིསི་གིས་ AoS དང་ བསྡུ་སྒྲིག་འབད་ཡོད་པའི་ཨང་རྟགས་འགྲུལ་ལམ་གཉིས་ཆ་ར་ བཟོ་བཏོན་འབདཝ་ཨིན། v1 ལུ་ AoS ལུ་སྔོན་སྒྲིག་འབདཝ་ཨིན།
+  བཀོད་སྒྲིག་ (ཕེག་ `0x00`) མགོ་ཡིག་དར་ཆ་ཚུ་ བསྡུ་སྒྲིག་འབད་ཡོད་པའི་དབྱེ་བ་ཚུ་ནང་ མ་བཙུགས།
+  ལག་ལེན་འཐབ་ནིའི་མི་ཚེ་ `crates/norito_derive/src/derive_struct.rs` ནང་།
+- བཀོད་སྒྲིག་-ཕན་གནོད་ཀྱི་ཁྱད་རྣམ་ (`packed-struct`, `packed-seq`, `compact-len`) ནང་།
+  མགོ་ཡིག་གི་དར་ཆ་ཚུ་བརྒྱུད་དེ་ གདམ་ཁ་ཚུ་ མཉམ་རོགས་ཀྱིས་ རྟག་བུ་རང་ བཀོད་སྒྲིག་འབད་དགོཔ་/བཀོད་དགོཔ་ཨིན།
+- JSON གྲོགས་རམ་པ་ (`norito::json`) གིས་ གཏན་འབེབས་ Norito-backed JSON འདི་ ༢༠༢༠ ལུ་བྱིནམ་ཨིན།
+  ཁ་ཕྱེ་ཨེ་པི་ཨའི་ཚུ། `norito::json::{to_json_pretty, from_json}` ལག་ལེན་ — ནམ་ཡང་ I18NI0000028X ལག་ལེན་འཐབ་དགོ།
 
-## Multicodec & identifier tables
+## སྣ་མང་ཀོ་ཌིཀ དང་ངོས་འཛིན་ཐིག་ཁྲམ་ཚུ།
 
-Norito keeps its multicodec assignments in `norito::multicodec`. The reference
-table (hashes, key types, payload descriptors) is maintained in `multicodec.md`
-at the repository root. When a new identifier is added:
+Norito གིས་ `norito::multicodec` ནང་ལུ་ དེ་གི་སྣ་མང་ཀོ་ཌེག་ལས་འགན་ཚུ་བཞགཔ་ཨིན། གཞི་བསྟུན་འདི།
+ཐིག་ཁྲམ་ (ཧ་ཤི ལྡེ་མིག་དབྱེ་བ་, པེ་ལོཌི་འགྲེལ་བཤད་) འདི་ `multicodec.md` ནང་ལུ་བཞག་ཡོདཔ་ཨིན།
+ནང་ མཛོད་ཁང་གི་རྩ་བ་ལུ། ངོས་འཛིན་འབད་མི་གསརཔ་ཅིག་ཁ་སྐོང་བརྐྱབ་པའི་སྐབས།
 
-1. Update `norito::multicodec::registry`.
-2. Extend the table in `multicodec.md`.
-3. Regenerate downstream bindings (Python/Java) if they consume the map.
+1. `norito::multicodec::registry` དུས་ཚོད།
+༢ `multicodec.md` ནང་ཐིག་ཁྲམ་རྒྱ་སྐྱེད་འབད།
+༣ ས་ཁྲ་འདི་ཟ་བ་ཅིན་ མར་མར་གྱི་བསྡམ་ཐག་ཚུ་ ལོག་བཟོ་དགོ། (Python/Java)
 
-## Regenerating docs & fixtures
+## ཡིག་ཆ་དང་སྒྲིག་ཆས་བསྐྱར་བཟོ་འབད་ནི།
 
-With the portal currently hosting a prose summary, use the upstream Markdown
-sources as the source of truth:
+ད་ལྟོ་ཚིག་སྦྱོར་གྱི་བཅུད་བསྡུས་ཅིག་ ཧོསཊི་འབད་མི་ དྲྭ་རྒྱ་འདི་གིས་ ཡར་འཕེལ་གྱི་རྟགས་ཌའོན་འདི་ལག་ལེན་འཐབ།
+འབྱུང་ཁུངས་ལྟར་བདེན་པའི་འབྱུང་ཁུངས།
 
-- **Spec**: `norito.md`
-- **Multicodec table**: `multicodec.md`
+- **སཔེག་**: I༡༨NI0000033X
+- **མུལ་ཊི་ཌེག་ཐིག་ཁྲམ་**: I 18NI00000034X
 - **Benchmarks**: `crates/norito/benches/`
-- **Golden tests**: `crates/norito/tests/`
+- **གསེར་གྱི་བརྟག་དཔྱད་**: I18NI0000036X
 
-When the Docusaurus automation goes live, the portal will be updated via a
-sync script (tracked in `docs/portal/scripts/`) that pulls the data from these
-files. Until then, keep this page aligned manually whenever the spec changes.
+I18NT000000000X རང་བཞིན་གྱི་རང་བཞིན་འདི་ ཐད་རི་འབའ་རི་ འགྱོ་བའི་སྐབས་ དྲྭ་ཚིགས་འདི་ ཅིག་བརྒྱུད་དེ་ དུས་མཐུན་བཟོ་འོང་།
+མཉམ་མཐུད་ཡིག་ཚུགས་ (I18NI000000037X ནང་རྗེས་འདེད་འབད་ཡོདཔ་) འདི་ཚུ་ལས་ གནད་སྡུད་འཐེན་ཨིན།
+ཡིག་སྣོད་ཚུ། དེ་ཚུན་ཚོད་ པར་འདི་བསྒྱུར་བཅོས་འགྱོཝ་ད་ ཤོག་ལེབ་འདི་ལག་ཐོག་ལས་ཕྲང་སྒྲིག་འབད་བཞག།

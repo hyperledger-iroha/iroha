@@ -11,42 +11,43 @@ id: preview-feedback-w1-summary
 title: W1 partner feedback & exit summary
 sidebar_label: W1 summary
 description: Findings, actions, and exit evidence for the partner/Torii integrator preview wave.
+translator: machine-google-reviewed
 ---
 
-| Item | Details |
+| Зүйл | Дэлгэрэнгүй |
 | --- | --- |
-| Wave | W1 — Partners & Torii integrators |
-| Invite window | 2025‑04‑12 → 2025‑04‑26 |
-| Artefact tag | `preview-2025-04-12` |
-| Tracker issue | `DOCS-SORA-Preview-W1` |
-| Participants | sorafs-op-01…03, torii-int-01…02, sdk-partner-01…02, gateway-ops-01 |
+| Долгион | W1 — Түншүүд & Torii интеграторууд |
+| Урих цонх | 2025‑04‑12 → 2025‑04‑26 |
+| Олдворын шошго | `preview-2025-04-12` |
+| Tracker асуудал | `DOCS-SORA-Preview-W1` |
+| Оролцогчид | sorafs-op-01...03, torii-int-01...02, sdk-partner-01...02, гарц-ops-01 |
 
-## Highlights
+## Онцлох үйл явдал
 
-1. **Checksum workflow** — All reviewers verified the descriptor/archive via `scripts/preview_verify.sh`; logs stored alongside the invite acknowledgements.
-2. **Telemetry** — `docs.preview.integrity`, `TryItProxyErrors`, and `DocsPortal/GatewayRefusals` dashboards stayed green for the entire wave; no incidents or alert pages fired.
-3. **Doc feedback (`docs-preview/w1`)** — Two minor nits filed:
-   - `docs-preview/w1 #1`: clarify nav wording in the Try it section (resolved).
-   - `docs-preview/w1 #2`: update Try it screenshot (resolved).
-4. **Runbook parity** — SoraFS operators confirmed the new cross-links between `orchestrator-ops` and `multi-source-rollout` addressed their W0 concerns.
+1. **Шалгах нийлбэрийн ажлын урсгал** — Бүх хянагчид тодорхойлогч/архивыг `scripts/preview_verify.sh`-ээр баталгаажуулсан; логууд урилга хүлээн авсантай зэрэгцэн хадгалагдана.
+2. **Телеметри** — `docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals` хяналтын самбарууд бүх долгионы турш ногоон өнгөтэй байсан; осол, сэрэмжлүүлгийн хуудас хийгээгүй.
+3. **Баримт бичгийн санал хүсэлт (`docs-preview/w1`)** - Хоёр жижиг nits гаргасан:
+   - `docs-preview/w1 #1`: Оролдоод үзээрэй (шийдвэрлэсэн) хэсэгт навигацийн үгийг тодруулах.
+   - `docs-preview/w1 #2`: Шинэчлээд үзээрэй дэлгэцийн агшин (шийдвэрлэсэн).
+4. **Runbook parity** — SoraFS операторууд `orchestrator-ops` болон `multi-source-rollout` хоёрын хоорондох шинэ хөндлөн холбоосыг баталгаажуулж, тэдний W0-ийн асуудалд хандсан.
 
-## Action items
+## Үйлдлийн зүйл
 
-| ID | Description | Owner | Status |
+| ID | Тодорхойлолт | Эзэмшигч | Статус |
 | --- | --- | --- | --- |
-| W1-A1 | Update Try it nav wording per `docs-preview/w1 #1`. | Docs-core-02 | ✅ Completed (2025‑04‑18). |
-| W1-A2 | Refresh Try it screenshot per `docs-preview/w1 #2`. | Docs-core-03 | ✅ Completed (2025‑04‑19). |
-| W1-A3 | Summarise partner findings + telemetry evidence in roadmap/status. | Docs/DevRel lead | ✅ Completed (see tracker + status.md). |
+| W1-A1 | Шинэчлэх `docs-preview/w1 #1`-ийн дагуу навигацийн үг хэллэгээр оролдож үзнэ үү. | Doc-core-02 | ✅ Дууссан (2025‑04‑18). |
+| W1-A2 | Дахин сэргээх `docs-preview/w1 #2`-ийн дэлгэцийн агшинд үзээрэй. | Doc-core-03 | ✅ Дууссан (2025‑04‑19). |
+| W1-A3 | Замын зураг/статус дахь түншийн дүгнэлт + телеметрийн нотолгоог нэгтгэн дүгнэ. | Docs/DevRel тэргүүлэх | ✅ Дууссан (tracker + status.md-г үзнэ үү). |
 
-## Exit summary (2025-04-26)
+## Гаралтын хураангуй (2025-04-26)
 
-- All eight reviewers confirmed completion during the final office hours, purged local artefacts, and had their access revoked.
-- Telemetry remained green through exit; final snapshots attached to `DOCS-SORA-Preview-W1`.
-- Invite log updated with exit acknowledgements; tracker flipped W1 to 🈴 and added the checkpoint entries.
-- Evidence bundle (descriptor, checksum log, probe output, Try it proxy transcript, telemetry screenshots, feedback digest) archived under `artifacts/docs_preview/W1/`.
+- Найман хянагч бүгд ажлын эцсийн цагаар дууссаныг баталж, орон нутгийн олдворуудыг цэвэрлэж, нэвтрэх эрхийг нь цуцалсан.
+- Телеметр нь гарцаар ногоон хэвээр үлдсэн; эцсийн хормын хувилбаруудыг `DOCS-SORA-Preview-W1`-д хавсаргасан.
+- Урилгын бүртгэлийг гаралтын мэдэгдлээр шинэчилсэн; tracker W1-г 🈴 руу эргүүлж, хяналтын цэгийн оруулгуудыг нэмсэн.
+- `artifacts/docs_preview/W1/` дор архивлагдсан нотлох баримтын багц (тодорхойлогч, шалгах нийлбэрийн бүртгэл, шалгалтын гаралт, прокси хуулбарыг туршиж үзээрэй, телеметрийн дэлгэцийн агшин, санал хүсэлтийн хураангуй).
 
-## Next steps
+## Дараагийн алхамууд
 
-- Prepare the W2 community intake plan (governance approval + request template tweaks).
-- Refresh the preview artefact tag for the W2 wave and re-run the preflight script once dates are finalised.
-- Port applicable W1 findings into roadmap/status so the community wave has the latest guidance.
+- W2 олон нийтийн хүлээн авах төлөвлөгөөг бэлтгэх (засаглалын зөвшөөрөл + хүсэлтийн загварт өөрчлөлт оруулах).
+- W2 долгионы урьдчилан харах олдворын шошгыг сэргээж, огноо дуусмагц урьдчилсан нислэгийн скриптийг дахин ажиллуулна уу.
+- Холбогдох W1-ийн дүгнэлтийг замын зураг/статус руу оруулснаар олон нийтийн долгион хамгийн сүүлийн үеийн удирдамжтай болно.

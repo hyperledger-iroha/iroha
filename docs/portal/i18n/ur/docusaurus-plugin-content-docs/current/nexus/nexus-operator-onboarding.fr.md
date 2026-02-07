@@ -4,92 +4,90 @@ direction: rtl
 source: docs/portal/docs/nexus/nexus-operator-onboarding.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: nexus-operator-onboarding
-title: Integration des operateurs de data-space Sora Nexus
-description: Miroir de `docs/source/sora_nexus_operator_onboarding.md`, suivant la checklist de release de bout en bout pour les operateurs Nexus.
+ID: گٹھ جوڑ آپریٹر آن بورڈنگ
+عنوان: ڈیٹا اسپیس آپریٹرز کا انضمام Sora Nexus
+تفصیل: آپریٹرز Nexus کے لئے اختتامی ریلیز چیک لسٹ کے بعد ، `docs/source/sora_nexus_operator_onboarding.md` کا آئینہ۔
 ---
 
-:::note Source canonique
-Cette page reflete `docs/source/sora_nexus_operator_onboarding.md`. Gardez les deux copies alignees jusqu'a l'arrivee des editions localisees sur le portal.
+::: نوٹ کینونیکل ماخذ
+یہ صفحہ `docs/source/sora_nexus_operator_onboarding.md` کی عکاسی کرتا ہے۔ پورٹل پر واقع ایڈیشن کی آمد تک دونوں کاپیاں منسلک رکھیں۔
 :::
 
-# Integration des operateurs de data-space Sora Nexus
+# ڈیٹا اسپیس آپریٹرز کا انضمام SORA Nexus
 
-Ce guide capture le flux de bout en bout que les operateurs de data-space Sora Nexus doivent suivre une fois un release annonce. Il complete le runbook a double voie (`docs/source/release_dual_track_runbook.md`) et la note de selection d'artefacts (`docs/source/release_artifact_selection.md`) en decrivant comment aligner les bundles/images telecharges, les manifests et les templates de configuration avec les attentes globales de lanes avant de mettre un noeud en ligne.
+یہ گائیڈ اختتام سے آخر میں بہاؤ کو اپنی گرفت میں لے رہا ہے جس میں SORA Nexus ڈیٹا اسپیس آپریٹرز کو ریلیز کا اعلان ہونے کے بعد پیروی کرنا چاہئے۔ یہ دوہری لین رن بک (`docs/source/release_dual_track_runbook.md`) اور نمونے کے سلیکشن نوٹ (`docs/source/release_artifact_selection.md`) کو بیان کرتے ہوئے بیان کرتے ہوئے کہ کس طرح اپلوڈڈ بنڈل/تصاویر ، مینی فیسٹ ، اور کنفیگریشن ٹیمپلیٹس کو آن لائن نوڈ لانے سے پہلے مجموعی طور پر لین کی توقعات کے ساتھ ترتیب دیا جائے۔
 
-## Audience et prerequis
-- Vous avez ete approuve par le Programme Nexus et avez recu votre affectation de data-space (index de lane, data-space ID/alias et exigences de politique de routage).
-- Vous pouvez acceder aux artefacts signes du release publies par Release Engineering (tarballs, images, manifests, signatures, cles publiques).
-- Vous avez genere ou recu le materiel de cles de production pour votre role de validator/observer (identite de noeud Ed25519; cle de consensus BLS + PoP pour les validators; plus tout toggle de fonctionnalite confidentielle).
-- Vous pouvez joindre les pairs Sora Nexus existants qui bootstrappent votre noeud.
+## سماعت اور شرطیں
+-آپ کو پروگرام Nexus کے ذریعہ منظور کرلیا گیا ہے اور آپ نے اپنی ڈیٹا اسپیس اسائنمنٹ (لین انڈیکس ، ڈیٹا اسپیس آئی ڈی/عرف اور روٹنگ پالیسی کی ضروریات) حاصل کی ہے۔
+- آپ ریلیز انجینئرنگ (ٹربالز ، امیجز ، مینی فیسٹ ، دستخط ، عوامی چابیاں) کے ذریعہ شائع کردہ ریلیز سائن نمونے تک رسائی حاصل کرسکتے ہیں۔
+- آپ نے اپنے جائز/مبصرین کے کردار کے لئے پروڈکشن کلیدی مواد تیار یا وصول کیا ہے (نوڈ شناخت ED25519 ؛ BLS + پاپ اتفاق رائے کے لئے توثیق کرنے والوں کے لئے ؛ نیز کوئی خفیہ فعالیت ٹوگل)۔
+- آپ موجودہ SORA Nexus ساتھیوں میں شامل ہوسکتے ہیں جو آپ کے نوڈ کو بوٹسٹریپنگ کررہے ہیں۔
 
-## Etape 1 - Confirmer le profil de release
-1. Identifiez l'alias de reseau ou le chain ID qui vous a ete donne.
-2. Lancez `scripts/select_release_profile.py --network <alias>` (ou `--chain-id <id>`) sur un checkout de ce depot. Le helper consulte `release/network_profiles.toml` et imprime le profil a deployer. Pour Sora Nexus la reponse doit etre `iroha3`. Pour toute autre valeur, arretez et contactez Release Engineering.
-3. Notez le tag de version reference par l'annonce du release (par exemple `iroha3-v3.2.0`); vous l'utiliserez pour recuperer les artefacts et manifests.
+## مرحلہ 1 - ریلیز پروفائل کی تصدیق کریں
+1. آپ کو دیئے گئے نیٹ ورک عرف یا چین کی شناخت کی شناخت کریں۔
+2. اس ذخیرے کے چیک آؤٹ پر `scripts/select_release_profile.py --network <alias>` (یا `--chain-id <id>`) چلائیں۔ مددگار `release/network_profiles.toml` سے مشورہ کرتا ہے اور تعینات کرنے کے لئے پروفائل پرنٹ کرتا ہے۔ سورہ Nexus کے لئے جواب `iroha3` ہونا چاہئے۔ کسی بھی دوسری قیمت کے ل stop ، ریلیز انجینئرنگ کو روکیں اور رابطہ کریں۔
+3. ریلیز کے اعلان کے ذریعہ حوالہ کردہ ورژن ٹیگ کو نوٹ کریں (جیسے `iroha3-v3.2.0`) ؛ آپ اسے نمونے اور ظاہر کرنے کے لئے استعمال کریں گے۔
 
-## Etape 2 - Recuperer et valider les artefacts
-1. Telechargez le bundle `iroha3` (`<profile>-<version>-<os>.tar.zst`) et ses fichiers compagnons (`.sha256`, optionnel `.sig/.pub`, `<profile>-<version>-manifest.json`, et `<profile>-<version>-image.json` si vous deployez des conteneurs).
-2. Validez l'integrite avant de decompresser:
+## مرحلہ 2 - نمونے کو بازیافت اور توثیق کریں
+1. بنڈل `iroha3` (`<profile>-<version>-<os>.tar.zst`) اور اس کے ساتھی فائلیں (`.sha256` ، اختیاری `.sig/.pub` ، `<profile>-<version>-manifest.json` ، اور `<profile>-<version>-image.json` ڈاؤن لوڈ کریں اگر آپ کنٹینرز تعینات کر رہے ہیں)۔
+2. پیک کھولنے سے پہلے سالمیت کی توثیق کریں:
    ```bash
    sha256sum -c iroha3-<version>-linux.tar.zst.sha256
    openssl dgst -sha256 -verify iroha3-<version>-linux.tar.zst.pub \
        -signature iroha3-<version>-linux.tar.zst.sig \
        iroha3-<version>-linux.tar.zst
    ```
-   Remplacez `openssl` par le verificateur approuve par l'organisation si vous utilisez un KMS materiel.
-3. Inspectez `PROFILE.toml` dans le tarball et les manifests JSON pour confirmer:
+   اگر آپ ہارڈ ویئر کے ایم ایس استعمال کررہے ہیں تو `openssl` کو تنظیم سے منظور شدہ تصدیق کنندہ کے ساتھ تبدیل کریں۔
+3. ٹربال میں `PROFILE.toml` کا معائنہ کریں اور JSON کی تصدیق کے لئے ظاہر ہوتا ہے:
    - `profile = "iroha3"`
-   - Les champs `version`, `commit` et `built_at` correspondent a l'annonce du release.
-   - L'OS/architecture correspond a votre cible de deploiement.
-4. Si vous utilisez l'image conteneur, repetez la verification hash/signature pour `<profile>-<version>-<os>-image.tar` et confirmez l'image ID enregistree dans `<profile>-<version>-image.json`.
+   - فیلڈز `version` ، `commit` اور `built_at` رہائی کے اعلان کے مطابق ہے۔
+   - OS/فن تعمیر آپ کے تعیناتی کے ہدف سے مطابقت رکھتا ہے۔
+4. اگر آپ کنٹینر امیج استعمال کررہے ہیں تو ، `<profile>-<version>-<os>-image.tar` کے لئے ہیش/دستخط چیک کو دہرائیں اور `<profile>-<version>-image.json` میں محفوظ کردہ تصویری ID کی تصدیق کریں۔## مرحلہ 3 - ٹیمپلیٹس سے ترتیب تیار کریں
+1. بنڈل نکالیں اور `config/` کو اس جگہ پر کاپی کریں جہاں نوڈ اپنی تشکیل کو پڑھے گا۔
+2. `config/` کے تحت فائلوں کا علاج ٹیمپلیٹس کے بطور:
+   - `public_key`/`private_key` کو اپنی پروڈکشن ED25519 کیز کے ساتھ تبدیل کریں۔ نجی چابیاں ڈسک سے حذف کریں اگر نوڈ ان کو HSM سے ذرائع بناتا ہے۔ HSM کنیکٹر کی طرف اشارہ کرنے کے لئے ترتیب کو اپ ڈیٹ کریں۔
+   - `trusted_peers` ، `network.address` اور `torii.address` کو ایڈجسٹ کریں تاکہ وہ آپ کے قابل رسائی انٹرفیس اور تفویض کردہ بوٹسٹریپ ساتھیوں کی عکاسی کریں۔
+   - آپریٹر سائیڈ پر اختتامی نقطہ Torii کے ساتھ `client.toml` کو اپ ڈیٹ کریں (اگر قابل اطلاق TLS کنفیگریشن بھی شامل ہے) اور آپریشنل ٹولز کے لئے فراہم کردہ شناخت کاروں۔
+3. چین کی شناخت کو بنڈل میں فراہم کریں جب تک کہ گورننس کے ذریعہ واضح طور پر ہدایت نہ کی جائے - عالمی لین کو ایک منفرد کیننیکل چین ID کی توقع ہے۔
+4. سورہ پروفائل پرچم کے ساتھ شروع کرنے کے لئے نوڈ کا شیڈول کریں: `irohad --sora --config <path>`۔ کنفیگریشن لوڈر اگر پرچم غیر حاضر ہے تو SoraFS یا ملٹی لین پیرامیٹرز کو مسترد کردے گا۔
 
-## Etape 3 - Preparer la configuration a partir des templates
-1. Extrayez le bundle et copiez `config/` vers l'emplacement ou le noeud lira sa configuration.
-2. Traitez les fichiers sous `config/` comme des templates:
-   - Remplacez `public_key`/`private_key` par vos cles Ed25519 de production. Supprimez les cles privees du disque si le noeud les source depuis un HSM; mettez a jour la configuration pour pointer vers le connecteur HSM.
-   - Ajustez `trusted_peers`, `network.address` et `torii.address` afin qu'ils refletent vos interfaces accessibles et les pairs bootstrap assignes.
-   - Mettez a jour `client.toml` avec l'endpoint Torii cote operateur (y compris la configuration TLS si applicable) et les identifiants provisionnes pour l'outillage operationnel.
-3. Conservez le chain ID fourni dans le bundle sauf instruction explicite de Governance - la lane globale attend un identifiant de chaine canonique unique.
-4. Planifiez le demarrage du noeud avec le flag de profil Sora: `irohad --sora --config <path>`. Le chargeur de configuration rejettera les parametres SoraFS ou multi-lane si le flag est absent.
-
-## Etape 4 - Aligner la metadata de data-space et le routage
-1. Editez `config/config.toml` pour que la section `[nexus]` corresponde au catalogue de data-space fourni par le Nexus Council:
-   - `lane_count` doit egaler le total des lanes activees dans l'epoque courante.
-   - Chaque entree dans `[[nexus.lane_catalog]]` et `[[nexus.dataspace_catalog]]` doit contenir un `index`/`id` unique et les alias convenus. Ne supprimez pas les entrees globales existantes; ajoutez vos alias delegues si le conseil a attribue des data-spaces additionnels.
-   - Assurez-vous que chaque entree de dataspace inclut `fault_tolerance (f)`; les comites lane-relay sont dimensionnes a `3f+1`.
-2. Mettez a jour `[[nexus.routing_policy.rules]]` pour capturer la politique qui vous a ete attribuee. Le template par defaut route les instructions de gouvernance vers la lane `1` et les deploiements de contrats vers la lane `2`; ajoutez ou modifiez des regles pour que le trafic destine a votre data-space soit dirige vers la lane et l'alias corrects. Coordonnez avec Release Engineering avant de changer l'ordre des regles.
-3. Revoyez les seuils `[nexus.da]`, `[nexus.da.audit]` et `[nexus.da.recovery]`. Les operateurs sont censes conserver les valeurs approuvees par le conseil; ajustez-les uniquement si une politique mise a jour a ete ratifiee.
-4. Enregistrez la configuration finale dans votre tracker d'operations. Le runbook de release a double voie exige d'attacher le `config.toml` effectif (secrets rediges) au ticket d'onboarding.
-
-## Etape 5 - Validation pre-flight
-1. Executez le validateur de configuration integre avant de rejoindre le reseau:
+## مرحلہ 4 - ڈیٹا اسپیس میٹا ڈیٹا اور روٹنگ سیدھ کریں
+1. `config/config.toml` میں ترمیم کریں تاکہ سیکشن `[nexus]` کونسل Nexus کے ذریعہ فراہم کردہ ڈیٹا اسپیس کیٹلاگ سے مماثل ہے:
+   - `lane_count` کو موجودہ دور میں فعال لینوں کے برابر ہونا چاہئے۔
+   - `[[nexus.lane_catalog]]` اور `[[nexus.dataspace_catalog]]` میں ہر اندراج میں ایک انوکھا `index`/`id` اور متفقہ عرفی ناموں پر مشتمل ہونا چاہئے۔ موجودہ عالمی اندراجات کو حذف نہ کریں۔ اگر کونسل نے اضافی ڈیٹا اسپیس مختص کی ہے تو اپنے مندوب کے عرفی ناموں کو شامل کریں۔
+   - اس بات کو یقینی بنائیں کہ ہر ڈیٹا اسپیس اندراج میں `fault_tolerance (f)` شامل ہے۔ لین ریلے کمیٹیوں کا سائز `3f+1` پر ہے۔
+2. آپ کو تفویض کردہ پالیسی پر قبضہ کرنے کے لئے `[[nexus.routing_policy.rules]]` کو اپ ڈیٹ کریں۔ پہلے سے طے شدہ ٹیمپلیٹ لین `1` پر گورننس کی ہدایات اور لین `2` پر معاہدہ کی تعیناتیوں کو راستے پر گامزن کرتا ہے۔ قواعد کو شامل کریں یا اس میں ترمیم کریں تاکہ آپ کے ڈیٹا کی جگہ کے لئے تیار کردہ ٹریفک کو صحیح لین اور عرف کی طرف ہدایت کی جائے۔ قواعد کے آرڈر کو تبدیل کرنے سے پہلے ریلیز انجینئرنگ کے ساتھ ہم آہنگی کریں۔
+3. جائزہ دہلیز `[nexus.da]` ، `[nexus.da.audit]` اور `[nexus.da.recovery]`۔ آپریٹرز سے توقع کی جاتی ہے کہ وہ بورڈ کے ذریعہ منظور شدہ اقدار کو برقرار رکھیں۔ صرف اس صورت میں ان کو ایڈجسٹ کریں جب کسی تازہ ترین پالیسی کی توثیق کی گئی ہو۔
+4. اپنے آپریشنز ٹریکر کو حتمی ترتیب کو محفوظ کریں۔ ڈوئل ٹریک ریلیز رن بک کے لئے جہاز پر چلنے والے ٹکٹ سے موثر `config.toml` (redacted راز) منسلک کرنے کی ضرورت ہے۔## مرحلہ 5 - پرواز سے پہلے کی توثیق
+1. نیٹ ورک میں شامل ہونے سے پہلے بلٹ ان کنفیگریشن کی توثیق کرنے والے کو چلائیں:
    ```bash
    ./bin/irohad --sora --config config/config.toml --trace-config
    ```
-   Cela imprime la configuration resolue et echoue tot si les entrees catalogue/routage sont incoherentes ou si genesis et config divergent.
-2. Si vous deployez des conteneurs, executez la meme commande dans l'image apres l'avoir chargee avec `docker load -i <profile>-<version>-<os>-image.tar` (pensez a inclure `--sora`).
-3. Verifiez les logs pour des avertissements sur des identifiants placeholder de lane/data-space. Si besoin, revenez a l'etape 4 - les deploiements production ne doivent pas dependre des IDs placeholder livres avec les templates.
-4. Executez votre procedure smoke locale (p. ex. soumettre une requete `FindNetworkStatus` avec `iroha_cli`, confirmer que les endpoints telemetrie exposent `nexus_lane_state_total`, et verifier que les cles de streaming sont tournees ou importees selon les exigences).
+   یہ حل شدہ ترتیب کو پرنٹ کرتا ہے اور جلد ہی ناکام ہوجاتا ہے اگر کیٹلاگ/روٹنگ اندراجات متضاد ہیں یا اگر پیدائش اور کنفیگ ڈائیورج۔
+2. اگر آپ کنٹینرز تعینات کررہے ہیں تو ، `docker load -i <profile>-<version>-<os>-image.tar` کے ساتھ لوڈ کرنے کے بعد تصویر میں وہی کمانڈ چلائیں (`--sora` سمیت)۔
+3. لین/ڈیٹا اسپیس پلیس ہولڈر آئی ڈی کے بارے میں انتباہات کے لئے لاگ ان چیک کریں۔ اگر ضروری ہو تو ، مرحلہ 4 پر واپس جائیں - پیداوار کی تعیناتیوں کا انحصار ٹیمپلیٹس کے ساتھ فراہم کردہ پلیس ہولڈر آئی ڈی پر نہیں ہونا چاہئے۔
+4. اپنے مقامی دھواں کے طریقہ کار کو چلائیں (جیسے `iroha_cli` کے ساتھ ایک درخواست `FindNetworkStatus` جمع کروائیں ، اس بات کی تصدیق کریں کہ ٹیلی میٹری کے اختتامی نکات `nexus_lane_state_total` کو بے نقاب کررہے ہیں ، اور تصدیق کریں کہ اسٹریمنگ کی چابیاں درکار ہیں یا درآمد کی جاتی ہیں)۔
 
-## Etape 6 - Cutover et hand-off
-1. Stockez le `manifest.json` verifie et les artefacts de signature dans le ticket de release pour que les auditeurs puissent reproduire vos verifications.
-2. Informez Nexus Operations que le noeud est pret a etre introduit; incluez:
-   - Identite du noeud (peer ID, hostnames, endpoint Torii).
-   - Valeurs effectives du catalogue lane/data-space et politique de routage.
-   - Hashes des binaires/images verifies.
-3. Coordonnez l'admission finale des pairs (gossip seeds et affectation de lane) avec `@nexus-core`. Ne rejoignez pas le reseau avant d'avoir recu l'approbation; Sora Nexus applique une occupation deterministe des lanes et requiert un manifest d'admissions mis a jour.
-4. Apres la mise en ligne du noeud, mettez a jour vos runbooks avec les overrides introduits et notez le tag de release pour que la prochaine iteration parte de cette baseline.
+## مرحلہ 6 - کٹ اوور اور ہینڈ آف
+1. ریلیز ٹکٹ میں تصدیق شدہ `manifest.json` اور دستخطی نمونے اسٹور کریں تاکہ آڈیٹر آپ کی تصدیق کو دوبارہ پیش کرسکیں۔
+2. Nexus آپریشنز کو آگاہ کریں کہ نوڈ متعارف کرانے کے لئے تیار ہے۔ شامل ہیں:
+   - نوڈ کی شناخت (پیر ID ، میزبان نام ، اختتامی نقطہ Torii)۔
+   - لین/ڈیٹا اسپیس کیٹلاگ اور روٹنگ پالیسی کی موثر اقدار۔
+   - تصدیق شدہ بائنریز/امیجز کے ہیش۔
+3. `@nexus-core` کے ساتھ آخری ہم مرتبہ داخلہ (گپ شپ بیج اور لین اسائنمنٹ) کو مربوط کریں۔ جب تک آپ کو منظوری مل جاتی ہے اس وقت تک نیٹ ورک میں شامل نہ ہوں۔ سورہ Nexus نے عین مطابق لین کے قبضے کو نافذ کیا ہے اور اس کے لئے تازہ ترین داخلے کی ضرورت ہے۔
+4. نوڈ آن لائن جانے کے بعد ، اپنے رن بوکس کو اوور رائڈس کے ساتھ اپ ڈیٹ کریں اور ریلیز ٹیگ کو نوٹ کریں تاکہ اگلی تکرار اس بیس لائن سے شروع ہوجائے۔
 
-## Checklist de reference
-- [ ] Profil de release valide comme `iroha3`.
-- [ ] Hashes et signatures du bundle/image verifies.
-- [ ] Cles, adresses de pairs et endpoints Torii mis a jour en valeurs production.
-- [ ] Catalogue lanes/dataspace et politique de routage Nexus correspondent a l'affectation du conseil.
-- [ ] Validateur de configuration (`irohad --sora --config ... --trace-config`) passe sans avertissements.
-- [ ] Manifests/signatures archives dans le ticket d'onboarding et Ops notifie.
+## حوالہ چیک لسٹ
+- [] درست ریلیز پروفائل جیسے `iroha3`۔
+- [] ہیش اور بنڈل/شبیہہ کے دستخط کی تصدیق شدہ۔
+- [] چابیاں ، ہم مرتبہ کے پتے اور اختتامی نکات Torii پروڈکشن اقدار میں تازہ کاری کرتے ہیں۔
+- [] لین/ڈیٹا اسپیس کیٹلاگ اور روٹنگ پالیسی Nexus بورڈ اسائنمنٹ سے ملتے ہیں۔
+- [] کنفیگریشن کی توثیق کرنے والا (`irohad --sora --config ... --trace-config`) بغیر کسی انتباہ کے گزرتا ہے۔
+- [] آن بورڈنگ ٹکٹ میں منشور/دستخطوں کے آرکائیوز اور او پی ایس نے مطلع کیا۔
 
-Pour un contexte plus large sur les phases de migration Nexus et les attentes de telemetrie, consultez [Nexus transition notes](./nexus-transition-notes).
+Nexus ہجرت کے مراحل اور ٹیلی میٹری کی توقعات پر وسیع تر سیاق و سباق کے لئے ، [Nexus منتقلی نوٹ] (./nexus-transition-notes) دیکھیں۔

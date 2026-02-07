@@ -4,54 +4,50 @@ direction: ltr
 source: docs/portal/docs/sorafs/reports/capacity-marketplace-validation.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: Validation du marche de capacite SoraFS
-tags: [SF-2c, acceptance, checklist]
-summary: Checklist d'acceptation couvrant l'onboarding des providers, les flux de litiges et la reconciliation du tresor conditionnant la disponibilite generale du marche de capacite SoraFS.
+título: Validación de la marcha de capacidad SoraFS
+Etiquetas: [SF-2c, aceptación, lista de verificación]
+Resumen: Lista de verificación de aceptación de la incorporación de proveedores, flujo de litigios y reconciliación del tresor condicionante de la disponibilidad general de la marcha de capacidad SoraFS.
 ---
 
-# Checklist de validation du marche de capacite SoraFS
+# Lista de verificación de validación de la marcha de capacidad SoraFS
 
-**Fenetre de revue:** 2026-03-18 -> 2026-03-24  
-**Responsables du programme:** Storage Team (`@storage-wg`), Governance Council (`@council`), Treasury Guild (`@treasury`)  
-**Portee:** Pipelines d'onboarding des providers, flux d'adjudication des litiges et processus de reconciliation du tresor requis pour la GA SF-2c.
+**Fenetre de revista:** 2026-03-18 -> 2026-03-24  
+**Responsables del programa:** Equipo de almacenamiento (`@storage-wg`), Consejo de Gobierno (`@council`), Gremio de Tesorería (`@treasury`)  
+**Porte:** Canalizaciones de incorporación de proveedores, flujo de adjudicación de litigios y proceso de reconciliación de tres requisitos para la GA SF-2c.
 
-La checklist ci-dessous doit etre revue avant d'activer le marche pour des operateurs externes. Chaque ligne renvoie vers une evidence deterministe (tests, fixtures ou documentation) que les auditeurs peuvent rejouer.
+La lista de verificación ci-dessous debe ser revisada antes de activar la marcha para los operadores externos. Cada línea de envío vers una evidencia determinante (pruebas, accesorios o documentación) que los auditores pueden renovar.
 
-## Checklist d'acceptation
+## Lista de verificación de aceptación
 
-### Onboarding des providers
-
-| Check | Validation | Evidence |
+### Incorporación de proveedores| Consultar | Validación | Evidencia |
 |-------|------------|----------|
-| Le registry accepte les declarations canoniques de capacite | Le test d'integration exerce `/v1/sorafs/capacity/declare` via l'app API, en verifiant la gestion des signatures, la capture de metadata et le hand-off vers le registry du noeud. | `crates/iroha_torii/src/routing.rs:7654` |
-| Le smart contract rejette les payloads incoherents | Le test unitaire garantit que les IDs de provider et les champs GiB engages correspondent a la declaration signee avant persistance. | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3445` |
-| Le CLI emet des artefacts d'onboarding canoniques | Le harness CLI ecrit des sorties Norito/JSON/Base64 deterministes et valide les round-trips pour que les operateurs puissent preparer les declarations offline. | `crates/sorafs_car/tests/capacity_cli.rs:17` |
-| Le guide operateur couvre le workflow d'admission et les garde-fous de gouvernance | La documentation enumere le schema de declaration, les defaults de policy et les etapes de revue pour le council. | `../storage-capacity-marketplace.md` |
+| El registro acepta las declaraciones canónicas de capacidad | La prueba de integración `/v1/sorafs/capacity/declare` a través de la API de la aplicación verifica la gestión de firmas, la captura de metadatos y la transferencia al registro del nodo. | `crates/iroha_torii/src/routing.rs:7654` |
+| El contrato inteligente rechaza las cargas útiles incoherentes | La prueba unitaria garantiza que las identificaciones del proveedor y los campeones de GiB se comprometen con el correspondiente a la declaración del firmante antes de la persistencia. | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3445` |
+| El CLI muestra los artefactos de incorporación canónica | El arnés CLI escrito de salidas Norito/JSON/Base64 determina y valida los viajes de ida y vuelta para que los operadores puedan preparar las declaraciones fuera de línea. | `crates/sorafs_car/tests/capacity_cli.rs:17` |
+| El guía operador cubre el flujo de trabajo de admisión y los guardias de gobierno | La documentación enumera el esquema de declaración, los valores predeterminados de política y las etapas de revista para el consejo. | `../storage-capacity-marketplace.md` |
 
-### Resolution des litiges
-
-| Check | Validation | Evidence |
+### Resolución de litigios| Consultar | Validación | Evidencia |
 |-------|------------|----------|
-| Les enregistrements de litige persistent avec un digest canonique du payload | Le test unitaire enregistre un litige, decode le payload stocke et affirme le statut pending pour garantir le determinisme du ledger. | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:1835` |
-| Le generateur de litiges du CLI correspond au schema canonique | Le test CLI couvre les sorties Base64/Norito et les resumes JSON pour `CapacityDisputeV1`, en assurant que les evidence bundles hashent de maniere deterministe. | `crates/sorafs_car/tests/capacity_cli.rs:455` |
-| Le test de replay prouve le determinisme litige/penalite | La telemetry de proof-failure rejouee deux fois produit des snapshots identiques de ledger, credit et litige afin que les slashes soient deterministes entre peers. | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3430` |
-| Le runbook documente le flux d'escalade et de revocation | Le guide d'operations capture le workflow du council, les exigences de preuve et les procedures de rollback. | `../dispute-revocation-runbook.md` |
+| Los registros de litigios persistentes con un resumen canónico de la carga útil | La prueba unitaria registra un litigio, decodifica el stock de carga útil y afirma el estatuto pendiente para garantizar el determinismo del libro mayor. | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:1835` |
+| El generador de litigios del CLI corresponde al esquema canónico | La prueba CLI cubre las salidas Base64/Norito y los currículums JSON para `CapacityDisputeV1`, asegurándose de que los paquetes de pruebas tengan una forma determinante. | `crates/sorafs_car/tests/capacity_cli.rs:455` |
+| Le test de replay prueba el determinismo litige/penalité | La telemetría de prueba-fallo se activa dos veces al producir instantáneas idénticas de libro mayor, crédito y litigio porque las barras diagonales son determinantes entre pares. | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3430` |
+| El runbook documenta el flujo de escalada y revocación | La guía de operaciones captura el flujo de trabajo del consejo, las exigencias de prevención y los procedimientos de reversión. | `../dispute-revocation-runbook.md` |
 
-### Reconciliation du tresor
-
-| Check | Validation | Evidence |
+### Reconciliación del tresor| Consultar | Validación | Evidencia |
 |-------|------------|----------|
-| L'accumulation du ledger correspond a la projection de soak sur 30 jours | Le test soak couvre cinq providers sur 30 fenetres de settlement, en comparant les entrees du ledger a la reference de payout attendue. | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3000` |
-| La reconciliation des exports de ledger est enregistree chaque nuit | `capacity_reconcile.py` compare les attentes du fee ledger aux exports XOR executes, emet des metriques Prometheus et gate l'approbation du tresor via Alertmanager. | `scripts/telemetry/capacity_reconcile.py:1`,`docs/source/sorafs/runbooks/capacity_reconciliation.md:1`,`dashboards/alerts/sorafs_capacity_rules.yml:100` |
-| Les dashboards de billing exposent les penalites et la telemetry d'accumulation | L'import Grafana trace l'accumulation GiB-hour, les compteurs de strikes et le collateral engage pour la visibilite on-call. | `dashboards/grafana/sorafs_capacity_penalties.json:1` |
-| Le rapport publie archive la methodologie de soak et les commandes de replay | Le rapport detaille la portee du soak, les commandes d'execution et les hooks d'observabilite pour les auditeurs. | `./sf2c-capacity-soak.md` |
+| La acumulación del libro mayor corresponde a la proyección de remojo de 30 días | La prueba empapará a cinco proveedores en 30 ventanas de liquidación, en comparación con las entradas del libro mayor a la referencia de los asistentes de pago. | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3000` |
+| La reconciliation des exports de ledger est registrada cada noche | `capacity_reconcile.py` compara los registros del libro mayor de tarifas aux exports XOR ejecuta, emet des métricas Prometheus y puerta la aprobación del tresor a través de Alertmanager. | `scripts/telemetry/capacity_reconcile.py:1`,`docs/source/sorafs/runbooks/capacity_reconciliation.md:1`,`dashboards/alerts/sorafs_capacity_rules.yml:100` |
+| Los paneles de facturación exponen las penalidades y la telemetría de acumulación | La importación Grafana rastrea la acumulación de GiB-hora, los computadores de huelga y la garantía se activan para la visibilidad de guardia. | `dashboards/grafana/sorafs_capacity_penalties.json:1` |
+| Le rapport publice archive la metodología de remojo y los comandos de repetición | La relación detalla la puerta de remojo, los comandos de ejecución y los ganchos de observabilidad para los auditores. | `./sf2c-capacity-soak.md` |
 
-## Notes d'execution
+## Notas de ejecución
 
-Relancez la suite de validation avant le sign-off:
+Relance el conjunto de validación antes del cierre de sesión:
 
 ```bash
 cargo test -p iroha_torii --features app_api -- capacity_declaration_handler_accepts_request
@@ -63,20 +59,18 @@ cargo test -p sorafs_car --features cli --test capacity_cli
 python3 scripts/telemetry/capacity_reconcile.py --snapshot <state.json> --ledger <ledger.ndjson> --warn-only
 ```
 
-Les operateurs doivent regenerer les payloads de demande d'onboarding/litige avec `sorafs_manifest_stub capacity {declaration,dispute}` et archiver les bytes JSON/Norito resultants aux cotes du ticket de gouvernance.
+Los operadores deben regenerar las cargas útiles de demanda de incorporación/litigación con `sorafs_manifest_stub capacity {declaration,dispute}` y archivar los bytes JSON/Norito resultantes de las costas del ticket de gobierno.
 
-## Artefacts de sign-off
-
-| Artefact | Path | blake2b-256 |
+## Artefactos de cierre de sesión| Artefacto | Camino | blake2b-256 |
 |----------|------|-------------|
-| Paquet d'approbation d'onboarding des providers | `docs/examples/sorafs_capacity_marketplace_validation/2026-03-24_onboarding_signoff.md` | `8f41a745d8d94710fe81c07839651520429d4abea5729bc00f8f45bbb11daa4c` |
-| Paquet d'approbation de resolution des litiges | `docs/examples/sorafs_capacity_marketplace_validation/2026-03-24_dispute_signoff.md` | `c3ac3999ef52857170fedb83cddbff7733ef5699f8b38aea2e65ae507a6229f7` |
-| Paquet d'approbation de reconciliation du tresor | `docs/examples/sorafs_capacity_marketplace_validation/2026-03-24_treasury_signoff.md` | `0511aeed1f5607c329428cd49c94d1af51292c85134c10c3330c172b0140e8c6` |
+| Paquete de aprobación de incorporación de proveedores | `docs/examples/sorafs_capacity_marketplace_validation/2026-03-24_onboarding_signoff.md` | `8f41a745d8d94710fe81c07839651520429d4abea5729bc00f8f45bbb11daa4c` |
+| Paquete de aprobación de resolución de litigios | `docs/examples/sorafs_capacity_marketplace_validation/2026-03-24_dispute_signoff.md` | `c3ac3999ef52857170fedb83cddbff7733ef5699f8b38aea2e65ae507a6229f7` |
+| Paquete de aprobación de reconciliación del tresor | `docs/examples/sorafs_capacity_marketplace_validation/2026-03-24_treasury_signoff.md` | `0511aeed1f5607c329428cd49c94d1af51292c85134c10c3330c172b0140e8c6` |
 
-Conservez les copies signees de ces artefacts avec le bundle de release et reliez-les dans le registre de changement de gouvernance.
+Conserve las copias firmadas de estos artefactos con el paquete de liberación y reliez-les dans le registre de changement de gouvernance.
 
-## Approbations
+## Aprobaciones
 
-- Storage Team Lead — @storage-tl (2026-03-24)  
-- Governance Council Secretary — @council-sec (2026-03-24)  
-- Treasury Operations Lead — @treasury-ops (2026-03-24)
+- Líder del equipo de almacenamiento: @storage-tl (24/03/2026)  
+- Secretario del Consejo de Gobernación — @council-sec (24/03/2026)  
+- Líder de operaciones de tesorería — @treasury-ops (24/03/2026)

@@ -7,94 +7,93 @@ generator: scripts/sync_docs_i18n.py
 source_hash: f3502fc6de75095282d44ce778b00d1b0d554773de1861d1b92f7dc573dfafa2
 source_last_modified: "2025-12-29T18:16:35.969398+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# ISI Extension Plan (v1)
+# ISI རྒྱ་བསྐྱེད་འཆར་གཞི།(v1)
 
-This note signs off on the priority order for the new Iroha Special Instructions and captures
-non-negotiable invariants for each instruction ahead of implementation. The ordering matches
-security and operability risk first, UX throughput second.
+དྲན་ཐོ་འདི་ Iroha གསརཔ་གི་དོན་ལུ་ གཙོ་རིམ་བཀའ་རྒྱ་གུ་རྟགས་བཀལ་ཡོདཔ་ཨིན།
+ལག་ལེན་གྱི་ཧེ་མ་ སློབ་སྟོན་རེ་རེ་གི་དོན་ལུ་ གྲོས་བསྟུན་འབད་མ་ཚུགས་པའི་ འགྱུར་ལྡོག་མེད་པའི་ འགྱུར་མེད་ཚུ། གོ་རིམ་མཐུན་སྒྲིག་ཚུ།
+བདེ་འཇགས་དང་བཀོལ་སྤྱོད་ཀྱི་ཉེན་ཁ།
 
-## Priority Stack
+## གཙོ་རིམ་བརྩེགས།
 
-1. **RotateAccountSignatory** – Required for hygienic key rotation without destructive migrations.
-2. **DeactivateContractInstance** / **RemoveSmartContractBytes** – Provide deterministic contract
-   kill switches and storage reclamation for compromised deployments.
-3. **SetAssetKeyValue** / **RemoveAssetKeyValue** – Extend metadata parity to concrete asset
-   balances so observability tooling can tag holdings.
-4. **BatchMintAsset** / **BatchTransferAsset** – Deterministic fan-out helpers to keep payload size
-   and VM fallback pressure manageable.
+1. **RotateAccountSignatore** – གཏོར་བཤིག་མེད་པའི་བར་མཚམས་མེད་པར་ འཕྲོད་བསྟེན་ལྡེ་མིག་འཁོར་སྐྱོད་འབད་དགོ།
+2. **Deaction ContractInstance** /*RemoveSmart ConctoryBytes** – གཏན་འབེབས་བཟོ་ནིའི་གན་རྒྱ་བྱིན།
+   བསད་བསྒྱུར་གྱི་བསྒྱུར་ཆས་དང་ བདེ་སྒྲིག་འབད་ཡོད་པའི་བཀྲམ་སྤེལ་ཚུ་གི་དོན་ལུ་ གསོག་འཇོག་སླར་གསོ་འབད་ནི།
+3. **SetsetKeyValue** /*RemoveAssetKeyValueu** – བརྟན་བརྟན་གྱི་རྒྱུ་དངོས་ལུ་གནས་སྡུད་ཆ་ཤས་རྒྱ་བསྐྱེད་འབད་ནི།
+   ལྷག་ལུས་འདི་ དེ་འབདཝ་ལས་ བལྟ་བརྟོག་འབད་ནི་གི་ལག་ཆས་འདི་གིས་ བདག་དབང་ཚུ་ འབད་ཚུགས།
+4. **BatchMintAsset** / **BatchTransferAsset** – དངུལ་སྤྲོད་ཚད་ཀྱི་ཚད་བཞག་ནིའི་དོན་ལུ་ གཏན་འབེབས་ཕན་བསྒྱུར།
+   དང་ VM ཕོལ་བེག་གནོན་ཤུགས་འཛིན་སྐྱོང་འཐབ་ཚུགས།
 
-## Instruction Invariants
+## བསླབ་སྟོན་འགྱུར་མེད་པ།
 
-### SetAssetKeyValue / RemoveAssetKeyValue
-- Reuse the `AssetMetadataKey` namespace (`state.rs`) so canonical WSV keys stay stable.
-- Enforce JSON size and schema limits identically to account metadata helpers.
-- Emit `AssetEvent::MetadataInserted` / `AssetEvent::MetadataRemoved` with the affected `AssetId`.
-- Require the same permission tokens as existing asset metadata edits (definition owner OR
-  `CanModifyAssetMetadata`-style grants).
-- Abort if the asset record is missing (no implicit creation).
+### སེཊ་ཨེ་སེཊི་ཀི་བེ་ལུ་ / བཏོན་གཏང་ནི་ཀི་ཝ་ལུ་
+- `AssetMetadataKey` མིང་གི་ས་སྒོ་ (`state.rs`) ལོག་སྟེ་ལག་ལེན་འཐབ།
+- རྩིས་ཐོ་མེ་ཊ་ཌེ་ཊ་ གྲོགས་རམ་པ་ཚུ་ལུ་ ཇེ་ཨེསི་ཨོ་ཨེན་ཚད་དང་ ལས་འཆར་ཚུ་ ཅོག་འཐདཔ་སྦེ་ བསྟར་སྤྱོད་འབདཝ་ཨིན།
+- `AssetEvent::MetadataInserted` / `AssetEvent::MetadataRemoved` གནོད་སྐྱོན་ཕོག་མི་ `AssetId` དང་ཅིག་ཁར་ བཏོན་གཏང་།
+- ད་ལྟོ་ཡོད་པའི་རྒྱུ་དངོས་མེ་ཊ་ཌེ་ཊ་ཞུན་དག་པ་ཚུ་བཟུམ་སྦེ་ གནང་བ་ཊོ་ཀེན་ཚུ་ (ངེས་ཚིག་བདག་པོ་ OR
+  `CanModifyAssetMetadata`-style གྲོགས་རམ།).
+- རྒྱུ་དངོས་དྲན་ཐོ་འདི་མེད་པ་ཅིན་ (འོད་མདངས་གསར་བསྐྲུན་འབད་ནི་མེད།)
 
-### RotateAccountSignatory
-- Atomic swap of the signatory in `AccountId` while preserving account metadata and linked
-  resources (assets, triggers, roles, permissions, pending events).
-- Verify the current signatory matches the caller (or delegated authority via explicit token).
-- Reject if the new public key already backs another account in the same domain.
-- Update all canonical keys that embed the account ID and invalidate caches before commit.
-- Emit a dedicated `AccountEvent::SignatoryRotated` with old/new keys for audit trails.
-- Migration scaffold: introduce `AccountLabel` + `AccountRekeyRecord` (see `account::rekey`) so
-  existing accounts can be mapped to stable labels during a rolling upgrade without hash breaks.
+### རོ་ཊེ་ཊི་ཨེ་ཀ་རྩིས་ཁྲ་བརྡ་སྟོན།
+- རྩིས་ཁྲའི་མེ་ཊ་ཌེ་ཊ་དང་འབྲེལ་མཐུད་ཉམས་སྲུང་འབད་བའི་སྐབས་ `AccountId` ནང་ རྡུལ་ཕྲན་བརྗེ་སོར་འབདཝ་ཨིན།
+  ཐོན་ཁུངས་ (རྒྱུ་དངོས་ ཊི་གར་ ལས་འགན་ གནང་བ་ མཇུག་བསྡུའི་བྱུང་ལས་)།
+- ད་ལྟོའི་མཚན་རྟགས་མཐུན་སྒྲིག་ཚུ་ འབོད་བརྡ་གཏང་མི་ (ཡང་ན་ གསལ་རི་རི་ཊོ་ཀེན་བརྒྱུད་དེ་ དབང་ཚད་སྤྲོད་ཡོད་པའི་དབང་ཚད་) བདེན་བཤད་འབད།
+- མི་མང་ལྡེ་མིག་གསརཔ་འདི་གིས་ ཧེ་མ་ལས་རང་ མངའ་ཁོངས་གཅིག་ནང་ རྩིས་ཐོ་གཞན་ཅིག་རྒྱབ་ཐག་བཏོནམ་ཨིན།
+- རྩིས་ཐོ་ཨའི་ཌི་བཙུགས་ཡོད་པའི་ ཀེ་ནོ་ནིག་ལྡེ་མིག་ཚུ་ཆ་མཉམ་དུས་མཐུན་བཟོ་ཞིནམ་ལས་ ཁས་བླངས་མ་འབད་བའི་ཧེ་མ་ འདྲ་མཛོད་ཚུ་ ཆ་མེད་གཏང་།
+- རྩིས་ཞིབ་ལམ་ལུགས་ཚུ་གི་དོན་ལུ་ ལྡེ་མིག་རྙིངམ་/གསརཔ་ཚུ་དང་གཅིག་ཁར་ བརྩོན་ཤུགས་ཅན་གྱི་ `AccountEvent::SignatoryRotated` ཅིག་བཏོན་དགོ།
+- གནས་སྤོ་འགྱོ་མི་ གཡོ་སྒྱུ་: `AccountLabel` ངོ་སྤྲོད་འབད་ + IVM (`AssetMetadataKey` ལུ་བལྟ།) དེ་འབདཝ་ལས་ དེ་ལས་ S
+  ད་ལྟོ་ཡོད་པའི་རྩིས་ཐོ་ཚུ་ ཧེ་ཤི་གི་བར་མཚམས་མེད་པར་ བསྐོར་རིམ་ཡར་འཕེལ་གྱི་སྐབས་ལུ་ གཏན་ཏོག་ཏོ་ཡོད་པའི་ཁ་ཡིག་ཚུ་ལུ་ སབ་ཁྲ་བཟོ་ཚུགས།
 
-### DeactivateContractInstance
-- Remove or tombstone the `(namespace, contract_id)` binding while persisting provenance data
-  (who, when, reason code) for troubleshooting.
-- Require the same governance permission set as activation, with policy hooks to disallow
-  deactivation of core system namespaces without elevated approval.
-- Reject when the instance is already inactive to keep event logs deterministic.
-- Emit a `ContractInstanceEvent::Deactivated` that downstream watchers can consume.
+### གན་འཛིན་ཤུགས་མེད་བཟོ་ནི།
+- `(namespace, contract_id)` མཐུད་པའི་སྐབས་ བྱུང་ཁུངས་གནས་སྡུད་གནས་བཞིན་ཡོད་པའི་སྐབས་ གད་སྙིགས་རྡོ་བརྒྱབ་པའམ་ཡང་ན་ དུར་ཁུང་།
+  (ག་ཨིན་ན་ རྒྱུ་མཚན་ཨང་རྟགས་) དཀའ་ངལ་སེལ་ཐབས་ལུ་ཨིན།
+- གཞུང་སྐྱོང་གནང་བ་གཅིག་མཚུངས་འདི་ ཤུགས་ལྡན་སྦེ་གཞི་སྒྲིག་འབད་དེ་ སྲིད་བྱུས་ཀྱི་ ཧུཀ་ཚུ་ མ་བཀོལ་བར་ བཀག་ཆ་འབདཝ་ཨིན།
+  ཆ་འཇོག་མ་བསྐྱེད་པར་ རིམ་ལུགས་གཙོ་བོ་གི་མིང་བར་སྟོང་ཚུ་ ཤུགས་མེད་བཟོ་ནི།
+- བྱུང་ལས་དྲན་ཐོ་ཚུ་ གཏན་འབེབས་བཞག་ནི་ལུ་ དཔེ་ཚད་འདི་ཧེ་མ་ལས་ ཤུགས་མེད་པའི་སྐབས་ བཀག་ཆ་འབད་དགོ།
+- མར་འབབ་བལྟ་མི་ཚུ་གིས་ ཟ་སྤྱོད་འབད་ཚུགས་པའི་ `ContractInstanceEvent::Deactivated` ཅིག་བཏོན་དགོ།### བཏོན་གཏང་ནི་སི་མཱརཊ་ གན་རྒྱ་བའིཊ།
+- གསོག་འཇོག་འབད་ཡོད་པའི་བཱའིཊི་ཀོཌི་འདི་ `code_hash` གིས་ གསལ་སྟོན་དང་ ཡང་ན་ ཤུགས་ལྡན་གནས་སྟངས་ཚུ་མེད་པའི་སྐབས་ལུ་རྐྱངམ་ཅིག་ གཤག་བཅོས་འབད་བཅུག།
+  ཅ་རྙིང་འདི་གཞི་བསྟུན་འབད། དེ་མེན་པ་ཅིན་ འགྲེལ་བཤད་ཀྱི་འཛོལ་བ་ཅིག་དང་གཅིག་ཁར་ འཐུས་ཤོར་འབྱུང་འོང་།
+- འཛུལ་ཞུགས་སྒོ་སྒྲིག་མེ་ལོང་ཐོ་བཀོད་ (`CanRegisterSmartContractCode`) དང་ བཀོལ་སྤྱོད་པ་གནས་རིམ་ཅིག།
+  ཉེན་སྲུང (དཔེར་ན་ `CanManageSmartContractStorage`).
+- བྱིན་ཡོད་པའི་ `code_hash` འདི་ གསོག་འཇོག་འབད་ཡོད་པའི་གཟུགས་ བཞུ་བཅུག་ནིའི་དོན་ལུ་ བཏོན་གཏང་པའི་ཧེ་མ་ལས་ བཀག་ཐབས་ལུ་ བདེན་དཔྱད་འབད།
+  སྒྲིབ་པའི་ལག་ལེབ་ཚུ།
+- ཧེཤ་དང་ ཀོལ་ཊར་མེ་ཊ་ཌེ་ཊ་དང་གཅིག་ཁར་ `ContractCodeEvent::Removed` འདི་ བཏོན་གཏང་།
 
-### RemoveSmartContractBytes
-- Allow pruning of stored bytecode by `code_hash` only when no manifests or active instances
-  reference the artifact; otherwise fail with a descriptive error.
-- Permission gate mirrors registration (`CanRegisterSmartContractCode`) plus an operator-level
-  guard (e.g., `CanManageSmartContractStorage`).
-- Verify the provided `code_hash` matches the stored body digest just before deletion to avoid
-  stale handles.
-- Emit `ContractCodeEvent::Removed` with hash and caller metadata.
-
-### BatchMintAsset / BatchTransferAsset
-- All-or-nothing semantics: either every tuple succeeds or the instruction aborts without side
-  effects.
-- Input vectors must be deterministically ordered (no implicit sorting) and bounded by config
+### བཱཆ་མིན་ཨེ་སེཊ་ / བཱཆ་ཊེན་ཕར་ཨེ་སེཊ།
+- ཆ་ཚང་ཡང་ན་གང་ཡང་མེད་པའི་ཡིག་བརྡ་: tuple རེ་རེ་བཞིན་ཕྱོགས་མེད་པའི་བཀོད་རྒྱ་འདི་ ཆ་མེད་གཏང་།
+  ཕན་གནོད།
+- ཨིན་པུཊི་ཝེཀ་ཊར་ཚུ་ གཏན་འབེབས་སྦེ་ གོ་རིམ་སྒྲིག་དགོཔ་ཨིན་ (བརྡ་མཚོན དབྱེ་སེལ་མེདཔ་) དེ་ལས་ རིམ་སྒྲིག་གིས་ མཐའ་མཚམས་བཟོཝ་ཨིན།
   (`max_batch_isi_items`).
-- Emit per-item asset events so downstream accounting stays consistent; batch context is additive,
-  not a replacement.
-- Permission checks reuse existing single-item logic per target (asset owner, definition owner,
-  or granted capability) before state mutation.
-- Advisory access sets must union all read/write keys to keep optimistic concurrency correct.
+- དོན་ཚན་རེ་ལུ་ རྒྱུ་དངོས་བྱུང་རིམ་ཚུ་ བཏོནམ་ལས་ མར་འབབ་རྩིས་ཁྲའི་ རྟག་བརྟན་སྦེ་ སྡོད་དགོ། batch སྐབས་དོན་འདི་ ཁ་སྐོང་ཨིན།
+  ཚབ་མ་ཅིག་མེན།
+- གནང་བ་ཞིབ་དཔྱད་ཚུ་གིས་ དམིགས་གཏད་རེ་ལུ་ ད་ལྟོ་ཡོད་པའི་ རྣམ་གྲངས་རྐྱང་པའི་ཚད་མ་འདི་ ལོག་ལག་ལེན་འཐབ་ཨིན་ (རྒྱུ་དངོས་བདག་པོ་ ངེས་ཚིག་བདག་པོ།
+  ཡང་ན་ ཆ་འཇོག་འབད་ཚུགས་པའི་ ལྕོགས་གྲུབ་) མངའ་སྡེ་རིགས་འགྱུར་གྱི་ཧེ་མ་ཨིན།
+- བསླབ་བྱའི་འཛུལ་སྤྱོད་ཆ་ཚན་ཚུ་གིས་ རེ་བ་བཟང་པོ་མཐུན་སྒྲིག་སྦེ་བཞག་ནིའི་དོན་ལུ་ ལྷག་ནི་/འབྲི་ནིའི་ལྡེ་མིག་ཚུ་ཆ་མཉམ་གཅིག་ཁར་བསྡོམས་དགོ།
 
-## Implementation Scaffolding
+## ལག་བསྟར་འབད་ནི།
 
-- Data model now carries `SetAssetKeyValue` / `RemoveAssetKeyValue` scaffolds for balance metadata
-  edits (`transparent.rs`).
-- Executor visitors expose placeholders that will gate permissions once host wiring lands
-  (`default/mod.rs`).
-- Rekey prototype types (`account::rekey`) provide a landing zone for rolling migrations.
-- World state includes `account_rekey_records` keyed by `AccountLabel` so we can stage label →
-  signatory migrations without touching the historical `AccountId` encoding.
+- གནས་སྡུད་དཔེ་ཚད་འདི་གིས་ ད་ལྟོ་ `SetAssetKeyValue` / `RemoveAssetKeyValue` གི་ ལྷག་ལུས་མེ་ཊ་ཌེ་ཊ་གི་དོན་ལུ་ སི་ཀ་ཕོལཌི་ཚུ་ འབག་འོང་དོ་ཡོདཔ་ཨིན།
+  ཞུན་དག་ (`transparent.rs`).
+- བཀོལ་མི་ ལྟ་བཤལཔ་ཚུ་ ཕྱིར་འཐེན་འབད་སའི་ ས་ཁོངས་ཚུ་ ཕྱི་ཁར་ཐོན་པའི་སྐབས་ གནང་བ་ཚུ་ སྒོ་བསྡམས་ཚརཝ་ཨིན།
+  (I 18NI0000026X).
+- རི་ཀི་དཔེ་ཚད་ཀྱི་དབྱེ་བ་ (`account::rekey`) གིས་ གནས་སྤོ་འགྱོ་ནིའི་དོན་ལུ་ ཆགས་སའི་ས་ཁོངས་ཅིག་བྱིནམ་ཨིན།
+- འཛམ་གླིང་གནས་སྟངས་ནང་ `account_rekey_records` འདི་ `AccountLabel` གིས་ ལྡེ་མིག་བརྐྱབ་སྟེ་ཡོདཔ་ལས་ ང་བཅས་ཀྱིས་ གནས་རིམ་གྱི་ཁ་ཡིག་ → → →
+  མཚན་རྟགས་བཀོད་པའི་གནས་སྤོ་ཚུ་ བྱུང་རབས་ལུ་ མ་བརྡུང་བར་ཡོདཔ་ཨིན།
 
-## IVM Syscall Drafting
+## IVM སིས་ཀཱལ་ཟིན་བྲིས།
 
-- Host shims for `DeactivateContractInstance` / `RemoveSmartContractBytes` ship as
-  `SYSCALL_DEACTIVATE_CONTRACT_INSTANCE` (0x43) and
-  `SYSCALL_REMOVE_SMART_CONTRACT_BYTES` (0x44), both consuming Norito TLVs that mirror the
-  canonical ISI structs.
-- Extend `abi_syscall_list()` only after host handlers mirror `iroha_core` execution paths to keep
-  ABI hashes stable during development.
-- Update Kotodama lowering once syscall numbers stabilize; add golden coverage for the expanded
-  surface at the same time.
+- `DeactivateContractInstance` གི་དོན་ལུ་ ཧོསཊི་ཤིམ་ཚུ་ / `RemoveSmartContractBytes` གྲུ་གཟིངས།
+  `SYSCALL_DEACTIVATE_CONTRACT_INSTANCE` (0x43) དང་།
+  `SYSCALL_REMOVE_SMART_CONTRACT_BYTES` (0x44), གཉིས་ཀས་ Norito བཀོལ་སྤྱོད་བྱེད་པའི་ཊི་ཨེལ་ཝི་ཚུ་ མེ་ལོང་ ཨིན།
+  ཀེ་ནོ་ནིག་ཨའི་ཨེསི་ཨའི་ བཟོ་བསྐྲུན་འབདཝ་ཨིན།
+- ཧོསིཊི་འཛིན་སྐྱོང་པ་ཚུ་གི་ཤུལ་ལས་རྐྱངམ་ཅིག་ `abi_syscall_list()` རྒྱ་སྐྱེད་འབད།
+  གོང་འཕེལ་གྱི་སྐབས་ལུ་ ABI hasheshe བརྟན་ཏོག་ཏོ་ཨིན།
+- སི་སི་ཀཱལ་ཨང་གྲངས་ཚུ་ བརྟན་ཏོག་ཏོ་བཟོ་བའི་སྐབས་ Kotodama དུས་མཐུན་བཟོ། ཁ་སྐོང་གསེར་གྱི་ཁྱབ་བསྒྲགས།
+  དུས་མཉམ་དུ་ཁ་ཐོག་།
 
-## Status
+## གནས་ཚད
 
-The above ordering and invariants are ready for implementation. Follow-up branches should reference
-this document when wiring execution paths and syscall exposure.
+གོང་འཁོད་བཀོད་རྒྱ་དང་ འགྱུར་ལྡོག་མེད་པའི་གནས་སྟངས་ཚུ་ ལག་ལེན་འཐབ་ནིའི་དོན་ལུ་ གྲ་སྒྲིག་ཡོདཔ་ཨིན། རྗེས་འཇུག་ཡན་ལག་ཚུ་གཞི་བསྟུན་འབད་དགོཔ།
+ཡིག་ཆ་འདི་ ལག་ལེན་འཐབ་ཐངས་འགྲུལ་ལམ་དང་ སི་ཀཱལ་འོད་འཕྲོ་འབད་བའི་སྐབས་ཨིན།

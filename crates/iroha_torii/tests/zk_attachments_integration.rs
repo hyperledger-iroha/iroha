@@ -127,20 +127,16 @@ async fn attachments_post_get_list_delete_roundtrip() {
     let app = Router::new()
         .route(
             "/v1/zk/attachments",
-            post(
-                {
-                    let anon_tenant = anon_tenant.clone();
-                    move |headers: axum::http::HeaderMap, body: axum::body::Bytes| async move {
-                        let tenant = anon_tenant.clone();
-                        Ok::<_, iroha_torii::Error>(
-                            iroha_torii::zk_attachments::handle_post_attachment(
-                                tenant, headers, body,
-                            )
+            post({
+                let anon_tenant = anon_tenant.clone();
+                move |headers: axum::http::HeaderMap, body: axum::body::Bytes| async move {
+                    let tenant = anon_tenant.clone();
+                    Ok::<_, iroha_torii::Error>(
+                        iroha_torii::zk_attachments::handle_post_attachment(tenant, headers, body)
                             .await,
-                        )
-                    }
-                },
-            )
+                    )
+                }
+            })
             .get({
                 let anon_tenant = anon_tenant.clone();
                 move || async move {
@@ -317,13 +313,13 @@ async fn attachments_enforce_per_tenant_quota() {
     let metas_bytes = iroha_torii::zk_attachments::handle_list_attachments(
         iroha_torii::zk_attachments::AttachmentTenant::anonymous(),
     )
-        .await
-        .into_response()
-        .into_body()
-        .collect()
-        .await
-        .unwrap()
-        .to_bytes();
+    .await
+    .into_response()
+    .into_body()
+    .collect()
+    .await
+    .unwrap()
+    .to_bytes();
     let metas: Vec<iroha_torii::zk_attachments::AttachmentMeta> =
         norito::json::from_slice(&metas_bytes).unwrap();
     // Aggregated history should keep the most recent ~8 entries of 1 MiB each

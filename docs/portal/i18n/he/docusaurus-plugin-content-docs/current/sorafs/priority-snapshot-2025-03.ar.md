@@ -4,6 +4,8 @@ direction: rtl
 source: docs/portal/docs/sorafs/priority-snapshot-2025-03.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
@@ -12,7 +14,7 @@ title: لقطة الأولويات — مارس 2025 (بيتا)
 description: نسخة مرآة من لقطة توجيه Nexus 2025-03؛ بانتظار ACKs قبل الطرح العام.
 ---
 
-> المصدر المعتمد: `docs/source/sorafs/priority_snapshot_2025-03.md`
+> מידע כללי: `docs/source/sorafs/priority_snapshot_2025-03.md`
 >
 > الحالة: **بيتا / بانتظار ACKs التوجيه** (Networking, Storage, Docs leads).
 

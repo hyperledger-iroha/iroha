@@ -4,52 +4,54 @@ direction: rtl
 source: docs/portal/docs/sorafs/manifest-pipeline.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# تجزئة SoraFS → مسار المانيفست
+# ہیش SoraFS → ظاہر راستہ
 
-يمثل هذا المرفق لدليل البدء السريع مساراً من البداية للنهاية يحوّل البايتات الخام إلى
-مانيفستات Norito مناسبة لـ Pin Registry في SoraFS. المحتوى مقتبس من
-[`docs/source/sorafs/manifest_pipeline.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/manifest_pipeline.md);
-راجِع ذلك المستند للمواصفة المعتمدة وسجل التغييرات.
+یہ کوئیک اسٹارٹ گائیڈ منسلک ایک اختتام سے آخر میں پائپ لائن کی نمائندگی کرتا ہے جو خام بائٹس کو تبدیل کرتا ہے
+Norito میں SoraFS میں پن رجسٹری کے لئے موزوں ہے۔ مواد سے موافقت پذیر
+[`docs/source/sorafs/manifest_pipeline.md`] (https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/manifest_pipeline.md) ؛
+اس دستاویز کو منظور شدہ تفصیلات اور تبدیلیوں کے لاگ کے لئے دیکھیں۔
 
-## 1. تجزئة حتمية
+## 1. تعصب پسند ہیشنگ
 
-يستخدم SoraFS ملف تعريف SF-1 (`sorafs.sf1@1.0.0`): hash متدحرج مستوحى من FastCDC مع حد أدنى
-لحجم chunk يبلغ 64 KiB، وهدف 256 KiB، وحد أقصى 512 KiB، وقناع كسر `0x0000ffff`. الملف
-مسجل في `sorafs_manifest::chunker_registry`.
+SoraFS ایک SF-1 پروفائل (`sorafs.sf1@1.0.0`) استعمال کرتا ہے: ایک فاسٹ سی ڈی سی سے متاثرہ رولنگ ہیش جس کا نچلا حصہ ہے
+64 KIB کے ایک حصے کے لئے ، 256 KIB کا ایک ہدف ، زیادہ سے زیادہ 512 KIB ، اور `0x0000ffff` کا بریک ماسک۔ فائل
+`sorafs_manifest::chunker_registry` پر رجسٹرڈ۔
 
-### مساعدات Rust
+### مورچا مددگار
 
-- `sorafs_car::CarBuildPlan::single_file` – يُنتج إزاحات chunks وأطوالها وملخصات BLAKE3 أثناء
-  تجهيز بيانات CAR الوصفية.
-- `sorafs_car::ChunkStore` – يمرر payloads بشكل streaming، ويحفظ بيانات chunks الوصفية، ويشتق
-  شجرة أخذ عينات Proof-of-Retrievability (PoR) بحجم 64 KiB / 4 KiB.
-- `sorafs_chunker::chunk_bytes_with_digests` – مساعد مكتبة يقف خلف كلا الـ CLI.
+- `sorafs_car::CarBuildPlan::single_file` - اس کے دوران ٹکڑوں کی آفسیٹ ، لمبائی اور بلیک 3 سمری تیار کرتا ہے
+  کار میٹا ڈیٹا تیار کرنا۔
+- `sorafs_car::ChunkStore` - پے لوڈز ، ٹکڑوں کو میٹا ڈیٹا ، اور اخذ کرتا ہے
+  سائز 64 KIB / 4 KIB کے ساتھ نمونے لینے والے درخت کی مناسبت (POR)۔
+- `sorafs_chunker::chunk_bytes_with_digests` - دونوں CLIs کے پیچھے ایک لائبریری اسسٹنٹ۔
 
-### أدوات CLI
+### سی ایل آئی ٹولز
 
 ```bash
 cargo run -p sorafs_chunker --bin sorafs-chunk-dump -- ./payload.bin \
   > chunk-plan.json
 ```
 
-يحتوي JSON على الإزاحات المرتبة والأطوال وملخصات chunks. احتفظ بالخطة عند بناء المانيفستات
-أو مواصفات fetch الخاصة بالأوركسترايتور.
+JSON میں آرڈر شدہ آفسیٹ ، لمبائی اور ٹکڑوں کے خلاصے شامل ہیں۔ منشور کی تعمیر کرتے وقت منصوبہ رکھیں
+یا آرکسٹریٹر کی بازیافت کی وضاحتیں۔
 
-### شواهد PoR
+### پور ثبوت
 
-تُتيح `ChunkStore` الخيارين `--por-proof=<chunk>:<segment>:<leaf>` و`--por-sample=<count>` حتى
-يتمكن المدققون من طلب مجموعات شواهد حتمية. قرن هذه الأعلام مع `--por-proof-out` أو
-`--por-sample-out` لتسجيل JSON.
+`ChunkStore` اختیارات `--por-proof=<chunk>:<segment>:<leaf>` اور `--por-sample=<count>` تک قابل بناتا ہے
+آڈیٹر ڈٹرمینسٹک شواہد کے سیٹ کی درخواست کرسکتے ہیں۔ ان جھنڈوں کو `--por-proof-out` یا کے ساتھ منسلک کریں
+`--por-sample-out` JSON کو رجسٹر کرنے کے لئے۔
 
-## 2. تغليف مانيفست
+## 2. ظاہر پیکیجنگ
 
-تجمع `ManifestBuilder` بيانات chunks الوصفية مع مرفقات الحوكمة:
+`ManifestBuilder` گورننس منسلکات کے ساتھ ٹکڑوں کو میٹا ڈیٹا جمع کرتا ہے:
 
-- CID الجذر (dag-cbor) وتعهدات CAR.
-- إثباتات alias ومطالبات قدرات المزوّدين.
-- توقيعات المجلس وبيانات وصفية اختيارية (مثل معرفات build).
+- سی آئی ڈی روٹ (ڈی اے جی سی بی آر) اور کار وعدے۔
+- عرف کے ثبوت اور فراہم کنندہ کی صلاحیتوں کے دعوے۔
+- بورڈ کے دستخط اور اختیاری میٹا ڈیٹا (جیسے بلڈ آئی ڈی)۔
 
 ```bash
 cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
@@ -60,52 +62,50 @@ cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
   --json-out=payload.report.json
 ```
 
-مخرجات مهمة:
+اہم نتائج:
 
-- `payload.manifest` – بايتات مانيفست مشفرة بـ Norito.
-- `payload.report.json` – ملخص قابل للقراءة للبشر/الأتمتة يتضمن `chunk_fetch_specs` و
-  `payload_digest_hex` وملخصات CAR وبيانات alias الوصفية.
-- `payload.manifest_signatures.json` – ظرف يحتوي على ملخص BLAKE3 للمانيفست، وملخص SHA3 لخطة
-  chunks، وتوقيعات Ed25519 مرتبة.
+- `payload.manifest` - Norito کے ساتھ انکوڈ شدہ مینی فیسٹ بائٹس۔
+- `payload.report.json` - انسانی/آٹومیشن پڑھنے کے قابل خلاصہ بشمول `chunk_fetch_specs` اور
+  `payload_digest_hex` ، کار کے خلاصے اور عرف میٹا ڈیٹا۔
+- `payload.manifest_signatures.json` - ایک لفافہ جس میں مینی فیسٹ کا ایک بلیک 3 سمری ہے ، اور اس منصوبے کا ایک SHA3 خلاصہ ہے
+  ٹکڑوں ، دستخطوں ED25519 کو ترتیب دیا گیا۔
 
-استخدم `--manifest-signatures-in` للتحقق من الأظرف القادمة من موقّعين خارجيين قبل إعادة
-كتابتها، واستخدم `--chunker-profile-id` أو `--chunker-profile=<handle>` لتثبيت اختيار السجل.
+واپس آنے سے پہلے بیرونی دستخط کرنے والوں سے آنے والے لفافوں کی تصدیق کے لئے `--manifest-signatures-in` استعمال کریں
+اسے لکھیں ، اور رجسٹری کا انتخاب انسٹال کرنے کے لئے `--chunker-profile-id` یا `--chunker-profile=<handle>` استعمال کریں۔
 
-## 3. النشر والتثبيت (pin)
+## 3. تعیناتی اور تنصیب (پن)
 
-1. **تقديم الحوكمة** – قدّم ملخص المانيفست وظرف التوقيعات إلى المجلس حتى يمكن قبول الـ pin.
-   يجب على المدققين الخارجيين حفظ ملخص SHA3 لخطة chunks بجانب ملخص المانيفست.
-2. **تثبيت payloads** – ارفع أرشيف CAR (وفهرس CAR الاختياري) المشار إليه في المانيفست إلى
-   Pin Registry. تأكد من أن المانيفست وCAR يشتركان في CID جذر واحد.
-3. **تسجيل التليمترية** – احتفظ بتقرير JSON وشواهد PoR وأي مقاييس fetch ضمن artefacts الإصدار.
-   تغذي هذه السجلات لوحات معلومات المشغلين وتساعد على إعادة إنتاج المشكلات دون تنزيل
-   payloads كبيرة.
+1. ** گورننس سبمیشن ** - بورڈ میں ظاہر ہونے والا خلاصہ اور دستخطی لفافہ جمع کروائیں تاکہ پن کو قبول کیا جاسکے۔
+   بیرونی آڈیٹرز کو مینی فیسٹ سمری کے ساتھ ساتھ حصوں کے منصوبے کے SHA3 سمری کو محفوظ کرنا ہوگا۔
+2.
+   پن رجسٹری۔ اس بات کو یقینی بنائیں کہ منشور اور کار ایک جڑ سی آئی ڈی کا اشتراک کریں۔
+3.
+   یہ لاگز آپریٹرز کے ڈیش بورڈز کو فیڈ کرتے ہیں اور بغیر کسی ڈاؤن لوڈ کے مسائل کو دوبارہ پیش کرنے میں مدد کرتے ہیں
+   بڑے پے لوڈ۔
 
-## 4. محاكاة fetch متعددة المزوّدين
+## 4. ملٹی فراہم کرنے والا بازیافت تخروپن
 
-`cargo run -p sorafs_car --bin sorafs_fetch -- --plan=payload.report.json \
-  --provider=alpha=providers/alpha.bin --provider=beta=providers/beta.bin#4@3 \
-  --output=payload.bin --json-out=fetch_report.json`
+`کارگو رن -پی sorafs_car -bin sorafs_fetch ---plan = payload.report.json \
+  -پرووئڈر = الفا = فراہم کنندہ/الفا.بن-پروویڈر= بی ٹی اے= پروویڈرز/بی ٹی اے ۔بن)
+  -آؤٹ پٹ = پے لوڈ.بن-JSON-OUT = fetch_report.json`- `#<concurrency>` ہر فراہم کنندہ (`#4` اوپر) متوازی اضافہ کرتا ہے۔
+- `@<weight>` شیڈولنگ تعصب کو ایڈجسٹ کرتا ہے۔ پہلے سے طے شدہ قیمت 1 ہے۔
+-`--max-peers=<n>` فراہم کرنے والوں کی تعداد کو محدود کرتا ہے جب دریافت کرنے کے لئے طے شدہ ہے جب دریافت ضرورت سے زیادہ امیدواروں کو لوٹاتا ہے۔
+- `--expect-payload-digest` اور `--expect-payload-len` خاموش بدعنوانی سے بچاؤ۔
+- `--provider-advert=name=advert.to` تخروپن میں استعمال کرنے سے پہلے فراہم کنندہ کی صلاحیتوں کی جانچ پڑتال کرتا ہے۔
+- `--retry-budget=<n>` فی حصہ (پہلے سے طے شدہ: 3) کی کوششوں کی تعداد کو تبدیل کرتا ہے تاکہ CI کا پتہ لگ سکے
+  ناکامی کے منظرناموں کی جانچ کرتے وقت رول بیکس تیز تر ہوتے ہیں۔
 
-- `#<concurrency>` يزيد التوازي لكل مزوّد (`#4` أعلاه).
-- `@<weight>` يضبط انحياز الجدولة؛ القيمة الافتراضية هي 1.
-- `--max-peers=<n>` يحد عدد المزوّدين المجدولين للتشغيل عندما يعيد الاكتشاف مرشحين أكثر من المطلوب.
-- `--expect-payload-digest` و`--expect-payload-len` يحميان من الفساد الصامت.
-- `--provider-advert=name=advert.to` يتحقق من قدرات المزوّد قبل استخدامه في المحاكاة.
-- `--retry-budget=<n>` يستبدل عدد المحاولات لكل chunk (الافتراضي: 3) حتى يتمكن CI من كشف
-  التراجعات أسرع عند اختبار سيناريوهات الفشل.
+`fetch_report.json` گروپڈ میٹرکس (`chunk_retry_total` ، `provider_failure_rate` ، وغیرہ) دکھاتا ہے۔
+CI اور مشاہدہ کرنے کے دعووں کے لئے موزوں ہے۔
 
-يعرض `fetch_report.json` مقاييس مجمّعة (`chunk_retry_total` و`provider_failure_rate` وغيرها)
-مناسبة لassertions الخاصة بـ CI وقابلية الملاحظة.
+## 5. رجسٹری اور گورننس اپڈیٹس
 
-## 5. تحديثات السجل والحوكمة
+جب نئے چنکر پروفائلز کی تجویز کرتے ہیں:
 
-عند اقتراح ملفات تعريف chunker جديدة:
+1. `sorafs_manifest::chunker_registry_data` میں تفصیل بنائیں۔
+2. `docs/source/sorafs/chunker_registry.md` اور متعلقہ کنونشنز کو اپ ڈیٹ کریں۔
+3. فکسچر (`export_vectors`) کو دوبارہ تخلیق کریں اور دستخط شدہ منشور منتخب کریں۔
+4. گورننس کے دستخطوں کے ساتھ چارٹر کی تعمیل کی رپورٹ پیش کریں۔
 
-1. أنشئ الوصف في `sorafs_manifest::chunker_registry_data`.
-2. حدّث `docs/source/sorafs/chunker_registry.md` والمواثيق ذات الصلة.
-3. أعد توليد fixtures (`export_vectors`) والتقط المانيفستات الموقّعة.
-4. قدّم تقرير الامتثال للميثاق مع توقيعات الحوكمة.
-
-ينبغي أن تفضّل الأتمتة handles القياسية (`namespace.name@semver`) وألا تعود إلى IDs رقمية
-إلا عند الحاجة إلى التوافق الرجعي.
+آٹومیشن کو معیاری ہینڈلز (`namespace.name@semver`) کو ترجیح دینی چاہئے اور عددی IDs میں واپس نہیں جانا چاہئے
+سوائے اس کے کہ جب پسماندہ مطابقت کی ضرورت ہو۔

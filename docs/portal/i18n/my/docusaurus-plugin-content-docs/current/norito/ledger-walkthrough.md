@@ -7,42 +7,44 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Ledger Walkthrough
 description: Reproduce a deterministic register → mint → transfer flow with the `iroha` CLI and verify the resulting ledger state.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-This walkthrough complements the [Norito quickstart](./quickstart.md) by showing
-how to mutate and inspect ledger state with the `iroha` CLI. You will register a
-new asset definition, mint some units into the default operator account, transfer
-part of the balance to another account, and verify the resulting transactions
-and holdings. Each step mirrors the flows covered in the Rust/Python/JavaScript
-SDK quickstarts so you can confirm parity between CLI and SDK behaviour.
+ဤဖော်ပြချက်သည် [Norito အမြန်စတင်ခြင်း](./quickstart.md) ကိုပြသခြင်းဖြင့် အားဖြည့်ပေးသည်
+`iroha` CLI ဖြင့် လယ်ဂျာပြည်နယ်ကို ဘယ်လိုပြောင်းပြီး စစ်ဆေးမလဲ။ စာရင်းသွင်းရလိမ့်မယ်။
+ပိုင်ဆိုင်မှု အဓိပ္ပါယ်ဖွင့်ဆိုချက်အသစ်၊ အချို့ယူနစ်များကို မူရင်းအော်ပရေတာအကောင့်သို့ လွှဲပြောင်းပါ၊ လွှဲပြောင်းပါ။
+လက်ကျန်ငွေ၏တစ်စိတ်တစ်ပိုင်းကို အခြားအကောင့်သို့ လွှဲပြောင်းပေးပြီး ရလဒ်များကို စိစစ်ပါ။
+နှင့် ပိုင်ဆိုင်မှု။ အဆင့်တစ်ဆင့်ချင်းစီသည် Rust/Python/JavaScript တွင် ပါရှိသော စီးဆင်းမှုများကို ထင်ဟပ်စေသည်။
+SDK သည် CLI နှင့် SDK အပြုအမူကြား တူညီမှုကို အတည်ပြုနိုင်သောကြောင့် SDK အမြန်စတင်ပါသည်။
 
-## Prerequisites
+## လိုအပ်ချက်များ
 
-- Follow the [quickstart](./quickstart.md) to boot the single-peer network via
-  `docker compose -f defaults/docker-compose.single.yml up --build`.
-- Ensure `iroha` (the CLI) is built or downloaded and that you can reach the
-  peer using `defaults/client.toml`.
-- Optional helpers: `jq` (formatting JSON responses) and a POSIX shell for the
-  environment-variable snippets used below.
+- တစ်ခုတည်းသောရွယ်တူကွန်ရက်ကိုဖွင့်ရန် [အမြန်စတင်ခြင်း](./quickstart.md) ကို လိုက်နာပါ။
+  `docker compose -f defaults/docker-compose.single.yml up --build`။
+- `iroha` (CLI) ကို တည်ဆောက်ထားသည် သို့မဟုတ် ဒေါင်းလုဒ်လုပ်ထားပြီး သင်ရောက်ရှိနိုင်သည်ကို သေချာပါစေ။
+  `defaults/client.toml` ကို အသုံးပြုထားသည့် အမျိုးအစား။
+- ရွေးချယ်နိုင်သော အကူအညီများ- `jq` (JSON တုံ့ပြန်မှုများကို ဖော်မတ်ပေးခြင်း) နှင့် POSIX ခွံတစ်ခု၊
+  အောက်တွင်အသုံးပြုထားသော ပတ်ဝန်းကျင်-ပြောင်းလဲနိုင်သော အတိုအထွာများ။
 
-Throughout the guide, replace `$ADMIN_ACCOUNT` and `$RECEIVER_ACCOUNT` with the
-account IDs you plan to use. The defaults bundle already includes two accounts
-derived from the demo keys:
+လမ်းညွှန်တစ်ခုလုံးတွင် `$ADMIN_ACCOUNT` နှင့် `$RECEIVER_ACCOUNT` ကို အစားထိုးပါ။
+သင်အသုံးပြုရန် စီစဉ်ထားသော အကောင့် ID များ။ မူရင်းအစုအဝေးတွင် အကောင့်နှစ်ခု ပါဝင်ပြီးဖြစ်သည်။
+သရုပ်ပြသော့များမှ ဆင်းသက်လာသည်-
 
 ```sh
 export ADMIN_ACCOUNT="ih58..."
 export RECEIVER_ACCOUNT="ih58..."
 ```
 
-Confirm the values by listing the first few accounts:
+ပထမအကောင့်အနည်းငယ်ကို စာရင်းပြုစုခြင်းဖြင့် တန်ဖိုးများကို အတည်ပြုပါ-
 
 ```sh
 iroha --config defaults/client.toml account list all --limit 5 --table
 ```
 
-## 1. Inspect the genesis state
+## ၁။ ဥပါဒ်အခြေအနေကို စစ်ဆေးပါ။
 
-Start by exploring the ledger the CLI is targeting:
+CLI က ပစ်မှတ်ထားသော စာရင်းဇယားကို ရှာဖွေခြင်းဖြင့် စတင်ပါ-
 
 ```sh
 # Domains registered in genesis
@@ -57,26 +59,26 @@ iroha --config defaults/client.toml account list filter \
 iroha --config defaults/client.toml asset definition list all --table
 ```
 
-These commands rely on Norito-backed responses, so filtering and pagination are
-deterministic and match what the SDKs receive.
+ဤ command များသည် Norito ကျောထောက်နောက်ခံပြုထားသော တုံ့ပြန်မှုများအပေါ် အားကိုးသောကြောင့် filtering နှင့် pagination သည်
+အဆုံးအဖြတ်ပေးပြီး SDK များရရှိသည့်အရာနှင့် ကိုက်ညီသည်။
 
-## 2. Register an asset definition
+## 2. ပိုင်ဆိုင်မှုအဓိပ္ပါယ်ဖွင့်ဆိုချက်ကို မှတ်ပုံတင်ပါ။
 
-Create a new, infinitely mintable asset called `coffee` inside the `wonderland`
-domain:
+`wonderland` အတွင်းရှိ `coffee` ဟုခေါ်သော အကန့်အသတ်မရှိ သေးငယ်သော ပိုင်ဆိုင်မှုအသစ်ကို ဖန်တီးပါ
+ဒိုမိန်း-
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
   --id coffee#wonderland
 ```
 
-The CLI prints the submitted transaction hash (for example,
-`0x5f…`). Save it so you can query the status later.
+CLI သည် တင်ပြထားသော ငွေပေးငွေယူ hash ကို print ထုတ်သည် (ဥပမာ၊
+`0x5f…`)။ အခြေအနေကို နောက်မှ မေးမြန်းနိုင်စေရန် ၎င်းကို သိမ်းဆည်းပါ။
 
-## 3. Mint units into the operator account
+## 3. အော်ပရေတာအကောင့်ထဲသို့ Mint ယူနစ်များ
 
-Asset quantities live under the `(asset definition, account)` pair. Mint 250
-units of `coffee#wonderland` into `$ADMIN_ACCOUNT`:
+ပိုင်ဆိုင်မှုပမာဏများသည် `(asset definition, account)` အတွဲအောက်တွင် နေထိုင်ပါသည်။ Mint 250
+`coffee#wonderland` ၏ ယူနစ် `$ADMIN_ACCOUNT` သို့
 
 ```sh
 iroha --config defaults/client.toml asset mint \
@@ -84,14 +86,14 @@ iroha --config defaults/client.toml asset mint \
   --quantity 250
 ```
 
-Again, capture the transaction hash (`$MINT_HASH`) from the CLI output. To
-double-check the balance, run:
+တဖန်၊ CLI အထွက်မှ ငွေပေးငွေယူ hash (`$MINT_HASH`) ကို ဖမ်းယူပါ။ ရန်
+လက်ကျန်ကို နှစ်ခါစစ်ဆေးပါ၊ ပြေးပါ-
 
 ```sh
 iroha --config defaults/client.toml asset list all --limit 5 --table
 ```
 
-or, to target just the new asset:
+သို့မဟုတ် ပိုင်ဆိုင်မှုအသစ်ကိုသာ ပစ်မှတ်ထားရန်-
 
 ```sh
 iroha --config defaults/client.toml asset list filter \
@@ -99,9 +101,9 @@ iroha --config defaults/client.toml asset list filter \
   --limit 1 | jq .
 ```
 
-## 4. Transfer part of the balance to another account
+## 4. လက်ကျန်ငွေ၏ အစိတ်အပိုင်းကို အခြားအကောင့်သို့ လွှဲပြောင်းပါ။
 
-Move 50 units from the operator account to `$RECEIVER_ACCOUNT`:
+အော်ပရေတာအကောင့်မှ `$RECEIVER_ACCOUNT` သို့ ယူနစ် 50 ရွှေ့ပါ။
 
 ```sh
 iroha --config defaults/client.toml asset transfer \
@@ -110,8 +112,8 @@ iroha --config defaults/client.toml asset transfer \
   --quantity 50
 ```
 
-Save the transaction hash as `$TRANSFER_HASH`. Query the holdings on both
-accounts to verify the new balances:
+ငွေပေးငွေယူ hash ကို `$TRANSFER_HASH` အဖြစ် သိမ်းဆည်းပါ။ နှစ်ခုစလုံးတွင် ပိုင်ဆိုင်မှုကို မေးမြန်းပါ။
+လက်ကျန်အသစ်များကို စစ်ဆေးရန် အကောင့်များ-
 
 ```sh
 iroha --config defaults/client.toml asset list filter \
@@ -121,35 +123,35 @@ iroha --config defaults/client.toml asset list filter \
   "{\"id\":\"coffee#wonderland##${RECEIVER_ACCOUNT}\"}" --limit 1 | jq .
 ```
 
-## 5. Verify ledger evidence
+## 5. လယ်ဂျာ အထောက်အထားကို စစ်ဆေးပါ။
 
-Use the saved hashes to confirm that both transactions committed:
+ငွေပေးငွေယူ နှစ်ခုလုံး ကျူးလွန်ကြောင်း အတည်ပြုရန် သိမ်းဆည်းထားသော ဟက်ကာများကို သုံးပါ-
 
 ```sh
 iroha --config defaults/client.toml transaction get --hash $MINT_HASH | jq .
 iroha --config defaults/client.toml transaction get --hash $TRANSFER_HASH | jq .
 ```
 
-You can also stream recent blocks to see which block included the transfer:
+လွှဲပြောင်းမှုတွင် ပါဝင်သည့် ဘလောက်များကို ကြည့်ရှုရန် မကြာသေးမီက ဘလောက်များကို ထုတ်လွှင့်နိုင်သည်။
 
 ```sh
 # Stream from the latest block and stop after ~5 seconds
 iroha --config defaults/client.toml blocks 0 --timeout 5s --table
 ```
 
-Every command above uses the same Norito payloads as the SDKs. If you replicate
-this flow via code (see the SDK quickstarts below), the hashes and balances will
-line up as long as you target the same network and defaults.
+အထက်ဖော်ပြပါ command တိုင်းသည် SDKs ကဲ့သို့တူညီသော Norito payloads ကိုအသုံးပြုသည်။ ပုံတူကူးရင်
+ကုဒ်မှတစ်ဆင့် ဤစီးဆင်းမှု (အောက်ပါ SDK အမြန်စတင်မှုများကိုကြည့်ပါ)၊ ဟက်ကာများနှင့် ချိန်ခွင်လျှာများ ရှိလိမ့်မည်။
+တူညီသောကွန်ရက်နှင့် ပုံသေများကို ပစ်မှတ်ထားသရွေ့ တန်းစီပါ။
 
-## SDK parity links
+## SDK တူညီသောလင့်ခ်များ
 
-- [Rust SDK quickstart](../sdks/rust) — demonstrates registering instructions,
-  submitting transactions, and polling status from Rust.
-- [Python SDK quickstart](../sdks/python) — shows the same register/mint
-  operations with Norito-backed JSON helpers.
-- [JavaScript SDK quickstart](../sdks/javascript) — covers Torii requests,
-  governance helpers, and typed query wrappers.
+- [Rrust SDK အမြန်စတင်ခြင်း](../sdks/rust) — မှတ်ပုံတင်ခြင်းဆိုင်ရာ ညွှန်ကြားချက်များကို သရုပ်ပြသည်၊
+  အရောင်းအ၀ယ်များနှင့် မဲရုံအခြေအနေများကို Rust မှတင်ပြခြင်း။
+- [Python SDK quickstart](../sdks/python) — တူညီသော မှတ်ပုံတင်ခြင်း/ mint ကို ပြသည်
+  Norito ကျောထောက်နောက်ခံပြုထားသော JSON အကူအညီများဖြင့် လုပ်ဆောင်မှုများ။
+- [JavaScript SDK အမြန်စတင်ခြင်း](../sdks/javascript) — Torii တောင်းဆိုချက်များကို အကျုံးဝင်သည် ။
+  အုပ်ချုပ်မှုအထောက် အကူပြုသူများ၊ နှင့် စာရိုက်ထားသော မေးခွန်းထုပ်များ။
 
-Run the CLI walkthrough first, then repeat the scenario with your preferred SDK
-to make sure both surfaces agree on transaction hashes, balances, and query
-outputs.
+CLI လမ်းညွှန်ချက်ကို ဦးစွာလုပ်ဆောင်ပါ၊ ထို့နောက် သင်နှစ်သက်သော SDK ဖြင့် ဇာတ်လမ်းကို ပြန်လုပ်ပါ။
+မျက်နှာပြင်နှစ်ခုလုံးသည် ငွေပေးငွေယူ hashes၊ လက်ကျန်များနှင့် query အပေါ် သဘောတူကြောင်း သေချာစေရန်
+အထွက်များ

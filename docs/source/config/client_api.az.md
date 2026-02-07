@@ -7,25 +7,26 @@ generator: scripts/sync_docs_i18n.py
 source_hash: fa548ec31fe928decc5c23719472618ff97f4eb45b084f9f9084df82b96cfac6
 source_last_modified: "2025-12-29T18:16:35.933651+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-## Client API Configuration Reference
+## Müştəri API Konfiqurasiya Referansı
 
-This document tracks the Torii client-facing configuration knobs that are
-surfaces through `iroha_config::parameters::user::Torii`. The section below
-focuses on the Norito-RPC transport controls introduced for NRPC-1; future
-client API settings should extend this file.
+Bu sənəd Torii müştəri ilə üzbəüz konfiqurasiya düymələrini izləyir.
+`iroha_config::parameters::user::Torii` vasitəsilə səthlər. Aşağıdakı bölmə
+NRPC-1 üçün təqdim edilən Norito-RPC nəqliyyat nəzarətlərinə diqqət yetirir; gələcək
+müştəri API parametrləri bu faylı genişləndirməlidir.
 
 ### `torii.transport.norito_rpc`
 
-| Key | Type | Default | Description |
+| Açar | Növ | Defolt | Təsvir |
 |-----|------|---------|-------------|
-| `enabled` | `bool` | `true` | Master switch that enables binary Norito decoding. When `false`, Torii rejects every Norito-RPC request with `403 norito_rpc_disabled`. |
-| `stage` | `string` | `"disabled"` | Rollout tier: `disabled`, `canary`, or `ga`. Stages drive admission decisions and `/rpc/capabilities` output. |
-| `require_mtls` | `bool` | `false` | Enforces mTLS for Norito-RPC transport: when `true`, Torii rejects Norito-RPC requests that do not carry an mTLS marker header (e.g. `X-Forwarded-Client-Cert`). The flag is surfaced via `/rpc/capabilities` so SDKs can warn on misconfigured environments. |
-| `allowed_clients` | `array<string>` | `[]` | Canary allowlist. When `stage = "canary"`, only requests carrying an `X-API-Token` header present in this list are accepted. |
+| `enabled` | `bool` | `true` | İkili Norito dekodlamasına imkan verən master keçid. `false` zaman, Torii, `403 norito_rpc_disabled` ilə hər Norito-RPC sorğusunu rədd edir. |
+| `stage` | `string` | `"disabled"` | Yayım səviyyəsi: `disabled`, `canary` və ya `ga`. Mərhələlər qəbul qərarlarını və `/rpc/capabilities` çıxışını idarə edir. |
+| `require_mtls` | `bool` | `false` | Norito-RPC nəqli üçün mTLS tətbiq edir: `true`, Torii, mTLS marker başlığı daşımayan Norito-RPC sorğularını rədd etdikdə (məsələn, I10000X). Bayraq `/rpc/capabilities` vasitəsilə üzə çıxır ki, SDK-lar yanlış konfiqurasiya edilmiş mühitlərdə xəbərdarlıq edə bilsin. |
+| `allowed_clients` | `array<string>` | `[]` | Kanarya icazə siyahısı. `stage = "canary"` olduqda, yalnız bu siyahıda olan `X-API-Token` başlığını daşıyan sorğular qəbul edilir. |
 
-Example configuration:
+Misal konfiqurasiya:
 
 ```toml
 [torii.transport.norito_rpc]
@@ -35,16 +36,16 @@ stage = "canary"
 allowed_clients = ["alpha-canary-token", "beta-canary-token"]
 ```
 
-Stage semantics:
+Mərhələ semantikası:
 
-- **disabled** — Norito-RPC is unavailable even if `enabled = true`. Clients
-  receive `403 norito_rpc_disabled`.
-- **canary** — Requests must include an `X-API-Token` header that matches one
-  of the `allowed_clients`. All other requests receive `403
+- **diaktiv** — Norito-RPC hətta `enabled = true` olsa belə əlçatan deyil. Müştərilər
+  `403 norito_rpc_disabled` qəbul edin.
+- **canary** — Sorğulara birinə uyğun gələn `X-API-Token` başlığı daxil edilməlidir
+  `allowed_clients`. Bütün digər sorğular `403-ü alır
   norito_rpc_canary_denied`.
-- **ga** — Norito-RPC is available to every authenticated caller (subject to the
-  usual rate and pre-auth limits).
+- **ga** — Norito-RPC hər bir autentifikasiya edilmiş zəng edən üçün əlçatandır (şərtdən asılı olaraq
+  adi tarif və pre-auth limitləri).
 
-Operators can update these values dynamically through `/v1/config`. Each change
-is reflected immediately in `/rpc/capabilities`, allowing SDKs and observability
-dashboards to show the live transport posture.
+Operatorlar bu dəyərləri `/v1/config` vasitəsilə dinamik olaraq yeniləyə bilərlər. Hər dəyişiklik
+dərhal `/rpc/capabilities`-də əks olunur, SDK-lara və müşahidə olunmağa imkan verir
+canlı nəqliyyat vəziyyətini göstərmək üçün panellər.

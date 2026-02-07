@@ -10,29 +10,30 @@ translation_last_reviewed: 2026-02-07
 id: priority-snapshot-2025-03
 title: Priority Snapshot — March 2025 (Beta)
 description: Mirror of the 2025-03 Nexus steering snapshot; pending ACKs before public rollout.
+translator: machine-google-reviewed
 ---
 
-> Canonical source: `docs/source/sorafs/priority_snapshot_2025-03.md`
+> Каноник сығанаҡ: `docs/source/sorafs/priority_snapshot_2025-03.md`
 >
-> Status: **Beta / awaiting steering ACKs** (Networking, Storage, Docs leads).
+> Статус: **Бета / көтөп руль ACKs** (Селтәр, Һаҡлау, Docs етәкселек итә).
 
-## Overview
+## Обзор
 
-The March snapshot keeps the docs/content-network initiatives aligned with the
-SoraFS delivery tracks (SF‑3, SF‑6b, SF‑9). Once all leads acknowledge the
-snapshot in the Nexus steering channel, remove the “Beta” note above.
+Март снимоктары docs/йөкмәтке-селтәр башланғыстары менән тура килтерелгән тота.
+I18NT000000000Х тапшырыу тректары (SF‐3, SF‐6b, SF‐9). Бер тапҡыр бөтә етәкселәр таный
+снимок I18NT000000002X руль каналында, өҫтәге “Бета” иҫкәрмәһен алып ташларға.
 
-### Focus threads
+### Фокус ептәр
 
-1. **Circulate priority snapshot** — collect acknowledgements and log them in the
-   2025-03-05 council minutes.
-2. **Gateway/DNS kickoff close-out** — rehearse the new facilitation kit (Section 6
-   in the runbook) before the 2025-03-03 workshop.
-3. **Operator runbook migration** — portal `Runbook Index` is live; expose the beta
-   preview URL after reviewer onboarding sign-off.
-4. **SoraFS delivery threads** — align SF‑3/6b/9 remaining work with the plan/roadmap:
-   - `sorafs-node` PoR ingestion worker + status endpoint.
-   - CLI/SDK binding polish across Rust/JS/Swift orchestrator integrations.
-   - PoR coordinator runtime wiring and GovernanceLog events.
+1. **Тиҙлек өҫтөнлөклө снимок** — таныу йыйыу һәм уларҙы логин .
+   2025-03-05 совет минуты.
+2. **Шлюз/ДНС старт яҡын-аут** — репетиция яңы еңеләйтеү комплекты (Section6
+   runbood-та) 2025-03-03 оҫтаханаһына тиклем.
+3. **Оператор runbook миграцияһы** — порталы I18NI000000004X йәшәй; бета фашлау
+   алдан ҡарау URL-адрестан һуң рецензент onboarding ҡул ҡуйыу.
+4. **I18NT0000000001X тапшырыу ептәре** — план/юл картаһы менән SF‐3/6б/9 ҡалған эштәрҙе тура килтерергә:
+   - `sorafs-node` PoR ашау эшсеһе + статус ос нөктәһе.
+   - CLI/SDK бәйләүсе лак буйынса Rust/JS/Swift оркестры интеграциялары.
+   - PoR координаторы эшләү ваҡыты проводка һәм идара итеү саралары.
 
-See the source file for the full table, distribution checklist, and log entries.
+Тулы таблица өсөн сығанаҡ файлын ҡарағыҙ, таратыу тикшерелгән исемлеге, һәм журнал яҙмалары.

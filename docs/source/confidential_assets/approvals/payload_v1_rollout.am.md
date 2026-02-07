@@ -7,39 +7,40 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 5fa5e39b0e758b38e27855fcfcae9a6e31817df4fdb9d5394b4b63d2f5164516
 source_last_modified: "2026-01-22T14:35:37.742189+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-//! Payload v1 rollout approval (SDK Council, 2026-04-28).
+//! የክፍያ v1 ልቀትን ማጽደቅ (ኤስዲኬ ምክር ቤት፣ 2026-04-28)።
 //!
-//! Captures the SDK Council decision memo required by `roadmap.md:M1` so the
-//! encrypted payload v1 rollout has an auditable record (deliverable M1.4).
+//! በ`roadmap.md:M1` የሚፈለገውን የኤስዲኬ ምክር ቤት ውሳኔ ማስታወሻ ይይዛል
+//! ኢንክሪፕትድ የተደረገ የክፍያ ጭነት v1 መልቀቅ ኦዲት የሚችል መዝገብ አለው (ሊደርስ የሚችል M1.4)።
 
-# Payload v1 Rollout Decision (2026-04-28)
+# የመጫኛ v1 ልቀት ውሳኔ (2026-04-28)
 
-- **Chair:** SDK Council Lead (M. Takemiya)
-- **Voting members:** Swift Lead, CLI Maintainer, Confidential Assets TL, DevRel WG
-- **Observers:** Program Mgmt, Telemetry Ops
+- ** ሊቀመንበር፡** የኤስዲኬ ምክር ቤት መሪ (ኤም. ታኬሚያ)
+- ** ድምጽ መስጠት አባላት፡** ስዊፍት መሪ፣ CLI ማቆያ፣ ሚስጥራዊ ንብረቶች TL፣ DevRel WG
+- ** ታዛቢዎች: ** ፕሮግራም Mgmt, ቴሌሜትሪ ኦፕስ
 
-## Inputs Reviewed
+## ግብዓቶች ተገምግመዋል
 
-1. **Swift bindings & submitters** — `ShieldRequest`/`UnshieldRequest`, async submitters, and Tx builder helpers landed with parity tests and docs.【IrohaSwift/Sources/IrohaSwift/TxBuilder.swift:389】【IrohaSwift/Sources/IrohaSwift/TxBuilder.swift:1006】
-2. **CLI ergonomics** — `iroha app zk envelope` helper covers encode/inspect workflows plus failure diagnostics, aligned with the roadmap ergonomics requirement.【crates/iroha_cli/src/zk.rs:1256】
-3. **Deterministic fixtures & parity suites** — shared fixture + Rust/Swift validation to keep Norito bytes/error surfaces aligned.【fixtures/confidential/encrypted_payload_v1.json:1】【crates/iroha_data_model/tests/confidential_encrypted_payload_vectors.rs:1】【IrohaSwift/Tests/IrohaSwiftTests/ConfidentialEncryptedPayloadTests.swift:73】
+1. ** ፈጣን ማያያዣዎች እና አስገቢዎች** — `ShieldRequest`/`UnshieldRequest`፣ async submitters እና Tx ገንቢ ረዳቶች በተመጣጣኝ ሙከራዎች እና docs.【IrohaSwift/ምንጮች/IrohaSwift/TxBuilder.swift:389】【IrohaSwift/ምንጮች/IrohaSwift/TxBuilder.swift:1006】
+2. **CLI ergonomics** — `iroha app zk envelope` አጋዥ የስራ ፍሰቶችን ኮድ/መመርመሪያ እና የውድቀት ምርመራዎችን ይሸፍናል፣ ከሮድ ካርታው ergonomics መስፈርት ጋር የተጣጣመ።【crates/iroha_cli/src/zk.rs:1256】
+3. ** ቆራጥ ዕቃዎች እና ተመሳሳይ ስብስቦች *** - የጋራ መገልገያ + ዝገት/ፈጣን ማረጋገጫ Norito ባይት/ስህተት ንጣፎችን ለማቆየት aligned crypted_payload_vectors.rs:1】【IrohaSwift/ፈተናዎች/IrohaSwiftTests/ምስጢራዊ ኢንክሪፕትድ ፔይሎድTests.swift:73】
 
-## Decision
+#ውሳኔ
 
-- **Approve payload v1 rollout** for SDKs and CLI, enabling Swift wallets to originate confidential envelopes without bespoke plumbing.
-- **Conditions:** 
-  - Keep parity fixtures under CI drift alerts (tied to `scripts/check_norito_bindings_sync.py`).
-  - Document the operational playbook in `docs/source/confidential_assets.md` (already updated via the Swift SDK PR).
-  - Record calibration + telemetry evidence before flipping any production flags (tracked under M2).
+- **የክፍያ ጭነት v1 መልቀቅን አጽድቅ** ለኤስዲኬዎች እና ለ CLI፣ ይህም ስዊፍት የኪስ ቦርሳዎች ያለ ምንም የቧንቧ መስመር ሚስጥራዊ ኤንቨሎፕ እንዲመጡ ያስችላቸዋል።
+- ** ሁኔታዎች: *** 
+  - በCI ተንሳፋፊ ማንቂያዎች (ከ`scripts/check_norito_bindings_sync.py` ጋር የተሳሰረ) የተመጣጣኝ መገልገያዎችን ያቆዩ።
+  - በ`docs/source/confidential_assets.md` (ቀድሞውንም በስዊፍት ኤስዲኬ PR በኩል የዘመነ) ውስጥ ያለውን የመጫወቻ መጽሐፍ ይመዝግቡ።
+  - ማንኛውንም የምርት ባንዲራ ከመገልበጥዎ በፊት የካሊብሬሽን + የቴሌሜትሪ ማስረጃን ይቅረጹ (በM2 ስር ይከተላሉ)።
 
-## Action Items
+## የተግባር እቃዎች
 
-| Owner | Item | Due |
-|-------|------|-----|
-| Swift Lead | Announce GA availability + README snippets | 2026-05-01 |
-| CLI Maintainer | Add `iroha app zk envelope --from-fixture` helper (optional) | Backlog (not blocking) |
-| DevRel WG | Update wallet quickstarts with payload v1 instructions | 2026-05-05 |
+| ባለቤት | ንጥል | የሚከፈልበት |
+|-------|---------|
+| ፈጣን አመራር | የGA መገኘቱን + README ቅንጥቦችን ያሳውቁ | 2026-05-01 |
+| CLI ማቆያ | `iroha app zk envelope --from-fixture` አጋዥ አክል (አማራጭ) | የኋላ መዝገብ (አይከለከልም) |
+| DevRel WG | ከክፍያ v1 መመሪያዎች ጋር የኪስ ቦርሳ ፈጣን ጅምርን ያዘምኑ | 2026-05-05 |
 
-> **Note:** This memo supersedes the temporary “pending council approval” call-out in `roadmap.md:2426` and satisfies tracker item M1.4. Update `status.md` whenever follow-up action items close.
+> **ማስታወሻ፡** ይህ ማስታወሻ በ`roadmap.md:2426` ያለውን ጊዜያዊ "በመጠባበቅ ላይ ያለ የምክር ቤት ማፅደቂያ" ጥሪን ይተካ እና የመከታተያ ንጥል M1.4 ን ያረካል። የክትትል እርምጃ ንጥሎች ሲዘጉ `status.md` ያዘምኑ።

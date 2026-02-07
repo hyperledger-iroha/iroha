@@ -7,48 +7,50 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraFS Capacity Marketplace Validation
 tags: [SF-2c, acceptance, checklist]
 summary: Acceptance checklist covering provider onboarding, dispute workflows, and treasury reconciliation gating the SoraFS capacity marketplace general availability.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# SoraFS Capacity Marketplace Validation Checklist
+# SoraFS Imkoniyatlar bozorini tekshirish ro'yxati
 
-**Review window:** 2026-03-18 → 2026-03-24  
-**Programme owners:** Storage Team (`@storage-wg`), Governance Council (`@council`), Treasury Guild (`@treasury`)  
-**Scope:** Provider onboarding pipelines, dispute adjudication flows, and treasury reconciliation processes required for SF-2c GA.
+**Ko‘rib chiqish oynasi:** 2026-03-18 → 2026-03-24  
+**Dastur egalari:** Saqlash jamoasi (`@storage-wg`), Boshqaruv kengashi (`@council`), G'aznachilik gildiyasi (`@treasury`)  
+**Qo‘llanish doirasi:** SF-2c GA uchun zarur bo‘lgan provayder quvurlari, nizolarni ko‘rib chiqish oqimlari va g‘aznachilikni yarashtirish jarayonlari.
 
-The checklist below must be reviewed before enabling the marketplace for external operators. Each row links to deterministic evidence (tests, fixtures, or documentation) that auditors can replay.
+Quyidagi nazorat ro'yxati tashqi operatorlar uchun bozorni yoqishdan oldin ko'rib chiqilishi kerak. Har bir qator auditorlar takrorlashi mumkin bo'lgan deterministik dalillarga (testlar, moslamalar yoki hujjatlar) bog'lanadi.
 
-## Acceptance Checklist
+## Qabul qilish ro'yxati
 
-### Provider Onboarding
+### Provayderni ishga tushirish
 
-| Check | Validation | Evidence |
+| Tekshiring | Tasdiqlash | Dalil |
 |-------|------------|----------|
-| Registry accepts canonical capacity declarations | Integration test exercises `/v1/sorafs/capacity/declare` via the app API, verifying signature handling, metadata capture, and hand-off to the node registry. | `crates/iroha_torii/src/routing.rs:7654` |
-| Smart contract rejects mismatched payloads | Unit test ensures provider IDs and committed GiB fields match the signed declaration before persisting. | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3445` |
-| CLI emits canonical onboarding artefacts | CLI harness writes deterministic Norito/JSON/Base64 outputs and validates round-trips so operators can stage declarations offline. | `crates/sorafs_car/tests/capacity_cli.rs:17` |
-| Operator guide captures admission workflow and governance guardrails | Documentation enumerates declaration schema, policy defaults, and review steps for the council. | `../storage-capacity-marketplace.md` |
+| Registr kanonik sig'im deklaratsiyasini qabul qiladi | Integratsiya testi `/v1/sorafs/capacity/declare` ilova API orqali amalga oshiriladi, imzo bilan ishlov berish, metama'lumotlarni yozib olish va tugun registriga o'tkazishni tekshiradi. | `crates/iroha_torii/src/routing.rs:7654` |
+| Smart kontrakt mos kelmaydigan foydali yuklarni rad etadi | Birlik testi davom etishdan oldin provayder identifikatorlari va belgilangan GiB maydonlari imzolangan deklaratsiyaga mos kelishini ta'minlaydi. | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3445` |
+| CLI kanonik onboarding artefaktlarini chiqaradi | CLI jabduqlari Norito/JSON/Base64 deterministik natijalarini yozadi va operatorlar deklaratsiyalarni oflayn rejimda ko'rsatishi uchun aylanma safarlarni tasdiqlaydi. | `crates/sorafs_car/tests/capacity_cli.rs:17` |
+| Operator qo'llanmasi qabul ish jarayoni va boshqaruv to'siqlarini qamrab oladi | Hujjatlar deklaratsiya sxemasini, siyosat defoltlarini va kengash uchun ko'rib chiqish bosqichlarini sanab o'tadi. | `../storage-capacity-marketplace.md` |
 
-### Dispute Resolution
+### Nizolarni hal qilish
 
-| Check | Validation | Evidence |
+| Tekshiring | Tasdiqlash | Dalil |
 |-------|------------|----------|
-| Dispute records persist with canonical payload digest | Unit test registers a dispute, decodes the stored payload, and asserts pending status to guarantee ledger determinism. | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:1835` |
-| CLI dispute generator matches canonical schema | CLI test covers Base64/Norito outputs and JSON summaries for `CapacityDisputeV1`, ensuring evidence bundles hash deterministically. | `crates/sorafs_car/tests/capacity_cli.rs:455` |
-| Replay test proves dispute/penalty determinism | Proof-failure telemetry replayed twice produces identical ledger, credit, and dispute snapshots so slashes are deterministic across peers. | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3430` |
-| Runbook documents escalation and revocation flow | Operations guide captures council workflow, evidence requirements, and rollback procedures. | `../dispute-revocation-runbook.md` |
+| Eʼtirozli yozuvlar kanonik foydali yuk dayjestida saqlanib qoladi Birlik testi nizoni qayd etadi, saqlangan foydali yukni dekodlaydi va daftar determinizmini kafolatlash uchun kutilayotgan holatni tasdiqlaydi. | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:1835` |
+| CLI nizo generatori kanonik sxemaga mos keladi | CLI testi `CapacityDisputeV1` uchun Base64/Norito chiqishlari va JSON xulosalarini qamrab oladi, bu esa dalillar to'plamlari xeshini aniq ta'minlaydi. | `crates/sorafs_car/tests/capacity_cli.rs:455` |
+| Takroriy test nizo/jarima determinizmini isbotlaydi | Ikki marta takrorlangan isbot-muvaffaqiyatsiz telemetriya bir xil daftar, kredit va bahsli suratlarni hosil qiladi, shuning uchun slashlar tengdoshlar orasida deterministik bo'ladi. | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3430` |
+| Runbook hujjatlarini kuchaytirish va bekor qilish oqimi | Operatsion qo'llanma kengash ish jarayonini, dalillar talablarini va orqaga qaytarish tartib-qoidalarini qamrab oladi. | `../dispute-revocation-runbook.md` |
 
-### Treasury Reconciliation
+### G'aznachilikni yarashtirish
 
-| Check | Validation | Evidence |
+| Tekshiring | Tasdiqlash | Dalil |
 |-------|------------|----------|
-| Ledger accrual matches 30-day soak projection | Soak test spans five providers across 30 settlement windows, diffing ledger entries against the expected payout reference. | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3000` |
-| Ledger export reconciliation recorded nightly | `capacity_reconcile.py` compares fee ledger expectations with executed XOR transfer exports, emits Prometheus metrics, and gates treasury approval via Alertmanager. | `scripts/telemetry/capacity_reconcile.py:1`,`docs/source/sorafs/runbooks/capacity_reconciliation.md:1`,`dashboards/alerts/sorafs_capacity_rules.yml:100` |
-| Billing dashboards surface penalties and accrual telemetry | Grafana import plots GiB·hour accrual, strike counters, and bonded collateral for on-call visibility. | `dashboards/grafana/sorafs_capacity_penalties.json:1` |
-| Published report archives soak methodology and replay commands | Report details soak scope, execution commands, and observability hooks for auditors. | `./sf2c-capacity-soak.md` |
+| Buxgalteriya hisobi 30 kunlik proektsiyaga mos keladi | Soak testi 30 ta hisob-kitob oynalari bo'ylab beshta provayderni qamrab oladi va buxgalteriya hisobidagi yozuvlarni kutilgan to'lov ma'lumotnomasidan farq qiladi. | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3000` |
+| Buxgalteriya daftarining eksportini solishtirish kechada qayd etiladi | `capacity_reconcile.py` toʻlov kitobi kutilmalarini bajarilgan XOR transfer eksporti bilan solishtiradi, Prometheus koʻrsatkichlarini chiqaradi va Alertmanager orqali xazina tasdiqlaydi. | `scripts/telemetry/capacity_reconcile.py:1`, `docs/source/sorafs/runbooks/capacity_reconciliation.md:1`, `dashboards/alerts/sorafs_capacity_rules.yml:100` |
+| Hisob-kitoblar panelidagi jarimalar va hisoblash telemetriyasi | Grafana import uchastkalari GiB·soat hisoblash, ish tashlash hisoblagichlari va qo'ng'iroq bo'yicha ko'rish uchun bog'langan garov. | `dashboards/grafana/sorafs_capacity_penalties.json:1` |
+| Nashr qilingan hisobot arxivlari metodologiyasi va qayta ijro etish buyruqlari | Hisobot tafsilotlari auditorlar uchun ko'lami, bajarish buyruqlari va kuzatuv ilgaklari. | `./sf2c-capacity-soak.md` |
 
-## Execution Notes
+## Ijro qaydlari
 
-Re-run the validation suite before sign-off:
+Ro'yxatdan o'tishdan oldin tekshirish to'plamini qayta ishga tushiring:
 
 ```bash
 cargo test -p iroha_torii --features app_api -- capacity_declaration_handler_accepts_request
@@ -60,20 +62,20 @@ cargo test -p sorafs_car --features cli --test capacity_cli
 python3 scripts/telemetry/capacity_reconcile.py --snapshot <state.json> --ledger <ledger.ndjson> --warn-only
 ```
 
-Operators should regenerate onboarding/dispute request payloads with `sorafs_manifest_stub capacity {declaration,dispute}` and archive the resulting JSON/Norito bytes alongside the governance ticket.
+Operatorlar `sorafs_manifest_stub capacity {declaration,dispute}` bilan ishga tushirish/nizo soʻrovining foydali yuklarini qayta yaratishi va natijada olingan JSON/Norito baytlarini boshqaruv chiptasi bilan birga arxivlashi kerak.
 
-## Sign-off Artefacts
+## Ro'yxatdan o'tish artefaktlari
 
-| Artefact | Path | blake2b-256 |
+| Artefakt | Yo'l | blake2b-256 |
 |----------|------|-------------|
-| Provider onboarding approval packet | `docs/examples/sorafs_capacity_marketplace_validation/2026-03-24_onboarding_signoff.md` | `8f41a745d8d94710fe81c07839651520429d4abea5729bc00f8f45bbb11daa4c` |
-| Dispute resolution approval packet | `docs/examples/sorafs_capacity_marketplace_validation/2026-03-24_dispute_signoff.md` | `c3ac3999ef52857170fedb83cddbff7733ef5699f8b38aea2e65ae507a6229f7` |
-| Treasury reconciliation approval packet | `docs/examples/sorafs_capacity_marketplace_validation/2026-03-24_treasury_signoff.md` | `0511aeed1f5607c329428cd49c94d1af51292c85134c10c3330c172b0140e8c6` |
+| Provayderning ishga kirishini tasdiqlash paketi | `docs/examples/sorafs_capacity_marketplace_validation/2026-03-24_onboarding_signoff.md` | `8f41a745d8d94710fe81c07839651520429d4abea5729bc00f8f45bbb11daa4c` |
+| Nizolarni hal qilishni tasdiqlash paketi | `docs/examples/sorafs_capacity_marketplace_validation/2026-03-24_dispute_signoff.md` | `c3ac3999ef52857170fedb83cddbff7733ef5699f8b38aea2e65ae507a6229f7` |
+| G'aznachilikni yarashtirishni tasdiqlash paketi | `docs/examples/sorafs_capacity_marketplace_validation/2026-03-24_treasury_signoff.md` | `0511aeed1f5607c329428cd49c94d1af51292c85134c10c3330c172b0140e8c6` |
 
-Store the signed copies of these artefacts with the release bundle and link them in the governance change record.
+Ushbu artefaktlarning imzolangan nusxalarini nashr to'plami bilan saqlang va ularni boshqaruvni o'zgartirish yozuviga bog'lang.
 
-## Approvals
+## Tasdiqlashlar
 
-- Storage Team Lead — @storage-tl (2026-03-24)  
-- Governance Council Secretary — @council-sec (2026-03-24)  
-- Treasury Operations Lead — @treasury-ops (2026-03-24)
+- Saqlash guruhi rahbari — @storage-tl (2026-03-24)  
+- Boshqaruv kengashi kotibi — @council-sec (2026-03-24)  
+- G'aznachilik operatsiyalari rahbari - @treasury-ops (2026-03-24)

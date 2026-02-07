@@ -4,26 +4,25 @@ direction: ltr
 source: docs/portal/docs/nexus/nexus-fee-model.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: nexus-fee-model
-title: Actualizaciones del modelo de tarifas de Nexus
-description: Espejo de `docs/source/nexus_fee_model.md`, que documenta los recibos de liquidacion de lanes y las superficies de conciliacion.
+identifiant : modèle de frais-nexus
+titre : Actualisations du modèle de tarifs de Nexus
+description : En particulier de `docs/source/nexus_fee_model.md`, qui documente les recettes de liquidation des voies et les superficies de conciliation.
 ---
 
 :::note Fuente canonica
-Esta pagina refleja `docs/source/nexus_fee_model.md`. Manten ambas copias alineadas mientras las traducciones al japones, hebreo, espanol, portugues, frances, ruso, arabe y urdu migran.
+Cette page reflète `docs/source/nexus_fee_model.md`. Manten ambas copias alineadas mientras las traducciones al japones, hebreo, espanol, portugues, frances, ruso, arabe y urdu migran.
 :::
 
-# Actualizaciones del modelo de tarifas de Nexus
+# Actualisations du modèle de tarifs de Nexus
 
-El router de liquidacion unificado ahora captura recibos deterministas por lane para que los operadores puedan conciliar los debitos de gas contra el modelo de tarifas de Nexus.
+Le routeur de liquidation unifié a maintenant capturé des recettes déterminées par la voie pour que les opérateurs puissent concilier les débits de gaz avec le modèle de tarifs de Nexus.- Pour l'architecture complète du routeur, la politique de tampon, la matrice de télémétrie et la sécurité de déploiement, ainsi que `docs/settlement-router.md`. Ce guide explique comment les paramètres documentés ici sont associés à la feuille de route NX-3 et comment les SRE doivent surveiller le routeur en production.
+- La configuration de l'activité de gaz (`pipeline.gas.units_per_gas`) comprend un décimal `twap_local_per_xor`, un `liquidity_profile` (`tier1`, `tier2`, ou `tier3`) et un `volatility_class` (`stable`, `elevated`, `dislocated`). Ces bandes alimentent le routeur de liquidation pour que la cotisation XOR résultante coïncide avec le canon TWAP et le niveau de coupe de cheveux pour la voie.
+- Chaque transaction de gaz enregistrée sous le numéro `LaneSettlementReceipt`. Chaque fois que vous recevez l'identifiant d'origine fourni par l'appelant, le micro-montage local, le XOR est demandé immédiatement, le XOR est attendu après la coupe de cheveux, la variante réalisée (`xor_variance_micro`) et la marque de temps de blocage en milisegundos.
+- L'exécution des blocs s'ajoute aux voies/espaces de données et au public via `lane_settlement_commitments` et `/v1/sumeragi/status`. Les totaux exposés `total_local_micro`, `total_xor_due_micro` et `total_xor_after_haircut_micro` sont placés sur le blocage pour les exportations nocturnes de conciliation.- Un nouveau contador `total_xor_variance_micro` indique la marge de sécurité de consommation (différence entre la dette XOR et les attentes après la coupe de cheveux), et `swap_metadata` documente les paramètres de conversion déterministes (TWAP, epsilon, profil de liquidité et volatilité_class) pour que les auditeurs puissent vérifier la entrées de cotation indépendantes de la configuration au moment de l'exécution.
 
-- Para la arquitectura completa del router, la politica de buffer, la matriz de telemetria y la secuencia de despliegue, ve `docs/settlement-router.md`. Esa guia explica como los parametros documentados aqui se vinculan con el entregable del roadmap NX-3 y como los SREs deben monitorear el router en produccion.
-- La configuracion del activo de gas (`pipeline.gas.units_per_gas`) incluye un decimal `twap_local_per_xor`, un `liquidity_profile` (`tier1`, `tier2`, o `tier3`), y una `volatility_class` (`stable`, `elevated`, `dislocated`). Estas banderas alimentan el router de liquidacion para que la cotizacion XOR resultante coincida con el TWAP canonico y el tier de haircut para el lane.
-- Cada transaccion que paga gas registra un `LaneSettlementReceipt`. Cada recibo almacena el identificador de origen provisto por el caller, el micro-monto local, el XOR debido inmediatamente, el XOR esperado despues del haircut, la varianza realizada (`xor_variance_micro`), y la marca de tiempo del bloque en milisegundos.
-- La ejecucion de bloques agrega recibos por lane/dataspace y los publica via `lane_settlement_commitments` en `/v1/sumeragi/status`. Los totales exponen `total_local_micro`, `total_xor_due_micro`, y `total_xor_after_haircut_micro` sumados sobre el bloque para las exportaciones nocturnas de conciliacion.
-- Un nuevo contador `total_xor_variance_micro` rastrea cuanto margen de seguridad se consumio (diferencia entre el XOR debido y la expectativa post-haircut), y `swap_metadata` documenta los parametros de conversion determinista (TWAP, epsilon, liquidity profile, y volatility_class) para que los auditores puedan verificar las entradas de la cotizacion independientemente de la configuracion en runtime.
-
-Los consumidores pueden observar `lane_settlement_commitments` junto con los snapshots existentes de commitments de lane y dataspace para verificar que los buffers de tarifas, los niveles de haircut y la ejecucion del swap coinciden con el modelo de tarifas de Nexus configurado.
+Les consommateurs peuvent observer `lane_settlement_commitments` conjointement avec les instantanés existants des engagements de voie et d'espace de données pour vérifier que les tampons de tarifs, les niveaux de coupe de cheveux et l'exécution du swap coïncident avec le modèle de tarifs de Nexus configuré.

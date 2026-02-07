@@ -7,94 +7,92 @@ generator: scripts/sync_docs_i18n.py
 source_hash: e7116d28e32d8bd77434edd6767427cc3d2ae0624f4de132b1d0cec3c7d44b86
 source_last_modified: "2025-12-29T18:16:35.938246+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% SM2/SM3/SM4 Product Filing (开发备案) Template
-% Hyperledger Iroha Compliance Working Group
+% SM2/SM3/SM4 Mahsulotni topshirish shabloni
+% Hyperledger Iroha Muvofiqlik ishchi guruhi
 % 2026-05-06
 
-# Instructions
+#Ko'rsatmalar
 
-Use this template when submitting a *product development filing* to a provincial
-or municipal State Cryptography Administration (SCA) office before distributing
-SM-enabled binaries or source artefacts from within mainland China. Replace the
-placeholders with project-specific details, export the completed form as PDF if
-required, and attach the artefacts referenced in the checklist.
+Viloyatga *mahsulot ishlab chiqish uchun ariza* yuborishda ushbu shablondan foydalaning
+yoki tarqatishdan oldin shahar Davlat kriptografiya boshqarmasi (SCA) idorasi
+SM yoqilgan binarlar yoki Xitoyning materik qismidagi manba artefaktlari. ni almashtiring
+loyihaga oid tafsilotlarga ega boʻlgan toʻldiruvchilar, toʻldirilgan shaklni PDF formatida eksport qiling, agar
+talab qilinadi va nazorat ro'yxatiga havola qilingan artefaktlarni ilova qiling.
 
-# 1. Applicant & Product Summary
+№ 1. Ariza beruvchi va mahsulot haqida xulosa
 
-| Field | Value |
+| Maydon | Qiymat |
 |-------|-------|
-| Organisation name | {{ ORGANISATION }} |
-| Registered address | {{ ADDRESS }} |
-| Legal representative | {{ LEGAL_REP }} |
-| Primary contact (name / title / email / phone) | {{ CONTACT }} |
-| Product name | Hyperledger Iroha {{ RELEASE_NAME }} |
-| Product version / build ID | {{ VERSION }} |
-| Filing type | Product development (开发备案) |
-| Filing date | {{ YYYY-MM-DD }} |
+| Tashkilot nomi | {{ TASHKILOT }} |
+| Ro'yxatdan o'tgan manzil | {{ MANZIL }} |
+| Qonuniy vakil | {{ HUQUQIY_REP }} |
+| Asosiy kontakt (ism / unvon / elektron pochta / telefon) | {{ ALOQA }} |
+| Mahsulot nomi | Hyperledger Iroha {{ RELEASE_NAME }} |
+| Mahsulot versiyasi / qurish identifikatori | {{ VERSIYA }} |
+| Hujjat turi | Mahsulotni ishlab chiqish (kàngāngì) |
+| Ariza topshirish sanasi | {{ YYYY-AA-KK }} |
 
-# 2. Cryptography Usage Overview
+# 2. Kriptografiyadan foydalanishga umumiy nuqtai
 
-- Supported algorithms: `SM2`, `SM3`, `SM4` (provide usage matrix below).
-- Usage context:
-  | Algorithm | Component | Purpose | Deterministic safeguards |
-  |-----------|-----------|---------|--------------------------|
-  | SM2 | {{ COMPONENT }} | {{ PURPOSE }} | RFC6979 + canonical r∥s enforcement |
-  | SM3 | {{ COMPONENT }} | {{ PURPOSE }} | Deterministic hashing via `Sm3Digest` |
-  | SM4 | {{ COMPONENT }} | {{ PURPOSE }} | AEAD (GCM/CCM) with enforced nonce policy |
-- Non-SM algorithms in build: {{ OTHER_ALGORITHMS }} (for completeness).
+- Qo'llab-quvvatlanadigan algoritmlar: `SM2`, `SM3`, `SM4` (quyida foydalanish matritsasini taqdim eting).
+- Foydalanish konteksti:
+  | Algoritm | Komponent | Maqsad | Deterministik himoya vositalari |
+  |----------|-----------|---------|--------------------------|
+  | SM2 | {{ KOMPONENT }} | {{ MAQSAD }} | RFC6979 + kanonik r∥s ijrosi |
+  | SM3 | {{ KOMPONENT }} | {{ MAQSAD }} | `Sm3Digest` | orqali deterministik xeshlash
+  | SM4 | {{ KOMPONENT }} | {{ MAQSAD }} | AEAD (GCM/CCM) majburiy bo'lmagan siyosat bilan |
+- Qurilishdagi SM bo'lmagan algoritmlar: {{ OTHER_ALGORITHMS }} (to'liqlik uchun).
 
-# 3. Development & Supply Chain Controls
+# 3. Rivojlanish va ta'minot zanjiri nazorati
 
-- Source code repository: {{ REPOSITORY_URL }}
-- Deterministic build instructions:
+- Manba kodlari ombori: {{ REPOSITORY_URL }}
+- Deterministik qurish bo'yicha ko'rsatmalar:
   1. `git clone {{ REPOSITORY_URL }} && git checkout {{ COMMIT_SHA }}`
-  2. `cargo build --workspace --locked --release --features "sm sm-ffi-openssl"` (adjust as needed).
-  3. SBOM generated via `cargo auditable` / CycloneDX (`{{ SBOM_PATH }}`).
-- Continuous integration environment summary:
-  | Item | Value |
+  2. `cargo build --workspace --locked --release --features "sm sm-ffi-openssl"` (kerak bo'lganda sozlang).
+  3. `cargo auditable` / CycloneDX (`{{ SBOM_PATH }}`) orqali yaratilgan SBOM.
+- Uzluksiz integratsiya muhiti haqida xulosa:
+  | Element | Qiymat |
   |------|-------|
-  | Build OS / version | {{ BUILD_OS }} |
-  | Compiler toolchain | {{ TOOLCHAIN }} |
-  | OpenSSL / Tongsuo source | {{ OPENSSL_SOURCE }} |
-  | Reproducibility checksum | {{ CHECKSUM }} |
+  | OS / versiyasini yaratish | {{ BUILD_OS }} |
+  | Kompilyator asboblar zanjiri | {{ TOLCHINA }} |
+  | OpenSSL / Tongsuo manbasi | {{ OPENSSL_SOURCE }} |
+  | Qayta ishlab chiqarishni tekshirish summasi | {{ CHEKK SO‘MASI }} |
 
-# 4. Key Management & Security
+# 4. Kalitlarni boshqarish va xavfsizlik
 
-- Default enabled SM features: {{ DEFAULTS }} (e.g., verify-only).
-- Configuration flags required for signing: {{ CONFIG_FLAGS }}.
-- Key custody approach:
-  | Item | Details |
+- Standart yoqilgan SM funksiyalari: {{ DEFAULTS }} (masalan, faqat tekshirish uchun).
+- Imzolash uchun talab qilinadigan konfiguratsiya bayroqlari: {{ CONFIG_FLAGS }}.
+- Asosiy saqlash yondashuvi:
+  | Element | Tafsilotlar |
   |------|---------|
-  | Key generation tool | {{ KEY_TOOL }} |
-  | Storage medium | {{ STORAGE_MEDIUM }} |
-  | Backup policy | {{ BACKUP_POLICY }} |
-  | Access controls | {{ ACCESS_CONTROLS }} |
-- Incident response contacts (24/7):
-  | Role | Name | Phone | Email |
+  | Kalit yaratish vositasi | {{ KEY_TOOL }} |
+  | Saqlash muhiti | {{ STORAGE_MEDIUM }} |
+  | Zaxiralash siyosati | {{ BACKUP_POLICY }} |
+  | Kirish boshqaruvlari | {{ ACCESS_CONTROLS }} |
+- Voqealarga javob berish aloqalari (24/7):
+  | Rol | Ism | Telefon | Elektron pochta |
   |------|------|-------|-------|
-  | Crypto lead | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} |
-  | Platform ops | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} |
-  | Legal liaison | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} |
+  | Kripto etakchi | {{ NAME }} | {{ TELEFON }} | {{ EMAIL }} |
+  | Platforma operatsiyalari | {{ NAME }} | {{ TELEFON }} | {{ EMAIL }} |
+  | Huquqiy aloqa | {{ NAME }} | {{ TELEFON }} | {{ EMAIL }} |
 
-# 5. Attachments Checklist
+№ 5. Qo'shimchalar nazorat ro'yxati- [ ] Manba kodi surati (`{{ SOURCE_ARCHIVE }}`) va xesh.
+- [ ] Deterministik qurilish skripti / takrorlanuvchanlik eslatmalari.
+- [ ] SBOM (`{{ SBOM_PATH }}`) va qaramlik manifesti (`Cargo.lock` barmoq izi).
+- [ ] Deterministik test transkriptlari (`scripts/sm_openssl_smoke.sh`, `cargo test -p iroha_crypto sm`).
+- [ ] SM kuzatilishini ko'rsatuvchi telemetriya asboblar paneli eksporti.
+- [ ] Eksport-nazorat bayonoti (alohida shablonga qarang).
+- [ ] Audit hisobotlari yoki uchinchi tomon baholashlari (agar allaqachon to'ldirilgan bo'lsa).
 
-- [ ] Source code snapshot (`{{ SOURCE_ARCHIVE }}`) and hash.
-- [ ] Deterministic build script / reproducibility notes.
-- [ ] SBOM (`{{ SBOM_PATH }}`) and dependency manifest (`Cargo.lock` fingerprint).
-- [ ] Deterministic test transcripts (`scripts/sm_openssl_smoke.sh`, `cargo test -p iroha_crypto sm`).
-- [ ] Telemetry dashboard export demonstrating SM observability.
-- [ ] Export-control statement (see separate template).
-- [ ] Audit reports or third-party assessments (if already completed).
+№ 6. Ariza beruvchining deklaratsiyasi
 
-# 6. Applicant Declaration
+> Men yuqoridagi ma'lumotlarning to'g'riligini, oshkor qilinganligini tasdiqlayman
+> kriptografik funksionallik XXRning amaldagi qonunlari va qoidalariga mos keladi,
+> va tashkilot taqdim etilgan artefaktlarni hech bo'lmaganda saqlab turishi
+> uch yil.
 
-> I confirm that the above information is accurate, that the disclosed
-> cryptographic functionality complies with applicable PRC laws and regulations,
-> and that the organisation will maintain the submitted artefacts for at least
-> three years.
-
-- Signature (legal representative): ________________________
-- Date: ________________________
-
+- Imzo (qonuniy vakil): ________________________
+- Sana: ______________________

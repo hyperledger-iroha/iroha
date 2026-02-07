@@ -7,80 +7,81 @@ generator: scripts/sync_docs_i18n.py
 source_hash: f9df713c3e078ac2ccbd74eb215b91bb80d08306d0ca455dc122fde535601ce8
 source_last_modified: "2026-01-18T10:42:52.828202+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Norito Streaming
+# I18NT000000000X Страмулятор
 
-Norito Streaming defines the wire format, control frames, and reference codec
-used for live media flows across Torii and SoraNet. The canonical spec lives in
-`norito_streaming.md` at the workspace root; this page distills the pieces that
-operators and SDK authors need alongside the configuration touch points.
+I18NT0000000001X Streaming сым форматын билдәләй, идара итеү кадрҙары, һәм һылтанма кодек .
+Torii һәм SoraNet аша тере киң мәғлүмәт саралары ағымдары өсөн ҡулланыла. Каноник спец 1990 йылда йәшәй.
+`norito_streaming.md` эш урыны тамырында; был битте дистилляциялай
+операторҙары һәм SDK авторҙары конфигурация сенсорный нөктәләре менән бер рәттән кәрәк.
 
-## Wire format and control plane
+## Сым форматында һәм идара итеү самолеты
 
-- **Manifests & frames.** `ManifestV1` and `PrivacyRoute*` describe the segment
-  timeline, chunk descriptors, and route hints. Control frames (`KeyUpdate`,
-  `ContentKeyUpdate`, and cadence feedback) live alongside the manifest so
-  viewers can validate commitments before decoding.
-- **Baseline codec.** `BaselineEncoder`/`BaselineDecoder` enforce monotonic
-  chunk ids, timestamp arithmetic, and commitment verification. Hosts must call
-  `EncodedSegment::verify_manifest` before serving viewers or relays.
-- **Feature bits.** Capability negotiation advertises `streaming.feature_bits`
-  (default `0b11` = baseline feedback + privacy route provider) so relays and
-  clients can reject peers without matching capabilities deterministically.
+- **Манифест һәм кадрҙар.** I18NI000000004X һәм `PrivacyRoute*` сегментты һүрәтләй
+  ваҡыт һыҙығы, өлөшө дескрипторҙар, һәм маршрут кәңәштәре. Контроль рамкалар (`KeyUpdate`,
+  I18NI000000007X, һәм каденция кире бәйләнеш) йәшәй менән бергә манифест шулай
+  тамашасылар расшифровка алдынан йөкләмәләрҙе раҫлай ала.
+- **Базалы кодек.** I18NI000000008X/`BaselineDecoder` X-сы көстө һаҡлау монотоник
+  өлөшө ids, ваҡыт тамғаһы арифметика, һәм йөкләмә тикшерергә. Хужалар шылтыратырға тейеш .
+  `EncodedSegment::verify_manifest` тамашасылар йәки эстафеталарға хеҙмәт иткәнсе.
+- **Функциональ биттар.** Мөмкинлек тураһында һөйләшеүҙәр реклама I18NI000000011X
+  (дефолт `0b11` = база һыҙығы кире бәйләнеш + хосуси маршрут провайдеры) шулай реле һәм
+  клиенттар тиҫтерҙәрен кире ҡаға ала, тап килгән мөмкинлектәрен детерминистик.
 
-## Keys, suites, and cadence
+## Асҡыс, люкс, һәм каденция
 
-- **Identity requirements.** Streaming control frames are always signed with
-  Ed25519. Dedicated keys can be supplied via
-  `streaming.identity_public_key`/`streaming.identity_private_key`; otherwise
-  the node identity is reused.
-- **HPKE suites.** `KeyUpdate` selects the lowest common suite; suite #1 is
-  mandatory (`AuthPsk`, `Kyber768`, `HKDF-SHA3-256`, `ChaCha20-Poly1305`), with
-  an optional `Kyber1024` upgrade path. Suite selection is stored on the
-  session and validated on every update.
-- **Rotation.** Publishers emit a signed `KeyUpdate` every 64 MiB or 5 minutes.
-  `key_counter` must increase strictly; regression is a hard error.
-  `ContentKeyUpdate` distributes the rolling Group Content Key, wrapped under
-  the negotiated HPKE suite, and gates segment decryption by ID + validity
-  window.
-- **Snapshots.** `StreamingSession::snapshot_state` and
-  `restore_from_snapshot` persist `{session_id, key_counter, suite, sts_root,
-  cadence state}` under `streaming.session_store_dir` (default
-  `./storage/streaming`). Transport keys are re-derived on restore so crashes
-  do not leak session secrets.
+- **Идентификация талаптары.** Һуғыш менән идара итеү кадрҙары һәр ваҡыт ҡул ҡуйылған.
+  Ed25519. Бағышланған асҡыстарҙы аша бирергә мөмкин.
+  I18NI0000013X/`streaming.identity_private_key`; башҡаса
+  төйөн үҙенсәлеге ҡабаттан ҡулланыла.
+- **HPKE люкс.** `KeyUpdate` иң түбән дөйөм люкс һайлай; 1-се люкс 1990 й.
+  мотлаҡ (`AuthPsk`, `Kyber768`, I18NI000000018X, I18NI000000019X X.
+  опциональ `Kyber1024` яңыртыу юлы. люкс һайлау һаҡлана.
+  сессия һәм һәр яңыртыуҙа раҫланған.
+- **Ротация.** Нәшриәтселәр 64МиБ йәки 5минут һайын һәр 64МиБ-та ҡул ҡуйылған I18NI0000021X сығара.
+  `key_counter` ҡәтғи рәүештә артырға тейеш; регрессия – ҡаты хата.
+  I18NI000000023X таратыу роллинг Төркөмө йөкмәткеһе асҡысы, 2000 йылда уралған.
+  һөйләшеүҙәр алып барылған HPKE люкс, һәм ҡапҡалар сегменты расшифровка ID + дөрөҫлөк
+  тәҙрә.
+- **Снимок.** I18NI000000024X һәм
+  I18NI000000025X һаҡлана `{сессия_ид, асҡыс_counter, люкс, sts_root, .
+  Каденция хәл}I18NI000000026Xstreaming.session_store_dir`
+  `./storage/streaming`). Транспорт асҡыстары яңынан алынған тергеҙелә, шулай авариялар .
+  сеанс серҙәрен ағыҙмағыҙ.
 
-## Runtime configuration
+## Йүгереп йөрөү конфигурацияһы
 
-- **Key material.** Supply dedicated keys with
-  `streaming.identity_public_key`/`streaming.identity_private_key` (Ed25519
-  multihash) and optional Kyber material via
-  `streaming.kyber_public_key`/`streaming.kyber_secret_key`. All four must be
-  present when overriding defaults; `streaming.kyber_suite` accepts
-  `mlkem512|mlkem768|mlkem1024` (aliases `kyber512/768/1024`, default
+- **Төп материал.**
+  `streaming.identity_public_key`/`streaming.identity_private_key` X (Ed25519
+  мультихаш) һәм факультатив Кибер материалы аша
+  `streaming.kyber_public_key`/I18NI000000031X. Дүртәүһе лә булырға тейеш .
+  ғәҙәттәгесә өҫтөнлөк иткәндә лә; I18NI000000032X ҡабул итә
+  I18NI0000000033X (псливно I18NI000000034X, ғәҙәттәгесә
   `mlkem768`).
-- **Codec guardrails.** CABAC stays disabled unless the build enables it;
-  bundled rANS requires `ENABLE_RANS_BUNDLES=1`. Enforce via
-  `streaming.codec.{entropy_mode,bundle_width,bundle_accel}` and optional
-  `streaming.codec.rans_tables_path` when supplying custom tables. Bundled
-- **SoraNet routes.** `streaming.soranet.*` controls anonymous transport:
-  `exit_multiaddr` (default `/dns/torii/udp/9443/quic`), `padding_budget_ms`
-  (default 25 ms), `access_kind` (`authenticated` vs `read-only`), optional
-  `channel_salt`, `provision_spool_dir` (default
-  `./storage/streaming/soranet_routes`), `provision_spool_max_bytes` (default 0,
-  unlimited), `provision_window_segments` (default 4), and
-  `provision_queue_capacity` (default 256).
-- **Sync gate.** `streaming.sync` toggles drift enforcement for audiovisual
-  streams: `enabled`, `observe_only`, `ewma_threshold_ms`, and `hard_cap_ms`
-  govern when segments are rejected for timing drift.
+- **Кодек ҡоршауҙары.** CABAC инвалид булып ҡала, әгәр төҙөү уны мөмкинлек бирмәһә;
+  йыйылма rANS талап итә I18NI000000036X. Үткәреү аша .
+  I18NI000000037X һәм теләк буйынса
+  I18NI000000038X ҡулланыусылар таблицалары менән тәьмин иткәндә. Йыйылған
+- **СораНет маршруттары.** I18NI000000039XX аноним транспортты контролдә тота:
+  I18NI000000040X (I18NI000000041X ғәҙәттәгесә), `padding_budget_ms`
+  (25мс ғәҙәттәгесә), I18NI000000043X (I18NI0000000044X vs I18NI000000045X), теләк буйынса
+  I18NI000000046X, I18NI000000047X
+  I18NI000000048X, I18NI000000049X X (3, 200).
+  сикләнмәгән), I18NI000000050X (4-се ғәҙәттәгесә), һәм
+  `provision_queue_capacity` (256-сы ғәҙәттәгесә).
+- **Синк ҡапҡаһы.** I18NI000000052X аудиовизуаль өсөн дрейфтарҙы үтәүҙе үҙгәртә
+  Ағымдар: I18NI000000053X, `observe_only`, `ewma_threshold_ms`, һәм `hard_cap_ms`
+  идара итеү, ҡасан сегменттар өсөн кире ҡағылған ваҡыт дрейф.
 
-## Validation and fixtures
+## Валидация һәм ҡорамалдар
 
-- Canonical type definitions and helpers live in
+- Канон типтағы аныҡлауҙар һәм ярҙамсылар 2019 йылда йәшәй.
   `crates/iroha_crypto/src/streaming.rs`.
-- Integration coverage exercises the HPKE handshake, content-key distribution,
-  and snapshot lifecycle (`crates/iroha_crypto/tests/streaming_handshake.rs`).
-  Run `cargo test -p iroha_crypto streaming_handshake` to verify the streaming
-  surface locally.
-- For a deep dive into layout, error handling, and future upgrades, read
-  `norito_streaming.md` in the repository root.
+- Интеграция яҡтыртыу күнекмәләрен HPKE ҡул ҡыҫыу, контент-асҡыс таратыу,
+  һәм снимок тормош циклы (I18NI000000058X).
+  Йүгереп I18NI0000000059X стриминг раҫлау өсөн
+  ер өҫтө урындағы.
+- Тәрән һыу инеү өсөн макет, хаталар менән эш итеү, һәм киләсәктә яңыртыу, уҡыу .
+  Репозиторий тамырында `norito_streaming.md`.

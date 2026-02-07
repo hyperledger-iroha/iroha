@@ -4,45 +4,43 @@ direction: rtl
 source: docs/portal/docs/reference/norito-codec.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Referencia do codec Norito
+# مرجع برنامج الترميز Norito
 
-Norito e a camada canonica de serializacao do Iroha. Toda mensagem on-wire, payload em disco e API entre componentes usa Norito para que os nos concordem em bytes identicos mesmo quando rodam em hardware diferente. Esta pagina resume as partes principais e aponta para a especificacao completa em `norito.md`.
+Norito والكاميرا التسلسلية Canon Iroha. جميع الرسائل عبر الأسلاك، والحمولة على القرص، وواجهة برمجة التطبيقات (API) بين المكونات Norito لكي نتوافق مع وحدات البايت المتطابقة مع اختلاف الأجهزة. هذه صفحة السيرة الذاتية كأجزاء رئيسية وقابلة للتخصيص بالكامل في `norito.md`.
 
-## Layout base
+## قاعدة التخطيط
 
-| Componente | Proposito | Fonte |
+| مكون | اقتراح | فونتي |
 | --- | --- | --- |
-| **Header** | Enquadra payloads com magic/version/schema hash, CRC64, length e tag de compressao; v1 requer `VERSION_MINOR = 0x00` e valida header flags contra a mascara suportada (default `0x00`). | `norito::header` - ver `norito.md` ("Header & Flags", raiz do repositorio) |
-| **Payload sem header** | Codificacao deterministica de valores usada para hashing/comparacao. O transporte on-wire sempre usa header; bytes sem header sao apenas internos. | `norito::codec::{Encode, Decode}` |
-| **Compressao** | Zstd opcional (e aceleracao GPU experimental) selecionada via o byte de compressao do header. | `norito.md`, "Compression negotiation" |
+| **الرأس** | Enquadra Payloads مع تجزئة السحر/الإصدار/المخطط، CRC64، الطول وعلامة الضغط؛ يتطلب الإصدار 1 `VERSION_MINOR = 0x00` وتحقق من صحة علامات الرأس مقابل دعم الماسكارا (`0x00` الافتراضي). | `norito::header` - الإصدار `norito.md` ("الرأس والأعلام"، raiz do repositorio) |
+| ** رأس الحمولة الصافية ** | حتمية القيم المستخدمة للتجزئة/المقارنة. النقل عبر الأسلاك دائمًا رأس الولايات المتحدة; بايت sem رأس sao apenas internos. | `norito::codec::{Encode, Decode}` |
+| **الكومبريسو** | يتم تحديد اختياري (تسريع GPU التجريبي) عبر بايت من ضغط الرأس. | `norito.md`، "تفاوض الضغط" |
 
-O registro de flags de layout (packed-struct, packed-seq, field bitset, compact lengths) fica em `norito::header::flags`. V1 usa flags `0x00` por padrao mas aceita header flags explicitas dentro da mascara suportada; bits desconhecidos sao rejeitados. `norito::header::Flags` e mantido para inspecao interna e versoes futuras.
+سجل علامات التخطيط (البنية المعبأة، والتسلسل المعبأ، ومجموعة بتات الحقل، والأطوال المدمجة) موجود في `norito::header::flags`. أعلام V1 usa `0x00` por padrao mas aceita أعلام الرأس واضحة داخل الماسكارا الداعمة؛ بت desconhecidos sao rejeitados. `norito::header::Flags` ومتابعة البحث الداخلي والأحداث المستقبلية.## دعم اشتقاق
 
-## Suporte a derive
+`norito_derive` يشتق `Encode` و`Decode` و`IntoSchema` والمساعدين JSON. مبادئ المؤتمرات:
 
-`norito_derive` fornece derives `Encode`, `Decode`, `IntoSchema` e helpers JSON. Convencoes principais:
+- يشتق geram caminhos AoS e معبأة؛ v1 usa تخطيط AoS por Padrao (الأعلام `0x00`) مع الحد من الأعلام المختارة حسب المتغيرات المعبأة. قم بالتنفيذ في `crates/norito_derive/src/derive_struct.rs`.
+- الموارد التي تحدد التخطيط (`packed-struct`، `packed-seq`، `compact-len`) يمكن الاشتراك فيها عبر علامات الرأس ويجب أن يتم تشفيرها/فك تشفيرها بشكل متسق بين أقرانها.
+- مساعدات JSON (`norito::json`) تستخدم لتحديد JSON في Norito لواجهات برمجة التطبيقات المفتوحة. استخدم `norito::json::{to_json_pretty, from_json}` - nunca `serde_json`.
 
-- Derives geram caminhos AoS e packed; v1 usa layout AoS por padrao (flags `0x00`) a menos que header flags optem por variantes packed. Implementacao em `crates/norito_derive/src/derive_struct.rs`.
-- Recursos que afetam layout (`packed-struct`, `packed-seq`, `compact-len`) sao opt-in via header flags e devem ser codificados/decodificados de forma consistente entre peers.
-- JSON helpers (`norito::json`) fornecem JSON deterministico apoiado em Norito para APIs abertas. Use `norito::json::{to_json_pretty, from_json}` - nunca `serde_json`.
+## ترميز متعدد وجداول معرفات
 
-## Multicodec e tabelas de identificadores
+Norito يحافظ على خصائص الترميز المتعدد الخاصة به في `norito::multicodec`. لوحة مرجعية (تجزئات وأنواع رؤوس وواصفات الحمولة) وتصفّح في `multicodec.md` في رأس المستودع. عند إضافة معرف جديد:
 
-Norito mantem suas atribuicoes de multicodec em `norito::multicodec`. A tabela de referencia (hashes, tipos de chave, descritores de payload) e mantida em `multicodec.md` na raiz do repositorio. Quando um novo identificador e adicionado:
+1. قم بتفعيل `norito::multicodec::registry`.
+2. قم بوضع اللوحة على `multicodec.md`.
+3. قم بإعادة إنشاء الارتباطات النهائية (Python/Java) من خلال استهلاكها أو خريطتها.
 
-1. Atualize `norito::multicodec::registry`.
-2. Estenda a tabela em `multicodec.md`.
-3. Regenere bindings downstream (Python/Java) se consumirem o mapa.
+## إعادة إنشاء المستندات والتركيبات
 
-## Regenerar docs e fixtures
+من خلال بوابة تستضيف ملخصًا احترافيًا، استخدمها كخطوط Markdown upstream كخط أخضر:
 
-Com o portal hospedando um resumo em prosa, use as fontes Markdown upstream como fonte de verdade:
-
-- **Spec**: `norito.md`
-- **Multicodec table**: `multicodec.md`
-- **Benchmarks**: `crates/norito/benches/`
-- **Golden tests**: `crates/norito/tests/`
-
-Quando a automacao de Docusaurus entrar no ar, o portal sera atualizado via um script de sync (rastreado em `docs/portal/scripts/`) que extrai os dados desses arquivos. Ate la, mantenha esta pagina alinhada manualmente sempre que a spec mudar.
+- **المواصفات**: `norito.md`
+- **جدول الترميز المتعدد**: `multicodec.md`
+- **المقاييس**: `crates/norito/benches/`
+- **الاختبارات الذهبية**: `crates/norito/tests/`عند دخول Docusaurus تلقائيًا، سيتم تحديث البوابة عبر برنامج مزامنة نصي (مرسوم على `docs/portal/scripts/`) يضيف البيانات من هذه الملفات. بعد ذلك، قم بحفظ هذه الصفحة يدويًا باستمرار حتى يتم تعديل المواصفات.

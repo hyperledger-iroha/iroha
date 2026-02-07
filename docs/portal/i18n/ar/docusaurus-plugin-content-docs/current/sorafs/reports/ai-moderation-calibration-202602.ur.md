@@ -4,63 +4,61 @@ direction: rtl
 source: docs/portal/docs/sorafs/reports/ai-moderation-calibration-202602.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: AI Moderation Calibration Report (2026-02)
-summary: MINFO-1 کے پہلے governance release کے لئے baseline calibration dataset، thresholds اور scoreboard۔
+العنوان: تقرير معايرة الإشراف على الذكاء الاصطناعي (2026-02)
+ملخص: MINFO-1 إصدار الحوكمة لمجموعة بيانات معايرة خط الأساس والعتبات ولوحة النتائج.
 ---
 
-# AI Moderation Calibration Report - فروری 2026
+# تقرير معايرة اعتدال الذكاء الاصطناعي - فروری 2026
 
-یہ رپورٹ **MINFO-1** کے لئے ابتدائی calibration artefacts کو پیک کرتی ہے۔ dataset، manifest اور scoreboard
-2026-02-05 کو تیار کیے گئے، 2026-02-10 کو Ministry council نے ریویو کیا، اور governance DAG میں height
-`912044` پر anchor کیے گئے۔
+هذا التقرير **MINFO-1** يحتوي على عناصر المعايرة المستمرة التي تم التقاطها. مجموعة البيانات والبيان ولوحة النتائج
+2026-02-05 کو تیے گئے، 2026-02-10 کو مجلس الوزارة نے ريویو كيا، والحكم DAG ارتفاع
+`912044` المرساة الأولى.
 
-## Dataset Manifest
+## بيان مجموعة البيانات
 
-- **Dataset reference:** `c0956583-355a-43cc-9a60-e3a5d9a0f7d0`
-- **Slug:** `ai-moderation-calibration-202602`
-- **Entries:** manifest 480, chunk 12,800, metadata 920, audio 160
-- **Label mix:** safe 68%, suspect 19%, escalate 13%
-- **Artefact digest:** `9c4f86a3c099a48d0e3d7cfbf14d22bb9492960c41cba3858f0722519ff612ab`
-- **Distribution:** `sora://datasets/ministry/ai-moderation/calibration/2026-02.tar.zst`
+- **مرجع مجموعة البيانات:** `c0956583-355a-43cc-9a60-e3a5d9a0f7d0`
+- **السبيكة:** `ai-moderation-calibration-202602`
+- **الإدخالات:** البيان 480، القطعة 12,800، البيانات الوصفية 920، الصوت 160
+- **مزيج التصنيف:** آمن بنسبة 68%، ومشتبه به بنسبة 19%، ومتصاعد بنسبة 13%
+- **ملخص المصنوعات:** `9c4f86a3c099a48d0e3d7cfbf14d22bb9492960c41cba3858f0722519ff612ab`
+- **التوزيع:** `sora://datasets/ministry/ai-moderation/calibration/2026-02.tar.zst`
 
-مکمل manifest `docs/examples/ai_moderation_calibration_manifest_202602.json` میں موجود ہے
-اور اس میں governance signature کے ساتھ release کے وقت captured runner hash شامل ہے۔
+مكتمل البيان `docs/examples/ai_moderation_calibration_manifest_202602.json` موجود
+وهو يحتوي على توقيع الحوكمة الذي تم إطلاقه منذ أن تم التقاط تجزئة العداء.
 
-## Scoreboard Summary
+## ملخص لوحة النتائج
 
-Calibrations opset 17 اور deterministic seed pipeline کے ساتھ چلائی گئیں۔ مکمل scoreboard JSON
-(`docs/examples/ai_moderation_calibration_scorecard_202602.json`) hashes اور telemetry digests ریکارڈ کرتا ہے؛
-نیچے دی گئی table اہم metrics دکھاتی ہے۔
-
-| Model (family) | Brier | ECE | AUROC | Precision@Quarantine | Recall@Escalate |
+تقابل المعايرة 17 وخط أنابيب البذور الحتمي. مكمل لوحة النتائج JSON
+(`docs/examples/ai_moderation_calibration_scorecard_202602.json`) ملخصات التجزئات والقياس عن بعد؛
+لا يوجد جدول آخر للمقاييس الإضافية.| نموذج (عائلي) | برير | اللجنة الاقتصادية لأوروبا | أوروك | الدقة @ الحجر الصحي | استدعاء @ التصعيد |
 | ------------- | ----- | --- | ----- | -------------------- | --------------- |
-| ViT-H/14 Safety (vision) | 0.141 | 0.031 | 0.987 | 0.964 | 0.912 |
-| LLaVA-1.6 34B Safety (multimodal) | 0.118 | 0.028 | 0.978 | 0.942 | 0.904 |
-| Perceptual ensemble (perceptual) | 0.162 | 0.047 | 0.953 | 0.883 | 0.861 |
+| ViT-H/14 السلامة (الرؤية) | 0.141 | 0.031 | 0.987 | 0.964 | 0.912 |
+| LLaVA-1.6 34B السلامة (متعدد الوسائط) | 0.118 | 0.028 | 0.978 | 0.942 | 0.904 |
+| المجموعة الإدراكية (الإدراك الحسي) | 0.162 | 0.047 | 0.953 | 0.883 | 0.861 |
 
-Combined metrics: `Brier = 0.126`, `ECE = 0.034`, `AUROC = 0.982`. Calibration window میں verdict distribution
-pass 91.2%, quarantine 6.8%, escalate 2.0% تھا، جو manifest summary میں درج policy expectations سے match کرتا ہے۔
-False-positive backlog صفر رہا، اور drift score (7.1%) 20% alert threshold سے کافی نیچے تھا۔
+المقاييس المجمعة: `Brier = 0.126`، `ECE = 0.034`، `AUROC = 0.982`. نافذة المعايرة ميں توزيع الحكم
+النجاح 91.2%، الحجر الصحي 6.8%، التصعيد 2.0%، وهذا ملخص البيان يتطابق مع توقعات السياسة الخارجية.
+التراكم الإيجابي الكاذب صفر رهانا، ودرجة الانجراف (7.1%) 20% حد التنبيه ليس كافيا.
 
-## Thresholds اور sign-off
+## العتبات وتسجيل الخروج
 
-- `thresholds.quarantine = 0.42`
-- `thresholds.escalate = 0.78`
-- Governance motion: `MINFO-2026-02-07`
-- Signed by `ministry-council-seat-03` at `2026-02-10T11:33:12Z`
+-`thresholds.quarantine = 0.42`
+-`thresholds.escalate = 0.78`
+- اقتراح الحوكمة: `MINFO-2026-02-07`
+- تم التوقيع عليه بواسطة `ministry-council-seat-03` في `2026-02-10T11:33:12Z`
 
-CI نے signed bundle کو `artifacts/ministry/ai_moderation/2026-02/` میں moderation runner binaries کے ساتھ محفوظ کیا۔
-اوپر دیے گئے manifest digest اور scoreboard hashes کو audits اور appeals کے دوران refer کرنا ضروری ہے۔
+لم يوقع CI على الحزمة `artifacts/ministry/ai_moderation/2026-02/` التي تحتوي على ثنائيات عداء معتدلة وهي محفوظاتها.
+يتم عرض الملخص الواضح وتجزئات لوحة النتائج وعمليات التدقيق والطعون التي تشير إلى العناصر الضرورية.
 
-## Dashboards & Alerts
-
-Moderation SREs کو Grafana dashboard
-`dashboards/grafana/ministry_moderation_overview.json` اور Prometheus alert rules
-`dashboards/alerts/ministry_moderation_rules.yml` امپورٹ کرنے چاہئیں
-(test coverage `dashboards/alerts/tests/ministry_moderation_rules.test.yml` میں ہے)۔ یہ artifacts
-ingest stalls، drift spikes اور quarantine queue کی growth کے لئے alerts emit کرتے ہیں، اور
-[AI Moderation Runner Specification](../../ministry/ai-moderation-runner.md) میں بیان کردہ monitoring
-requirements پوری کرتے ہیں۔
+## لوحات المعلومات والتنبيهاتالاعتدال SREs هو لوحة القيادة Grafana
+قواعد التنبيه `dashboards/grafana/ministry_moderation_overview.json` وPrometheus
+`dashboards/alerts/ministry_moderation_rules.yml` محرك كهربائي
+(تغطية الاختبار `dashboards/alerts/tests/ministry_moderation_rules.test.yml`). أو التحف
+استيعاب الأكشاك، ارتفاعات الانجراف وقائمة انتظار الحجر الصحي، تنبعث التنبيهات من النمو، و
+[مواصفات مشغل الإشراف على الذكاء الاصطناعي](../../ministry/ai-moderation-runner.md) ميزة المراقبة
+المتطلبات الأساسية.

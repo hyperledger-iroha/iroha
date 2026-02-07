@@ -7,82 +7,79 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 097ea58d49f48d059cda762cd719bc62f0b2d6f6ddecedef3f9bac030ae46aec
 source_last_modified: "2025-12-29T18:16:35.934098+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-#! Connect Architecture Feedback Checklist
+#! დაკავშირება არქიტექტურის გამოხმაურების ჩამონათვალი
 
-This checklist captures the open questions from the Connect Session Architecture
-strawman that require input from the Android and JavaScript leads before the
-Feb 2026 cross-SDK workshop. Use it to collect comments asynchronously, track
-ownership, and unblock the workshop agenda.
+ეს ჩამონათვალი ასახავს ღია კითხვებს Connect Session Architecture-დან
+Strawman, რომლებიც საჭიროებენ შეყვანას Android-დან და JavaScript-დან
+2026 წლის თებერვალი cross-SDK სემინარი. გამოიყენეთ იგი კომენტარების ასინქრონულად შესაგროვებლად, თვალყურის დევნებისთვის
+საკუთრება და განბლოკეთ სემინარის დღის წესრიგი.
 
-> Status / Notes column captured final responses from Android and JS leads as of
-> the Feb 2026 pre-workshop sync; link new follow-up issues inline if decisions
-> evolve.
+> სტატუსის / შენიშვნების სვეტში აღბეჭდილია საბოლოო პასუხები Android და JS ლიდერებიდან
+> 2026 წლის თებერვლის წინასწარი სემინარის სინქრონიზაცია; გადაწყვეტილების მიღების შემთხვევაში დააკავშირეთ ახალი შემდგომი საკითხები
+> განვითარება.
 
-## Session Lifecycle & Transport
+## სესიის სასიცოცხლო ციკლი და ტრანსპორტი
 
-| Topic | Android owner | JS owner | Status / Notes |
-|-------|---------------|----------|----------------|
-| WebSocket reconnect back-off strategy (exponential vs. capped linear) | Android Networking TL | JS Lead | ✅ Agreed on exponential back-off with jitter, capped at 60 s; JS mirrors same constants for browser/node parity. |
-| Offline buffer capacity defaults (current strawman: 32 frames) | Android Networking TL | JS Lead | ✅ Confirmed 32-frame default with config override; Android persists via `ConnectQueueConfig`, JS respects `window.connectQueueMax`. |
-| Push-style reconnect notifications (FCM/APNS vs. polling) | Android Networking TL | JS Lead | ✅ Android will expose optional FCM hook for wallet apps; JS remains polling-based with exponential back-off, noting browser push constraints. |
-| Ping/pong cadence guardrails for mobile clients | Android Networking TL | JS Lead | ✅ Standardised 30 s ping with 3× miss tolerance; Android balances Doze impact, JS clamps to ≥15 s to avoid browser throttling. |
+| თემა | ანდროიდის მფლობელი | JS მფლობელი | სტატუსი / შენიშვნები |
+|-------|--------------|----------|---------------|
+| WebSocket-ის ხელახლა დაკავშირების სტრატეგია (ექსპონენციალური და დაფარვის ხაზოვანი) | Android Networking TL | JS წამყვანი | ✅ შეთანხმდნენ ექსპონენციალურ უკან დახევაზე ჯიტერით, 60 წმ-ზე დახურული; JS ასახავს იგივე მუდმივებს ბრაუზერის/კვანძის პარიტეტისათვის. |
+| ხაზგარეშე ბუფერული სიმძლავრის ნაგულისხმევი ნაგულისხმევი (ამჟამინდელი strawman: 32 კადრი) | Android Networking TL | JS წამყვანი | ✅ დადასტურებული 32-ფრემიანი ნაგულისხმევი კონფიგურაციის გადაფარვით; Android მუშაობს `ConnectQueueConfig`-ით, JS პატივს სცემს `window.connectQueueMax`-ს. |
+| Push სტილის ხელახალი დაკავშირების შეტყობინებები (FCM/APNS vs. polling) | Android Networking TL | JS წამყვანი | ✅ Android გამოავლენს არასავალდებულო FCM Hook-ს საფულის აპებისთვის; JS რჩება გამოკითხვაზე დაფუძნებული ექსპონენციალური უკან დახევით, რაც აღნიშნავს ბრაუზერის ბიძგის შეზღუდვებს. |
+| პინგ/პონგის კადენციის დამცავი მოაჯირები მობილური კლიენტებისთვის | Android Networking TL | JS წამყვანი | ✅ სტანდარტიზებული 30-იანი პინგი 3× გამოტოვების ტოლერანტობით; Android აბალანსებს Doze ზემოქმედებას, JS ამაგრებს ≥15 წმ-ზე, რათა თავიდან აიცილოს ბრაუზერის დახშობა. |
 
-## Encryption & Key Management
+## დაშიფვრა და გასაღების მართვა
 
-| Topic | Android owner | JS owner | Status / Notes |
-|-------|---------------|----------|----------------|
-| X25519 key storage expectations (StrongBox, WebCrypto secure contexts) | Android Crypto TL | JS Lead | ✅ Android stores X25519 in StrongBox when available (falls back to TEE); JS mandates secure-context WebCrypto for dApps, falling back to the native `iroha_js_host` bridge in Node. |
-| ChaCha20-Poly1305 nonce management sharing across SDKs | Android Crypto TL | JS Lead | ✅ Adopt shared `sequence` counter API with 64-bit wrap guard and shared tests; JS uses BigInt counters to match Rust behaviour. |
-| Hardware-backed attestation payload schema | Android Crypto TL | JS Lead | ✅ Schema finalised: `attestation { platform, evidence_b64, statement_hash }`; JS optional (browser), Node uses HSM plug-in hook. |
-| Recovery flow for lost wallets (key rotation handshake) | Android Crypto TL | JS Lead | ✅ Wallet rotation handshake accepted: dApp issues `rotate` control, wallet replies with new pubkey + signed acknowledgment; JS re-keys WebCrypto material immediately. |
+| თემა | ანდროიდის მფლობელი | JS მფლობელი | სტატუსი / შენიშვნები |
+|-------|--------------|----------|---------------|
+| X25519 გასაღების შენახვის მოლოდინი (StrongBox, WebCrypto უსაფრთხო კონტექსტი) | Android Crypto TL | JS წამყვანი | ✅ Android ინახავს X25519-ს StrongBox-ში, როცა ხელმისაწვდომია (უბრუნდება TEE-ს); JS ავალდებულებს უსაფრთხო კონტექსტის WebCrypto-ს dApps-ისთვის, რაც დაბრუნდება Node-ში არსებულ `iroha_js_host` ხიდზე. |
+| ChaCha20-Poly1305 არასტანდარტული მენეჯმენტის გაზიარება SDK-ებში | Android Crypto TL | JS წამყვანი | ✅ მიიღეთ საერთო `sequence` მრიცხველის API 64-ბიტიანი გადასაფარებლით და საერთო ტესტებით; JS იყენებს BigInt მრიცხველებს Rust-ის ქცევის შესატყვისად. |
+| აპარატურაზე მხარდაჭერილი ატესტაციის დატვირთვის სქემა | Android Crypto TL | JS წამყვანი | ✅ სქემა დასრულებულია: `attestation { platform, evidence_b64, statement_hash }`; JS სურვილისამებრ (ბრაუზერი), Node იყენებს HSM დანამატს. |
+| დაკარგული საფულეების აღდგენის ნაკადი (გასაღების როტაციის ხელის ჩამორთმევა) | Android Crypto TL | JS წამყვანი | ✅ მისაღებია საფულის როტაციის ხელის ჩამორთმევა: dApp გასცემს `rotate` კონტროლს, საფულე პასუხობს ახალი pubkey + ხელმოწერილი აღიარება; JS ხელახლა კლავს WebCrypto მასალას დაუყოვნებლივ. |
 
-## Permissions & Proof Bundles
+## ნებართვები და მტკიცებულების პაკეტები| თემა | ანდროიდის მფლობელი | JS მფლობელი | სტატუსი / შენიშვნები |
+|-------|--------------|----------|---------------|
+| მინიმალური ნებართვის სქემა (მეთოდები/მოვლენები/რესურსები) GA | Android მონაცემთა მოდელი TL | JS წამყვანი | ✅ GA საწყისი: `methods`, `events`, `resources`, `constraints`; JS ასწორებს TypeScript ტიპებს Rust manifest-თან. |
+| საფულის უარყოფის დატვირთვა (`reason_code`, ლოკალიზებული შეტყობინებები) | Android Networking TL | JS წამყვანი | ✅ კოდები დასრულებულია (`user_declined`, `permissions_mismatch`, `compliance_failed`, `internal_error`) პლუს სურვილისამებრ `localized_message`. |
+| მტკიცებულების ნაკრები არასავალდებულო ველები (შეესაბამება/KYC დანართები) | Android მონაცემთა მოდელი TL | JS წამყვანი | ✅ ყველა SDK იღებს არჩევით `attachments[]` (Norito `AttachmentRef`) და `compliance_manifest_id`; არ არის საჭირო ქცევის შეცვლა. |
+| გასწორება Norito JSON სქემაზე ხიდის გენერირებული სტრუქტურების წინააღმდეგ | Android მონაცემთა მოდელი TL | JS წამყვანი | ✅ გადაწყვეტილება: უპირატესობა მიანიჭეთ ხიდზე წარმოქმნილ კონსტრუქციებს; JSON გზა რჩება მხოლოდ გამართვისთვის, JS ინახავს `Value` ადაპტერს. |
 
-| Topic | Android owner | JS owner | Status / Notes |
-|-------|---------------|----------|----------------|
-| Minimum permission schema (methods/events/resources) for GA | Android Data Model TL | JS Lead | ✅ GA baseline: `methods`, `events`, `resources`, `constraints`; JS aligns TypeScript types with Rust manifest. |
-| Wallet rejection payload (`reason_code`, localized messages) | Android Networking TL | JS Lead | ✅ Codes finalised (`user_declined`, `permissions_mismatch`, `compliance_failed`, `internal_error`) plus optional `localized_message`. |
-| Proof bundle optional fields (compliance/KYC attachments) | Android Data Model TL | JS Lead | ✅ All SDKs accept optional `attachments[]` (Norito `AttachmentRef`) and `compliance_manifest_id`; no behaviour change required. |
-| Alignment on Norito JSON schema vs. bridge-generated structs | Android Data Model TL | JS Lead | ✅ Decision: prefer bridge-generated structs; JSON path remains for debugging only, JS keeps `Value` adapter. |
+## SDK ფასადები და API ფორმა
 
-## SDK Facades & API Shape
+| თემა | ანდროიდის მფლობელი | JS მფლობელი | სტატუსი / შენიშვნები |
+|-------|--------------|----------|---------------|
+| მაღალი დონის ასინქრონული ინტერფეისები (`Flow`, ასინქრონული იტერატორები) პარიტეტი | Android Networking TL | JS წამყვანი | ✅ Android ავლენს `Flow<ConnectEvent>`-ს; JS იყენებს `AsyncIterable<ConnectEvent>`; ორივე რუკა საზიარო `ConnectEventKind`-ზე. |
+| შეცდომის ტაქსონომიური რუქა (`ConnectError`, აკრეფილი ქვეკლასები) | Android Networking TL | JS წამყვანი | ✅ მიიღეთ გაზიარებული ნომრები {`Transport`, `Codec`, `Authorization`, `Timeout`, `QueueOverflow`, `Internal`} დეტალების სპეციფიკური დატვირთვით. |
+| გაუქმების სემანტიკა ფრენის დროს ნიშნების მოთხოვნებისთვის | Android Networking TL | JS წამყვანი | ✅ დაინერგა `cancelRequest(hash)` კონტროლი; ორივე SDK-ის ზედაპირის გაუქმებადი კორუტინები/დაპირებები საფულის აღიარების გათვალისწინებით. |
+| საერთო ტელემეტრიის კაკვები (მოვლენები, მეტრიკის დასახელება) | Android Networking TL | JS წამყვანი | ✅ გასწორებული მეტრიკული სახელები: `connect.queue_depth`, `connect.latency_ms`, `connect.reconnects_total`; დოკუმენტირებული ექსპორტიორების ნიმუში. |
 
-| Topic | Android owner | JS owner | Status / Notes |
-|-------|---------------|----------|----------------|
-| High-level async interfaces (`Flow`, async iterators) parity | Android Networking TL | JS Lead | ✅ Android exposes `Flow<ConnectEvent>`; JS uses `AsyncIterable<ConnectEvent>`; both map to shared `ConnectEventKind`. |
-| Error taxonomy mapping (`ConnectError`, typed subclasses) | Android Networking TL | JS Lead | ✅ Adopt shared enum {`Transport`, `Codec`, `Authorization`, `Timeout`, `QueueOverflow`, `Internal`} with platform-specific payload details. |
-| Cancellation semantics for in-flight sign requests | Android Networking TL | JS Lead | ✅ Introduced `cancelRequest(hash)` control; both SDKs surface cancellable coroutines/promises respecting wallet acknowledgment. |
-| Shared telemetry hooks (events, metrics naming) | Android Networking TL | JS Lead | ✅ Metric names aligned: `connect.queue_depth`, `connect.latency_ms`, `connect.reconnects_total`; sample exporters documented. |
+## ოფლაინ მდგრადობა და ჟურნალინგი
 
-## Offline Persistence & Journaling
+| თემა | ანდროიდის მფლობელი | JS მფლობელი | სტატუსი / შენიშვნები |
+|-------|--------------|----------|---------------|
+| შესანახი ფორმატი რიგში მდგომი კადრებისთვის (ორობითი Norito vs. JSON) | Android მონაცემთა მოდელი TL | JS წამყვანი | ✅ შეინახეთ ბინარული Norito (`.to`) ყველგან; JS იყენებს IndexedDB `ArrayBuffer`. |
+| ჟურნალის შენახვის პოლიტიკა და ზომის ქუდები | Android Networking TL | JS წამყვანი | ✅ ნაგულისხმევი შენარჩუნება 24 საათი და 1 მიბაიტი თითო სესიაზე; კონფიგურირებადია `ConnectQueueConfig`-ის საშუალებით. |
+| კონფლიქტის მოგვარება, როდესაც ორივე მხარე იმეორებს კადრებს | Android Networking TL | JS წამყვანი | ✅ გამოიყენეთ `sequence` + `payload_hash`; დუბლიკატები იგნორირებულია, კონფლიქტები იწვევს `ConnectError.Internal` ტელემეტრიის მოვლენით. |
+| ტელემეტრია რიგის სიღრმისა და გამეორების წარმატებისთვის | Android Networking TL | JS წამყვანი | ✅ Emit `connect.queue_depth` ლიანდაგი და `connect.replay_success_total` მრიცხველი; ორივე SDK უკავშირდება Norito ტელემეტრიის საერთო სქემას. |
 
-| Topic | Android owner | JS owner | Status / Notes |
-|-------|---------------|----------|----------------|
-| Storage format for queued frames (binary Norito vs. JSON) | Android Data Model TL | JS Lead | ✅ Store binary Norito (`.to`) everywhere; JS uses IndexedDB `ArrayBuffer`. |
-| Journal retention policy & size caps | Android Networking TL | JS Lead | ✅ Default retention 24 h and 1 MiB per session; configurable via `ConnectQueueConfig`. |
-| Conflict resolution when both sides replay frames | Android Networking TL | JS Lead | ✅ Use `sequence` + `payload_hash`; duplicates ignored, conflicts trigger `ConnectError.Internal` with telemetry event. |
-| Telemetry for queue depth and replay success | Android Networking TL | JS Lead | ✅ Emit `connect.queue_depth` gauge and `connect.replay_success_total` counter; both SDKs hook into shared Norito telemetry schema. |
+## Implementation Spikes & References- **Rust bridge fixtures:** `crates/connect_norito_bridge/src/lib.rs` და მასთან დაკავშირებული ტესტები მოიცავს კანონიკურ კოდირების/გაშიფვრის ბილიკებს, რომელსაც იყენებს ყველა SDK.
+- **Swift დემო აღკაზმულობა:** `examples/ios/NoritoDemoXcode/NoritoDemoXcodeTests/ConnectViewModelTests.swift` სავარჯიშოები დააკავშირეთ სესიის ნაკადები დამცინავი ტრანსპორტით.
+- **Swift CI gating:** გაუშვით `make swift-ci` Connect არტეფაქტების განახლებისას, რათა დაადასტუროთ მოწყობილობების პარიტეტი, დაფის არხები და Buildkite `ci/xcframework-smoke:<lane>:device_tag` მეტამონაცემები სხვა SDK-ებთან გაზიარებამდე.
+- ** JavaScript SDK ინტეგრაციის ტესტები:** `javascript/iroha_js/test/integrationTorii.test.js` ამოწმებს დაკავშირების სტატუსის/სესიის დამხმარეებს Torii-ის წინააღმდეგ.
+- **Android კლიენტის მდგრადობის შენიშვნები:** `java/iroha_android/README.md:150` ადასტურებს კავშირის მიმდინარე ექსპერიმენტებს, რომლებმაც შთააგონეს რიგის/დაბრუნების ნაგულისხმევი პარამეტრები.
 
-## Implementation Spikes & References
+## სემინარის მოსამზადებელი ნივთები
 
-- **Rust bridge fixtures:** `crates/connect_norito_bridge/src/lib.rs` and associated tests cover the canonical encode/decode paths used by every SDK.
-- **Swift demo harness:** `examples/ios/NoritoDemoXcode/NoritoDemoXcodeTests/ConnectViewModelTests.swift` exercises Connect session flows with mocked transports.
-- **Swift CI gating:** run `make swift-ci` when updating Connect artifacts to validate fixture parity, dashboard feeds, and Buildkite `ci/xcframework-smoke:<lane>:device_tag` metadata before sharing with other SDKs.
-- **JavaScript SDK integration tests:** `javascript/iroha_js/test/integrationTorii.test.js` validate Connect status/session helpers against Torii.
-- **Android client resilience notes:** `java/iroha_android/README.md:150` documents the current connectivity experiments that inspired the queue/back-off defaults.
+- [x] Android: მიანიჭეთ ქულის პირი ცხრილის თითოეული მწკრივის ზემოთ.
+- [x] JS: დანიშნეთ პუნქტიანი პირი ცხრილის თითოეული მწკრივის ზემოთ.
+- [x] შეაგროვეთ ბმულები განხორციელების არსებულ მწვერვალებზე ან ექსპერიმენტებზე.
+- [x] დაგეგმეთ სამუშაო წინასწარი მიმოხილვა 2026 წლის თებერვლის საბჭომდე (დაჯავშნილია 2026-01-29 15:00 UTC-ისთვის Android TL, JS Lead, Swift Lead-ით).
+- [x] განაახლეთ `docs/source/connect_architecture_strawman.md` მიღებული პასუხებით.
 
-## Workshop Prep Items
+## წინასწარ წაკითხული პაკეტი
 
-- [x] Android: assign point person for each table row above.
-- [x] JS: assign point person for each table row above.
-- [x] Collect links to existing implementation spikes or experiments.
-- [x] Schedule pre-work review before Feb 2026 council (Booked for 2026-01-29 15:00 UTC with Android TL, JS Lead, Swift Lead).
-- [x] Update `docs/source/connect_architecture_strawman.md` with accepted answers.
-
-## Pre-read Package
-
-- ✅ Bundle recorded under `artifacts/connect/pre-read/20260129/` (generated via `make docs-html` after refreshing the strawman, SDK guides, and this checklist).
-- 📄 Summary + distribution steps live in `docs/source/project_tracker/connect_architecture_pre_read.md`; include the link in the Feb 2026 workshop invite and in the `#sdk-council` reminder.
-- 🔁 When refreshing the bundle, update the path and hash inside the pre-read note and archive the announcement in `status.md` under the IOS7/AND7 readiness logs.
+- ✅ პაკეტი ჩაწერილია `artifacts/connect/pre-read/20260129/`-ის ქვეშ (გენერირებულია `make docs-html`-ის მეშვეობით, ჩალაგების, SDK სახელმძღვანელოების და ამ საკონტროლო სიის განახლების შემდეგ).
+- 📄 შეჯამება + განაწილების საფეხურები პირდაპირ ეთერში `docs/source/project_tracker/connect_architecture_pre_read.md`; ჩართეთ ბმული 2026 წლის თებერვლის სემინარში და `#sdk-council` შეხსენებაში.
+- 🔁 პაკეტის განახლებისას განაახლეთ ბილიკი და ჰაშიში წინასწარ წაკითხული ჩანაწერის შიგნით და დაარქივეთ განცხადება `status.md`-ში IOS7/AND7 მზადყოფნის ჟურნალებში.

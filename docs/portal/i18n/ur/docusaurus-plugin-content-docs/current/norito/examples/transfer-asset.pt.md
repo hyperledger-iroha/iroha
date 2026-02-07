@@ -4,30 +4,32 @@ direction: rtl
 source: docs/portal/docs/norito/examples/transfer-asset.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-slug: /norito/examples/transfer-asset
-title: Transferir ativo entre contas
-description: Fluxo direto de transferencia de ativos que espelha os quickstarts do SDK e os roteiros do livro razao.
-source: examples/transfer/transfer.ko
+سلگ:/نوریٹو/مثالوں/ٹرانسفر اثاثہ
+عنوان: اکاؤنٹس کے مابین اثاثہ کی منتقلی
+تفصیل: براہ راست اثاثہ کی منتقلی کا بہاؤ جو SDK کوئیک اسٹارٹ اور لیجر اسکرپٹس کو آئینہ دیتا ہے۔
+ماخذ: مثالوں/منتقلی/منتقلی.KO
 ---
 
-Fluxo direto de transferencia de ativos que espelha os quickstarts do SDK e os roteiros do livro razao.
+براہ راست اثاثہ منتقلی کا بہاؤ جو SDK کوئیک اسٹارٹ اور لیجر اسکرپٹس کو آئینہ دیتا ہے۔
 
-## Roteiro do livro razao
+## لیجر اسکرپٹ
 
-- Pre-financie Alice com o ativo alvo (por exemplo via o trecho `register and mint` ou os fluxos de quickstart do SDK).
-- Execute o entrypoint `do_transfer` para mover 10 unidades de Alice para Bob, atendendo a permissao `AssetTransferRole`.
-- Consulte saldos (`FindAccountAssets`, `iroha_cli ledger assets list`) ou assine eventos do pipeline para observar o resultado da transferencia.
+- ہدف اثاثہ کے ساتھ پری فنڈ ایلس (مثال کے طور پر `register and mint` اسنیپٹ یا SDK کوئیک اسٹارٹ بہاؤ کے ذریعے)۔
+- انٹری پوائنٹ `do_transfer` پر عمل کریں تاکہ 10 یونٹوں کو ایلس سے باب میں منتقل کریں ، اجازت سے ملاقات کریں `AssetTransferRole`۔
+- بیلنس سے مشورہ کریں (`FindAccountAssets` ، `iroha_cli ledger assets list`) یا منتقلی کے نتائج کا مشاہدہ کرنے کے لئے پائپ لائن واقعات کو سبسکرائب کریں۔
 
-## Guias de SDK relacionados
+## متعلقہ SDK گائیڈز
 
-- [Quickstart do SDK Rust](/sdks/rust)
-- [Quickstart do SDK Python](/sdks/python)
-- [Quickstart do SDK JavaScript](/sdks/javascript)
+- [مورچا SDK کوئیک اسٹارٹ] (/sdks/rust)
+- [ازگر ایس ڈی کے کوئیک اسٹارٹ] (/sdks/python)
+- [جاوا اسکرپٹ SDK کوئیک اسٹارٹ] (/sdks/javascript)
 
-[Baixe a fonte Kotodama](/norito-snippets/transfer-asset.ko)
+[ماخذ Kotodama ڈاؤن لوڈ کریں] (/norito-snippets/transfer-asset.ko)
 
 ```text
 // Transfer example: uses typed pointer constructors and transfer_asset syscall

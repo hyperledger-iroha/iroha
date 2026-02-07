@@ -4,50 +4,46 @@ direction: ltr
 source: docs/portal/docs/nexus/lane-model.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: nexus-lane-model
-title: Модель lanes Nexus
-description: Логическая таксономия lanes, геометрия конфигурации и правила слияния world-state для Sora Nexus.
+id: modelo-carril-nexus
+título: Модель carriles Nexus
+descripción: Логическая таксономия lanes, geометрия конфигурации и правила слияния world-state для Sora Nexus.
 ---
 
-# Модель lanes Nexus и партиционирование WSV
+# Líneas de modelo Nexus y particiones WSV
 
-> **Статус:** поставка NX-1 - таксономия lanes, геометрия конфигурации и раскладка хранения готовы к внедрению.  
-> **Owners:** Nexus Core WG, Governance WG  
-> **Ссылка в roadmap:** NX-1 в `roadmap.md`
+> **Status:** поставка NX-1 - таксономия lanes, геометрия конфигурации и раскладка хранения готовы к внедрению.  
+> **Propietarios:** Nexus Grupo de Trabajo Principal, Grupo de Trabajo de Gobernanza  
+> **Ссылка en hoja de ruta:** NX-1 en `roadmap.md`
 
-Эта страница портала зеркалирует канонический brief `docs/source/nexus_lanes.md`, чтобы операторы Sora Nexus, owners SDK и ревьюеры могли читать руководство по lanes без погружения в дерево mono-repo. Целевая архитектура сохраняет детерминизм world state, при этом позволяя отдельным data spaces (lanes) запускать публичные или частные наборы валидаторов с изолированными workloads.
+Este sitio web contiene un resumen canónico `docs/source/nexus_lanes.md`, los operadores de Sora Nexus, el SDK de los propietarios y los principales proveedores. руководство по lanes без погружения в дерево mono-repo. El arquitecto alemán determina el estado mundial, por lo que existen otros espacios de datos (carriles) que se publican o se publican. validadores de cargas de trabajo aisladas.
 
-## Concepts
+## Conceptos- **Lane:** el libro mayor de fragmentos logísticos Nexus para que se realicen validaciones y trabajos pendientes. Идентифицируется стабильным `LaneId`.
+- **Espacio de datos:** depósito de gobernanza, carriles de gestión de cumplimiento de políticas, enrutamiento y liquidación de objetivos.
+- **Manifiesto de carril:** metadatos de control de gobernanza, validadores de opiniones, política de DA, token de gas, permisos de enrutamiento y liquidación parcial.
+- **Compromiso global:** prueba, carril выпускаемая y суммирующая новые raíces estatales, datos de liquidación y transferencias entre carriles opcionales. Глобальное кольцо NPoS упорядочивает compromisos.
 
-- **Lane:** логический shard ledger Nexus со своим набором валидаторов и backlog выполнения. Идентифицируется стабильным `LaneId`.
-- **Data Space:** governance bucket, группирующий одну или несколько lanes с общими политиками compliance, routing и settlement.
-- **Lane Manifest:** governance-контролируемая metadata, описывающая валидаторов, DA policy, gas token, правила settlement и routing permissions.
-- **Global Commitment:** proof, выпускаемая lane и суммирующая новые state roots, settlement data и опциональные cross-lane transfers. Глобальное кольцо NPoS упорядочивает commitments.
+## carriles de taxonomía
 
-## Таксономия lanes
-
-Типы lanes канонически описывают видимость, governance surface и settlement hooks. Геометрия конфигурации (`LaneConfig`) фиксирует эти атрибуты, чтобы узлы, SDKs и tooling могли понимать layout без bespoke логики.
-
-| Тип lane | Видимость | Membership валидаторов | Экспозиция WSV | Governance по умолчанию | Политика settlement | Типичное применение |
+Tipos de carriles que describen el paisaje, superficie de gobernanza y ganchos de liquidación. Las configuraciones geométricas (`LaneConfig`) incluyen estos atributos, aplicaciones, SDK y herramientas que permiten diseñar diseños con lógicas personalizadas.| Carril tip | Видимость | Membresía валидаторов | Экспозиция WSV | Gobernanza по умолчанию | Acuerdo político | Типичное применение |
 |-----------|------------|----------------------|--------------|--------------------|-------------------|-------------|
-| `default_public` | public | Permissionless (global stake) | Full state replica | SORA Parliament | `xor_global` | Базовый публичный ledger |
-| `public_custom` | public | Permissionless or stake-gated | Full state replica | Stake weighted module | `xor_lane_weighted` | Публичные приложения с высоким throughput |
-| `private_permissioned` | restricted | Фиксированный набор валидаторов (одобрен governance) | Commitments & proofs | Federated council | `xor_hosted_custody` | CBDC, консорциумные workloads |
-| `hybrid_confidential` | restricted | Смешанная membership; оборачивает ZK proofs | Commitments + selective disclosure | Programmable money module | `xor_dual_fund` | Privacy-preserving programmable money |
+| `default_public` | público | Sin permiso (participación global) | Réplica de estado completo | SORA Parlamento | `xor_global` | Libro mayor público |
+| `public_custom` | público | Sin permiso o controlado por participación | Réplica de estado completo | Módulo ponderado por participación | `xor_lane_weighted` | Rendimiento de las aplicaciones públicas con anuncios publicitarios |
+| `private_permissioned` | restringido | Фиксированный набор валидаторов (gobernanza del gobierno) | Compromisos y pruebas | Consejo federado | `xor_hosted_custody` | CBDC, cargas de trabajo masivas |
+| `hybrid_confidential` | restringido | Membresía Смешанная; pruebas ZK | Compromisos + divulgación selectiva | Módulo de dinero programable | `xor_dual_fund` | Dinero programable que preserva la privacidad |
 
-Все типы lane обязаны объявлять:
+Все типы carril обязаны объявлять:
 
-- Dataspace alias - человекочитаемая группировка, связывающая политики compliance.
-- Governance handle - идентификатор, разрешаемый через `Nexus.governance.modules`.
-- Settlement handle - идентификатор, потребляемый settlement router для списания XOR buffers.
-- Опциональная telemetry metadata (description, contact, business domain), отображаемая через `/status` и dashboards.
+- Alias del espacio de datos: cumplimiento de las políticas de человекочитаемая группировка.
+- Controlador de gobernanza - идентификатор, разрешаемый через `Nexus.governance.modules`.
+- Identificador de liquidación: identificador, enrutador de liquidación popular para la descripción de buffers XOR.
+- Metadatos de telemetría opcionales (descripción, contacto, dominio comercial), información sobre `/status` y paneles de control.## Líneas de configuración geométrica (`LaneConfig`)
 
-## Геометрия конфигурации lanes (`LaneConfig`)
-
-`LaneConfig` - runtime геометрия, выводимая из валидированного каталога lanes. Она не заменяет governance manifests; вместо этого предоставляет детерминированные storage identifiers и telemetry hints для каждой сконфигурированной lane.
+`LaneConfig` - geometría de tiempo de ejecución, выводимая из валидированного каталога lanes. Она не заменяет manifiestos de gobernanza; Todo esto incluye identificadores de almacenamiento determinados y sugerencias de telemetría para el carril de configuración.
 
 ```text
 LaneConfigEntry {
@@ -65,60 +61,52 @@ LaneConfigEntry {
 ```
 
 - `LaneConfig::from_catalog` пересчитывает геометрию при загрузке конфигурации (`State::set_nexus`).
-- Aliases санитизируются в нижний регистр slug; последовательности неалфавитно-цифровых символов схлопываются в `_`. Если alias дает пустой slug, используем `lane{id}`.
-- `shard_id` выводится из metadata key `da_shard_id` (по умолчанию `lane_id`) и управляет журналом shard cursor, чтобы DA replay оставался детерминированным между restarts/resharding.
-- Key prefixes гарантируют, что WSV сохраняет раздельные key ranges по lane, даже если backend общий.
-- Имена Kura segment детерминированы между hosts; аудиторы могут сопоставлять директории сегментов и manifests без bespoke tooling.
-- Merge segments (`lane_{id:03}_merge`) хранят последние merge-hint roots и global state commitments для этой lane.
+- Alias ​​санитизируются в нижний регистр slug; последовательности неалфавитно-цифровых символов схлопываются в `_`. Otro alias de esta babosa es `lane{id}`.
+- `shard_id` incluye la clave de metadatos `da_shard_id` (junto con `lane_id`) y actualiza el cursor de fragmentos local, la reproducción de DA está disponible детерминированным между reinicia/reharding.
+- Los prefijos de claves están garantizados, ya que WSV proporciona rangos de claves diferentes en el carril, así como el backend.
+- Имена Kura segmento детерминированы между hosts; Los auditores pueden componer directorios de segmentos y manifiestos con herramientas personalizadas.
+- Fusionar segmentos (`lane_{id:03}_merge`) muestra raíces de sugerencias de fusión y compromisos estatales globales en este carril.
 
-## Партиционирование world-state
+## Партиционирование estado mundial- Estado mundial lógico Nexus - Estos espacios de estado observados en el carril. Carriles públicos сохраняют estado completo; carriles privados/confidenciales экспортируют Merkle/raíces de compromiso en el libro mayor de fusión.
+- Almacenamiento MV префиксирует каждый ключ 4-байтовым префиксом `LaneConfigEntry::key_prefix`, получая ключи вида `[00 00 00 01] ++ PackedKey`.
+- Tablas compartidas (cuentas, activos, activadores, registros de gobierno) хранят записи, сгруппированные по lane prefix, сохраняя детерминизм range scans.
+- Los metadatos del libro mayor de fusión se utilizan en el diseño: el carril incluye raíces de sugerencias de fusión y raíces de estado global reducidas en `lane_{id:03}_merge`, que puede eliminar la retención/desalojo dirigidos en el carril.
+- Índices entre carriles (alias de cuentas, registros de activos, manifiestos de gobernanza) que permiten la conciliación de prefijos de carriles.
+- **Política de retención** - carriles públicos сохраняют полные cuerpos de bloque; Los carriles de solo compromiso pueden competir con organismos después de los puntos de control, así como con compromisos autorizados. Los carriles confidenciales contienen diarios de texto cifrado en segmentos muy diversos, que no bloquean cargas de trabajo excesivas.
+- **Herramientas** - Utilidades de configuración (`kagami`, comandos de administrador CLI) que se adaptan al espacio de nombres slugged con métricas específicas, etiquetas Prometheus o архивировании segmentos de Kura.
 
-- Логический world state Nexus - это объединение state spaces по lane. Public lanes сохраняют full state; private/confidential lanes экспортируют Merkle/commitment roots в merge ledger.
-- MV storage префиксирует каждый ключ 4-байтовым префиксом `LaneConfigEntry::key_prefix`, получая ключи вида `[00 00 00 01] ++ PackedKey`.
-- Shared tables (accounts, assets, triggers, governance records) хранят записи, сгруппированные по lane prefix, сохраняя детерминизм range scans.
-- Merge-ledger metadata зеркалирует тот же layout: каждая lane пишет merge-hint roots и reduced global state roots в `lane_{id:03}_merge`, что позволяет делать targeted retention/eviction при выводе lane.
-- Cross-lane indexes (account aliases, asset registries, governance manifests) хранят явные lane prefixes, чтобы операторы могли быстро выполнять reconciliation.
-- **Retention policy** - public lanes сохраняют полные block bodies; commitment-only lanes могут компактизировать старые bodies после checkpoints, потому что commitments авторитетны. Confidential lanes хранят ciphertext journals в выделенных сегментах, чтобы не блокировать другие workloads.
-- **Tooling** - утилиты обслуживания (`kagami`, CLI admin commands) должны ссылаться на slugged namespace при экспонировании metrics, Prometheus labels или архивировании Kura segments.
+## Enrutamiento y API- Puntos finales Torii REST/gRPC принимают опциональный `lane_id`; отсутствие означает `lane_default`.
+- Los SDK incluyen selectores de carriles y asignan alias fáciles de usar en `LaneId` de carriles del catálogo.
+- Las reglas de enrutamiento se adaptan al catálogo válido y se pueden conectar a carriles y espacios de datos. `LaneConfig` proporciona alias compatibles con telemetría para paneles y registros.
 
-## Routing & APIs
+## Liquidación y tarifas
 
-- Torii REST/gRPC endpoints принимают опциональный `lane_id`; отсутствие означает `lane_default`.
-- SDKs показывают lane selectors и маппят user-friendly aliases в `LaneId` через каталог lanes.
-- Routing rules работают по валидированному каталогу и могут выбирать и lane, и dataspace. `LaneConfig` предоставляет telemetry-friendly aliases для dashboards и logs.
+- Каждая lane платит XOR fee global набору валидаторов. Los carriles pueden adquirir tokens de gas nativo, sin equivalentes XOR de depósito en garantía junto con compromisos.
+- Pruebas de liquidación del monto del monto, metadatos de conversión y depósito de prueba (por ejemplo, перевод в глобальный bóveda de tarifas).
+- El enrutador de liquidación moderno (NX-3) permite almacenar en buffers los prefijos de carril y la telemetría de liquidación se combina con la geometría de almacenamiento.
 
-## Settlement & fees
+## Gobernanza
 
-- Каждая lane платит XOR fees глобальному набору валидаторов. Lanes могут собирать native gas tokens, но обязаны escrow XOR equivalents вместе с commitments.
-- Settlement proofs включают amount, conversion metadata и proof escrow (например, перевод в глобальный fee vault).
-- Единый settlement router (NX-3) дебетует buffers теми же lane prefixes, поэтому settlement telemetry совпадает со storage геометрией.
+- Carriles объявляют свой módulo de gobernanza через каталог. `LaneConfigEntry` no necesita alias ni slug originales, ni telemetría ni registros de auditoría establecidos.
+- El registro Nexus combina los manifiestos de carril, incluye `LaneId`, enlace de espacio de datos, identificador de gobernanza, identificador de liquidación y metadatos.
+- Los ganchos de actualización del tiempo de ejecución implementan políticas de gobernanza (`gov_upgrade_id` para el usuario) y registran diferencias en el puente de telemetría (eventos `nexus.config.diff`).
 
-## Governance
+## Telemetría y estado- `/status` incluye alias de carriles, enlaces de espacios de datos, identificadores de gobierno y perfiles de liquidación, registros de catálogos e `LaneConfig`.
+- Métricas del programador (`nexus_scheduler_lane_teu_*`) que incluyen alias/slugs, retrasos en el trabajo de los operadores y presión de TEU.
+- `nexus_lane_configured_total` считает количество выведенных entradas de carril y пересчитывается при изменении конфигурации. La telemetría permite diferencias según la geometría del carril.
+- El backlog del espacio de datos mide los metadatos de alias/descripción, lo que ayuda a que el operador evalúe la presión de la cola en los hogares de negocios.
 
-- Lanes объявляют свой governance module через каталог. `LaneConfigEntry` несет оригинальные alias и slug, чтобы telemetry и audit trails оставались читаемыми.
-- Nexus registry распространяет подписанные lane manifests, включающие `LaneId`, dataspace binding, governance handle, settlement handle и metadata.
-- Runtime-upgrade hooks продолжают применять governance policies (`gov_upgrade_id` по умолчанию) и логируют diffs через telemetry bridge (events `nexus.config.diff`).
+## Configuración y tipos Norito
 
-## Telemetry & status
+- `LaneCatalog`, `LaneConfig`, y `DataSpaceCatalog` conectados a `iroha_data_model::nexus` y anteriores a Norito. Estructuras de manifiestos y SDK.
+- `LaneConfig` se conecta a `iroha_config::parameters::actual::Nexus` y se actualizan automáticamente en el catálogo; La codificación Norito no es un problema, ya que es este asistente de tiempo de ejecución exclusivo.
+- Configuración de configuración avanzada (`iroha_config::parameters::user::Nexus`) que permite definir la línea de descriptores y el espacio de datos; El análisis de los nombres geométricos y la eliminación de alias no válidos o de ID de carril duplicados.
 
-- `/status` показывает lane aliases, dataspace bindings, governance handles и settlement profiles, производные от каталога и `LaneConfig`.
-- Scheduler metrics (`nexus_scheduler_lane_teu_*`) отображают aliases/slugs, чтобы операторы быстро связывали backlog и TEU pressure.
-- `nexus_lane_configured_total` считает количество выведенных lane entries и пересчитывается при изменении конфигурации. Telemetry испускает подписанные diffs при изменении lane geometry.
-- Dataspace backlog gauges включают alias/description metadata, помогая операторам связывать queue pressure с бизнес-доменами.
-
-## Configuration & Norito types
-
-- `LaneCatalog`, `LaneConfig`, и `DataSpaceCatalog` находятся в `iroha_data_model::nexus` и предоставляют Norito-совместимые структуры для manifests и SDKs.
-- `LaneConfig` находится в `iroha_config::parameters::actual::Nexus` и автоматически выводится из каталога; Norito encoding не требуется, так как это внутренний runtime helper.
-- Пользовательская конфигурация (`iroha_config::parameters::user::Nexus`) продолжает принимать декларативные descriptors lane и dataspace; парсинг теперь выводит геометрию и отклоняет невалидные aliases или дублирующиеся lane IDs.
-
-## Оставшаяся работа
-
-- Интегрировать settlement router updates (NX-3) с новой геометрией, чтобы XOR buffer debits и receipts помечались slug lane.
-- Расширить admin tooling для списка column families, компакта retired lanes и проверки per-lane block logs через slugged namespace.
-- Финализировать merge алгоритм (ordering, pruning, conflict detection) и добавить regression fixtures для cross-lane replay.
-- Добавить compliance hooks для whitelists/blacklists и programmable-money policies (трекится под NX-12).
+## Оставшаяся работа- Integrar actualizaciones del enrutador de liquidación (NX-3) con nueva geometría, con débitos y recibos del búfer XOR con slug lane.
+- Herramientas de administración mejoradas para familias de columnas específicas, carriles retirados compactos y registros de bloques por carril para espacios de nombres reducidos.
+- Finalizar el algoritmo de fusión (ordenamiento, poda, detección de conflictos) y agregar elementos de regresión para la repetición entre carriles.
+- Incorporar ganchos de cumplimiento para listas blancas/negras y políticas de dinero programables (трекится под NX-12).
 
 ---
 
-*Эта страница продолжит отслеживать NX-1 follow-ups по мере посадки NX-2 до NX-18. Пожалуйста, поднимайте открытые вопросы в `roadmap.md` или governance tracker, чтобы портал оставался синхронизированным с каноническими документами.*
+*Esta página permite seleccionar seguimientos de NX-1 junto con NX-2 y NX-18. Es posible que pueda registrar datos en `roadmap.md` o en el rastreador de gobernanza, que es un portal portátil de sincronización con canales documentos.*

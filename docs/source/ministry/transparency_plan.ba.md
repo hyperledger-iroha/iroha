@@ -9,119 +9,113 @@ source_last_modified: "2025-12-29T18:16:35.983537+00:00"
 translation_last_reviewed: 2026-02-07
 title: Ministry Transparency & Audit Plan
 summary: Implementation plan for roadmap item MINFO-8 covering quarterly transparency reports, privacy guardrails, dashboards, and automation.
+translator: machine-google-reviewed
 ---
 
-# Transparency & Audit Reports (MINFO-8)
+# Үтә күренмәлелек & Аудит отчеттары (МИНФО-8)
 
-Roadmap reference: **MINFO-8 — Transparency & audit reports** and **MINFO-8a — Privacy-preserving release process**
+Юл картаһы һылтанмаһы: **МИНФО-8 — асыҡлыҡ & аудит отчеттары** һәм **МИНФО-8а — Хосусилыҡты һаҡлау процесы **
 
-The Ministry of Information must publish deterministic transparency artefacts so the community can audit moderation efficacy, appeal handling, and blacklist churn. This document defines the scope, artefacts, privacy controls, and operational workflow required to close MINFO-8 before the Q3 2026 target.
+Мәғлүмәт министрлығы детерминистик асыҡлыҡ артефакттарын баҫтырып сығарырға тейеш, шуға күрә йәмәғәтселек модерация һөҙөмтәлелеген, апелляцияға эшкәртергә һәм ҡара исемлек churn-ды аудитлай ала. Был документ билдәләй, күләме, артефакттар, хосуси контроль, һәм оператив эш ағымы кәрәк ябыу өсөн MINFO-8 тиклем Q32026 маҡсатлы.
 
-## Goals & Deliverables
+## Маҡсаттар һәм тапшырыуҙар
 
-- Produce quarterly transparency packets that summarise AI moderation accuracy, appeal outcomes, denylist churn, volunteer panel activity, and treasury movements tied to MINFO budgets.
-- Ship accompanying raw-data bundles (Norito JSON + CSV) plus dashboards so citizens can slice metrics without waiting for static PDFs.
-- Enforce privacy guarantees (differential privacy + minimum-count rules) and signed attestations before any dataset is published.
-- Record each publication in the governance DAG and SoraFS so historical artefacts remain immutable and independently verifiable.
+- АИ модерациялау теүәллеген, апелляция һөҙөмтәләрен, денилист churn, ирекмәндәр панелдәре эшмәкәрлеге һәм MINFO бюджеттарына бәйле ҡаҙна хәрәкәттәрен дөйөмләштергән квартал асыҡлыҡ пакеттарын етештереү.
+- Сеймал-мәғлүмәттәр өйөмдәре менән оҙатыусы (Norito JSON + CSV) плюс приборҙар таҡтаһы, шулай итеп, граждандар статик PDF-файлдарҙы көтмәйенсә метрикаларҙы ҡырҡып ала.
+- Шәхси гарантияларҙы үтәү (дифференциаль хосусилыҡ + минималь-иҫәп ҡағиҙәләре) һәм ҡул ҡуйылған аттестациялар ниндәй ҙә булһа мәғлүмәттәр йыйылмаһы баҫылып сыҡҡансы.
+- Һәр баҫма идара итеүҙә DAG һәм SoraFS яҙып, шулай тарихи артефакттар үҙгәрмәй торған һәм үҙ аллы тикшерелергә мөмкин булып ҡала.
 
-### Artefact Matrix
+### Артефакт матрицаһы
 
-| Artefact | Description | Format | Storage |
-|----------|-------------|--------|---------|
-| Transparency summary | Human-readable report with executive summary, highlights, risk items | Markdown → PDF | `docs/source/ministry/reports/<YYYY-Q>.md` → `artifacts/ministry/transparency/<YYYY-Q>/summary.pdf` |
-| Data appendix | Canonical Norito bundle with sanitized tables (`ModerationLedgerBlockV1`, appeals, blacklist deltas) | `.norito` + `.json` | `artifacts/ministry/transparency/<YYYY-Q>/data` (mirrored to SoraFS CID) |
-| Metrics CSVs | Convenience CSV exports for dashboards (AI FP/FN, appeal SLA, denylist churn) | `.csv` | Same directory, hashed & signed |
-| Dashboard snapshot | Grafana JSON export of `ministry_transparency_overview` panels + alert rules | `.json` | `dashboards/grafana/ministry_transparency_overview.json` / `dashboards/alerts/ministry_transparency_rules.yml` |
-| Provenance manifest | Norito manifest tying digests, SoraFS CID, signatures, release timestamp | `.json` + detached signature | `artifacts/ministry/transparency/<YYYY-Q>/manifest.json(.sig)` (also attached to governance vote) |
+| Артефакт | Тасуирлама | Формат | Һаҡлау |
+|---------|-------------|---------|--------- |
+| Үтә күренмәлелек резюмеһы | Кеше-уҡымышлы отчет менән башҡарма резюме, өҫтөнлөктәр, хәүеф әйберҙәре | Маркдаун → PDF | `docs/source/ministry/reports/<YYYY-Q>.md` → Norito |
+| Мәғлүмәттәр ҡушымтаһы | Canonical Norito өйөмдәре менән санитарлаштырылған таблицалар (`ModerationLedgerBlockV1`, мөрәжәғәттәр, ҡара исемлек дельталары) | `.norito` + `.json` | `artifacts/ministry/transparency/<YYYY-Q>/data` (көҙгө SoraFS CID) |
+| Метрика CSVs | Уңайлыҡтар CSV экспорты өсөн приборҙар таҡтаһы (AI FP/FN, апелляция SLA, denilist churn) | `.csv` | Шул уҡ каталог, хешед & ҡул ҡуйҙы |
+| Приборҙар таҡтаһы снимок | Grafana JSON экспорты `ministry_transparency_overview` панелдәре + иҫкәртмә ҡағиҙәләре | `.json` | `dashboards/grafana/ministry_transparency_overview.json` / `dashboards/alerts/ministry_transparency_rules.yml` |
+| Провенанс манифест | Norito манифежлау бәйләүсе препараттар, SoraFS CID, ҡултамғалар, сығарыу ваҡыт маркаһы | `.json` + айырым ҡултамға | `artifacts/ministry/transparency/<YYYY-Q>/manifest.json(.sig)` (шулай уҡ идара итеү тауышына беркетелгән) |
 
-## Data Sources & Pipeline
+## Мәғлүмәттәр сығанаҡтары & торба .
 
-| Source | Feed | Notes |
-|--------|------|-------|
-| Moderation ledger (`docs/source/sorafs_transparency_plan.md`) | Hourly `ModerationLedgerBlockV1` exports stored in CAR files | Already live for SFM-4c; reused for quarterly aggregation. |
-| AI calibration + false-positive rates | `docs/source/sorafs_ai_moderation_plan.md` fixtures + calibration manifests (`docs/examples/ai_moderation_calibration_*.json`) | Metrics aggregated per policy, region, and model profile. |
-| Appeal register | Norito `AppealCaseV1` events emitted by MINFO-7 treasury tooling | Contains stake transfers, panel roster, SLA timers. |
-| Denylist churn | `MinistryDenylistChangeV1` events from the Merkle registry (MINFO-6) | Includes hash families, TTL, emergency canon flags. |
-| Treasury flows | `MinistryTreasuryTransferV1` events (appeal deposits, panel rewards) | Balanced against `finance/mminfo_gl.csv`. |
+| Сығанаҡ | Аҙыҡ | Иҫкәрмәләр |
+|-------|------|-------|
+| Модерация китабы (`docs/source/sorafs_transparency_plan.md`) | Сәғәт `ModerationLedgerBlockV1` экспорты CAR файлдарында һаҡланған | Инде СФМ-4c өсөн йәшәй; квартал һайын агрегация өсөн ҡабаттан ҡулланылған. |
+| ЯИ калибровка + ялған ыңғай ставкалар | `docs/source/sorafs_ai_moderation_plan.md` ҡоролмалары + калибровка манифестар (`docs/examples/ai_moderation_calibration_*.json`) | Метрика бер сәйәсәт, төбәк һәм модель профиле буйынса йыйылған. |
+| Апелляция реестры | Norito `AppealCaseV1` ваҡиғалар MINFO-7 ҡаҙна инструменттары сығарған | Составында ставкалар күсермәләр, панель исемлеге, SLA таймерҙар. |
+| Эндолист churn | Merkle реестрынан `MinistryDenylistChangeV1` ваҡиғалары (МИНФО-6) | Хеш ғаиләләрен үҙ эсенә ала, TTL, ашығыс канон флагтары. |
+| ҡаҙна ағымы | `MinistryTreasuryTransferV1` ваҡиғалар (апелляция депозиттары, панель бүләктәре) | Баланслы ҡаршы `finance/mminfo_gl.csv`. |Ғәҙәттән тыш канон менән идара итеү, TTL сиктәре, һәм тикшерелгән талаптар хәҙер йәшәй .
+[`docs/source/ministry/emergency_canon_policy.md`] (emergency_canon_policy.md), тәьмин итеү
+тип churn метрикаһы ярусты тота (`standard`, `emergency`, `permanent`), канон id, id,
+һәм тикшерергә сроктар, тип Torii йөк ваҡытында үтәй.
 
-Emergency canon governance, TTL limits, and review requirements now live in
-[`docs/source/ministry/emergency_canon_policy.md`](emergency_canon_policy.md), ensuring
-that the churn metrics capture the tier (`standard`, `emergency`, `permanent`), canon id,
-and review deadlines that Torii enforces at load time.
+Эшкәртеү этаптары:
+1. **Ingest** сеймал ваҡиғалар `ministry_transparency_ingest` X (Раст хеҙмәте көҙгө үтә күренмәлелек башлыҡ ингесторы). Төндә йүгерә, идемпотент.
+2. **Кварталға агрегат** `ministry_transparency_builder` менән. Norito мәғлүмәттәр ҡушымтаһы плюс хосуси фильтрҙар алдынан сығымдар.
+3. **Санитлаштырыу** метрика аша `cargo xtask ministry-transparency sanitize` (йәки `scripts/ministry/dp_sanitizer.py`) һәм метамағлүмәттәр менән CSV/JSON киҫәктәрен сығара.
+4. **Пакет** артефакттар, уларҙы `ministry_release_signer` менән ҡул ҡуйырға һәм SoraFS + идара итеү ДАГ-ҡа тейәгеҙ.
 
-Processing stages:
-1. **Ingest** raw events into `ministry_transparency_ingest` (Rust service mirroring the transparency ledger ingestor). Runs nightly, idempotent.
-2. **Aggregate** per quarter with `ministry_transparency_builder`. Outputs the Norito data appendix plus per-metric tables before privacy filters.
-3. **Sanitize** metrics via `cargo xtask ministry-transparency sanitize` (or `scripts/ministry/dp_sanitizer.py`) and emit CSV/JSON slices with metadata.
-4. **Package** artefacts, sign them with `ministry_release_signer`, and upload to SoraFS + governance DAG.
+## 2026-Q3 һылтанма сығарыу
 
-## 2026-Q3 Reference Release
+- 2026 йылдың 2026-сы-һы инаугурация идара итеү өйөмө (2026-Q3) `make check-ministry-transparency` аша 2026 йылдың 10-07-һендә етештерелә. Артефакттар йәшәй Norito-X- шул иҫәптән Norito, `dp_report.json`, `summary.md`, `checksums.sha256`, Grafana, һәм `transparency_release_action.json`—һәм көҙгө. SoraFS CID `7f4c2d81a6b13579ccddeeff00112233`.
+- Баҫма реквизиттары, метрика таблицалары һәм раҫлауҙар `docs/source/ministry/reports/2026-Q3.md`-та төшөрөлгән, хәҙер ул аудиторҙар өсөн Q3 тәҙрәһен тикшергән канон һылтанмаһы булып хеҙмәт итә.
+- CI ҡулланыу `ci/check_ministry_transparency.sh` / `make check-ministry-transparency` отпуск стадияһында сығарыр алдынан, артефакт дисэкстарын раҫлау, Grafana/аллерт хештары, һәм асыҡ метамағлүмәттәр шулай һәр киләсәк квартал шул уҡ дәлилдәр эҙенән килә.
 
-- The inaugural governance-gated bundle (2026-Q3) was produced on 2026‑10‑07 via `make check-ministry-transparency`. Artefacts live in `artifacts/ministry/transparency/2026-Q3/`—including `sanitized_metrics.json`, `dp_report.json`, `summary.md`, `checksums.sha256`, `transparency_manifest.json`, and `transparency_release_action.json`—and were mirrored to SoraFS CID `7f4c2d81a6b13579ccddeeff00112233`.
-- Publication details, metrics tables, and approvals are captured in `docs/source/ministry/reports/2026-Q3.md`, which now serves as the canonical reference for auditors reviewing the Q3 window.
-- CI applies `ci/check_ministry_transparency.sh` / `make check-ministry-transparency` before releases leave staging, verifying the artefact digests, Grafana/alert hashes, and manifest metadata so every future quarter follows the same evidence trail.
+## Метрика һәм приборҙар таҡталары
 
-## Metrics & Dashboards
+Grafana приборҙар таҡтаһы (`dashboards/grafana/ministry_transparency_overview.json`) түбәндәге панелдәрҙе фашлай:
 
-The Grafana dashboard (`dashboards/grafana/ministry_transparency_overview.json`) exposes the following panels:
+- AI модерация теүәллеге: пер-модель FP/FN ставкаһы, дрейф vs калибровка маҡсаты, һәм иҫкәртмә сиктәре бәйләнгән `docs/source/sorafs/reports/ai_moderation_calibration_*.md`.
+- Апелляция йәшәү циклы: тапшырыуҙар, СЛА үтәү, кире ҡайтарыу, облигациялар яндырыу, бер ҡатлы артта ҡалыу.
+- Денилист churn: өҫтәмәләр/алып ташлау өсөн бер хеш ғаилә, TTL срогы, авария канон саҡырыуҙар.
+- Ирекмәндәр брифтар & панель төрлөлөгө: телгә тапшырыу, конфликт-ҡыҙыҡһыныу асыҡлау, баҫма лаг. Ҡыҫҡаса ҡыҫҡа яландар `docs/source/ministry/volunteer_brief_template.md`-та күрһәтелгән, факт таблицаларын һәм модерация тегтарын машина менән уҡыу булыуын тәьмин итә.
+- ҡаҙна баланстары: депозиттар, түләүҙәр, яуаплылыҡты иҫәпкә алмағанда (МИНФО-7 аҙыҡ-түлек).
 
-- AI moderation accuracy: per-model FP/FN rate, drift vs calibration target, and alert thresholds tied to `docs/source/sorafs/reports/ai_moderation_calibration_*.md`.
-- Appeal lifecycle: submissions, SLA compliance, reversals, bond burns, per-tier backlog.
-- Denylist churn: additions/removals per hash family, TTL expirations, emergency canon invocations.
-- Volunteer briefs & panel diversity: submissions per language, conflict-of-interest disclosures, publication lag. Balanced brief fields are specified in `docs/source/ministry/volunteer_brief_template.md`, ensuring fact tables and moderation tags are machine readable.
-- Treasury balances: deposits, payouts, outstanding liability (feeds MINFO-7).
+Иҫкәртмә ҡағиҙәләре (`dashboards/alerts/ministry_transparency_rules.yml`X-та кодификацияланған) тышлыҡ:
+- FP/FN тайпылыш >25% ҡаршы калибровка башланғыс һыҙығы.
+- Апелляция SLA ставкаһы >5% кварталына.
+- Ғәҙәттән тыш хәлдәр канон TTLs сәйәсәттән өлкән.
+- Баҫма лаг >14 көндән-кварталға ябыла.
 
-Alert rules (codified in `dashboards/alerts/ministry_transparency_rules.yml`) cover:
-- FP/FN deviation >25% versus calibration baseline.
-- Appeal SLA miss rate >5% per quarter.
-- Emergency canon TTLs older than policy.
-- Publication lag >14 days after quarter close.
+## Шәхси & Релиз гвардияһы (МИНФО-8а)| Метрика класы | Механизм | Параметрҙар | Өҫтәмә һаҡсылар |
+|------------|-------------------------|---------------------|
+| Иҫәптәр (апелляция, ҡара исемлек үҙгәрештәр, ирекмәндәр трусик) | Лаплас шау-шыу | ε=0,75 кварталға, δ=1е-6 | Биҙрәләрҙе шау-шыуҙан һуңғы ҡиммәте менән баҫтырыу <5; клип иғәнәләре 1 бер актер кварталына. |
+| АИ теүәллеге | Гаусс шау-шыу нумератор/номинатор | ε=0,5, δ=1е-6 | ≥50 (`min_accuracy_samples` ҡат) санитарлаштырылған өлгө иҫәбендә генә сығарығыҙ һәм ышаныс интервалын баҫтырығыҙ. |
+| ҡаҙна ағымы | Юҡ шау-шыу (инде йәмәғәт сылбырында) | — | Битлектәге иҫәп-хисап исемдәре ҡаҙна идентификаторҙарынан башҡа; үҙ эсенә Меркл дәлилдәрен үҙ эсенә ала. |
 
-## Privacy & Release Guardrails (MINFO-8a)
+Талаптарҙы сығарыу:
+- Дифференциаль хосусилыҡ тураһында отчеттар эпсилон/дельта баш китабы һәм RNG орлоҡ йөкләмәһе (`blake3(seed)`).
+- Һиҙгер миҫалдар (дәфтәргә дәлилдәр) редакцияланған, әгәр ҙә инде йәмәғәт Меркл квитанцияларында.
+- Редакция журналы бөтә алынған яландарҙы һәм аҡлауҙы һүрәтләгән дөйөм һүрәтләүгә ҡушылған.
 
-| Metric class | Mechanism | Parameters | Additional guards |
-|--------------|-----------|------------|-------------------|
-| Counts (appeals, blacklist changes, volunteer briefs) | Laplace noise | ε = 0.75 per quarter, δ = 1e-6 | Suppress buckets with post-noise value <5; clip contributions to 1 per actor per quarter. |
-| AI accuracy | Gaussian noise on numerator/denominator | ε = 0.5, δ = 1e-6 | Release only when sanitized sample count ≥ 50 (the `min_accuracy_samples` floor) and publish the confidence interval. |
-| Treasury flows | No noise (already public on-chain) | — | Mask account names except treasury IDs; include Merkle proofs. |
+## Баҫма эш ағымы & Ваҡыт һыҙығы
 
-Release requirements:
-- Differential privacy reports include the epsilon/delta ledger and RNG seed commitment (`blake3(seed)`).
-- Sensitive examples (evidence hashes) redacted unless already in public Merkle receipts.
-- Redaction log appended to the summary describing all removed fields and justification.
+| Т‐Window | Эш | Хужа(тар) | Дәлилдәр |
+|--------|-------|-----------|---------|
+| Т+3d кварталға ябыла | Сеймал экспорты туңдырыу, агрегация эшен триггер | Министрлыҡ күҙәтеүсәнлеге TL | `ministry_transparency_ingest.log`, торба үткәргес эш идентификаторы |
+| Т+7д | Сей метрикаларҙы ҡарап сығыу, DP дезинфекциялаусы ҡоро йүгереүҙе эшләгеҙ | Мәғлүмәттәр ышаныс командаһы | Сантизатор отчеты (`artifacts/.../dp_report.json`) |
+| Т+10д | Конструкция резюме + мәғлүмәт ҡушымтаһы | Док/ДевРель + Сәйәсәт аналитигы | `docs/source/ministry/reports/<YYYY-Q>.md` |
+| Т+12д | Ҡулланма артефакттар, етештереү асыҡ, тейәп SoraFS | Опс / Идара итеү секретариаты | `manifest.json(.sig)`, SoraFS CID |
+| Т+14d | Баҫма приборҙар таҡталары + иҫкәртмәләр, пост идара итеү иғлан | Күҙәтеүсәнлек + Коммдар | Grafana экспорты, иҫкәртмә ҡағиҙәһе хеш, идара итеү тауыш биреүҙең һылтанмаһы |
 
-## Publishing Workflow & Timeline
+Һәр релиз раҫларға тейеш:
+1. Министрлыҡ күҙәтеүсәнлеге TL (мәғлүмәттәр бөтөнлөгө)
+2. Идара итеү советы бәйләнеше (сәйәсәт)
+3. Док/Коммдар ҡурғаш (йәмәғәт формулировкаһы)
 
-| T‑Window | Task | Owner(s) | Evidence |
-|----------|------|----------|----------|
-| T + 3 d after quarter close | Freeze raw exports, trigger aggregation job | Ministry Observability TL | `ministry_transparency_ingest.log`, pipeline job ID |
-| T + 7 d | Review raw metrics, run DP sanitizer dry run | Data Trust team | Sanitizer report (`artifacts/.../dp_report.json`) |
-| T + 10 d | Draft summary + data appendix | Docs/DevRel + Policy analyst | `docs/source/ministry/reports/<YYYY-Q>.md` |
-| T + 12 d | Sign artefacts, produce manifest, upload to SoraFS | Ops / Governance Secretariat | `manifest.json(.sig)`, SoraFS CID |
-| T + 14 d | Publish dashboards + alerts, post governance announcement | Observability + Comms | Grafana export, alert rule hash, governance vote link |
+## Автоматлаштырыу & Дәлилдәр һаҡлау- Сеймал каналдарынан квартал һайын снимок төҙөү өсөн `cargo xtask ministry-transparency ingest` ҡулланыу ( башланған, мөрәжәғәттәрҙән, денилисты, ҡаҙна, ирекмән). `cargo xtask ministry-transparency build` менән эҙләп, приборҙар таҡтаһы метрикаларын сығарыу өсөн JSON плюс ҡул ҡуйылған манифест баҫтырыу алдынан.
+- Ҡыҙыл команда бәйләнеше: үткәреү бер йәки бер нисә `--red-team-report docs/source/ministry/reports/<YYYY-MM>-mod-red-team-<scenario>.md` файлдар ашау аҙымы шулай үтә күренмәлелек снимок һәм санитария метрика ташый быраулау идентификаторҙары, сценарий кластары, дәлилдәр өйөмдәре юлдар, һәм приборҙар таҡтаһы SHAs менән бер рәттән леджер/апелле/инҡар итеү мәғлүмәттәре. Был MINFO-9 быраулау каденцияһы һаҡлай, һәр үтә күренмәле пакетта сағыла ҡул менән мөхәррирләүҙәрһеҙ.
+- Ирекмәндәр тапшырыуҙары `docs/source/ministry/volunteer_brief_template.md` X (миҫал: `docs/examples/ministry/volunteer_brief_template.json`). 18NI00000081X яҙмаларын автоматик рәүештә JSON массивы көтә, был аптедацияларҙы асыҡлай, һәм факт-өҫтәл ҡаплауын теркәй, шуға күрә приборҙар таҡталары юҡ цитаталарҙы айырып күрһәтә ала.
+- Өҫтәмә автоматлаштырыу `scripts/ministry/` буйынса йәшәй. `dp_sanitizer.py` `cargo xtask ministry-transparency sanitize` командаһын урап, шул уҡ ваҡытта `transparency_release.py` (профессиональ инструменттар менән бер рәттән өҫтәлгән) хәҙер пакеттар артефакттар, Norito CID `sorafs_cli car pack|proof verify` summary (йәки асыҡтан-асыҡ `--sorafs-cid`), һәм яҙа һәм `transparency_manifest.json` һәм `transparency_release_action.json` X (A18NI000000000000X0000000X0000000000019X CID һәм приборҙар таҡтаһы git SHHA). `transparency_release.py` (йәки Grafana) Grafana файҙалы йөктө кодлау һәм уны ташлау өсөн ( JSON йыйылмаһын) баҫтырып сығарыр алдынан идара итеү DAG каталогына индереү өсөн Pass `--governance-dir <path>`. Шул уҡ флаг шулай уҡ `MinistryTransparencyHeadUpdateV1` `<governance-dir>/publisher/head_requests/ministry_transparency/` буйынса үтенес сығара, кварталға һылтанма яһай, SoraFS CID, асыҡ юлдар, һәм IPNS төп псевдонимы (IPNS аша өҫтөнлөклө `--ipns-key`). `--auto-head-update`-ны тәьмин итеү өсөн, был запросты эшкәртергә шунда уҡ `publisher_head_updater.py`, теләк буйынса үткән `--head-update-ipns-template '/usr/local/bin/ipfs name publish --key {ipns_key} /ipfs/{cid}'`, ҡасан IPNS шул уҡ ваҡытта баҫылып сығырға тейеш. Юғиһә, `scripts/ministry/publisher_head_updater.py --governance-dir <path>` һуңыраҡ (кәрәк булһа, шул уҡ шаблон менән) сиратты дренажлау өсөн эшләгеҙ, `publisher/head_updates.log` ҡушымтаһын ҡушымта, `publisher/ipns_heads/<key>.json` яңыртыу һәм `head_requests/ministry_transparency/processed/` буйынса эшкәртелгән JSON архивы.
+- `artifacts/ministry/transparency/<YYYY-Q>/` буйынса һаҡланған артефакттар релиз асҡысы ҡул ҡуйған `checksums.sha256` файлы менән. Ағас хәҙер `artifacts/ministry/transparency/2026-Q3/` (санитарлаштырылған метрика, DP отчеты, резюме, асыҡ, идара итеү ғәмәлдәре), шулай итеп, инженерҙар инструменталь офлайн һынау мөмкин, һәм Norito локаль локаль тикшерелгән, ә `ci/check_ministry_transparency.sh` CI-ла шул уҡ раҫлауҙы раҫлай. тейәп. Хәҙер шашка документлаштырылған DP бюджеттарын ( ε≤0.75 һандар өсөн, ε≤0.5 теүәллек өсөн, δ≤1e−6) үтәй һәм `min_accuracy_samples` йәки баҫтырыу сиге дрейфы булғанда, йәки биҙрә ағып торғанда, был ҡаттарҙан түбәнерәк ҡиммәтен баҫтырмай. Сценарийҙы юл картаһы (MINFO‐8) һәм CI араһындағы килешәү тип ҡабул итегеҙ: өҫтәге таблицаны ла, шашканы бергә көйләү, әгәр ҙә хосусилыҡ параметрҙары ҡасан да булһа үҙгәрә.- Идара итеү якорь: булдырыу `TransparencyReleaseV1` ғәмәлгә һылтанма буйынса манифест disist, SoraFS CID, һәм приборҙар панелендә git SHA (SoraFS канон файҙалы йөкләмәһен билдәләй).
 
-Each release must be approved by:
-1. Ministry Observability TL (data integrity)
-2. Governance Council liaison (policy)
-3. Docs/Comms lead (public wording)
+## Асыҡ бурыстар & Киләһе аҙымдар
 
-## Automation & Evidence Storage
-
-- Use `cargo xtask ministry-transparency ingest` to build the quarterly snapshot from the raw feeds (ledger, appeals, denylist, treasury, volunteer). Follow up with `cargo xtask ministry-transparency build` to emit the dashboard metrics JSON plus the signed manifest before publishing.
-- Red-team linkage: pass one or more `--red-team-report docs/source/ministry/reports/<YYYY-MM>-mod-red-team-<scenario>.md` files to the ingest step so the transparency snapshot and sanitized metrics carry drill IDs, scenario classes, evidence bundle paths, and dashboard SHAs alongside the ledger/appeal/denylist data. This keeps MINFO-9 drill cadence reflected in every transparency packet without manual edits.
-- Volunteer submissions must follow `docs/source/ministry/volunteer_brief_template.md` (example: `docs/examples/ministry/volunteer_brief_template.json`). The ingest step expects a JSON array of those objects, automatically filters `moderation.off_topic` entries, enforces disclosure attestations, and records fact-table coverage so dashboards can highlight missing citations.
-- Additional automation lives under `scripts/ministry/`. `dp_sanitizer.py` wraps the `cargo xtask ministry-transparency sanitize` command, while `transparency_release.py` (added alongside the provenance tooling) now packages artefacts, derives the SoraFS CID from the `sorafs_cli car pack|proof verify` summary (or an explicit `--sorafs-cid`), and writes both `transparency_manifest.json` and `transparency_release_action.json` (a `TransparencyReleaseV1` governance payload capturing the manifest digest, SoraFS CID, and dashboards git SHA). Pass `--governance-dir <path>` to `transparency_release.py` (or run `cargo xtask ministry-transparency anchor --action artifacts/.../transparency_release_action.json --governance-dir <path>`) to encode the Norito payload and drop it (plus the JSON summary) into the governance DAG directory before publishing. The same flag also emits a `MinistryTransparencyHeadUpdateV1` request under `<governance-dir>/publisher/head_requests/ministry_transparency/`, referencing the quarter, SoraFS CID, manifest paths, and IPNS key alias (overridable via `--ipns-key`). Provide `--auto-head-update` to process that request immediately via `publisher_head_updater.py`, optionally passing `--head-update-ipns-template '/usr/local/bin/ipfs name publish --key {ipns_key} /ipfs/{cid}'` when IPNS needs to be published at the same time. Otherwise, run `scripts/ministry/publisher_head_updater.py --governance-dir <path>` later (with the same template if needed) to drain the queue, append `publisher/head_updates.log`, update `publisher/ipns_heads/<key>.json`, and archive the processed JSON under `head_requests/ministry_transparency/processed/`.
-- Artefacts stored under `artifacts/ministry/transparency/<YYYY-Q>/` with a `checksums.sha256` file signed by the release key. The tree now carries a reference bundle at `artifacts/ministry/transparency/2026-Q3/` (sanitized metrics, DP report, summary, manifest, governance action) so engineers can test the tooling offline, and `scripts/ministry/check_transparency_release.py` verifies the digests/quarter metadata locally while `ci/check_ministry_transparency.sh` runs the same validation in CI before evidence is uploaded. The checker now enforces the documented DP budgets (ε≤0.75 for counts, ε≤0.5 for accuracy, δ≤1e−6) and fails the build whenever `min_accuracy_samples` or the suppression threshold drift, or when a bucket leaks a value below those floors without being suppressed. Treat the script as the contract between the roadmap (MINFO‑8) and CI: adjust both the table above and the checker together if the privacy parameters ever change.
-- Governance anchor: create `TransparencyReleaseV1` action referencing the manifest digest, SoraFS CID, and dashboard git SHA (`iroha_data_model::ministry::TransparencyReleaseV1` defines the canonical payload).
-
-## Open Tasks & Next Steps
-
-| Task | Status | Notes |
+| Эш | Статус | Иҫкәрмәләр |
 |------|--------|-------|
-| Implement `ministry_transparency_ingest` + builder jobs | 🈺 In Progress | `cargo xtask ministry-transparency ingest|build` now stitches ledger/appeal/denylist/treasury feeds; remaining work wires the DP sanitizer + release script pipeline. |
-| Publish Grafana dashboard + alert pack | 🈴 Completed | Dashboard + alert files live under `dashboards/grafana/ministry_transparency_overview.json` and `dashboards/alerts/ministry_transparency_rules.yml`; wire them into PagerDuty `ministry-transparency` during rollout. |
-| Automate DP sanitizer + provenance manifest | 🈴 Completed | `cargo xtask ministry-transparency sanitize` (wrapper: `scripts/ministry/dp_sanitizer.py`) emits the sanitized metrics + DP report, and `scripts/ministry/transparency_release.py` now writes `checksums.sha256` plus `transparency_manifest.json` for provenance. |
-| Create quarterly report template (`reports/<YYYY-Q>.md`) | 🈴 Completed | Template added at `docs/source/ministry/reports/2026-Q3-template.md`; copy/rename per quarter and replace the `{{...}}` tokens before publishing. |
-| Wire governance DAG anchoring | 🈴 Completed | `TransparencyReleaseV1` lives in `iroha_data_model::ministry`, `scripts/ministry/transparency_release.py` emits the JSON payload, and `cargo xtask ministry-transparency anchor` encodes the `.to` artefact into the configured governance DAG directory so the publisher can ingest releases automatically. |
+| `ministry_transparency_ingest` + төҙөүсе эш урындары | 🈺 Прогресс | `cargo xtask ministry-transparency ingest|build` хәҙер стручок баш китабы/апелляция/инҡар итеүсе/газнасыл каналдары; ҡалған эш сымдары DP дезинфекциялаусы + сценарий торбаһы сығарыу. |
+| Баҫма Grafana приборҙар таҡтаһы + иҫкәртмә пакеты | 🈴 Тулыланды | Приборҙар таҡтаһы + иҫкәртмә файлдары `dashboards/grafana/ministry_transparency_overview.json` һәм `dashboards/alerts/ministry_transparency_rules.yml` буйынса йәшәй; уларҙы PagerDuty `ministry-transparency` ролл-аут ваҡытында сым. |
+| Автоматлаштырыу DP дезинфекциялаусы + провенанс манифест | 🈴 Тулыланды | `cargo xtask ministry-transparency sanitize` ( урау: SoraFS) санитария метрикаһы + DP отчеты сығара, ә SoraFS хәҙер `checksums.sha256` плюс `transparency_manifest.json` тип яҙа. |
+| Квартал һайын отчет ҡалып булдырыу (`reports/<YYYY-Q>.md`) | 🈴 Тулыланды | Ҡалып `docs/source/ministry/reports/2026-Q3-template.md`-та өҫтәлде; күсермәһе/үҙгәреш кварталына һәм алмаштырыу `{{...}}` токендар баҫтырыу алдынан. |
+| Сым идара итеү DAG якорь | 🈴 Тулыланды | `TransparencyReleaseV1` йәшәй `iroha_data_model::ministry`, `scripts/ministry/transparency_release.py` JSON файҙалы йөк сығара, һәм `cargo xtask ministry-transparency anchor` `.to` X артефактын конфигурацияланған идара итеү каталогына кодлай, шуға күрә нәшерсе автоматик рәүештә азат итеүҙәр ала. |
 
-Delivering the document, dashboard spec, and workflow moves MINFO-8 from 🈳 to 🈺. Remaining engineering tasks (jobs, scripts, alert wiring) are tracked in the table above and should close before the first Q3 2026 publication.
+Документ, приборҙар таҡтаһы спец, һәм эш ағымы MINFO-8 🈳 🈺 күсерә. Ҡалған инженерлыҡ бурыстары (эш, сценарийҙар, иҫкәртмә проводка) өҫтәге таблицала күҙәтелә һәм беренсе Q32026 баҫылып сыҡҡанға тиклем ябыла.

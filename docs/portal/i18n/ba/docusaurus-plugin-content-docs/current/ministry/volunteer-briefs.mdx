@@ -6,40 +6,37 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Volunteer Briefs
 description: Submit, lint, and publish citizen briefs for Ministry blacklist reviews.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-import VolunteerLintStatusTable from '@site/src/components/VolunteerLintStatusTable';
+импорт VolunteerLintStatusTable '@site/src/компоненттар/ВолунтерЛинтСтатусТабл';
 
-## Overview
+## Обзор
 
-Volunteer briefs capture the support/oppose/context viewpoints that the Ministry of Information reviews whenever blacklist or policy changes are proposed. Every submission must follow the canonical schema implemented by `iroha_data_model::ministry::VolunteerBriefV1` (version `1`) so that:
+Ирекмәндәр брифтар ярҙам/ҡаршы/контекст ҡараштарын тотоп, тип, Мәғлүмәт министрлығы тикшерелгән, ҡасан ҡара исемлек йәки сәйәсәт үҙгәрештәре тәҡдим ителә. Һәр тапшырыу I18NI000000003X (I18NI000000004X версияһы) тарафынан тормошҡа ашырылған канон схемаһын үтәргә тейеш, шуға күрә:
 
-1. Governance dashboards can compare fact tables deterministically.
-2. Conflict-of-interest disclosures are enforced before publication.
-3. Off-topic or astroturfed submissions are suppressed without removing them from the audit trail.
+1. Идара итеү таҡталары факт таблицаларын детерминистик яҡтан сағыштыра ала.
+2. Конфликт-проценттарҙы асыҡлау баҫылып сыҡҡанға тиклем үтәлә.
+3. Теманан тыш йәки астротурфированный тапшырыуҙар уларҙы аудит эҙенән алып ташламайынса баҫтырыла.
 
-Use the template in `docs/source/ministry/volunteer_brief_template.md` or the `cargo xtask ministry-transparency ingest` helper to build a payload. The CLI validates the Norito struct, lints moderation tags, and emits a summary showing how many fact rows, citations, and disclosures were accepted.
+`docs/source/ministry/volunteer_brief_template.md` йәки I18NI00000000006X ярҙамсыһы шаблон ҡулланыу файҙалы йөк төҙөү өсөн. CLI раҫлай I18NT000000001X структур, линт модерация тегтары, һәм йыйнаҡ сығара, нисә факт рәттәр, цитаталар һәм асыҡлау ҡабул ителгәнен күрһәтә.
 
-## Publication pipeline & SLA
+## Баҫма торбаһы & СЛА| Этап | Тәҙрә | Ентекле |
+|------|---------|---------|
+| Ҡабул итеү & раҫлау | Т+0 6 сәғәткә тиклем | Түләүҙәр ирекмән формаһы йәки CLI аша тейәлгән. `VolunteerBriefV1::validate` схемаһын үтәй (версия, RFC3339 ваҡыт маркаһы, асыҡлау сәйәсәте, үҙләштереү форматлау). Уңышһыҙлыҡтар шунда уҡ ғәмәлгә яраҡлы хата кодтары менән кире ҡағыла. |
+| Тәржемә & сама | Т+6 24 сәғәткә тиклем | Рецензенттар модерация тегтарын ҡуллана (I18NI0000008X, `duplicate`, `policy-escalation`, һ.б.), редакция контакттар, һәм флаг теманан ситтәге яҙмалар. Тегтар I18NT000000002X файҙалы йөктә һаҡлана, шуға күрә автоматлаштырыу аҫҡы ағымында яҙмаларҙы баҫтыра ала йәки айырып күрһәтә ала. |
+| Портал баҫма | Т+24 48 сәғәткә тиклем | Дөрөҫ брифтар тейешле тәҡдим бите менән бер рәттән баҫылып сыға **Ирекле фекерҙәр **. Теманан тыш яҙмалар сеймал архивында ҡала, әммә дөйөм позиция һандарынан сығарыла. |
 
-| Stage | Window | Details |
-|-------|--------|---------|
-| Intake & validation | T+0 to 6 hours | Payloads are uploaded through the volunteer form or the CLI. `VolunteerBriefV1::validate` enforces the schema (version, RFC 3339 timestamp, disclosure policy, digest formatting). Failures are rejected immediately with actionable error codes. |
-| Translation & moderation | T+6 to 24 hours | Reviewers apply moderation tags (`needs-translation`, `duplicate`, `policy-escalation`, etc.), redact contacts, and flag off-topic entries. Tags are stored in the Norito payload so downstream automation can suppress or highlight entries. |
-| Portal publication | T+24 to 48 hours | Valid briefs are published alongside the corresponding proposal page under **Volunteer Opinions**. Off-topic entries remain in the raw archive but are excluded from aggregate stance counts. |
+Тиҙлаштырылған эшкәртергә (≤12hours) автоматик рәүештә эшләй, ҡасан `policy-escalation` йәки `astroturf` тегтар булғанда. Операторҙар ирекмәндәр ҡыҫҡаса I18NT000000000X панелдәре аша аудит үтәй ала, ул `submitted_at` һәм порталь баҫма араһындағы ваҡытты күҙәтә.
 
-Expedited handling (≤12 hours) is triggered automatically when the `policy-escalation` or `astroturf` tags are present. Operators can audit compliance via the Volunteer Briefs Grafana panel, which tracks the time between `submitted_at` and portal publication.
+## Доставка- **Схема & docs:** `VolunteerBriefV1` дөйөм мәғлүмәт моделендә йәшәй, ә ентекле ялан етәксеһе плюс миҫал файҙалы йөк `docs/source/ministry/volunteer_brief_template.md` һәм `docs/examples/ministry/volunteer_brief_template.json`.
+- **Валидация инструменттары:** I18NI000000017X порталь төҙөү ҡулланған шул уҡ линттарҙы эшләтә; I18NI000000018X һеҙ баҫылып сығыу өсөн тотош өйөм ойошторорға теләһәгеҙ, доступный ҡала.
+- **Порталь өҫкө өлөшө:** Һәр тәҡдим бит һылтанмалар декодный ярҙам/ҡаршы/контекст брифтар, граждандар фекерҙәрен күренеп тора, сеймал JSON скачать. Ҡыҫҡаса рәүештә модерация метамағлүмәттәре менән бергә күрһәтелә, шуға күрә присяжныйҙар ни өсөн яҙма тотҡарланған йәки сығарып ташланған булыуы мөмкин.
 
-## Deliverables
+Юл картаһы пунктына мөрәжәғәт итегеҙ **MINFO-3 — Ирекмәндәр процент панелдәре инфраструктураһы ** әгәр өҫтәмә автоматлаштырыу (мәҫәлән, импорт API йәки киңәйтелгән аналитика) кәрәк.
 
-- **Schema & docs:** `VolunteerBriefV1` lives in the shared data model, and the detailed field guide plus example payload reside in `docs/source/ministry/volunteer_brief_template.md` and `docs/examples/ministry/volunteer_brief_template.json`.
-- **Validation tooling:** `cargo xtask ministry-transparency volunteer-validate --input <file> [--json-output artifacts/ministry/volunteer-lint.json]` runs the same lints used by the portal build; `ingest --volunteer <file>` remains available when you want to stage an entire bundle for publication.
-- **Portal surfacing:** Each proposal page links to the decoded support/oppose/context briefs, making citizen opinions visible without downloading raw JSON. Moderation metadata is rendered alongside the brief so jurors understand why an entry may have been delayed or excluded.
+## Линт статусы приборҙар таҡтаһы
 
-Refer to the roadmap item **MINFO-3 — Volunteer interest panel infrastructure** if additional automation (e.g., bulk import APIs or extended analytics) is required.
+Портал төҙөү хәҙер `npm run generate:volunteer-lint` X, был I18NI000000020X тураһында һәр тикшерелгән ирекмәндәр брифы буйынса саҡыра. Һөҙөмтәлә манифест түбәндә күрһәтелгән, шулай итеп, рецензенттар раҫлай ала, һәр тәҡдим’s линт статусы баҫтырып сығарыу алдынан.
 
-## Lint status dashboard
-
-The portal build now runs `npm run generate:volunteer-lint`, which invokes `cargo xtask ministry-transparency volunteer-validate --json-output …` across every checked-in volunteer brief. The resulting manifest is rendered below so reviewers can confirm each proposal’s lint status before publishing.
-
-<VolunteerLintStatusTable />

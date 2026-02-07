@@ -4,113 +4,111 @@ direction: rtl
 source: docs/portal/docs/sorafs/node-plan.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: node-plan
-title: Plano de implementacao do nodo SoraFS
-sidebar_label: Plano de implementacao do nodo
-description: Converte o roadmap de storage SF-3 em trabalho de engenharia acionavel com marcos, tarefas e cobertura de testes.
+ID: نوڈ پلان
+عنوان: نوڈ عمل درآمد کا منصوبہ SoraFS
+سائڈبار_لیبل: نوڈ عمل درآمد کا منصوبہ
+تفصیل: SF-3 اسٹوریج روڈ میپ کو سنگ میل ، کاموں اور ٹیسٹ کوریج کے ساتھ قابل عمل انجینئرنگ کے کام میں تبدیل کرتا ہے۔
 ---
 
-:::note Fonte canonica
-Esta pagina espelha `docs/source/sorafs/sorafs_node_plan.md`. Mantenha ambas as copias sincronizadas ate que a documentacao Sphinx alternativa seja retirada.
+::: نوٹ کینونیکل ماخذ
+یہ صفحہ `docs/source/sorafs/sorafs_node_plan.md` کی آئینہ دار ہے۔ متبادل اسفنکس دستاویزات کو نہ ہٹانے تک دونوں کاپیاں ہم وقت سازی رکھیں۔
 :::
 
-SF-3 entrega o primeiro crate executavel `sorafs-node` que transforma um processo Iroha/Torii em um provedor de storage SoraFS. Use este plano junto com o [guia de storage do nodo](node-storage.md), a [politica de admissao de provedores](provider-admission-policy.md) e o [roadmap do marketplace de capacidade de storage](storage-capacity-marketplace.md) ao sequenciar entregas.
+SF-3 پہلا `sorafs-node` قابل عمل کریٹ فراہم کرتا ہے جو Iroha/Torii عمل کو SoraFS اسٹوریج فراہم کرنے والے میں تبدیل کرتا ہے۔ اس منصوبے کا استعمال [نوڈ اسٹوریج گائیڈ] (node-storage.md) ، [فراہم کنندہ داخلہ پالیسی] (provider-admission-policy.md) ، اور [اسٹوریج کی گنجائش مارکیٹ پلیس روڈ میپ] (storage-capacity-marketplace.md) کے ساتھ مل کر استعمال کریں۔
 
-## Escopo alvo (Marco M1)
+## ہدف اسکوپ (سنگ میل M1)
 
-1. **Integracao do chunk store.** Envolver `sorafs_car::ChunkStore` com um backend persistente que armazena bytes de chunk, manifests e arvores PoR no diretorio de dados configurado.
-2. **Endpoints de gateway.** Expor endpoints HTTP Norito para submissao de pin, fetch de chunks, amostragem PoR e telemetria de storage dentro do processo Torii.
-3. **Plumbing de configuracao.** Adicionar uma struct de config `SoraFsStorage` (flag habilitado, capacidade, diretorios, limites de concorrencia) conectada via `iroha_config`, `iroha_core` e `iroha_torii`.
-4. **Quota/agendamento.** Impor limites de disco/paralelismo definidos pelo operador e enfileirar requisicoes com back-pressure.
-5. **Telemetria.** Emitir metricas/logs para sucesso de pin, latencia de fetch de chunks, utilizacao de capacidade e resultados de amostragem PoR.
+1. ** کنٹ اسٹور انضمام۔
+2. ** گیٹ وے کے اختتامی مقامات۔
+3. ** کنفیگریشن پلمبنگ۔
+4. ** کوٹہ/شیڈولنگ۔
+5. ** ٹیلی میٹری۔
 
-## Quebra de trabalho
+## کام کا وقفہ
 
-### A. Estrutura de crate e modulos
+### اے کریٹ اور ماڈیول ڈھانچہ
 
-| Tarefa | Dono(s) | Notas |
-|------|---------|------|
-| Criar `crates/sorafs_node` com modulos: `config`, `store`, `gateway`, `scheduler`, `telemetry`. | Storage Team | Reexporta tipos reutilizaveis para integracao com Torii. |
-| Implementar `StorageConfig` mapeado de `SoraFsStorage` (user -> actual -> defaults). | Storage Team / Config WG | Garante que as camadas Norito/`iroha_config` permanecam deterministicas. |
-| Fornecer uma facade `NodeHandle` que Torii usa para submeter pins/fetches. | Storage Team | Encapsula internos de storage e plumbing async. |
+| ٹاسک | مالک (زبانیں) | نوٹ |
+| ------ | -------------- | ------ |
+| ماڈیولز کے ساتھ `crates/sorafs_node` بنائیں: `config` ، `store` ، `gateway` ، `scheduler` ، `telemetry`۔ | اسٹوریج ٹیم | Torii کے ساتھ انضمام کے لئے دوبارہ قابل استعمال اقسام کی دوبارہ برآمد کرتا ہے۔ |
+| `StorageConfig` کو `SoraFsStorage` (صارف -> موجودہ -> ڈیفالٹس) سے میپڈ کریں۔ | اسٹوریج ٹیم / کنفیگ ڈبلیو جی | اس بات کو یقینی بناتا ہے کہ Norito/`iroha_config` پرتیں تعصب پسند رہیں۔ |
+| ایک facade `NodeHandle` فراہم کریں جو Torii پنوں/بازیافتوں کو جمع کروانے کے لئے استعمال کرتا ہے۔ | اسٹوریج ٹیم | داخلی اسٹوریج اور async پلمبنگ کو encapsulates. |
 
-### B. Chunk store persistente
+### B. مستقل حصہ اسٹور
 
-| Tarefa | Dono(s) | Notas |
-|------|---------|------|
-| Construir um backend em disco envolvendo `sorafs_car::ChunkStore` com indice de manifest em disco (`sled`/`sqlite`). | Storage Team | Layout deterministico: `<data_dir>/<manifest_cid>/chunk_{idx}.bin`. |
-| Manter metadados PoR (arvores 64 KiB/4 KiB) usando `ChunkStore::sample_leaves`. | Storage Team | Suporta replay apos restart; falha rapido em corrupcao. |
-| Implementar replay de integridade no startup (rehash de manifests, podar pins incompletos). | Storage Team | Bloqueia o start de Torii ate o replay terminar. |
+| ٹاسک | مالک (زبانیں) | نوٹ |
+| ------ | -------------- | ------ |
+| آن ڈسک مینی فیسٹ انڈیکس (`sled`/`sqlite`) کے ساتھ `sorafs_car::ChunkStore` پر مشتمل ایک آن ڈسک پسدید بنائیں۔ | اسٹوریج ٹیم | تعی .ن کی ترتیب: `<data_dir>/<manifest_cid>/chunk_{idx}.bin`۔ |
+| `ChunkStore::sample_leaves` کا استعمال کرتے ہوئے POR میٹا ڈیٹا (64 KIB/4 KIB درخت) کو برقرار رکھیں۔ | اسٹوریج ٹیم | دوبارہ شروع کرنے کے بعد ری پلے کی حمایت کرتا ہے۔ بدعنوانی میں تیزی سے ناکام ہوجاتا ہے۔ |
+| اسٹارٹ اپ میں سالمیت کے ری پلے کو نافذ کریں (ریہش منشور ، نامکمل پنوں کی کٹائی)۔ | اسٹوریج ٹیم | ری پلے ختم ہونے تک Torii کے آغاز کو روکتا ہے۔ |
 
-### C. Endpoints de gateway
+### C. گیٹ وے اینڈپوائنٹس| اختتامی نقطہ | سلوک | کام |
+| ---------- | -------------- | -------- |
+| `POST /sorafs/pin` | `PinProposalV1` کو قبول کرتا ہے ، ظاہر ہوتا ہے ، توہینوں ، قطار میں گھسنے کی توثیق کرتا ہے ، ظاہر کرتا ہے ، ظاہر کرتا ہے۔ | چنکر پروفائل کی توثیق کریں ، کوٹہ نافذ کریں ، کنٹ اسٹور کے ذریعے ڈیٹا اسٹریم کریں۔ |
+| `GET /sorafs/chunks/{cid}` + رینج استفسار | ہیڈر `Content-Chunker` کے ساتھ حصہ بائٹس کی خدمت کریں۔ رینج کی گنجائش کی تفصیلات کا احترام کرتا ہے۔ | شیڈولر + اسٹریم بجٹ استعمال کریں (SF-2D رینج کی صلاحیت کو آن کریں)۔ |
+| `POST /sorafs/por/sample` | ایک مینی فیسٹ اور ریٹرن پروف بنڈل کے ل por پور نمونے لینے کو چلائیں۔ | کنٹ اسٹور کے نمونے لینے کا دوبارہ استعمال کریں ، Norito JSON پے لوڈ کے ساتھ جواب دیں۔ |
+| `GET /sorafs/telemetry` | خلاصہ: صلاحیت ، پور کامیابی ، غلطی کاؤنٹرز بازیافت۔ | ڈیش بورڈز/آپریٹرز کو ڈیٹا فراہم کریں۔ |
 
-| Endpoint | Comportamento | Tarefas |
-|----------|--------------|--------|
-| `POST /sorafs/pin` | Aceita `PinProposalV1`, valida manifests, enfileira ingestao, responde com o CID do manifest. | Validar perfil de chunker, impor quotas, stream de dados via chunk store. |
-| `GET /sorafs/chunks/{cid}` + query de range | Servir bytes de chunk com headers `Content-Chunker`; respeita a especificacao de capacidade de range. | Usar scheduler + orcamentos de stream (ligar a capacidade de range SF-2d). |
-| `POST /sorafs/por/sample` | Rodar amostragem PoR para um manifest e retornar bundle de prova. | Reutilizar amostragem do chunk store, responder com payloads Norito JSON. |
-| `GET /sorafs/telemetry` | Resumos: capacidade, sucesso PoR, contadores de erro de fetch. | Fornecer dados para dashboards/operadores. |
+رن ٹائم پلمبنگ `sorafs_node::por` کے ذریعے پور تعامل کو پاس کرتا ہے: ٹریکر ہر `PorChallengeV1` ، `PorProofV1` اور `AuditVerdictV1` کو ریکارڈ کرتا ہے تاکہ `CapacityMeter` میٹرکس Prometheus کے بغیر گورننس ورڈکٹ کی عکاسی کریں۔ [کریٹس/sorafs_node/src/شیڈولر. آر ایس: 147]
 
-O plumbing em runtime passa as interacoes PoR via `sorafs_node::por`: o tracker registra cada `PorChallengeV1`, `PorProofV1` e `AuditVerdictV1` para que as metricas `CapacityMeter` reflitam vereditos de governanca sem logica Torii bespoke. [crates/sorafs_node/src/scheduler.rs:147]
+نفاذ کے نوٹ:
 
-Notas de implementacao:
+- Torii کا AXUM اسٹیک `norito::json` پے لوڈ کے ساتھ استعمال کریں۔
+- جوابات کے ل I Norito اسکیموں کو شامل کریں (`PinResultV1` ، `FetchErrorV1` ، ٹیلی میٹری ڈھانچے)۔
 
-- Use o stack Axum de Torii com payloads `norito::json`.
-- Adicione schemas Norito para respostas (`PinResultV1`, `FetchErrorV1`, structs de telemetria).
+- `/v1/sorafs/por/ingestion/{manifest_digest_hex}` اب بیک بلاگ کی گہرائی کے علاوہ سب سے قدیم ایپوچ/ڈیڈ لائن اور تازہ ترین کامیابی/ناکامی کے ٹائم اسٹیمپ فی فراہم کنندہ ، `sorafs_node::NodeHandle::por_ingestion_status` کے ذریعے ، اور Torii ریکارڈز SoraFS گاؤگس کے لئے Torii ریکارڈز کے ذریعے۔ .
 
-- `/v1/sorafs/por/ingestion/{manifest_digest_hex}` agora expoe a profundidade do backlog mais a epoca/deadline mais antiga e os timestamps mais recentes de sucesso/falha por provedor, via `sorafs_node::NodeHandle::por_ingestion_status`, e Torii registra os gauges `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` para dashboards. [crates/sorafs_node/src/lib.rs:510] [crates/iroha_torii/src/sorafs/api.rs:1883] [crates/iroha_torii/src/routing.rs:7244] [crates/iroha_telemetry/src/metrics.rs:5390]
+### D. شیڈیولر اور کوٹہ تکمیل
 
-### D. Scheduler e cumprimento de quotas
+| ٹاسک | تفصیلات |
+| ------ | --------- |
+| ڈسک شیئر | ڈسک پر بائٹس کو ٹریک کریں۔ `max_capacity_bytes` سے زیادہ ہونے پر نئے پنوں کو مسترد کریں۔ آئندہ کی پالیسیوں کے لئے بے دخلی کے ہکس فراہم کریں۔ |
+| بازیافت مقابلہ | گلوبل ٹریفک لائٹ (`max_parallel_fetches`) SF-2D رینج کیپس سے فی فراہم کنندہ کے علاوہ قیمتیں۔ |
+| پنوں کی قطار | زیر التواء ملازمتوں کی حد ؛ قطار کی گہرائی کے لئے اسٹیٹس اینڈ پوائنٹس Norito کو بے نقاب کریں۔ |
+| کیڈینس پور | `por_sample_interval_secs` کے ذریعہ ہدایت کردہ پس منظر کا کارکن۔ |
 
-| Tarefa | Detalhes |
-|------|---------|
-| Quota de disco | Rastrear bytes em disco; rejeitar novos pins ao exceder `max_capacity_bytes`. Fornecer hooks de eviccao para politicas futuras. |
-| Concorrencia de fetch | Semaforo global (`max_parallel_fetches`) mais orcamentos por provedor oriundos de caps de range SF-2d. |
-| Fila de pins | Limitar jobs de ingestao pendentes; expor endpoints Norito de status para profundidade da fila. |
-| Cadencia PoR | Worker de background dirigido por `por_sample_interval_secs`. |
+### E. ٹیلی میٹری اور لاگنگ
 
-### E. Telemetria e logging
+میٹرکس (Prometheus):
 
-Metricas (Prometheus):
-
-- `sorafs_pin_success_total`, `sorafs_pin_failure_total`
-- `sorafs_chunk_fetch_duration_seconds` (histograma com labels `result`)
-- `torii_sorafs_storage_bytes_used`, `torii_sorafs_storage_bytes_capacity`
-- `torii_sorafs_storage_pin_queue_depth`, `torii_sorafs_storage_fetch_inflight`
+- `sorafs_pin_success_total` ، `sorafs_pin_failure_total`
+- `sorafs_chunk_fetch_duration_seconds` (لیبل کے ساتھ ہسٹگرام `result`)
+- `torii_sorafs_storage_bytes_used` ، `torii_sorafs_storage_bytes_capacity`
+- `torii_sorafs_storage_pin_queue_depth` ، `torii_sorafs_storage_fetch_inflight`
 - `torii_sorafs_storage_fetch_bytes_per_sec`
 - `torii_sorafs_storage_por_inflight`
-- `torii_sorafs_storage_por_samples_success_total`, `torii_sorafs_storage_por_samples_failed_total`
+- `torii_sorafs_storage_por_samples_success_total` ، `torii_sorafs_storage_por_samples_failed_total`
 
-Logs / eventos:
+نوشتہ جات/واقعات:
 
-- Telemetria Norito estruturada para ingestao de governanca (`StorageTelemetryV1`).
-- Alertas quando utilizacao > 90% ou streak de falhas PoR exceder o threshold.
+- Norito ٹیلی میٹری گورننس ایجشن (`StorageTelemetryV1`) کے لئے ڈھانچہ تیار کیا گیا ہے۔
+- استعمال کرتے وقت انتباہات> 90 ٪ یا POR کی ناکامی کی لکیر دہلیز سے زیادہ ہے۔
 
-### F. Estrategia de testes
+### F. جانچ کی حکمت عملی1. ** یونٹ ٹیسٹ۔
+2. ** انضمام ٹیسٹ ** (`crates/sorafs_node/tests`)۔ پن۔
+3. ** Torii انضمام ٹیسٹ۔
+4. ** افراتفری کا روڈ میپ۔ ** مستقبل کی مشقیں ڈسک کی تھکن ، سست IO ، فراہم کنندہ کو ہٹانے کی تقلید کرتی ہیں۔
 
-1. **Testes unitarios.** Persistencia do chunk store, calculos de quota, invariantes do scheduler (ver `crates/sorafs_node/src/scheduler.rs`).
-2. **Testes de integracao** (`crates/sorafs_node/tests`). Pin -> fetch round trip, recovery apos restart, rejeicao por quota, verificacao de provas de amostragem PoR.
-3. **Testes de integracao Torii.** Rodar Torii com storage habilitado, exercitar endpoints HTTP via `assert_cmd`.
-4. **Roadmap de caos.** Drills futuros simulam exaustao de disco, IO lento, remocao de provedores.
+## انحصار
 
-## Dependencias
+- SF -2B داخلہ پالیسی - یقینی بنائیں کہ نوڈس اشتہار سے پہلے داخلہ کے لفافے چیک کریں۔
+- SF -2C صلاحیت کا بازار - ٹیلی میٹری کو صلاحیت کے دعووں سے واپس لنک کریں۔
+- SF -2D اشتہاری توسیع - دستیاب ہونے پر رینج کی گنجائش + اسٹریم بجٹ استعمال کریں۔
 
-- Politica de admissao SF-2b - garantir que nodes verifiquem envelopes de admissao antes de anunciar.
-- Marketplace de capacidade SF-2c - ligar telemetria de volta a declaracoes de capacidade.
-- Extensoes de advert SF-2d - consumir capacidade de range + orcamentos de stream quando disponiveis.
+## سنگ میل سے باہر نکلنے کا معیار
 
-## Criterios de saida do marco
+- `cargo run -p sorafs_node --example pin_fetch` مقامی فکسچر کے خلاف کام کرتا ہے۔
+- Torii `--features sorafs-storage` کے ساتھ مرتب کرتا ہے اور انضمام کے ٹیسٹ پاس کرتا ہے۔
+- دستاویزات ([نوڈ اسٹوریج گائیڈ] (node-storage.md)) کنفیگریشن ڈیفالٹس + CLI مثالوں کے ساتھ تازہ کاری ؛ آپریٹر رن بک دستیاب ہے۔
+- اسٹیجنگ ڈیش بورڈز پر مرئی ٹیلی میٹری ؛ صلاحیت کی سنترپتی اور POR کی ناکامیوں کے لئے انتباہات تشکیل شدہ۔
 
-- `cargo run -p sorafs_node --example pin_fetch` funciona contra fixtures locais.
-- Torii compila com `--features sorafs-storage` e passa testes de integracao.
-- Documentacao ([guia de storage do nodo](node-storage.md)) atualizada com defaults de configuracao + exemplos de CLI; runbook de operador disponivel.
-- Telemetria visivel em dashboards de staging; alertas configurados para saturacao de capacidade e falhas PoR.
+## دستاویزات اور آپس کی فراہمی
 
-## Entregaveis de documentacao e ops
-
-- Atualizar a [referencia de storage do nodo](node-storage.md) com defaults de configuracao, uso de CLI e passos de troubleshooting.
-- Manter o [runbook de operacoes de nodo](node-operations.md) alinhado com a implementacao conforme SF-3 evolui.
-- Publicar referencias de API para endpoints `/sorafs/*` dentro do portal do desenvolvedor e conectar ao manifesto OpenAPI assim que handlers de Torii estiverem prontos.
+- تشکیل ڈیفالٹس ، سی ایل آئی کے استعمال اور خرابیوں کا سراغ لگانے والے اقدامات کے ساتھ [نوڈ اسٹوریج ریفرنس] (node-storage.md) کو اپ ڈیٹ کریں۔
+- [نوڈ آپریشنز رن بک] (node-operations.md) کو SF-3 ارتقاء کے طور پر عمل درآمد کے ساتھ منسلک رکھیں۔
+- ڈویلپر پورٹل کے اندر `/sorafs/*` اختتامی مقامات کے لئے API حوالہ جات شائع کریں اور Norito ہینڈلر تیار ہونے کے بعد OpenAPI مینی فیسٹ سے مربوط ہوں۔

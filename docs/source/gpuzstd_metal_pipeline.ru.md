@@ -7,115 +7,114 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 019b3aa25ae224c1595467ac809f2c53290813e91a78b78b94ca71c3dd950264
 source_last_modified: "2026-01-31T19:25:45.072449+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# GPU Zstd (Metal) Pipeline
+# Конвейер GPU Zstd (металлический)
 
-This document describes the deterministic GPU pipeline used by the Metal helper
-for zstd compression. It is a design and implementation guide for the
-`gpuzstd_metal` helper that emits standard zstd frames and deterministic bytes
-for a given sequence stream. Outputs must roundtrip with CPU decoders; byte-for-
-byte parity with the CPU compressor is not required because sequence generation
-differs.
+В этом документе описывается детерминированный конвейер графического процессора, используемый помощником Metal.
+для сжатия zstd. Это руководство по проектированию и внедрению
+Помощник `gpuzstd_metal`, который генерирует стандартные кадры zstd и детерминированные байты.
+для данного потока последовательности. Выходы должны иметь двустороннюю связь с декодерами ЦП; байт-за-
+четность байтов с компрессором ЦП не требуется, поскольку генерация последовательности
+отличается.
 
-## Goals
+## Цели
 
-- Emit standard zstd frames that decode identically with CPU zstd; byte parity
-  with the CPU compressor is not required.
-- Deterministic outputs across hardware, drivers, and thread scheduling.
-- Explicit bounds checks and predictable buffer lifetimes.
+- Генерация стандартных кадров zstd, которые декодируются идентично процессору zstd; четность байтов
+  с процессорным компрессором не требуется.
+- Детерминированные выходные данные для оборудования, драйверов и планирования потоков.
+- Явные проверки границ и предсказуемое время жизни буфера.
 
-## Current implementation note
+## Текущее примечание по реализации
 
-- Match finding and sequence generation run on GPU.
-- Frame assembly and entropy coding (Huffman/FSE) currently run on the host
-  using the in-crate encoder; GPU Huffman/FSE kernels are parity-tested but not
-  yet wired into the full frame path.
-- Decode uses the in-crate frame decoder with a CPU zstd fallback for unsupported frames;
-  full GPU block decode remains in progress.
+- Поиск совпадений и генерация последовательности выполняются на графическом процессоре.
+- Сборка кадров и энтропийное кодирование (Huffman/FSE) в настоящее время выполняются на хосте.
+  использование встроенного кодировщика; Ядра GPU Huffman/FSE проверяются на четность, но не
+  еще подключен к полному кадру.
+- При декодировании используется встроенный декодер кадров с резервным процессором zstd для неподдерживаемых кадров;
+  полное декодирование блоков графического процессора продолжается.
 
-## Encoding pipeline (high level)
+## Конвейер кодирования (высокий уровень)
 
-1. Input staging
-   - Copy the input into a device buffer.
-   - Partition into fixed-size chunks (for sequence generation) and blocks (for
-     zstd frame assembly).
-2. Match finding and sequence emission
-   - GPU kernels scan each chunk and emit sequences (literal length, match
-     length, offset).
-   - Sequence ordering is stable and deterministic.
-3. Literal preparation
-   - Collect literals referenced by sequences.
-   - Build literal histograms and select literal block mode (raw, RLE, or
-     Huffman) deterministically.
-4. Huffman tables (literals)
-   - Generate code lengths from the histogram.
-   - Build canonical tables with deterministic tie-breaking that matches CPU
-     zstd output.
-5. FSE tables (LL/ML/OF)
-   - Normalize frequency counts.
-   - Build FSE decoding/encoding tables deterministically.
-6. Bitstream writer
-   - Pack bits little-endian (LSB-first).
-   - Flush on byte boundaries; pad with zeros only.
-   - Mask values to declared bit widths and enforce capacity checks.
-7. Block and frame assembly
-   - Emit block headers (type, size, last-block flag).
-   - Serialize literals and sequences into compressed blocks.
-   - Emit standard zstd frame headers and optional checksums.
+1. Постановка ввода
+   - Скопируйте ввод в буфер устройства.
+   - Разделение на куски фиксированного размера (для генерации последовательности) и блоки (для
+     сборка рамы zstd).
+2. Поиск совпадений и выдача последовательности
+   - Ядра графического процессора сканируют каждый фрагмент и выдают последовательности (буквальную длину, соответствие
+     длина, смещение).
+   - Порядок последовательностей стабилен и детерминирован.
+3. Буквальная подготовка
+   - Собирайте литералы, на которые ссылаются последовательности.
+   - Стройте литеральные гистограммы и выбирайте литеральный режим блока (необработанный, RLE или
+     Хаффман) детерминистически.
+4. Таблицы Хаффмана (литералы)
+   - Генерация длин кода из гистограммы.
+   - Создавайте канонические таблицы с детерминированным решением тай-брейков, соответствующим процессору.
+     вывод zstd.
+5. Таблицы FSE (LL/ML/OF)
+   - Нормализовать счетчики частот.
+   - Детерминированное построение таблиц декодирования/кодирования FSE.
+6. Писатель битового потока
+   - Пакет битов с прямым порядком байтов (LSB-сначала).
+   - Сброс границ байтов; блокнот только с нулями.
+   - Маскируйте значения в соответствии с заявленной разрядностью и применяйте проверки емкости.
+7. Сборка блока и рамы.
+   - Выдавать заголовки блоков (тип, размер, флаг последнего блока).
+   - Сериализуйте литералы и последовательности в сжатые блоки.
+   - Выдавать стандартные заголовки кадров zstd и дополнительные контрольные суммы.
 
-## Decoding pipeline (high level)
+## Конвейер декодирования (высокий уровень)
 
-1. Frame parse
-   - Validate magic bytes, window settings, and frame header fields.
-2. Bitstream reader
-   - Read LSB-first bit sequences with strict bounds checks.
-3. Literal decode
-   - Decode literal blocks (raw, RLE, or Huffman) into the literal buffer.
-4. Sequence decode
-   - Decode LL/ML/OF values using FSE tables.
-   - Reconstruct matches using the sliding window.
-5. Output and checksum
-   - Write reconstructed bytes into the output buffer.
-   - Verify optional checksums when enabled.
+1. Разбор кадра
+   - Проверка магических байтов, настроек окна и полей заголовка кадра.
+2. Считыватель битового потока
+   - Чтение битовых последовательностей с первым младшим битом со строгой проверкой границ.
+3. Литеральное декодирование
+   - Декодировать литеральные блоки (необработанные, RLE или Хаффмана) в литеральный буфер.
+4. Декодирование последовательности
+   - Декодируйте значения LL/ML/OF с помощью таблиц FSE.
+   - Реконструируйте совпадения с помощью скользящего окна.
+5. Вывод и контрольная сумма
+   - Записать восстановленные байты в выходной буфер.
+   - Проверьте дополнительные контрольные суммы, если они включены.
 
-## Buffer lifetimes and ownership
+## Время жизни и владение буфером— Входной буфер: хост -> устройство, только для чтения.
+- Буфер последовательности: устройство, созданное путем поиска совпадений и потребляемое энтропией.
+  кодирование; нет повторного использования перекрестных блоков.
+- Литеральный буфер: устройство, создаваемое для каждого блока и освобождаемое после блока.
+  эмиссия.
+- Выходной буфер: устройство, хранящее последние байты кадра, пока хост не скопирует их.
+  вне.
+— Временные буферы: повторно используются в разных ядрах, но всегда детерминированно перезаписываются.
 
-- Input buffer: host -> device, read-only.
-- Sequence buffer: device, produced by match-finding and consumed by entropy
-  coding; no cross-block reuse.
-- Literal buffer: device, produced for each block and released after block
-  emission.
-- Output buffer: device, holds the final frame bytes until the host copies them
-  out.
-- Scratch buffers: reused across kernels, but always overwritten deterministically.
+## Обязанности ядра
 
-## Kernel responsibilities
+- Ядра поиска совпадений: находят совпадения и выдают последовательности (LL/ML/OF + литералы).
+- Ядра сборки Хаффмана: получение длин кода и канонических таблиц.
+- Ядра сборки FSE: сборка таблиц LL/ML/OF и конечных автоматов.
+- Ядра блочного кодирования: сериализуют литералы и последовательности в битовый поток.
+- Ядра блочного декодирования: анализ битового потока и восстановление литералов/последовательностей.
 
-- Match finding kernels: find matches and emit sequences (LL/ML/OF + literals).
-- Huffman build kernels: derive code lengths and canonical tables.
-- FSE build kernels: build LL/ML/OF tables and state machines.
-- Block encode kernels: serialize literals and sequences into the bitstream.
-- Block decode kernels: parse bitstream and reconstruct literals/sequences.
+## Детерминизм и ограничения четности
 
-## Determinism and parity constraints
+- Канонические сборки таблиц должны использовать тот же порядок и разделение связей, что и ЦП.
+  зстд.
+- Никаких атомов или сокращений, которые зависят от планирования потоков для любого выходного байта.
+- Упаковка битового потока имеет прямой порядок байтов, сначала LSB; площадки выравнивания байтов с нулями.
+- Все проверки границ являются явными; неверные входные данные детерминированно терпят неудачу.
 
-- Canonical table builds must use the same ordering and tie-breaking as CPU
-  zstd.
-- No atomics or reductions that depend on thread scheduling for any output byte.
-- Bitstream packing is little-endian, LSB-first; byte alignment pads with zeros.
-- All bounds checks are explicit; invalid inputs fail deterministically.
+## Проверка
 
-## Validation
+- Золотые векторы ЦП для устройства записи/считывания битового потока.
+- Тесты четности корпуса, сравнивающие выходные данные графического процессора и процессора.
+- Нечеткое покрытие некорректных кадров и граничных условий.
 
-- CPU golden vectors for the bitstream writer/reader.
-- Corpus parity tests comparing GPU and CPU outputs.
-- Fuzz coverage for malformed frames and boundary conditions.
+## Бенчмаркинг
 
-## Benchmarking
-
-Run `cargo test -p gpuzstd_metal gpu_vs_cpu_benchmark -- --ignored --nocapture` to
-compare CPU vs GPU encode latency across payload sizes. The test skips on hosts
-without a Metal-capable device; capture the output alongside hardware details
-when adjusting the GPU offload thresholds. Norito enforces the same cutoff in
-`gpu_zstd::encode_all`, so direct callers match the heuristic gate.
+Запустите `cargo test -p gpuzstd_metal gpu_vs_cpu_benchmark -- --ignored --nocapture`, чтобы
+сравнить задержку кодирования ЦП и ГП в зависимости от размера полезной нагрузки. Тест пропускает хосты
+без металлического устройства; захватите выходные данные вместе с деталями оборудования
+при настройке порогов разгрузки графического процессора. Norito обеспечивает такое же ограничение в
+`gpu_zstd::encode_all`, поэтому прямые вызовы соответствуют эвристическому шлюзу.

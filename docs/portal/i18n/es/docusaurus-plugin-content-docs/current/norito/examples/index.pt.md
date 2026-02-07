@@ -4,18 +4,20 @@ direction: ltr
 source: docs/portal/docs/norito/examples/index.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: Exemplos de Norito
-description: Trechos Kotodama selecionados com roteiros do livro razao.
-slug: /norito/examples
+título: Ejemplos de Norito
+descripción: Trechos Kotodama seleccionados con roteiros do livro razao.
+babosa: /norito/ejemplos
 ---
 
-Estes exemplos espelham os quickstarts do SDK e os roteiros do livro razao. Cada trecho inclui uma lista de verificacao do livro razao e aponta para os guias de Rust, Python e JavaScript para que voce possa repetir o mesmo cenario do inicio ao fim.
+Estos ejemplos incluyen los inicios rápidos del SDK y los controladores del libro razao. Cada trecho incluye una lista de verificación del libro razao y utiliza las guías de Rust, Python y JavaScript para que puedas repetir el mismo escenario del inicio de la semana.
 
-- **[Esqueleto do entrypoint Hajimari](./hajimari-entrypoint)** - Estrutura minima de contrato Kotodama com um unico entrypoint publico e um handle de estado.
+- **[Esqueleto do Entrypoint Hajimari](./hajimari-entrypoint)** - Estructura mínima de contrato Kotodama con un único punto de entrada público y un identificador de estado.
 - **[Registrar dominio e cunhar ativos](./register-and-mint)** - Mostra a criacao de dominios com permissao, o registro de ativos e a cunhagem deterministica.
-- **[Invocar transferencia do host a partir de Kotodama](./call-transfer-asset)** - Mostra como um entrypoint Kotodama pode chamar a instrucao do host `transfer_asset` com validacao inline de metadados.
-- **[Transferir ativo entre contas](./transfer-asset)** - Fluxo direto de transferencia de ativos que espelha os quickstarts do SDK e os roteiros do livro razao.
-- **[Cunhar, transferir e queimar um NFT](./nft-flow)** - Percorre o ciclo de vida de um NFT do inicio ao fim: cunhagem para o dono, transferencia, marcacao de metadados e queima.
+- **[Invocar transferencia do host a partir de Kotodama](./call-transfer-asset)** - Mostra como un punto de entrada Kotodama puede chamar a instrucciones del host `transfer_asset` con validación en línea de metadados.
+- **[Transferir ativo entre contas](./transfer-asset)** - Flujo directo de transferencia de activos que espelha los inicios rápidos del SDK y los roteiros del libro razao.
+- **[Cunhar, transferir e queimar um NFT](./nft-flow)** - Percorre o ciclo de vida de un NFT do inicio ao fim: cunhagem para o dono, transferencia, marcacao de metadados e queima.

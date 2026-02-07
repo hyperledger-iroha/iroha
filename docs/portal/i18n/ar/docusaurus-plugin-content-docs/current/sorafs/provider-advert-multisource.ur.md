@@ -4,87 +4,83 @@ direction: rtl
 source: docs/portal/docs/sorafs/provider-advert-multisource.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# ملٹی سورس پرووائیڈر adverts اور شیڈولنگ
+# العديد من الإعلانات والإعلانات الترويجية
 
-یہ صفحہ درج ذیل دستاویز میں موجود canonical spec کو خلاصہ کرتا ہے:
+تحتوي إحدى صفحات الدرج على المواصفات الأساسية الحالية التي تلخص ملخصًا:
 [`docs/source/sorafs/provider_advert_multisource.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/provider_advert_multisource.md).
-Norito schemas اور changelogs کے لیے اسی دستاویز کو حرف بہ حرف استعمال کریں؛ portal کی کاپی
-آپریٹر گائیڈنس، SDK نوٹس، اور ٹیلیمیٹری حوالہ جات کو SoraFS کے باقی runbooks کے قریب رکھتی ہے۔
+تعد مخططات Norito وسجلات التغيير بمثابة دستاويز بمهارة الاستخدام؛ بوابة كاي كابي
+تعد مستندات IP وSDK وملاحظات SoraFS من أحدث دفاتر التشغيل.
 
-## Norito schema میں اضافے
+## تمت إضافة مخطط Norito
 
-### Range capability (`CapabilityType::ChunkRangeFetch`)
-- `max_chunk_span` – فی درخواست سب سے بڑا مسلسل span (bytes)، `>= 1`.
-- `min_granularity` – seek ریزولوشن، `1 <= قدر <= max_chunk_span`.
-- `supports_sparse_offsets` – ایک درخواست میں غیر مسلسل offsets کی اجازت دیتا ہے۔
-- `requires_alignment` – اگر true ہو تو offsets کو `min_granularity` کے مطابق align ہونا لازم ہے۔
-- `supports_merkle_proof` – PoR witness کی سپورٹ ظاہر کرتا ہے۔
+### قدرة النطاق (`CapabilityType::ChunkRangeFetch`)
+- `max_chunk_span` – فی دخواست سبے بڑا مسلسلspan (بايت)، `>= 1`.
+- `min_granularity` – ابحث عن ریزولوشن، `1 <= قدر <= max_chunk_span`.
+- `supports_sparse_offsets` – هذا هو نوع آخر من سلسلة الإزاحات التي تسمح لك بذلك.
+- `requires_alignment` – إذا كان صحيحًا، فستتم إزاحة `min_granularity` وفقًا للمحاذاة المطلوبة.
+- `supports_merkle_proof` – شاهد PoR يظهر في الرياضة.
 
-`ProviderCapabilityRangeV1::to_bytes` / `from_bytes` canonical encoding نافذ کرتے ہیں
-تاکہ gossip payloads deterministic رہیں۔
+`ProviderCapabilityRangeV1::to_bytes` / `from_bytes` التشفير المتعارف عليه
+هذه حمولات ثرثرة حتمية.
 
-### `StreamBudgetV1`
-- فیلڈز: `max_in_flight`, `max_bytes_per_sec`, اختیاری `burst_bytes`.
-- Validation rules (`StreamBudgetV1::validate`):
-  - `max_in_flight >= 1`, `max_bytes_per_sec > 0`.
-  - `burst_bytes` موجود ہو تو `> 0` اور `<= max_bytes_per_sec` ہونا چاہیے۔
+###`StreamBudgetV1`
+- التحويل: `max_in_flight`, `max_bytes_per_sec`, اختیاری `burst_bytes`.
+- قواعد التحقق (`StreamBudgetV1::validate`):
+  - `max_in_flight >= 1`، `max_bytes_per_sec > 0`.
+  - `burst_bytes` موجود ہو تو `> 0` و `<= max_bytes_per_sec` ہونا چاہیے۔
 
-### `TransportHintV1`
-- فیلڈز: `protocol: TransportProtocol`, `priority: u8` (0-15 کی ونڈو
-  `TransportHintV1::validate` نافذ کرتا ہے).
-- معروف protocols: `torii_http_range`, `quic_stream`, `soranet_relay`,
+###`TransportHintV1`
+- التصنيف: `protocol: TransportProtocol`, `priority: u8` (0-15 عامًا)
+  `TransportHintV1::validate` نافذ كرتا).
+- البروتوكولات المعروفة: `torii_http_range`، `quic_stream`، `soranet_relay`،
   `vendor_reserved`.
-- فی provider ڈپلیکیٹ protocol entries مسترد کی جاتی ہیں۔
-
-### `ProviderAdvertBodyV1` میں اضافے
+- فيما يتعلق بإدخالات بروتوكول المزود، يتم إرسالها إلى البوابة.### تمت إضافة `ProviderAdvertBodyV1`
 - اختیاری `stream_budget: Option<StreamBudgetV1>`.
 - اختیاری `transport_hints: Option<Vec<TransportHintV1>>`.
-- دونوں فیلڈز اب `ProviderAdmissionProposalV1`، governance envelopes، CLI fixtures، اور telemetric JSON میں بہاؤ رکھتے ہیں۔
+- تم تطوير دونوڤيلز اب `ProviderAdmissionProposalV1`، ومظاريف الإدارة، وتركيبات CLI، وقياس JSON عن بعد.
 
-## Validation اور governance binding
+## التحقق من صحة وحوكمة ملزمة
 
-`ProviderAdvertBodyV1::validate` اور `ProviderAdmissionProposalV1::validate`
-خراب metadata کو مسترد کرتے ہیں:
+`ProviderAdvertBodyV1::validate` و`ProviderAdmissionProposalV1::validate`
+ملخص البيانات الوصفية التي تم الحصول عليها:
 
-- Range capabilities کو decode ہونا چاہیے اور span/granularity limits پوری کرنی چاہئیں۔
-- Stream budgets / transport hints کے لیے `CapabilityType::ChunkRangeFetch` TLV اور non-empty hints list لازم ہے۔
-- ڈپلیکیٹ transport protocols اور غیر درست priorities gossip سے پہلے validation errors پیدا کرتے ہیں۔
-- Admission envelopes `compare_core_fields` کے ذریعے proposal/adverts کے range metadata کو compare کرتے ہیں تاکہ mismatch gossip payloads جلدی مسترد ہوں۔
+- قدرات النطاق لفك تشفير ما هو محدد وحدود الامتداد/التفاصيل حسب ما هو مطلوب.
+- تدفق الميزانيات / تلميحات النقل إلى `CapabilityType::ChunkRangeFetch` TLV وقائمة التلميحات غير الفارغة مطلوبة.
+- بروتوكولات النقل العامة وغير الصحيحة من الأولويات، القيل والقال، بالإضافة إلى أخطاء التحقق من الصحة.
+- مظاريف القبول `compare_core_fields` عبارة عن اقتراح/إعلانات عبارة عن بيانات وصفية للنطاق ومقارنة البطاقة وعدم تطابق حمولات القيل والقال.
 
-Regression coverage یہاں موجود ہے:
+تغطية الانحدار موجودة:
 `crates/sorafs_manifest/src/{provider_advert,provider_admission}.rs`.
 
-## Tooling اور fixtures
+## الأدوات والتركيبات- الحمولات النافعة لإعلان الموفر تشمل `range_capability` و`stream_budget` و`transport_hints` وهي تشمل ما هو مطلوب.
+  استجابات `/v1/sorafs/providers` وتجهيزات القبول للتحقق من صحة البطاقة؛ تتضمن ملخصات JSON القدرة على التحليل وميزانية البث ومصفوفات التلميحات التي تتضمن المزيد من المعلومات حول استيعاب القياس عن بعد.
+- `cargo xtask sorafs-admission-fixtures` تحتوي عناصر JSON على ميزانيات البث وتلميحات النقل بالإضافة إلى لوحات المعلومات التي تتميز بمسار التبني.
+- `fixtures/sorafs_manifest/provider_admission/` تحت التركيبات شامل البطاقة:
+  - إعلانات أساسية متعددة المصادر،
+  - `multi_fetch_plan.json` تحتوي على مجموعات SDK لإعادة تشغيل خطة الجلب المتعددة الأقران.
 
-- Provider advert payloads میں `range_capability`, `stream_budget`, اور `transport_hints` شامل ہونا لازم ہے۔
-  `/v1/sorafs/providers` responses اور admission fixtures کے ذریعے validate کریں؛ JSON summaries میں parsed capability، stream budget، اور hint arrays شامل ہونے چاہئیں تاکہ telemetry ingest ہو سکے۔
-- `cargo xtask sorafs-admission-fixtures` اپنے JSON artefacts میں stream budgets اور transport hints دکھاتا ہے تاکہ dashboards feature adoption track کر سکیں۔
-- `fixtures/sorafs_manifest/provider_admission/` کے تحت fixtures اب شامل کرتے ہیں:
-  - canonical multi-source adverts،
-  - `multi_fetch_plan.json` تاکہ SDK suites deterministic multi-peer fetch plan replay کر سکیں۔
+## المنسق وTorii الفائزون
 
-## Orchestrator اور Torii انضمام
+- Torii `/v1/sorafs/providers` بيانات تعريف قدرة النطاق التي تم تحليلها مثل `stream_budget` و`transport_hints` واپس كرتا.
+  يحرص مقدمو الخدمات على البيانات الوصفية الجديدة على الرجوع إلى إصدار سابق للتحذيرات، ونقاط نهاية نطاق البوابة للعملاء الذين يفرضون قيودًا أو قيودًا.
+- منسق متعدد المصادر (`sorafs_car::multi_fetch`) عبر حدود النطاق، ومواءمة القدرة، وميزانيات الدفق لمهمة العمل ے دوران فرض کرتا ہے۔ قد تكون اختبارات الوحدة كبيرة جدًا، ومتفرقة، وسيناريوهات الاختناق تتضمن الكثير.
+- `sorafs_car::multi_fetch` إشارات الرجوع إلى إصدار أقدم (فشل المحاذاة، الطلبات المُقيدة) دفق مشغلي كرتا ہے تاکہ دیکھ سکیں کہ پلاننج کے دوران موفري الخصوصية کیوں تخطي ہوئے.
 
-- Torii `/v1/sorafs/providers` parsed range capability metadata کے ساتھ `stream_budget` اور `transport_hints` واپس کرتا ہے۔
-  providers جب نئی metadata چھوڑ دیں تو downgrade warnings چلتے ہیں، اور gateway range endpoints براہ راست clients کے لیے یہی constraints نافذ کرتے ہیں۔
-- Multi-source orchestrator (`sorafs_car::multi_fetch`) اب range limits، capability alignment، اور stream budgets کو work assignment کے دوران enforce کرتا ہے۔ Unit tests میں chunk-too-large، sparse-seek، اور throttling scenarios شامل ہیں۔
-- `sorafs_car::multi_fetch` downgrade signals (alignment failures, throttled requests) stream کرتا ہے تاکہ operators دیکھ سکیں کہ پلاننگ کے دوران مخصوص providers کیوں skip ہوئے۔
+## مرجع القياس عن بعدTorii أدوات جلب النطاق **SoraFS إمكانية ملاحظة الجلب** لوحة معلومات Grafana
+(`dashboards/grafana/sorafs_fetch_observability.json`) وقواعد التنبيه ذات الصلة
+(`dashboards/alerts/sorafs_fetch_rules.yml`) تغذية الكرت.
 
-## Telemetry reference
-
-Torii کی range fetch instrumentation **SoraFS Fetch Observability** Grafana dashboard
-(`dashboards/grafana/sorafs_fetch_observability.json`) اور متعلقہ alert rules
-(`dashboards/alerts/sorafs_fetch_rules.yml`) کو feed کرتی ہے۔
-
-| Metric | Type | Labels | Description |
+| متري | اكتب | التسميات | الوصف |
 |--------|------|--------|-------------|
-| `torii_sorafs_provider_range_capability_total` | Gauge | `feature` (`providers`, `supports_sparse_offsets`, `requires_alignment`, `supports_merkle_proof`, `stream_budget`, `transport_hints`) | Range capability features advertise کرنے والے providers۔ |
-| `torii_sorafs_range_fetch_throttle_events_total` | Counter | `reason` (`quota`, `concurrency`, `byte_rate`) | Policy کے مطابق throttled range fetch attempts۔ |
-| `torii_sorafs_range_fetch_concurrency_current` | Gauge | — | Shared concurrency budget استعمال کرنے والی active guarded streams۔ |
+| `torii_sorafs_provider_range_capability_total` | مقياس | `feature` (`providers`، `supports_sparse_offsets`، `requires_alignment`، `supports_merkle_proof`، `stream_budget`، `transport_hints`) | تعلن ميزات قدرة النطاق عن موفري الخدمة. |
+| `torii_sorafs_range_fetch_throttle_events_total` | عداد | `reason` (`quota`، `concurrency`، `byte_rate`) | السياسة تتوافق مع محاولات جلب النطاق المحدود. |
+| `torii_sorafs_range_fetch_concurrency_current` | مقياس | — | استخدام ميزانية التزامن المشتركة تيارات حراسة نشطة. |
 
-Example PromQL snippets:
+مثال على مقتطفات PromQL:
 
 ```promql
 sum(rate(torii_sorafs_range_fetch_throttle_events_total[5m])) by (reason)
@@ -92,4 +88,4 @@ max(torii_sorafs_range_fetch_concurrency_current)
 torii_sorafs_provider_range_capability_total
 ```
 
-Quota enforcement کی تصدیق کے لیے throttling counter استعمال کریں اس سے پہلے کہ multi-source orchestrator defaults فعال کریں، اور جب concurrency آپ کے fleet کے stream budget maxima کے قریب ہو تو alert کریں۔
+يتم مراقبة تطبيق الحصص من خلال استخدام عداد الاختناق، حيث تم تنشيط الإعدادات الافتراضية للمنسق متعدد المصادر، وعندما يتزامن الأسطول مع الحد الأقصى لميزانية التدفق، فإنه يسمح بتنبيه الآخرين.

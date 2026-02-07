@@ -4,27 +4,29 @@ direction: ltr
 source: docs/portal/docs/reference/torii-rapidoc.mdx
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-import RapiDocPanel from '@site/src/components/RapiDocPanel.jsx';
+RapiDocPanel файлын '@site/src/components/RapiDocPanel.jsx' ішінен импорттау;
 
 # Torii API (RapiDoc)
 
-`RapiDoc` offers a compact, documentation-first rendering of the same Torii
-OpenAPI document. Use it when you need a denser overview or read-only review of
-request/response models.
+`RapiDoc` бірдей Torii ықшам, құжаттаманы бірінші рет көрсетуді ұсынады.
+OpenAPI құжаты. Оны көбірек шолу немесе тек оқуға арналған шолу қажет болғанда пайдаланыңыз
+сұрау/жауап үлгілері.
 
-## Usage tips
+## Пайдалану бойынша кеңестер
 
-- Enter a bearer token to enable interactive calls. The value is forwarded as an
-  `X-TryIt-Auth` header and normalised by the proxy.
-- Configure `TRYIT_PROXY_PUBLIC_URL` when serving the portal so interactive
-  requests are routed through the staging proxy. The widget warns when the proxy
-  URL is missing.
-- Use the “OpenAPI snapshot” dropdown to load historical specs published by
-  `npm run sync-openapi`; the `Latest (tracked)` option always resolves to
+- Интерактивті қоңырауларды қосу үшін жеткізуші таңбалауышын енгізіңіз. Мән ретінде жіберіледі
+  `X-TryIt-Auth` тақырыбы және прокси арқылы қалыпқа келтірілген.
+- Порталға интерактивті қызмет көрсету кезінде `TRYIT_PROXY_PUBLIC_URL` теңшеңіз
+  сұраулар кезеңдік прокси арқылы бағытталады. Виджет прокси болғанда ескертеді
+  URL мекенжайы жоқ.
+- Жариялаған тарихи сипаттамаларды жүктеу үшін "OpenAPI суреті" ашылмалы тізімін пайдаланыңыз.
+  `npm run sync-openapi`; `Latest (tracked)` опциясы әрқашан шешіледі
   `/openapi/torii.json`.
-- Combine with the “[Try it](/api/overview#try-it-sandbox-docs-3)” console when
-  working against staged gateways requiring the proxy.
+- «[Көріп көріңіз](/api/overview#try-it-sandbox-docs-3)» консольімен біріктіріңіз:
+  проксиді қажет ететін кезеңдік шлюздерге қарсы жұмыс.
 
 <RapiDocPanel />

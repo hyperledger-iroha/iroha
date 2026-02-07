@@ -6,45 +6,46 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 79a048e6061f7054e14a471004cf7da0dddd3f9bf627d9f1d20ff63803cb0979
 source_last_modified: "2026-01-04T17:06:14.405886+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# SoraFS Quickstart
+# SoraFS התחלה מהירה
 
-This hands-on guide walks through the deterministic SF-1 chunker profile,
-manifest signing, and multi-provider fetch flow that underpin the SoraFS
-storage pipeline. Pair it with the [manifest pipeline deep dive](manifest-pipeline.md)
-for design notes and CLI flag reference material.
+מדריך מעשי זה עובר דרך פרופיל הצ'אנקר הדטרמיניסטי SF-1,
+חתימת מניפסט, וזרימת אחזור מרובה ספקים העומדים בבסיס ה-SoraFS
+צינור אחסון. התאם אותו עם [צלילת צנרת גלויה לעומק](manifest-pipeline.md)
+עבור הערות עיצוב וחומר התייחסות לדגל CLI.
 
-## Prerequisites
+## דרישות מוקדמות
 
-- Rust toolchain (`rustup update`), workspace cloned locally.
-- Optional: [OpenSSL-generated Ed25519 keypair](https://github.com/hyperledger-iroha/iroha/tree/master/defaults/dev-keys#readme)
-  for signing manifests.
-- Optional: Node.js ≥ 18 if you plan to preview the Docusaurus portal.
+- שרשרת כלי חלודה (`rustup update`), סביבת עבודה משובטת מקומית.
+- אופציונלי: [זוג מפתחות Ed25519 שנוצר על ידי OpenSSL](https://github.com/hyperledger-iroha/iroha/tree/master/defaults/dev-keys#readme)
+  לחתימה על מניפסטים.
+- אופציונלי: Node.js ≥ 18 אם אתה מתכנן לצפות בתצוגה מקדימה של פורטל Docusaurus.
 
-Set `export RUST_LOG=info` while experimenting to surface helpful CLI messages.
+הגדר את `export RUST_LOG=info` תוך כדי ניסוי כדי להציג הודעות CLI מועילות.
 
-## 1. Refresh the deterministic fixtures
+## 1. רענן את הגופים הדטרמיניסטיים
 
-Regenerate the canonical SF-1 chunking vectors. The command also emits signed
-manifest envelopes when `--signing-key` is supplied; use `--allow-unsigned`
-during local development only.
+צור מחדש את וקטורי החתכים הקנוניים של SF-1. הפקודה גם פולטת חתום
+מעטפות מניפסט כאשר `--signing-key` מסופק; השתמש ב-`--allow-unsigned`
+במהלך פיתוח מקומי בלבד.
 
 ```bash
 cargo run -p sorafs_chunker --bin export_vectors -- --allow-unsigned
 ```
 
-Outputs:
+פלטים:
 
 - `fixtures/sorafs_chunker/sf1_profile_v1.{json,rs,ts,go}`
 - `fixtures/sorafs_chunker/manifest_blake3.json`
-- `fixtures/sorafs_chunker/manifest_signatures.json` (if signed)
+- `fixtures/sorafs_chunker/manifest_signatures.json` (אם חתום)
 - `fuzz/sorafs_chunker/sf1_profile_v1_{input,backpressure}.json`
 
-## 2. Chunk a payload and inspect the plan
+## 2. חלק מטען ובדוק את התוכנית
 
-Use `sorafs_chunker` to chunk an arbitrary file or archive:
+השתמש ב-`sorafs_chunker` כדי לחלק קובץ או ארכיון שרירותיים:
 
 ```bash
 echo "SoraFS deterministic chunking" > /tmp/docs.txt
@@ -52,23 +53,23 @@ cargo run -p sorafs_chunker --bin sorafs-chunk-dump -- /tmp/docs.txt \
   > /tmp/docs.chunk-plan.json
 ```
 
-Key fields:
+שדות מפתח:
 
-- `profile` / `break_mask` – confirms the `sorafs.sf1@1.0.0` parameters.
-- `chunks[]` – ordered offsets, lengths, and chunk BLAKE3 digests.
+- `profile` / `break_mask` - מאשר את הפרמטרים `sorafs.sf1@1.0.0`.
+- `chunks[]` - הוזמנו קיזוזים, אורכים ועיכובי BLAKE3 נתחים.
 
-For larger fixtures, run the proptest-backed regression to ensure streaming and
-batch chunking stay in sync:
+עבור מתקנים גדולים יותר, הפעל את הרגרסיה המגובה ב-proptest כדי להבטיח סטרימינג ו
+נתחי אצווה הישאר מסונכרן:
 
 ```bash
 cargo test -p sorafs_chunker streaming_backpressure_fuzz_matches_batch
 ```
 
-## 3. Build and sign a manifest
+## 3. בנה וחתום על מניפסט
 
-Wrap the chunk plan, aliases, and governance signatures into a manifest using
-`sorafs-manifest-stub`. The command below showcases a single-file payload; pass
-a directory path to package a tree (the CLI walks it lexicographically).
+עטפו את תוכנית הנתחים, הכינויים וחתימות הממשל למניפסט באמצעות
+`sorafs-manifest-stub`. הפקודה למטה מציגה מטען של קובץ יחיד; לעבור
+נתיב ספרייה לאריזת עץ (ה-CLI מטייל בו מבחינה לקסיקוגרפית).
 
 ```bash
 cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
@@ -80,21 +81,21 @@ cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
   --allow-unsigned
 ```
 
-Review `/tmp/docs.report.json` for:
+בדוק את `/tmp/docs.report.json` עבור:
 
-- `chunking.chunk_digest_sha3_256` – SHA3 digest of offsets/lengths, matches the
-  chunker fixtures.
-- `manifest.manifest_blake3` – BLAKE3 digest signed in the manifest envelope.
-- `chunk_fetch_specs[]` – ordered fetch instructions for orchestrators.
+- `chunking.chunk_digest_sha3_256` - תקציר SHA3 של קיזוזים/אורכים, תואם את
+  אביזרי צ'אנקר.
+- `manifest.manifest_blake3` - תקציר BLAKE3 חתום במעטפת המניפסט.
+- `chunk_fetch_specs[]` - הוראות אחזור הוזמנו עבור מתזמרים.
 
-When ready to supply real signatures, add `--signing-key` and `--signer`
-arguments. The command verifies every Ed25519 signature before writing the
-envelope.
+כשתהיה מוכן לספק חתימות אמיתיות, הוסף `--signing-key` ו-`--signer`
+טיעונים. הפקודה מאמתת כל חתימה של Ed25519 לפני כתיבת ה-
+מעטפה.
 
-## 4. Simulate multi-provider retrieval
+## 4. הדמיית אחזור מרובה ספקים
 
-Use the developer fetch CLI to replay the chunk plan against one or more
-providers. This is ideal for CI smoke tests and orchestrator prototyping.
+השתמש ב-CLI של המפתחים כדי להפעיל מחדש את תוכנית הנתחים מול אחד או יותר
+ספקים. זה אידיאלי עבור מבחני עשן CI ואב-טיפוס של מתזמר.
 
 ```bash
 cargo run -p sorafs_car --bin sorafs_fetch -- \
@@ -104,27 +105,25 @@ cargo run -p sorafs_car --bin sorafs_fetch -- \
   --json-out=/tmp/docs.fetch-report.json
 ```
 
-Assertions:
+קביעות:
 
-- `payload_digest_hex` must match the manifest report.
-- `provider_reports[]` surfaces success/failure counts per provider.
-- Non-zero `chunk_retry_total` highlights back-pressure adjustments.
-- Pass `--max-peers=<n>` to limit the number of providers scheduled for a run
-  and keep CI simulations focused on the primary candidates.
-- `--retry-budget=<n>` overrides the default per-chunk retry count (3) so you
-  can surface orchestrator regressions faster when injecting failures.
+- `payload_digest_hex` חייב להתאים לדוח המניפסט.
+- `provider_reports[]` מציג ספירות הצלחה/כישלונות לכל ספק.
+- `chunk_retry_total` ללא אפס מדגיש התאמות של לחץ גב.
+- עברו את `--max-peers=<n>` כדי להגביל את מספר הספקים המתוכננים להרצה
+  ולשמור על סימולציות CI ממוקדות במועמדים העיקריים.
+- `--retry-budget=<n>` עוקף את ברירת המחדל של ספירת הניסיון החוזר לכל נתח (3) כך שאתה
+  יכול להציף רגרסיות מתזמר מהר יותר בעת הזרקת כשלים.
 
-Add `--expect-payload-digest=<hex>` and `--expect-payload-len=<bytes>` to fail
-fast when the reconstructed payload deviates from the manifest.
+הוסף את `--expect-payload-digest=<hex>` ו-`--expect-payload-len=<bytes>` כדי להיכשל
+מהיר כאשר המטען המשוחזר חורג מהמניפסט.
 
-## 5. Next steps
-
-- **Governance integration** – pipe the manifest digest and
-  `manifest_signatures.json` into the council workflow so the Pin Registry can
-  advertise availability.
-- **Registry negotiation** – consult [`sorafs/chunker_registry.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/chunker_registry.md)
-  before registering new profiles. Automation should prefer canonical handles
-  (`namespace.name@semver`) over numeric IDs.
-- **CI automation** – add the commands above to release pipelines so docs,
-  fixtures, and artifacts publish deterministic manifests alongside signed
-  metadata.
+## 5. השלבים הבאים- **שילוב ממשל** - צינור ה-manifest digest ו
+  `manifest_signatures.json` לתוך זרימת העבודה של המועצה כדי שמרשם הפינים יוכל
+  לפרסם זמינות.
+- **משא ומתן ברישום** - התייעצו עם [`sorafs/chunker_registry.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/chunker_registry.md)
+  לפני רישום פרופילים חדשים. אוטומציה צריכה להעדיף ידיות קנוניות
+  (`namespace.name@semver`) על מזהים מספריים.
+- **אוטומציה של CI** - הוסף את הפקודות שלמעלה כדי לשחרר צינורות כך שמסמכים,
+  מתקנים וחפצים מפרסמים מניפסטים דטרמיניסטיים לצד חתומים
+  מטא נתונים.

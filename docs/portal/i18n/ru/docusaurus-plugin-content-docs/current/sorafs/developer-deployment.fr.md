@@ -4,61 +4,61 @@ direction: ltr
 source: docs/portal/docs/sorafs/developer-deployment.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: developer-deployment
-title: Notes de déploiement SoraFS
-sidebar_label: Notes de déploiement
-description: Checklist pour promouvoir le pipeline SoraFS de la CI vers la production.
+идентификатор: развертывание разработчика
+заголовок: Примечания к развертыванию SoraFS
+Sidebar_label: Примечания к развертыванию
+описание: Контрольный список для продвижения конвейера SoraFS CI в зависимости от производства.
 ---
 
-:::note Source canonique
+:::note Источник канонический
 :::
 
-# Notes de déploiement
+# Примечания по развертыванию
 
-Le workflow de packaging SoraFS renforce le déterminisme, donc passer de la CI à la production nécessite surtout des garde-fous opérationnels. Utilisez cette checklist lors du déploiement de l'outillage sur des gateways et fournisseurs de stockage réels.
+Рабочий процесс упаковки SoraFS усиливает детерминизм, обеспечивая передачу CI на производство, необходимое для обеспечения осторожности операций. Используйте этот контрольный список для развертывания оборудования на шлюзах и для обслуживания складских катушек.
 
-## Pré-vol
+## Пре-вол
 
-- **Alignement du registre** — confirmez que les profils de chunker et les manifests référencent le même tuple `namespace.name@semver` (`docs/source/sorafs/chunker_registry.md`).
-- **Politique d'admission** — revoyez les adverts de fournisseurs signés et les alias proofs nécessaires pour `manifest submit` (`docs/source/sorafs/provider_admission_policy.md`).
-- **Runbook du pin registry** — gardez `docs/source/sorafs/runbooks/pin_registry_ops.md` à portée pour les scénarios de reprise (rotation d'alias, échecs de réplication).
+- **Выравнивание регистрации** — подтвердите, что профили фрагмента и манифесты ссылаются на кортеж памяти `namespace.name@semver` (`docs/source/sorafs/chunker_registry.md`).
+- **Политика допуска** — отзовите рекламные объявления с подписями Fournisseurs и псевдонимы, необходимые для `manifest submit` (`docs/source/sorafs/provider_admission_policy.md`).
+- **Реестр Runbook du pin** — добавлен `docs/source/sorafs/runbooks/pin_registry_ops.md` для сценариев повторения (чередование псевдонимов, выполнение репликации).
 
-## Configuration de l'environnement
+## Конфигурация среды
 
-- Les gateways doivent activer l'endpoint de proof streaming (`POST /v1/sorafs/proof/stream`) pour que le CLI puisse émettre des résumés de télémétrie.
-- Configurez la policy `sorafs_alias_cache` en utilisant les valeurs par défaut de `iroha_config` ou le helper CLI (`sorafs_cli manifest submit --alias-*`).
-- Fournissez les stream tokens (ou identifiants Torii) via un gestionnaire de secrets sécurisé.
-- Activez les exporters de télémétrie (`torii_sorafs_proof_stream_*`, `torii_sorafs_chunk_range_*`) et envoyez-les vers votre stack Prometheus/OTel.
+- Шлюзы активизируют конечную точку подтверждения потоковой передачи (`POST /v1/sorafs/proof/stream`), чтобы CLI мог получить резюме телеметрии.
+- Настройте политику `sorafs_alias_cache`, используя значения по умолчанию `iroha_config` или вспомогательный CLI (`sorafs_cli manifest submit --alias-*`).
+- Формирование токенов потока (или идентификаторы Torii) с помощью защищенного секретного кода.
+- Активируйте экспортеры телеметрии (`torii_sorafs_proof_stream_*`, `torii_sorafs_chunk_range_*`) и отправляйте свой стек Prometheus/OTel.
 
-## Stratégie de rollout
+## Стратегия развертывания
 
-1. **Manifests blue/green**
-   - Utilisez `manifest submit --summary-out` pour archiver les réponses de chaque rollout.
-   - Surveillez `torii_sorafs_gateway_refusals_total` pour détecter tôt les mismatches de capacité.
-2. **Validation des proofs**
-   - Traitez les échecs de `sorafs_cli proof stream` comme des bloqueurs de déploiement ; les pics de latence indiquent souvent un throttling fournisseur ou des tiers mal configurés.
-   - `proof verify` doit faire partie du smoke test post-pin pour s'assurer que le CAR hébergé par les fournisseurs correspond toujours au digest du manifest.
-3. **Dashboards de télémétrie**
-   - Importez `docs/examples/sorafs_proof_streaming_dashboard.json` dans Grafana.
-   - Ajoutez des panneaux pour la santé du pin registry (`docs/source/sorafs/runbooks/pin_registry_ops.md`) et les stats de chunk range.
-4. **Activation multi-source**
-   - Suivez les étapes de rollout progressif dans `docs/source/sorafs/runbooks/multi_source_rollout.md` lors de l'activation de l'orchestrateur, et archivez les artefacts scoreboard/télémétrie pour les audits.
+1. **Проявляет синий/зеленый цвет**
+   - Используйте `manifest submit --summary-out` для архивирования ответов на развертывание.
+   - Surveillez `torii_sorafs_gateway_refusals_total` для обнаружения несоответствий емкости.
+2. **Проверка доказательств**
+   - Traitez les échecs de `sorafs_cli proof stream` как блоки развертывания; Независимые изображения с задержкой представляют собой удушающий фурнисер или уровни неправильных конфигураций.
+   - `proof verify` сделайте вечеринку по дыму после проверки, чтобы убедиться, что CAR hébergé par les fournisseurs соответствует toujours au Digest du Manifest.
+3. **Информационные панели телеметрии**
+   - Импортируйте `docs/examples/sorafs_proof_streaming_dashboard.json` в Grafana.
+   - Добавление панелей для восстановления реестра контактов (`docs/source/sorafs/runbooks/pin_registry_ops.md`) и статистики диапазона фрагментов.
+4. **Активация из нескольких источников**
+   - Следуйте этапам развертывания в `docs/source/sorafs/runbooks/multi_source_rollout.md` для активации оркестратора и архивируйте табло/телеметрию артефактов для аудитов.
 
-## Gestion des incidents
-
-- Suivez les chemins d'escalade dans `docs/source/sorafs/runbooks/` :
-  - `sorafs_gateway_operator_playbook.md` pour les pannes de gateway et l'épuisement des stream tokens.
-  - `dispute_revocation_runbook.md` lors de litiges de réplication.
-  - `sorafs_node_ops.md` pour la maintenance au niveau des nœuds.
-  - `multi_source_rollout.md` pour les overrides d'orchestrateur, le blacklisting des peers et les rollouts par étapes.
-- Enregistrez les échecs de proofs et les anomalies de latence dans GovernanceLog via les API de PoR tracker existantes afin que la gouvernance puisse évaluer les performances des fournisseurs.
+## Описание инцидентов- Suivez les chemins d'escalade в `docs/source/sorafs/runbooks/` :
+  - `sorafs_gateway_operator_playbook.md` для панелей шлюза и использования токенов потока.
+  - `dispute_revocation_runbook.md` для судебных разбирательств по репликации.
+  - `sorafs_node_ops.md` для обслуживания на новом уровне.
+  - `multi_source_rollout.md` для переопределения оркестратора, внесения в черный список узлов и развертываний на этапах.
+- Зарегистрируйте тесты доказательств и аномалии задержки в GovernanceLog через API-интерфейс PoR-трекера, который существует до тех пор, пока управление не сможет оценить действия четырех специалистов.
 
 ## Prochaines étapes
 
-- Intégrez l'automatisation de l'orchestrateur (`sorafs_car::multi_fetch`) lorsque l'orchestrateur multi-source fetch (SF-6b) sera disponible.
-- Suivez les mises à jour PDP/PoTR sous SF-13/SF-14 ; le CLI et les docs évolueront pour exposer les deadlines et la sélection de tiers une fois ces proofs stabilisés.
+- Интегрированная автоматизация оркестрации (`sorafs_car::multi_fetch`) с функцией выборки из нескольких источников (SF-6b) доступна.
+- Suivez les Mises à jour PDP/PoTR sous SF-13/SF-14; CLI и документация развиваются для выявления сроков и выбора уровней, которые стабилизируют эти доказательства.
 
-En combinant ces notes de déploiement avec le quickstart et les recettes CI, les équipes peuvent passer des expérimentations locales à des pipelines SoraFS en production avec un processus répétable et observable.
+В сочетании с этими заметками по развертыванию, быстрым запуском и записями CI, оборудование может быть использовано для локального прохождения экспериментов в конвейерах SoraFS в производстве с воспроизводимым и наблюдаемым процессом.

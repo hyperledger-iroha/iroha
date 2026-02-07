@@ -7,26 +7,27 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 29808ff4511c668963b3c8c4326cca49e033bea91b1b9aa56968ef494648f18e
 source_last_modified: "2026-01-22T14:35:37.885694+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# SoraNet Relay Incentive Parliament Packet
+# የሶራኔት ሪሌይ ማበረታቻ የፓርላማ ፓኬት
 
-This bundle captures the artefacts required by Sora Parliament to approve
-automatic relay payouts (SNNet-7):
+ይህ ጥቅል በሶራ ፓርላማ ለማጽደቅ የሚያስፈልጉትን ቅርሶች ይይዛል
+ራስ-ሰር የማስተላለፊያ ክፍያዎች (SNNet-7)፦
 
-- `reward_config.json` - Norito-serialisable reward engine configuration, ready
-  to be ingested by `iroha app sorafs incentives service init`. The
-  `budget_approval_id` matches the hash listed in the governance minutes.
-- `shadow_daemon.json` - beneficiary and bond mapping consumed by the replay
-  harness (`shadow-run`) and the production daemon.
-- `economic_analysis.md` - fairness summary for the 2025-10 -> 2025-11
-  shadow simulation.
-- `rollback_plan.md` - operational playbook for disabling automatic payouts.
-- Supporting artefacts: `docs/examples/soranet_incentive_shadow_run.{json,pub,sig}`,
-  `dashboards/grafana/soranet_incentives.json`,
+- `reward_config.json` - I18NT0000000X-ተከታታይ የሽልማት ሞተር ውቅር፣ ዝግጁ
+  በ `iroha app sorafs incentives service init` ለመዋሃድ. የ
+  `budget_approval_id` በአስተዳደር ደቂቃዎች ውስጥ ከተዘረዘረው ሃሽ ጋር ይዛመዳል።
+- `shadow_daemon.json` - ተጠቃሚ እና ቦንድ ካርታ በድጋሚ አጫውት ጥቅም ላይ ይውላል
+  መታጠቂያ (`shadow-run`) እና የምርት ዴሞን.
+- `economic_analysis.md` - ለ2025-10 -> 2025-11 የፍትሃዊነት ማጠቃለያ
+  ጥላ ማስመሰል.
+- `rollback_plan.md` - አውቶማቲክ ክፍያዎችን ለማሰናከል የሚሰራ የመጫወቻ መጽሐፍ።
+- የሚደግፉ ቅርሶች፡- `docs/examples/soranet_incentive_shadow_run.{json,pub,sig}`፣
+  `dashboards/grafana/soranet_incentives.json`፣
   `dashboards/alerts/soranet_incentives_rules.yml`.
 
-## Integrity Checks
+## የታማኝነት ማረጋገጫዎች
 
 ```bash
 shasum -a 256 docs/examples/soranet_incentive_parliament_packet/* \
@@ -34,15 +35,15 @@ shasum -a 256 docs/examples/soranet_incentive_parliament_packet/* \
   docs/examples/soranet_incentive_shadow_run.sig
 ```
 
-Compare the digests with the values recorded in the Parliament minutes. Verify
-the shadow-run signature as described in
+የምግብ መፍጫ ስርዓቱን በፓርላማ ደቂቃዎች ውስጥ ከተመዘገቡት እሴቶች ጋር ያወዳድሩ። አረጋግጥ
+በ ውስጥ እንደተገለፀው የጥላ አሂድ ፊርማ
 `docs/source/soranet/reports/incentive_shadow_run.md`.
 
-## Updating the Packet
+## ፓኬጁን በማዘመን ላይ
 
-1. Refresh `reward_config.json` whenever the reward weights, base payout, or
-   approval hash change.
-2. Re-run the 60-day shadow simulation, update `economic_analysis.md` with the
-   new findings, and commit the JSON + detached signature pair.
-3. Present the updated bundle to Parliament together with Observatory dashboard
-   exports when seeking renewed approval.
+1. ሽልማቱ በሚመዘንበት ጊዜ፣ የመሠረታዊ ክፍያ ወይም የ `reward_config.json` አድስ
+   ማጽደቅ የሃሽ ለውጥ.
+2. የ60-ቀን ጥላ ማስመሰልን እንደገና አሂድ፣ `economic_analysis.md` በ
+   አዲስ ግኝቶችን እና JSON + የተነጠለ ፊርማ ጥንድ ያድርጉ።
+3. የተዘመነውን ጥቅል ከኦብዘርቫቶሪ ዳሽቦርድ ጋር ለፓርላማ ያቅርቡ
+   የታደሰ ፈቃድ ሲፈልጉ ወደ ውጭ መላክ።

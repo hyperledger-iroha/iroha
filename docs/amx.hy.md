@@ -7,32 +7,33 @@ generator: scripts/sync_docs_i18n.py
 source_hash: f11f0a83efc46035aeeaf4c1ad626a2a773303e9dfab188704016cf483a78ce6
 source_last_modified: "2026-01-23T08:31:38.611123+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# AMX Execution & Operations Guide
+# AMX կատարման և գործառնությունների ուղեցույց
 
-**Status:** Draft (NX-17)  
-**Audience:** Core protocol, AMX/consensus engineers, SRE/Telemetry, SDK & Torii teams  
-**Context:** Completes the roadmap item “Documentation (owner: Docs) — update `docs/amx.md` with timing diagrams, error catalog, operator expectations, and developer guidance for generating/using PVOs.”【roadmap.md:2497】
+**Կարգավիճակ՝** Սևագիր (NX-17)  
+**Հանդիսատես.** Հիմնական արձանագրություն, AMX/համաձայնության ինժեներներ, SRE/Telemetry, SDK և Torii թիմեր  
+**Համատեքստ.** Ավարտում է ճանապարհային քարտեզի կետը «Փաստաթղթեր (սեփականատեր՝ Փաստաթղթեր) — թարմացնել `docs/amx.md`-ը՝ ժամանակային դիագրամներով, սխալների կատալոգով, օպերատորի ակնկալիքներով և PVO-ների ստեղծման/օգտագործման համար մշակողի ուղեցույցով։【roadmap.md:2497】
 
-## Summary
+## Ամփոփում
 
-Atomic cross-data-space transactions (AMX) let a single submission touch multiple data spaces (DS) while preserving 1 s slot finality, deterministic failure codes, and confidentiality for private DS fragments. This guide captures the timing model, canonical error handling, operator evidence requirements, and developer expectations for Proof Verification Objects (PVOs) so the roadmap deliverable remains self-contained outside the Nexus design paper (`docs/source/nexus.md`).
+Ատոմային տվյալների խաչաձև տարածության գործարքները (AMX) թույլ են տալիս մեկ ներկայացում դիպչել բազմաթիվ տվյալների տարածություններին (DS)՝ պահպանելով 1-ների բնիկի վերջնականությունը, դետերմինիստական ձախողման կոդերը և գաղտնիությունը մասնավոր DS բեկորների համար: Այս ուղեցույցը ներառում է ժամանակի մոդելը, կանոնական սխալների մշակումը, օպերատորի ապացույցների պահանջները և ծրագրավորողների ակնկալիքները Proof Verification Objects (PVOs), այնպես որ ճանապարհային քարտեզի առաքումը մնում է ինքնուրույն՝ Nexus դիզայնի թղթից դուրս (`docs/source/nexus.md`):
 
-Key guarantees:
+Հիմնական երաշխիքներ.
 
-- Every AMX submission receives deterministic prepare/commit budgets; overruns abort with documented codes rather than hanging lanes.
-- DA samples that miss the budget are logged as missing availability evidence and the transaction remains queued for the next slot instead of silently stalling throughput.
-- Proof Verification Objects (PVOs) decouple heavy proofs from the 1 s slot by letting clients/batchers pre-register artefacts that the nexus host validates quickly in-slot.
-- IVM hosts derive per-dataspace AXT policy from the Space Directory: handles must target the lane advertised in the catalog, present the latest manifest root, satisfy expiry_slot, handle_era, and sub_nonce minima, and reject unknown dataspaces with `PermissionDenied` before execution.
-- Slot expiry uses `nexus.axt.slot_length_ms` (default `1` ms, validated between `1` ms and `600_000` ms) plus the bounded `nexus.axt.max_clock_skew_ms` (default `0` ms, capped by the slot length and `60_000` ms). Hosts compute `current_slot = block.creation_time_ms / slot_length_ms`, apply the skew allowance to proof and handle expiry checks, and reject handles that advertise a larger skew than the configured limit.
-- Proof cache TTL bounds reuse: `nexus.axt.proof_cache_ttl_slots` (default `1`, validated `1`–`64`) limits how long accepted or rejected proofs stay in the host cache; entries drop once the TTL window or the proof’s `expiry_slot` elapses so replay protection stays bounded.
-- Replay ledger retention: `nexus.axt.replay_retention_slots` (default `128`, validated `1`–`4_096`) sets the minimum slot window of handle-usage history retained for replay rejection across peers/restarts; align it with the longest handle-validity window you expect operators to issue. The ledger is persisted in WSV, hydrated on startup, and pruned deterministically once both the retention window and handle expiry have elapsed (whichever is later) so peer switches do not reopen replay gaps.
-- Debugging cache status: Torii exposes `/v1/debug/axt/cache` (telemetry/developer gate) to return the current AXT policy snapshot version, the most recent reject (lane/reason/version), cached proofs (dataspace/status/manifest root/slots), and reject hints (`next_min_handle_era`/`next_min_sub_nonce`). Use this endpoint to confirm slot/manifest rotations are reflected in cache state and to refresh handles deterministically during troubleshooting.
+- AMX-ի յուրաքանչյուր ներկայացում ստանում է որոշիչ բյուջեներ պատրաստելու/պարտավորելու համար; գերազանցումներն ընդհատվում են փաստաթղթավորված կոդերով, այլ ոչ թե կախովի ուղիներով:
+- DA նմուշները, որոնք բաց են թողնում բյուջեն, գրանցվում են որպես բացակայող առկայության ապացույց, և գործարքը մնում է հերթագրված հաջորդ հատվածի համար՝ անձայն թողունակությունը դադարեցնելու փոխարեն:
+- Proof Verification Objects (PVOs) անջատում են ծանր ապացույցները 1s բնիկից՝ թույլ տալով հաճախորդներին/բաչերներին նախապես գրանցել արտեֆակտներ, որոնք nexus host-ը արագորեն վավերացնում է ներդիրում:
+- IVM հոսթորդները բխում են մեկ տվյալների տարածության AXT քաղաքականությունից Space Directory-ից. բռնակները պետք է ուղղված լինեն կատալոգում գովազդված գծին, ներկայացնեն վերջին մանիֆեստի արմատը, բավարարեն expiry_slot, handle_era և sub_nonce minima, և մերժեն անհայտ տվյալների տարածքները I1800040-ից առաջ:
+- Սլոտի ժամկետի ավարտը օգտագործում է `nexus.axt.slot_length_ms` (կանխադրված `1`ms, վավերացված `1`ms-ի և `600_000`ms-ի միջև) գումարած սահմանափակված `nexus.axt.max_clock_skew_ms` (կանխադրված `1`ms, լռելյայն 400000044Xms) և `60_000`ms): Հոսթները հաշվարկում են `current_slot = block.creation_time_ms / slot_length_ms`-ը, կիրառում են թեքության սահմանաչափը ապացուցման և ժամկետանց ստուգումների համար, և մերժում են բռնակները, որոնք գովազդում են ավելի մեծ թեքություն, քան կազմաձևված սահմանաչափը:
+- Ապացուցված քեշի TTL սահմանների կրկնակի օգտագործումը. `nexus.axt.proof_cache_ttl_slots` (կանխադրված `1`, վավերացված `1`–`64`) սահմանափակում է ընդունված կամ մերժված ապացույցների գտնվելու ժամկետը հյուրընկալող քեշում; գրառումները ընկնում են, երբ TTL պատուհանը կամ ապացույցի `expiry_slot`-ն անցնում է, այնպես որ կրկնակի պաշտպանությունը մնում է սահմանափակ:
+- Կրկնել մատյանների պահպանումը. հավասարեցրեք այն ամենաերկար բռնակի վավերականության պատուհանի հետ, որը դուք ակնկալում եք թողարկել օպերատորները: Գրանցամատյանը պահպանվում է WSV-ում, խոնավացվում է գործարկման ժամանակ և կտրվում է դետերմինիստական ​​կերպով, երբ և՛ պահպանման պատուհանը, և՛ բռնակի ժամկետը լրանում է (որն ավելի ուշ է), այնպես որ գործընկերների անջատիչները չեն վերաբացել կրկնվող բացերը:
+- Վրիպազերծման քեշի կարգավիճակը. Torii ցուցադրում է `/v1/debug/axt/cache` (հեռաչափություն/մշակողի դարպաս)՝ վերադարձնելու AXT քաղաքականության ընթացիկ տարբերակը, ամենավերջին մերժումը (երթուղի/պատճառը/տարբերակ), քեշավորված ապացույցները (տվյալների տարածություն/ռեստատիվ/կարգավիճակ/կարգավիճակ) վերադարձնելու համար: (`next_min_handle_era`/`next_min_sub_nonce`): Օգտագործեք այս վերջնակետը՝ հաստատելու համար, որ անցք/մանիֆեստի պտույտներն արտացոլված են քեշի վիճակում և անսարքությունների վերացման ընթացքում բռնակները որոշիչ կերպով թարմացնելու համար:
 
 ## Slot Timing Model
 
-### Timeline
+### Ժամանակացույց
 
 ```text
 t=0ms           70ms             300ms              600ms       840ms    1000ms
@@ -42,12 +43,12 @@ t=0ms           70ms             300ms              600ms       840ms    1000ms
 │  ingest │sample (≤300ms) │(≤300ms)           │(≤250ms)      │(≤40ms)   │(≤40ms) │
 ```
 
-- Budgets align with the global ledger plan: mempool 70 ms, DA commit ≤300 ms, consensus 300 ms, IVM/AMX 250 ms, settlement 40 ms, guard 40 ms.【roadmap.md:2529】
-- Transactions breaching the DA window are logged as missing availability evidence and retried in the next slot; all other breaches surface codes such as `AMX_TIMEOUT` or `SETTLEMENT_ROUTER_UNAVAILABLE`.
-- The guard slice absorbs telemetry export and final auditing so the slot still closes at 1 s even if exporters lag briefly.
-- Configuration tips: defaults keep expiry strict (`slot_length_ms = 1`, `max_clock_skew_ms = 0`). For a 1 s cadence set `slot_length_ms = 1_000` and `max_clock_skew_ms = 250`; for a 2 s cadence use `slot_length_ms = 2_000` and `max_clock_skew_ms = 500`. Values outside the validated window (`1`–`600_000` ms or `max_clock_skew_ms` greater than the slot length/`60_000` ms) are rejected at config-parse time, and advertised handle skew must stay within the configured bound.
+- Բյուջեները համընկնում են գլոբալ հաշվապահական պլանի հետ՝ mempool 70ms, DA commit ≤300ms, Consensus 300ms, IVM/AMX 250ms, հաշվարկ 40ms, guard 40ms.【roadmap.md:2529
+- Գործարքները, որոնք խախտում են DA պատուհանը, գրանցվում են որպես բացակայող առկայության ապացույց և նորից փորձարկվում հաջորդ բնիկում; բոլոր այլ խախտումների մակերեսային ծածկագրերը, ինչպիսիք են `AMX_TIMEOUT` կամ `SETTLEMENT_ROUTER_UNAVAILABLE`:
+- Պահակային շերտը կլանում է հեռաչափության արտահանումը և վերջնական աուդիտը, այնպես որ բնիկը դեռ փակվում է 1 վրկ-ով, նույնիսկ եթե արտահանողները կարճ ժամանակով հետ են մնում:
+- Կազմաձևման խորհուրդներ. լռելյայն պահպանում է ժամկետի ժամկետը (`slot_length_ms = 1`, `max_clock_skew_ms = 0`): `slot_length_ms = 1_000` և `max_clock_skew_ms = 250` 1s cadence հավաքածուի համար; 2s կադենսի համար օգտագործեք `slot_length_ms = 2_000` և `max_clock_skew_ms = 500`: Վավերացված պատուհանից դուրս արժեքները (`1`–`600_000`ms կամ `max_clock_skew_ms` ավելի մեծ են, քան բացվածքի երկարությունը/`60_000`ms) կազմաձևման վերլուծման ժամանակին մերժվում են, և գովազդվող բռնակը պետք է մնա թեքված վիճակում:
 
-### Cross-DS swim lane
+### Cross-DS լողուղի
 
 ```text
 Client        DS A (public)        DS B (private)        Nexus Lane        Settlement
@@ -61,189 +62,185 @@ Client        DS A (public)        DS B (private)        Nexus Lane        Settl
   │◀──────────│ result + code │◀────│ result + code │◀────│ outcome│          receipt
 ```
 
-Each DS fragment must finish its 30 ms prepare window before the lane assembles the slot. Missing proofs stay in the mempool for the next slot rather than blocking peers.
+DS-ի յուրաքանչյուր հատված պետք է ավարտի իր 30 մս պատրաստման պատուհանը, նախքան գոտին հավաքի անցքը: Բաց թողնված ապացույցները մնում են մեմփուլում հաջորդ սլոտում, այլ ոչ թե արգելափակում են հասակակիցներին:
 
-### Instrumentation checklist
+### Գործիքների ստուգաթերթ
 
-| Metric / Trace | Source | SLO / Alert | Notes |
-|----------------|--------|-------------|-------|
-| `iroha_slot_duration_ms` (histogram) / `iroha_slot_duration_ms_latest` (gauge) | `iroha_telemetry` | p95 ≤ 1000 ms | Ci gate described in `ans3.md`. |
-| `iroha_da_quorum_ratio` | `iroha_telemetry` (commit hook) | ≥0.95 per 30 min window | Derived from missing-availability telemetry so every block updates the gauge (`crates/iroha_core/src/telemetry.rs:3524`,`crates/iroha_core/src/telemetry.rs:4558`). |
-| `iroha_amx_prepare_ms` | IVM host | p95 ≤ 30 ms per DS scope | Drives `AMX_TIMEOUT` aborts. |
-| `iroha_amx_commit_ms` | IVM host | p95 ≤ 40 ms per DS scope | Covers delta merge + trigger execution. |
-| `iroha_ivm_exec_ms` | IVM host | Alert if >250 ms per lane | Mirrors the IVM overlay chunk execution window. |
-| `iroha_amx_abort_total{stage}` | Executor | Alert if >0.05 aborts/slot or sustained single-stage spikes | Stage labels: `prepare`, `exec`, `commit`. |
-| `iroha_amx_lock_conflicts_total` | AMX scheduler | Alert if >0.1 conflicts/slot | Indicates inaccurate R/W sets. |
-| `iroha_axt_policy_reject_total{lane,reason}` | IVM host | Watch for spikes | Distinguishes manifest/lane/era/sub_nonce/expiry rejects. |
-| `iroha_axt_policy_snapshot_cache_events_total{event}` | IVM host | Expect cache_miss only on startup/manifest change | Sustained misses indicate stale policy hydration. |
-| `iroha_axt_proof_cache_events_total{event}` | IVM host | Expect mostly `hit`/`miss` | `reject`/`expired` spikes usually indicate manifest drift or stale proofs. |
-| `iroha_axt_proof_cache_state{dsid,status,manifest_root_hex,verified_slot}` | IVM host | Inspect cached proofs | Gauge value is expiry_slot (with skew applied) for the cached proof. |
-| Missing availability evidence (`sumeragi_da_gate_block_total{reason="missing_local_data"}`) | Lane telemetry | Alert if >5% of tx per DS | Means attesters or proofs are lagging. |
+| Մետրիկ / Հետք | Աղբյուր | SLO / Զգուշացում | Ծանոթագրություններ |
+|----------------|--------|------------|-------|
+| `iroha_slot_duration_ms` (հիստոգրամ) / `iroha_slot_duration_ms_latest` (չափիչ) | `iroha_telemetry` | p95 ≤ 1000ms | Ci դարպասը նկարագրված է `ans3.md`-ում: |
+| `iroha_da_quorum_ratio` | `iroha_telemetry` (պարտադրել կարթ) | ≥0,95 30 րոպե պատուհանի համար | Ստացվում է բացակայող հասանելիության հեռաչափությունից, այնպես որ յուրաքանչյուր բլոկ թարմացնում է չափիչը (`crates/iroha_core/src/telemetry.rs:3524`, `crates/iroha_core/src/telemetry.rs:4558`): |
+| `iroha_amx_prepare_ms` | IVM հոսթ | p95 ≤ 30ms մեկ DS շրջանակի համար | `AMX_TIMEOUT` կրիչներն ընդհատվում են: |
+| `iroha_amx_commit_ms` | IVM հոսթ | p95 ≤ 40ms մեկ DS շրջանակի համար | Ծածկում է դելտա միաձուլումը + ձգան կատարումը: |
+| `iroha_ivm_exec_ms` | IVM հոսթ | Զգուշացում, եթե ավելի քան 250 մս մեկ գոտում | Հայելի է IVM ծածկույթի հատվածի կատարման պատուհանը: |
+| `iroha_amx_abort_total{stage}` | Կատարող | Զգուշացում, եթե >0.05 վիժում է/սլոտ կամ շարունակվում է մեկ փուլով ցատկեր | Բեմական պիտակներ՝ `prepare`, `exec`, `commit`: |
+| `iroha_amx_lock_conflicts_total` | AMX ժամանակացույց | Զգուշացում, եթե >0.1 կոնֆլիկտներ/սլոտ | Ցույց է տալիս ոչ ճշգրիտ R/W հավաքածուներ: |
+| `iroha_axt_policy_reject_total{lane,reason}` | IVM հոսթ | Watch for spikes | Տարբերում է manifest/lane/era/sub_nonce/expiry rejects: |
+| `iroha_axt_policy_snapshot_cache_events_total{event}` | IVM հոսթ | Ակնկալեք cache_miss միայն գործարկման/մանիֆեստի փոփոխության դեպքում | Կայուն բացթողումները ցույց են տալիս հնացած քաղաքականության խոնավացում: |
+| `iroha_axt_proof_cache_events_total{event}` | IVM հոսթ | Ակնկալվում է հիմնականում `hit`/`miss` | `reject`/`expired` հասկերը սովորաբար ցույց են տալիս ակնհայտ շեղում կամ հնացած ապացույցներ: |
+| `iroha_axt_proof_cache_state{dsid,status,manifest_root_hex,verified_slot}` | IVM հոսթ | Ստուգեք քեշավորված ապացույցները | Քեշավորված ապացույցի համար չափիչի արժեքը expiry_slot է (կիրառված թեքությամբ): |
+| Բացակայում է առկայության ապացույցներ (`sumeragi_da_gate_block_total{reason="missing_local_data"}`) | Գոտու հեռաչափություն | Զգուշացում, եթե ավելի քան 5% tx մեկ DS | Նշանակում է, որ ստուգողները կամ ապացույցները ուշանում են: |
 
-`/v1/debug/axt/cache` mirrors the `iroha_axt_proof_cache_state` gauge with a per-dataspace snapshot (status, manifest root, verified/expiry slots) for operators.
+`/v1/debug/axt/cache`-ը արտացոլում է `iroha_axt_proof_cache_state` չափիչը՝ յուրաքանչյուր տվյալների տարածության վրա պատկերված (կարգավիճակ, մանիֆեստի արմատ, ստուգված/ժամկետանց հատվածներ) օպերատորների համար:
 
-`iroha_amx_commit_ms` and `iroha_ivm_exec_ms` share the same latency buckets as
-`iroha_amx_prepare_ms`. The abort counter tags every rejection with the lane id
-and stage (`prepare` = overlay build/validation, `exec` = IVM chunk execution,
-`commit` = delta merge + trigger replay) so telemetry can highlight whether
-contention comes from read/write mismatches or post-state merges.
+`iroha_amx_commit_ms` և `iroha_ivm_exec_ms` կիսում են նույն ուշացման դույլերը, ինչ
+`iroha_amx_prepare_ms`. Ընդհատման հաշվիչը նշում է յուրաքանչյուր մերժում գծի ID-ով
+և փուլ (`prepare` = ծածկույթի կառուցում/վավերացում, `exec` = IVM կտորի կատարում,
+`commit` = դելտա միաձուլում + գործարկիչի վերարտադրում), այնպես որ հեռաչափությունը կարող է ընդգծել, թե արդյոք
+վեճը ծագում է կարդալու/գրելու անհամապատասխանություններից կամ հետվիճակի միաձուլումից:
 
-Operators must archive these metrics for audit alongside slot acceptance evidence and note regressions in `status.md`.
+Օպերատորները պետք է արխիվացնեն այս չափորոշիչները աուդիտի համար՝ սլոտի ընդունման ապացույցների հետ մեկտեղ և նշեն ռեգրեսիաները `status.md`-ում:
 
-### AXT golden fixtures
+### AXT ոսկե ամրացումներ
 
-Norito fixtures for the descriptor/handle/policy snapshot live at `crates/iroha_data_model/tests/fixtures/axt_golden.rs`, with a regeneration helper in `crates/iroha_data_model/tests/axt_policy_vectors.rs` (`print_golden_vectors`). CoreHost consumes the same fixtures in `core_host_enforces_fixture_snapshot_fields` (`crates/ivm/tests/core_host_policy.rs`) to exercise lane binding, manifest root matching, expiry_slot freshness, handle_era/sub_nonce minima, and missing-dataspace rejections.
-- A multi-dataspace JSON fixture (`crates/iroha_data_model/tests/fixtures/axt_descriptor_multi_ds.json`) pins the descriptor/touch schema, canonical Norito bytes, and Poseidon binding (`compute_descriptor_binding`). The `axt_descriptor_fixture` test guards the encoded bytes, and SDKs can use `AxtDescriptorBuilder::builder` plus `TouchManifest::from_read_write` to assemble deterministic samples for docs/SDKs.
+Norito հարմարանքներ նկարագրիչի/բռնակի/քաղաքականության լուսանկարի համար ուղիղ հեռարձակմամբ `crates/iroha_data_model/tests/fixtures/axt_golden.rs`-ում, վերականգնման օգնականով `crates/iroha_data_model/tests/axt_policy_vectors.rs`-ում (`print_golden_vectors`): CoreHost-ն օգտագործում է նույն հարմարանքները `core_host_enforces_fixture_snapshot_fields`-ում (`crates/ivm/tests/core_host_policy.rs`)՝ իրականացնելու գծի կապում, բացահայտ արմատային համապատասխանություն, expiry_slot թարմություն, handle_era/sub_nonce minima և բացակայող տվյալների տարածության մերժումներ:
+- Բազմաթիվ տվյալների տարածության JSON սարքը (`crates/iroha_data_model/tests/fixtures/axt_descriptor_multi_ds.json`) ամրացնում է նկարագրիչ/հպման սխեման, կանոնական Norito բայթ և Poseidon կապում (`compute_descriptor_binding`): `axt_descriptor_fixture` թեստը պաշտպանում է կոդավորված բայթերը, և SDK-ները կարող են օգտագործել `AxtDescriptorBuilder::builder` գումարած `TouchManifest::from_read_write`՝ փաստաթղթերի/SDK-ների համար որոշիչ նմուշներ հավաքելու համար:
 
-### Lane catalog mapping and manifests
+### Գոտիների կատալոգի քարտեզագրում և դրսևորում
 
-- AXT policy snapshots are built from the Space Directory manifest set and lane catalog. Each dataspace is mapped to its configured lane; active manifests contribute the manifest hash, activation epoch (`min_handle_era`), and sub-nonce floor. UAID bindings without an active manifest still emit a policy entry with a zeroed manifest root so lane gating remains active until a real manifest lands.
-- `current_slot` in the snapshot is derived from the latest committed block timestamp (`creation_time_ms / slot_length_ms`), falling back to the block height only before a committed header is available.
-- Telemetry surfaces the hydrated snapshot as `iroha_axt_policy_snapshot_version` (lower 64 bits of the Norito-encoded snapshot hash) and cache events via `iroha_axt_policy_snapshot_cache_events_total{event=cache_hit|cache_miss}`. Reject counters use the labels `lane`, `manifest`, `era`, `sub_nonce`, and `expiry` so operators can immediately see which field blocked a handle.
+- AXT քաղաքականության ակնթարթները ստեղծվել են Space Directory մանիֆեստների հավաքածուից և գոտիների կատալոգից: Յուրաքանչյուր տվյալների տարածք քարտեզագրվում է իր կազմաձևված գծի վրա. ակտիվ մանիֆեստները նպաստում են մանիֆեստի հեշին, ակտիվացման դարաշրջանին (`min_handle_era`) և ենթահաշիվին: UAID-ի կապակցումներն առանց ակտիվ մանիֆեստի դեռևս թողարկում են քաղաքականության մուտքագրում զրոյացված մանիֆեստի արմատով, այնպես որ երթևեկության երթևեկությունը մնում է ակտիվ մինչև իրական մանիֆեստը վայրէջք կատարի:
+- Պատկերում `current_slot`-ը բխում է վերջին կատարված բլոկի ժամանակի դրոշմից (`creation_time_ms / slot_length_ms`), որը հետ է ընկնում բլոկի բարձրության վրա միայն մինչև հանձնված վերնագիրը հասանելի լինի:
+- Telemetry-ն երևում է հիդրացված լուսանկարը որպես `iroha_axt_policy_snapshot_version` (Norito-ով կոդավորված ակնթարթային հեշի ստորին 64 բիթ) և քեշի իրադարձությունները `iroha_axt_policy_snapshot_cache_events_total{event=cache_hit|cache_miss}`-ի միջոցով: Մերժման հաշվիչներն օգտագործում են `lane`, `manifest`, `era`, `sub_nonce` և `expiry` պիտակները, որպեսզի օպերատորները կարողանան անմիջապես տեսնել, թե որ դաշտն է արգելափակել բռնակը:
 
-### Cross-dataspace composability checklist
+### Տվյալների տարածքների միջև կոմպոզիցիայի ստուգաթերթ- Հաստատեք, որ Տիեզերական գրացուցակում թվարկված յուրաքանչյուր տվյալների տարածք ունի գոտի մուտք և ակտիվ մանիֆեստ; ռոտացիան պետք է թարմացնի կապանքները և բացահայտի արմատները՝ նախքան նոր բռնակներ թողարկելը: Զրոյացված արմատները նշանակում են, որ բռնակները կմնան մերժված այնքան ժամանակ, քանի դեռ մանիֆեստները չեն հայտնվել, իսկ հաղորդավարների/բլոկների վավերացումը այժմ մերժում է այն բռնակները, որոնք ներկայացնում են զրոյացված մանիֆեստների արմատներ:
+- Գործարկման ժամանակ և Տիեզերական գրացուցակի փոփոխություններից հետո սպասեք մեկ `cache_miss`, որին կհետևեն կայուն `cache_hit` իրադարձություններ քաղաքականության պատկերի չափման վրա. կայուն բաց թողնման տոկոսադրույքը մատնանշում է հնացած կամ բացակայող դրսևորվող բովանդակությունը:
+- Երբ բռնակը մերժվում է, նայեք `iroha_axt_policy_reject_total{lane,reason}`-ին և ակնթարթային տարբերակին՝ որոշելու համար՝ պահանջե՞լ թարմացված բռնակ (`expiry`/`era`/`sub_nonce`), թե՞ վերանորոգել binding/manifest-ը։ (`lane`/`manifest`): Torii վրիպազերծման վերջնակետը `/v1/debug/axt/cache` նաև վերադարձնում է `reject_hints` `dataspace`, `target_lane`, `next_min_handle_era`, և I18NI000000138X, `target_lane`, `next_min_handle_era`, և I10resh00000140X օպերատորների հետ: վճռականորեն՝ քաղաքականության բախումից հետո:
 
-- Confirm every dataspace listed in the Space Directory has a lane entry and an active manifest; rotation should refresh bindings and manifest roots before issuing new handles. Zeroed roots mean handles will stay denied until manifests are present, and hosts/block validation now reject handles that present zeroed manifest roots.
-- On startup and after Space Directory changes, expect one `cache_miss` followed by steady `cache_hit` events on the policy snapshot metric; a sustained miss rate points to a stale or missing manifest feed.
-- When a handle is rejected, look at `iroha_axt_policy_reject_total{lane,reason}` and the snapshot version to decide whether to request a refreshed handle (`expiry`/`era`/`sub_nonce`) or to repair the lane/manifest binding (`lane`/`manifest`). The Torii debug endpoint `/v1/debug/axt/cache` also returns `reject_hints` with `dataspace`, `target_lane`, `next_min_handle_era`, and `next_min_sub_nonce` so operators can refresh handles deterministically after a policy bump.
+### SDK նմուշ. հեռահար ծախսեր՝ առանց խորհրդանշական ելքի
 
-### SDK sample: remote spend without token egress
+1. Կառուցեք AXT նկարագրիչ, որը թվարկում է այն տվյալների տարածքը, որին պատկանում է ակտիվը, գումարած ցանկացած ընթերցման/գրելու հպումներ, որոնք պահանջվում են տեղում; Պահպանեք նկարագրիչը որոշիչ, որպեսզի կապող հեշը մնա կայուն:
+2. Զանգահարեք `AXT_TOUCH` հեռավոր տվյալների տարածության համար ձեր ակնկալվող մանիֆեստի դիտմամբ; ընտրովի կցեք ապացույց `AXT_VERIFY_DS_PROOF`-ի միջոցով, եթե հյուրընկալողը դա պահանջում է:
+3. Խնդրեք կամ թարմացրեք ակտիվի բռնիչը և կանչեք `AXT_USE_ASSET_HANDLE` `RemoteSpendIntent`-ով, որը ծախսում է հեռավոր տվյալների տարածության ներսում (առանց կամրջի ոտքի): Բյուջեի կիրարկումն օգտագործում է բռնակի `remaining`, `per_use`, `sub_nonce`, `handle_era` և `expiry_slot`՝ վերը նկարագրված պատկերի հետ համեմատած:
+4. Պարտավորել `AXT_COMMIT`-ի միջոցով; եթե հոսթորդը վերադարձնում է `PermissionDenied`, օգտագործեք մերժման պիտակը, որոշելու համար՝ բեռնել թարմ բռնակ (ժամկետանց/sub_nonce/դարաշրջան) կամ շտկել մանիֆեստի/գծի կապը:
 
-1. Build an AXT descriptor listing the dataspace that owns the asset plus any read/write touches required locally; keep the descriptor deterministic so the binding hash stays stable.
-2. Call `AXT_TOUCH` for the remote dataspace with the manifest view you expect; optionally attach a proof via `AXT_VERIFY_DS_PROOF` if the host requires it.
-3. Request or refresh the asset handle and invoke `AXT_USE_ASSET_HANDLE` with a `RemoteSpendIntent` that spends inside the remote dataspace (no bridge leg). Budget enforcement uses the handle’s `remaining`, `per_use`, `sub_nonce`, `handle_era`, and `expiry_slot` against the snapshot described above.
-4. Commit via `AXT_COMMIT`; if the host returns `PermissionDenied`, use the reject label to decide whether to fetch a fresh handle (expiry/sub_nonce/era) or fix the manifest/lane binding.
+## Օպերատորի ակնկալիքները
 
-## Operator Expectations
+1. **Նախնական պատրաստություն**
+   - Ապահովել, որ DA ստուգող լողավազանները մեկ պրոֆիլի համար (A=12, B=9, C=7) առողջ են. Ատեստիչի ցնցումը գրանցված է բացվածքի Տիեզերական տեղեկատուի լուսանկարում:
+   - Վավերացրեք `iroha_amx_prepare_ms`-ը, որը բյուջեից ցածր է ներկայացուցչական վազորդների համար, նախքան նոր աշխատանքային ծանրաբեռնվածության խառնուրդներ միացնելը:
 
-1. **Pre-slot readiness**
-   - Ensure DA attester pools per profile (A=12, B=9, C=7) are healthy; attester churn is recorded in the Space Directory snapshot for the slot.
-   - Validate `iroha_amx_prepare_ms` is below budget on representative runners before enabling new workload mixes.
+2. **Ներքին մոնիտորինգ**
+   - Զգուշացում բացակայող հասանելիության աճերի մասին (>5% երկու անընդմեջ սլոտների համար) և `AMX_TIMEOUT`-ի վրա, քանի որ երկուսն էլ ցույց են տալիս բաց թողնված բյուջեները:
+   - Հետևեք PVO քեշի օգտագործմանը (`iroha_pvo_cache_hit_ratio`, արտահանված ապացուցողական ծառայության կողմից)՝ ապացուցելու համար, որ արտաճանապարհային ստուգումը համընկնում է ներկայացումների հետ:
 
-2. **In-slot monitoring**
-   - Alert on missing-availability spikes (>5% for two consecutive slots) and on `AMX_TIMEOUT` because both indicate missed budgets.
-   - Track PVO cache utilisation (`iroha_pvo_cache_hit_ratio`, exported by the proof service) to prove that off-path verification keeps up with submissions.
+3. **Ապացույցների հավաքում**
+   - Կցեք DA անդորրագրերի հավաքածուները, AMX-ը պատրաստում է հիստոգրամներ և PVO քեշի հաշվետվությունները `status.md`-ից նշված գիշերային արտեֆակտների փաթեթին:
+   - Գրանցեք քաոսային հորատման արդյունքները `ops/drill-log.md`-ում, երբ DA-ի ցնցումները, Oracle-ի ախոռները կամ բուֆերային սպառման թեստերը կատարվում են:
 
-3. **Evidence capture**
-   - Attach DA receipt sets, AMX prepare histograms, and PVO cache reports to the nightly artefact bundle referenced from `status.md`.
-   - Record chaos drill outputs in `ops/drill-log.md` whenever DA jitter, oracle stalls, or buffer depletion tests run.
+4. **Runbook սպասարկում**
+   - Թարմացրեք Android/Swift SDK մատյանները, երբ AMX-ի սխալի կոդերը կամ անտեսումները փոխվում են, որպեսզի հաճախորդի թիմերը ժառանգեն դետերմինիստական ձախողման իմաստաբանությունը:
+   - Պահպանեք կազմաձևման հատվածները (օրինակ՝ `iroha_config.amx.*`) համաժամեցված `docs/source/nexus.md`-ի կանոնական պարամետրերի հետ:
 
-4. **Runbook maintenance**
-   - Update the Android/Swift SDK runbooks whenever AMX error codes or overrides change so client teams inherit the deterministic failure semantics.
-   - Keep configuration snippets (e.g., `iroha_config.amx.*`) in sync with the canonical parameters in `docs/source/nexus.md`.
+## Հեռամետրիա և խնդիրների լուծում
 
-## Telemetry & Troubleshooting
+### Հեռուստաչափության արագ հղում
 
-### Telemetry quick reference
+| Աղբյուր | Ինչ գրավել | Հրաման / ուղի | Ապացույցների ակնկալիքներ |
+|--------|-----------------------------------|----------------------|
+| Prometheus (`iroha_telemetry`) | Սլոտ և AMX SLO-ներ՝ `iroha_slot_duration_ms`, `iroha_amx_prepare_ms`, `iroha_amx_commit_ms`, `iroha_da_quorum_ratio`, `iroha_amx_abort_total{stage}` | Քերեք `https://$TORII/telemetry/metrics` կամ արտահանեք `docs/source/telemetry.md`-ում նկարագրված վահանակներից: | Գիշերային `status.md` գրառմանը կցեք հիստոգրամի նկարները (և ահազանգերի պատմությունը, եթե գործարկվի), որպեսզի աուդիտորները կարողանան տեսնել p95/p99 արժեքները և ազդանշանային վիճակները: |
+| Torii RBC snapshots | DA/RBC հետնահերթություն. յուրաքանչյուր նստաշրջանի համար նախատեսված մետատվյալներ, դիտման/բարձրության մետատվյալներ և DA հասանելիության հաշվիչներ (`sumeragi_da_gate_block_total{reason="missing_local_data"}`; `sumeragi_rbc_da_reschedule_total`-ը ժառանգություն է): | `GET /v1/sumeragi/rbc` և `GET /v1/sumeragi/rbc/sessions` (օրինակների համար տե՛ս `docs/source/samples/sumeragi_rbc_status.md`): | Պահպանեք JSON-ի պատասխանները (ժամային դրոշմանիշներով) ամեն անգամ, երբ AMX DA-ն ահազանգում է կրակի մասին. ներառեք դրանք միջադեպերի փաթեթում, որպեսզի վերանայողները կարողանան հաստատել, որ հետճնշումը համապատասխանում է հեռաչափությանը: |
+| Ապացույց ծառայության չափումներ | PVO քեշի առողջությունը. `iroha_pvo_cache_hit_ratio`, քեշի լրացման/վտարման հաշվիչներ, ապացույցների հերթի խորություն | `GET /metrics` ապացույց ծառայության վրա (`IROHA_PVO_METRICS_URL`) կամ ընդհանուր OTLP կոլեկցիոների միջոցով: | Արտահանեք քեշի հարվածների հարաբերակցությունը և հերթի խորությունը AMX բնիկի չափման հետ մեկտեղ, որպեսզի OA/PVO դարպասը ունենա դետերմինիստական ​​արտեֆակտներ: |
+| Ընդունման զրահ | ծայրից ծայր խառը բեռնվածություն (slot/DA/RBC/PVO) վերահսկվող ցնցումների տակ | Կրկին գործարկեք `ci/acceptance/slot_1s.yml`-ը (կամ նույն աշխատանքը CI-ում) և արխիվացրեք տեղեկամատյանների փաթեթը + ստեղծված արտեֆակտները `artifacts/acceptance/slot_1s/<timestamp>/`-ում: | Պահանջվում է նախքան GA-ը և երբ փոխվում են սրտի ռիթմավարի/DA-ի կարգավորումները. ներառեք YAML գործարկման ամփոփագիրը, գումարած Prometheus նկարները օպերատորի ձեռքբերման փաթեթում: |
 
-| Source | What to capture | Command / Path | Evidence expectations |
-|--------|-----------------|----------------|-----------------------|
-| Prometheus (`iroha_telemetry`) | Slot and AMX SLOs: `iroha_slot_duration_ms`, `iroha_amx_prepare_ms`, `iroha_amx_commit_ms`, `iroha_da_quorum_ratio`, `iroha_amx_abort_total{stage}` | Scrape `https://$TORII/telemetry/metrics` or export from the dashboards described in `docs/source/telemetry.md`. | Attach histogram snapshots (and alert history if triggered) to the nightly `status.md` note so auditors can see p95/p99 values and alert states. |
-| Torii RBC snapshots | DA/RBC backlog: per-session chunk backlog, view/height metadata, and DA availability counters (`sumeragi_da_gate_block_total{reason="missing_local_data"}`; `sumeragi_rbc_da_reschedule_total` is legacy). | `GET /v1/sumeragi/rbc` and `GET /v1/sumeragi/rbc/sessions` (see `docs/source/samples/sumeragi_rbc_status.md` for examples). | Store the JSON responses (with timestamps) whenever AMX DA alerts fire; include them in the incident bundle so reviewers can confirm that backpressure matched telemetry. |
-| Proof service metrics | PVO cache health: `iroha_pvo_cache_hit_ratio`, cache fill/evict counters, proof queue depth | `GET /metrics` on the proof service (`IROHA_PVO_METRICS_URL`) or via the shared OTLP collector. | Export the cache hit ratio and queue depth alongside the AMX slot metrics so the roadmap OA/PVO gate has deterministic artefacts. |
-| Acceptance harness | End-to-end mixed load (slot/DA/RBC/PVO) under controlled jitter | Re-run `ci/acceptance/slot_1s.yml` (or the same job in CI) and archive the log bundle + generated artefacts in `artifacts/acceptance/slot_1s/<timestamp>/`. | Required before GA and whenever pacemaker/DA settings change; include the YAML run summary plus the Prometheus snapshots in the operator hand-off packet. |
+### Անսարքությունների վերացման խաղագիրք
 
-### Troubleshooting playbook
+| Ախտանիշ | Նախ ստուգել | Առաջարկվող վերականգնում |
+|---------|-----------------------------------------|
+| `iroha_slot_duration_ms` p95-ը սողում է 1000 մվ-ից բարձր | Prometheus արտահանում `/telemetry/metrics`-ից գումարած վերջին `/v1/sumeragi/rbc` լուսանկարը՝ DA-ի հետաձգումները հաստատելու համար. համեմատեք վերջին `ci/acceptance/slot_1s.yml` արտեֆակտի հետ: | Նվազեցրեք AMX խմբաքանակի չափերը կամ միացրեք լրացուցիչ RBC կոլեկտորներ (`sumeragi.collectors.k`), այնուհետև նորից գործարկեք ընդունման զրահը և գրավեք նոր հեռաչափության ապացույցը: |
+| Բացակայում է հասանելիության նշաձողը | `/v1/sumeragi/rbc/sessions` հետնահերթ դաշտեր (`lane_backlog`, `dataspace_backlog`) ստուգողների առողջության վահանակների կողքին: | Հեռացրեք անառողջ ստուգողներին, ժամանակավորապես ավելացրեք `redundant_send_r`՝ առաքումն արագացնելու համար և հրապարակեք վերականգնման նշումները `status.md`-ում: Կցեք RBC-ի թարմացված նկարները, երբ մնացորդները մաքրվեն: |
+| Հաճախակի `PVO_MISSING_OR_EXPIRED` անդորրագրերում | Ապացույց ծառայության քեշի չափումներ + թողարկողի PVO ժամանակացույցի տեղեկամատյանները: | Վերականգնեք հնացած PVO արտեֆակտները, կրճատեք պտտման արագությունը և համոզվեք, որ յուրաքանչյուր SDK-ն թարմացնում է բռնակը `expiry_slot`-ից առաջ: Ներառեք ապացույցների ծառայության չափումները ապացույցների փաթեթում՝ ապացուցելու, որ քեշը վերականգնվել է: |
+| Կրկնվող `AMX_LOCK_CONFLICT` կամ `AMX_TIMEOUT` | `iroha_amx_lock_conflicts_total`, `iroha_amx_prepare_ms`, և ազդակիր գործարքը դրսևորվում է: | Կրկին գործարկեք Norito ստատիկ անալիզատորը, ուղղեք կարդալու/գրելու ընտրիչները (կամ բաժանեք խմբաքանակը) և հրապարակեք թարմացված մանիֆեստի հարմարանքները, որպեսզի կոնֆլիկտային հաշվիչը վերադառնա բազային: |
+| `SETTLEMENT_ROUTER_UNAVAILABLE` ահազանգեր | Հաշվարկների երթուղիչի տեղեկամատյանները (`docs/settlement-router.md`), գանձապետարանի բուֆերային վահանակները և տուժած անդորրագրերը: | Լիցքավորեք XOR բուֆերները կամ շրջեք գիծը միայն XOR ռեժիմի, փաստաթղթավորեք գանձապետական ​​գործողությունը և նորից գործարկեք բնիկի ընդունման թեստը՝ ապացուցելու համար, որ կարգավորումը վերսկսվել է: |
 
-| Symptom | Inspect first | Recommended remediation |
-|---------|---------------|--------------------------|
-| `iroha_slot_duration_ms` p95 creeps above 1 000 ms | Prometheus export from `/telemetry/metrics` plus the latest `/v1/sumeragi/rbc` snapshot to confirm DA deferrals; compare against the last `ci/acceptance/slot_1s.yml` artefact. | Lower AMX batch sizes or enable additional RBC collectors (`sumeragi.collectors.k`), then rerun the acceptance harness and capture the new telemetry evidence. |
-| Missing availability spike | `/v1/sumeragi/rbc/sessions` backlog fields (`lane_backlog`, `dataspace_backlog`) alongside attester health dashboards. | Remove unhealthy attesters, temporarily increase `redundant_send_r` to speed up delivery, and publish the remediation notes in `status.md`. Attach updated RBC snapshots once the backlog clears. |
-| Frequent `PVO_MISSING_OR_EXPIRED` in receipts | Proof service cache metrics + the issuer’s PVO scheduler logs. | Regenerate stale PVO artefacts, shorten the rotation cadence, and ensure every SDK refreshes the handle before `expiry_slot`. Include the proof-service metrics in the evidence bundle to prove the cache recovered. |
-| Repeated `AMX_LOCK_CONFLICT` or `AMX_TIMEOUT` | `iroha_amx_lock_conflicts_total`, `iroha_amx_prepare_ms`, and the affected transaction manifests. | Re-run the Norito static analyzer, correct the read/write selectors (or split the batch), and publish the updated manifest fixtures so the conflict counter returns to baseline. |
-| `SETTLEMENT_ROUTER_UNAVAILABLE` alerts | Settlement router logs (`docs/settlement-router.md`), treasury buffer dashboards, and the affected receipts. | Top up XOR buffers or flip the lane to XOR-only mode, document the treasury action, and rerun the slot acceptance test to prove settlement resumed. |
+### AXT մերժման ազդանշաններ
 
-### AXT rejection signals
+- Պատճառի ծածկագրերը վերցված են որպես `AxtRejectReason` (`lane`, `manifest`, `era`, `sub_nonce`, I18NI0000020302X, I18NI0000020300001 `policy_denied`, `proof`, `budget`, `replay_cache`, `descriptor`, `duplicate`): Արգելափակման վավերացումն այժմ հայտնվում է `AxtEnvelopeValidationFailed { message, reason, snapshot_version }`-ում, այնպես որ միջադեպերը կարող են մերժումը կապել քաղաքականության հատուկ նկարի վրա:
+- `/v1/debug/axt/cache`-ը վերադարձնում է `{ policy_snapshot_version, last_reject, cache, hints }`, որտեղ `last_reject`-ը կրում է ամենավերջին հյուրընկալողի մերժման գիծը/պատճառը/տարբերակը, իսկ `hints`-ը տրամադրում է I18NI000000215X refresh6/I10NI կողմի `next_min_handle_era`/I10NI կողմի հետ միասին: քեշավորված ապացույցի վիճակ:
+- Զգուշացման ձևանմուշ. էջ, երբ `iroha_axt_policy_reject_total{reason="manifest"}` կամ `{reason="expiry"}` աճում է 5 րոպեանոց պատուհանի ընթացքում, կցեք `last_reject` նկարը + `policy_snapshot_version`-ը I18NT000000018-ից և օգտագործեք վճարման ակնարկը վերջացնելու համար: թարմացված բռնակներ՝ նորից փորձելուց առաջ:
 
-- Reason codes are captured as `AxtRejectReason` (`lane`, `manifest`, `era`, `sub_nonce`, `expiry`, `missing_policy`, `policy_denied`, `proof`, `budget`, `replay_cache`, `descriptor`, `duplicate`). Block validation now surfaces `AxtEnvelopeValidationFailed { message, reason, snapshot_version }`, so incidents can pin the rejection to a specific policy snapshot.
-- `/v1/debug/axt/cache` returns `{ policy_snapshot_version, last_reject, cache, hints }`, where `last_reject` carries the lane/reason/version of the most recent host rejection and `hints` provide `next_min_handle_era`/`next_min_sub_nonce` refresh guidance alongside the cached proof state.
-- Alert template: page when `iroha_axt_policy_reject_total{reason="manifest"}` or `{reason="expiry"}` spikes over a 5‑minute window, attach the `last_reject` snapshot + `policy_snapshot_version` from the Torii debug endpoint to the incident, and use the hint payload to request refreshed handles before retrying.
+## Ապացույցների ստուգման օբյեկտներ (PVO)
 
-## Proof Verification Objects (PVOs)
+### Կառուցվածք
 
-### Structure
+PVO-ները Norito կոդավորված ծրարներ են, որոնք հաճախորդներին թույլ են տալիս ժամանակից շուտ ապացուցել ծանր աշխատանքը: Կանոնական դաշտերն են.
 
-PVOs are Norito-encoded envelopes that let clients prove heavy work ahead of time. The canonical fields are:
-
-| Field | Description |
+| Դաշտային | Նկարագրություն |
 |-------|-------------|
-| `circuit_id` | Static identifier for the proof system/statement (e.g., `amx.transfer.v1`). |
-| `vk_hash` | Blake2b-256 hash of the verifying key referenced by the DS manifest. |
-| `proof_digest` | Poseidon digest of the serialized proof payload stored in the off-slot PVO registry. |
-| `max_k` | Upper bound on the AIR domain; hosts reject proofs exceeding the advertised size. |
-| `expiry_slot` | Slot height after which the artefact is invalid; keeps stale proofs out of lanes. |
-| `profile` | Optional hint (e.g., DS profile A/B/C) to help schedulers batch proofs that share a profile. |
+| `circuit_id` | Ստատիկ նույնացուցիչ ապացույցի համակարգի/հայտարարության համար (օրինակ՝ `amx.transfer.v1`): |
+| `vk_hash` | Blake2b-256 DS մանիֆեստի կողմից վկայակոչված ստուգիչ բանալու հեշը: |
+| `proof_digest` | Poseidon digest-ը սերիական ապացույցի օգտակար բեռի մասին, որը պահվում է անջատված PVO գրանցամատյանում: |
+| `max_k` | AIR տիրույթի վերին սահմանը; հյուրընկալողները մերժում են գովազդվող չափը գերազանցող ապացույցները: |
+| `expiry_slot` | Անցքի բարձրությունը, որից հետո արտեֆակտն անվավեր է. հեռու է պահում հնացած ապացույցները: |
+| `profile` | Կամընտիր հուշում (օրինակ՝ DS պրոֆիլ A/B/C)՝ օգնելու պլանավորողներին հավաքել պրոֆիլը կիսող ապացույցները: |
 
-The Norito schema lives beside the data model definitions in `crates/iroha_data_model/src/nexus` so SDKs can derive it without serde.
+Norito սխեման ապրում է `crates/iroha_data_model/src/nexus`-ի տվյալների մոդելի սահմանումների կողքին, այնպես որ SDK-ները կարող են այն ստանալ առանց սերդի:
 
-### Generation pipeline
+### Սերունդ խողովակաշար1. **Կազմեք շղթայի մետատվյալներ** — Արտահանեք `circuit_id`, հաստատող բանալի և առավելագույն հետքի չափը ձեր պրովերի կառուցումից (սովորաբար `fastpq_prover` հաշվետվությունների միջոցով):
+2. **Արտադրեք ապացուցված արտեֆակտներ** — Գործարկեք ներդիրից դուրս պրովերը և պահեք ամբողջական տառադարձումները և պարտավորությունները:
+3. **Գրանցվեք ապացուցման ծառայության միջոցով** — Ներկայացրեք Norito PVO ծանրաբեռնվածությունը անցքից դուրս գտնվող ստուգիչին (տես NX-17 հաստատուն խողովակաշարի ճանապարհային քարտեզը): Ծառայությունը մեկ անգամ ստուգում է, ամրացնում է բովանդակությունը և ցուցադրում բռնակը Torii-ի միջոցով:
+4. **Հղում գործարքներում** — Կցեք PVO բռնակը AMX շինարարներին (`amx_touch` կամ ավելի բարձր մակարդակի SDK օգնականներ): Հոսթները փնտրում են digest-ը, ստուգում են քեշավորված արդյունքը և միայն այն դեպքում, երբ քեշը սառը է:
+5. **Պտտել ժամկետի ավարտին** — SDK-ները պետք է թարմացնեն ցանկացած քեշավորված բռնակ մինչև `expiry_slot`: Ժամկետանց օբյեկտները գործարկում են `PVO_MISSING_OR_EXPIRED`:
 
-1. **Compile circuit metadata** — Export `circuit_id`, verifying key, and max trace size from your prover build (usually via `fastpq_prover` reports).
-2. **Produce proof artefacts** — Run the out-of-slot prover and store full transcripts plus commitments.
-3. **Register via the proof service** — Submit the Norito PVO payload to the off-slot verifier (see roadmap NX-17 proof pipeline). The service verifies once, pins the digest, and exposes the handle via Torii.
-4. **Reference in transactions** — Attach the PVO handle to AMX builders (`amx_touch` or higher-level SDK helpers). Hosts look up the digest, verify the cached result, and only recompute inside the slot if the cache is cold.
-5. **Rotate on expiry** — SDKs must refresh any cached handle before `expiry_slot`. Expired objects trigger `PVO_MISSING_OR_EXPIRED`.
+### Մշակողի ստուգաթերթ
 
-### Developer checklist
+- Ճշգրիտ հայտարարեք կարդալու/գրելու հավաքածուները, որպեսզի AMX-ը կարողանա նախապես առբերել կողպեքները և խուսափել `AMX_LOCK_CONFLICT`-ից:
+- Միևնույն UAID-ի մանիֆեստի թարմացման մեջ միացրեք դետերմինիստական ​​նպաստի ապացույցները, երբ խաչաձեւ DS փոխանցումները դիպչում են կարգավորվող DS-ներին:
+- Ռազմավարության փորձ. բացակայում է առկայության ապացույցը → ոչ մի գործողություն (tx-ը մնում է mempool-ում); `AMX_TIMEOUT` կամ `PVO_MISSING_OR_EXPIRED` → վերակառուցեք արտեֆակտները և հետ կանգնեք երկրաչափական կարգով:
+- Թեստերը պետք է ներառեն և՛ քեշի հարվածները, և՛ սառը մեկնարկները (ստիպելով հյուրընկալողին ստուգել ապացույցը նույն `max_k`-ով)՝ դետերմինիզմի հետընթացից պաշտպանվելու համար:
+- Ապացուցիչ բլբերը (`ProofBlob`) ՊԵՏՔ Է կոդավորեն `AxtProofEnvelope { dsid, manifest_root, da_commitment?, proof }`; հոսթները կապում են ապացույցները Տիեզերական գրացուցակի մանիֆեստի արմատին և քեշի անցման/ձախողման արդյունքները տվյալների տարածության/սլոտի համար `iroha_axt_proof_cache_events_total{event="hit|miss|expired|reject|cleared"}`-ով: Ժամկետանց կամ ակնհայտորեն անհամապատասխան արտեֆակտները մերժվում են նախքան կատարելը և հետագա կրկնությունները նույն կարճ միացման ժամանակ, որը պահված է `reject`-ում:
+- Ապացույցների քեշի կրկնակի օգտագործումը սահմանվում է բնիկով. ստուգված ապացույցները մնում են տաք ծրարների վրա նույն բնիկի մեջ և ինքնաբերաբար դուրս են հանվում, երբ բնիկը առաջ է գնում, այնպես որ կրկնվող փորձերը մնում են որոշիչ:
 
-- Declare read/write sets accurately so AMX can prefetch locks and avoid `AMX_LOCK_CONFLICT`.
-- Bundle deterministic allowance proofs in the same UAID manifest update when cross-DS transfers touch regulated DSes.
-- Retrying strategy: missing availability evidence → no action (the tx stays in mempool); `AMX_TIMEOUT` or `PVO_MISSING_OR_EXPIRED` → rebuild artefacts and back off exponentially.
-- Tests should include both cache hits and cold starts (forcing the host to verify the proof with the same `max_k`) to guard against determinism regressions.
-- Proof blobs (`ProofBlob`) MUST encode an `AxtProofEnvelope { dsid, manifest_root, da_commitment?, proof }`; hosts bind proofs to the Space Directory manifest root and cache pass/fail results per dataspace/slot with `iroha_axt_proof_cache_events_total{event="hit|miss|expired|reject|cleared"}`. Expired or manifest-mismatched artefacts are rejected before commit and subsequent retries in the same slot short-circuit on the cached `reject`.
-- Proof cache reuse is slot-scoped: verified proofs stay hot across envelopes within the same slot and are evicted automatically when the slot advances so retries remain deterministic.
+### Ստատիկ կարդալու/գրելու անալիզատոր
 
-### Static read/write analyzer
+Կազմելու ժամանակի ընտրիչները պետք է համապատասխանեն պայմանագրի իրական վարքագծին, նախքան AMX-ը
+նախապես առբերեք կողպեքները կամ կիրառեք UAID-ի մանիֆեստները: Նոր `ivm::analysis` մոդուլը
+(`crates/ivm/src/analysis.rs`) բացահայտում է `analyze_program(&[u8])`, որը վերծանում է
+`.to` արտեֆակտ, թվերի գրանցման ընթերցումներ/գրումներ, հիշողության օպերացիաներ և համակարգային կապի օգտագործում,
+և պատրաստում է JSON-ի համար հարմար զեկույց, որը SDK-ի մանիֆեստները կարող են զետեղել: Գործարկել այն
+`koto_lint`-ի կողքին UAID-ներ հրապարակելիս, որպեսզի ստեղծված R/W ամփոփագիրը լինի
+ֆիքսված է NX-17-ի պատրաստականության ստուգումների ժամանակ վկայակոչված ապացույցների փաթեթում:
 
-Compile-time selectors must match the contract’s actual behaviour before AMX can
-prefetch locks or apply UAID manifests. The new `ivm::analysis` module
-(`crates/ivm/src/analysis.rs`) exposes `analyze_program(&[u8])` which decodes a
-`.to` artefact, tallies register reads/writes, memory ops, and syscall usage,
-and produces a JSON-friendly report that the SDK manifests can embed. Run it
-alongside `koto_lint` when publishing UAIDs so the generated R/W summary is
-captured in the evidence bundle referenced during NX-17 readiness reviews.
+## Space Directory քաղաքականության կիրարկում
 
-## Space Directory policy enforcement
+AXT handle-ի ստուգումն այժմ լռակյաց է Տիեզերական գրացուցակի ակնթարթում, երբ հոսթն ունի մուտք դեպի այն (CoreHost-ը թեստերում, WsvHost-ը՝ ինտեգրման հոսքերում): Տվյալների տարածության համար քաղաքականության գրառումները կրում են `manifest_root`, `target_lane`, `min_handle_era`, `min_sub_nonce` և `current_slot`: Հյուրընկալները պարտադրում են՝
 
-AXT handle verification now defaults to the Space Directory snapshot when the host has access to it (CoreHost in tests, WsvHost in integration flows). Per-dataspace policy entries carry `manifest_root`, `target_lane`, `min_handle_era`, `min_sub_nonce`, and `current_slot`. Hosts enforce:
+- Գոտի կապում. `target_lane` բռնակը պետք է համապատասխանի Space Directory մուտքագրմանը.
+- մանիֆեստի պարտադիր կապ. `manifest_root` ոչ զրոյական արժեքները պետք է համապատասխանեն բռնակի `manifest_view_root`-ին;
+- Ժամկետը՝ `current_slot` ավելի մեծ, քան բռնակի `expiry_slot`-ը մերժվում է.
+- հաշվիչներ. `handle_era` և `sub_nonce` պետք է լինեն առնվազն գովազդվող նվազագույնը.
+- Անդամակցություն. Լուսանկարում բացակայող տվյալների տարածքների բռնակները մերժվում են:
 
-- lane binding: handle `target_lane` must match the Space Directory entry;
-- manifest binding: non-zero `manifest_root` values must match the handle’s `manifest_view_root`;
-- expiry: `current_slot` greater than the handle’s `expiry_slot` is rejected;
-- counters: `handle_era` and `sub_nonce` must be at least the advertised minima;
-- membership: handles for dataspaces absent from the snapshot are denied.
+Խափանումները քարտեզագրվում են `PermissionDenied`-ի վրա, իսկ CoreHost քաղաքականության ակնթարթային թեստերը `crates/ivm/tests/core_host_policy.rs` ծածկույթում թույլ են տալիս/մերժում գործերը յուրաքանչյուր դաշտի համար:
+Արգելափակման վավերացումը պահանջում է նաև ոչ դատարկ ապացույցներ յուրաքանչյուր տվյալների տարածության համար՝ `expiry_slot`-ով, որը ծածկում է քաղաքականության անցքը (կարգավորված թեքության սահմանաչափով) և չի ավարտվում բռնակի առաջ, պարտադրում է նկարագրիչի պարտադիր կապը և հպման մանիֆեստները հայտարարված բնութագրերի համար (և մերժում է նախածանցից դուրս գրառումները (նախածանցից դուրս գրառումներ), շրջանակը/առարկա հավասարեցումը և ոչ զրոյական դարաշրջանը/sub_nonce/ժամկետանցը), ագրեգատները մշակում են բյուջեները յուրաքանչյուր տվյալների տարածքի համար, և առաջխաղացումները `min_handle_era`/`min_sub_nonce`, քանի որ ծրարները կատարում են, այնպես որ վերարտադրվող ենթաբաժինները մերժվում են նույնիսկ այն բանից հետո, երբ վերակառուցվում են դիրեկտորիաները:
 
-Failures map to `PermissionDenied`, and the CoreHost policy snapshot tests in `crates/ivm/tests/core_host_policy.rs` cover allow/deny cases for each field.
-Block validation also requires non-empty proofs per dataspace with `expiry_slot` covering the policy slot (with the configured skew allowance) and not expiring before the handle, enforces descriptor binding plus touch manifests for declared specs (and rejects out-of-prefix entries), checks handle intent invariants (non-zero amounts, scope/subject alignment, and non-zero era/sub_nonce/expiry), aggregates handle budgets per dataspace, and advances `min_handle_era`/`min_sub_nonce` as envelopes commit so replayed sub-nonces are rejected even after Space Directory rebuilds.
+## Սխալների կատալոգ
 
-## Error Catalog
+Կանոնական կոդերն ապրում են `crates/iroha_data_model/src/errors.rs`-ում: Օպերատորները պետք է դրանք բառացիորեն ցուցադրեն չափումների/մատյաններում, և SDK-ները պետք է դրանք քարտեզագրեն գործունակ կրկնվող փորձերի համար:
 
-Canonical codes live in `crates/iroha_data_model/src/errors.rs`. Operators must surface them verbatim in metrics/logs, and SDKs should map them to actionable retries.
+| Կոդ | ձգան | Օպերատորի արձագանքը | SDK ուղեցույց |
+|------|------------------------------|-------------|
+| Բացակայում է առկայության ապացույց (հեռաչափություն) | Ավելի քիչ, քան `q` հաստատող անդորրագրեր, որոնք հաստատվել են մինչև 300 մվ: | Ստուգեք ստուգիչի առողջությունը, ընդլայնեք նմուշառման պարամետրերը հաջորդ սլոտի համար, պահեք գործարքը հերթագրված և գրանցեք բացակայող հասանելիության հաշվիչները՝ գործառնական գրքի ապացույցների համար: | Ոչ մի գործողություն; կրկին փորձելը տեղի է ունենում ավտոմատ կերպով, քանի որ tx-ը մնում է հերթագրված: |
+| `DA_DEADLINE_EXCEEDED` | Δ պատուհանն անցել է առանց DA քվորումի բավարարման: | Հրաժարական տվեք վիրավորող հավատարմագրողներին, հրապարակեք միջադեպի մասին գրություն, ստիպեք հաճախորդներին նորից ներկայացնել: | Վերակառուցել գործարքը, երբ ստուգողները վերադառնան. մտածեք խմբաքանակի բաժանման մասին: |
+| `AMX_TIMEOUT` | Համակցված պատրաստումը/կատարումը գերազանցել է 250 մվ-ը DS-ի մեկ հատվածի համար: | Լուսանկարեք ֆլեյմգրաֆները, ստուգեք R/W հավաքածուները և համեմատեք `iroha_amx_prepare_ms`-ի հետ: | Կրկին փորձեք ավելի փոքր խմբաքանակով կամ վեճը նվազեցնելուց հետո: |
+| `AMX_LOCK_CONFLICT` | Հաղորդավարը հայտնաբերել է գրելու համընկնող հավաքածուներ կամ չազդանշված հպումներ: | Ստուգեք UAID-ի մանիֆեստները և ստատիկ վերլուծության հաշվետվությունները. թարմացումը դրսևորվում է, եթե բացակայում են ընտրիչները: | Վերակազմավորել գործարքը շտկված կարդալու/գրելու հայտարարագրերով: |
+| `PVO_MISSING_OR_EXPIRED` | Հղված PVO բռնիչը քեշում կամ անցյալում չէ `expiry_slot`: | Ստուգեք ապացույցների սպասարկման մնացորդները, վերականգնեք արտեֆակտը և ստուգեք Torii ինդեքսները: | Թարմացրեք ապացուցված արտեֆակտը և նորից ուղարկեք նոր բռնակով: |
+| `RWSET_UNBOUNDED` | Ստատիկ վերլուծությունը չկարողացավ կապել կարդալու/գրելու ընտրիչը: | Մերժել տեղակայումը, գրանցամատյանի ընտրիչի հետքը, պահանջել մշակողի ուղղում նախքան նորից փորձելը: | Թարմացրեք պայմանագիրը՝ հստակ ընտրիչներ թողարկելու համար: |
+| `HEAVY_INSTRUCTION_DISALLOWED` | Պայմանագիրը վկայակոչել է հրահանգ, որն արգելված է AMX ուղիներով (օրինակ՝ խոշոր FFT առանց PVO): | Համոզվեք, որ Norito Builder-ն օգտագործում է հաստատված opcode հավաքածուն, նախքան նորից միացնելը: | Բաժանեք ծանրաբեռնվածությունը կամ ավելացրեք նախապես հաշվարկված ապացույց: |
+| `SETTLEMENT_ROUTER_UNAVAILABLE` | Երթուղիչը չկարողացավ հաշվարկել դետերմինիստական ​​փոխակերպումը (բացակայում է ուղին, բուֆերը չորացված է): | Ներգրավեք գանձապետարանը՝ բուֆերները լիցքավորելու կամ միայն XOR ռեժիմը շրջելու համար. գրանցում հաշվարկային հաշվառման գրքում: | Կրկին փորձեք բուֆերային ազդանշանի ջնջումից հետո; ցուցադրել օգտատիրոջ դեմ ուղղված նախազգուշացումը: |
 
-| Code | Trigger | Operator response | SDK guidance |
-|------|---------|-------------------|--------------|
-| Missing availability evidence (telemetry) | Fewer than `q` attester receipts verified before 300 ms. | Inspect attester health, widen sampling parameters for next slot, keep the transaction queued, and capture the missing-availability counters for runbook evidence. | No action; retry happens automatically because the tx stays enqueued. |
-| `DA_DEADLINE_EXCEEDED` | Δ window elapsed without meeting DA quorum. | Resign offending attesters, publish incident note, force clients to resubmit. | Rebuild transaction once attesters are back; consider splitting the batch. |
-| `AMX_TIMEOUT` | Combined prepare/commit exceeded 250 ms per DS slice. | Capture flamegraphs, verify R/W sets, and compare against `iroha_amx_prepare_ms`. | Retry with smaller batch or after reducing contention. |
-| `AMX_LOCK_CONFLICT` | Host detected overlapping write sets or unsignaled touches. | Inspect UAID manifests and static analysis reports; update manifests if missing selectors. | Recompile transaction with corrected read/write declarations. |
-| `PVO_MISSING_OR_EXPIRED` | Referenced PVO handle not in cache or past `expiry_slot`. | Check proof service backlog, regenerate artefact, and verify Torii indexes. | Refresh proof artefact and resubmit with the new handle. |
-| `RWSET_UNBOUNDED` | Static analysis could not bound a read/write selector. | Reject deployment, log selector stack trace, require developer fix before retry. | Update contract to emit explicit selectors. |
-| `HEAVY_INSTRUCTION_DISALLOWED` | Contract invoked an instruction banned from AMX lanes (e.g., large FFT without PVO). | Make sure Norito builder uses the approved opcode set before re-enabling. | Split workload or add a pre-computed proof. |
-| `SETTLEMENT_ROUTER_UNAVAILABLE` | Router could not compute deterministic conversion (missing path, buffer drained). | Engage Treasury to refill buffers or flip XOR-only mode; record in settlement runbook. | Retry after buffer alert clears; show user-facing warning. |
+SDK թիմերը պետք է արտացոլեն այս կոդերը ինտեգրման թեստերում, որպեսզի `iroha_cli`, Android, Swift, JS և Python մակերեսները համաձայնեն սխալի տեքստի և առաջարկվող գործողությունների վերաբերյալ:
 
-SDK teams should mirror these codes in integration tests so `iroha_cli`, Android, Swift, JS, and Python surfaces agree on error text and recommended actions.
+### AXT մերժման դիտելիություն
 
-### AXT rejection observability
+- Torii-ը բացահայտում է քաղաքականության ձախողումները որպես `ValidationFail::AxtReject` (և արգելափակում է վավերացումը որպես `AxtEnvelopeValidationFailed`) կայուն պատճառի պիտակով, ակտիվ `snapshot_version`, կամընտիր I18NI000000279X/I100000279X/I1000000279X/I10000000279X/I10000000279X/I10020000000279X/I1000000279X/I1002002000020020020020020020020020020020202002000200200200279X/I100000279X `next_min_handle_era`/`next_min_sub_nonce`-ի համար: SDK-ները պետք է փրփրացնեն այս դաշտերը օգտատերերին, որպեսզի հնացած բռնակները կարողանան որոշիչ կերպով թարմացնել:
+- Torii-ն այժմ նաև կնքում է HTTP պատասխանները `X-Iroha-Axt-*` վերնագրերով արագ տրաֆիկի համար՝ `Code`/`Reason`, `Snapshot-Version`, I18NI000002802 և `Code`/`Snapshot-Version`, I18NI000002802 կամընտիր `Next-Handle-Era`/`Next-Sub-Nonce`: ISO կամուրջների մերժումները կրում են համապատասխան `PRTRY:AXT_*` պատճառային կոդեր և նույն մանրամասների տողերը, որպեսզի վահանակները և օպերատորները կարողանան ազդանշաններ փակցնել AXT խափանումների դասից՝ առանց վերծանելու ամբողջ օգտակար բեռը:
+- Հոսթները գրանցում են `AXT policy rejection recorded`-ը նույն դաշտերով և արտահանում դրանք հեռաչափության միջոցով. Ապացույցի քեշի վիճակը մնում է հասանելի `/v1/debug/axt/cache`-ի միջոցով (տվյալների տարածություն/կարգավիճակ/մանիֆեստի արմատ/անցքեր):
+- Զգուշացում. դիտեք `iroha_axt_policy_reject_total`-ի հասկերը՝ խմբավորված ըստ `reason`-ի և `snapshot_version`-ով էջը տեղեկամատյաններից/Validation Չհաջողվեց հաստատել, թե արդյոք օպերատորները պետք է պտտեն մանիֆեստները (lane/manifest rejectles/refersex-rejects) Զույգացրեք ծանուցումները ապացույցների քեշի վերջնակետի հետ՝ հաստատելու, թե արդյոք մերժումները կապված են քեշի հետ, թե քաղաքականության հետ:
 
-- Torii surfaces policy failures as `ValidationFail::AxtReject` (and block validation as `AxtEnvelopeValidationFailed`) with a stable reason label, the active `snapshot_version`, optional `lane`/`dataspace` identifiers, and hint fields for `next_min_handle_era`/`next_min_sub_nonce`. SDKs should bubble these fields to users so stale handles can be refreshed deterministically.
-- Torii now also stamps HTTP responses with `X-Iroha-Axt-*` headers for quick triage: `Code`/`Reason`, `Snapshot-Version`, `Dataspace`, `Lane`, and optional `Next-Handle-Era`/`Next-Sub-Nonce`. ISO bridge rejections carry matching `PRTRY:AXT_*` reason codes and the same detail strings so dashboards and operators can key alerts off the AXT failure class without decoding the full payload.
-- Hosts log `AXT policy rejection recorded` with the same fields and export them via telemetry: `iroha_axt_policy_reject_total{lane,reason}` counts rejects, and `iroha_axt_policy_snapshot_version` tracks the hash of the active snapshot. Proof cache state remains available via `/v1/debug/axt/cache` (dataspace/status/manifest root/slots).
-- Alerting: watch for spikes in `iroha_axt_policy_reject_total` grouped by `reason` and page with the `snapshot_version` from logs/ValidationFail to confirm whether operators need to rotate manifests (lane/manifest rejects) or refresh handles (era/sub_nonce/expiry). Pair alerts with the proof-cache endpoint to confirm whether rejects are cache-related or policy-related.
+## Թեստավորում և ապացույցներ
 
-## Testing & Evidence
+- CI-ն պետք է գործարկի `ci/acceptance/slot_1s.yml` փաթեթը (30 րոպե խառը ծանրաբեռնվածություն) և ձախողվի միաձուլումը, երբ անցք/DA/հեռաչափության շեմերը չեն պահպանվում, ինչպես նշված է `ans3.md`-ում:
+- Քաոսային վարժանքները (ստուգիչի ցնցում, oracle ախոռներ, բուֆերների սպառում) պետք է իրականացվեն առնվազն եռամսյակը մեկ՝ `ops/drill-log.md`-ով արխիվացված արտեֆակտներով:
+- Կարգավիճակի թարմացումները պետք է ներառեն. ամենավերջին տեղաբաշխման SLO հաշվետվությունը, չմարված սխալների աճը և հղումը դեպի վերջին PVO քեշի նկարը, որպեսզի ճանապարհային քարտեզի շահագրգիռ կողմերը կարողանան ստուգել պատրաստակամությունը:
 
-- CI must run the `ci/acceptance/slot_1s.yml` suite (30 min mixed workloads) and fail merges when the slot/DA/telemetry thresholds are not met, as spelled out in `ans3.md`.
-- Chaos drills (attester jitter, oracle stalls, buffer depletion) must be executed at least quarterly with artefacts archived under `ops/drill-log.md`.
-- Status updates should include: most recent slot SLO report, outstanding error spikes, and a link to the latest PVO cache snapshot so roadmap stakeholders can audit readiness.
-
-By following this guide, contributors satisfy the roadmap requirement for AMX documentation and give operators and developers a single reference for timing, telemetry, and PVO workflows.
+Հետևելով այս ուղեցույցին՝ ներդրողները բավարարում են AMX փաստաթղթերի ճանապարհային քարտեզի պահանջը և օպերատորներին և ծրագրավորողներին տալիս են մեկ հղում՝ ժամանակացույցի, հեռաչափության և PVO աշխատանքային հոսքերի համար:

@@ -7,115 +7,114 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 019b3aa25ae224c1595467ac809f2c53290813e91a78b78b94ca71c3dd950264
 source_last_modified: "2026-01-31T19:25:45.072449+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# GPU Zstd (Metal) Pipeline
+# Pipeline GPU Zstd (Metal)
 
-This document describes the deterministic GPU pipeline used by the Metal helper
-for zstd compression. It is a design and implementation guide for the
-`gpuzstd_metal` helper that emits standard zstd frames and deterministic bytes
-for a given sequence stream. Outputs must roundtrip with CPU decoders; byte-for-
-byte parity with the CPU compressor is not required because sequence generation
-differs.
+Este documento descreve o pipeline determinístico de GPU usado pelo auxiliar Metal
+para compactação zstd. É um guia de design e implementação para o
+Auxiliar `gpuzstd_metal` que emite quadros zstd padrão e bytes determinísticos
+para um determinado fluxo de sequência. As saídas devem ida e volta com decodificadores de CPU; byte por-
+a paridade de bytes com o compressor da CPU não é necessária porque a geração de sequência
+difere.
 
-## Goals
+## Metas
 
-- Emit standard zstd frames that decode identically with CPU zstd; byte parity
-  with the CPU compressor is not required.
-- Deterministic outputs across hardware, drivers, and thread scheduling.
-- Explicit bounds checks and predictable buffer lifetimes.
+- Emite quadros zstd padrão que decodificam de forma idêntica ao zstd da CPU; paridade de bytes
+  com o compressor da CPU não é necessário.
+- Saídas determinísticas em hardware, drivers e agendamento de threads.
+- Verificações de limites explícitos e tempos de vida de buffer previsíveis.
 
-## Current implementation note
+## Nota de implementação atual
 
-- Match finding and sequence generation run on GPU.
-- Frame assembly and entropy coding (Huffman/FSE) currently run on the host
-  using the in-crate encoder; GPU Huffman/FSE kernels are parity-tested but not
-  yet wired into the full frame path.
-- Decode uses the in-crate frame decoder with a CPU zstd fallback for unsupported frames;
-  full GPU block decode remains in progress.
+- A descoberta de correspondência e a geração de sequência são executadas na GPU.
+- Montagem de quadro e codificação de entropia (Huffman/FSE) atualmente executadas no host
+  usando o codificador embutido; Os kernels GPU Huffman/FSE são testados em termos de paridade, mas não
+  ainda conectado ao caminho completo do quadro.
+- Decode usa o decodificador de quadros na caixa com um substituto zstd da CPU para quadros não suportados;
+  a decodificação completa do bloco GPU permanece em andamento.
 
-## Encoding pipeline (high level)
+## Pipeline de codificação (alto nível)
 
-1. Input staging
-   - Copy the input into a device buffer.
-   - Partition into fixed-size chunks (for sequence generation) and blocks (for
-     zstd frame assembly).
-2. Match finding and sequence emission
-   - GPU kernels scan each chunk and emit sequences (literal length, match
-     length, offset).
-   - Sequence ordering is stable and deterministic.
-3. Literal preparation
-   - Collect literals referenced by sequences.
-   - Build literal histograms and select literal block mode (raw, RLE, or
-     Huffman) deterministically.
-4. Huffman tables (literals)
-   - Generate code lengths from the histogram.
-   - Build canonical tables with deterministic tie-breaking that matches CPU
-     zstd output.
-5. FSE tables (LL/ML/OF)
-   - Normalize frequency counts.
-   - Build FSE decoding/encoding tables deterministically.
-6. Bitstream writer
-   - Pack bits little-endian (LSB-first).
-   - Flush on byte boundaries; pad with zeros only.
-   - Mask values to declared bit widths and enforce capacity checks.
-7. Block and frame assembly
-   - Emit block headers (type, size, last-block flag).
-   - Serialize literals and sequences into compressed blocks.
-   - Emit standard zstd frame headers and optional checksums.
+1. Preparação de entrada
+   - Copie a entrada em um buffer de dispositivo.
+   - Partição em pedaços de tamanho fixo (para geração de sequência) e blocos (para
+     montagem da estrutura zstd).
+2. Localização de correspondência e emissão de sequência
+   - Os kernels da GPU examinam cada pedaço e emitem sequências (comprimento literal, correspondência
+     comprimento, deslocamento).
+   - A ordenação de sequências é estável e determinística.
+3. Preparação literal
+   - Colete literais referenciados por sequências.
+   - Construa histogramas literais e selecione o modo de bloco literal (bruto, RLE ou
+     Huffman) deterministicamente.
+4. Tabelas Huffman (literais)
+   - Gere comprimentos de código a partir do histograma.
+   - Construa tabelas canônicas com desempate determinístico que corresponda à CPU
+     saída zstd.
+5. Tabelas FSE (LL/ML/OF)
+   - Normalizar contagens de frequência.
+   - Construir tabelas de decodificação/codificação FSE de forma determinística.
+6. Escritor Bitstream
+   - Pacote de bits little-endian (LSB primeiro).
+   - Liberar limites de bytes; bloco apenas com zeros.
+   - Mascarar valores para larguras de bits declaradas e impor verificações de capacidade.
+7. Montagem de bloco e estrutura
+   - Emite cabeçalhos de bloco (tipo, tamanho, sinalizador do último bloco).
+   - Serialize literais e sequências em blocos compactados.
+   - Emite cabeçalhos de quadro zstd padrão e somas de verificação opcionais.
 
-## Decoding pipeline (high level)
+## Pipeline de decodificação (alto nível)
 
-1. Frame parse
-   - Validate magic bytes, window settings, and frame header fields.
-2. Bitstream reader
-   - Read LSB-first bit sequences with strict bounds checks.
-3. Literal decode
-   - Decode literal blocks (raw, RLE, or Huffman) into the literal buffer.
-4. Sequence decode
-   - Decode LL/ML/OF values using FSE tables.
-   - Reconstruct matches using the sliding window.
-5. Output and checksum
-   - Write reconstructed bytes into the output buffer.
-   - Verify optional checksums when enabled.
+1. Análise de quadro
+   - Valide bytes mágicos, configurações de janela e campos de cabeçalho de quadro.
+2. Leitor de fluxo de bits
+   - Leia sequências de primeiro bit LSB com verificações de limites estritos.
+3. Decodificação literal
+   - Decodifique blocos literais (brutos, RLE ou Huffman) no buffer literal.
+4. Decodificação de sequência
+   - Decodifique valores LL/ML/OF usando tabelas FSE.
+   - Reconstrua partidas usando a janela deslizante.
+5. Saída e soma de verificação
+   - Grave bytes reconstruídos no buffer de saída.
+   - Verifique somas de verificação opcionais quando habilitadas.
 
-## Buffer lifetimes and ownership
+## Vida útil e propriedade do buffer- Buffer de entrada: host -> dispositivo, somente leitura.
+- Buffer de sequência: dispositivo, produzido por busca de correspondência e consumido pela entropia
+  codificação; sem reutilização entre blocos.
+- Buffer literal: dispositivo, produzido para cada bloco e liberado após bloco
+  emissão.
+- Buffer de saída: dispositivo, armazena os bytes finais do quadro até que o host os copie
+  fora.
+- Buffers scratch: reutilizados entre kernels, mas sempre sobrescritos de forma determinística.
 
-- Input buffer: host -> device, read-only.
-- Sequence buffer: device, produced by match-finding and consumed by entropy
-  coding; no cross-block reuse.
-- Literal buffer: device, produced for each block and released after block
-  emission.
-- Output buffer: device, holds the final frame bytes until the host copies them
-  out.
-- Scratch buffers: reused across kernels, but always overwritten deterministically.
+## Responsabilidades do kernel
 
-## Kernel responsibilities
+- Kernels de localização de correspondência: encontre correspondências e emita sequências (LL/ML/OF + literais).
+- Kernels de construção Huffman: deriva comprimentos de código e tabelas canônicas.
+- Kernels de construção FSE: construa tabelas LL/ML/OF e máquinas de estado.
+- Bloquear kernels de codificação: serializar literais e sequências no fluxo de bits.
+- Bloquear kernels de decodificação: analisar bitstream e reconstruir literais/sequências.
 
-- Match finding kernels: find matches and emit sequences (LL/ML/OF + literals).
-- Huffman build kernels: derive code lengths and canonical tables.
-- FSE build kernels: build LL/ML/OF tables and state machines.
-- Block encode kernels: serialize literals and sequences into the bitstream.
-- Block decode kernels: parse bitstream and reconstruct literals/sequences.
+## Determinismo e restrições de paridade
 
-## Determinism and parity constraints
-
-- Canonical table builds must use the same ordering and tie-breaking as CPU
+- As compilações de tabelas canônicas devem usar a mesma ordem e desempate da CPU
   zstd.
-- No atomics or reductions that depend on thread scheduling for any output byte.
-- Bitstream packing is little-endian, LSB-first; byte alignment pads with zeros.
-- All bounds checks are explicit; invalid inputs fail deterministically.
+- Sem atômicos ou reduções que dependam do agendamento de threads para qualquer byte de saída.
+- O empacotamento Bitstream é little-endian, LSB-first; blocos de alinhamento de bytes com zeros.
+- Todas as verificações de limites são explícitas; entradas inválidas falham deterministicamente.
 
-## Validation
+## Validação
 
-- CPU golden vectors for the bitstream writer/reader.
-- Corpus parity tests comparing GPU and CPU outputs.
-- Fuzz coverage for malformed frames and boundary conditions.
+- Vetores dourados de CPU para o gravador/leitor de fluxo de bits.
+- Testes de paridade de Corpus comparando saídas de GPU e CPU.
+- Cobertura Fuzz para quadros malformados e condições de contorno.
 
-## Benchmarking
+## Comparativo de mercado
 
-Run `cargo test -p gpuzstd_metal gpu_vs_cpu_benchmark -- --ignored --nocapture` to
-compare CPU vs GPU encode latency across payload sizes. The test skips on hosts
-without a Metal-capable device; capture the output alongside hardware details
-when adjusting the GPU offload thresholds. Norito enforces the same cutoff in
-`gpu_zstd::encode_all`, so direct callers match the heuristic gate.
+Execute `cargo test -p gpuzstd_metal gpu_vs_cpu_benchmark -- --ignored --nocapture` para
+compare a latência de codificação de CPU versus GPU em tamanhos de carga útil. O teste pula nos hosts
+sem dispositivo com capacidade de metal; capture a saída junto com detalhes de hardware
+ao ajustar os limites de descarregamento da GPU. Norito impõe o mesmo corte em
+`gpu_zstd::encode_all`, para que os chamadores diretos correspondam à porta heurística.

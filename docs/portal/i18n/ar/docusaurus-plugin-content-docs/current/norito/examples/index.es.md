@@ -4,18 +4,20 @@ direction: rtl
 source: docs/portal/docs/norito/examples/index.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: Ejemplos de Norito
-description: Fragmentos de Kotodama seleccionados con recorridos del libro mayor.
-slug: /norito/examples
+العنوان: Ejemplos de Norito
+الوصف: تم تحديد أجزاء من Kotodama مع تسجيلات الكتاب الرئيسية.
+سبيكة: /نوريتو/أمثلة
 ---
 
-Estos ejemplos reflejan los quickstarts de los SDK y los recorridos del libro mayor. Cada fragmento incluye una lista de verificación del libro mayor y enlaza a las guías de Rust, Python y JavaScript para que puedas repetir el mismo escenario de principio a fin.
+تعكس هذه الأمثلة البدايات السريعة لـ SDK والمسجلات الأكبر للكتاب. يتضمن كل جزء قائمة تحقق أكبر من الكتاب ومرفقة بأدلة Rust وPython وJavaScript حتى تتمكن من تكرار نفس السيناريو من البداية في النهاية.
 
-- **[Esqueleto del entrypoint Hajimari](./hajimari-entrypoint)** — Andamiaje mínimo de contrato Kotodama con un único entrypoint público y un manejador de estado.
-- **[Registrar dominio y acuñar activos](./register-and-mint)** — Demuestra la creación de dominios con permisos, el registro de activos y la acuñación determinista.
-- **[Invocar transferencia del host desde Kotodama](./call-transfer-asset)** — Demuestra cómo un entrypoint de Kotodama puede llamar a la instrucción de host `transfer_asset` con validación de metadatos en línea.
-- **[Transferir activo entre cuentas](./transfer-asset)** — Flujo directo de transferencia de activos que refleja los quickstarts de los SDK y los recorridos del libro mayor.
-- **[Acuñar, transferir y quemar un NFT](./nft-flow)** — Recorre el ciclo de vida de un NFT de extremo a extremo: acuñación al propietario, transferencias, etiquetado de metadatos y quema.
+- **[مفتاح نقطة الدخول Hajimari](./hajimari-entrypoint)** — الحد الأدنى من عقد Kotodama مع نقطة دخول عامة واحدة ومدير الحالة.
+- **[تسجيل النطاقات وتسجيل الأنشطة](./register-and-mint)** — عرض إنشاء النطاقات بالأذونات وسجل الأنشطة والنقر المحدد.
+- **[استدعاء نقل المضيف من Kotodama](./call-transfer-asset)** — يمكن استخدامه كنقطة دخول لـ Kotodama للاتصال لتعليمات المضيف `transfer_asset` مع التحقق من صحة البيانات الوصفية عبر الإنترنت.
+- **[نقل النشاط بين الحسابات](./transfer-asset)** — التدفق المباشر لنقل الأنشطة التي تعكس البدايات السريعة لـ SDK والمسجلات الأكبر للكتاب.
+- **[تسجيل ونقل واستعادة NFT](./nft-flow)** — قم باستعادة حلقة الحياة من NFT من أقصى إلى أقصى: الضغط على الملكية، والتحويلات، وبيانات التعريف، والمفتاح.

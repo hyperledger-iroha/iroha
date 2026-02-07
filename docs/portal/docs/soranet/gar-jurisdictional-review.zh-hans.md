@@ -10,21 +10,22 @@ translation_last_reviewed: 2026-02-07
 title: GAR Jurisdictional Review (SNNet-9)
 sidebar_label: GAR Jurisdictional Review
 description: Signed-off jurisdiction decisions and Blake2b digests to wire into SoraNet compliance configs.
+translator: machine-google-reviewed
 ---
 
-The SNNet-9 compliance track is now complete. This page lists the signed
-jurisdiction decisions, the Blake2b-256 digests operators must copy into their
-`compliance.attestations` blocks, and the next review dates. Keep the signed
-PDFs in your governance archive; these digests are the canonical fingerprints
-for automation and audits.
+SNNet-9 合规性跟踪现已完成。此页列出了已签名的
+管辖权决定，Blake2b-256 摘要操作员必须将其复制到其
+`compliance.attestations` 块，以及下一次审核日期。保留签名
+您的治理档案中的 PDF；这些摘要是规范的指纹
+用于自动化和审计。
 
-| Jurisdiction | Decision | Memo | Blake2b-256 digest (uppercase hex) | Next review |
-|--------------|----------|------|------------------------------------|-------------|
-| United States | Direct-only transport required (no SoraNet circuits) | `governance/compliance/attestations/us-2027-q2.md` | `1636B0B52286896C4894FA0333CD691D9B3DB7F2B73548EA2EA622B90A09BCF7` | 2027-09-30 |
-| Canada | Direct-only transport required | `governance/compliance/attestations/ca-2027-q2.md` | `52D9D9EE1E43DA0526D8C659AC61C1844858F9A6A74650EA5C04CBD8F8614063` | 2027-09-30 |
-| EU/EEA | Anonymous SoraNet transport allowed with SNNet-8 privacy budgets enforced | `governance/compliance/attestations/eu-2027-q2.md` | `30FDAF718095E87FDFADA6BE3EC1EF9D56DFFDEE97BF4BBEAB9013F7A0963B15` | 2027-09-30 |
+|管辖范围 |决定|备忘录 | Blake2b-256 摘要（大写十六进制）|下一篇评论 |
+|--------------|----------|------|------------------------------------|------------------------|
+|美国 |需要直接传输（无 SoraNet 电路）| `governance/compliance/attestations/us-2027-q2.md` | `1636B0B52286896C4894FA0333CD691D9B3DB7F2B73548EA2EA622B90A09BCF7` | 2027-09-30 |
+|加拿大 |需要直达交通 | `governance/compliance/attestations/ca-2027-q2.md` | `52D9D9EE1E43DA0526D8C659AC61C1844858F9A6A74650EA5C04CBD8F8614063` | 2027-09-30 |
+|欧盟/欧洲经济区 |允许匿名 SoraNet 传输并强制执行 SNNet-8 隐私预算 | `governance/compliance/attestations/eu-2027-q2.md` | `30FDAF718095E87FDFADA6BE3EC1EF9D56DFFDEE97BF4BBEAB9013F7A0963B15` | 2027-09-30 |
 
-## Deployment snippet
+## 部署片段
 
 ```jsonc
 {
@@ -61,15 +62,15 @@ for automation and audits.
 }
 ```
 
-## Audit checklist
+## 审核清单
 
-- Attestation digests copied exactly into production configs.
-- `jurisdiction_opt_outs` matches the canonical catalogue.
-- Signed PDFs retained in your governance archive with matching digests.
-- Activation window and approvers captured in the GAR logbook.
-- Next-review reminders scheduled from the table above.
+- 证明摘要准确复制到生产配置中。
+- `jurisdiction_opt_outs` 与规范目录匹配。
+- 签名的 PDF 保留在您的治理档案中，并带有匹配的摘要。
+- GAR 日志中捕获的激活窗口和批准者。
+- 从上表中安排的下一次审核提醒。
 
-## See also
+## 另请参阅
 
-- [GAR Operator Onboarding Brief](gar-operator-onboarding)
-- [GAR Compliance Playbook (source)](../../../source/soranet/gar_compliance_playbook.md)
+- [GAR 操作员入职简介](gar-operator-onboarding)
+- [GAR 合规手册（来源）](../../../source/soranet/gar_compliance_playbook.md)

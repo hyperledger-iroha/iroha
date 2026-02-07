@@ -7,48 +7,49 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 1b453559c05401edc11894e585c8d5ca4b678d4667c1cef0415582e1f7de8246
 source_last_modified: "2025-12-29T18:16:35.087502+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Economic Analysis - 2025-10 -> 2025-11 Shadow Run
+# Iqtisodiy tahlil - 2025-10 -> 2025-11 Shadow Run
 
-Source artefact: `docs/examples/soranet_incentive_shadow_run.json` (signature +
-public key in the same directory). The simulation replayed 60 epochs per relay
-with the reward engine pinned to `RewardConfig` recorded in
+Manba artefakt: `docs/examples/soranet_incentive_shadow_run.json` (imzo +
+bir xil katalogdagi ochiq kalit). Simulyatsiya har bir estafeta uchun 60 ta davrni takrorladi
+`RewardConfig` ga biriktirilgan mukofot dvigateli bilan
 `reward_config.json`.
 
-## Distribution Summary
+## Tarqatish xulosasi
 
-- **Total payouts:** 5,160 XOR over 360 rewarded epochs.
-- **Fairness envelope:** Gini coefficient 0.121; top relay share 23.26%
-  (well below the 30% governance guardrail).
-- **Availability:** fleet average 96.97%, all relays remained above 94%.
-- **Bandwidth:** fleet average 91.20%, with the lowest performer at 87.23%
-  during planned maintenance; penalties were applied automatically.
-- **Compliance noise:** 9 warning epochs and 3 suspensions were observed and
-  translated into payout reductions; no relay exceeded the 12-warning cap.
-- **Operational hygiene:** no metrics snapshots were skipped due to missing
-  config, bonds, or duplicates; no calculator errors were emitted.
+- **Jami toʻlovlar:** 5160 XOR 360 dan ortiq mukofotlangan davrlar.
+- **Adolat konverti:** Jini koeffitsienti 0,121; yuqori o'rni ulushi 23,26%
+  (30% boshqaruv panjarasidan ancha past).
+- **Mavjudligi:** flot o'rtacha 96,97%, barcha o'rni 94% dan yuqori bo'lib qoldi.
+- **Transport kengligi:** flot o'rtacha 91,20%, eng past ko'rsatkich 87,23%
+  rejalashtirilgan ta'mirlash vaqtida; jarimalar avtomatik tarzda qo'llanildi.
+- **Muvofiqlik shovqini:** 9 ta ogohlantirish davri va 3 ta suspenziya kuzatildi va
+  to'lovlarni kamaytirishga tarjima qilingan; hech qanday rele 12-ogohlantirish qopqog'idan oshmadi.
+- **Ish gigienasi:** hech qanday ko‘rsatkichlar snapshotlari etishmayotganligi sababli o‘tkazib yuborilmadi
+  konfiguratsiya, obligatsiyalar yoki dublikatlar; hech qanday kalkulyator xatosi yo'q edi.
 
-## Observations
+## Kuzatishlar
 
-- Suspensions correspond to epochs where relays entered maintenance mode. The
-  payout engine emitted zero payouts for those epochs while preserving the
-  audit trail in the shadow-run JSON.
-- Warning penalties shaved 2% off the affected payouts; the resulting
-  distribution still converges thanks to the uptime/bandwidth weights (650/350
-  per mille).
-- Bandwidth variance tracks the anonymised guard heatmap. The lowest performer
-  (`6666...6666`) retained 620 XOR across the window, above the 0.6x floor.
-- Latency-sensitive alerts (`SoranetRelayLatencySpike`) remained below warning
-  thresholds throughout the window; correlated dashboards are captured under
+- Süspansiyonlar o'rni parvarishlash rejimiga kirgan davrlarga to'g'ri keladi. The
+  to'lov mexanizmi saqlab qolgan holda o'sha davrlar uchun nol to'lovlarni chiqardi
+  soyada boshqariladigan JSONdagi audit izi.
+- Ogohlantirish jarimalari zararlangan to'lovlardan 2% chegirildi; natijada
+  tarqatish hali ham ish vaqti/tarmoqli kengligi og'irliklari (650/350
+  promille).
+- Tarmoqli kengligi farqi anonim himoyalangan issiqlik xaritasini kuzatib boradi. Eng past ko'rsatkich
+  (`6666...6666`) deraza bo'ylab, 0,6x qavatdan yuqorida 620 XORni saqlab qoldi.
+- Kechikishga sezgir ogohlantirishlar (`SoranetRelayLatencySpike`) ogohlantirish ostida qoldi
+  deraza bo'ylab eshiklar; o'zaro bog'liq asboblar paneli ostida olingan
   `dashboards/grafana/soranet_incentives.json`.
 
-## Recommended Actions Before GA
+## GA dan oldin tavsiya etilgan harakatlar
 
-1. Keep running monthly shadow replays and update the artefact set and this
-   analysis if the fleet composition changes.
-2. Gate automatic payouts on the Grafana alert suite referenced in the roadmap
-   (`dashboards/alerts/soranet_incentives_rules.yml`); copy screenshots into the
-   governance minutes when seeking renewal.
-3. Re-run the economic stress test if base reward, uptime/bandwidth weights, or
-   the compliance penalty changes by >=10%.
+1. Oylik soyalarni takrorlashni davom ettiring va artefakt to'plamini yangilang va bu
+   flot tarkibi o'zgargan taqdirda tahlil qilish.
+2. Yo‘l xaritasida ko‘rsatilgan Grafana ogohlantirish to‘plamida avtomatik to‘lovlarni amalga oshiring
+   (`dashboards/alerts/soranet_incentives_rules.yml`); skrinshotlarni nusxalash
+   yangilashni talab qilganda boshqaruv protokollari.
+3. Iqtisodiy stress testini qayta o'tkazing, agar asosiy mukofot, ish vaqti / tarmoqli kengligi og'irliklari yoki
+   muvofiqlik jazosi >=10% ga o'zgaradi.

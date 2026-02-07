@@ -7,39 +7,40 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 03275f401b49b62d8ccb361358235e5964b1ca791a68dcada0fd763bb6a4941b
 source_last_modified: "2026-01-31T19:25:45.072378+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-## Acceleration & Norito Heuristics Reference
+## ማጣደፍ እና Norito የሂዩሪስቲክስ ማጣቀሻ
 
-The `[accel]` block in `iroha_config` threads through
-`crates/irohad/src/main.rs:1895` into `ivm::set_acceleration_config`. Every host
-applies the same knobs before instantiating the VM, so operators can deterministically
-pick which GPU backends are allowed while keeping scalar/SIMD fallbacks available.
-Swift, Android, and Python bindings load the same manifest via the bridge layer, so
-documenting these defaults unblocks WP6-C in the hardware-acceleration backlog.
+በ `iroha_config` ክሮች ውስጥ ያለው የ `[accel]` እገዳ
+`crates/irohad/src/main.rs:1895` ወደ `ivm::set_acceleration_config`። እያንዳንዱ አስተናጋጅ
+ቪኤምን ከመፍጠን በፊት ተመሳሳይ ቁልፎችን ይተገብራል፣ ስለዚህ ኦፕሬተሮች በትክክል መወሰን ይችላሉ።
+scalar/SIMD መውደቅ ሲኖር የትኞቹ የጂፒዩ መደገፊያዎች እንደሚፈቀዱ ይምረጡ።
+ስዊፍት፣ አንድሮይድ እና ፓይዘን ማሰሪያዎች በድልድዩ ንብርብር በኩል አንድ አይነት አንጸባራቂ ይጫናሉ፣ ስለዚህ
+እነዚህን ነባሪዎች መመዝገብ WP6-Cን በሃርድዌር-ማጣደፍ የኋላ መዝገብ ውስጥ ያቆማል።
 
-### `accel` (hardware acceleration)
+### `accel` (የሃርድዌር ማጣደፍ)
 
-The table below mirrors `docs/source/references/peer.template.toml` and the
-`iroha_config::parameters::user::Acceleration` definition, exposing the environment
-variable that overrides each key.
+ከታች ያለው ሠንጠረዥ `docs/source/references/peer.template.toml` እና የ
+`iroha_config::parameters::user::Acceleration` ፍቺ፣ አካባቢን ማጋለጥ
+እያንዳንዱን ቁልፍ የሚሽር ተለዋዋጭ።
 
-| Key | Env var | Default | Description |
-|-----|---------|---------|-------------|
-| `enable_simd` | `ACCEL_ENABLE_SIMD` | `true` | Enables SIMD/NEON/AVX execution. When `false`, the VM forces scalar backends for vector ops and Merkle hashing to ease deterministic parity captures. |
-| `enable_cuda` | `ACCEL_ENABLE_CUDA` | `true` | Enables the CUDA backend when it is compiled in and the runtime passes all golden-vector checks. |
-| `enable_metal` | `ACCEL_ENABLE_METAL` | `true` | Enables the Metal backend on macOS builds. Even when true, Metal self-tests can still disable the backend at runtime if parity mismatches occur. |
-| `max_gpus` | `ACCEL_MAX_GPUS` | `0` (auto) | Caps how many physical GPUs the runtime initialises. `0` means “match hardware fan-out” and is clamped by `GpuManager`. |
-| `merkle_min_leaves_gpu` | `ACCEL_MERKLE_MIN_LEAVES_GPU` | `8192` | Minimum leaves required before Merkle leaf hashing offloads to GPU. Values below this threshold keep hashing on the CPU to avoid PCIe overhead (`crates/ivm/src/byte_merkle_tree.rs:49`). |
-| `merkle_min_leaves_metal` | `ACCEL_MERKLE_MIN_LEAVES_METAL` | `0` (inherit global) | Metal-specific override for the GPU threshold. When `0`, Metal inherits `merkle_min_leaves_gpu`. |
-| `merkle_min_leaves_cuda` | `ACCEL_MERKLE_MIN_LEAVES_CUDA` | `0` (inherit global) | CUDA-specific override for the GPU threshold. When `0`, CUDA inherits `merkle_min_leaves_gpu`. |
-| `prefer_cpu_sha2_max_leaves_aarch64` | `ACCEL_PREFER_CPU_SHA2_MAX_AARCH64` | `0` (32 768 internally) | Caps the tree size where ARMv8 SHA-2 instructions should win over GPU hashing. `0` keeps the compiled-in default of `32_768` leaves (`crates/ivm/src/byte_merkle_tree.rs:59`). |
-| `prefer_cpu_sha2_max_leaves_x86` | `ACCEL_PREFER_CPU_SHA2_MAX_X86` | `0` (32 768 internally) | Same as above but for x86/x86_64 hosts using SHA-NI (`crates/ivm/src/byte_merkle_tree.rs:63`). |
+| ቁልፍ | Env var | ነባሪ | መግለጫ |
+|-------------|----|------------|
+| `enable_simd` | `ACCEL_ENABLE_SIMD` | `true` | SIMD/NEON/AVX አፈፃፀምን ያነቃል። `false` በሚሆንበት ጊዜ ቪኤም ለቬክተር ኦፕስ እና ለ Merkle hashing ቆራጥነት የተመጣጠነ ቀረጻዎችን ለማቃለል scalar backends ያስገድዳል። |
+| `enable_cuda` | `ACCEL_ENABLE_CUDA` | `true` | የCUDA ጀርባን ያነቃል እና ሲጠናቀር እና የአሂድ ጊዜ ሁሉንም ወርቃማ-ቬክተር ቼኮችን አልፏል። |
+| `enable_metal` | `ACCEL_ENABLE_METAL` | `true` | በ macOS ግንቦች ላይ የብረታ ብረት ጀርባን ያነቃል። እውነት ቢሆንም እንኳ፣ የብረታ ብረት ራስን መፈተሽ የተመጣጣኝ አለመጣጣም ከተከሰተ በሂደት ላይ ያለውን የጀርባውን መጨረሻ ሊያሰናክለው ይችላል። |
+| `max_gpus` | `ACCEL_MAX_GPUS` | `0` (ራስ-ሰር) | የሩጫ ጊዜ ማስጀመሪያው ስንት አካላዊ ጂፒዩዎችን ያሳያል። `0` ማለት "ተዛማጅ ሃርድዌር ማራገቢያ" እና በ `GpuManager` ተጣብቋል። |
+| `merkle_min_leaves_gpu` | `ACCEL_MERKLE_MIN_LEAVES_GPU` | `8192` | ወደ ጂፒዩ ከመጫንዎ በፊት ከመርክሌ ቅጠል በፊት የሚፈለጉት አነስተኛ ቅጠሎች። ከዚህ ገደብ በታች ያሉት ዋጋዎች PCIe ከአናት (`crates/ivm/src/byte_merkle_tree.rs:49`) ለማስቀረት በሲፒዩ ላይ ማሽቆልቆላቸውን ይቀጥላሉ. |
+| `merkle_min_leaves_metal` | `ACCEL_MERKLE_MIN_LEAVES_METAL` | `0` (ዓለም አቀፍ ውርስ) | ለጂፒዩ ገደብ ብረት-ተኮር መሻር። `0` ሲኖር ሜታል `merkle_min_leaves_gpu` ይወርሳል። |
+| `merkle_min_leaves_cuda` | `ACCEL_MERKLE_MIN_LEAVES_CUDA` | `0` (ዓለም አቀፍ ውርስ) | ለጂፒዩ ገደብ CUDA-ተኮር መሻር። `0`፣ CUDA `merkle_min_leaves_gpu` ይወርሳል። |
+| `prefer_cpu_sha2_max_leaves_aarch64` | `ACCEL_PREFER_CPU_SHA2_MAX_AARCH64` | `0` (32768 በውስጥ) | የ ARMv8 SHA-2 መመሪያዎች በጂፒዩ ሃሺንግ ላይ የሚያሸንፉበትን የዛፉን መጠን ይሸፍናል። `0` የተቀናበረውን የ`32_768` ቅጠሎች (`crates/ivm/src/byte_merkle_tree.rs:59`) ነባሪ ያቆያል። |
+| `prefer_cpu_sha2_max_leaves_x86` | `ACCEL_PREFER_CPU_SHA2_MAX_X86` | `0` (32768 በውስጥ) | ከላይ ካለው ጋር ተመሳሳይ ነገር ግን SHA-NI (`crates/ivm/src/byte_merkle_tree.rs:63`) በመጠቀም ለ x86/x86_64 አስተናጋጆች። |
 
-`enable_simd` also controls RS16 erasure coding (Torii DA ingest + tooling). Disable it to
-force scalar parity generation while keeping outputs deterministic across hardware.
+`enable_simd` በተጨማሪም RS16 erasure codeing (Torii DA ingest + tooling) ይቆጣጠራል። እሱን አሰናክል
+ውጤቶቹ በሃርድዌር ላይ እንዲወስኑ ሲያደርጉ scalar perity ትውልድን ያስገድዱ።
 
-Example configuration:
+የምሳሌ ውቅር፡
 
 ```toml
 [accel]
@@ -53,17 +54,15 @@ merkle_min_leaves_cuda = 16384
 prefer_cpu_sha2_max_leaves_aarch64 = 65536
 ```
 
-Zero values for the last five keys mean “keep the compiled default”. Hosts must not
-set conflicting overrides (e.g., disabling CUDA while forcing CUDA-only thresholds),
-otherwise the request is ignored and the backend continues to follow the global policy.
+የመጨረሻዎቹ አምስት ቁልፎች ዜሮ እሴቶች "የተጠናቀረ ነባሪ አቆይ" ማለት ነው። አስተናጋጆች መሆን የለባቸውም
+የሚጋጩ መሻሮችን ያቀናብሩ (ለምሳሌ፡ CUDAን በማሰናከል CUDA-ብቻ ገደቦችን በማስገደድ)
+አለበለዚያ ጥያቄው ችላ ይባላል እና የጀርባው አካል የአለም አቀፍ ፖሊሲን መከተሉን ይቀጥላል.
 
-### Inspecting runtime state
-
-Run `cargo xtask acceleration-state [--format table|json]` to snapshot the applied
-configuration alongside the Metal/CUDA runtime health bits. The command pulls the
-current `ivm::acceleration_config`, parity status, and sticky error strings (if a
-backend was disabled) so operations can feed the result directly into parity
-dashboards or incident reviews.
+### የሩጫ ጊዜ ሁኔታን በመፈተሽ ላይየተተገበረውን ቅጽበተ ፎቶ ለማየት `cargo xtask acceleration-state [--format table|json]` ያሂዱ
+ከMetal/CUDA የሩጫ ጊዜ የጤና ቢት ጋር ውቅር። ትዕዛዙ ይጎትታል
+የአሁኑ `ivm::acceleration_config`፣ የተመጣጣኝነት ሁኔታ እና ተለጣፊ የስህተት ሕብረቁምፊዎች (ከሆነ
+backend ተሰናክሏል) ስለዚህ ክዋኔዎች ውጤቱን በቀጥታ ወደ እኩልነት ይመገባሉ።
+ዳሽቦርዶች ወይም የክስተት ግምገማዎች።
 
 ```
 $ cargo xtask acceleration-state
@@ -87,23 +86,23 @@ Metal   yes        yes         yes        yes       -
 CUDA    no         no          no         no        policy disabled (no CUDA libraries present)
 ```
 
-Use `--format json` when the snapshot needs to be ingested by automation (the JSON
-contains the same fields shown in the table).
+ቅጽበተ-ፎቶው በራስ-ሰር (JSON) ወደ ውስጥ መግባት ሲፈልግ `--format json` ይጠቀሙ
+በሰንጠረዡ ውስጥ የሚታዩትን ተመሳሳይ መስኮች ይዟል).
 
-`acceleration_runtime_errors()` now calls out why SIMD fell back to scalar:
-`disabled by config`, `forced scalar override`, `simd unsupported on hardware`, or
-`simd unavailable at runtime` when detection succeeds but execution still runs
-without vectors. Clearing the override or re-enabling the policy drops the message
-on hosts that support SIMD.
+`acceleration_runtime_errors()` ለምን SIMD ወደ scalar ተመልሶ እንደወደቀ ጠራ።
+`disabled by config`፣ `forced scalar override`፣ `simd unsupported on hardware`፣ ወይም
+`simd unavailable at runtime` ማግኘቱ ሲሳካ ግን አፈጻጸም አሁንም ይሰራል
+ያለ ቬክተሮች. መሻሩን ማጽዳት ወይም መመሪያውን እንደገና ማንቃት መልእክቱን ይጥላል
+SIMD በሚደግፉ አስተናጋጆች ላይ።
 
-### Parity checks
+### የፓሪቲ ቼኮች
 
-Flip `AccelerationConfig` between CPU-only and accel-on to prove deterministic results.
-The `poseidon_instructions_match_across_acceleration_configs` regression runs the
-Poseidon2/6 opcodes twice—first with `enable_cuda`/`enable_metal` set to `false`, then
-with both enabled—and asserts identical outputs plus CUDA parity when GPUs are present.【crates/ivm/tests/crypto.rs:100】
-Capture `acceleration_runtime_status()` alongside the run to record whether backends
-were configured/available in lab logs.
+ወሳኙን ውጤት ለማረጋገጥ `AccelerationConfig`ን በሲፒዩ-ብቻ እና በ accel-on መካከል ገልብጥ።
+የ `poseidon_instructions_match_across_acceleration_configs` regression ያካሂዳል
+Poseidon2/6 ሁለት ጊዜ ኦፕኮዶችን ያደርጋል—መጀመሪያ በ `enable_cuda`/`enable_metal` ወደ `false` ተቀናብሯል፣ከዚያም
+ከሁለቱም የነቃ - እና ጂፒዩዎች በሚገኙበት ጊዜ ተመሳሳይ ውጤቶችን እና የCUDA እኩልነትን ያረጋግጣል።【crates/ivm/tests/crypto.rs:100】
+የኋለኛውን ለመቅዳት `acceleration_runtime_status()`ን ከሩጫው ጋር ይያዙ
+በቤተ ሙከራ ምዝግብ ማስታወሻዎች ውስጥ ተዋቅረዋል/ ይገኛሉ።
 
 ```rust
 let baseline = ivm::acceleration_config();
@@ -126,90 +125,86 @@ SIMD-enabled baseline on the same host while surfacing the `simd` status/error
 fields via `acceleration_runtime_status`/`acceleration_runtime_errors`.【crates/ivm/tests/acceleration_simd.rs:9】
 ```
 
-### GPU defaults & heuristics
+### የጂፒዩ ነባሪዎች እና ሂዩሪስቲክስ
 
-`MerkleTree` GPU offload kicks in at `8192` leaves by default, and the CPU SHA-2
-preference thresholds stay at `32_768` leaves per architecture. When neither CUDA nor
-Metal is available or has been disabled by health checks, the VM automatically falls
-back to SIMD/scalar hashing and the above numbers do not affect determinism.
+`MerkleTree` ጂፒዩ ማውረድ በነባሪ በ `8192` ይጀምራል እና ሲፒዩ SHA-2
+ምርጫ ገደቦች በእያንዳንዱ አርክቴክቸር `32_768` ቅጠሎች ላይ ይቆያሉ። መቼ CUDA ወይም
+ሜታል በጤና ፍተሻዎች ይገኛል ወይም ተሰናክሏል፣ VM በራስ-ሰር ይወድቃል
+ወደ SIMD/scalar hashing ይመለሱ እና ከላይ ያሉት ቁጥሮች በቆራጥነት ላይ ተጽዕኖ አያሳርፉም።
 
-`max_gpus` clamps the pool size fed into `GpuManager`. Setting `max_gpus = 1` on
-multi-GPU hosts keeps telemetry simple while still allowing acceleration. Operators can
-use this switch to reserve the remaining devices for FASTPQ or CUDA Poseidon jobs.
+`max_gpus` የመዋኛ ገንዳውን መጠን ወደ `GpuManager` ያቆማል። `max_gpus = 1` በማቀናበር ላይ
+የብዝሃ-ጂፒዩ አስተናጋጆች ማፋጠንን በሚፈቅዱበት ጊዜ ቴሌሜትሪ ቀላል ያደርገዋል። ኦፕሬተሮች ይችላሉ።
+የተቀሩትን መሳሪያዎች ለ FASTPQ ወይም CUDA Poseidon ስራዎች ለማስያዝ ይህንን ማብሪያ / ማጥፊያ ይጠቀሙ።
 
-### Next acceleration targets & budgets
+### ቀጣይ የፍጥነት ዒላማዎች እና በጀቶች
 
-The latest FastPQ Metal trace (`fastpq_metal_bench_20k_latest.json`, 32 K rows × 16
-columns, 5 iters) shows Poseidon column hashing dominating ZK workloads:
+የቅርብ ጊዜው የ FastPQ ብረት ዱካ (`fastpq_metal_bench_20k_latest.json`፣ 32K ረድፎች × 16
+አምዶች፣ 5 iters) የPoseidon አምድ ሃሽንግ የZK የስራ ጫናዎችን እንደሚቆጣጠር ያሳያል፡
 
-- `poseidon_hash_columns`: CPU mean **3.64 s** vs. GPU mean **3.55 s** (1.03×).
-- `lde`: CPU mean **1.75 s** vs. GPU mean **1.57 s** (1.12×).
+- `poseidon_hash_columns`: ሲፒዩ አማካኝ **3.64s** vs.ጂፒዩ አማካኝ **3.55s** (1.03×)።
+- `lde`: ሲፒዩ አማካኝ **1.75s** vs.ጂፒዩ አማካኝ **1.57s** (1.12×)።
 
-IVM/Crypto will target these two kernels in the next accel sweep. Baseline budgets:
+IVM/Crypto በሚቀጥለው የአሲል መጥረግ እነዚህን ሁለት እንክብሎች ኢላማ ያደርጋል። የመነሻ በጀቶች፡-
 
-- Keep scalar/SIMD parity at or below the CPU means above, and capture
-  `acceleration_runtime_status()` alongside each run so Metal/CUDA availability is
-  logged with the budget numbers.
-- Target ≥1.3× speedup for `poseidon_hash_columns` and ≥1.2× for `lde` once tuned Metal
-  and CUDA kernels land, without changing outputs or telemetry labels.
+- scalar/SIMD ን ከሲፒዩ በላይ ካለው ወይም በታች ያቆዩት እና ይያዙ
+  `acceleration_runtime_status()` ከእያንዳንዱ ሩጫ ጎን ለጎን የብረታ ብረት/CUDA ተገኝነት
+  በበጀት ቁጥሮች ተመዝግቧል.
+- ዒላማ ≥1.3× የፍጥነት ፍጥነት ለ`poseidon_hash_columns` እና ≥1.2× ለ `lde` አንዴ የተስተካከለ ሜታል
+  እና CUDA የከርነል መሬት፣ የውጤት ወይም የቴሌሜትሪ መለያዎችን ሳይቀይሩ።
 
-Attach the JSON trace and `cargo xtask acceleration-state --format json` snapshot to
-future lab runs so CI/regressions can assert both the budgets and backend health while
-comparing CPU-only vs. accel-on runs.
+የJSON ዱካውን እና `cargo xtask acceleration-state --format json` ቅጽበተ ፎቶን አያይዝ
+ወደፊት ላብራቶሪ ይሰራል CI/regressions ሁለቱንም በጀቶችን እና ጤናን በሚደግፍበት ጊዜ ማረጋገጥ ይችላል።
+ሲፒዩ-ብቻ ከ accel-on ሩጫዎች ጋር ማወዳደር።
 
-### Norito heuristics (compile-time defaults)
+### Norito ሂዩሪስቲክስ (የተጠናቀረ ጊዜ ነባሪዎች)የNorito አቀማመጥ እና መጭመቂያ ሂዩሪስቲክስ በ`crates/norito/src/core/heuristics.rs` ውስጥ ይኖራሉ
+እና በእያንዳንዱ ሁለትዮሽ ውስጥ ይሰበሰባሉ. በማሽከርከር ጊዜ የሚዋቀሩ አይደሉም፣ ግን የሚያጋልጡ ናቸው።
+ግብዓቶቹ ኤስዲኬ እና ኦፕሬተር ቡድኖች Norito አንዴ ጂፒዩ እንዴት እንደሚያሳዩ ለመተንበይ ይረዳል
+መጭመቂያ አስኳሎች ነቅተዋል።
+የስራ ቦታው አሁን Norito በነባሪ የነቃው የ `gpu-compression` ባህሪን ይገነባል።
+ስለዚህ የጂፒዩ zstd ጀርባዎች ተሰብስበዋል; የአሂድ ጊዜ መገኘት አሁንም በሃርድዌር ላይ የተመሰረተ ነው,
+የረዳት ቤተ-መጽሐፍት (`libgpuzstd_*`/`gpuzstd_cuda.dll`) እና `allow_gpu_compression`
+አዋቅር ባንዲራ. የብረት ረዳትን በ `cargo build -p gpuzstd_metal --release` እና
+በጫኚው መንገድ ላይ `libgpuzstd_metal.dylib` ያስቀምጡ. የአሁኑ ሜታል ረዳት ጂፒዩ ይሰራል
+ግጥሚያ-ግኝት/ተከታታይ ማመንጨት እና የውስጠ-crate መወሰኛ zstd ፍሬም ይጠቀማል
+ኢንኮደር (Huffman/FSE + ፍሬም ስብሰባ) በአስተናጋጁ ላይ; ዲኮድ የውስጠ-ክሬት ፍሬሙን ይጠቀማል
+ላልተደገፉ ክፈፎች ከሲፒዩ zstd ውድቀት ጋር ዲኮደር የጂፒዩ ብሎክ መፍታት እስኪገባ ድረስ።
 
-Norito’s layout and compression heuristics live in `crates/norito/src/core/heuristics.rs`
-and are compiled into every binary. They are not configurable at runtime, but exposing
-the inputs helps SDK and operator teams predict how Norito will behave once GPU
-compression kernels are enabled.
-The workspace now builds Norito with the `gpu-compression` feature enabled by default,
-so GPU zstd backends are compiled in; runtime availability still depends on hardware,
-the helper library (`libgpuzstd_*`/`gpuzstd_cuda.dll`), and the `allow_gpu_compression`
-config flag. Build the Metal helper with `cargo build -p gpuzstd_metal --release` and
-place `libgpuzstd_metal.dylib` on the loader path. The current Metal helper runs GPU
-match-finding/sequence generation and uses the in-crate deterministic zstd frame
-encoder (Huffman/FSE + frame assembly) on the host; decode uses the in-crate frame
-decoder with a CPU zstd fallback for unsupported frames until GPU block decode is wired in.
+| መስክ | ነባሪ | ዓላማ |
+|-------|---------|-----|
+| `min_compress_bytes_cpu` | `256` ባይት | ከዚህ በታች፣ ከአቅም በላይ ጫናዎች ለማስቀረት zstdን ሙሉ በሙሉ ይዘላሉ። |
+| `min_compress_bytes_gpu` | `1_048_576` ባይት (1ሚቢ) | `norito::core::hw::has_gpu_compression()` እውነት ሲሆን በዚህ ገደብ ወይም ከዚያ በላይ የሚጫኑ ጭነቶች ወደ ጂፒዩ zstd ይቀየራሉ። |
+| `zstd_level_small` / `zstd_level_large` | `1` / `3` | የሲፒዩ መጭመቂያ ደረጃዎች ለ<32KiB እና ≥32KiB እንደቅደም ተከተላቸው። |
+| `zstd_level_gpu` | `1` | የትዕዛዝ ወረፋዎችን በሚሞሉበት ጊዜ ዘግይቶ እንዲቆይ ለማድረግ ወግ አጥባቂ የጂፒዩ ደረጃ። |
+| `large_threshold` | `32_768` ባይት | በ"ትንሽ" እና "ትልቅ" ሲፒዩ zstd ደረጃዎች መካከል ያለው የመጠን ወሰን። |
+| `aos_ncb_small_n` | `64` ረድፎች | ከዚህ የረድፍ ቆጠራ በታች የሚለምደዉ ኢንኮደሮች ሁለቱንም የAoS እና የኤንሲቢ አቀማመጦችን ይመረምራሉ ትንሹን ክፍያ ለመምረጥ። |
+| `combo_no_delta_small_n_if_empty` | `2` ረድፎች | 1-2 ረድፎች ባዶ ህዋሶችን ሲይዙ u32/id delta ኢንኮዲንግ ማንቃትን ይከለክላል። |
+| `combo_id_delta_min_rows` / `combo_u32_delta_min_rows` | `2` | ዴልታዎች ቢያንስ ሁለት ረድፎች ካሉ አንድ ጊዜ ብቻ ነው የሚገቡት። |
+| `combo_enable_id_delta` / `combo_enable_u32_delta_names` / `combo_enable_u32_delta_bytes` | `true` | ሁሉም የዴልታ ትራንስፎርሜሽን በነባሪነት ጥሩ ባህሪ ላላቸው ግብዓቶች ነቅተዋል። |
+| `combo_enable_name_dict` | `true` | የተመታ ሬሾዎች የማህደረ ትውስታውን በላይ ሲያጸድቁ በአንድ-አምድ መዝገበ-ቃላት ይፈቅዳል። |
+| `combo_dict_ratio_max` | `0.40` | ከ40% በላይ ረድፎች ሲለያዩ መዝገበ ቃላትን ያሰናክሉ። |
+| `combo_dict_avg_len_min` | `8.0` | መዝገበ ቃላትን ከመገንባቱ በፊት አማካኝ የሕብረቁምፊ ርዝመት ≥8 ጠይቅ (አጭር ተለዋጭ ስሞች በውስጥ መስመር ይቆያሉ። |
+| `combo_dict_max_entries` | `1024` | የተገደበ የማህደረ ትውስታ አጠቃቀምን ለማረጋገጥ በመዝገበ-ቃላት ግቤቶች ላይ ጠንካራ ሽፋን። |
 
-| Field | Default | Purpose |
-|-------|---------|---------|
-| `min_compress_bytes_cpu` | `256` bytes | Below this, payloads skip zstd entirely to avoid overhead. |
-| `min_compress_bytes_gpu` | `1_048_576` bytes (1 MiB) | Payloads at or above this limit switch to GPU zstd when `norito::core::hw::has_gpu_compression()` is true. |
-| `zstd_level_small` / `zstd_level_large` | `1` / `3` | CPU compression levels for <32 KiB and ≥32 KiB payloads respectively. |
-| `zstd_level_gpu` | `1` | Conservative GPU level to keep latency consistent while filling command queues. |
-| `large_threshold` | `32_768` bytes | Size boundary between the “small” and “large” CPU zstd levels. |
-| `aos_ncb_small_n` | `64` rows | Below this row count adaptive encoders probe both AoS and NCB layouts to pick the smallest payload. |
-| `combo_no_delta_small_n_if_empty` | `2` rows | Prevents enabling u32/id delta encodings when 1–2 rows contain empty cells. |
-| `combo_id_delta_min_rows` / `combo_u32_delta_min_rows` | `2` | Deltas kick in only once there are at least two rows. |
-| `combo_enable_id_delta` / `combo_enable_u32_delta_names` / `combo_enable_u32_delta_bytes` | `true` | All delta transforms are enabled by default for well-behaved inputs. |
-| `combo_enable_name_dict` | `true` | Allows per-column dictionaries when hit ratios justify the memory overhead. |
-| `combo_dict_ratio_max` | `0.40` | Disable dictionaries when more than 40 % of rows are distinct. |
-| `combo_dict_avg_len_min` | `8.0` | Require average string length ≥8 before building dictionaries (short aliases stay inline). |
-| `combo_dict_max_entries` | `1024` | Hard cap on dictionary entries to guarantee bounded memory usage. |
+እነዚህ ሂውሪስቲክስ በጂፒዩ የነቁ አስተናጋጆችን ከሲፒዩ-ብቻ አቻዎች ጋር ያቆያቸዋል፡ መራጩ
+የሽቦ ቅርጸቱን የሚቀይር ውሳኔ በጭራሽ አያደርግም, እና ጣራዎቹ ተስተካክለዋል
+በአንድ ልቀት. ፕሮፌሽናል ማድረግ የተሻሉ የመለያየት ነጥቦችን ሲያገኝ፣ Norito ያዘምናል
+ቀኖናዊ `Heuristics::canonical` ትግበራ እና `docs/source/benchmarks.md` plus
+`status.md` ለውጡን ከተቀየረው ማስረጃ ጋር ይመዘግባል።የጂፒዩ zstd አጋዥ በተመሳሳይ `min_compress_bytes_gpu` መቆራረጥን ያስፈጽማል
+በቀጥታ ተጠርቷል (ለምሳሌ በ `norito::core::gpu_zstd::encode_all`) ፣ በጣም ትንሽ
+የጂፒዩ መገኘት ምንም ይሁን ምን የክፍያ ጭነቶች ሁል ጊዜ በሲፒዩ መንገድ ላይ ይቆያሉ።
 
-These heuristics keep GPU-enabled hosts aligned with CPU-only peers: the selector
-never makes a decision that would change the wire format, and the thresholds are fixed
-per release. When profiling uncovers better break-even points, Norito updates the
-canonical `Heuristics::canonical` implementation and `docs/source/benchmarks.md` plus
-`status.md` record the change alongside the versioned evidence.
+### መላ ፍለጋ እና እኩልነት ማረጋገጫ ዝርዝር
 
-The GPU zstd helper enforces the same `min_compress_bytes_gpu` cutoff even when
-called directly (for example via `norito::core::gpu_zstd::encode_all`), so small
-payloads always stay on the CPU path regardless of GPU availability.
-
-### Troubleshooting and parity checklist
-
-- Snapshot runtime state with `cargo xtask acceleration-state --format json` and keep
-  the output alongside any failing logs; the report shows configured/available backends
-  plus parity/last-error strings.
-- Re-run the accel parity regression locally to rule out drift:
+- ቅጽበታዊ የአሂድ ጊዜ ሁኔታ ከ`cargo xtask acceleration-state --format json` እና አቆይ
+  ከማንኛውም ያልተሳኩ ምዝግብ ማስታወሻዎች ጋር የሚወጣው ውጤት; ሪፖርቱ የተዋቀሩ/የሚገኙ የኋላ መደገፊያዎችን ያሳያል
+  ሲደመር እኩልነት/የመጨረሻ ስህተት ሕብረቁምፊዎች.
+- መንሸራተትን ለማስቀረት የ accel parity regression በአካባቢው እንደገና ያስኪዱ፡
   `cargo test -p ivm poseidon_instructions_match_across_acceleration_configs -- --nocapture`
-  (runs CPU-only then accel-on). Record `acceleration_runtime_status()` for the run.
-- If a backend fails self-tests, keep the node online in CPU-only mode (`enable_metal =
-  false`, `enable_cuda = false`) and open an incident with the captured parity output
-  instead of forcing the backend on. Results must remain deterministic across modes.
-- **CUDA parity smoke (lab NV hardware):** Run
+  (ሲፒዩ-ብቻ ከዚያም accel-on ይሰራል)። ለመሮጥ `acceleration_runtime_status()` ይመዝግቡ።
+- የኋለኛ ክፍል ራስን መፈተሽ ካልተሳካ፣ መስቀለኛ መንገዱን በሲፒዩ-ብቻ ሁነታ ያቆዩት (`enable_metal =
+  false`, `enable_cuda = false`) እና ከተያዘው ተመሳሳይ ውጤት ጋር አንድ ክስተት ይክፈቱ
+  ጀርባውን ከማስገደድ ይልቅ. ውጤቶቹ በሁሉም ሁነታዎች የሚወሰኑ ሆነው መቆየት አለባቸው።
+- ** CUDA እኩልነት ጭስ (ላብ NV ሃርድዌር): ** አሂድ
   `ACCEL_ENABLE_CUDA=1 cargo test -p ivm poseidon_instructions_match_across_acceleration_configs -- --nocapture`
-  on sm_8x hardware, capture `cargo xtask acceleration-state --format json`, and attach
-  the status snapshot (GPU model/driver included) to the benchmark artefacts.
+  በsm_8x ሃርድዌር ላይ፣ `cargo xtask acceleration-state --format json`ን ያንሱ እና አያይዘው።
+  የሁኔታ ቅጽበታዊ ገጽ እይታ (የጂፒዩ ሞዴል/ሹፌር ተካትቷል) ወደ ቤንችማርክ ቅርሶች።

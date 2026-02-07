@@ -7,40 +7,37 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Java ledger flow recipe
 description: Drive the register → mint → transfer demo using the IrohaAndroid JVM library.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-import SampleDownload from '@site/src/components/SampleDownload';
+filight Sample load འདི་ '@site/src/ཆ་ཤས་/ཆ་ཤས་/དཔེ་ཚད་ཕབ་ལེན་';
 
-This recipe targets the desktop/JVM variant of the `java/iroha_android` module.
-It mirrors the CLI walkthrough by registering an asset definition, minting into
-the admin account, transferring to a second account, and printing the resulting
-balance.
+བཀོད་སྒྲིག་འདི་གིས་ I18NI0000007X ཚད་གཞི་གི་ ཌེཀསི་ཊོཔ་/ཇེ་ཝི་ཨེམ་གྱི་དབྱེ་བ་ལུ་དམིགས་གཏད་བསྐྱེདཔ་ཨིན།
+འདི་གིས་ རྒྱུ་དངོས་ངེས་ཚིག་ཅིག་ ཐོ་བཀོད་འབད་དེ་ སི་ཨེལ་ཨའི་ འགྲུལ་བསྐྱོད་འདི་ གསལ་སྟོན་འབདཝ་ཨིན།
+བདག་སྐྱོང་རྩིས་ཐོ་ རྩིས་ཁྲ་གཉིས་པ་ལུ་སྤོ་བཤུད་འབད་ནི་ དེ་ལས་ གྲུབ་འབྲས་དཔར་བསྐྲུན་འབད་ནི།
+སྙོམས་ཏོག་ཏོ།
 
-<SampleDownload
-  href="/sdk-recipes/java/src/main/java/ledger/LedgerFlow.java"
-  filename="src/main/java/ledger/LedgerFlow.java"
-  description="Download the complete Java example to import into your IDE or project template."
-/>
+<དཔེ་ཚད་ཕབ་ལེན་འབད།
+  href="/sdk-ལེན་ཚུ་/ཇ་བ་/src/main/java/ledger/LedgerFlow.java"
+  filen="src/main/java/lendger/LedgerFlow.java"
+  deང་ཁྱོད་རའི་ཨའི་ཌི་ཨི་ཡང་ན་ལས་འགུལ་ཊེམ་པེལེཊི་ནང་ལུ་ནང་འདྲེན་འབད་ནི་ལུ་ ཇ་བ་གི་དཔེ་ཆ་ཚང་འདི་ཕབ་ལེན་འབད།"
+།/>།
 
-## 1. Register the asset definition (CLI)
+## 1. རྒྱུ་ནོར་ངེས་ཚིག་ (CLI) ཐོ་བཀོད་འབད།
 
 ```bash
 iroha --config defaults/client.toml asset definition register --id coffee#wonderland
 ```
 
-## 2. Export credentials
+## 2. ཕྱིར་འདྲེན་འབད།
 
-```bash
-# raw 32-byte Ed25519 private key in hex (without multicodec prefix)
-export ADMIN_PRIVATE_KEY_RAW="4f94...<64 hex chars>..."
-export ADMIN_ACCOUNT="ih58..."
-export RECEIVER_ACCOUNT="ih58..."
-```
+I18NF0000004X
 
-> Use `iroha_cli tools crypto private-key export --raw --private-key <multihash>` if you
-> need to strip the multihash prefix from the default config.
+> ཁྱོད་ཀྱིས་ I18NI0000008X ལག་ལེན་འཐབ།
+> སྔོན་སྒྲིག་རིམ་སྒྲིག་ལས་ མལ་ཊི་ཧཤ་སྔོན་ཚིག་འདི་ བཏོན་དགོཔ་ཨིན།
 
-## 3. Add dependencies
+## 3. རྟེན་འབྲེལ་བསྣན་པ།
 
 ```kts title="build.gradle.kts"
 dependencies {
@@ -49,7 +46,7 @@ dependencies {
 }
 ```
 
-## 4. Example program
+## 4. དཔེར་བརྗོད།
 
 ```java title="src/main/java/ledger/LedgerFlow.java"
 package ledger;
@@ -175,10 +172,10 @@ public final class LedgerFlow {
 }
 ```
 
-Compile with your preferred build tool (`./gradlew :java:iroha_android:assemble && ./gradlew run`).
+ཁྱོད་རའི་དགའ་གདམ་གྱི་བཟོ་བསྐྲུན་ལག་ཆས་ (I18NI0000009X) དང་ཅིག་ཁར་ བསྡུ་སྒྲིག་འབད་དགོ།
 
-## 5. Verify parity
+## 5. ཆ་སྙོམས་བདེན་པ།
 
-- Inspect the transaction hashes via `iroha --config defaults/client.toml transaction get --hash <hash>`.
-- Fetch balances with the CLI (`asset list filter '{"id":"coffee#wonderland##<account>"}'`).
-- Compare results with the Rust/Python/JavaScript/Swift recipes to ensure every SDK produces identical Norito payloads for the demo flow.
+- `iroha --config defaults/client.toml transaction get --hash <hash>` བརྒྱུད་དེ་ ཚོང་འབྲེལ་ཧ་ཤི་ཚུ་ བརྟག་ཞིབ་འབད།
+- སི་ཨེལ་ཨའི་ (`asset list filter '{"id":"coffee#wonderland##<account>"}'`) དང་གཅིག་ཁར་ ཕིཊི་ཆི་ལྷག་ལུས་འབདཝ་ཨིན།
+- བརྡ་བཀོད་རྒྱུན་འགྲུལ་གྱི་དོན་ལུ་ ཨེསི་ཌི་ཀེ་རེ་རེ་གིས་ I18NT000000001X གི་ སྤྲོད་ལེན་ཚུ་ ངེས་གཏན་བཟོ་ནི་ལུ་ Rust/Python/Python/JavaScript/Swift བཟོ་ཐངས་ཚུ་དང་གཅིག་ཁར་ གྲུབ་འབྲས་ཚུ་ ག་བསྡུར་རྐྱབ།

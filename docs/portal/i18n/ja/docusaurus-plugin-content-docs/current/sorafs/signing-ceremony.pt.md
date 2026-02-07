@@ -4,66 +4,68 @@ direction: ltr
 source: docs/portal/docs/sorafs/signing-ceremony.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: signing-ceremony
-title: Substituicao da cerimonia de assinatura
-description: Como o Parlamento Sora aprova e distribui fixtures do chunker SoraFS (SF-1b).
-sidebar_label: Cerimonia de assinatura
+id: 調印式
+タイトル: アサナチュラの代替品
+説明: Como o Parlamento Sora aprova e distribui fixtures do chunker SoraFS (SF-1b)。
+サイドバーラベル: Cerimonia de assinatura
 ---
 
-> Roadmap: **SF-1b - aprovacoes de fixtures do Parlamento Sora.**
-> O fluxo do Parlamento substitui a antiga "cerimonia de assinatura do conselho" offline.
+> ロードマップ: **SF-1b - Parlamento Sora の備品の開発。**
+> オフラインで「セレモニア デ アシナチュラ ド コンセルホ」というアンチガを置き換える議会をご覧ください。
 
-O ritual manual de assinatura usado para os fixtures do chunker SoraFS foi aposentado.
-Todas as aprovacoes agora passam pelo **Parlamento Sora**, a DAO baseada em sorteio que
-governa o Nexus. Membros do Parlamento bloqueiam XOR para obter cidadania, rotacionam
-entre paineis e votam on-chain para aprovar, rejeitar ou reverter releases de fixtures.
-Este guia explica o processo e o tooling para developers.
+おお、OS フィクスチャを使用してチャンカー SoraFS を実行するための儀式マニュアル。
+Todas as aprovacoes agora passam pelo **Parlamento Sora**、DAO のベースアダ エム ソーテイオ クエリ
+ガバナ o Nexus。会員は、シダダニア、ロタシオナムを観察する XOR ブロックを開催します
+entre paineis と votam オンチェーンパラ承認、rejeitar または reverter releases defixture です。
+開発者向けにプロセスやツールを説明します。
 
-## Visao geral do Parlamento
+## ビザオ ジェラル ド パルラメント
 
 - **Cidadania** - Operadores bloqueiam o XOR necessario para se inscrever como cidadaos e
-  se tornar elegiveis ao sorteio.
+  セ・トルナル・エレギヴィス・アオ・ソルテイオ。
 - **Paineis** - As responsabilidades sao divididas entre paineis rotativos (Infraestrutura,
-  Moderacao, Tesouraria, ...). O Painel de Infraestrutura e o dono das aprovacoes de
-  fixtures do SoraFS.
-- **Sorteio e rotacao** - As cadeiras de painel sao redesenhadas na cadencia definida na
-  constituicao do Parlamento para que nenhum grupo monopolize as aprovacoes.
+  モデラソー、テソウラリア、...)。インフラストラクチャのパイネル、およびアプリケーションの実行
+  器具は SoraFS を実行します。
+- **Sorteio e rotacao** - パイネルのカディラとして、定義されたカデンシアの定義として
+  constituicao do Parlamento para que nenhum grupo は aprovacoes として独占されます。
 
-## Fluxo de aprovacao de fixtures
+## フィクスチャのフルクソ
 
-1. **Submissao da proposta**
-   - O Tooling WG envia o bundle candidato `manifest_blake3.json` mais o diff do fixture
-     para o registry on-chain via `sorafs.fixtureProposal`.
-   - A proposta registra o digest BLAKE3, a versao semantica e as notas de mudanca.
+1. **提案の提出**
+   - O ツーリング WG は、バンドル候補 `manifest_blake3.json` の差分フィクスチャを参照します
+     `sorafs.fixtureProposal` 経由でオンチェーンのレジストリにアクセスします。
+   - BLAKE3 をダイジェストするための登録簿、ムダンカの解釈と同様の意味。
 2. **Revisao e votacao**
-   - O Painel de Infraestrutura recebe a atribuicao pela fila de tarefas do Parlamento.
-   - Membros do painel inspecionam artefatos de CI, rodam testes de paridade e
-     registram votos ponderados on-chain.
-3. **Finalizacao**
-   - Quando o quorum e atingido, o runtime emite um evento de aprovacao que inclui o
-     digest canonico do manifest e o compromisso Merkle do payload do fixture.
-   - O evento e espelhado no registry SoraFS para que clientes possam buscar o
-     manifest mais recente aprovado pelo Parlamento.
-4. **Distribuicao**
-   - Helpers de CLI (`cargo xtask sorafs-fetch-fixture`) puxam o manifest aprovado via
-     Nexus RPC. As constantes JSON/TS/Go do repositorio ficam sincronizadas ao
-     reexecutar `export_vectors` e validar o digest contra o registro on-chain.
+   - 議会の情報を参照してください。
+   - メンバーは、CI の検査、検査の検査を行っています。
+     オンチェーン上の登録投票ポンダーラド。
+3. **ファイナライザカオ**
+   - クォーラムの実行、または承認を含むイベントのランタイム発行
+     カノニコのダイジェスト、マニフェスト、妥協のマークル、ペイロード、フィクスチャ。
+   - イベント エスペルハド レジストリ SoraFS パラケ クライアント ポッサム バスカー o
+     マニフェストは最近の承認を得るために議会に提出します。
+4. **ディストリビューカオ**
+   - CLI ヘルパー (`cargo xtask sorafs-fetch-fixture`) によるマニフェストの実行
+     Nexus RPC。定数として JSON/TS/Go はリポジトリ ficam sincronizadas ao を実行します
+     reexecutar `export_vectors` オンチェーンのレジストリ コントラ ダイジェストの検証。
 
-## Fluxo de trabalho de developer
+## Fluxo デ トラバルホ デ開発者
 
-- Regenere fixtures com:
+- Regenere フィクスチャー コム:
 
 ```bash
 cargo run -p sorafs_chunker --bin export_vectors
 ```
 
-- Use o helper de fetch do Parlamento para baixar o envelope aprovado, verificar
-  assinaturas e atualizar fixtures locais. Aponte `--signatures` para o envelope
-  publicado pelo Parlamento; o helper resolve o manifest associado, recomputa o
-  digest BLAKE3 e impoe o perfil canonico `sorafs.sf1@1.0.0`.
+- バイシャルのパーラメント取得ヘルパー、エンベロープ アプロバード、検証を使用します。
+  あらゆる状況に対応したフィクスチャを提供します。 Aponte `--signatures` パラオエンベロープ
+  公共のペロ・パルラメント。 o ヘルパー解決 o マニフェスト関連付け、再計算 o
+  BLAKE3 をダイジェストし、canonico `sorafs.sf1@1.0.0` を実行します。
 
 ```bash
 cargo xtask sorafs-fetch-fixture \
@@ -71,11 +73,11 @@ cargo xtask sorafs-fetch-fixture \
   --out fixtures/sorafs_chunker
 ```
 
-Passe `--manifest` se o manifest estiver em outra URL. Envelopes sem assinatura
-sao recusados, a menos que `--allow-unsigned` seja definido para smoke runs locais.
+`--manifest` を外部 URL のマニフェストに渡します。封筒はシナチュアに似ています
+サン・レクサドス、メノス・クエ`--allow-unsigned`セハ・デフィニド・パラ・スモーク・ラン・ロカイス。
 
-- Ao validar um manifest via gateway de staging, aponte para Torii em vez de
-  payloads locais:
+- ゲートウェイデステージング経由のマニフェストの検証、Torii em vez de の対応
+  ペイロードの場所:
 
 ```bash
 sorafs-fetch \
@@ -86,31 +88,31 @@ sorafs-fetch \
   --json-out=reports/staging_gateway.json
 ```
 
-- O CI local nao exige mais um roster `signer.json`.
-  `ci/check_sorafs_fixtures.sh` compara o estado do repo com o ultimo compromisso
-  on-chain e falha quando divergem.
+- O CI ローカル nao exige mais um 名簿 `signer.json`。
+  `ci/check_sorafs_fixtures.sh` 究極の妥協点を比較し、リポジトリを作成します
+  オンチェーンとファルハの分岐点。
 
-## Notas de governanca
+## 統治に関するノート
 
-- A constituicao do Parlamento governa quorum, rotacao e escalonamento - nao e
-  necessaria configuracao no nivel do crate.
-- Rollbacks de emergencia sao tratados pelo painel de moderacao do Parlamento. O
-  Painel de Infraestrutura abre uma proposta de revert que referencia o digest
-  anterior do manifest, substituindo a release quando aprovada.
-- Aprovacoes historicas permanecem disponiveis no registry SoraFS para replay
-  forense.
+- 議会定足数、回転性エスカロナメントの構成 - 直江
+  必要な設定はクレートに必要ありません。
+- 議会での緊急事態のロールバック。 ○
+  インフラストラクチャーは、ダイジェストの参照を元に戻すためのインフラストラクチャーを作成します
+  前に明示し、代わりにリリースを承認します。
+- Aprovacoes Historicalas permanecem disponiveis no registry SoraFS パラ リプレイ
+  法廷。
 
-## FAQ
+## よくある質問
 
-- **Para onde foi `signer.json`?**  
-  Foi removido. Toda a atribuicao de assinaturas vive on-chain; `manifest_signatures.json`
-  no repositorio e apenas um fixture de developer que deve corresponder ao ultimo
-  evento de aprovacao.
+- **`signer.json` をご覧ください?**  
+  フォイ・リモビデオ。オンチェーンでの活動を可能にします。 `manifest_signatures.json`
+  リポジトリと開発者向けのアペナス フィクスチャがありません。開発者は、究極的に対応します。
+  イベント・デ・アプロバカオ。
 
 - **Ainda exigimos assinaturas Ed25519 locais?**  
-  Nao. As aprovacoes do Parlamento sao armazenadas como artefatos on-chain. Fixtures
-  locais existem para reprodutibilidade, mas sao validados contra o digest do Parlamento.
+  ナオ。アプロバコとして、オンチェーンでパルラメント サオ アルマゼナダス コモ アルテファトを行います。備品
+  再現性のある場所が存在し、議会でのダイジェストの検証が行われます。
 
-- **Como as equipes monitoram aprovacoes?**  
-  Assinem o evento `ParliamentFixtureApproved` ou consultem o registry via Nexus RPC
-  para recuperar o digest atual do manifest e a chamada do painel.
+- **コモは監視アプロバコを装備していますか?**  
+  `ParliamentFixtureApproved` のイベントを割り当て、Nexus RPC 経由でレジストリを参照します
+  回復中または消化中の実際の症状は、痛みを伴うチャマダです。

@@ -4,65 +4,67 @@ direction: ltr
 source: docs/portal/docs/devportal/public-preview-invite.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 # دليل دعوات المعاينة العامة
 
-## اهداف البرنامج
+## ありがとうございます
 
-يوضح هذا الدليل كيفية اعلان وتشغيل المعاينة العامة بعد تفعيل سير عمل تاهيل المراجعين. يحافظ على
-صدق خارطة الطريق DOCS-SORA عبر ضمان ان كل دعوة تتضمن اثارا قابلة للتحقق، ارشادات امنية، ومسارا
-واضحا للتغذية الراجعة.
+يوضح هذا الدليل كيفية اعلان وتشغيل المعاينة العامة بعد تفعيل سير عمل تاهيل المراجعين。 حافظ على
+DOCS-SORA をテストし、テストを実行します。 और देखें
+ログインしてください。
 
-- **الجمهور:** قائمة منقحة من اعضاء المجتمع والشركاء والـ maintainers الذين وقعوا سياسة الاستخدام المقبول للمعاينة.
-- **الحدود:** حجم الموجة الافتراضي <= 25 مراجع، نافذة وصول 14 يوما، استجابة للحوادث خلال 24h.
+- **الجمهور:** قائمة منقحة من اعضاء المجتمع والشركاء والـ メンテナー الذين وقعوا سياسة الاستخدامああ、それは。
+- **الحدود:** 24 時間以内、25 時間以内、14 時間以内。
 
 ## قائمة فحص بوابة الاطلاق
 
-اكمل هذه المهام قبل ارسال اي دعوة:
+回答:
 
-1. اخر اثار المعاينة مرفوعة في CI (`docs-portal-preview`,
-   manifest checksum, descriptor, bundle SoraFS).
-2. `npm run --prefix docs/portal serve` (مقيد بالchecksum) تم اختباره على نفس tag.
+1. ロシア連邦 CI (`docs-portal-preview`,
+   マニフェスト チェックサム、記述子、バンドル SoraFS)。
+2. `npm run --prefix docs/portal serve` (مقيد بالchecksum) タグ。
 3. تذاكر تاهيل المراجعين معتمدة ومربوطة بموجة الدعوة.
-4. مستندات الامن والمراقبة والحوادث مؤكدة
-   ([`security-hardening`](./security-hardening.md),
-   [`observability`](./observability.md),
-   [`incident-runbooks`](./incident-runbooks.md)).
-5. نموذج feedback او قالب issue مجهز (يتضمن حقول الشدة، خطوات اعادة الانتاج، لقطات شاشة، ومعلومات البيئة).
-6. نسخة الاعلان تمت مراجعتها من Docs/DevRel + Governance.
+4. 重要な情報
+   ([`security-hardening`](./security-hardening.md)、
+   [`observability`](./observability.md)、
+   [`incident-runbooks`](./incident-runbooks.md))。
+5. フィードバックに関する問題の問題 (評価、評価、評価、評価、評価、評価、評価、評価、評価) ）。
+6. ドキュメント/DevRel + ガバナンスを強化します。
 
 ## حزمة الدعوة
 
-يجب ان تتضمن كل دعوة:
+セキュリティ:
 
-1. **اثار متحقق منها** — قدم روابط manifest/plan لـ SoraFS او artefact من GitHub
-   اضافة الى manifest checksum وdescriptor. اذكر امر التحقق صراحة حتى يتمكن المراجعون
-   من تشغيله قبل تشغيل الموقع.
-2. **تعليمات التشغيل** — ادرج امر المعاينة المقيد بالchecksum:
+1. ** 安全性** — マニフェスト/計画 SoraFS アーティファクト GitHub
+   マニフェスト チェックサムと記述子。 ذكر امر التحقق صراحة حتى يتمكن المراجعون
+   重要な点は次のとおりです。
+2. ** チェックサム — チェックサム:
 
    ```bash
    DOCS_RELEASE_TAG=preview-<stamp> npm run --prefix docs/portal serve
    ```
 
-3. **تذكيرات امنية** — اوضح ان الرموز تنتهي تلقائيا، والروابط لا يجب مشاركتها،
-   ويجب الابلاغ عن الحوادث فورا.
-4. **قناة feedback** — اربط نموذج/قالب issue ووضح توقعات زمن الاستجابة.
-5. **تواريخ البرنامج** — قدم تواريخ البداية/النهاية، ساعات المكتب او جلسات sync،
-   ونافذة التحديث التالية.
+3. **評価**********************************************************
+   ويجب الابلاغعن الحوادث فورا。
+4. **フィードバック** — 問題を解決します。
+5. **評価** — 評価/評価/同期
+   ログインしてください。
 
-البريد النموذجي في
+और देखें
 [`docs/examples/docs_preview_invite_template.md`](../../../examples/docs_preview_invite_template.md)
-يغطي هذه المتطلبات. حدّث العناصر النائبة (التواريخ، URLs، وجهات الاتصال)
-قبل الارسال.
+غطي هذه المتطلبات。 حدّث العناصر النائبة (التواريخ، URLs، وجهات الاتصال)
+そうです。
 
-## اظهار مضيف المعاينة
+## ظهار مضيف المعاينة
 
-لا تروج لمضيف المعاينة الا بعد اكتمال التاهيل واعتماد تذكرة التغيير. راجع
-[دليل اظهار مضيف المعاينة](./preview-host-exposure.md) لخطوات build/publish/verify من البداية للنهاية
-المستخدمة في هذا القسم.
+最高のパフォーマンスを見せてください。やあ
+[دليل اظهار مضيف المعاينة](./preview-host-exposure.md) لخطوات ビルド/公開/検証 من البداية للنهاية
+ありがとうございます。
 
-1. **البناء والتعبئة:** ضع release tag وانتج اثارا حتمية.
+1. ** リリース タグ وانتج اثارا حتمية。
 
    ```bash
    cd docs/portal
@@ -81,14 +83,14 @@ generator: docs/portal/scripts/sync-i18n.mjs
      --out artifacts/sorafs/preview-descriptor.json
    ```
 
-   سكربت pin يكتب `portal.car`, `portal.manifest.*`, `portal.pin.proposal.json`,
-   و`portal.dns-cutover.json` تحت `artifacts/sorafs/`. ارفق هذه الملفات بموجة الدعوة
-   حتى يتمكن كل مراجع من التحقق من نفس البتات.
+   ピン番号 `portal.car`、`portal.manifest.*`、`portal.pin.proposal.json`、
+   `portal.dns-cutover.json` と `artifacts/sorafs/`。 هذه الملفات بموجة الدعوة
+   重要な問題は、重要な問題を解決することです。
 
-2. **نشر alias المعاينة:** اعد تشغيل الامر بدون `--skip-submit`
-   (قدم `TORII_URL`, `AUTHORITY`, `PRIVATE_KEY[_FILE]`، واثبات alias الصادر عن الحوكمة).
-   سيقوم السكربت بربط manifest بـ `docs-preview.sora` ويصدر
-   `portal.manifest.submit.summary.json` و`portal.pin.report.json` لحزمة الادلة.
+2. ** 別名 المعاينة:** اعد تشغيل الامر بدون `--skip-submit`
+   (別名 الصادر عن الحوكمة)。
+   マニフェスト `docs-preview.sora` を確認してください
+   `portal.manifest.submit.summary.json` و`portal.pin.report.json` は、
 
 3. **فحص النشر:** تاكد من ان alias يحل وانه checksum يطابق tag قبل ارسال الدعوات.
 
@@ -98,25 +100,25 @@ generator: docs/portal/scripts/sync-i18n.mjs
      --expect-release="$DOCS_RELEASE_TAG"
    ```
 
-   احتفظ بـ `npm run serve` (`scripts/serve-verified-preview.mjs`) كخيار fallback ليتمكن
-   المراجعون من تشغيل نسخة محلية اذا حدث خلل في preview edge.
+   `npm run serve` (`scripts/serve-verified-preview.mjs`) フォールバック フォールバック
+   プレビュー エッジを確認してください。
 
-## جدول الاتصالات
+## いいえ
 
-| اليوم | الاجراء | Owner |
+|ああ |ああ |オーナー |
 | --- | --- | --- |
-| D-3 | انهاء نص الدعوة، تحديث الاثار، تنفيذ dry-run للتحقق | Docs/DevRel |
-| D-2 | موافقة الحوكمة + تذكرة تغيير | Docs/DevRel + Governance |
-| D-1 | ارسال الدعوات باستخدام القالب، تحديث tracker بقائمة المستلمين | Docs/DevRel |
-| D | مكالمة kickoff / office hours، مراقبة لوحات القياس | Docs/DevRel + On-call |
-| D+7 | digest للfeedback في منتصف الموجة، triage للقضايا المانعة | Docs/DevRel |
-| D+14 | اغلاق الموجة، الغاء الوصول المؤقت، نشر ملخص في `status.md` | Docs/DevRel |
+| D-3 |テストを実行し、予行演習を実行します。ドキュメント/開発リリース |
+| D-2 | موافقة الحوكمة + تذكرة تغيير |ドキュメント/DevRel + ガバナンス |
+| D-1 |追跡者追跡者追跡 | 追跡者追跡者ドキュメント/開発リリース |
+| D |キックオフ/オフィスアワー| キックオフ / オフィスアワードキュメント/DevRel + オンコール |
+| D+7 |ダイジェスト、フィードバック、トリアージ、トリアージ、フィードバック、トリアージドキュメント/開発リリース |
+| D+14 | `status.md` | ログイン して翻訳を追加するドキュメント/開発リリース |
 
-## تتبع الوصول والقياس عن بعد
+## عبع الوصول والقياس عن بعد
 
-1. سجل كل مستلم وطابع وقت الدعوة وتاريخ الالغاء باستخدام preview feedback logger
+1. プレビュー フィードバック ロガー
    (انظر [`preview-feedback-log`](./preview-feedback-log)) حتى تشترك كل موجة
-   في نفس اثر الادلة:
+   回答:
 
    ```bash
    # اضافة حدث دعوة جديد الى artifacts/docs_portal_preview/feedback_log.json
@@ -127,40 +129,38 @@ generator: docs/portal/scripts/sync-i18n.mjs
      --notes "wave-01 seed"
    ```
 
-   الاحداث المدعومة هي `invite-sent`, `acknowledged`, `feedback-submitted`,
-   `issue-opened`, و`access-revoked`. يعيش السجل افتراضيا في
-   `artifacts/docs_portal_preview/feedback_log.json`; ارفقه بتذكرة موجة الدعوة
-   مع نماذج الموافقة. استخدم مساعد summary لانتاج roll-up قابل للتدقيق قبل
-   ملاحظة الاغلاق:
+   `invite-sent`、`acknowledged`、`feedback-submitted`、
+   `issue-opened`、و`access-revoked`。 عيش السجل افتراضيا في
+   `artifacts/docs_portal_preview/feedback_log.json`; بتذكرة موجة الدعوة
+   عنماذج الموافقة。概要 ロールアップ ロールアップ 要約
+   重要:
 
    ```bash
    npm run --prefix docs/portal preview:summary -- --summary-json \
      > artifacts/docs_portal_preview/preview-20250303-summary.json
    ```
 
-   summary JSON يعد الدعوات لكل موجة، المستلمين المفتوحين، تعداد feedback، وطابع
-   الوقت لاخر حدث. المساعد يعتمد على
-   [`scripts/preview-feedback-log.mjs`](../../scripts/preview-feedback-log.mjs),
-   لذا يمكن تشغيل نفس workflow محليا او في CI. استخدم قالب digest في
+   概要 JSON يعد الدعوات لكل موجة، المستلمين المفتوحين، تعداد フィードバック، وطابع
+   ありがとうございます。 और देखें
+   [`scripts/preview-feedback-log.mjs`](../../scripts/preview-feedback-log.mjs)、
+   CI のワークフローを確認します。ダイジェスト版
    [`docs/examples/docs_preview_feedback_digest.md`](../../../examples/docs_preview_feedback_digest.md)
-   عند نشر recap للموجة.
-2. ضع وسم `DOCS_RELEASE_TAG` المستخدم للموجة على لوحات القياس حتى يمكن ربط
-   الارتفاعات مع cohort الدعوات.
-3. شغل `npm run probe:portal -- --expect-release=<tag>` بعد النشر لتاكيد
-   ان بيئة المعاينة تعلن عن metadata الاصدار الصحيحة.
-4. سجل اي حادثة في قالب runbook واربطها بالمجموعة.
+   要約を要約します。
+2. ضع وسم `DOCS_RELEASE_TAG` الموجة على لوحات القياس حتى يمكن ربط
+   重要なコホート。
+3. `npm run probe:portal -- --expect-release=<tag>` の意味
+   メタデータを確認してください。
+4. ランブックを実行します。
 
-## feedback والاغلاق
-
-1. اجمع feedback في مستند مشترك او لوحة issues. ضع وسم `docs-preview/<wave>` حتى يتمكن
-   اصحاب roadmap من العثور عليها بسهولة.
-2. استخدم مخرجات summary من preview logger لملء تقرير الموجة، ثم لخص المجموعة في
-   `status.md` (المشاركون، ابرز الملاحظات، الاصلاحات المخطط لها) وحدّث `roadmap.md`
-   اذا تغير معلم DOCS-SORA.
-3. اتبع خطوات offboarding من
-   [`reviewer-onboarding`](./reviewer-onboarding.md): الغ الوصول، ارشف الطلبات، واشكر المشاركين.
-4. جهز الموجة التالية عبر تحديث الاثار، اعادة تشغيل gates الخاصة بالchecksum،
-   وتحديث قالب الدعوة بتواريخ جديدة.
+## フィードバック1. 問題に関するフィードバック。認証済み `docs-preview/<wave>` 認証済み
+   ロードマップが重要です。
+2. 要約プレビュー ロガーの概要を確認する
+   `status.md` (ヤステル) وحدّث `roadmap.md`
+   DOCS-SORA を確認してください。
+3. オフボーディングを行う
+   [`reviewer-onboarding`](./reviewer-onboarding.md): ログインしてください。
+4. ゲートとチェックサムをチェックする
+   قالب الدعوة بتواريخ جديدة.
 
 تطبيق هذا الدليل بشكل متسق يحافظ على قابلية تدقيق برنامج المعاينة ويمنح Docs/DevRel
-طريقة قابلة للتكرار لتوسيع الدعوات مع اقتراب البوابة من GA.
+GA。

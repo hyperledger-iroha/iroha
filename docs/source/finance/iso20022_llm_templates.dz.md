@@ -7,21 +7,22 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 8d4569e75fb219979ee7c5e776427336bc43c155a24210af977e7a8e6ee1c8be
 source_last_modified: "2025-12-29T18:16:35.958788+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-//! ISO 20022 clarification prompt templates for roadmap Milestone F3.
+///! ISO 20022 བརྡ་འཕྲིན་བརྡ་འཕྲིན་ཊེམ་པེལེཊི་ཚུ་ ལམ་སྟོན་པ་ མའིལ་སི་ཊོན་ཨེཕ་༣.
 
-# ISO 20022 Clarification Prompt Templates
+# ISO 20022 གསལ་བཤད།
 
-These templates help seed requests to LLM (or other assistants) when financial-settlement engineers need quick references from ISO 20022 documentation or market-structure norms. Always include concrete payload samples and cite the specific message families you are working on so responses remain deterministic and audit-friendly.
+དངུལ་འབྲེལ་གཞི་བཅག་པའི་བཟོ་རིག་པ་ཚུ་ལུ་ ISO 20022 ཡིག་ཆ་ ཡང་ན་ ཁྲོམ་གྱི་བཟོ་བཀོད་ལམ་ལུགས་ཚུ་ལས་ མགྱོགས་དྲགས་སྦེ་ གཞི་བསྟུན་འབད་དགོཔ་ཐོན་པའི་སྐབས་ ཊེམ་པེལེཊ་འདི་ཚུ་གིས་ ཨེལ་ཨེལ་ཨེམ་ལུ་ ཞུ་བ་ཚུ་ ཕན་ཐོགཔ་ཨིན། དུས་རྒྱུན་དུ་ བརྟན་བཞུགས་ཀྱི་ པེ་ལེསི་དཔེ་ཚད་ཚུ་ ཚུད་དེ་ ཁྱོད་ཀྱིས་ ལཱ་འབད་བའི་ བརྡ་འཕྲིན་བཟའ་ཚང་ཚུ་ བཀོད་དགོཔ་ལས་ ལན་ཚུ་ གཏན་འབེབས་དང་ རྩིས་ཞིབ་མཐུན་སྒྲིག་སྦེ་ ལུསཔ་ཨིན།
 
-## Before You Ask
-- Identify the ISO 20022 message (`MsgDefId`, variant, market practice pack) and version.
-- Collect the Norito/ISI context: instruction name, legs, optional parameters, expected execution timeline.
-- Note which artefacts you already have (schema snippet, BR-n validation rule, market practice note).
-- Clarify whether you need regulatory guidance (e.g., CPMI-IOSCO) or operational norms (cut-off windows, liquidity buffers).
+## མ་འདྲི་བའི་སྔོན་ལ།
+- ISO 20022 འཕྲིན་དོན་ (`MsgDefId`, འགྱུར་ལྡོག་ཅན་, ཁྲོམ་རའི་སྦྱོང་ལཱ་གི་ཐུམ་སྒྲིལ་) དང་ཐོན་རིམ་ངོས་འཛིན་འབད།
+- Norito/ISI སྐབས་དོན་: བཀོད་རྒྱའི་མིང་ རྐངམ་ གདམ་ཁའི་ཚད་བཟུང་ཚུ་ རེ་བ་བསྐྱེད་པའི་ལག་ལེན་དུས་ཚོད་གྲལ་ཐིག་ཚུ་བསྡུ་ལེན་འབད།
+- ཁྱོད་ལུ་ཧེ་མ་ལས་རང་ ཅ་རྙིང་ག་ཅི་ཡོདཔ་ཨིན་ན་ དྲན་འཛིན་འབད། (འཆར་གཞི་ snippet, BR-n བདེན་དཔྱད་ལམ་ལུགས་, ཁྲོམ་རའི་ལག་ལེན་དྲན་ཐོ།)
+- ཁྱོད་ལུ་ ཁྲིམས་ལུགས་ཀྱི་ལམ་སྟོན་དགོཔ་ཨིན་ན་ (དཔེར་ན་ CPMI-IOSCO) ཡང་ན་ བཀོལ་སྤྱོད་ཀྱི་ལམ་ལུགས་ (བཏོག་བཏང་ནིའི་སྒོ་སྒྲིག་དང་ ཆུ་ཡི་བཱ་ཕར་ཚུ་) གསལ་ཏོག་ཏོ་བཟོ་དགོ།
 
-## Template 1 – Field Mapping & Semantics
+## གཞི་རྩ། ༡ – ས་སྒོའི་སབ་ཁྲ་དང་ཡིག་བརྡ།
 ```text
 You are LLM acting as an ISO 20022 integration analyst.
 Goal: map {{Norito_instruction_or_field}} in Hyperledger Iroha to ISO 20022 {{message_id}} (version {{version}}).
@@ -38,7 +39,7 @@ Questions:
 Return the answer as a table with `Field`, `ISO Path`, `Rules`, `Notes`.
 ```
 
-## Template 2 – Settlement Workflow & Timeline Clarifications
+## གཞི་རིམ་༢ པ་ - གཞིས་ཆགས་ལཱ་གི་རྒྱུན་རིམ་དང་དུས་ཚོད་ཀྱི་གསལ་བསྒྲགས།
 ```text
 You are LLM advising on DvP/PvP settlement workflows referencing ISO 20022 repo/payments messages.
 Scenario: {{brief_repo_or_pvp_scenario}}, including legs, currencies, and counterparties.
@@ -55,7 +56,7 @@ Questions:
 Deliver the answer as bullet lists grouped by phase, citing ISO references (e.g., sese.023 BR23).
 ```
 
-## Template 3 – Validation Rules & Code Sets
+## ཊེམ་པེལེཊི་ ༣ – བདེན་དཔྱད་ལམ་ལུགས་དང་ཨང་རྟགས་ཆ་ཚན་ཚུ།
 ```text
 You are LLM validating ISO 20022 message content.
 Message: {{message_id_version}} for {{business_process}}.
@@ -68,7 +69,7 @@ Tasks:
 Produce the result as a checklist with `Requirement`, `Reference`, `Implementation Hint`.
 ```
 
-## Template 4 – Market-Structure & Regulatory Context
+## ཊེམ་པེལེཊ་༤ – ཁྲོམ་ར་བཟོ་བཀོད་དང་ སྒྲིག་གཞི་གི་སྐབས་དོན།
 ```text
 You are LLM providing market-structure references for ISO 20022 settlement.
 Region/Market: {{market_or_region}}
@@ -81,7 +82,7 @@ Need:
 Return concise paragraphs with citations and note where operator documentation should reference these rules.
 ```
 
-## Template 5 – Exception Handling & Reconciliation
+## ཊེམ་པེལེཊ་ ༥ – ཁྱད་པར་འཛིན་སྐྱོང་དང་མཐུན་སྒྲིག།
 ```text
 You are LLM focusing on exception handling for ISO 20022-driven settlements.
 Scenario: {{failure_case}} (e.g., counterparty fails cash leg).
@@ -94,7 +95,7 @@ Questions:
 Respond with a step-by-step outline and map each action to ISO codes.
 ```
 
-## Usage Notes
-- Store filled-in prompts in the issue tracker or design docs to ensure conversations remain auditable.
-- When sharing external references, link to official ISO documentation portals or SMPG extracts; avoid unpublished material.
-- Update this template set whenever new ISO message families or market practices enter scope (e.g., pacs.009, derivatives collateral).
+## ལག་བསྟར་དྲན་ཐོ།
+- བློ་སླབ་ཚུ་ རྩིས་ཞིབ་འབད་བཏུབ་སྦེ་བཞག་ནི་ལུ་ གནད་དོན་འཚོལ་ཞིབ་འབད་མི་ ཡང་ན་ བཟོ་བཀོད་ཀྱི་ ཡིག་ཆ་ཚུ་ནང་ བཀང་ཆ་ཚུ་ གསོག་འཇོག་འབད།
+- ཕྱིའི་གཞི་བསྟུན་ཚུ་བརྗེ་སོར་འབད་བའི་སྐབས་ གཞུང་འབྲེལ་ཨའི་ཨེསི་ཨོ་ཡིག་ཆ་གི་དྲྭ་ཚིགས་ ཡང་ན་ ཨེསི་ཨེམ་པི་ཇི་ ཕྱིར་འཐེན་ཚུ་ལུ་འབྲེལ་མཐུད་འབད་ནི། དཔར་བསྐྲུན་མ་འབད་བའི་རྒྱུ་ཆ་སྤང་དགོ།
+- ཨའི་ཨེསི་ཨོ་བརྡ་འཕྲིན་བཟའ་ཚང་གསརཔ་ ཡང་ན་ ཁྲོམ་རའི་ལག་ལེན་ཚུ་ ཁྱབ་ཚད་ཐོ་བཀོད་འབད་བའི་སྐབས་ གཞི་སྒྲིག་འབད་ ཊེམ་པེལེཊི་འདི་ གཞི་སྒྲིག་འབད།

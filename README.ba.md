@@ -7,41 +7,42 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 8f2fe1d4fc449fc895f770195f3d209d5a576dfe78c8fea37c523cc111694c44
 source_last_modified: "2026-02-07T00:30:39.016220+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Hyperledger Iroha
+# I18NT000000000X Iroha
 
-[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![Лиценза] (I18NU000000032X)] (https://opensource.org/licenses/Apache-2.0)
 
-Hyperledger Iroha is a deterministic blockchain platform for permissioned and consortium deployments. It provides account/asset management, on-chain permissions, and smart contracts through the Iroha Virtual Machine (IVM).
+I18NT0000001X Iroha — рөхсәт ителгән һәм консорциумдарҙы таратыу өсөн детерминистик блокчейн платформаһы. Ул иҫәп/активтар менән идара итеү, сылбырҙа рөхсәт, һәм аҡыллы килешеп, I18NT0000000014X виртуаль машина (I18NT000000023X).
 
-> Workspace status and recent changes are tracked in [`status.md`](./status.md).
+> Эш киңлеге статусы һәм һуңғы үҙгәрештәр күҙәтелә [`status.md`] (./status.md).
 
-## Release Tracks
+##
 
-This repository ships two deployment tracks from the same codebase:
+Был һаҡлағыс караптар ике таратыу трек бер үк код базаһы:
 
-- **Iroha 2**: self-hosted permissioned/consortium networks.
-- **Iroha 3 (SORA Nexus)**: the Nexus-oriented deployment track using the same core crates.
+- **Iroha 2**: үҙ-үҙен ҡабул иткән рөхсәт/консорциум селтәрҙәре.
+- *I18NT000000016X 3 (I18NT000000022X I18NT000000019X)****: шул уҡ үҙәк йәшниктәрҙе ҡулланып I18NT000000000000020-сы йүнәлешле трасса.
 
 Both tracks share the same core components, including Norito serialization, Sumeragi consensus, and the Kotodama -> IVM toolchain.
 
-## Repository Layout
+## Репозиторий макеты
 
-- [`crates/`](./crates): core Rust crates (`iroha`, `irohad`, `iroha_cli`, `iroha_core`, `ivm`, `norito`, etc.).
-- [`integration_tests/`](./integration_tests): cross-component network/integration tests.
-- [`IrohaSwift/`](./IrohaSwift): Swift SDK package.
-- [`java/iroha_android/`](./java/iroha_android): Android SDK package.
-- [`docs/`](./docs): user/operator/developer documentation.
+- [I18NI000000078X] (I18NU000000034X): ядро ​​Rust йәшниктәре (I18NI00000000079X X, `irohad`, `iroha_cli`, I18NI0000082X, I18NI0000000083 X, `norito`, һ.б.).
+- [`integration_tests/`](I18NU000000035X): селтәр/интеграция һынауҙары.
+- [`IrohaSwift/` X] (I18NU000000036X): Свифт SDK пакеты.
+- [`java/iroha_android/`] (I18NU000000037X): Android SDK пакеты.
+- [I18NI000000088X](I18NU000000038X): ҡулланыусы/оператор/үҫтереүҙең документацияһы.
 
 ## Quickstart
 
-### Prerequisites
+### Алдан шарттар
 
-- [Rust stable](https://www.rust-lang.org/tools/install)
-- Optional: Docker + Docker Compose for local multi-peer runs
+- [Рат тотороҡло] (https://www.rust-lang.org/tools/install X)
+- Һорау: I18NT000000009X X + I18NT00000000010X урындағы күп тиңдәштәр өсөн Компози
 
-### Build and Test (Workspace)
+### Төҙөү һәм һынау (Воркспейс)
 
 ```bash
 cargo build --workspace
@@ -50,105 +51,94 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all
 ```
 
-Notes:
+Иҫкәрмәләр:
 
-- Full workspace build can take about 20 minutes.
-- Full workspace tests can take multiple hours.
-- The workspace targets `std` (WASM/no-std builds are not supported).
+- Тулы эш урыны төҙөү 20 минут тирәһе ваҡыт ала.
+- Тулы эш урыны һынауҙары бер нисә сәғәт ваҡыт талап итә ала.
+- Эш майҙаны `std` X (WASM/no-std төҙөүҙәр ярҙам итмәй).
 
-### Targeted Test Commands
+### Маҡсатлы һынау командалары
 
 ```bash
 cargo test -p <crate>
 cargo test -p <crate> <test_name> -- --nocapture
 ```
 
-### SDK Test Commands
+### SDK һынау командалары
 
-```bash
-cd IrohaSwift
-swift test
-```
+I18NF000000028X
 
-```bash
-cd java/iroha_android
-JAVA_HOME=$(/usr/libexec/java_home -v 21) \
-ANDROID_HOME=~/Library/Android/sdk \
-ANDROID_SDK_ROOT=~/Library/Android/sdk \
-./gradlew test
-```
+I18NF000000029X.
 
-## Run a Local Network
+## Урындағы селтәр йүгерегеҙ
 
-Start the provided Docker Compose network:
+Башланғыс бирелгән I18NT000000011X Композис селтәре:
 
-```bash
-docker compose -f defaults/docker-compose.yml up
-```
+I18NF000000030X
 
-Use the CLI against the default client config:
+Ҡулланыу CLI ҡаршы ғәҙәттәгесә клиент конфиг:
 
 ```bash
 cargo run --bin iroha -- --config ./defaults/client.toml --help
 ```
 
-For daemon-specific native deployment steps, see [`crates/irohad/README.md`](./crates/irohad/README.md).
+Демон-специфик туған таратыу аҙымдары өсөн, ҡарағыҙ [I18NI000000090X] (./crates/irohad/README.md).
 
-## API and Observability
+## API һәм күҙәтеүсәнлек
 
-Torii exposes both Norito and JSON APIs. Common operator endpoints:
+Torii I18NT000000007X һәм JSON API-ларын фашлай. Дөйөм оператор ос нөктәләре:
 
-- `GET /status`
-- `GET /metrics`
-- `GET /v1/parameters`
+- I18NI000000091X
+- I18NI000000092X
+- I18NI000000093X
 - `GET /v1/events/sse`
 
-See the full endpoint reference in:
+Ҡарағыҙ, тулы ос нөктәһе һылтанмаһы:
 
-- [`docs/source/telemetry.md`](./docs/source/telemetry.md)
-- [`docs/portal/docs/reference/README.md`](./docs/portal/docs/reference/README.md)
+- [I18NI0000000955Х] (./docs/source/telemetry.md)
+- [I18NI000000096X X] (./docs/portal/docs/reference/README.md)
 
-## Core Crates
+## Ядро йәшниктәре
 
-- [`crates/iroha`](./crates/iroha): client library.
-- [`crates/irohad`](./crates/irohad): peer daemon binaries.
-- [`crates/iroha_cli`](./crates/iroha_cli): reference CLI.
-- [`crates/iroha_core`](./crates/iroha_core): ledger/core execution engine.
-- [`crates/iroha_config`](./crates/iroha_config): typed configuration model.
-- [`crates/iroha_data_model`](./crates/iroha_data_model): canonical data model.
-- [`crates/iroha_crypto`](./crates/iroha_crypto): cryptographic primitives.
-- [`crates/norito`](./crates/norito): deterministic serialization codec.
-- [`crates/ivm`](./crates/ivm): Iroha Virtual Machine.
-- [`crates/iroha_kagami`](./crates/iroha_kagami): key/genesis/config tooling.
+- [`crates/iroha`] (./crates/iroha): клиент китапханаһы.
+- [`crates/irohad` X] (./crates/irohad): тиңдәштәре демонарийҙары.
+- [I18NI0000009XX X] (I18NU000000045X): белешмә CLI.
+- [`crates/iroha_core`](I18NU000000046X): баш китабы/ядро башҡарыу двигателе.
+- [`crates/iroha_config`](I18NU000000047X): терпе конфигурация моделе.
+- [`crates/iroha_data_model`](I18NU000000048X): канон мәғлүмәттәр моделе.
+- [`crates/iroha_crypto`](I18NU000000049X): криптографик примитивтар.
+- [`crates/norito`] (./crates/norito): детерминистик сериализация кодек.
+- [`crates/ivm`] (./crates/ivm): Iroha виртуаль машина.
+- [`crates/iroha_kagami`](I18NU000000052X): асҡыс/генез/конфиг инструменттары.
 
-## Documentation Map
+## Документация картаһы
 
-- Main docs index: [`docs/README.md`](./docs/README.md)
-- Genesis: [`docs/genesis.md`](./docs/genesis.md)
-- Consensus (Sumeragi): [`docs/source/sumeragi.md`](./docs/source/sumeragi.md)
-- Transaction pipeline: [`docs/source/pipeline.md`](./docs/source/pipeline.md)
-- P2P internals: [`docs/source/p2p.md`](./docs/source/p2p.md)
-- IVM syscalls: [`docs/source/ivm_syscalls.md`](./docs/source/ivm_syscalls.md)
-- Kotodama grammar: [`docs/source/kotodama_grammar.md`](./docs/source/kotodama_grammar.md)
-- Norito wire format: [`norito.md`](./norito.md)
-- Current work tracking: [`status.md`](./status.md), [`roadmap.md`](./roadmap.md)
+- Төп docs индексы: [`docs/README.md`] (./docs/README.md)
+- Башланмыш: [`docs/genesis.md`] (I18NU000000054X)
+- Консенсус (I18NT000000003X): [I18NI000000109X X] (./docs/source/sumeragi.md)
+- Транзакция торбаһы: [I18NI000000110X] (./docs/source/pipeline.md)
+- P2P эске: [`docs/source/p2p.md`] (I18NU000000057X)
+- I18NT0000000025X syscalls: [I18NI000000112X] (./docs/source/ivm_syscalls.md X)
+- I18NT0000000005X грамматикаһы: [`docs/source/kotodama_grammar.md`] (./docs/source/kotodama_grammar.md X)
+- I18NT0000000008X сым форматында: [I18NI000000114X] (./norito.md)
+- Ағымдағы эштәрҙе күҙәтеү: [`status.md`] (I18NU000000061X), [Iroha] (./roadmap.md)
 
-## Translations
+## Тәржемә
 
-Japanese overview: [`README.ja.md`](./README.ja.md)
+Япония дөйөм ҡараш: [`README.ja.md`] (./README.ja.md)
 
-Other overviews:
-[`README.he.md`](./README.he.md), [`README.es.md`](./README.es.md), [`README.pt.md`](./README.pt.md), [`README.fr.md`](./README.fr.md), [`README.ru.md`](./README.ru.md), [`README.ar.md`](./README.ar.md), [`README.ur.md`](./README.ur.md)
+Башҡа дөйөм ҡараш:
+[I18NI000000118X] (I18NU000000064X), [I18NI000000119X X] (I18NU000000065X), [I18NI0000000120X] (./README.pt.md), . [`README.fr.md`] (I18NU000000067X), [I18NI000000122X] (I18NU000000068X), [I18NI0000000123X] (I18NU00000069ХХ). [I18NI000000124X] (./README.ur.md)
 
-Translation workflow: [`docs/i18n/README.md`](./docs/i18n/README.md)
+Тәржемә эш ағымы: [`docs/i18n/README.md`] (./docs/i18n/README.md)
 
-## Contributing and Help
+## Үҙ өлөшө һәм ярҙам
 
-- Contribution guide: [`CONTRIBUTING.md`](./CONTRIBUTING.md)
-- Community/support channels: [`CONTRIBUTING.md#contact`](./CONTRIBUTING.md#contact)
+- Иғәнә ҡулланмаһы: [`CONTRIBUTING.md`X] (./CONTRIBUTING.md)
+- Йәмәғәт/ярҙам каналдары: [I18NI000000127X] (I18NU0000073X)
 
-## License
+## Лицензия
 
-Iroha is licensed under Apache-2.0. See [`LICENSE`](./LICENSE).
+I18NT000000018X лицензияһы буйынса Apache-2.0. Ҡара: [`LICENSE`] (./LICENSE).
 
-Documentation is licensed under CC-BY-4.0: http://creativecommons.org/licenses/by/4.0/
+Документация лицензияһы буйынса CC-BY-4.0: http://creativecommons.org/licenses/by/4.0/ .

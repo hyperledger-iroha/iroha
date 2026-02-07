@@ -7,55 +7,56 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 09567fc0280e726bdd1f2f1289dc98547ac70db9b19324ef5e413c2cff34de80
 source_last_modified: "2025-12-29T18:16:35.201180+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# SF-2c Capacity Accrual Soak Report
+# SF-2c 容量累積浸泡報告
 
-Date: 2026-03-21
+日期：2026-03-21
 
-## Scope
+## 範圍
 
-This report records the deterministic SoraFS capacity accrual and payout soak
-tests requested under the SF-2c roadmap track.
+該報告記錄了確定性 SoraFS 容量累積和支付浸泡
+SF-2c 路線圖軌道下要求的測試。
 
-- **30-day multi-provider soak:** Exercised by
-  `capacity_fee_ledger_30_day_soak_deterministic` in
-  `crates/iroha_core/src/smartcontracts/isi/sorafs.rs`.
-  The harness instantiates five providers, spans 30 settlement windows, and
-  validates that ledger totals match an independently computed reference
-  projection. The test emits a Blake3 digest (`capacity_soak_digest=...`) so
-  CI can capture and diff the canonical snapshot.
-- **Under-delivery penalties:** Enforced by
+- **30 天多提供商浸泡：** 執行者
+  `capacity_fee_ledger_30_day_soak_deterministic` 中
+  `crates/iroha_core/src/smartcontracts/isi/sorafs.rs`。
+  該工具實例化了 5 個提供商，跨越 30 個結算窗口，並且
+  驗證分類總數是否與獨立計算的參考相匹配
+  投影。該測試發出 Blake3 摘要 (`capacity_soak_digest=...`)，因此
+  CI 可以捕獲並區分規範快照。
+- **交付不足的處罰：** 執行者
   `record_capacity_telemetry_penalises_persistent_under_delivery`
-  (same file). The test confirms strike thresholds, cooldowns, collateral slashes,
-  and ledger counters remain deterministic.
+  （同一文件）。該測試確認了打擊閾值、冷卻時間、附帶削減、
+  賬本計數器仍然是確定性的。
 
-## Execution
+## 執行
 
-Run the soak validations locally with:
+使用以下命令在本地運行浸泡驗證：
 
 ```bash
 cargo test -p iroha_core -- record_capacity_telemetry_penalises_persistent_under_delivery
 cargo test -p iroha_core -- capacity_fee_ledger_30_day_soak_deterministic
 ```
 
-The tests complete in under one second on a standard laptop and require no
-external fixtures.
+測試在標準筆記本電腦上在一秒內完成，並且不需要
+外部固定裝置。
 
-## Observability
+## 可觀察性
 
-Torii now exposes provider credit snapshots alongside fee ledgers so dashboards
-can gate on low balances and penalty strikes:
+Torii 現在將提供商信用快照與費用分類賬一起公開，以便儀表板
+可以控制低餘額和罰球：
 
-- REST: `GET /v1/sorafs/capacity/state` returns `credit_ledger[*]` entries that
-  mirror the ledger fields verified in the soak test. See
-  `crates/iroha_torii/src/sorafs/registry.rs`.
-- Grafana import: `dashboards/grafana/sorafs_capacity_penalties.json` plots the
-  exported strike counters, penalty totals, and bonded collateral so on-call
-  staff can compare soak baselines with live environments.
+- REST：`GET /v1/sorafs/capacity/state` 返回 `credit_ledger[*]` 條目
+  鏡像浸泡測試中驗證的賬本字段。參見
+  `crates/iroha_torii/src/sorafs/registry.rs`。
+- Grafana 導入：`dashboards/grafana/sorafs_capacity_penalties.json` 繪製
+  出口罷工計數器、罰款總額和保稅抵押品等
+  工作人員可以將浸泡基線與現場環境進行比較。
 
-## Follow-up
+## 後續行動
 
-- Schedule weekly gate runs in CI to replay the soak test (smoke-tier).
-- Extend the Grafana board with Torii scrape targets once production telemetry
-  exports go live.
+- 在 CI 中安排每週門運行以重播浸泡測試（煙霧層）。
+- 一旦生產遙測，使用 Torii 刮擦目標擴展 Grafana 板
+  出口上線。

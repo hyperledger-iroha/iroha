@@ -8,80 +8,82 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: W1 feedback & telemetry log
 sidebar_label: W1 feedback log
 description: Aggregate roster, telemetry checkpoints, and reviewer notes for the first partner preview wave.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-This log keeps the invite roster, telemetry checkpoints, and reviewer feedback for the
-**W1 partner preview** that accompanies the acceptance tasks in
-[`preview-feedback/w1/plan.md`](./plan.md) and the wave tracker entry in
-[`../../preview-invite-tracker.md`](../../preview-invite-tracker.md). Update it whenever an invite
-is sent, telemetry snapshot recorded, or feedback item triaged so governance reviewers can replay
-the evidence without chasing external tickets.
+Энэ бүртгэл нь урилгын жагсаалт, телеметрийн хяналтын цэг, хянагчийн санал хүсэлтийг хадгалдаг
+**W1 түншийн урьдчилж харах** нь хүлээн авах даалгавруудыг дагалддаг
+[`preview-feedback/w1/plan.md`](./plan.md) болон долгион хянагч оруулга
+[`../../preview-invite-tracker.md`](../../preview-invite-tracker.md). Урилга ирэх бүрт үүнийг шинэчил
+илгээгдсэн, телеметрийн агшин зуурын агшинд бичигдсэн эсвэл санал хүсэлтийн зүйл гурвалсан тул засаглалыг хянагчид дахин тоглуулах боломжтой
+гадны тасалбар хөөхгүйгээр нотлох баримт.
 
-## Cohort roster
+## Когортын жагсаалт
 
-| Partner ID | Request ticket | NDA received | Invite sent (UTC) | Ack/first login (UTC) | Status | Notes |
+| Түншийн ID | Тасалбар хүсэх | NDA хүлээн авсан | Урилга илгээсэн (UTC) | Зөвшөөрөх/анхны нэвтрэлт (UTC) | Статус | Тэмдэглэл |
 | --- | --- | --- | --- | --- | --- | --- |
-| partner-w1-01 | `DOCS-SORA-Preview-REQ-P01` | ✅ 2025-04-03 | 2025-04-12 15:00 | 2025-04-12 15:11 | ✅ Completed 2025-04-26 | sorafs-op-01; focused on orchestrator doc parity evidence. |
-| partner-w1-02 | `DOCS-SORA-Preview-REQ-P02` | ✅ 2025-04-03 | 2025-04-12 15:03 | 2025-04-12 15:15 | ✅ Completed 2025-04-26 | sorafs-op-02; validated Norito/telemetry cross-links. |
-| partner-w1-03 | `DOCS-SORA-Preview-REQ-P03` | ✅ 2025-04-04 | 2025-04-12 15:06 | 2025-04-12 15:18 | ✅ Completed 2025-04-26 | sorafs-op-03; ran multi-source failover drills. |
-| partner-w1-04 | `DOCS-SORA-Preview-REQ-P04` | ✅ 2025-04-04 | 2025-04-12 15:09 | 2025-04-12 15:21 | ✅ Completed 2025-04-26 | torii-int-01; Torii `/v1/pipeline` + Try it cookbook review. |
-| partner-w1-05 | `DOCS-SORA-Preview-REQ-P05` | ✅ 2025-04-05 | 2025-04-12 15:12 | 2025-04-12 15:23 | ✅ Completed 2025-04-26 | torii-int-02; paired on Try it screenshot update (docs-preview/w1 #2). |
-| partner-w1-06 | `DOCS-SORA-Preview-REQ-P06` | ✅ 2025-04-05 | 2025-04-12 15:15 | 2025-04-12 15:26 | ✅ Completed 2025-04-26 | sdk-partner-01; JS/Swift cookbook feedback + ISO bridge sanity checks. |
-| partner-w1-07 | `DOCS-SORA-Preview-REQ-P07` | ✅ 2025-04-11 | 2025-04-12 15:18 | 2025-04-12 15:29 | ✅ Completed 2025-04-26 | sdk-partner-02; compliance cleared 2025-04-11, focused on Connect/telemetry notes. |
-| partner-w1-08 | `DOCS-SORA-Preview-REQ-P08` | ✅ 2025-04-11 | 2025-04-12 15:21 | 2025-04-12 15:33 | ✅ Completed 2025-04-26 | gateway-ops-01; audited gateway ops guide + anonymised Try it proxy flow. |
+| түнш-w1-01 | `DOCS-SORA-Preview-REQ-P01` | ✅ 2025-04-03 | 2025-04-12 15:00 | 2025-04-12 15:11 | ✅ 2025-04-26-нд дууссан | sorafs-op-01; orchestrator doc parity нотолгоонд анхаарлаа хандуулсан. |
+| түнш-w1-02 | `DOCS-SORA-Preview-REQ-P02` | ✅ 2025-04-03 | 2025-04-12 15:03 | 2025-04-12 15:15 | ✅ 2025-04-26-нд дууссан | sorafs-op-02; баталгаажуулсан Norito/телеметрийн хөндлөн холбоосууд. |
+| түнш-w1-03 | `DOCS-SORA-Preview-REQ-P03` | ✅ 2025-04-04 | 2025-04-12 15:06 | 2025-04-12 15:18 | ✅ 2025-04-26-нд дууссан | sorafs-op-03; олон эх сурвалжийн бүтэлгүйтлийн дасгалуудыг ажиллуулсан. |
+| түнш-w1-04 | `DOCS-SORA-Preview-REQ-P04` | ✅ 2025-04-04 | 2025-04-12 15:09 | 2025-04-12 15:21 | ✅ 2025-04-26-нд дууссан | torii-int-01; Torii `/v1/pipeline` + Хоолны номны тоймыг үзээрэй. |
+| түнш-w1-05 | `DOCS-SORA-Preview-REQ-P05` | ✅ 2025-04-05 | 2025-04-12 15:12 | 2025-04-12 15:23 | ✅ 2025-04-26-нд дууссан | torii-int-02; Try It дээр хосолсон дэлгэцийн агшинг шинэчлэх (docs-preview/w1 #2). |
+| түнш-w1-06 | `DOCS-SORA-Preview-REQ-P06` | ✅ 2025-04-05 | 2025-04-12 15:15 | 2025-04-12 15:26 | ✅ 2025-04-26-нд дууссан | sdk-partner-01; JS/Swift хоолны номын санал хүсэлт + ISO гүүрний эрүүл мэндийн шалгалт. |
+| түнш-w1-07 | `DOCS-SORA-Preview-REQ-P07` | ✅ 2025-04-11 | 2025-04-12 15:18 | 2025-04-12 15:29 | ✅ 2025-04-26-нд дууссан | sdk-partner-02; Холбогдох/телеметрийн тэмдэглэл дээр төвлөрсөн 2025-04-11-ний өдөр дагаж мөрдсөн. |
+| түнш-w1-08 | `DOCS-SORA-Preview-REQ-P08` | ✅ 2025-04-11 | 2025-04-12 15:21 | 2025-04-12 15:33 | ✅ 2025-04-26-нд дууссан | гарц-опс-01; аудитлагдсан гарц үйлдлийн гарын авлага + нэрээ нууцалсан Прокси урсгалыг туршаад үзээрэй. |
 
-Populate the **Invite sent** and **Ack** timestamps as soon as the outbound email is issued.
-Anchor the times to the UTC schedule defined in the W1 plan.
+**Урилга илгээсэн** болон **Зөвшөөрөх** гэсэн тэмдэгтүүдийг гадагш илгээсэн и-мэйл гарсан даруйд бөглөнө үү.
+Цагийг W1 төлөвлөгөөнд тодорхойлсон UTC хуваарьтай холбоно уу.
 
-## Telemetry checkpoints
+## Телеметрийн хяналтын цэгүүд
 
-| Timestamp (UTC) | Dashboards / probes | Owner | Result | Artefact |
+| Цагийн тэмдэг (UTC) | Хяналтын самбар / датчик | Эзэмшигч | Үр дүн | Олдвор |
 | --- | --- | --- | --- | --- |
-| 2025-04-06 18:05 | `docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals` | Docs/DevRel + Ops | ✅ All green | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250406` |
-| 2025-04-06 18:20 | `npm run manage:tryit-proxy -- --stage preview-w1` transcript | Ops | ✅ Staged | `artifacts/docs_preview/W1/preview-2025-04-12/tryit/OPS-TRYIT-147.log` |
-| 2025-04-12 14:45 | `docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals`, `probe:portal` | Docs/DevRel + Ops | ✅ Pre-invite snapshot, no regressions | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250412` |
-| 2025-04-19 17:55 | Dashboards above + Try it proxy latency diff | Docs/DevRel lead | ✅ Midpoint check passed (0 alerts; Try it latency p95=410 ms) | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250419` |
-| 2025-04-26 16:25 | Dashboards above + exit probe | Docs/DevRel + Governance liaison | ✅ Exit snapshot, zero outstanding alerts | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250426` |
+| 2025-04-06 18:05 | `docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals` | Docs/DevRel + Ops | ✅ Бүх ногоон | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250406` |
+| 2025-04-06 18:20 | `npm run manage:tryit-proxy -- --stage preview-w1` транскрипт | Үйлдэл | ✅ Үе шаттай | `artifacts/docs_preview/W1/preview-2025-04-12/tryit/OPS-TRYIT-147.log` |
+| 2025-04-12 14:45 | `docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals`, `probe:portal` | Docs/DevRel + Ops | ✅ Урьдчилан хормын хувилбар, регресс байхгүй | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250412` |
+| 2025-04-19 17:55 | Дээрх хяналтын самбарууд + Оролдоод үз прокси хоцрогдлын зөрүү | Docs/DevRel тэргүүлэх | ✅ Дунд цэгийн шалгалтыг давлаа (0 анхааруулга; Үүнийг туршаад үзээрэй p95=410ms) | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250419` |
+| 2025-04-26 16:25 | Дээрх хяналтын самбар + гарах датчик | Docs/DevRel + Засаглалын холбоо | ✅ Хормын хувилбараас гарах, онцгүй анхааруулга байхгүй | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250426` |
 
-Daily office-hour samples (2025-04-13 → 2025-04-25) are bundled as NDJSON + PNG exports under
-`artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/` with filenames
-`docs-preview-integrity-<date>.json` and corresponding screenshots.
+Өдөр тутмын ажлын цагийн дээжийг (2025-04-13 → 2025-04-25) NDJSON + PNG экспортын дагуу багцалсан.
+Файлын нэр бүхий `artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/`
+`docs-preview-integrity-<date>.json` болон холбогдох дэлгэцийн агшин.
 
-## Feedback & issue log
+## Санал хүсэлт, асуудлын бүртгэл
 
-Use this table to summarise reviewer-submitted findings. Link each entry to the GitHub/discuss
-ticket plus the structured form captured via
+Шүүмжлэгчээс ирүүлсэн дүгнэлтийг нэгтгэн дүгнэхийн тулд энэ хүснэгтийг ашиглана уу. Бичлэг бүрийг GitHub/хэлэлцүүлэгт холбоно уу
+тасалбар дээр нэмэх нь дамжуулан авсан бүтэцтэй хэлбэр
 [`docs/examples/docs_preview_feedback_form.md`](../../../../../examples/docs_preview_feedback_form.md).
 
-| Reference | Severity | Owner | Status | Notes |
+| Лавлагаа | Хүнд байдал | Эзэмшигч | Статус | Тэмдэглэл |
 | --- | --- | --- | --- | --- |
-| `docs-preview/w1 #1` | Low | Docs-core-02 | ✅ Resolved 2025-04-18 | Clarified Try it nav wording + sidebar anchor (`docs/source/sorafs/tryit.md` updated with new label). |
-| `docs-preview/w1 #2` | Low | Docs-core-03 | ✅ Resolved 2025-04-19 | Refreshed Try it screenshot + caption per reviewer request; artefact `artifacts/docs_preview/W1/preview-2025-04-12/feedback/partner-w1-05/screenshot-diff.png`. |
-| — | Info | Docs/DevRel lead | 🟢 Closed | Remaining comments were Q&A-only; captured in each partner’s feedback form under `artifacts/docs_preview/W1/preview-2025-04-12/feedback/`. |
+| `docs-preview/w1 #1` | Бага | Doc-core-02 | ✅ Шийдвэрлэсэн 2025-04-18 | Тодруулсан Оролдоод үзээрэй navigation + sidebar anchor (`docs/source/sorafs/tryit.md` шинэ шошготой шинэчлэгдсэн). |
+| `docs-preview/w1 #2` | Бага | Doc-core-03 | ✅ Шийдвэрлэсэн 2025-04-19 | Шинэчлэгдсэн Оролдоод үз дэлгэцийн агшин + хянагч хүсэлт бүрийн тайлбар; олдвор `artifacts/docs_preview/W1/preview-2025-04-12/feedback/partner-w1-05/screenshot-diff.png`. |
+| — | Мэдээлэл | Docs/DevRel тэргүүлэх | 📢 Хаалттай | Үлдсэн сэтгэгдлүүд нь зөвхөн асуулт хариулт байсан; `artifacts/docs_preview/W1/preview-2025-04-12/feedback/` дор түнш бүрийн санал хүсэлтийн маягт дээр авсан. |
 
-## Knowledge check & survey tracking
+## Мэдлэг шалгах, судалгааг хянах
 
-1. Record quiz scores (target ≥90 %) for every reviewer; attach the exported CSV alongside the
-   invite artefacts.
-2. Collect the qualitative survey answers captured with the feedback form template and mirror them
-   under `artifacts/docs_preview/W1/preview-2025-04-12/surveys/`.
-3. Schedule remediation calls for anyone scoring below threshold and log them in this file.
+1. Шүүмжлэгч бүрийн шалгалтын оноог (зорилт ≥90%) тэмдэглэх; -ийн хажууд экспортлогдсон CSV-г хавсаргана
+   эд өлгийн зүйлсийг урих.
+2. Санал хүсэлтийн маягтын загварт авсан чанарын судалгааны хариултуудыг цуглуулж, тусгал
+   `artifacts/docs_preview/W1/preview-2025-04-12/surveys/` доор.
+3. Босгооос доогуур оноо авсан хэн нэгний засварын дуудлагыг товлон энэ файлд бүртгүүлнэ үү.
 
-All eight reviewers scored ≥94 % on the knowledge check (CSV:
-`artifacts/docs_preview/W1/preview-2025-04-12/feedback/w1-quiz-scores.csv`). No remediation calls
-were required; survey exports for each partner live under
+Бүх найман шүүмжлэгч мэдлэг шалгахад ≥94% оноо авсан (CSV:
+`artifacts/docs_preview/W1/preview-2025-04-12/feedback/w1-quiz-scores.csv`). Засвар хийх дуудлага байхгүй
+шаардлагатай байсан; Судалгааны экспортын түнш бүрийн
 `artifacts/docs_preview/W1/preview-2025-04-12/surveys/<partner-id>/summary.json`.
 
-## Artefact inventory
+## Олдворын тооллого
 
-- Preview descriptor/checksum bundle: `artifacts/docs_preview/W1/preview-2025-04-12/descriptor.json`
-- Probe + link-check summary: `artifacts/docs_preview/W1/preview-2025-04-12/preflight-summary.json`
-- Try it proxy change log: `artifacts/docs_preview/W1/preview-2025-04-12/tryit/OPS-TRYIT-147.log`
-- Telemetry exports: `artifacts/docs_preview/W1/preview-2025-04-12/grafana/<date>/`
-- Daily office-hour telemetry bundle: `artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/`
-- Feedback + survey exports: place reviewer-specific folders under
+- Тодорхойлогч/шалгах багцыг урьдчилан харах: `artifacts/docs_preview/W1/preview-2025-04-12/descriptor.json`
+- Шинжилгээ + холбоос шалгах хураангуй: `artifacts/docs_preview/W1/preview-2025-04-12/preflight-summary.json`
+- Прокси өөрчлөлтийн бүртгэлийг туршаад үзээрэй: `artifacts/docs_preview/W1/preview-2025-04-12/tryit/OPS-TRYIT-147.log`
+- Телеметрийн экспорт: `artifacts/docs_preview/W1/preview-2025-04-12/grafana/<date>/`
+- Өдөр тутмын ажлын цагийн телеметрийн багц: `artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/`
+- Санал хүсэлт + судалгааны экспорт: хянагчдад зориулсан хавтаснуудыг доор байрлуулна уу
   `artifacts/docs_preview/W1/preview-2025-04-12/feedback/<partner-id>/`
-- Knowledge check CSV and summary: `artifacts/docs_preview/W1/preview-2025-04-12/feedback/w1-quiz-scores.csv`
+- Мэдлэг шалгах CSV болон хураангуй: `artifacts/docs_preview/W1/preview-2025-04-12/feedback/w1-quiz-scores.csv`
 
-Keep the inventory in sync with the tracker issue. Attach hashes when copying artefacts to the
-governance ticket so auditors can verify the files without shell access.
+Бараа материалыг трекерийн асуудалтай синхрончлоорой. Олдворуудыг хуулахдаа хэш хавсаргана
+удирдлагын тасалбар, ингэснээр аудиторууд бүрхүүлийн хандалтгүйгээр файлуудыг шалгах боломжтой.

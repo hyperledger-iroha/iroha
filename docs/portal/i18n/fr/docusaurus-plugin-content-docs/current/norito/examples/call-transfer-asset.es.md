@@ -4,30 +4,32 @@ direction: ltr
 source: docs/portal/docs/norito/examples/call-transfer-asset.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-slug: /norito/examples/call-transfer-asset
-title: Invocar transferencia del host desde Kotodama
-description: Demuestra cómo un entrypoint de Kotodama puede llamar a la instrucción de host `transfer_asset` con validación de metadatos en línea.
-source: crates/ivm/docs/examples/08_call_transfer_asset.ko
+slug : /norito/examples/call-transfer-asset
+titre : Invoquer le transfert de l'hôte à partir de Kotodama
+description : Vous pouvez voir comment un point d'entrée Kotodama peut appeler les instructions de l'hôte `transfer_asset` avec la validation des métadonnées en ligne.
+source : crates/ivm/docs/examples/08_call_transfer_asset.ko
 ---
 
-Demuestra cómo un entrypoint de Kotodama puede llamar a la instrucción de host `transfer_asset` con validación de metadatos en línea.
+Vous verrez comment un point d'entrée Kotodama peut appeler les instructions de l'hôte `transfer_asset` avec la validation des métadonnées en ligne.
 
 ## Recorrido del libro mayor
 
-- Fondea la autoridad del contrato (por ejemplo `ih58...`) con el activo que transferirá y otórgale el rol `CanTransfer` o un permiso equivalente.
-- Llama al entrypoint `call_transfer_asset` para transferir 5 unidades desde la cuenta del contrato a `ih58...`, reflejando la forma en que la automatización on-chain puede envolver llamadas del host.
-- Verifica los balances mediante `FindAccountAssets` o `iroha_cli ledger assets list --account ih58...` e inspecciona los eventos para confirmar que la guardia de metadatos registró el contexto de la transferencia.
+- Fondez l'autorité du contrat (par exemple `ih58...`) avec l'actif qui transfère et otorgale le rôle `CanTransfer` ou un permis équivalent.
+- Appelez le point d'entrée `call_transfer_asset` pour transférer 5 unités du compte du contrat vers `ih58...`, en réfléchissant au formulaire dans lequel l'automatisation en chaîne peut affecter les appels de l'hôte.
+- Vérifiez les soldes intermédiaires `FindAccountAssets` ou `iroha_cli ledger assets list --account ih58...` et inspectez les événements pour confirmer que la garde de métadonnées a enregistré le contexte du transfert.
 
-## Guías de SDK relacionadas
+## Guides relatifs au SDK
 
-- [Quickstart del SDK de Rust](/sdks/rust)
-- [Quickstart del SDK de Python](/sdks/python)
-- [Quickstart del SDK de JavaScript](/sdks/javascript)
+- [Démarrage rapide du SDK de Rust](/sdks/rust)
+- [Démarrage rapide du SDK de Python](/sdks/python)
+- [Démarrage rapide du SDK de JavaScript](/sdks/javascript)
 
-[Descarga la fuente de Kotodama](/norito-snippets/call-transfer-asset.ko)
+[Télécharger la source de Kotodama](/norito-snippets/call-transfer-asset.ko)
 
 ```text
 // Direct builtin call (no contract-style call syntax) inside a contract.

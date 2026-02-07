@@ -7,72 +7,73 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 8691a94d23e589f46d8e8cf2359d6d9a31f7c38c5b7bf0def69c88d2dd081765
 source_last_modified: "2026-01-22T14:35:37.510319+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-//! Confidential assets audit & operations playbook referenced by `roadmap.md:M4`.
+//! በ`roadmap.md:M4` የተጠቀሰው ሚስጥራዊ ንብረቶች ኦዲት እና ኦፕሬሽኖች የመጫወቻ መጽሐፍ።
 
-# Confidential Assets Audit & Operations Runbook
+# ሚስጥራዊ ንብረቶች ኦዲት እና ኦፕሬሽኖች Runbook
 
-This guide consolidates the evidence surfaces auditors and operators rely on
-when validating confidential-asset flows. It complements the rotation playbook
-(`docs/source/confidential_assets_rotation.md`) and the calibration ledger
-(`docs/source/confidential_assets_calibration.md`).
+ይህ መመሪያ ኦዲተሮች እና ኦፕሬተሮች የሚተማመኑባቸውን ማስረጃዎች ያጠናክራል።
+ሚስጥራዊ-ንብረት ፍሰቶችን ሲያረጋግጥ. የማዞሪያ መጫወቻ ደብተርን ያሟላል
+(`docs/source/confidential_assets_rotation.md`) እና የካሊብሬሽን መዝገብ
+(`docs/source/confidential_assets_calibration.md`)።
 
-## 1. Selective Disclosure & Event Feeds
+## 1. የተመረጡ ይፋ መግለጫ እና የክስተት ምግቦች
 
-- Every confidential instruction emits a structured `ConfidentialEvent` payload
-  (`Shielded`, `Transferred`, `Unshielded`) captured in
-  `crates/iroha_data_model/src/events/data/events.rs:198` and serialized by the
-  executors (`crates/iroha_core/src/smartcontracts/isi/world.rs:3699`–`4021`).
-  The regression suite exercises the concrete payloads so auditors can rely on
-  deterministic JSON layouts (`crates/iroha_core/tests/zk_confidential_events.rs:19`–`299`).
-- Torii exposes these events via the standard SSE/WebSocket pipeline; auditors
-  subscribe using `ConfidentialEventFilter` (`crates/iroha_data_model/src/events/data/filters.rs:82`),
-  optionally scoping to a single asset definition. CLI example:
+- እያንዳንዱ ሚስጥራዊ መመሪያ የተዋቀረ `ConfidentialEvent` ጭነት ያስወጣል።
+  (`Shielded`፣ `Transferred`፣ `Unshielded`) ተይዟል
+  `crates/iroha_data_model/src/events/data/events.rs:198` እና ተከታታይ በ
+  አስፈፃሚዎች (`crates/iroha_core/src/smartcontracts/isi/world.rs:3699`-`4021`)።
+  የሪግሬሽን ስብስብ የኮንክሪት ሸክሞችን ስለሚለማመድ ኦዲተሮች ሊተማመኑበት ይችላሉ።
+  የሚወስኑ JSON አቀማመጦች (`crates/iroha_core/tests/zk_confidential_events.rs:19`–`299`)።
+- Torii እነዚህን ክስተቶች በመደበኛ SSE/WebSocket ቧንቧ በኩል ያጋልጣል; ኦዲተሮች
+  `ConfidentialEventFilter` (`crates/iroha_data_model/src/events/data/filters.rs:82`) በመጠቀም ይመዝገቡ
+  እንደ አማራጭ ወደ ነጠላ የንብረት ፍቺ መፈተሽ። CLI ምሳሌ፡-
 
   ```bash
   iroha ledger events data watch --filter '{ "confidential": { "asset_definition_id": "rose#wonderland" } }'
   ```
 
-- Policy metadata and pending transitions are available through
+- የፖሊሲ ዲበ ውሂብ እና በመጠባበቅ ላይ ያሉ ሽግግሮች ይገኛሉ
   `GET /v1/confidential/assets/{definition_id}/transitions`
-  (`crates/iroha_torii/src/routing.rs:15205`), mirrored by the Swift SDK
-  (`IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:3245`) and documented in
-  both the confidential-assets design and SDK guides
-  (`docs/source/confidential_assets.md:70`, `docs/source/sdk/swift/index.md:334`).
+  (`crates/iroha_torii/src/routing.rs:15205`)፣ በስዊፍት ኤስዲኬ የተንጸባረቀ
+  (`IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:3245`) እና በ ውስጥ ተመዝግቧል
+  ሁለቱም ሚስጥራዊ-ንብረት ንድፍ እና የኤስዲኬ መመሪያዎች
+  (`docs/source/confidential_assets.md:70`፣ `docs/source/sdk/swift/index.md:334`)።
 
-## 2. Telemetry, Dashboards, and Calibration Evidence
+## 2. ቴሌሜትሪ፣ ዳሽቦርድ እና የካሊብሬሽን ማስረጃ
 
-- Runtime metrics surface tree depth, commitment/frontier history, root eviction
-  counters, and verifier-cache hit ratios
-  (`crates/iroha_telemetry/src/metrics.rs:5760`–`5815`). Grafana dashboards in
-  `dashboards/grafana/confidential_assets.json` ship the associated panels and
-  alerts, with the workflow documented in `docs/source/confidential_assets.md:401`.
-- Calibration runs (NS/op, gas/op, ns/gas) with signed logs live in
-  `docs/source/confidential_assets_calibration.md`. The latest Apple Silicon
-  NEON run is archived at
-  `docs/source/confidential_assets_calibration_neon_20260428.log`, and the same
-  ledger records the temporary waivers for SIMD-neutral and AVX2 profiles until
-  the x86 hosts come online.
+- የሩጫ ጊዜ መለኪያዎች የወለል ዛፍ ጥልቀት፣ ቁርጠኝነት/የድንበር ታሪክ፣ ስርወ ማስወጣት
+  ቆጣሪዎች፣ እና አረጋጋጭ-መሸጎጫ መምታት ሬሾዎች
+  (`crates/iroha_telemetry/src/metrics.rs:5760`–`5815`)። Grafana ዳሽቦርዶች በ
+  `dashboards/grafana/confidential_assets.json` ተያያዥ ፓነሎችን እና
+  ማንቂያዎች፣ በ`docs/source/confidential_assets.md:401` ውስጥ ከተመዘገበው የስራ ፍሰት ጋር።
+- የካሊብሬሽን ስራዎች (NS/op፣ gas/op፣ ns/gas) ከተፈረሙ ምዝግብ ማስታወሻዎች ጋር በቀጥታ ወደ ውስጥ
+  `docs/source/confidential_assets_calibration.md`. የቅርብ ጊዜ አፕል ሲሊኮን
+  NEON ሩጫ በ ላይ ተቀምጧል
+  `docs/source/confidential_assets_calibration_neon_20260428.log`, እና ተመሳሳይ
+  ደብተር እስከ ሲምዲ-ገለልተኛ እና AVX2 መገለጫዎች ጊዜያዊ መልቀቂያዎችን ይመዘግባል
+  የ x86 አስተናጋጆች መስመር ላይ ይመጣሉ።
 
-## 3. Incident Response & Operator Tasks
+## 3. የክስተት ምላሽ እና ኦፕሬተር ተግባራት
 
-- Rotation/upgrade procedures reside in
-  `docs/source/confidential_assets_rotation.md`, covering how to stage new
-  parameter bundles, schedule policy upgrades, and notify wallets/auditors. The
-  tracker (`docs/source/project_tracker/confidential_assets_phase_c.md`) lists
-  runbook owners and rehearsal expectations.
-- For production rehearsals or emergency windows, operators attach evidence to
-  `status.md` entries (e.g., the multi-lane rehearsal log) and include:
-  `curl` proof of policy transitions, Grafana snapshots, and the relevant event
-  digests so auditors can reconstruct mint→transfer→reveal timelines.
+- የማሽከርከር/የማሻሻል ሂደቶች ይኖራሉ
+  `docs/source/confidential_assets_rotation.md`፣ እንዴት አዲስ ደረጃ ማድረግ እንደሚቻል ይሸፍናል።
+  የመለኪያ ቅርቅቦች፣ የፖሊሲ ማሻሻያዎችን መርሐግብር እና የኪስ ቦርሳ/ኦዲተሮችን አሳውቅ። የ
+  መከታተያ (`docs/source/project_tracker/confidential_assets_phase_c.md`) ዝርዝሮች
+  runbook ባለቤቶች እና የመለማመጃ የሚጠበቁ.
+- ለምርት ልምምዶች ወይም የድንገተኛ መስኮቶች ኦፕሬተሮች ማስረጃዎችን ያያይዙ
+  `status.md` ግቤቶች (ለምሳሌ፣ ባለብዙ መስመር መለማመጃ ምዝግብ ማስታወሻ) እና የሚከተሉትን ያካትታሉ፡
+  `curl` የመመሪያ ሽግግሮች ማረጋገጫ፣ Grafana ቅጽበታዊ ገጽ እይታዎች እና ተዛማጅ ክስተት
+  ኦዲተሮች ሚንት → ማስተላለፍ →የጊዜ መስመሮችን መግለጥ እንዲችሉ ይዋሃዳል።
 
-## 4. External Review Cadence
+## 4. የውጭ ግምገማ Cadence
 
-- Security review scope: confidential circuits, parameter registries, policy
-  transitions, and telemetry. This document plus the calibration ledger forms
-  the evidence packet sent to vendors; review scheduling is tracked via
-  M4 in `docs/source/project_tracker/confidential_assets_phase_c.md`.
-- Operators must keep `status.md` updated with any vendor findings or follow-up
-  action items. Until the external review completes, this runbook serves as the
-  operational baseline auditors can test against.
+- የደህንነት ግምገማ ወሰን: ሚስጥራዊ ወረዳዎች, የመለኪያ መዝገብ ቤቶች, ፖሊሲ
+  ሽግግሮች, እና ቴሌሜትሪ. ይህ ሰነድ እና የካሊብሬሽን ደብተር ቅጾች
+  ለሻጮች የተላከው የማስረጃ ፓኬት; የግምገማ መርሐግብር ክትትል የሚደረገው በ በኩል ነው።
+  M4 በ `docs/source/project_tracker/confidential_assets_phase_c.md`.
+- ኦፕሬተሮች በማንኛውም የአቅራቢ ግኝቶች ወይም ክትትል `status.md` ማዘመን አለባቸው
+  የድርጊት እቃዎች. የውጭ ግምገማው እስኪጠናቀቅ ድረስ፣ ይህ runbook የ
+  የክዋኔ ቤዝላይን ኦዲተሮች ሊፈትኑ ይችላሉ።

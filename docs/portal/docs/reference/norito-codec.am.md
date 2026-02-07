@@ -7,62 +7,63 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 8de31f9e066b729fda8324b8847badba23de926888574d02a44fb0e6d4472f77
 source_last_modified: "2026-01-16T17:12:51.444585+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Norito Codec Reference
+# Norito ኮዴክ ማጣቀሻ
 
-Norito is Iroha’s canonical serialization layer. Every on-wire message, on-disk
-payload, and cross-component API uses Norito so nodes agree on identical bytes
-even when they run on different hardware. This page summarises the moving parts
-and points to the full specification in `norito.md`.
+Norito የ Iroha ቀኖናዊ ተከታታይ ንብርብር ነው። እያንዳንዱ ሽቦ ላይ መልእክት፣ በዲስክ ላይ
+የመጫኛ ጭነት፣ እና ተሻጋሪ አካል ኤፒአይ Norito ይጠቀማል ስለዚህ አንጓዎች በተመሳሳይ ባይት ይስማማሉ።
+በተለያዩ ሃርድዌር ላይ ሲሰሩ እንኳን. ይህ ገጽ ተንቀሳቃሽ ክፍሎችን ያጠቃልላል
+እና በ `norito.md` ውስጥ ወደ ሙሉ ዝርዝር መግለጫው ይጠቁማል.
 
-## Core layout
+## ዋና አቀማመጥ
 
-| Component | Purpose | Source |
+| አካል | ዓላማ | ምንጭ |
 | --- | --- | --- |
-| **Header** | Frames payloads with magic/version/schema hash, CRC64, length, and compression tag; v1 requires `VERSION_MINOR = 0x00` and validates header flags against the supported mask (default `0x00`). | `norito::header` — see `norito.md` (“Header & Flags”, repository root) |
-| **Bare payload** | Deterministic value encoding used for hashing/comparison. On-wire transport always uses a header; bare bytes are internal-only. | `norito::codec::{Encode, Decode}` |
-| **Compression** | Optional Zstd (and experimental GPU acceleration) selected via the header compression byte. | `norito.md`, “Compression negotiation” |
+| **ራስጌ** | ክፈፎች የሚጫኑ ጭነቶች በአስማት/ስሪት/schema hash፣ CRC64፣ ርዝመት እና መጭመቂያ መለያ; v1 `VERSION_MINOR = 0x00` ይፈልጋል እና የራስጌ ባንዲራዎችን ከሚደገፈው ጭምብል (ነባሪው `0x00`) ያረጋግጣል። | `norito::header` — ይመልከቱ `norito.md` (“ራስጌ እና ባንዲራ”፣ ማከማቻ ስር) |
+| ** ባዶ ጭነት** | ለሃሺንግ/ለማነፃፀር ጥቅም ላይ የሚውል ቆራጥ እሴት ኢንኮዲንግ። በሽቦ ላይ ማጓጓዝ ሁልጊዜ ራስጌን ይጠቀማል; ባዶ ባይት የውስጥ-ብቻ ነው። | `norito::codec::{Encode, Decode}` |
+| **መጭመቅ** | አማራጭ Zstd (እና የሙከራ ጂፒዩ ማጣደፍ) በራስጌ መጭመቂያ ባይት በኩል ተመርጧል። | `norito.md`, "የመጭመቂያ ድርድር" |
 
-The layout flag registry (packed-struct, packed-seq, field bitset, compact
-lengths) lives in `norito::header::flags`. V1 defaults to flags `0x00` but
-accepts explicit header flags within the supported mask; unknown bits are
-rejected. `norito::header::Flags` is retained for internal inspection and
-future versions.
+የአቀማመጥ ባንዲራ መዝገብ (የታሸገ-መዋቅር፣ የታሸገ-ሴክ፣ የመስክ ቢትሴት፣ የታመቀ
+ርዝመቶች) በ `norito::header::flags` ውስጥ ይኖራል. V1 ነባሪዎች ወደ ባንዲራዎች `0x00` ግን
+በሚደገፈው ጭምብል ውስጥ ግልጽ የሆኑ የራስጌ ባንዲራዎችን ይቀበላል; ያልታወቁ ቢትዎች ናቸው
+ተቀባይነት አላገኘም። `norito::header::Flags` ለውስጣዊ ምርመራ እና ተይዟል
+የወደፊት ስሪቶች.
 
-## Derive support
+## ድጋፍ ያግኙ
 
-`norito_derive` ships `Encode`, `Decode`, `IntoSchema`, and JSON helper derives.
-Key conventions:
+`norito_derive` መርከቦች `Encode`, `Decode`, `IntoSchema` እና JSON አጋዥ ያስገኛል.
+ቁልፍ ስምምነቶች፡-
 
-- Derives generate both AoS and packed code paths; v1 defaults to the AoS
-  layout (flags `0x00`) unless header flags opt into packed variants.
-  Implementation lives in `crates/norito_derive/src/derive_struct.rs`.
-- Layout-affecting features (`packed-struct`, `packed-seq`, `compact-len`) are
-  opt-in via header flags and must be encoded/decoded consistently across peers.
-- JSON helpers (`norito::json`) provide deterministic Norito-backed JSON for
-  open APIs. Use `norito::json::{to_json_pretty, from_json}` — never `serde_json`.
+- የ AoS እና የታሸጉ የኮድ መንገዶችን ያመነጫል; v1 ለ AoS ነባሪዎች
+  አቀማመጥ (ባንዲራዎች `0x00`) የራስጌ ባንዲራዎች ወደ የታሸጉ ልዩነቶች ካልመረጡ በስተቀር።
+  ትግበራ በI18NI0000022X ውስጥ ይኖራል።
+- አቀማመጥን የሚነኩ ባህሪያት (`packed-struct`፣ `packed-seq`፣ `compact-len`)
+  በራስጌ ባንዲራዎች መርጠው ይግቡ እና በእኩዮች መካከል ያለማቋረጥ መመሳጠር/መግለጽ አለበት።
+- JSON አጋዥዎች (`norito::json`) የሚወስን Norito የሚደገፍ JSON ይሰጣሉ
+  ኤፒአይዎችን ይክፈቱ። `norito::json::{to_json_pretty, from_json}` ይጠቀሙ — በጭራሽ `serde_json`።
 
-## Multicodec & identifier tables
+## መልቲኮዴክ እና መለያ ሰንጠረዦች
 
-Norito keeps its multicodec assignments in `norito::multicodec`. The reference
-table (hashes, key types, payload descriptors) is maintained in `multicodec.md`
-at the repository root. When a new identifier is added:
+Norito መልቲኮዴክ ስራዎቹን በ`norito::multicodec` ውስጥ ያቆያል። ማጣቀሻው
+ሠንጠረዥ (ሃሽ፣ ቁልፍ ዓይነቶች፣ የመጫኛ ጭነት ገላጭ) በI18NI0000030X ውስጥ ተቀምጧል።
+በማጠራቀሚያ ስር. አዲስ መለያ ሲታከል፡-
 
-1. Update `norito::multicodec::registry`.
-2. Extend the table in `multicodec.md`.
-3. Regenerate downstream bindings (Python/Java) if they consume the map.
+1. `norito::multicodec::registry` አዘምን.
+2. ሠንጠረዡን በ `multicodec.md` ያራዝሙ.
+3. ካርታውን ከበሉ የታችኛው ተፋሰስ ማሰሪያዎችን (Python/Java) ያድሱ።
 
-## Regenerating docs & fixtures
+## ሰነዶችን እና ዕቃዎችን እንደገና በማመንጨት ላይ
 
-With the portal currently hosting a prose summary, use the upstream Markdown
-sources as the source of truth:
+ፖርታሉ በአሁኑ ጊዜ የስድ ማጠቃለያን እያስተናገደ፣ የላይ ያለውን ማርክዳውን ተጠቀም
+ምንጮች እንደ እውነት ምንጭ:
 
-- **Spec**: `norito.md`
-- **Multicodec table**: `multicodec.md`
-- **Benchmarks**: `crates/norito/benches/`
-- **Golden tests**: `crates/norito/tests/`
+- ** ዝርዝር ***: `norito.md`
+- ** መልቲኮዴክ ጠረጴዛ ***: `multicodec.md`
+- ** ካስማዎች ***: `crates/norito/benches/`
+- ** ወርቃማ ሙከራዎች ***: `crates/norito/tests/`
 
-When the Docusaurus automation goes live, the portal will be updated via a
-sync script (tracked in `docs/portal/scripts/`) that pulls the data from these
-files. Until then, keep this page aligned manually whenever the spec changes.
+የDocusaurus አውቶሜሽን በቀጥታ ሲሰራ ፖርታሉ በኤ.
+መረጃውን ከእነዚህ የሚጎትት የማመሳሰል ስክሪፕት (በ`docs/portal/scripts/` ውስጥ ተከታትሏል)
+ፋይሎች. እስከዚያ ድረስ ዝርዝሩ በተቀየረ ቁጥር ይህን ገጽ እራስዎ እንዲሰምር ያድርጉት።

@@ -8,49 +8,51 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraFS Chunker Profile Registry
 sidebar_label: Chunker Registry
 description: Profile IDs, parameters, and negotiation plan for the SoraFS chunker registry.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
+::: Каноник эх сурвалжийг анхаарна уу
 :::
 
-## SoraFS Chunker Profile Registry (SF-2a)
+## SoraFS Chunker профайлын бүртгэл (SF-2a)
 
-The SoraFS stack negotiates chunking behaviour via a small, namespaced registry.
-Each profile assigns deterministic CDC parameters, semver metadata, and the
-expected digest/multicodec used in manifests and CAR archives.
+SoraFS стек нь жижиг нэрийн зайтай бүртгэлээр дамжуулан ангилах үйлдлийг хэлэлцдэг.
+Профайл бүр нь CDC-ийн тодорхойлогч параметрүүд, северийн мета өгөгдөл болон
+манифест болон CAR архивт ашигладаг хүлээгдэж буй дижест/multicodec.
 
-Profile authors should consult
+Профайл зохиогчидтой зөвлөлдөх хэрэгтэй
 [`docs/source/sorafs/chunker_profile_authoring.md`](./chunker-profile-authoring.md)
-for the required metadata, validation checklist, and proposal template before
-submitting new entries. Once governance has approved a change, follow the
-[registry rollout checklist](./chunker-registry-rollout-checklist.md) and the
-[staging manifest playbook](./staging-manifest-playbook) to promote
-the fixtures through staging and production.
+өмнө шаардлагатай мета өгөгдөл, баталгаажуулалтын хяналтын хуудас, саналын загвар
+шинэ бичлэг оруулах. Засаглал өөрчлөлтийг баталсны дараа дараахыг дагаж мөрдөөрэй
+[бүртгэлийг нэвтрүүлэх шалгах хуудас](./chunker-registry-rollout-checklist.md) болон
+[Manifest playbook](./staging-manifest-playbook) сурталчлах
+тайз болон үйлдвэрлэлээр дамжуулан бэхэлгээний .
 
-### Profiles
+### Профайл
 
-| Namespace | Name | SemVer | Profile ID | Min (bytes) | Target (bytes) | Max (bytes) | Break mask | Multihash | Aliases | Notes |
-|-----------|------|--------|------------|-------------|----------------|-------------|------------|-----------|---------|-------|
-| `sorafs`  | `sf1` | `1.0.0` | `1` | 65 536 | 262 144 | 524 288 | `0x0000ffff` | `0x1f` (BLAKE3-256) | `["sorafs.sf1@1.0.0"]` | Canonical profile used in SF-1 fixtures |
+| Нэрийн орон зай | Нэр | SemVer | Профайл ID | Мин (байт) | Зорилтот (байт) | Макс (байт) | Маск эвдэх | Multihash | Гадна нэр | Тэмдэглэл |
+|----------|------|--------|------------|-------------|----------------|-------------|------------|-----------|---------|-------|
+| `sorafs` | `sf1` | `1.0.0` | `1` | 65536 | 262144 | 524288 | `0x0000ffff` | `0x1f` (BLAKE3-256) | `["sorafs.sf1@1.0.0"]` | SF-1 бэхэлгээнд ашигласан каноник профиль |
 
-The registry lives in code as `sorafs_manifest::chunker_registry` (governed by [`chunker_registry_charter.md`](./chunker-registry-charter.md)). Each entry
-is expressed as a `ChunkerProfileDescriptor` with:
+Бүртгэл нь `sorafs_manifest::chunker_registry` кодоор ажилладаг ([`chunker_registry_charter.md`](./chunker-registry-charter.md)-ээр зохицуулагддаг). Оруулга бүр
+нь `ChunkerProfileDescriptor` хэлбэрээр илэрхийлэгдэнэ:
 
-* `namespace` – logical grouping of related profiles (e.g., `sorafs`).
-* `name` – human-readable profile label (`sf1`, `sf1-fast`, …).
-* `semver` – semantic version string for the parameter set.
-* `profile` – the actual `ChunkProfile` (min/target/max/mask).
-* `multihash_code` – the multihash used when producing chunk digests (`0x1f`
-  for the SoraFS default).
+* `namespace` – холбогдох профайлын логик бүлэглэл (жишээ нь, `sorafs`).
+* `name` – хүний ​​унших боломжтой профайл шошго (`sf1`, `sf1-fast`, …).
+* `semver` – параметрийн багцад зориулсан семантик хувилбарын мөр.
+* `profile` – бодит `ChunkProfile` (мин/зорилт/макс/маск).
+* `multihash_code` – хэсэгчилсэн найруулга (`0x1f`) гаргахад ашигладаг олон талт хэрэглүүр
+  SoraFS анхдагч хувьд).
 
-The manifest serializes profiles via `ChunkingProfileV1`. The structure records
-the registry metadata (namespace, name, semver) alongside the raw CDC
-parameters and the alias list shown above. Consumers should first attempt a
-registry lookup by `profile_id` and fall back to the inline parameters when
-unknown IDs appear. Registry charter rules require the canonical handle
-(`namespace.name@semver`) to be the first entry in `profile_aliases`.
+Манифест нь профайлыг `ChunkingProfileV1`-ээр дамжуулан цуваа болгодог. Бүтцийн бүртгэл
+түүхий CDC-ийн хажууд бүртгэлийн мета өгөгдөл (нэрийн зай, нэр, семвер)
+параметрүүд болон дээр дурдсан нэрсийн жагсаалт. Хэрэглэгч эхлээд оролдох ёстой a
+`profile_id`-ээр бүртгэлийн хайлт хийж, дараа нь шугамын параметрүүд рүү буцна.
+үл мэдэгдэх ID гарч ирнэ. Бүртгэлийн дүрмийн дүрэм нь каноник бариулыг шаарддаг
+(`namespace.name@semver`) нь `profile_aliases`-ийн анхны оруулга байх болно.
 
-To inspect the registry from tooling, run the helper CLI:
+Бүртгэлийг багаж хэрэгсэлээс шалгахын тулд туслах CLI-г ажиллуулна уу:
 
 ```
 $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
@@ -116,7 +118,7 @@ and will transparently truncate when the request exceeds the available leaves:
 $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
     --por-sample=8 --por-sample-seed=0xfeedface --por-sample-out=por.samples.json
 
-The manifest stub mirrors the same data, which is convenient when scripting `--chunker-profile-id` selection in pipelines. Both chunk store CLIs also accept the canonical handle form (`--profile=sorafs.sf1@1.0.0`) so build scripts can avoid hard-coding numeric IDs:
+Манифест stub нь ижил өгөгдлийг тусгадаг бөгөөд энэ нь дамжуулах хоолойд `--chunker-profile-id` сонголтыг скрипт хийхэд тохиромжтой. CLI-ууд хоёулаа каноник бариулын хэлбэрийг (`--profile=sorafs.sf1@1.0.0`) хүлээн авдаг тул скриптүүд нь хатуу кодлох тоон ID-аас зайлсхийх боломжтой:
 
 ```
 $ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- --list-chunker-profiles
@@ -136,12 +138,12 @@ $ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- --list-chunker-prof
 ]
 ```
 
-The `handle` field (`namespace.name@semver`) matches what the CLIs accept via
-`--profile=…`, making it safe to copy directly into automation.
+`handle` талбар (`namespace.name@semver`) нь CLI-ийн хүлээн зөвшөөрсөн зүйлтэй таарч байна.
+`--profile=…` нь автоматжуулалт руу шууд хуулж авахад аюулгүй болгодог.
 
-### Negotiating Chunkers
+### Хэлэлцээ хийж буй хуйвалдаанууд
 
-Gateways and clients advertise supported profiles via provider adverts:
+Гарцууд болон үйлчлүүлэгчид үйлчилгээ үзүүлэгчийн сурталчилгаагаар дэмжигдсэн профайлыг сурталчилдаг:
 
 ```
 ProviderAdvertBodyV1 {
@@ -151,30 +153,30 @@ ProviderAdvertBodyV1 {
 }
 ```
 
-Multi-source chunk scheduling is announced via the `range` capability. The
-CLI accepts it with `--capability=range[:streams]`, where the optional numeric
-suffix encodes the provider's preferred range-fetch concurrency (for example,
-`--capability=range:64` advertises a 64-stream budget). When omitted, consumers
-fall back to the general `max_streams` hint published elsewhere in the advert.
+Олон эх сурвалжийн хуваарийг `range` боломжоор дамжуулан зарладаг. The
+CLI нь үүнийг `--capability=range[:streams]`-ээр хүлээн авдаг бөгөөд энд нэмэлт тоон
+дагавар нь үйлчилгээ үзүүлэгчийн сонгосон муж-татаалтын зэрэгцлийг кодлодог (жишээлбэл,
+`--capability=range:64` нь 64 урсгалтай төсвийг сурталчилдаг). орхигдуулсан тохиолдолд хэрэглэгчид
+Зар сурталчилгааны өөр газар нийтлэгдсэн ерөнхий `max_streams` зөвлөмж рүү буцна уу.
 
-When requesting CAR data, clients should send an `Accept-Chunker` header listing
-supported `(namespace, name, semver)` tuples in preference order:
+CAR-ийн мэдээлэл хүсэх үед үйлчлүүлэгчид `Accept-Chunker` толгойн жагсаалтыг илгээх ёстой.
+дэмжигдсэн `(namespace, name, semver)` tuple-уудыг давуу эрх олгох дарааллаар нь:
 
 ```
 Accept-Chunker: sorafs.sf1;version=1.0.0
 ```
 
-Gateways select a mutually supported profile (defaulting to `sorafs.sf1@1.0.0`)
-and reflect the decision via the `Content-Chunker` response header. Manifests
-embed the chosen profile so downstream nodes can validate the chunk layout
-without relying on HTTP negotiation.
+Гарцууд нь харилцан дэмжигдсэн профайлыг сонгоно (өгөгдмөл нь `sorafs.sf1@1.0.0`)
+мөн `Content-Chunker` хариу толгойгоор дамжуулан шийдвэрийг тусгана. Манифестууд
+Сонгосон профайлаа оруулснаар доод талын зангилаа нь хэсэгчилсэн байршлыг баталгаажуулах болно
+HTTP хэлэлцээрт найдахгүйгээр.
 
-### Conformance
+### Тохиромжтой байдал
 
-* The `sorafs.sf1@1.0.0` profile maps to the public fixtures in
-  `fixtures/sorafs_chunker` and the corpora registered under
-  `fuzz/sorafs_chunker`. End-to-end parity is exercised in Rust, Go, and Node
-  via the provided tests.
-* `chunker_registry::lookup_by_profile` asserts that the descriptor parameters
-  match `ChunkProfile::DEFAULT` to guard accidental divergence.
-* Manifests produced by `iroha app sorafs toolkit pack` and `sorafs_manifest_stub` include the registry metadata.
+* `sorafs.sf1@1.0.0` профайл нь олон нийтийн эд хогшлын газрын зураг
+  `fixtures/sorafs_chunker` ба дор бүртгүүлсэн корпораци
+  `fuzz/sorafs_chunker`. Rust, Go, Node дээр төгсгөл хоорондын паритетыг хэрэгжүүлдэг
+  өгсөн тестүүдээр дамжуулан.
+* `chunker_registry::lookup_by_profile` нь тодорхойлогч параметрүүдийг баталж байна
+  санамсаргүй зөрүүг хамгаалахын тулд `ChunkProfile::DEFAULT`-тай таарна.
+* `iroha app sorafs toolkit pack` болон `sorafs_manifest_stub`-ийн гаргасан манифестууд нь бүртгэлийн мета өгөгдлийг агуулдаг.

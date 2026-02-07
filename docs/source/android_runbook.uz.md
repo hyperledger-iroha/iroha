@@ -7,6 +7,7 @@ generator: scripts/sync_docs_i18n.py
 source_hash: da7119ab99121dbcfc268f5406f43b16ac9149cef6500a45c6717ad16c02ab80
 source_last_modified: "2026-01-28T15:38:09.507154+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
@@ -15,313 +16,299 @@ translation_last_reviewed: 2026-02-07
 
 # Android SDK Operations Runbook
 
-This runbook supports operators and support engineers managing Android SDK
-deployments for AND7 and beyond. Pair with the Android Support Playbook for SLA
-definitions and escalation paths.
+Ushbu runbook operatorlar va Android SDK boshqaruvchi muhandislarni qo'llab-quvvatlaydi
+AND7 va undan keyingi versiyalar uchun joylashtirish. SLA uchun Android Support Playbook bilan ulang
+ta'riflar va kuchayish yo'llari.
 
-> **Note:** When updating incident procedures, also refresh the shared
-> troubleshooting matrix (`docs/source/sdk/android/troubleshooting.md`) so the
-> scenario table, SLAs, and telemetry references stay aligned with this runbook.
+> **Eslatma:** Voqea tartib-qoidalarini yangilashda, shuningdek, umumiy ma'lumotlarni yangilang
+> muammolarni bartaraf etish matritsasi (`docs/source/sdk/android/troubleshooting.md`) shuning uchun
+> stsenariy jadvali, SLA’lar va telemetriya ma’lumotnomalari ushbu ish kitobiga mos keladi.
 
-## 0. Quickstart (when pagers fire)
+## 0. Tez boshlash (peyjerlar ishga tushganda)
 
-Keep this sequence handy for Sev 1/Sev 2 alerts before diving into the detailed
-sections below:
+Batafsil ma'lumotga sho'ng'ishdan oldin Sev1/Sev2 ogohlantirishlari uchun ushbu ketma-ketlikni qulay saqlang
+quyidagi bo'limlar:
 
-1. **Confirm the active config:** Capture the `ClientConfig` manifest checksum
-   emitted at app startup and compare it to the pinned manifest in
-   `configs/android_client_manifest.json`. If hashes diverge, halt releases and
-   file a config drift ticket before touching telemetry/overrides (see §1).
-2. **Run the schema diff gate:** Execute the `telemetry-schema-diff` CLI against
-   the accepted snapshot
+1. **Faol konfiguratsiyani tasdiqlang:** `ClientConfig` manifest nazorat summasini yozib oling
+   ilova ishga tushganda chiqariladi va uni qadalgan manifest bilan solishtiring
+   `configs/android_client_manifest.json`. Agar xeshlar ajralib chiqsa, nashrlarni to'xtating va
+   telemetriya/bekorlarni teginishdan oldin konfiguratsiya drift chiptasini rasmiylashtiring (§1-ga qarang).
+2. **Diff gate sxemasini ishga tushiring:** `telemetry-schema-diff` CLI-ni quyidagiga qarshi bajaring
+   qabul qilingan surat
    (`docs/source/sdk/android/readiness/schema_diffs/android_vs_rust-20260305.json`).
-   Treat any `policy_violations` output as Sev 2 and block exports until the
-   discrepancy is understood (see §2.6).
-3. **Check dashboards + status CLI:** Open the Android Telemetry Redaction and
-   Exporter Health boards, then run
-   `scripts/telemetry/check_redaction_status.py --status-url <collector>`. If
-   authorities are under the floor or exports error, capture screenshots and
-   CLI output for the incident doc (see §2.4–§2.5).
-4. **Decide on overrides:** Only after the above steps and with incident/owner
-   recorded, issue a limited override via `scripts/android_override_tool.sh`
-   and log it in `telemetry_override_log.md` (see §3). Default expiry: <24 h.
-5. **Escalate per contact list:** Page the Android on-call and Observability TL
-   (contacts in §8), then follow the escalation tree in §4.1. If attestation or
-   StrongBox signals are involved, pull the latest bundle and run the harness
-   checks from §7 before re-enabling exports.
+   Har qanday `policy_violations` chiqishini Sev2 sifatida ko'rib chiqing va oxirigacha eksportni bloklang
+   nomuvofiqlik tushuniladi (2.6-bandga qarang).
+3. **Boshqaruv paneli + CLI holatini tekshiring:** Android Telemetriyani tahrirlashni oching va
+   Exporter Health boards, keyin ishga tushiring
+   `scripts/telemetry/check_redaction_status.py --status-url <collector>`. Agar
+   organlari qavat ostida yoki eksport xato, qo'lga ekran tasvirlari va
+   Hodisa hujjati uchun CLI chiqishi (qarang: §2.4–§2.5).
+4. **Bekor qilish to'g'risida qaror qabul qiling:** Faqat yuqoridagi amallardan keyin va hodisa/egasi bilan
+   qayd etilgan, `scripts/android_override_tool.sh` orqali cheklangan bekor qilish
+   va uni `telemetry_override_log.md` tizimiga kiriting (3-§ga qarang). Birlamchi amal qilish muddati: <24 soat.
+5. **Har bir kontakt roʻyxatini koʻpaytirish:** Qoʻngʻiroq boʻyicha Android va Observability TL sahifasi
+   (§8-dagi kontaktlar), keyin §4.1-dagi eskalatsiya daraxtiga amal qiling. Agar attestatsiya yoki
+   StrongBox signallari ishtirok etadi, eng so'nggi to'plamni torting va jabduqni ishga tushiring
+   eksportni qayta yoqishdan oldin §7 dan tekshiradi.
 
-## 1. Configuration & Deployment
+## 1. Konfiguratsiya va joylashtirish
 
-- **ClientConfig sourcing:** Ensure Android clients load Torii endpoint, TLS
-  policies, and retry knobs from `iroha_config`-derived manifests. Validate
-  values during app startup and log checksum of the active manifest.
-  Implementation reference: `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ClientConfig.java`
-  threads `TelemetryOptions` from `java/iroha_android/src/main/java/org/hyperledger/iroha/android/telemetry/TelemetryOptions.java`
-  (plus the generated `TelemetryObserver`) so hashed authorities are emitted automatically.
-- **Hot reload:** Use the configuration watcher to pick up `iroha_config`
-  updates without app restarts. Failed reloads should emit the
-  `android.telemetry.config.reload` event and trigger retry with exponential
-  backoff (max 5 attempts).
-- **Fallback behaviour:** When configuration is missing or invalid, fall back to
-  safe defaults (read-only mode, no pending queue submission) and surface a user
-  prompt. Record the incident for follow-up.
+- **ClientConfig manbasi:** Android mijozlari Torii oxirgi nuqtasi, TLS yuklanishiga ishonch hosil qiling
+  siyosatlar va `iroha_config`-dan olingan manifestlardan qayta urinib ko'ring. Tasdiqlash
+  ilovani ishga tushirish vaqtidagi qiymatlar va faol manifestning log nazorat summasi.
+  Amalga oshirish uchun ma'lumotnoma: `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ClientConfig.java`
+  iplar `TelemetryOptions` dan `java/iroha_android/src/main/java/org/hyperledger/iroha/android/telemetry/TelemetryOptions.java`
+  (shuningdek, yaratilgan `TelemetryObserver`) shuning uchun xeshlangan vakolatlar avtomatik ravishda chiqariladi.
+- **Issiq qayta yuklash:** `iroha_config` ni olish uchun konfiguratsiya kuzatuvchisidan foydalaning
+  ilovalarni qayta ishga tushirmasdan yangilanishlar. Muvaffaqiyatsiz qayta yuklashlar chiqarishi kerak
+  `android.telemetry.config.reload` hodisasi va eksponensial bilan qayta urinish
+  orqaga qaytish (maksimal 5 urinish).
+- **Orqaga qaytish harakati:** Agar konfiguratsiya mavjud boʻlmasa yoki yaroqsiz boʻlsa, ga qayting
+  xavfsiz standart sozlamalar (faqat o'qish rejimi, kutilayotgan navbatni topshirish yo'q) va foydalanuvchini ko'rsatish
+  taklif. Kuzatuv uchun voqeani yozib oling.
 
-### 1.1 Config reload diagnostics
-
-- The config watcher emits `android.telemetry.config.reload` signals with
-  `source`, `result`, `duration_ms`, and optional `digest`/`error` fields (see
-  `configs/android_telemetry.json` and
+### 1.1 Qayta yuklash diagnostikasini sozlash- Konfiguratsiya kuzatuvchisi `android.telemetry.config.reload` signallarini chiqaradi
+  `source`, `result`, `duration_ms` va ixtiyoriy `digest`/`error` maydonlari (qarang.
+  `configs/android_telemetry.json` va
   `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ConfigWatcher.java`).
-  Expect a single `result:"success"` event per applied manifest; repeated
-  `result:"error"` records indicate the watcher exhausted its 5 backoff attempts
-  starting at 50 ms.
-- During an incident, capture the latest reload signal from the collector
-  (OTLP/span store or the redaction status endpoint) and log the `digest` +
-  `source` in the incident doc. Compare the digest to
-  `configs/android_client_manifest.json` and the release manifest distributed to
-  operators.
-- If the watcher continues to emit errors, run the targeted harness to reproduce
-  the parse failure with the suspect manifest:
+  Har bir qo'llaniladigan manifestda bitta `result:"success"` hodisasini kuting; takrorlanadi
+  `result:"error"` yozuvlari kuzatuvchining 5 ta orqaga qaytish urinishlarini tugatganligini ko'rsatadi.
+  50ms dan boshlanadi.
+- Hodisa paytida kollektordan so'nggi qayta yuklash signalini oling
+  (OTLP/span do'koni yoki redaktsiya holatining so'nggi nuqtasi) va `digest` + ni qayd qiling
+  Hodisa hujjatida `source`. Dijest bilan solishtiring
+  `configs/android_client_manifest.json` va nashr manifestiga tarqatildi
+  operatorlar.
+- Agar kuzatuvchi xatoliklarni chiqarishda davom etsa, ko'paytirish uchun mo'ljallangan jabduqni ishga tushiring
+  shubhali manifest bilan tahlil xatosi:
   `ci/run_android_tests.sh org.hyperledger.iroha.android.client.ConfigWatcherTests`.
-  Attach the test output and the failing manifest to the incident bundle so SRE
-  can diff it against the baked configuration schema.
-- When reload telemetry is missing, confirm the active `ClientConfig` carries a
-  telemetry sink and that the OTLP collector still accepts the
-  `android.telemetry.config.reload` ID; otherwise treat it as a Sev 2 telemetry
-  regression (same path as §2.4) and pause releases until the signal returns.
+  Sinov chiqishi va muvaffaqiyatsiz manifestni hodisa to'plamiga SRE qilib biriktiring
+  uni pishirilgan konfiguratsiya sxemasidan farq qilishi mumkin.
+- Qayta yuklash telemetriyasi yo'q bo'lsa, faol `ClientConfig` ni tasdiqlang
+  telemetriya sink va OTLP kollektori hali ham qabul qiladi
+  `android.telemetry.config.reload` ID; aks holda uni Sev2 telemetriyasi sifatida qabul qiling
+  regressiya (§2.4 bilan bir xil yo'l) va signal qaytguncha pauza bo'shatish.
 
-### 1.2 Deterministic key export bundles
-- Software exports now emit v3 bundles with per-export salt + nonce, `kdf_kind`, and `kdf_work_factor`.
-  The exporter prefers Argon2id (64 MiB, 3 iterations, parallelism = 2) and falls back to
-  PBKDF2-HMAC-SHA256 with a 350 k iteration floor when Argon2id is unavailable on the device. Bundle
-  AAD still binds to the alias; passphrases must be at least 12 characters for v3 exports and the
-  importer rejects all-zero salt/nonce seeds.
-  `KeyExportBundle.decode(Base64|bytes)`, import with the original passphrase, and re-export to v3 to
-  move to the memory-hard format. The importer rejects all-zero or reused salt/nonce pairs; always
-  rotate bundles instead of reusing old exports between devices.
-- Negative-path tests in `ci/run_android_tests.sh --tests org.hyperledger.iroha.android.crypto.export.DeterministicKeyExporterTests`
-  rejection. Clear passphrase char arrays after use and capture both the bundle version and `kdf_kind`
-  in incident notes when recovery fails.
+### 1.2 Deterministik kalit eksport paketlari
+- Dasturiy ta'minot eksporti endi har bir eksport tuzi + nonce, `kdf_kind` va `kdf_work_factor` bilan v3 to'plamlarini chiqaradi.
+  Eksportchi Argon2id ni afzal ko'radi (64 MiB, 3 iteratsiya, parallelizm = 2) va qaytadi.
+  PBKDF2-HMAC-SHA256, agar qurilmada Argon2id mavjud bo'lmasa, 350 k iteratsiya qavatiga ega. To'plam
+  AAD hali ham taxallus bilan bog'lanadi; v3 eksporti uchun parollar kamida 12 belgidan iborat bo'lishi kerak
+  import qiluvchi barcha nol tuz/nonce urug'larni rad etadi.
+  `KeyExportBundle.decode(Base64|bytes)`, asl parol bilan import qiling va v3 ga qayta eksport qiling
+  qattiq xotira formatiga o'ting. Import qiluvchi nol yoki qayta ishlatiladigan tuz/nontime juftlarini rad etadi; har doim
+  qurilmalar o'rtasida eski eksportlarni qayta ishlatish o'rniga to'plamlarni aylantiring.
+- `ci/run_android_tests.sh --tests org.hyperledger.iroha.android.crypto.export.DeterministicKeyExporterTests` da salbiy yo'l testlari
+  rad etish. Foydalanishdan keyin parolli iboralar massivlarini tozalang va paket versiyasini va `kdf_kind` ni yozib oling
+  tiklash muvaffaqiyatsizlikka uchragan voqea qaydlarida.
 
-## 2. Telemetry & Redaction
+## 2. Telemetriya va redaktsiya
 
-> Quick reference: see
+> Tezkor ma'lumot: qarang
 > [`telemetry_redaction_quick_reference.md`](sdk/android/telemetry_redaction_quick_reference.md)
-> for the condensed command/threshold checklist used during enablement
-> sessions and incident bridges.
-
-- **Signal inventory:** Refer to `docs/source/sdk/android/telemetry_redaction.md`
-  for the full list of emitted spans/metrics/events and
+> faollashtirish vaqtida foydalaniladigan siqilgan buyruq/eshik nazorat ro'yxati uchun
+> seanslar va hodisa ko'prigi.- **Signal inventarizatsiyasi:** `docs/source/sdk/android/telemetry_redaction.md` ga qarang
+  chiqarilgan oraliqlar/ko'rsatkichlar/hodisalar to'liq ro'yxati va
   `docs/source/sdk/android/readiness/signal_inventory_worksheet.md`
-  for owner/validation details and outstanding gaps.
-- **Canonical schema diff:** The approved AND7 snapshot is
+  egasi/tasdiqlash tafsilotlari va ajoyib bo'shliqlar uchun.
+- **Kanonik sxema farqi:** Tasdiqlangan AND7 surati
   `docs/source/sdk/android/readiness/schema_diffs/android_vs_rust-20260305.json`.
-  Every new CLI run must be compared against this artefact so reviewers can see
-  that the accepted `intentional_differences` and `android_only_signals` still
-  match the policy tables documented in
-  `docs/source/sdk/android/telemetry_schema_diff.md` §3. The CLI now adds
-  `policy_violations` when any intentional difference is missing a
-  `status:"accepted"`/`"policy_allowlisted"` (or when Android-only records lose
-  their accepted status), so treat non-empty violations as Sev 2 and stop
-  exports. The `jq` snippets below remain as a manual sanity check on archived
-  artefacts:
+  Har bir yangi CLI ishini ushbu artefakt bilan solishtirish kerak, shunda sharhlovchilar ko'rishlari mumkin
+  qabul qilingan `intentional_differences` va `android_only_signals` hali ham
+  da hujjatlashtirilgan siyosat jadvallariga mos keling
+  `docs/source/sdk/android/telemetry_schema_diff.md` §3. Endi CLI qo'shadi
+  `policy_violations` qasddan farq yo'q bo'lganda a
+  `status:"accepted"`/`"policy_allowlisted"` (yoki faqat Android yozuvlari yo'qolganda)
+  ularning qabul qilingan holati), shuning uchun bo'sh bo'lmagan buzilishlarni Sev2 deb hisoblang va to'xtating
+  eksport. Quyidagi `jq` snippetlari arxivda qo'lda aqlni tekshirish sifatida qoladi
+  artefaktlar:
   ```bash
   jq '.intentional_differences[] | select(.status != "accepted" and .status != "policy_allowlisted")' "$OUT"
   jq '.android_only_signals[] | select(.status != "accepted")' "$OUT"
   jq '.field_mismatches[] | {signal, field, android, rust}' "$OUT"
   ```
-  Treat any output from these commands as a schema regression that needs an
-  AND7 readiness bug before telemetry exports continue; `field_mismatches`
-  must stay empty per `telemetry_schema_diff.md` §5. The helper now writes
-  `artifacts/android/telemetry/schema_diff.prom` automatically; pass
-  `--textfile-dir /var/lib/node_exporter/textfile_collector` (or set
-  `ANDROID_SCHEMA_DIFF_TEXTFILE_DIR`) when running on staging/production hosts
-  so the `telemetry_schema_diff_run_status` gauge flips to `policy_violation`
-  automatically if the CLI detects drift.
-- **CLI helper:** `scripts/telemetry/check_redaction_status.py` inspects
-  `artifacts/android/telemetry/status.json` by default; pass `--status-url` to
-  query staging and `--write-cache` to refresh the local copy for offline
-  drills. Use `--min-hashed 214` (or set
-  `ANDROID_TELEMETRY_MIN_HASHED_AUTHORITIES=214`) to enforce the governance
-  floor on hashed authorities during every status poll.
-- **Authority hashing:** All authorities are hashed using Blake2b-256 with the
-  quarterly rotation salt stored in the secure secrets vault. Rotations occur on
-  the first Monday of each quarter at 00:00 UTC. Verify the exporter picks up
-  the new salt by checking the `android.telemetry.redaction.salt_version` metric.
-- **Device profile buckets:** Only `emulator`, `consumer`, and `enterprise`
-  tiers are exported (alongside SDK major version). Dashboards compare these
-  counts against Rust baselines; variance >10% raises alerts.
-- **Network metadata:** Android exports `network_type` and `roaming` flags only.
-  Carrier names are never emitted; operators should not request subscriber
-  information in incident logs. The sanitised snapshot is emitted as the
-  `android.telemetry.network_context` event, so ensure apps register a
-  `NetworkContextProvider` (either via
-  `ClientConfig.Builder.setNetworkContextProvider(...)` or the convenience
-  `enableAndroidNetworkContext(...)` helper) before Torii calls are issued.
-- **Grafana pointer:** The `Android Telemetry Redaction` dashboard is the
-  canonical visual check for the CLI output above—confirm the
-  `android.telemetry.redaction.salt_version` panel matches the current salt epoch
-  and the `android_telemetry_override_tokens_active` widget stays at zero
-  whenever no drills or incidents are running. Escalate if either panel drifts
-  before the CLI scripts report a regression.
+  Ushbu buyruqlardan olingan har qanday natijani kerak bo'lgan sxema regressiyasi sifatida ko'rib chiqing
+  Telemetriya eksporti davom etgunga qadar AND7 tayyorligi xatosi; `field_mismatches`
+  `telemetry_schema_diff.md` §5 bo'yicha bo'sh qolishi kerak. Yordamchi hozir yozadi
+  `artifacts/android/telemetry/schema_diff.prom` avtomatik ravishda; o'tish
+  `--textfile-dir /var/lib/node_exporter/textfile_collector` (yoki o'rnatilgan
+  `ANDROID_SCHEMA_DIFF_TEXTFILE_DIR`) sahnalashtirish/ishlab chiqarish xostlarida ishlayotganda
+  Shunday qilib, `telemetry_schema_diff_run_status` o'lchagich `policy_violation` ga aylanadi
+  Agar CLI driftni aniqlasa, avtomatik ravishda.
+- **CLI yordamchisi:** `scripts/telemetry/check_redaction_status.py` tekshiradi
+  Sukut bo'yicha `artifacts/android/telemetry/status.json`; `--status-url` ga o'ting
+  mahalliy nusxani oflayn rejimda yangilash uchun so'rov bosqichi va `--write-cache`
+  matkaplar. `--min-hashed 214` dan foydalaning (yoki o'rnating
+  `ANDROID_TELEMETRY_MIN_HASHED_AUTHORITIES=214`) boshqaruvni amalga oshirish
+  har bir status so'rovi paytida xeshlangan organlarga qavat.
+- **Authority heshing:** Barcha organlar Blake2b-256 yordamida xeshlangan.
+  xavfsiz sirlar omborida saqlanadi chorak aylanma tuz. Aylanishlar sodir bo'ladi
+  har chorakning birinchi dushanba kuni soat 00:00 UTC da. Eksportchi qabul qilishini tasdiqlang
+  `android.telemetry.redaction.salt_version` ko'rsatkichini tekshirish orqali yangi tuz.
+- **Qurilma profili chelaklari:** Faqat `emulator`, `consumer` va `enterprise`
+  darajalar eksport qilinadi (SDK asosiy versiyasi bilan birga). Boshqaruv panellari ularni taqqoslaydi
+  Rustning asosiy ko'rsatkichlari bilan hisoblashadi; >10% farq ogohlantirishlarni oshiradi.
+- **Tarmoq metamaʼlumotlari:** Android faqat `network_type` va `roaming` bayroqlarini eksport qiladi.
+  Operator nomlari hech qachon ko'rsatilmaydi; operatorlar abonentni talab qilmasligi kerak
+  hodisalar jurnallarida ma'lumotlar. Sanitatsiya qilingan oniy rasm sifatida chiqariladi
+  `android.telemetry.network_context` hodisasi, shuning uchun ilovalar roʻyxatdan oʻtganiga ishonch hosil qiling a
+  `NetworkContextProvider` (yoki orqali
+  `ClientConfig.Builder.setNetworkContextProvider(...)` yoki qulaylik
+  `enableAndroidNetworkContext(...)` yordamchisi) Torii qo'ng'iroqlari chiqarilishidan oldin.
+- **Grafana ko'rsatkichi:** `Android Telemetry Redaction` asboblar paneli
+  Yuqoridagi CLI chiqishi uchun kanonik vizual tekshirish - tasdiqlang
+  `android.telemetry.redaction.salt_version` paneli joriy tuz davriga mos keladi
+  va `android_telemetry_override_tokens_active` vidjeti nolda qoladi
+  hech qanday mashqlar yoki hodisalar bajarilmaganda. Har bir panel siljib ketsa, kuchaytiring
+  CLI skriptlari regressiya haqida xabar berishdan oldin.
 
-### 2.1 Export pipeline workflow
+### 2.1 Eksport quvurlari ish jarayoni1. **Konfiguratsiya taqsimoti.** `ClientConfig.telemetry.redaction` dan ulangan
+   `iroha_config` va `ConfigWatcher` tomonidan qayta yuklangan. Har bir qayta yuklash qayd qiladi
+   manifest digest plyus tuz davri - bu chiziqni hodisalarda va davomida qo'lga kiriting
+   mashqlar.
+2. **Instrumentation.** SDK komponentlari oraliqlar/ko‘rsatkichlar/hodisalar chiqaradi
+   `TelemetryBuffer`. Bufer har bir foydali yukni qurilma profili va
+   joriy tuz davri, shuning uchun eksportchi xeshlash ma'lumotlarini aniq tekshirishi mumkin.
+3. **Redaktsiya filtri.** `RedactionFilter` xeshlari `authority`, `alias` va
+   qurilma identifikatorlari qurilmani tark etishidan oldin. Muvaffaqiyatsizliklar chiqaradi
+   `android.telemetry.redaction.failure` va eksport urinishini bloklang.
+4. **Eksportchi + kollektor.** Sanitizatsiya qilingan foydali yuklar Android orqali yuboriladi
+   `android-otel-collector` o'rnatish uchun OpenTelemetry eksportchisi. The
+   kollektor fanatlari izlar (Temp), ko'rsatkichlar (Prometheus) va Norito chiqadi
+   log lavabolar.
+5. **Kuzatilish ilgaklari.** `scripts/telemetry/check_redaction_status.py` o'qiydi
+   kollektor hisoblagichlari (`android.telemetry.export.status`,
+   `android.telemetry.redaction.salt_version`) va holat to'plamini ishlab chiqaradi
+   ushbu runbook davomida havola qilingan.
 
-1. **Config distribution.** `ClientConfig.telemetry.redaction` is threaded from
-   `iroha_config` and hot-reloaded by `ConfigWatcher`. Each reload logs the
-   manifest digest plus salt epoch—capture that line in incidents and during
-   rehearsals.
-2. **Instrumentation.** SDK components emit spans/metrics/events into the
-   `TelemetryBuffer`. The buffer tags every payload with the device profile and
-   current salt epoch so the exporter can verify hashing inputs deterministically.
-3. **Redaction filter.** `RedactionFilter` hashes `authority`, `alias`, and
-   device identifiers before they leave the device. Failures emit
-   `android.telemetry.redaction.failure` and block the export attempt.
-4. **Exporter + collector.** Sanitised payloads are shipped through the Android
-   OpenTelemetry exporter to the `android-otel-collector` deployment. The
-   collector fans outputs to traces (Tempo), metrics (Prometheus), and Norito
-   log sinks.
-5. **Observability hooks.** `scripts/telemetry/check_redaction_status.py` reads
-   collector counters (`android.telemetry.export.status`,
-   `android.telemetry.redaction.salt_version`) and produces the status bundle
-   referenced throughout this runbook.
+### 2.2 Tasdiqlash eshiklari
 
-### 2.2 Validation gates
-
-- **Schema diff:** Run
+- **Sxema farqi:** Ishga tushirish
   `scripts/telemetry/run_schema_diff.sh --android-config configs/android_telemetry.json --rust-config configs/rust_telemetry.json`
-  whenever manifests change. After each run, confirm every
-  `intentional_differences[*]` and `android_only_signals[*]` entry is stamped
-  `status:"accepted"` (or `status:"policy_allowlisted"` for hashed/bucketed
-  fields) as recommended in `telemetry_schema_diff.md` §3 before attaching the
-  artefact to incidents and chaos lab reports. Use the approved snapshot
-  (`android_vs_rust-20260305.json`) as a guardrail and lint the freshly emitted
-  JSON before it is filed:
+  namoyon bo'lganda o'zgaradi. Har bir yugurishdan keyin har birini tasdiqlang
+  `intentional_differences[*]` va `android_only_signals[*]` yozuvlari muhrlangan
+  `status:"accepted"` (yoki xeshlangan/chelaklangan uchun `status:"policy_allowlisted"`)
+  maydonlar) biriktirishdan oldin `telemetry_schema_diff.md` §3 da tavsiya qilinganidek
+  hodisalar va xaos laboratoriya hisobotlari uchun artefakt. Tasdiqlangan suratdan foydalaning
+  (`android_vs_rust-20260305.json`) to'siq sifatida va yangi chiqarilgan
+  JSON topshirilishidan oldin:
   ```bash
   LATEST=docs/source/sdk/android/readiness/schema_diffs/$(date -u +%Y%m%d).json
   jq '.intentional_differences[] | select(.status != "accepted" and .status != "policy_allowlisted") | {signal, field, status}' "$LATEST"
   jq '.android_only_signals[] | select(.status != "accepted") | {signal, status}' "$LATEST"
   ```
-  Compare `$LATEST` against
+  `$LATEST` bilan solishtiring
   `docs/source/sdk/android/readiness/schema_diffs/android_vs_rust-20260305.json`
-  to prove that the allowlist stayed unchanged. Missing or blank `status`
-  entries (for example on `android.telemetry.redaction.failure` or
-  `android.telemetry.redaction.salt_version`) are now treated as regressions and
-  must be resolved before the review can close; the CLI surfaces the accepted
-  state directly, so the manual §3.4 cross-reference only applies when
-  explaining why a non-`accepted` status appears.
+  ruxsat etilgan ro'yxat o'zgarishsiz qolganligini isbotlash. Yo'qolgan yoki bo'sh `status`
+  yozuvlar (masalan, `android.telemetry.redaction.failure` yoki
+  `android.telemetry.redaction.salt_version`) endi regressiya va sifatida qaraladi
+  ko'rib chiqish tugashidan oldin hal qilinishi kerak; CLI qabul qilinganni yuzaga chiqaradi
+  to'g'ridan-to'g'ri davlat, shuning uchun qo'llanma §3.4 o'zaro havola faqat qachon amal qiladi
+  nega `accepted` bo'lmagan holat paydo bo'lishini tushuntiradi.
 
-  **Canonical AND7 signals (2026-03-05 snapshot)**
-
-  | Signal | Channel | Status | Governance note | Validation hook |
+  **Kanonik AND7 signallari (2026-03-05 surati)**| Signal | Kanal | Holati | Boshqaruv eslatmasi | Tasdiqlash kancasi |
   |--------|---------|--------|-----------------|-----------------|
-  | `android.telemetry.redaction.override` | Event | `accepted` | Mirrors override manifests and must match `telemetry_override_log.md` entries. | Watch `android_telemetry_override_tokens_active` and archive manifests per §3. |
-  | `android.telemetry.network_context` | Event | `accepted` | Android intentionally redacts carrier names; only `network_type` and `roaming` are exported. | Ensure apps register a `NetworkContextProvider` and confirm the event volume follows Torii traffic on `Android Telemetry Overview`. |
-  | `android.telemetry.redaction.failure` | Counter | `accepted` | Emits whenever hashing fails; governance now requires explicit status metadata in the schema diff artefact. | The `Redaction Compliance` dashboard panel and CLI output from `check_redaction_status.py` must stay at zero except during drills. |
-  | `android.telemetry.redaction.salt_version` | Gauge | `accepted` | Proves the exporter is using the current quarterly salt epoch. | Compare Grafana’s salt widget with the secrets-vault epoch and ensure schema diff runs retain the `status:"accepted"` annotation. |
+  | `android.telemetry.redaction.override` | Tadbir | `accepted` | Ko'zgular manifestlarni bekor qiladi va `telemetry_override_log.md` yozuvlariga mos kelishi kerak. | `android_telemetry_override_tokens_active` ni tomosha qiling va §3 bo'yicha manifestlarni arxivlang. |
+  | `android.telemetry.network_context` | Tadbir | `accepted` | Android tashuvchi nomlarini ataylab o'zgartiradi; faqat `network_type` va `roaming` eksport qilinadi. | Ilovalar `NetworkContextProvider` ni roʻyxatdan oʻtkazganiga ishonch hosil qiling va `Android Telemetry Overview` da Torii trafigiga mos keladigan voqea hajmini tasdiqlang. |
+  | `android.telemetry.redaction.failure` | Hisoblagich | `accepted` | Xeshlash muvaffaqiyatsiz bo'lganda chiqaradi; boshqaruv endi diff artefakt sxemasida aniq status metama'lumotlarini talab qiladi. | `Redaction Compliance` asboblar paneli paneli va `check_redaction_status.py` dan CLI chiqishi mashqlar paytidan tashqari nolda qolishi kerak. |
+  | `android.telemetry.redaction.salt_version` | O'lchagich | `accepted` | Eksport qiluvchi joriy choraklik tuz davridan foydalanishini isbotlaydi. | Grafana tuz vidjetini sirlar ombori davri bilan solishtiring va sxema farqlari `status:"accepted"` izohini saqlab qolishiga ishonch hosil qiling. |
 
-  If any entry in the table above drops a `status`, the diff artefact must be
-  regenerated **and** `telemetry_schema_diff.md` updated before the AND7
-  governance packet is circulated. Include the refreshed JSON in
-  `docs/source/sdk/android/readiness/schema_diffs/` and link it from the
-  incident, chaos lab, or enablement report that triggered the rerun.
-- **CI/unit coverage:** `ci/run_android_tests.sh` must pass before
-  publishing builds; the suite enforces hashing/override behaviour by exercising
-  the telemetry exporters with sample payloads.
-- **Injector sanity checks:** Use
-  `scripts/telemetry/inject_redaction_failure.sh --dry-run` ahead of rehearsals
-  to confirm failure injection works and that alerts fire when hashing guards
-  are tripped. Always clear the injector with `--clear` once validation
-  completes.
+  Agar yuqoridagi jadvaldagi biron bir yozuv `status` ni tushirsa, farq artefakt bo'lishi kerak.
+  qayta tiklangan **va** `telemetry_schema_diff.md` AND7 dan oldin yangilangan
+  boshqaruv paketi tarqatiladi. Yangilangan JSONni qo'shing
+  `docs/source/sdk/android/readiness/schema_diffs/` va uni dan bog'lang
+  voqea, tartibsizlik laboratoriyasi yoki qayta ishga tushirishga sabab bo'lgan faollashtirish hisoboti.
+- **CI/birlik qamrovi:** `ci/run_android_tests.sh` oldin o'tishi kerak
+  nashriyot tuzilmalari; to'plam mashq qilish orqali xeshlash/bekor qilish xatti-harakatlarini amalga oshiradi
+  namuna yuklari bilan telemetriya eksportchilari.
+- **Injektorning sog'lig'ini tekshirish:** Foydalanish
+  Mashqlar oldidan `scripts/telemetry/inject_redaction_failure.sh --dry-run`
+  nosozlik inyeksiya ishlarini tasdiqlash va qo'riqchilarni xeshlashda yong'in haqida ogohlantiradi
+  qoqilib ketishadi. Injektorni har doim bir marta tekshirish `--clear` bilan tozalang
+  yakunlaydi.
 
-### 2.3 Mobile ↔ Rust telemetry parity checklist
+### 2.3 Mobile ↔ Rust telemetriya pariteti nazorat roʻyxati
 
-Keep the Android exporters and Rust node services aligned while respecting the
-different redaction requirements documented in
-`docs/source/sdk/android/telemetry_redaction.md`. The table below serves as the
-dual allowlist referenced in the AND7 roadmap entry—update it whenever the
-schema diff introduces or removes fields.
-
-| Category | Android exporters | Rust services | Validation hook |
+Android eksportchilari va Rust tugun xizmatlarini bir xilda saqlang
+hujjatlashtirilgan turli tahrirlash talablari
+`docs/source/sdk/android/telemetry_redaction.md`. Quyidagi jadval sifatida xizmat qiladi
+AND7 yo'l xaritasi yozuvida havola qilingan ikki tomonlama ruxsat etilgan ro'yxat - uni istalgan vaqtda yangilang
+schema diff maydonlarni kiritadi yoki olib tashlaydi.| Kategoriya | Android eksportchilari | Rust xizmatlari | Tasdiqlash kancasi |
 |----------|-------------------|---------------|-----------------|
-| Authority / route context | Hash `authority`/`alias` via Blake2b-256 and drop raw Torii hostnames before export; emit `android.telemetry.redaction.salt_version` to prove salt rotation. | Emit full Torii hostnames and peer IDs for correlation. | Compare `android.torii.http.request` vs `torii.http.request` entries in the latest schema diff under `readiness/schema_diffs/`, then confirm `android.telemetry.redaction.salt_version` matches the cluster salt by running `scripts/telemetry/check_redaction_status.py`. |
-| Device & signer identity | Bucket `hardware_tier`/`device_profile`, hash controller aliases, and never export serial numbers. | No device metadata; nodes emit validator `peer_id` and controller `public_key` verbatim. | Mirror the mappings in `docs/source/sdk/mobile_device_profile_alignment.md`, audit `PendingQueueInspector` outputs during labs, and ensure the alias hashing tests inside `ci/run_android_tests.sh` remain green. |
-| Network metadata | Export only `network_type` + `roaming` booleans; `carrier_name` is dropped. | Rust retains peer hostnames plus full TLS endpoint metadata. | Store the latest diff JSON in `readiness/schema_diffs/` and confirm that the Android side still omits `carrier_name`. Alert if Grafana’s “Network Context” widget shows any carrier strings. |
-| Override / chaos evidence | Emit `android.telemetry.redaction.override` and `android.telemetry.chaos.scenario` events with masked actor roles. | Rust services emit override approvals without role masking and no chaos-specific spans. | Cross-check `docs/source/sdk/android/readiness/and7_operator_enablement.md` after every drill to ensure override tokens and chaos artefacts are archived alongside the unmasked Rust events. |
+| Vakolat / marshrut konteksti | Blake2b-256 orqali `authority`/`alias` xash va eksportdan oldin xom Torii xost nomlarini tashlang; tuz aylanishini isbotlash uchun `android.telemetry.redaction.salt_version` chiqaradi. | Korrelyatsiya uchun to'liq Torii xost nomlari va tengdosh identifikatorlarini chiqaring. | `readiness/schema_diffs/` ostidagi so'nggi sxema farqidagi `android.torii.http.request` va `torii.http.request` yozuvlarini solishtiring, so'ngra `scripts/telemetry/check_redaction_status.py` ishga tushirish orqali `android.telemetry.redaction.salt_version` klaster tuziga mos kelishini tasdiqlang. |
+| Qurilma va imzolovchi identifikatori | Paqir `hardware_tier`/`device_profile`, xesh-kontroller taxalluslari va hech qachon seriya raqamlarini eksport qilmang. | Qurilmaning metamaʼlumotlari yoʻq; tugunlar validator `peer_id` va kontroller `public_key` so'zma-so'z chiqaradi. | `docs/source/sdk/mobile_device_profile_alignment.md`-dagi xaritalarni aks ettiring, laboratoriya mashg'ulotlari davomida `PendingQueueInspector` natijalarini tekshirib ko'ring va `ci/run_android_tests.sh` ichidagi taxallus xeshlash testlari yashil bo'lib qolishiga ishonch hosil qiling. |
+| Tarmoq metama'lumotlari | Faqat `network_type` + `roaming` mantiqiy qiymatlarni eksport qilish; `carrier_name` o'chirildi. | Rust tengdosh xost nomlarini va toʻliq TLS soʻnggi nuqta metamaʼlumotlarini saqlaydi. | Eng so'nggi farq JSONni `readiness/schema_diffs/` da saqlang va Android tomoni hali ham `carrier_name` ni o'tkazib yuborayotganini tasdiqlang. Grafana ning "Tarmoq konteksti" vidjeti har qanday tashuvchi qatorlarini ko'rsatsa, ogohlantiring. |
+| bekor qilish / tartibsizlik dalillar | Maskali aktyor rollari bilan `android.telemetry.redaction.override` va `android.telemetry.chaos.scenario` voqealarini emit. | Rust xizmatlari rolni niqoblashsiz va tartibsizliklarga xos oraliqlarsiz bekor qilish ruxsatlarini chiqaradi. | Har bir mashqdan keyin `docs/source/sdk/android/readiness/and7_operator_enablement.md` ni oʻzaro tekshirib koʻring, tokenlar va tartibsizlik artefaktlari maskalanmagan Rust hodisalari bilan birga arxivlanganligiga ishonch hosil qiling. |
 
-Parity workflow:
+Paritet ish jarayoni:
 
-1. After each manifest or exporter change, run
+1. Har bir manifest yoki eksportchi o'zgarishidan keyin ishga tushiring
    `scripts/telemetry/run_schema_diff.sh --android-config configs/android_telemetry.json --rust-config configs/rust_telemetry.json --out docs/source/sdk/android/readiness/schema_diffs/$(date -u +%Y%m%d).json --textfile-dir /var/lib/node_exporter/textfile_collector`
-   so the JSON artefact and the mirrored metrics both land in the evidence bundle
-   (the helper still writes `artifacts/android/telemetry/schema_diff.prom` by default).
-2. Review the diff against the table above; if Android now emits a field that is
-   only allowed on Rust (or vice versa), file an AND7 readiness bug and update
-   the redaction plan.
-3. During weekly checks, run
+   shuning uchun JSON artefakti va aks ettirilgan ko'rsatkichlar ikkalasi ham dalillar to'plamiga tushadi
+   (yordamchi hali ham sukut bo'yicha `artifacts/android/telemetry/schema_diff.prom` deb yozadi).
+2. Yuqoridagi jadvalga nisbatan farqni ko'rib chiqing; agar Android endi maydonni chiqaradi
+   faqat Rust-da ruxsat berilgan (yoki aksincha), AND7-ga tayyorlik xatosini va yangilashni yozing
+   tahrirlash rejasi.
+3. Haftalik tekshiruvlar vaqtida yuguring
    `scripts/telemetry/check_redaction_status.py --status-url https://android-telemetry-stg/api/redaction/status`
-   to confirm salt epochs match the Grafana widget and note the epoch in the
-   on-call journal.
-4. Record any deltas in
-   `docs/source/sdk/android/readiness/signal_inventory_worksheet.md` so
-   governance can audit parity decisions.
+   tuz davrlari Grafana vidjetiga mos kelishini tasdiqlash uchun va davrni qayd qiling.
+   chaqiruv jurnali.
+4. Barcha deltalarni yozib oling
+   `docs/source/sdk/android/readiness/signal_inventory_worksheet.md` shunday
+   boshqaruv paritet qarorlarni tekshirishi mumkin.
 
-### 2.4 Observability dashboards & alert thresholds
+### 2.4 Kuzatuv paneli va ogohlantirish chegaralari
 
-Keep dashboards and alerts aligned with the AND7 schema diff approvals when
-reviewing `scripts/telemetry/check_redaction_status.py` output:
+Boshqaruv panellari va ogohlantirishlarni qachon AND7 sxemasi farqlarini tasdiqlash bilan moslab turing
+`scripts/telemetry/check_redaction_status.py` chiqishini ko'rib chiqish:
 
-- `Android Telemetry Redaction` — Salt epoch widget, override token gauge.
-- `Redaction Compliance` — `android.telemetry.redaction.failure` counter and
-  injector trend panels.
-- `Exporter Health` — `android.telemetry.export.status` rate breakdowns.
-- `Android Telemetry Overview` — device profile buckets and network context volume.
+- `Android Telemetry Redaction` - Tuz davri vidjeti, token o'lchagichni bekor qilish.
+- `Redaction Compliance` — `android.telemetry.redaction.failure` hisoblagich va
+  injektor trend panellari.
+- `Exporter Health` — `android.telemetry.export.status` stavkalarining buzilishi.
+- `Android Telemetry Overview` - qurilma profili paqirlari va tarmoq konteksti hajmi.
 
-The following thresholds mirror the quick-reference card and must be enforced
-during incident response and rehearsals:
-
-| Metric / panel | Threshold | Action |
+Quyidagi chegaralar tezkor ma'lumot kartasini aks ettiradi va ular bajarilishi kerak
+hodisaga javob berish va mashqlar paytida:| Metrik / panel | Ostona | Harakat |
 |----------------|-----------|--------|
-| `android.telemetry.redaction.failure` (`Redaction Compliance` board) | >0 over a rolling 15 min window | Investigate failing signal, run injector clear, log CLI output + Grafana screenshot. |
-| `android.telemetry.redaction.salt_version` (`Android Telemetry Redaction` board) | Differs from secrets-vault salt epoch | Halt releases, coordinate with secrets rotation, file AND7 note. |
-| `android.telemetry.export.status{status="error"}` (`Exporter Health` board) | >1 % of exports | Inspect collector health, capture CLI diagnostics, escalate to SRE. |
-| `android.telemetry.device_profile{tier="enterprise"}` vs Rust parity (`Android Telemetry Overview`) | Variance >10 % from Rust baseline | File governance follow-up, verify fixture pools, annotate schema diff artefact. |
-| `android.telemetry.network_context` volume (`Android Telemetry Overview`) | Drops to zero while Torii traffic exists | Confirm `NetworkContextProvider` registration, rerun schema diff to ensure fields unchanged. |
-| `android.telemetry.redaction.override` / `android_telemetry_override_tokens_active` (`Android Telemetry Redaction`) | Non-zero outside approved override/drill window | Tie token to an incident, regenerate digest, revoke via workflow in §3. |
+| `android.telemetry.redaction.failure` (`Redaction Compliance` taxtasi) | >0 dumalab 15min oyna ustida | Ishlamay qolgan signalni tekshirib ko'ring, injektorni tozalang, CLI chiqishi + Grafana skrinshotini qayd qiling. |
+| `android.telemetry.redaction.salt_version` (`Android Telemetry Redaction` taxtasi) | Sirlardan farq qiladi-qnoz tuzi davri | Relizlarni to'xtating, sirlarni aylantirish bilan muvofiqlashtiring, fayl AND7 eslatmasi. |
+| `android.telemetry.export.status{status="error"}` (`Exporter Health` taxtasi) | >1% eksport | Kollektorning sog'lig'ini tekshiring, CLI diagnostikasini oling, SREga o'ting. |
+| `android.telemetry.device_profile{tier="enterprise"}` va Rust pariteti (`Android Telemetry Overview`) | Tafovut >10% Rustning asosiy ko'rsatkichidan | Fayl boshqaruvini kuzatib boring, armatura hovuzlarini tekshiring, sxema farqiga izoh bering. |
+| `android.telemetry.network_context` hajmi (`Android Telemetry Overview`) | Torii trafik mavjud bo'lganda nolga tushadi | `NetworkContextProvider` roʻyxatdan oʻtishni tasdiqlang, maydonlar oʻzgarmasligini taʼminlash uchun diff sxemasini qayta ishga tushiring. |
+| `android.telemetry.redaction.override` / `android_telemetry_override_tokens_active` (`Android Telemetry Redaction`) | Noldan tashqari tasdiqlangan bekor qilish/burg'ulash oynasi | Tokenni voqeaga bog‘lang, dayjestni qayta tiklang, 3-§da ish jarayoni orqali bekor qiling. |
 
-### 2.5 Operator readiness & enablement trail
+### 2.5 Operatorning tayyorligi va ishga tushirilishi
 
-Roadmap item AND7 calls out a dedicated operator curriculum so support, SRE, and
-release stakeholders understand the parity tables above before the runbook goes
-GA. Use the outline in
-`docs/source/sdk/android/telemetry_readiness_outline.md` for canonical logistics
-(agenda, presenters, timeline) and `docs/source/sdk/android/readiness/and7_operator_enablement.md`
-for the detailed checklist, evidence links, and action log. Keep the following
-phases in sync whenever the telemetry plan changes:
-
-| Phase | Description | Evidence bundle | Primary owner |
+Yo'l xaritasi AND7 bandi maxsus operator o'quv dasturini chaqiradi, shuning uchun qo'llab-quvvatlash, SRE va
+nashrning manfaatdor tomonlari yuqoridagi paritet jadvallarini runbook ishga tushishidan oldin tushunishadi
+GA. Konturdan foydalaning
+Kanonik logistika uchun `docs/source/sdk/android/telemetry_readiness_outline.md`
+(kun tartibi, taqdimotchilar, vaqt jadvali) va `docs/source/sdk/android/readiness/and7_operator_enablement.md`
+batafsil nazorat ro'yxati, dalillar havolalari va harakatlar jurnali uchun. Quyidagilarni saqlang
+Telemetriya rejasi o'zgarganda fazalar sinxronlashtiriladi:| Bosqich | Tavsif | Dalillar to'plami | Asosiy egasi |
 |-------|-------------|-----------------|---------------|
-| Pre-read distribution | Send the policy pre-read, `telemetry_redaction.md`, and the quick-reference card at least five business days before the briefing. Track acknowledgements in the outline’s comms log. | `docs/source/sdk/android/telemetry_readiness_outline.md` (Session Logistics + Communications Log) and the archived email in `docs/source/sdk/android/readiness/archive/<YYYY-MM>/`. | Docs/Support manager |
-| Live readiness session | Deliver the 60-minute training (policy deep dive, runbook walkthrough, dashboards, chaos lab demo) and keep the recording running for asynchronous viewers. | Recording + slides stored under `docs/source/sdk/android/readiness/archive/<YYYY-MM>/` with references captured in §2 of the outline. | LLM (acting AND7 owner) |
-| Chaos lab execution | Run at least C2 (override) + C6 (queue replay) from `docs/source/sdk/android/readiness/labs/telemetry_lab_01.md` immediately after the live session and attach logs/screenshots to the enablement kit. | Scenario reports and screenshots inside `docs/source/sdk/android/readiness/labs/reports/<YYYY-MM>/` and `/screenshots/<YYYY-MM>/`. | Android Observability TL + SRE on-call |
-| Knowledge check & attendance | Collect quiz submissions, remediate anyone scoring <90 %, and record attendance/quiz statistics. Keep the quick-reference questions aligned with the parity checklist. | Quiz exports in `docs/source/sdk/android/readiness/forms/responses/`, summary Markdown/JSON produced via `scripts/telemetry/generate_and7_quiz_summary.py`, and the attendance table inside `and7_operator_enablement.md`. | Support engineering |
-| Archive & follow-ups | Update the enablement kit’s action log, upload artefacts to the archive, and note the completion in `status.md`. Any remediation or override tokens issued during the session must be copied into `telemetry_override_log.md`. | `docs/source/sdk/android/readiness/and7_operator_enablement.md` §6 (action log), `.../archive/<YYYY-MM>/checklist.md`, and the override log referenced in §3. | LLM (acting AND7 owner) |
+| O'qishdan oldin tarqatish | Oldindan oʻqilgan siyosatni, `telemetry_redaction.md` va tezkor maʼlumot kartasini brifingdan kamida besh ish kuni oldin yuboring. Tasdiqlashlarni konturning xabarlar jurnalida kuzatib boring. | `docs/source/sdk/android/telemetry_readiness_outline.md` (Session Logistics + Communications Log) va `docs/source/sdk/android/readiness/archive/<YYYY-MM>/` da arxivlangan elektron pochta. | Hujjatlar/Yordam menejeri |
+| Jonli tayyorgarlik sessiyasi | 60 daqiqalik treningni o'tkazing (siyosat chuqur sho'ng'in, yugurish kitobi, asboblar paneli, betartiblik laboratoriyasi demosi) va asinxron tomoshabinlar uchun yozib olishni davom ettiring. | Yozib olish + slaydlar konturning 2-bandida olingan havolalar bilan `docs/source/sdk/android/readiness/archive/<YYYY-MM>/` ostida saqlanadi. | LLM (AND7 egasi vazifasini bajaruvchi) |
+| Xaos laboratoriya ijrosi | Jonli seansdan so'ng darhol `docs/source/sdk/android/readiness/labs/telemetry_lab_01.md` dan kamida C2 (bekor qilish) + C6 (navbat takrorlash) ni ishga tushiring va faollashtirish to'plamiga jurnallar/skrinshotlarni biriktiring. | `docs/source/sdk/android/readiness/labs/reports/<YYYY-MM>/` va `/screenshots/<YYYY-MM>/` ichidagi stsenariy hisobotlari va skrinshotlar. | Android Observability TL + SRE on-call |
+| Bilimlarni tekshirish va davomat | Viktorina topshiriqlarini to'plang, <90% ball to'plagan har bir kishini tuzating va davomat/viktorina statistikasini yozib oling. Tezkor savollarni paritetni tekshirish roʻyxatiga moslab qoʻying. | `docs/source/sdk/android/readiness/forms/responses/` da viktorina eksporti, `scripts/telemetry/generate_and7_quiz_summary.py` orqali ishlab chiqarilgan Markdown/JSON xulosasi va `and7_operator_enablement.md` ichidagi davomatlar jadvali. | Muhandislikni qo'llab-quvvatlash |
+| Arxiv va kuzatuvlar | Faollashtirish to'plamining harakatlar jurnalini yangilang, artefaktlarni arxivga yuklang va `status.md` da yakunlanishiga e'tibor bering. Seans davomida chiqarilgan har qanday tuzatish yoki bekor qilish tokenlari `telemetry_override_log.md` ga ko'chirilishi kerak. | `docs/source/sdk/android/readiness/and7_operator_enablement.md` §6 (harakat jurnali), `.../archive/<YYYY-MM>/checklist.md` va §3 da havola qilingan bekor qilish jurnali. | LLM (AND7 egasi vazifasini bajaruvchi) |
 
-When the curriculum is rerun (quarterly or before major schema changes), refresh
-the outline with the new session date, keep the attendee roster current, and
-regenerate the quiz summary JSON/Markdown artefacts so governance packets can
-reference consistent evidence. The `status.md` entry for AND7 should link to the
-latest archive folder once each enablement sprint closes.
+O'quv rejasi qayta ishlansa (har chorakda yoki asosiy sxema o'zgarishidan oldin) yangilang
+yangi sessiya sanasi bilan kontur, ishtirokchilar ro'yxatini joriy saqlang va
+boshqaruv paketlari uchun JSON/Markdown artefaktlari viktorina xulosasini qayta yarating
+izchil dalillarga havola. AND7 uchun `status.md` yozuvi bilan bog'lanishi kerak
+Har bir faollashtirish sprinti yopilgandan so'ng so'nggi arxiv papkasi.
 
-### 2.6 Schema diff allowlists & policy checks
+### 2.6 Sxema farqlari ruxsat etilgan roʻyxatlar va siyosat tekshiruvlari
 
-The roadmap explicitly calls out a dual-allowlist policy (mobile redactions vs
-Rust retention) that is enforced by the `telemetry-schema-diff` CLI housed under
-`tools/telemetry-schema-diff`. Every diff artefact recorded in
-`docs/source/sdk/android/readiness/schema_diffs/` must document which fields are
-hashed/bucketed on Android, which fields remain unhashed on Rust, and whether
-any non-allowlisted signal slipped into the build. Capture those decisions
-directly in the JSON by running:
+Yo'l xaritasi ikkita ruxsat etilgan ro'yxat siyosatini aniq ko'rsatadi (mobil tahrirlar va boshqalar
+Zangni ushlab turish) ostida joylashgan `telemetry-schema-diff` CLI tomonidan amalga oshiriladi.
+`tools/telemetry-schema-diff`. Har bir diff artefakt qayd etilgan
+`docs/source/sdk/android/readiness/schema_diffs/` qaysi maydonlar ekanligini hujjatlashtirishi kerak
+Android-da xeshlangan/paqirlangan, Rust-da qaysi maydonlar xeshlanmagan va yo'qmi
+har qanday ruxsat etilmagan signal qurilishga kirdi. Ushbu qarorlarni qabul qiling
+to'g'ridan-to'g'ri JSONda ishga tushirish orqali:
 
 ```bash
 cargo run -p telemetry-schema-diff -- \
@@ -334,51 +321,47 @@ if jq -e '.policy_violations | length > 0' "$LATEST" >/dev/null; then
   jq '.policy_violations[]' "$LATEST"
   exit 1
 fi
-```
+```Yakuniy `jq` hisobot toza bo'lsa, no-op deb baholanadi. Har qanday chiqishni davolash
+ushbu buyruqdan Sev2 tayyorligi xatosi sifatida: to'ldirilgan `policy_violations`
+massiv CLI faqat Android ro'yxatida bo'lmagan signalni aniqlaganligini anglatadi
+na hujjatlashtirilgan faqat Rust-dan ozod qilish ro'yxatida
+`docs/source/sdk/android/telemetry_schema_diff.md`. Bu sodir bo'lganda, to'xtating
+eksport qilish, AND7 chiptasini topshirish va farqni faqat siyosat modulidan keyin qayta ishga tushirish
+va manifest snapshotlari tuzatildi. Olingan JSON-ni saqlang
+Sana qo'shimchasi va eslatma bilan `docs/source/sdk/android/readiness/schema_diffs/`
+hodisa yoki laboratoriya hisoboti ichidagi yo'l, shuning uchun boshqaruv tekshiruvlarni takrorlashi mumkin.
 
-The final `jq` evaluates to a no-op when the report is clean. Treat any output
-from that command as a Sev 2 readiness bug: a populated `policy_violations`
-array means the CLI discovered a signal that is neither on the Android-only list
-nor on the Rust-only exemption list documented in
-`docs/source/sdk/android/telemetry_schema_diff.md`. When this occurs, halt
-exports, file an AND7 ticket, and rerun the diff only after the policy module
-and manifest snapshots have been corrected. Store the resulting JSON in
-`docs/source/sdk/android/readiness/schema_diffs/` with the date suffix and note
-the path inside the incident or lab report so governance can replay the checks.
+**Xeshlash va saqlash matritsasi**
 
-**Hashing & retention matrix**
+| Signal.field | Android bilan ishlash | Zang bilan ishlov berish | Ruxsat berilgan roʻyxat tegi |
+|-------------|-----------------|---------------|---------------|
+| `torii.http.request.authority` | Blake2b-256 xeshlangan (`representation: "blake2b_256"`) | Kuzatuv uchun so'zma-so'z saqlanadi | `policy_allowlisted` (mobil xesh) |
+| `attestation.result.alias` | Blake2b-256 xeshlangan | Oddiy matn taxalluslari (attestatsiya arxivi) | `policy_allowlisted` |
+| `attestation.result.device_tier` | Paqirlangan (`representation: "bucketed"`) | Oddiy darajali qator | `policy_allowlisted` |
+| `hardware.profile.hardware_tier` | Yo'q - Android eksportchilari maydonni butunlay tark etadilar | Tahrirsiz taqdim etish | `rust_only` (`telemetry_schema_diff.md` ning 3-bandida hujjatlashtirilgan) |
+| `android.telemetry.redaction.override.*` | Masklangan aktyor rollari bilan faqat Android uchun signal | Ekvivalent signal chiqarilmadi | `android_only` (qolishi kerak `status:"accepted"`) |
 
-| Signal.field | Android handling | Rust handling | Allowlist tag |
-|--------------|-----------------|---------------|---------------|
-| `torii.http.request.authority` | Blake2b-256 hashed (`representation: "blake2b_256"`) | Stored verbatim for traceability | `policy_allowlisted` (mobile hash) |
-| `attestation.result.alias` | Blake2b-256 hashed | Plain text alias (attestation archives) | `policy_allowlisted` |
-| `attestation.result.device_tier` | Bucketed (`representation: "bucketed"`) | Plain tier string | `policy_allowlisted` |
-| `hardware.profile.hardware_tier` | Absent — Android exporters drop the field entirely | Present without redaction | `rust_only` (documented in §3 of `telemetry_schema_diff.md`) |
-| `android.telemetry.redaction.override.*` | Android-only signal with masked actor roles | No equivalent signal emitted | `android_only` (must stay `status:"accepted"`) |
-
-When new signals appear, add them to the schema diff policy module **and** the
-table above so the runbook mirrors the enforcement logic shipped in the CLI.
-Schema runs now fail if any Android-only signal omits an explicit `status` or if
-the `policy_violations` array is non-empty, so keep this checklist in sync with
-`telemetry_schema_diff.md` §3 and the latest JSON snapshots referenced in
+Yangi signallar paydo bo'lganda, ularni sxema diff siyosat moduliga **va** qo'shing
+yuqoridagi jadval, shuning uchun runbook CLI da yuborilgan majburlash mantiqini aks ettiradi.
+Sxema endi faqat Android uchun signal aniq `status` ni o'tkazib yuborsa yoki bajarilmaydi
+`policy_violations` massivi bo'sh emas, shuning uchun ushbu nazorat ro'yxati bilan sinxronlashtiring.
+`telemetry_schema_diff.md` §3 va eng so'nggi JSON snapshotlariga havola qilingan
 `telemetry_redaction_minutes_*.md`.
 
-## 3. Override Workflow
+## 3. Ish jarayonini bekor qilish
 
-Overrides are the “break glass” option when hashing regressions or privacy
-alerts block customers. Apply them only after recording the full decision trail
-in the incident doc.
-
-1. **Confirm drift and scope.** Wait for the PagerDuty alert or the schema diff
-   gate to fire, then run
-   `scripts/telemetry/check_redaction_status.py --status-url <collector>` to
-   prove mismatched authorities. Attach the CLI output and Grafana screenshots
-   to the incident record.
-2. **Prepare a signed request.** Populate
-   `docs/examples/android_override_request.json` with the ticket id, requester,
-   expiry, and justification. Store the file next to the incident artefacts so
-   compliance can audit the inputs.
-3. **Issue the override.** Invoke
+Regressiya yoki maxfiylikni xeshlashda bekor qilish "shisha sindirish" opsiyasidir
+ogohlantirishlar bloklangan mijozlar. Ularni faqat to'liq qaror yo'lini yozib olgandan keyin qo'llang
+voqeada doc.1. **Drift va qamrovni tasdiqlang.** PagerDuty ogohlantirishi yoki diagramma farqini kuting
+   olov uchun darvoza, keyin yugur
+   `scripts/telemetry/check_redaction_status.py --status-url <collector>` gacha
+   vakolatlarning mos kelmasligini isbotlash. CLI chiqishi va Grafana skrinshotlarini biriktiring
+   voqea yozuviga.
+2. **Imzolangan so‘rov tayyorlang.** To‘ldiring
+   `docs/examples/android_override_request.json` chipta identifikatori, so'rovchi,
+   amal qilish muddati va asoslash. Faylni voqea artefaktlari yonida saqlang
+   muvofiqlik kirishlarni tekshirishi mumkin.
+3. **Bekor qilish.** Chaqiruv
    ```bash
    scripts/android_override_tool.sh apply \
      --request docs/examples/android_override_request.json \
@@ -387,310 +370,294 @@ in the incident doc.
      --event-log docs/source/sdk/android/readiness/override_logs/override_events.ndjson \
      --actor-role <support|sre|docs|compliance|program|other>
    ```
-   The helper prints the override token, writes the manifest, and appends a row
-   to the Markdown audit log. Never post the token in chat; deliver it directly
-   to the Torii operators applying the override.
-4. **Monitor the effect.** Within five minutes verify a single
-   `android.telemetry.redaction.override` event was emitted, the collector
-   status endpoint shows `override_active=true`, and the incident doc lists the
-   expiry. Watch the Android Telemetry Overview dashboard’s “Override tokens
-   active” panel (`android_telemetry_override_tokens_active`) for the same
-   token count and continue running the status CLI every 10 minutes until
-   hashing stabilises.
-5. **Revoke and archive.** As soon as the mitigation lands, run
-  `scripts/android_override_tool.sh revoke --token <token>` so the audit log
-  captures the revocation time, then execute
+   Yordamchi bekor qilish tokenini chop etadi, manifestni yozadi va qator qo'shadi
+   Markdown audit jurnaliga. Hech qachon tokenni chatda joylashtirmang; to'g'ridan-to'g'ri etkazib bering
+   bekor qilishni qo'llaydigan Torii operatorlariga.
+4. **Effektni kuzatib boring.** Besh daqiqa ichida bittasini tekshiring
+   `android.telemetry.redaction.override` hodisa emissiya qilindi, kollektor
+   holat so'nggi nuqtasi `override_active=true` ni ko'rsatadi va voqea hujjati ro'yxatini ko'rsatadi
+   muddati tugashi. Android Telemetry Overview boshqaruv panelidagi “Tokenlarni bekor qilish
+   faol” paneli (`android_telemetry_override_tokens_active`).
+   tokenni hisoblang va har 10 daqiqada CLI holatini ishga tushirishda davom eting
+   xeshlash barqarorlashadi.
+5. **Bekor qilish va arxivlash.** Yumshatish tushishi bilanoq yuguring
+  `scripts/android_override_tool.sh revoke --token <token>` shuning uchun audit jurnali
+  bekor qilish vaqtini ushlaydi, keyin bajaring
   `scripts/android_override_tool.sh digest --out docs/source/sdk/android/readiness/override_logs/override_digest_$(date -u +%Y%m%dT%H%M%SZ).json`
-  to refresh the sanitised snapshot that governance expects. Attach the
-  manifest, digest JSON, CLI transcripts, Grafana snapshots, and the NDJSON log
-  produced via `--event-log` to
-  `docs/source/sdk/android/readiness/screenshots/<date>/` and cross-link the
-  entry from `docs/source/sdk/android/telemetry_override_log.md`.
+  boshqaruv kutgan sanitarlashtirilgan suratni yangilash uchun. ni biriktiring
+  manifest, dayjest JSON, CLI transkriptlari, Grafana suratlari va NDJSON jurnali
+  to `--event-log` orqali ishlab chiqarilgan
+  `docs/source/sdk/android/readiness/screenshots/<date>/` va o'zaro bog'lang
+  `docs/source/sdk/android/telemetry_override_log.md` dan kirish.
 
-Overrides exceeding 24 hours require SRE Director and Compliance approval and
-must be highlighted in the next weekly AND7 review.
+24 soatdan ortiq vaqtni bekor qilish SRE direktori va Muvofiqlik tasdiqini talab qiladi va
+keyingi haftalik AND7 sharhida ta'kidlanishi kerak.
 
-### 3.1 Override escalation matrix
+### 3.1 Eskalatsiya matritsasini bekor qilish
 
-| Situation | Max duration | Approvers | Required notifications |
-|-----------|--------------|-----------|------------------------|
-| Single-tenant investigation (hashed authority mismatch, customer Sev 2) | 4 hours | Support engineer + SRE on-call | Ticket `SUP-OVR-<id>`, `android.telemetry.redaction.override` event, incident log |
-| Fleet-wide telemetry outage or SRE-requested reproduction | 24 hours | SRE on-call + Program Lead | PagerDuty note, override log entry, update in `status.md` |
-| Compliance/forensics request or any case exceeding 24 hours | Until explicitly revoked | SRE Director + Compliance lead | Governance mailing list, override log, AND7 weekly status |
+| Vaziyat | Maksimal muddat | Tasdiqlovchilar | Kerakli bildirishnomalar |
+|----------|--------------|-----------|------------------------|
+| Yagona ijarachi tekshiruvi (hashed vakolatlari mos kelmasligi, mijoz Sev2) | 4 soat | Yordam muhandisi + SRE on-call | Chipta `SUP-OVR-<id>`, `android.telemetry.redaction.override` voqea, voqea jurnali |
+| Filo boʻylab telemetriya uzilishi yoki SRE soʻralgan koʻpaytirish | 24 soat | Qo'ng'iroq bo'yicha SRE + Dastur rahbari | PagerDuty eslatmasi, jurnal yozuvini bekor qilish, `status.md` da yangilash |
+| Muvofiqlik/sud-tibbiyot ekspertizasi so'rovi yoki 24 soatdan ortiq har qanday holat | Aniq bekor qilinmaguncha | SRE direktori + Muvofiqlik yetakchisi | Boshqaruv pochta roʻyxati, bekor qilish jurnali, AND7 haftalik holati |
 
-#### Role responsibilities
-
-| Role | Responsibilities | SLA / Notes |
+#### Rol mas'uliyati| Rol | Mas'uliyat | SLA / Eslatmalar |
 |------|------------------|-------------|
-| Android telemetry on-call (Incident Commander) | Drive detection, execute the override tooling, record approvals in the incident doc, and ensure revocation happens before expiry. | Acknowledge PagerDuty within 5 minutes and log progress every 15 minutes. |
-| Android Observability TL (Haruka Yamamoto) | Validate the drift signal, confirm exporter/collector state, and sign off on the override manifest before it is handed to operators. | Join the bridge within 10 minutes; delegate to the staging cluster owner if unavailable. |
-| SRE liaison (Liam O’Connor) | Apply the manifest to collectors, monitor backlog, and coordinate with Release Engineering for Torii-side mitigations. | Log every `kubectl` action in the change request and paste command transcripts in the incident doc. |
-| Compliance (Sofia Martins / Daniel Park) | Approve overrides longer than 30 minutes, verify the audit log row, and advise on regulator/customer messaging. | Post acknowledgement in `#compliance-alerts`; for production events file a compliance note before the override is issued. |
-| Docs/Support Manager (Priya Deshpande) | Archive manifests/CLI output under `docs/source/sdk/android/readiness/…`, keep the override log tidy, and schedule follow-up labs if gaps surface. | Confirms evidence retention (13 months) and files AND7 follow-ups before closing the incident. |
+| Qo'ng'iroq bo'yicha Android telemetriyasi (Incident Commander) | Drayvni aniqlash, bekor qilish vositalarini bajaring, voqea hujjatiga tasdiqlashlarni yozib oling va bekor qilish muddati tugashidan oldin sodir bo'lishini ta'minlang. | PagerDuty-ni 5 daqiqa ichida tasdiqlang va har 15 daqiqada taraqqiyotni qayd qiling. |
+| Android Observability TL (Haruka Yamamoto) | Drift signalini tasdiqlang, eksportchi/kollektor holatini tasdiqlang va operatorlarga topshirishdan oldin bekor qilish manifestida imzo cheking. | 10 daqiqa ichida ko'prikka qo'shiling; agar mavjud bo'lmasa, staging klaster egasiga vakil qiling. |
+| SRE aloqasi (Liam O'Konnor) | Manifestni kollektorlarga qo'llang, orqada qolganlarni kuzatib boring va Torii tomonidagi yumshatishlar uchun Release Engineering bilan muvofiqlashtiring. | Har bir `kubectl` harakatini o'zgartirish so'roviga kiriting va buyruq transkriptlarini voqea hujjatiga joylashtiring. |
+| Muvofiqlik (Sofiya Martins / Daniel Park) | 30 daqiqadan ko'proq vaqtni bekor qilishni tasdiqlang, audit jurnali qatorini tekshiring va tartibga soluvchi/mijoz xabarlari bo'yicha maslahat bering. | `#compliance-alerts` da e'tirof etish; ishlab chiqarish hodisalari uchun bekor qilishdan oldin muvofiqlik eslatmasini topshiring. |
+| Hujjatlar/Yordam menejeri (Priya Deshpande) | `docs/source/sdk/android/readiness/…` ostida arxiv manifestlari/CLI chiqishi, bekor qilish jurnalini tartibli saqlang va boʻshliqlar yuzaga kelsa, kuzatuv laboratoriyalarini rejalashtiring. | Hodisani yopishdan oldin dalillarni saqlashni (13 oy) va AND7 kuzatuvlarini tasdiqlaydi. |
 
-Escalate immediately if any override token approaches its expiry without a
-documented revocation plan.
+Agar bekor qilish tokeni muddati tugashiga a holda yaqinlashsa, darhol oshiring
+hujjatlashtirilgan bekor qilish rejasi.
 
-## 4. Incident Response
+## 4. Hodisaga javob
 
-- **Alerts:** PagerDuty service `android-telemetry-primary` covers redaction
-  failures, exporter outages, and bucket drift. Acknowledge within SLA windows
-  (see support playbook).
-- **Diagnostics:** Run `scripts/telemetry/check_redaction_status.py` to gather
-  current exporter health, recent alerts, and hashed authority metrics. Include
-  output in the incident timeline (`incident/YYYY-MM-DD-android-telemetry.md`).
-- **Dashboards:** Monitor the Android Telemetry Redaction, Android Telemetry
-  Overview, Redaction Compliance, and Exporter Health dashboards. Capture
-  screenshots for incident records and annotate any salt-version or override
-  token deviations before closing an incident.
-- **Coordination:** Engage Release Engineering for exporter issues, Compliance
-  for override/PII questions, and Program Lead for Sev 1 incidents.
+- **Ogohlantirishlar:** PagerDuty xizmati `android-telemetry-primary` tahrirlashni qamrab oladi
+  nosozliklar, eksportchilarning uzilishlari va chelakning siljishi. SLA oynalarida tasdiqlash
+  (qo'llab-quvvatlash o'yin kitobiga qarang).
+- **Diagnostika:** yig‘ish uchun `scripts/telemetry/check_redaction_status.py` ni ishga tushiring
+  joriy eksportchi salomatligi, so'nggi ogohlantirishlar va xeshlangan vakolat ko'rsatkichlari. O'z ichiga oladi
+  hodisa vaqt jadvalidagi chiqish (`incident/YYYY-MM-DD-android-telemetry.md`).
+- **Boshqaruv paneli:** Android Telemetry Redaction, Android Telemetry-ni kuzatib boring
+  Umumiy koʻrinish, redaktsiyaga muvofiqlik va eksportchi salomatligi asboblar paneli. Qo‘lga olish
+  voqea yozuvlari uchun skrinshotlar va har qanday tuz-versiya yoki bekor qilish izohi
+  hodisani yopishdan oldin token og'ishlari.
+- **Muvofiqlashtirish:** Eksportchi masalalari bo'yicha Release Engineering bilan shug'ullanish, Muvofiqlik
+  bekor qilish/PII savollari va Sev 1 hodisalari uchun dastur rahbari.
 
-### 4.1 Escalation flow
+### 4.1 Eskalatsiya oqimi
 
-Android incidents are triaged using the same severity levels as the Android
-Support Playbook (§2.1). The table below summarises who must be paged and how
-quickly each responder is expected to join the bridge.
+Android hodisalari Android bilan bir xil jiddiylik darajalari yordamida triajlanadi
+Qo'llab-quvvatlash o'yin kitobi (§2.1). Quyidagi jadvalda kim va qanday sahifalash kerakligi ko'rsatilgan
+Tezda har bir javob beruvchi ko'prikka qo'shilishi kutilmoqda.| Jiddiylik | Ta'sir | Birlamchi javob beruvchi (≤5min) | Ikkilamchi eskalatsiya (≤10min) | Qo'shimcha bildirishnomalar | Eslatmalar |
+|----------|--------|--------------------------------|--------------------------------|--------------------------|-------|
+| Sev1 | Mijoz bilan bog'liq uzilishlar, maxfiylik buzilishi yoki ma'lumotlar sizib chiqishi | Qo'ng'iroq bo'yicha Android telemetriyasi (`android-telemetry-primary`) | Torii qo'ng'iroq bo'yicha + Dastur rahbari | Muvofiqlik + SRE boshqaruvi (`#sre-governance`), bosqichma-bosqich klaster egalari (`#android-staging`) | Darhol urush xonasini ishga tushiring va buyruqlar jurnali uchun umumiy hujjatni oching. |
+| Sev2 | Filoning degradatsiyasi, noto'g'ri foydalanishni bekor qilish yoki uzoq vaqt davomida qayta o'ynash kechikishi | Qo'ng'iroq bo'yicha Android telemetriyasi | Android Foundations TL + Hujjatlar/Yordam menejeri | Dastur rahbari, reliz muhandislik aloqasi | Agar bekor qilish 24 soatdan oshsa, Muvofiqlik darajasiga o'ting. |
+| Sev3 | Yagona ijarachi masalasi, laboratoriya mashg'ulotlari yoki maslahat ogohlantirishi | Yordamchi muhandis | Qo'ng'iroq bo'yicha Android (ixtiyoriy) | Hujjatlar/Ogohlantirish uchun yordam | Qo'llanish doirasi kengaysa yoki bir nechta ijarachilarga ta'sir qilsa, Sev2 ga aylantiring. |
 
-| Severity | Impact | Primary responder (≤5 min) | Secondary escalation (≤10 min) | Additional notifications | Notes |
-|----------|--------|----------------------------|--------------------------------|--------------------------|-------|
-| Sev 1 | Customer-facing outage, privacy breach, or data leak | Android telemetry on-call (`android-telemetry-primary`) | Torii on-call + Program Lead | Compliance + SRE Governance (`#sre-governance`), staging cluster owners (`#android-staging`) | Start war room immediately and open a shared doc for command logging. |
-| Sev 2 | Fleet degradation, override misuse, or prolonged replay backlog | Android telemetry on-call | Android Foundations TL + Docs/Support Manager | Program Lead, Release Engineering liaison | Escalate to Compliance if overrides exceed 24 hours. |
-| Sev 3 | Single-tenant issue, lab rehearsal, or advisory alert | Support engineer | Android on-call (optional) | Docs/Support for awareness | Convert to Sev 2 if scope expands or multiple tenants are affected. |
-
-| Window | Action | Owner(s) | Evidence/Notes |
+| Oyna | Harakat | Ega(lar)i | Dalillar/eslatmalar |
 |--------|--------|----------|----------------|
-| 0–5 min | Acknowledge PagerDuty, assign an incident commander (IC), and create `incident/YYYY-MM-DD-android-telemetry.md`. Drop the link plus one-line status in `#android-sdk-support`. | On-call SRE / Support engineer | Screenshot of PagerDuty ack + incident stub committed beside other incident logs. |
-| 5–15 min | Run `scripts/telemetry/check_redaction_status.py --status-url https://android-telemetry-stg/api/redaction/status` and paste the summary in the incident doc. Ping Android Observability TL (Haruka Yamamoto) and Support lead (Priya Deshpande) for real-time hand-off. | IC + Android Observability TL | Attach CLI output JSON, note dashboard URLs opened, and mark who owns diagnostics. |
-| 15–25 min | Engage staging cluster owners (Haruka Yamamoto for observability, Liam O’Connor for SRE) to reproduce on `android-telemetry-stg`. Seed load with `scripts/telemetry/generate_android_load.sh --cluster android-telemetry-stg` and capture queue dumps from the Pixel + emulator to confirm symptom parity. | Staging cluster owners | Upload sanitized `pending.queue` + `PendingQueueInspector` output to the incident folder. |
-| 25–40 min | Decide on overrides, Torii throttling, or StrongBox fallback. If PII exposure or non-deterministic hashing is suspected, page Compliance (Sofia Martins, Daniel Park) via `#compliance-alerts` and notify the Program Lead in the same incident thread. | IC + Compliance + Program Lead | Link override tokens, Norito manifests, and approval comments. |
-| ≥40 min | Provide 30-minute status updates (PagerDuty notes + `#android-sdk-support`). Schedule war-room bridge if not already active, document mitigation ETA, and ensure Release Engineering (Alexei Morozov) is on standby to roll collector/SDK artifacts. | IC | Time-stamped updates plus decision logs stored in the incident file and summarized in `status.md` during the next weekly refresh. |
+| 0–5 daqiqa | PagerDuty-ni tan oling, hodisa qo'mondoni (IC) tayinlang va `incident/YYYY-MM-DD-android-telemetry.md` ni yarating. `#android-sdk-support` da havolani va bir qatorli holatini qoldiring. | Qo'ng'iroq bo'yicha SRE / Yordam muhandisi | Boshqa hodisalar jurnallari bilan bir qatorda PagerDuty ack + hodisa stubining skrinshoti. |
+| 5–15 daqiqa | `scripts/telemetry/check_redaction_status.py --status-url https://android-telemetry-stg/api/redaction/status` ni ishga tushiring va xulosani voqea hujjatiga joylashtiring. Ping Android Observability TL (Haruka Yamamoto) va qo'llab-quvvatlash yetakchisi (Priya Deshpande) real vaqtda uzatish uchun. | IC + Android Observability TL | CLI chiqish JSON-ni biriktiring, boshqaruv paneli URL-manzillari ochilganiga e'tibor bering va diagnostika kimga tegishli ekanligini belgilang. |
+| 15–25 daqiqa | `android-telemetry-stg` da koʻpaytirish uchun klaster egalarini (kuzatish uchun Xaruka Yamamoto, SRE uchun Liam O'Konnor) jalb qiling. Semptomlar paritetini tasdiqlash uchun `scripts/telemetry/generate_android_load.sh --cluster android-telemetry-stg` bilan urug'larni yuklang va Pixel + emulyatoridan navbat qoldiqlarini oling. | Staging klaster egalari | Sanitatsiya qilingan `pending.queue` + `PendingQueueInspector` chiqishini voqea jildiga yuklang. |
+| 25–40 daqiqa | Qayta belgilash, Torii kamaytirish yoki StrongBoxni qayta tiklash haqida qaror qabul qiling. Agar PII taʼsir qilish yoki deterministik boʻlmagan xeshlashda gumon qilinsa, `#compliance-alerts` orqali Muvofiqlik (Sofiya Martins, Daniel Park) sahifasiga oʻting va xuddi shu voqea doirasida dastur rahbariga xabar bering. | IC + Muvofiqlik + Dastur rahbari | Havolani bekor qilish tokenlari, Norito manifestlari va tasdiqlash sharhlari. |
+| ≥40min | 30 daqiqalik holat yangilanishlarini taqdim eting (PagerDuty eslatmalari + `#android-sdk-support`). Agar hali faol bo'lmasa, jangovar xona ko'prigini rejalashtiring, ETAni yumshatishni hujjatlang va Release Engineering (Aleksey Morozov) kollektor/SDK artefaktlarini aylantirish uchun kutish rejimida ekanligiga ishonch hosil qiling. | IC | Vaqt tamgʻasi boʻlgan yangilanishlar va voqea faylida saqlanadigan qaror jurnallari va keyingi haftalik yangilanish vaqtida `status.md` da umumlashtiriladi. |- Barcha eskalatsiyalar voqea hujjatida Android qoʻllab-quvvatlash kitobidagi “Egasi / Keyingi yangilash vaqti” jadvalidan foydalangan holda aks ettirilishi kerak.
+- Agar boshqa voqea allaqachon ochiq bo'lsa, mavjud urush xonasiga qo'shiling va yangisini yaratish o'rniga Android kontekstini qo'shing.
+- Voqea runbook bo'shliqlariga tegsa, AND7 JIRA eposida keyingi vazifalarni yarating va `telemetry-runbook` tegini yarating.
 
-- All escalations must stay mirrored in the incident doc using the “Owner / Next update time” table from the Android Support Playbook.
-- If another incident is already open, join the existing war room and append Android context rather than spinning up a new one.
-- When the incident touches runbook gaps, create follow-up tasks in the AND7 JIRA epic and tag `telemetry-runbook`.
+## 5. Xaos va Tayyorgarlik mashqlari
 
-## 5. Chaos & Readiness Exercises
-
-- Execute the scenarios detailed in
-  `docs/source/sdk/android/telemetry_chaos_checklist.md` quarterly and prior to
-  major releases. Log outcomes with the lab report template.
-- Store evidence (screenshots, logs) under
+- Batafsil ko'rsatilgan stsenariylarni bajaring
+  `docs/source/sdk/android/telemetry_chaos_checklist.md` har chorakda va undan oldin
+  asosiy relizlar. Natijalarni laboratoriya hisoboti shabloni bilan qayd qiling.
+- Dalillarni (skrinshotlar, jurnallar) ostida saqlang
   `docs/source/sdk/android/readiness/screenshots/`.
-- Track remediation tickets in the AND7 epic with label `telemetry-lab`.
-- Scenario map: C1 (redaction fault), C2 (override), C3 (exporter brownout), C4
-  (schema diff gate using `run_schema_diff.sh` with a drifted config), C5
-  (device-profile skew seeded via `generate_android_load.sh`), C6 (Torii timeout
-  + queue replay), C7 (attestation rejection). Keep this numbering aligned with
-  `telemetry_lab_01.md` and the chaos checklist when adding drills.
+- `telemetry-lab` yorlig'i bilan AND7 dostonidagi tuzatish chiptalarini kuzatib boring.
+- Stsenariy xaritasi: C1 (redaktsiya xatosi), C2 (bekor qilish), C3 (eksportchining ishdan chiqishi), C4
+  (Drift konfiguratsiyasi bilan `run_schema_diff.sh` yordamida farqli eshik sxemasi), C5
+  (`generate_android_load.sh` orqali qurilma profilining egri chizig'i), C6 (Torii kutish vaqti tugadi
+  + navbatni takrorlash), C7 (attestatsiyani rad etish). Bu raqamlashni moslab turing
+  `telemetry_lab_01.md` va mashqlarni qo'shishda tartibsizlik nazorat ro'yxati.
 
 ### 5.1 Redaction drift & override drill (C1/C2)
 
-1. Inject a hashing failure via
-   `scripts/telemetry/inject_redaction_failure.sh` and wait for the PagerDuty
-   alert (`android.telemetry.redaction.failure`). Capture the CLI output from
-   `scripts/telemetry/check_redaction_status.py --status-url <collector>` for
-   the incident record.
-2. Clear the failure with `--clear` and confirm the alert resolves within
-   10 minutes; attach Grafana screenshots of the salt/authority panels.
-3. Create a signed override request using
-   `docs/examples/android_override_request.json`, apply it with
-   `scripts/android_override_tool.sh apply`, and verify the unhashed sample by
-   inspecting the exporter payload in staging (look for
+1. Xeshlash xatosini orqali kiriting
+   `scripts/telemetry/inject_redaction_failure.sh` va PagerDuty-ni kuting
+   ogohlantirish (`android.telemetry.redaction.failure`). dan CLI chiqishini yozib oling
+   `scripts/telemetry/check_redaction_status.py --status-url <collector>` uchun
+   voqea yozuvi.
+2. `--clear` yordamida nosozlikni o'chiring va ogohlantirishning ichida hal qilinishini tasdiqlang
+   10 daqiqa; tuz/vakolat panellarining Grafana skrinshotlarini biriktiring.
+3. Imzolangan bekor qilish so'rovini yarating
+   `docs/examples/android_override_request.json`, bilan qo'llang
+   `scripts/android_override_tool.sh apply` va o'tkazilmagan namunani tomonidan tekshiring
+   bosqichma-bosqich eksportchining foydali yukini tekshirish (
    `android.telemetry.redaction.override`).
-4. Revoke the override with `scripts/android_override_tool.sh revoke --token <token>`,
-   append the override token hash plus ticket reference to
-   `docs/source/sdk/android/telemetry_override_log.md`, and mint a digest JSON
-   under `docs/source/sdk/android/readiness/override_logs/`. This closes the
-   C2 scenario in the chaos checklist and keeps the governance evidence fresh.
+4. `scripts/android_override_tool.sh revoke --token <token>` yordamida bekor qilishni bekor qiling,
+   bekor qilish tokeni xesh va chipta havolasini qo'shing
+   `docs/source/sdk/android/telemetry_override_log.md` va JSON-ni sindiring
+   `docs/source/sdk/android/readiness/override_logs/` ostida. Bu yopadi
+   C2 stsenariysi tartibsizlik nazorat ro'yxatida va boshqaruv dalillarini yangilab turadi.
 
-### 5.2 Exporter brownout & queue replay drill (C3/C6)
+### 5.2 Eksportchining ishdan chiqishi va navbatni takrorlash mashqlari (C3/C6)1. Staging kollektorini kichiklashtiring (`kubectl shkalasi
+   deploy/android-otel-collector --replicas=0`) eksportchini simulyatsiya qilish uchun
+   jigarrang. Status CLI orqali bufer ko'rsatkichlarini kuzatib boring va ogohlantirishlarning yonishini tasdiqlang
+   15 daqiqalik belgi.
+2. Kollektorni qayta tiklang, qoldiq drenajini tasdiqlang va kollektor jurnalini arxivlang
+   takror ijro tugallanishini ko'rsatadigan parcha.
+3. Staging Pixel va emulyatorda ScenarioC6: o'rnatishga amal qiling
+   `examples/android/operator-console`, samolyot rejimini o'zgartiring, demoni yuboring
+   oʻtkazmalarni oʻtkazing, keyin samolyot rejimini oʻchiring va navbat chuqurligi koʻrsatkichlarini tomosha qiling.
+4. Har bir kutilayotgan navbatni torting (`adb shell run-as  cat files/pending.queue >
+   /tmp/.queue`), compile the inspector (`gradle -p java/iroha_android
+   :yadro:sinflar >/dev/null`), and run `java -cp qurish/sinflar
+   org.hyperledger.iroha.android.tools.PendingQueueInspector --fayl
+   /tmp/.queue --json > queue-replay-.json`. Ilova dekodlangan
+   konvertlar va laboratoriya jurnaliga xeshlarni takrorlang.
+5. Xaos hisobotini eksportchi uzilish muddati, oldin/keyin navbat chuqurligi bilan yangilang,
+   va `android_sdk_offline_replay_errors` 0 qolganligini tasdiqlash.
 
-1. Scale the staging collector down (`kubectl scale
-   deploy/android-otel-collector --replicas=0`) to simulate an exporter
-   brownout. Track buffer metrics via the status CLI and confirm alerts fire at
-   the 15-minute mark.
-2. Restore the collector, confirm backlog drain, and archive the collector log
-   snippet showing replay completion.
-3. On both the staging Pixel and emulator, follow Scenario C6: install
-   `examples/android/operator-console`, toggle airplane mode, submit the demo
-   transfers, then disable airplane mode and watch queue depth metrics.
-4. Pull each pending queue (`adb shell run-as <app-id> cat files/pending.queue >
-   /tmp/<serial>.queue`), compile the inspector (`gradle -p java/iroha_android
-   :core:classes >/dev/null`), and run `java -cp build/classes
-   org.hyperledger.iroha.android.tools.PendingQueueInspector --file
-   /tmp/<serial>.queue --json > queue-replay-<serial>.json`. Attach decoded
-   envelopes plus replay hashes to the lab log.
-5. Update the chaos report with exporter outage duration, queue depth before/after,
-   and confirmation that `android_sdk_offline_replay_errors` remained 0.
+### 5.3 Staging klaster xaos skripti (android-telemetry-stg)
 
-### 5.3 Staging cluster chaos script (android-telemetry-stg)
+Sahnalashtiruvchi klaster egalari Xaruka Yamamoto (Android Observability TL) va Liam O'Konnor
+(SRE) har doim mashq rejalashtirilganda ushbu skriptga amal qiling. Ketma-ketlik saqlanib qoladi
+ishtirokchilar telemetriya xaos nazorat ro'yxatiga mos kelishini kafolatlashdi
+artefaktlar boshqaruv uchun qo'lga olinadi.
 
-Staging cluster owners Haruka Yamamoto (Android Observability TL) and Liam O’Connor
-(SRE) follow this script whenever a rehearsal run is scheduled. The sequence keeps
-participants aligned with the telemetry chaos checklist while guaranteeing that
-artefacts are captured for governance.
+**Ishtirokchilar**
 
-**Participants**
-
-| Role | Responsibilities | Contact |
+| Rol | Mas'uliyat | Aloqa |
 |------|------------------|---------|
-| Android on-call IC | Drives the drill, coordinates PagerDuty notes, owns command log | PagerDuty `android-telemetry-primary`, `#android-sdk-support` |
-| Staging cluster owners (Haruka, Liam) | Gate change windows, run `kubectl` actions, snapshot cluster telemetry | `#android-staging` |
-| Docs/Support manager (Priya) | Record evidence, track labs checklist, publish follow-up tickets | `#docs-support` |
+| Android qo'ng'iroq bo'yicha IC | Matkapni boshqaradi, PagerDuty qaydlarini muvofiqlashtiradi, buyruqlar jurnaliga egalik qiladi | PagerDuty `android-telemetry-primary`, `#android-sdk-support` |
+| Staging klaster egalari (Haruka, Liam) | Darvoza oynalarini oʻzgartirish, `kubectl` amallarini ishga tushirish, snapshot klaster telemetriyasi | `#android-staging` |
+| Hujjatlar/Yordam menejeri (Priya) | Dalillarni yozib oling, laboratoriya nazorat ro'yxatini kuzatib boring, keyingi chiptalarni nashr eting | `#docs-support` |
 
-**Pre-flight coordination**
+**Parvozdan oldin muvofiqlashtirish**
 
-- 48 hours before the drill, file a change request that lists the planned
-  scenarios (C1–C7) and paste the link in `#android-staging` so cluster owners
-  can block clashing deployments.
-- Collect the latest `ClientConfig` hash and `kubectl --context staging get pods
-  -n android-telemetry-stg` output to establish the baseline state, then store
-  both under `docs/source/sdk/android/readiness/labs/reports/<date>/`.
-- Confirm device coverage (Pixel + emulator) and ensure
-  `ci/run_android_tests.sh` compiled the tools used during the lab
-  (`PendingQueueInspector`, telemetry injectors).
+- Mashqdan 48 soat oldin, rejalashtirilganlar ro'yxatini o'zgartirish so'rovini yuboring
+  stsenariylar (C1–C7) va klaster egalari uchun havolani `#android-staging`-ga joylashtiring
+  ziddiyatli joylashtirishlarni bloklashi mumkin.
+- Eng so'nggi `ClientConfig` xesh va `kubectl --kontekst staging pods olish to'plamini to'plang
+  Asosiy holatni o'rnatish uchun -n android-telemetry-stg` chiqishi, keyin esa saqlang
+  ikkalasi ham `docs/source/sdk/android/readiness/labs/reports/<date>/` ostida.
+- Qurilmaning qamrovini tasdiqlang (Pixel + emulyator) va ishonch hosil qiling
+  `ci/run_android_tests.sh` laboratoriya davomida ishlatiladigan asboblarni tuzdi
+  (`PendingQueueInspector`, telemetriya injektorlari).
 
-**Execution checkpoints**
+**Ijro nazorat punktlari**
 
-- Announce “chaos start” in `#android-sdk-support`, begin the bridge recording,
-  and keep `docs/source/sdk/android/telemetry_chaos_checklist.md` visible so
-  every command is narrated for the scribe.
-- Have a staging owner mirror each injector action (`kubectl scale`, exporter
-  restarts, load generators) so both Observability and SRE confirm the step.
-- Capture the output from `scripts/telemetry/check_redaction_status.py
-  --status-url https://android-telemetry-stg/api/redaction/status` after each
-  scenario and paste it into the incident doc.
+- `#android-sdk-support` da "tartibsizlik boshlanishi" e'lon qiling, ko'prik yozishni boshlang,
+  va `docs/source/sdk/android/telemetry_chaos_checklist.md` ko'rinadigan qilib turing
+  har bir amr kotib uchun rivoyat qilinadi.
+- Har bir injektor harakatini sahnalashtiruvchi egasi aks ettirsin (`kubectl scale`, eksportchi
+  qayta ishga tushiriladi, generatorlarni yuklaydi) shuning uchun ham Kuzatish, ham SRE qadamni tasdiqlaydi.
+- `scripts/telemetry/check_redaction_status.py dan olingan ma'lumotlarni yozib oling
+  --status-url https://android-telemetry-stg/api/redaction/status` har biridan keyin
+  stsenariyni yarating va uni voqea hujjatiga joylashtiring.
 
-**Recovery**
+**Qayta tiklash**- Barcha injektorlar tozalanmaguncha ko'prikni tark etmang (`inject_redaction_failure.sh --clear`,
+  `kubectl scale ... --replicas=1`) va Grafana asboblar paneli yashil holatni ko'rsatadi.
+- Hujjatlar/Yordam arxivlari navbatlari, CLI jurnallari va skrinshotlar ostida
+  `docs/source/sdk/android/readiness/screenshots/<date>/` va arxivni belgilang
+  o'zgartirish so'rovi yopilishidan oldin nazorat ro'yxati.
+- Har qanday stsenariy uchun `telemetry-chaos` yorlig'i bilan kuzatuv chiptalarini ro'yxatdan o'tkazing
+  muvaffaqiyatsiz yoki kutilmagan ko'rsatkichlarni ishlab chiqaring va ularga `status.md` da havola qiling
+  keyingi haftalik ko'rib chiqish paytida.
 
-- Do not leave the bridge until all injectors are cleared (`inject_redaction_failure.sh --clear`,
-  `kubectl scale ... --replicas=1`) and Grafana dashboards show green status.
-- Docs/Support archives queue dumps, CLI logs, and screenshots under
-  `docs/source/sdk/android/readiness/screenshots/<date>/` and ticks the archive
-  checklist before the change request closes.
-- Log follow-up tickets with the `telemetry-chaos` label for any scenario that
-  failed or produced unexpected metrics, and reference them in `status.md`
-  during the next weekly review.
-
-| Time | Action | Owner(s) | Artefact |
+| Vaqt | Harakat | Ega(lar)i | Artefakt |
 |------|--------|----------|----------|
-| T−30 min | Verify `android-telemetry-stg` health: `kubectl --context staging get pods -n android-telemetry-stg`, confirm no pending upgrades, and note collector versions. | Haruka | `docs/source/sdk/android/readiness/screenshots/<date>/cluster-health.png` |
-| T−20 min | Seed baseline load (`scripts/telemetry/generate_android_load.sh --cluster android-telemetry-stg --duration 20m`) and capture stdout. | Liam | `readiness/labs/reports/<date>/load-generator.log` |
-| T−15 min | Copy `docs/source/sdk/android/readiness/incident/telemetry_chaos_template.md` to `docs/source/sdk/android/readiness/incident/<date>-telemetry-chaos.md`, list scenarios to run (C1–C7), and assign scribes. | Priya Deshpande (Support) | Incident markdown committed before rehearsal starts. |
-| T−10 min | Confirm Pixel + emulator online, latest SDK installed, and `ci/run_android_tests.sh` compiled the `PendingQueueInspector`. | Haruka, Liam | `readiness/screenshots/<date>/device-checklist.png` |
-| T−5 min | Start Zoom bridge, begin screen recording, and announce “chaos start” in `#android-sdk-support`. | IC / Docs/Support | Recording saved under `readiness/archive/<month>/`. |
-| +0 min | Execute the selected scenario from `docs/source/sdk/android/readiness/labs/telemetry_lab_01.md` (typically C2 + C6). Keep the lab guide visible and call out command invocations as they happen. | Haruka drives, Liam mirrors results | Logs attached to the incident file in real time. |
-| +15 min | Pause to collect metrics (`scripts/telemetry/check_redaction_status.py --status-url https://android-telemetry-stg/api/redaction/status`) and grab Grafana screenshots. | Haruka | `readiness/screenshots/<date>/status-<scenario>.png` |
-| +25 min | Restore any injected failures (`inject_redaction_failure.sh --clear`, `kubectl scale ... --replicas=1`), replay queues, and confirm alerts close. | Liam | `readiness/labs/reports/<date>/recovery.log` |
-| +35 min | Debrief: update incident doc with pass/fail per scenario, list follow-ups, and push artefacts to git. Notify Docs/Support that the archive checklist can be completed. | IC | Incident doc updated, `readiness/archive/<month>/checklist.md` ticked. |
+| T−30min | `android-telemetry-stg` sog'lig'ini tekshiring: `kubectl --context staging get pods -n android-telemetry-stg`, kutilayotgan yangilanishlar yo'qligini tasdiqlang va kollektor versiyalariga e'tibor bering. | Haruka | `docs/source/sdk/android/readiness/screenshots/<date>/cluster-health.png` |
+| T−20min | Urug'ning asosiy yuki (`scripts/telemetry/generate_android_load.sh --cluster android-telemetry-stg --duration 20m`) va stdoutni tortib oling. | Liam | `readiness/labs/reports/<date>/load-generator.log` |
+| T−15min | `docs/source/sdk/android/readiness/incident/telemetry_chaos_template.md` ni `docs/source/sdk/android/readiness/incident/<date>-telemetry-chaos.md` ga nusxalash, ishga tushiriladigan stsenariylarni ro‘yxatlash (C1–C7) va yozuvchilarni tayinlash. | Priya Deshpande (Qo'llab-quvvatlash) | Repetitsiya boshlanishidan oldin sodir bo'lgan voqea belgisi. |
+| T−10min | Pixel + emulyatorini onlayn tasdiqlang, so'nggi SDK o'rnatilgan va `ci/run_android_tests.sh` `PendingQueueInspector` ni kompilyatsiya qilgan. | Haruka, Liam | `readiness/screenshots/<date>/device-checklist.png` |
+| T−5min | Masshtab koʻprigini ishga tushiring, ekran yozishni boshlang va `#android-sdk-support` da “tartibsizlik boshlanishi”ni eʼlon qiling. | IC / Hujjatlar / Yordam | Yozuv `readiness/archive/<month>/` ostida saqlangan. |
+| +0min | `docs/source/sdk/android/readiness/labs/telemetry_lab_01.md` (odatda C2 + C6) dan tanlangan stsenariyni bajaring. Laboratoriya qo'llanmasini ko'rinadigan holda saqlang va ular sodir bo'lganda buyruq chaqiruvlarini chaqiring. | Haruka haydaydi, Liam natijalarni aks ettiradi | Voqea fayliga real vaqtda biriktirilgan jurnallar. |
+| +15 daqiqa | Koʻrsatkichlarni yigʻish uchun pauza qiling (`scripts/telemetry/check_redaction_status.py --status-url https://android-telemetry-stg/api/redaction/status`) va Grafana skrinshotlarini oling. | Haruka | `readiness/screenshots/<date>/status-<scenario>.png` |
+| +25 daqiqa | AOK qilingan nosozliklarni tiklang (`inject_redaction_failure.sh --clear`, `kubectl scale ... --replicas=1`), navbatlarni takrorlang va ogohlantirishlarni yopishni tasdiqlang. | Liam | `readiness/labs/reports/<date>/recovery.log` |
+| +35 daqiqa | Xulosa: voqea hujjatini har bir stsenariy bo'yicha o'tish/muvaffaqiyatsiz yangilash, kuzatuvlarni ro'yxatga olish va artefaktlarni git-ga surish. Arxivni tekshirish roʻyxatini toʻldirish mumkinligi haqida Docs/Supportga xabar bering. | IC | Hodisa hujjati yangilandi, `readiness/archive/<month>/checklist.md` belgilandi. |
 
-- Keep the staging owners on the bridge until exporters are healthy and all alerts have cleared.
-- Store raw queue dumps in `docs/source/sdk/android/readiness/labs/reports/<date>/queues/` and reference their hashes in the incident log.
-- If a scenario fails, immediately create a JIRA ticket labelled `telemetry-chaos` and cross-link it from `status.md`.
-- Automation helper: `ci/run_android_telemetry_chaos_prep.sh` wraps the load generator, status snapshots, and queue export plumbing. Set `ANDROID_TELEMETRY_DRY_RUN=false` when staging access is available and `ANDROID_PENDING_QUEUE_EXPORTS=pixel8=/tmp/pixel.queue,emulator=/tmp/emulator.queue` (etc.) so the script copies each queue file, emits `<label>.sha256`, and runs `PendingQueueInspector` to produce `<label>.json`. Use `ANDROID_PENDING_QUEUE_INSPECTOR=false` only when JSON emission must be skipped (e.g., no JDK available). **Always export the expected salt identifiers before running the helper** by setting `ANDROID_TELEMETRY_EXPECTED_SALT_EPOCH=<YYYYQ#>` and `ANDROID_TELEMETRY_EXPECTED_SALT_ROTATION=<id>` so the embedded `check_redaction_status.py` calls fail fast if the captured telemetry diverges from the Rust baseline.
+- Eksportchilar sog'lom bo'lgunga qadar va barcha ogohlantirishlar o'chirilgunga qadar sahna egalarini ko'prikda saqlang.
+- Navbatdagi xom ashyolarni `docs/source/sdk/android/readiness/labs/reports/<date>/queues/` da saqlang va hodisalar jurnalida ularning xeshlariga havola qiling.
+- Agar stsenariy bajarilmasa, darhol `telemetry-chaos` etiketli JIRA chiptasini yarating va uni `status.md` dan oʻzaro bogʻlang.
+- Avtomatlashtirish yordamchisi: `ci/run_android_telemetry_chaos_prep.sh` yuk generatorini, holat suratlarini va navbatni eksport qilish sanitariya-tesisatini o'rab oladi. Skript har bir navbat faylini nusxalashi, `<label>.sha256` chiqarishi va `PendingQueueInspector` ni ishga tushirishi uchun `PendingQueueInspector` `PendingQueueInspector` va `ANDROID_PENDING_QUEUE_EXPORTS=pixel8=/tmp/pixel.queue,emulator=/tmp/emulator.queue` (va hokazo.) `PendingQueueInspector` ni oʻrnating. `ANDROID_PENDING_QUEUE_INSPECTOR=false` dan faqat JSON emissiyasini o'tkazib yuborish kerak bo'lganda foydalaning (masalan, JDK mavjud emas). **Yordamchini ishga tushirishdan oldin har doim kutilgan tuz identifikatorlarini eksport qiling** `ANDROID_TELEMETRY_EXPECTED_SALT_EPOCH=<YYYYQ#>` va `ANDROID_TELEMETRY_EXPECTED_SALT_ROTATION=<id>` ni o'rnating, shuning uchun o'rnatilgan `check_redaction_status.py` qo'ng'iroqlari, agar olingan telemetriya Rust asosiy chizig'idan farq qilsa, tezda muvaffaqiyatsiz bo'ladi.
 
-## 6. Documentation & Enablement
-
-- **Operator enablement kit:** `docs/source/sdk/android/readiness/and7_operator_enablement.md`
-  links the runbook, telemetry policy, lab guide, archive checklist, and knowledge
-  checks into a single AND7-ready package. Reference it when preparing SRE
-  governance pre-reads or scheduling the quarterly refresh.
-- **Enablement sessions:** A 60-minute enablement recording runs on 2026-02-18
-  with quarterly refreshes. Materials live under
+## 6. Hujjatlashtirish va yoqish- **Operatorni yoqish to'plami:** `docs/source/sdk/android/readiness/and7_operator_enablement.md`
+  runbook, telemetriya siyosati, laboratoriya qo'llanmasi, arxiv nazorat ro'yxati va bilimlarni bog'laydi
+  bitta AND7-tayyor paketga tekshiradi. SREni tayyorlashda unga murojaat qiling
+  boshqaruvni oldindan o'qish yoki choraklik yangilanishni rejalashtirish.
+- **Yoqish seanslari:** 60 daqiqalik yoqish yozuvi 2026-02-18 da ishlaydi
+  har chorakda yangilanishlar bilan. Materiallar ostida yashaydi
   `docs/source/sdk/android/readiness/`.
-- **Knowledge checks:** Staff must score ≥90% via the readiness form. Store
-  results in `docs/source/sdk/android/readiness/forms/responses/`.
-- **Updates:** Whenever telemetry schemas, dashboards, or override policies
-  change, update this runbook, the support playbook, and `status.md` in the same
+- **Bilimlarni tekshirish:** Xodimlar tayyorlik shakli orqali ≥90% ball to'plashlari kerak. Do'kon
+  natijalari `docs/source/sdk/android/readiness/forms/responses/`.
+- **Yangilanishlar:** Telemetriya sxemalari, asboblar paneli yoki siyosatlarni bekor qilganda
+  o'zgartiring, ushbu runbook, qo'llab-quvvatlash o'yin kitobi va `status.md`ni bir xilda yangilang
   PR.
-- **Weekly review:** After each Rust release candidate (or at least weekly), verify
-  `java/iroha_android/README.md` and this runbook still reflect current automation,
-  fixture rotation procedures, and governance expectations. Capture the review in
-  `status.md` so the Foundations milestone audit can trace documentation freshness.
+- **Haftalik ko'rib chiqish:** Har bir Rust-reliz nomzodidan so'ng (yoki kamida haftada bir marta) tekshiring
+  `java/iroha_android/README.md` va bu runbook hali ham joriy avtomatlashtirishni aks ettiradi,
+  armatura aylanish tartib-qoidalari va boshqaruvning taxminlari. Sharhni yozib oling
+  `status.md`, shuning uchun Foundations muhim bosqich auditi hujjatlarning yangiligini kuzatishi mumkin.
 
-## 7. StrongBox Attestation Harness
-
-- **Purpose:** Validate hardware-backed attestation bundles before promoting devices into the
-  StrongBox pool (AND2/AND6). The harness consumes captured certificate chains and verifies them
-  against trusted roots using the same policy that production code executes.
-- **Reference:** See `docs/source/sdk/android/strongbox_attestation_harness_plan.md` for the full
-  capture API, alias lifecycle, CI/Buildkite wiring, and ownership matrix. Treat that plan as the
-  source of truth when onboarding new lab technicians or updating finance/compliance artefacts.
-- **Workflow:**
-  1. Collect an attestation bundle on-device (alias, `challenge.hex`, and `chain.pem` with the
-     leaf→root order) and copy it to the workstation.
-  2. Run `scripts/android_keystore_attestation.sh --bundle-dir <bundle> --trust-root <root.pem>
-     [--trust-root-dir <dir>] --require-strongbox --output <report.json>` using the appropriate
-     Google/Samsung root (directories allow you to load whole vendor bundles).
-  3. Archive the JSON summary alongside raw attestation material in
+## 7. StrongBox attestatsiya jabduqlari- **Maqsad:** Qurilmalarni reklama qilishdan oldin apparat ta'minoti bilan ta'minlangan attestatsiya to'plamlarini tasdiqlang.
+  StrongBox puli (AND2/AND6). Jabduqlar olingan sertifikat zanjirlarini iste'mol qiladi va ularni tekshiradi
+  ishlab chiqarish kodi bajaradigan siyosatdan foydalangan holda ishonchli ildizlarga qarshi.
+- **Ma'lumotnoma:** To'liq ma'lumot uchun `docs/source/sdk/android/strongbox_attestation_harness_plan.md` ga qarang
+  Capture API, taxallusning hayot aylanishi, CI/Buildkite simlari va egalik matritsasi. Ushbu rejani shunday deb hisoblang
+  yangi laboratoriya texniklarini ishga qabul qilish yoki moliya/muvofiqlik artefaktlarini yangilashda haqiqat manbai.
+- **Ish jarayoni:**
+  1. Qurilmada attestatsiya to‘plamini yig‘ing (taxallus, `challenge.hex` va `chain.pem`
+     barg→ ildiz tartibi) va uni ish stantsiyasiga nusxalash.
+  2. `scripts/android_keystore_attestation.sh --bundle-dir  --trust-root  dasturini ishga tushiring.
+     [--trust-root-dir ] --require-strongbox --output ` tegishli kod yordamida
+     Google/Samsung ildizi (kataloglar butun sotuvchi paketlarini yuklash imkonini beradi).
+  3. JSON xulosasini xom attestatsiya materiallari bilan birga arxivlang
      `artifacts/android/attestation/<device-tag>/`.
-- **Bundle format:** Follow `docs/source/sdk/android/readiness/android_strongbox_attestation_bundle.md`
-  for the required file layout (`chain.pem`, `challenge.hex`, `alias.txt`, `result.json`).
-- **Trusted roots:** Obtain vendor-supplied PEMs from the device lab secrets store; pass multiple
-  `--trust-root` arguments or point `--trust-root-dir` to the directory that holds the anchors when
-  the chain terminates in a non-Google anchor.
-- **CI harness:** Use `scripts/android_strongbox_attestation_ci.sh` to batch-verify archived bundles
-  on lab machines or CI runners. The script scans `artifacts/android/attestation/**` and invokes the
-  harness for every directory containing the documented files, writing refreshed `result.json`
-  summaries in place.
-- **CI lane:** After syncing new bundles, run the Buildkite step defined in
+- **To‘plam formati:** `docs/source/sdk/android/readiness/android_strongbox_attestation_bundle.md` ga rioya qiling
+  kerakli fayl tartibi uchun (`chain.pem`, `challenge.hex`, `alias.txt`, `result.json`).
+- **Ishonchli ildizlar:** Qurilma laboratoriyasi sirlari do‘konidan sotuvchi tomonidan taqdim etilgan PEMlarni oling; bir nechta o'tish
+  `--trust-root` argumentlari yoki `--trust-root-dir` ni langarlarni saqlaydigan katalogga belgilang
+  zanjir Google bo'lmagan langarda tugaydi.
+- **CI jabduqlari:** Arxivlangan paketlarni paketli tekshirish uchun `scripts/android_strongbox_attestation_ci.sh` dan foydalaning
+  laboratoriya mashinalarida yoki CI yuguruvchilarda. Skript `artifacts/android/attestation/**` ni skanerlaydi va uni chaqiradi
+  hujjatlashtirilgan fayllarni o'z ichiga olgan har bir katalog uchun jabduqlar, yangilangan `result.json` yozish
+  xulosalar joyida.
+- **CI qatori:** Yangi paketlarni sinxronlashtirgandan so'ng, Buildkite-da belgilangan qadamni bajaring
   `.buildkite/android-strongbox-attestation.yml` (`buildkite-agent pipeline upload --pipeline .buildkite/android-strongbox-attestation.yml`).
-  The job executes `scripts/android_strongbox_attestation_ci.sh`, generates a summary with
-  `scripts/android_strongbox_attestation_report.py`, uploads the report to `artifacts/android_strongbox_attestation_report.txt`,
-  and annotates the build as `android-strongbox/report`. Investigate any failures immediately and
-  link the build URL from the device matrix.
-- **Reporting:** Attach the JSON output to governance reviews and update the device matrix entry in
-  `docs/source/sdk/android/readiness/android_strongbox_device_matrix.md` with the attestation date.
-- **Mock rehearsal:** When hardware is unavailable, run `scripts/android_generate_mock_attestation_bundles.sh`
-  (which uses `scripts/android_mock_attestation_der.py`) to mint deterministic test bundles plus a shared mock root so CI and docs can exercise the harness end-to-end.
-- **In-code guardrails:** `ci/run_android_tests.sh --tests
-  org.hyperledger.iroha.android.crypto.keystore.KeystoreKeyProviderTests` covers empty vs challenged
-  attestation regeneration (StrongBox/TEE metadata) and emits `android.keystore.attestation.failure`
-  on challenge mismatch so cache/telemetry regressions are caught before shipping new bundles.
+  Ish `scripts/android_strongbox_attestation_ci.sh` ni bajaradi, bilan xulosa hosil qiladi
+  `scripts/android_strongbox_attestation_report.py`, hisobotni `artifacts/android_strongbox_attestation_report.txt` ga yuklaydi,
+  va qurilishni `android-strongbox/report` sifatida izohlaydi. Har qanday nosozliklarni darhol tekshirib ko'ring va
+  qurilma matritsasidan qurish URL manzilini bog'lang.
+- **Hisobot:** JSON chiqishini boshqaruv tekshiruvlariga ilova qiling va qurilma matritsasi yozuvini yangilang
+  Attestatsiya sanasi bilan `docs/source/sdk/android/readiness/android_strongbox_device_matrix.md`.
+- **Soxta mashq:** Uskunalar mavjud bo'lmaganda, `scripts/android_generate_mock_attestation_bundles.sh` ni ishga tushiring
+  (`scripts/android_mock_attestation_der.py` dan foydalanadi) deterministik test toʻplamlarini va umumiy soxta ildizni zarb qilish uchun, CI va docs jabduqni oxirigacha ishlatishi mumkin.
+- **Kod ichidagi himoya panjaralari:** `ci/run_android_tests.sh --tests
+  org.hyperledger.iroha.android.crypto.keystore.KeystoreKeyProviderTests` boʻsh va eʼtirozli boʻlganlarni qamrab oladi
+  attestatsiya regeneratsiyasi (StrongBox/TEE metamaʼlumotlari) va `android.keystore.attestation.failure` chiqaradi
+  muammoga mos kelmasligi sababli kesh/temetriya regressiyalari yangi to'plamlarni jo'natishdan oldin ushlanadi.
 
-## 8. Contacts
+## 8. Kontaktlar
 
-- **Support Engineering On-call:** `#android-sdk-support`
-- **SRE Governance:** `#sre-governance`
-- **Docs/Support:** `#docs-support`
-- **Escalation Tree:** See Android Support Playbook §2.1
+- **Qo'ng'iroq bo'yicha muhandislikni qo'llab-quvvatlash:** `#android-sdk-support`
+- **SRE boshqaruvi:** `#sre-governance`
+- **Hujjatlar/Yordam:** `#docs-support`
+- **Eskalatsiya daraxti:** Android qo'llab-quvvatlash bo'limiga qarang §2.1
 
-## 9. Troubleshooting Scenarios
+## 9. Muammolarni bartaraf etish stsenariylariYo'l xaritasi AND7-P2 elementi qayta-qayta sahifaga tushadigan uchta hodisa sinfini chaqiradi
+Android qo'ng'irog'i: Torii/tarmoq vaqtlari, StrongBox attestatsiyasidagi nosozliklar va
+`iroha_config` manifest drifti. Ariza topshirishdan oldin tegishli nazorat ro'yxatidan o'ting
+Sev1/2 kuzatish va dalillarni `incident/<date>-android-*.md` da arxivlash.
 
-Roadmap item AND7-P2 calls out three incident classes that repeatedly page the
-Android on-call: Torii/network timeouts, StrongBox attestation failures, and
-`iroha_config` manifest drift. Work through the relevant checklist before filing
-Sev 1/2 follow-ups and archive the evidence in `incident/<date>-android-*.md`.
+### 9.1 Torii va tarmoqning kutish vaqti
 
-### 9.1 Torii & Network Timeouts
+**Signallar**
 
-**Signals**
+- `android_sdk_submission_latency`, `android_sdk_pending_queue_depth` da ogohlantirishlar,
+  `android_sdk_offline_replay_errors` va Torii `/v1/pipeline` xato darajasi.
+- `operator-console` vidjetlari (misollar/android) toʻxtab qolgan navbatni koʻrsatuvchi yoki
+  qayta urinishlar eksponentsial orqaga yopishib qolgan.
 
-- Alerts on `android_sdk_submission_latency`, `android_sdk_pending_queue_depth`,
-  `android_sdk_offline_replay_errors`, and the Torii `/v1/pipeline` error rate.
-- `operator-console` widgets (examples/android) showing stalled queue drain or
-  retries stuck in exponential backoff.
+**Darhol javob**
 
-**Immediate response**
+1. PagerDuty (`android-networking`) ni tan oling va hodisalar jurnalini boshlang.
+2. Grafana suratlarini (yuborish kechikishi + navbat chuqurligi) qamrab oladi.
+   oxirgi 30 daqiqa.
+3. Qurilma jurnallaridan (`ConfigWatcher`) faol `ClientConfig` xeshini yozib oling
+   qayta yuklash muvaffaqiyatli yoki muvaffaqiyatsiz bo'lganda manifest dayjestini chop etadi).
 
-1. Acknowledge PagerDuty (`android-networking`) and start an incident log.
-2. Capture Grafana snapshots (Submission Latency + Queue Depth) covering the
-   last 30 minutes.
-3. Record the active `ClientConfig` hash from the device logs (`ConfigWatcher`
-   prints the manifest digest whenever a reload succeeds or fails).
+**Diagnostika**
 
-**Diagnostics**
-
-- **Queue health:** Pull the configured queue file from a staging device or the
-  emulator (`adb shell run-as <app-id> cat files/pending.queue >
-  /tmp/pending.queue`). Decode the envelopes with
-  `OfflineSigningEnvelopeCodec` as described in
-  `docs/source/sdk/android/offline_signing.md#4-queueing--replay` to confirm the
-  backlog matches operator expectations. Attach the decoded hashes to the
-  incident.
-- **Hash inventory:** After downloading the queue file, run the inspector helper
-  to capture canonical hashes/aliases for the incident artefacts:
+- **Navbat holati:** Sozlangan navbat faylini sahnalash qurilmasidan yoki qurilmadan tortib oling
+  emulyator (`adb qobig'i  mushuk fayllari/pending.queue> sifatida ishlaydi
+  /tmp/pending.queue`). bilan konvertlarni dekodlash
+  `OfflineSigningEnvelopeCodec` da tavsiflanganidek
+  tasdiqlash uchun `docs/source/sdk/android/offline_signing.md#4-queueing--replay`
+  kechikish operator kutganlariga mos keladi. dekodlangan xeshlarni biriktiring
+  voqea.
+- **Xesh inventarizatsiyasi:** Navbat faylini yuklab olgach, inspektor yordamchisini ishga tushiring
+  hodisa artefaktlari uchun kanonik xesh/taxalluslarni olish uchun:
 
   ```bash
   gradle -p java/iroha_android :core:classes >/dev/null  # compiles classes if needed
@@ -698,187 +665,181 @@ Sev 1/2 follow-ups and archive the evidence in `incident/<date>-android-*.md`.
     --file /tmp/pending.queue --json > queue-inspector.json
   ```
 
-  Attach `queue-inspector.json` and the pretty-printed stdout to the incident
-  and link it from the AND7 lab report for Scenario D.
-- **Torii connectivity:** Run the HTTP transport harness locally to rule out SDK
-  regressions: `ci/run_android_tests.sh` exercises
-  `HttpClientTransportTests`, `HttpClientTransportHarnessTests`, and
-  `ToriiMockServerTests`. Failures here indicate a client bug rather than a
-  Torii outage.
-- **Fault injection rehearsal:** On the staging Pixel (StrongBox) and the AOSP
-  emulator, toggle connectivity to reproduce pending-queue growth:
-  `adb shell cmd connectivity airplane-mode enable` → submit two demo
-  transactions via operator-console → `adb shell cmd connectivity airplane-mode
+  Hodisaga `queue-inspector.json` va chiroyli bosilgan stdoutni biriktiring
+  va uni D stsenariysi uchun AND7 laboratoriya hisobotidan bog'lang.
+- **Torii ulanishi:** SDK ni istisno qilish uchun HTTP transport jabduqlarini mahalliy sifatida ishga tushiring
+  regressiyalar: `ci/run_android_tests.sh` mashqlari
+  `HttpClientTransportTests`, `HttpClientTransportHarnessTests` va
+  `ToriiMockServerTests`. Bu yerdagi nosozliklar a emas, balki mijoz xatosini bildiradi
+  Torii uzilish.
+- **Noto'g'ri in'ektsiya repetisiyasi:** Pixel (StrongBox) va AOSP sahnasida
+  emulyator, kutilayotgan navbat o'sishini ko'paytirish uchun ulanishni almashtiring:
+  `adb shell cmd connectivity airplane-mode enable` → ikkita demoni yuboring
+  operator-konsol orqali tranzaktsiyalar → `adb shell cmd ulanish samolyot-rejimi
   disable` → verify the queue drains and `android_sdk_offline_replay_errors`
-  remains 0. Record hashes of the replayed transactions.
-- **Alert parity:** When tuning thresholds or after Torii changes, execute
-  `scripts/telemetry/test_torii_norito_rpc_alerts.sh` so Prometheus rules stay
-  aligned with the dashboards.
+  qoladi 0. Qayta o'tkazilgan tranzaksiyalarning rekord xeshlari.
+- **Ogohlantirish pariteti:** Eshiklarni sozlashda yoki Torii o'zgargandan so'ng, bajaring
+  `scripts/telemetry/test_torii_norito_rpc_alerts.sh` shuning uchun Prometheus qoidalari qoladi
+  asboblar paneli bilan moslashtirilgan.
 
-**Recovery**
+**Qayta tiklash**
 
-1. If Torii is degraded, engage the Torii on-call and continue replaying the
-   queue once `/v1/pipeline` accepts traffic.
-2. Reconfigure affected clients only via signed `iroha_config` manifests. The
-   `ClientConfig` hot-reload watcher must emit a success log before the incident
-   can close.
-3. Update the incident with the queue size before/after replay plus hashes of
-   any dropped transactions.
+1. Agar Torii buzilgan bo'lsa, Torii qo'ng'irog'ini ishga tushiring va qayta o'ynashni davom eting.
+   navbat bir marta `/v1/pipeline` trafikni qabul qiladi.
+2. Ta'sir qilingan mijozlarni faqat imzolangan `iroha_config` manifestlari orqali qayta sozlang. The
+   `ClientConfig` issiq qayta yuklash kuzatuvchisi voqeadan oldin muvaffaqiyat jurnalini chiqarishi kerak
+   yopishi mumkin.
+3. Hodisani takrorlashdan oldin/keyin navbat hajmi va xeshlari bilan yangilang
+   har qanday to'xtatilgan tranzaktsiyalar.
 
-### 9.2 StrongBox & Attestation Failures
+### 9.2 StrongBox va attestatsiyadagi xatolar
 
-**Signals**
-
-- Alerts on `android_sdk_strongbox_success_rate` or
+**Signallar**- `android_sdk_strongbox_success_rate` yoki bo'yicha ogohlantirishlar
   `android.keystore.attestation.failure`.
-- `android.keystore.keygen` telemetry now records the requested
-  `KeySecurityPreference` and the route used (`strongbox`, `hardware`,
-  `software`) with a `fallback=true` flag when a StrongBox preference lands in
-  TEE/software. STRONGBOX_REQUIRED requests now fail fast instead of silently
-  returning TEE keys.
-- Support tickets referencing `KeySecurityPreference.STRONGBOX_ONLY` devices
-  falling back to software keys.
+- `android.keystore.keygen` telemetriyasi endi so'ralganni yozib oladi
+  `KeySecurityPreference` va foydalanilgan marshrut (`strongbox`, `hardware`,
+  `software`) StrongBox afzalligi tushganda `fallback=true` bayrog'i bilan
+  TEE/dasturiy ta'minot. STRONGBOX_REQUIRED so‘rovlari endi jimgina emas, tez bajarilmaydi
+  TEE kalitlarini qaytarish.
+- `KeySecurityPreference.STRONGBOX_ONLY` qurilmalariga havola qilingan chiptalarni qo'llab-quvvatlash
+  dasturiy ta'minot kalitlariga qaytish.
 
-**Immediate response**
+**Darhol javob**
 
-1. Acknowledge PagerDuty (`android-crypto`) and capture the affected alias label
-   (salted hash) plus device profile bucket.
-2. Check the attestation matrix entry for the device in
-   `docs/source/sdk/android/readiness/android_strongbox_device_matrix.md` and
-   record the last verified date.
+1. PagerDuty (`android-crypto`) ni tan oling va ta'sirlangan taxallus yorlig'ini oling
+   (tuzlangan hash) ortiqcha qurilma profili paqir.
+2. Qurilma uchun attestatsiya matritsasi yozuvini tekshiring
+   `docs/source/sdk/android/readiness/android_strongbox_device_matrix.md` va
+   oxirgi tasdiqlangan sanani yozib oling.
 
-**Diagnostics**
+**Diagnostika**
 
-- **Bundle verification:** Run
+- **To‘plamni tekshirish:** Ishga tushirish
   `scripts/android_keystore_attestation.sh --bundle-dir <bundle> --trust-root <root.pem>`
-  on the archived attestation to confirm whether the failure is due to device
-  misconfiguration or a policy change. Attach the generated `result.json`.
-- **Challenge regen:** Challenges are not cached. Each challenge request regenerates a fresh
-  attestation and caches by `(alias, challenge)`; challenge-less calls reuse the cache. Unsupported
-- **CI sweep:** Execute `scripts/android_strongbox_attestation_ci.sh` so every
-  stored bundle is revalidated; this guards against systemic issues introduced
-  by new trust anchors.
-- **Device drill:** On hardware without StrongBox (or by forcing the emulator),
-  set the SDK to require StrongBox only, submit a demo transaction, and confirm
-  the telemetry exporter emits the `android.keystore.attestation.failure` event
-  with the expected reason. Repeat on a StrongBox-capable Pixel to ensure the
-  happy path stays green.
-- **SDK regression check:** Run `ci/run_android_tests.sh` and pay
-  attention to the attestation-focused suites (`AndroidKeystoreBackendDetectionTests`,
+  Arxivlangan attestatsiyada nosozlik qurilmadan kelib chiqqanligini tasdiqlash uchun
+  noto'g'ri konfiguratsiya yoki siyosat o'zgarishi. Yaratilgan `result.json` ni biriktiring.
+- **Challenge regen:** Qiyinchiliklar keshda saqlanmaydi. Har bir chaqiruv so'rovi yangisini tiklaydi
+  `(alias, challenge)` tomonidan attestatsiya va keshlar; muammosiz qo'ng'iroqlar keshni qayta ishlatadi. Qo'llab-quvvatlanmaydi
+- **CI supurgi:** Har bir `scripts/android_strongbox_attestation_ci.sh` ni bajaring
+  saqlangan to'plam qayta tasdiqlanadi; bu kiritilgan tizimli muammolardan himoya qiladi
+  yangi ishonch langarlari tomonidan.
+- **Device matkap:** StrongBox bo'lmagan apparatda (yoki emulyatorni majburlash orqali),
+  SDK ni faqat StrongBox talab qiladigan qilib sozlang, demo tranzaksiyani yuboring va tasdiqlang
+  telemetriya eksportchisi `android.keystore.attestation.failure` hodisasini chiqaradi
+  kutilgan sabab bilan. Bunga ishonch hosil qilish uchun StrongBox-ga mos keladigan Pixel-da takrorlang
+  baxtli yo'l yashil bo'lib qoladi.
+- **SDK regressiya tekshiruvi:** `ci/run_android_tests.sh` dasturini ishga tushiring va to‘lang
+  attestatsiyaga yo'naltirilgan to'plamlarga e'tibor (`AndroidKeystoreBackendDetectionTests`,
   `AttestationVerifierTests`, `IrohaKeyManagerDeterministicExportTests`,
-  `KeystoreKeyProviderTests` for cache/challenge separation). Failures here
-  indicate a client-side regression.
+  kesh/qidiruv ajratish uchun `KeystoreKeyProviderTests`). Bu erda muvaffaqiyatsizliklar
+  mijoz tomonidagi regressiyani ko'rsatadi.
 
-**Recovery**
+**Qayta tiklash**
 
-1. Regenerate attestation bundles if the vendor rotated certificates or if the
-   device recently received a major OTA.
-2. Upload the refreshed bundle to `artifacts/android/attestation/<device>/` and
-   update the matrix entry with the new date.
-3. If StrongBox is unavailable in production, follow the override workflow in
-   Section 3 and document the fallback duration; long-term mitigation requires
-   device replacement or a vendor fix.
+1. Agar sotuvchi sertifikatlarni aylantirgan bo'lsa yoki sertifikatlash paketlarini qayta tiklang
+   qurilma yaqinda katta OTA oldi.
+2. Yangilangan to'plamni `artifacts/android/attestation/<device>/` va
+   matritsa yozuvini yangi sana bilan yangilang.
+3. Agar StrongBox ishlab chiqarishda mavjud bo'lmasa, unda bekor qilish ish jarayoniga rioya qiling
+   3-bo'lim va qayta tiklash muddatini hujjatlash; uzoq muddatli yumshatishni talab qiladi
+   qurilmani almashtirish yoki sotuvchini tuzatish.
 
-### 9.2a Deterministic Export Recovery
+### 9.2a Deterministik eksportni tiklash
 
-- **Formats:** Current exports are v3 (per-export salt/nonce + Argon2id, recorded as
-- **Passphrase policy:** v3 enforces ≥12 character passphrases. If users supply shorter
-  passphrases, instruct them to re-export with a compliant passphrase; v0/v1 imports are
-  exempt but should be rewrapped as v3 immediately after import.
-- **Tamper/reuse guards:** Decoders reject zero/short salt or nonce lengths and repeated
-  salt/nonce pairs surface as `salt/nonce reuse` errors. Regenerate the export to clear
-  the guard; do not attempt to force reuse.
-  `SoftwareKeyProvider.importDeterministic(...)` to rehydrate the key, then
-  `exportDeterministic(...)` to emit a v3 bundle so desktop tooling records the new KDF
-  parameters.
+- **Formatlar:** Joriy eksportlar v3 (eksport uchun tuz/kesish + Argon2id, sifatida qayd etilgan)
+- **Parol iborasi siyosati:** v3 ≥12 ta belgidan iborat parol iboralarini qo‘llaydi. Agar foydalanuvchilar qisqaroq etkazib berishsa
+  parollar, ularga mos parol bilan qayta eksport qilishni ko'rsating; v0/v1 importlari
+  ozod qilingan, lekin importdan so'ng darhol v3 sifatida qayta o'ralgan bo'lishi kerak.
+- **Buzg'unchilik/qayta foydalanish muhofazasi:** Dekoderlar nol/qisqa tuz yoki bo'lmagan uzunliklarni rad etadi va takrorlanadi
+  tuz/nonce juftliklar `salt/nonce reuse` xatolar sifatida yuzaga keladi. Tozalash uchun eksportni qayta tiklang
+  qo'riqchi; qayta ishlatishga majburlamang.
+  Kalitni qayta tiklash uchun `SoftwareKeyProvider.importDeterministic(...)`, keyin
+  `exportDeterministic(...)` v3 to'plamini chiqaradi, shunda ish stoli asboblari yangi KDFni yozib oladi
+  parametrlari.### 9.3 Manifest va konfiguratsiya nomuvofiqligi
 
-### 9.3 Manifest & Config Mismatches
+**Signallar**
 
-**Signals**
+- `ClientConfig` qayta yuklashda xatoliklar, mos kelmaydigan Torii xost nomlari yoki telemetriya
+  AND7 diff vositasi tomonidan belgilangan sxema farqlari.
+- Operatorlar bir xil qurilmalarda turli xil qayta urinish/orqaga o'chirish tugmalari haqida xabar berishadi
+  flot.
 
-- `ClientConfig` reload failures, mismatched Torii hostnames, or telemetry
-  schema diffs flagged by the AND7 diff tool.
-- Operators reporting different retry/backoff knobs across devices in the same
-  fleet.
+**Darhol javob**
 
-**Immediate response**
-
-1. Capture the `ClientConfig` digest printed in the Android logs and the
-   expected digest from the release manifest.
-2. Dump the running node configuration for comparison:
+1. Android jurnallarida chop etilgan `ClientConfig` dayjestini yozib oling va
+   reliz manifestidan kutilgan dayjest.
+2. Taqqoslash uchun ishlaydigan tugun konfiguratsiyasini o'chirib tashlang:
    `iroha_cli config show --actual > /tmp/iroha_config.actual.json`.
 
-**Diagnostics**
+**Diagnostika**
 
-- **Schema diff:** Run `scripts/telemetry/run_schema_diff.sh --android-config
-  <android.json> --rust-config <rust.json> --textfile-dir /var/lib/node_exporter/textfile_collector`
-  to generate a Norito diff report, refresh the Prometheus textfile, and attach the
-  JSON artefact plus metrics evidence to the incident and AND7 telemetry readiness log.
-- **Manifest validation:** Use `iroha_cli runtime capabilities` (or the runtime
-  audit command) to retrieve the node’s advertised crypto/ABI hashes and ensure
-  they match the mobile manifest. A mismatch confirms the node was rolled back
-  without reissuing the Android manifest.
-- **SDK regression check:** `ci/run_android_tests.sh` covers
-  `ClientConfigNoritoRpcTests`, `ClientConfig.ValidationTests`, and
-  `HttpClientTransportStatusTests`. Failures signal that the shipped SDK cannot
-  parse the manifest format currently deployed.
+- **Sxema farqi:** `scripts/telemetry/run_schema_diff.sh --android-config-ni ishga tushiring
+   --rust-config  --textfile-dir /var/lib/node_exporter/textfile_collector`
+  Norito farq hisobotini yaratish uchun Prometheus matn faylini yangilang va ilova qiling
+  JSON artefakt plyus koʻrsatkichlari hodisaga dalil va AND7 telemetriyaga tayyorlik jurnali.
+- **Manifest tekshiruvi:** `iroha_cli runtime capabilities` (yoki ish vaqti) dan foydalaning
+  audit buyrug'i) tugunning reklama qilingan kripto/ABI xeshlarini olish va ta'minlash
+  ular mobil manifestga mos keladi. Mos kelmaslik tugunning orqaga qaytarilganligini tasdiqlaydi
+  Android manifestini qayta chiqarmasdan.
+- **SDK regressiya tekshiruvi:** `ci/run_android_tests.sh` qamrab oladi
+  `ClientConfigNoritoRpcTests`, `ClientConfig.ValidationTests` va
+  `HttpClientTransportStatusTests`. Xatolar yuborilgan SDK qila olmasligini bildiradi
+  joriy qilingan manifest formatini tahlil qilish.
 
-**Recovery**
+**Qayta tiklash**
 
-1. Regenerate the manifest via the authorized pipeline (usually
-   `iroha_cli runtime Capabilities` → signed Norito manifest → config bundle) and
-   redeploy it through the operator channel. Never edit `ClientConfig`
-   overrides on-device.
-2. Once a corrected manifest lands, watch for the `ConfigWatcher` “reload ok”
-   message on each fleet tier and close the incident only after the telemetry
-   schema diff reports parity.
-3. Record the manifest hash, schema diff artefact path, and incident link in
-   `status.md` under the Android section for auditability.
+1. Manifestni ruxsat etilgan quvur liniyasi orqali qayta yarating (odatda
+   `iroha_cli runtime Capabilities` → imzolangan Norito manifest → konfiguratsiya paketi) va
+   uni operator kanali orqali qayta joylashtiring. Hech qachon `ClientConfig` ni tahrirlamang
+   qurilmada bekor qiladi.
+2. Tuzatilgan manifest tushgandan soʻng, `ConfigWatcher` “qayta yuklash OK”ni koʻring.
+   har bir flot darajasida xabar va voqeani faqat telemetriyadan keyin yoping
+   schema diff hisobotlar pariteti.
+3. Manifest xeshini, sxema farqli artefakt yo'lini va hodisa havolasini yozib oling
+   Auditorlik uchun Android bo'limi ostida `status.md`.
 
-## 10. Operator enablement curriculum
+## 10. Operatorni yoqish bo'yicha o'quv dasturi
 
-Roadmap item **AND7** requires a repeatable training package so operators,
-support engineers, and SRE can adopt the telemetry/redaction updates without
-guesswork. Pair this section with
-`docs/source/sdk/android/readiness/and7_operator_enablement.md`, which contains
-the detailed checklist and artefact links.
+“Yo‘l xaritasi” bandi **AND7** takrorlanadigan o‘quv paketini talab qiladi, shuning uchun operatorlar
+qo'llab-quvvatlash muhandislari va SRE telemetriya/redaktsiya yangilanishlarini qabul qilmasdan qabul qilishi mumkin
+taxmin qilish. Ushbu bo'lim bilan bog'lang
+O'z ichiga olgan `docs/source/sdk/android/readiness/and7_operator_enablement.md`
+batafsil nazorat ro'yxati va artefakt havolalari.
 
-### 10.1 Session modules (60-minute briefing)
+### 10.1 Seans modullari (60 daqiqalik brifing)
 
-1. **Telemetry architecture (15 min).** Walk through the exporter buffer,
-   redaction filter, and schema diff tooling. Demo
+1. **Telemetriya arxitekturasi (15 daqiqa).** Eksport qiluvchi bufer orqali o'ting,
+   redaktsiya filtri va sxema diff asboblari. Namoyish
    `scripts/telemetry/run_schema_diff.sh --textfile-dir /var/lib/node_exporter/textfile_collector` plus
-   `scripts/telemetry/check_redaction_status.py` so attendees see how parity is
-   enforced.
-2. **Runbook + chaos labs (20 min).** Highlight Sections 2–9 of this runbook,
-   rehearse one scenario from `readiness/labs/telemetry_lab_01.md`, and show how
-   to archive artefacts under `readiness/labs/reports/<stamp>/`.
-3. **Override + compliance workflow (10 min).** Review Section 3 overrides,
-   demonstrate `scripts/android_override_tool.sh` (apply/revoke/digest), and
-   update `docs/source/sdk/android/telemetry_override_log.md` plus the latest
-   digest JSON.
-4. **Q&A / knowledge check (15 min).** Use the quick-reference card in
-   `readiness/cards/telemetry_redaction_qrc.md` to anchor questions, then
-   capture follow-ups in `readiness/and7_operator_enablement.md`.
+   `scripts/telemetry/check_redaction_status.py`, shuning uchun ishtirokchilar paritet qanday ekanligini ko'rishadi
+   amalga oshirildi.
+2. **Runbook + chaos labs (20daq).** Ushbu runbookning 2–9-qismlarini ajratib ko‘rsating,
+   `readiness/labs/telemetry_lab_01.md` dan bitta stsenariyni takrorlang va qanday qilib ko'rsating
+   artefaktlarni `readiness/labs/reports/<stamp>/` ostida arxivlash.
+3. **Bekor qilish + muvofiqlik ish jarayoni (10 daqiqa).** 3-bo‘limni bekor qilishni ko‘rib chiqing,
+   `scripts/android_override_tool.sh` ni ko'rsatish (qo'llash/bekor qilish/dijest) va
+   `docs/source/sdk/android/telemetry_override_log.md` va eng yangisini yangilang
+   JSONni hazm qilish.
+4. **Savol-javob / bilimlarni tekshirish (15 daqiqa).** Tezkor ma'lumot kartasidan foydalaning
+   Savollarni aniqlash uchun `readiness/cards/telemetry_redaction_qrc.md`
+   `readiness/and7_operator_enablement.md` da kuzatuvlarni yozib oling.### 10.2 Obyekt ritmi va egalari
 
-### 10.2 Asset cadence & owners
-
-| Asset | Cadence | Owner(s) | Archive location |
+| Aktiv | Kadens | Ega(lar)i | Arxiv joylashuvi |
 |-------|---------|----------|------------------|
-| Recorded walkthrough (Zoom/Teams) | Quarterly or before every salt rotation | Android Observability TL + Docs/Support manager | `docs/source/sdk/android/readiness/archive/<YYYY-MM>/` (recording + checklist) |
-| Slide deck & quick-reference card | Update whenever policy/runbook changes | Docs/Support manager | `docs/source/sdk/android/readiness/deck/` and `/cards/` (export PDF + Markdown) |
-| Knowledge check + attendance sheet | After each live session | Support engineering | `docs/source/sdk/android/readiness/forms/responses/` and `and7_operator_enablement.md` attendance block |
-| Q&A backlog / action log | Rolling; updated after every session | LLM (acting DRI) | `docs/source/sdk/android/readiness/and7_operator_enablement.md` §6 |
+| Yozib olingan ko'rsatmalar (Zoom/Jamoalar) | Har chorakda yoki har bir tuz aylanishidan oldin | Android Observability TL + Hujjatlar/Yordam menejeri | `docs/source/sdk/android/readiness/archive/<YYYY-MM>/` (yozuv + nazorat ro'yxati) |
+| Slayd pastki va tezkor ma'lumot kartasi | Siyosat/runbook o'zgarganda yangilang | Hujjatlar/Yordam menejeri | `docs/source/sdk/android/readiness/deck/` va `/cards/` (PDF eksport + Markdown) |
+| Bilimlarni tekshirish + davomat varaqasi | Har bir jonli seansdan keyin | Muhandislikni qo'llab-quvvatlash | `docs/source/sdk/android/readiness/forms/responses/` va `and7_operator_enablement.md` davomat bloki |
+| Savol-javoblar ro'yxati / harakatlar jurnali | Rolling; har bir seansdan keyin yangilanadi | LLM (harakat qiluvchi DRI) | `docs/source/sdk/android/readiness/and7_operator_enablement.md` §6 |
 
-### 10.3 Evidence & feedback loop
+### 10.3 Dalillar va mulohazalar davri
 
-- Store session artefacts (screenshots, incident drills, quiz exports) in the
-  same dated directory used for chaos rehearsals so governance can audit both
-  readiness tracks together.
-- When a session completes, update `status.md` (Android section) with links to
-  the archive directory and note any open follow-ups.
-- Outstanding questions from the live Q&A must be turned into issues or doc
-  pull requests within one week; reference the roadmap epics (AND7/AND8) in the
-  ticket description so owners stay aligned.
-- SRE syncs review the archive checklist plus the schema diff artefact listed in
-  Section 2.3 before declaring the curriculum closed for the quarter.
+- Seans artefaktlarini (skrinshotlar, hodisa mashqlari, viktorina eksporti) saqlang
+  Boshqaruv ikkalasini ham tekshirishi uchun tartibsizlik mashqlari uchun ishlatiladigan bir xil sanali katalog
+  tayyorlik izlari birgalikda.
+- Seans tugagach, havolalar bilan `status.md` (Android bo'limi) yangilang.
+  arxiv katalogini oching va har qanday ochiq kuzatuvlarga e'tibor bering.
+- Jonli savol-javobdagi ajoyib savollar muammo yoki hujjatga aylantirilishi kerak
+  bir hafta ichida so'rovlarni qabul qilish; da yo'l xaritasi epiklariga (AND7/AND8) murojaat qiling
+  chipta tavsifi, shuning uchun egalar bir xilda qoladilar.
+- SRE sinxronizatsiyasi arxiv nazorat ro'yxatini va ro'yxatda keltirilgan sxema farqi artefaktini ko'rib chiqadi
+  O'quv rejasini chorak uchun yopiq deb e'lon qilishdan oldin 2.3-bo'lim.

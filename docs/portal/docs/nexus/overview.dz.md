@@ -10,65 +10,66 @@ translation_last_reviewed: 2026-02-07
 id: nexus-overview
 title: Sora Nexus overview
 description: High-level summary of the Iroha 3 (Sora Nexus) architecture with pointers to the canonical mono-repo docs.
+translator: machine-google-reviewed
 ---
 
-Nexus (Iroha 3) extends Iroha 2 with multi-lane execution, governance-scoped
-data spaces, and shared tooling across every SDK. This page mirrors the new
-`docs/source/nexus_overview.md` brief in the mono-repo so portal readers can
-quickly understand how the architecture pieces fit together.
+Nexus (Iroha 3) གིས་ I18NT0000000003X འདི་ སྣ་མང་ལམ་ཐིག་བཀོལ་སྤྱོད་དང་གཅིག་ཁར་ རྒྱ་བསྐྱེད་འབདཝ་ཨིན།
+གནད་སྡུད་ས་སྟོང་དང་ ཨེསི་ཌི་ཀེ་ག་རའི་ནང་ ལག་ཆས་ཚུ་ བརྗེ་སོར་འབད་ཡོདཔ་ཨིན། ཤོག་ལེབ་འདི་གིས་ གསརཔ་འདི་ གཟུགས་བརྙན་བཟོཝ་ཨིན།
+I18NI000000028X ནང་ མོ་ནོ་རེ་པོ་ དེ་འདྲ་ དྲྭ་ཚིགས་ལྷག་མཁན་ཚོས་ ཤོར།
+བཟོ་རིག་གི་ཆ་ཤས་ཚུ་ གཅིག་ཁར་ག་དེ་སྦེ་མཐུན་སྒྲིག་འབདཝ་ཨིན་ན་ མགྱོགས་པ་རང་ཧ་གོ་དགོ།
 
-## Release lines
+## གྲལ་ཐིག་ཚུ་གསར་བཏོན་འབད།
 
-- **Iroha 2** – self-hosted deployments for consortium or private networks.
-- **Iroha 3 / Sora Nexus** – the multi-lane public network where operators
-  register data spaces (DS) and inherit shared governance, settlement, and
-  observability tooling.
-- Both lines compile from the same workspace (IVM + Kotodama toolchain), so SDK
-  fixes, ABI updates, and Norito fixtures remain portable. Operators download
-  the `iroha3-<version>-<os>.tar.zst` bundle to join Nexus; refer to
-  `docs/source/sora_nexus_operator_onboarding.md` for the fullscreen checklist.
+- **I18NT0000004X 2** – གྲོས་ཚོགས་ཡང་ན་སྒེར་གྱི་ཡོངས་འབྲེལ་གྱི་དོན་ལུ་ རང་དོན་གཙོ་བོར་བཏོན་ཡོད་པའི་བཀྲམ་སྤེལ་ཚུ།
+- **I18NT0000005X 3 / སོ་ར་ I18NT000000007X** – བཀོལ་སྤྱོད་པ་ཚུ་ཡོད་སའི་ སྣ་མང་ལམ་ཐིག་མི་མང་དྲ་རྒྱ།
+  གནས་སྡུད་ས་སྟོང་ (DS) དང་ ཤུལ་འཛིན་བརྗེ་སོར་གཞུང་སྐྱོང་ གཞིས་ཆགས་ དང་།
+  བལྟ་རྟོག་འབད་བཏུབ་པའི་ ལག་ཆས།
+- ལཱ་གི་ས་སྒོ་གཅིག་པ་ལས་ གྲལ་ཐིག་གཉིས་ཆ་ར་ བསྡུ་སྒྲིག་འབད་ཡོདཔ་ཨིན།
+  བཅོས་སྒྲིག་དང་ ABI དུས་མཐུན་བཟོ་ནི་ དེ་ལས་ Norito གི་སྒྲིག་བཀོད་ཚུ་ འབག་བཏུབ་སྦེ་རང་ ལུས་ཡོདཔ་ཨིན། བཀོལ་སྤྱོད་པ་ཚུ་ཕབ་ལེན་འབད་མི།
+  I18NI000000029X བཱན་ཌལ་ Nexus མཐུད་ནིའི་དོན་ལུ་; བལྟ།
+  I18NI000000030X གསལ་གཞིའི་ཞིབ་དཔྱད་ཐོ་ཡིག་ཆ་ཚང་གི་དོན་ལུ་ཨིན།
 
-## Building blocks
+## སྒྲིང་ཁྱིམ་སྡེབ་ཚན་ཚུ།
 
-| Component | Summary | Portal hooks |
-|-----------|---------|--------------|
-| Data Space (DS) | Governance-defined execution/storages domain that owns one or more lanes, declares validator sets, privacy class, fee + DA policy. | See [Nexus spec](./nexus-spec) for the manifest schema. |
-| Lane | Deterministic shard of execution; emits commitments that the global NPoS ring orders. Lane classes include `default_public`, `public_custom`, `private_permissioned`, and `hybrid_confidential`. | [Lane model](./nexus-lane-model) captures geometry, storage prefixes, and retention. |
-| Transition plan | Placeholder identifiers, routing phases, and dual-profile packaging track how single-lane deployments evolve into Nexus. | [Transition notes](./nexus-transition-notes) document each migration phase. |
-| Space Directory | Registry contract that stores DS manifests + versions. Operators reconcile catalog entries against this directory before joining. | Manifest diff tracker lives under `docs/source/project_tracker/nexus_config_deltas/`. |
-| Lane catalog | `[nexus]` config section that maps lane IDs to aliases, routing policies, and DA thresholds. `irohad --sora --config … --trace-config` prints the resolved catalog for audits. | Use `docs/source/sora_nexus_operator_onboarding.md` for the CLI walk-through. |
-| Settlement router | XOR transfer orchestrator that connects private CBDC lanes with public liquidity lanes. | `docs/source/cbdc_lane_playbook.md` spells out policy knobs and telemetry gates. |
-| Telemetry/SLOs | Dashboards + alerts under `dashboards/grafana/nexus_*.json` capture lane height, DA backlog, settlement latency, and governance queue depth. | [Telemetry remediation plan](./nexus-telemetry-remediation) spells out the dashboards, alerts, and audit evidence. |
+| ཆ་ཤས་ | བཅུད་བསྡུས་ | དྲྭ་ཚིགས་ཀྱི་ ཧུཀ་ |
+|--------------------------------------------- |
+| གནད་སྡུད་བར་སྟོང་ (DS) | གཞུང་སྐྱོང་གིས་ ངེས་ཚིག་བཀོད་ཡོད་པའི་ ལག་ལེན་/གསོག་འཇོག་མངའ་ཁོངས་ཚུ་ ལམ་གཅིག་དང་ ཡང་ན་ མངམ་ཡོད་པའི་ གསོག་འཇོག་ཚུ་ བདེན་དཔྱད་ཆ་ཚན་ཚུ་ སྒེར་གྱི་དབྱེ་རིམ་ འཐུས་ + ཌི་ཨེ་སྲིད་བྱུས་ཚུ་ཨིན། | གསལ་སྟོན་གྱི་འཆར་གཞི་གི་དོན་ལུ་ [Nexus sest](./nexus-spec) ལུ་བལྟ། |
+| ལམ་ | བཀག་ཐབས་ཀྱི་ ཐག་གཅོད་འབད་ནི། འཛམ་གླིང་ཨེན་པི་ཨོ་ཨེསི་གིས་ བཀའ་རྒྱ་ཚུ་ ཁས་བླངས་ཚུ་ བཏོནམ་ཨིན། ལམ་གྱི་སློབ་ཚན་ནང་ `default_public`, I18NI000000032X, I18NI000000033X, དང་ `hybrid_confidential` ཚུ་ཚུདཔ་ཨིན། | [Lane དཔེ་ཚད་](./nexus-lane-model) དབྱིབས་རྩིས་རིག་པ་དང་ གསོག་འཇོག་སྔོན་འཇུག་ དེ་ལས་ བཀག་འཛིན་ཚུ་ བཟུང་ཡོདཔ་ཨིན། |
+| འགྱུར་བའི་འཆར་གཞི | ས་གནས་འཛིན་མི་ངོས་འཛིན་འབད་མི་དང་ འགྲུལ་ལམ་གནས་རིམ་ དེ་ལས་ གཉིས་ལྡན་གྱི་ཐུམ་སྒྲིལ་གཉིས་ ལམ་གཅིག་གི་བཀྲམ་སྤེལ་ཚུ་ I18NT000000010X ལུ་ ག་དེ་སྦེ་ གོང་འཕེལ་འགྱོཝ་ཨིན་ན་ འཚོལ་ཞིབ་འབདཝ་ཨིན། | [Transition notes](./nexus-transition-notes) གནས་སྤོ་བའི་དུས་རིམ་རེ་རེར་ཡིག་ཆ་བཏབ། |
+| གནམ་སྟོང་སྣོད་ཐོ། | DS གསོག་འཇོག་འབད་མི་ ཐོ་བཀོད་གན་རྒྱ་འདི་གིས་ +ཐོན་རིམ་ཚུ་ གསལ་སྟོན་འབདཝ་ཨིན། བཀོལ་སྤྱོད་པ་ཚུ་གིས་ ཐོ་གཞུང་ནང་ འཛུལ་ཞུགས་མ་འབད་བའི་ཧེ་མ་ སྣོད་ཐོ་འདི་དང་ མཐུན་སྒྲིག་འབདཝ་ཨིན། | མ་འདྲ་བའི་ཁྱད་པར་འཚོལ་ཞིབ་འབད་མི་འདི་ `docs/source/project_tracker/nexus_config_deltas/` གི་འོག་ལུ་སྡོད་དོ་ཡོདཔ་ཨིན། |
+| ལམ་གྱི་ཐོ་གཞུང་ | `[nexus]` རིམ་སྒྲིག་དབྱེ་ཚན་འདི་གིས་ ལམ་གྱི་ཨའི་ཌི་ཚུ་ འགྲུལ་ལམ་སྲིད་བྱུས་ཚུ་ དེ་ལས་ ཌི་ཨེ་ཚད་གཞི་ཚུ་ སབ་ཁྲ་བཟོཝ་ཨིན། `irohad --sora --config … --trace-config` རྩིས་ཞིབ་ཀྱི་དོན་ལུ་ ཐག་བཅད་ཡོད་པའི་ཐོ་གཞུང་འདི་ དཔར་བསྐྲུན་འབདཝ་ཨིན། | CLI འགྲུལ་བཞུད་ཀྱི་དོན་ལུ་ `docs/source/sora_nexus_operator_onboarding.md` ལག་ལེན་འཐབ། |
+| གཞིས་ཆགས་རའུ་ཊར་ | སྒེར་གྱི་CBDC མཐུད་མི་ XOR སྤོ་བཤུད་སྙན་ཆའི་སྒྲིག་ཆས་འདི་ མི་མང་གི་དངུལ་འབབ་ཀྱི་ ལམ་ཐིག་ཚུ་དང་གཅིག་ཁར་ཨིན། | `docs/source/cbdc_lane_playbook.md` གིས་ སྲིད་བྱུས་ཀྱི་ མཛུབ་གནོན་དང་ ཊེ་ལི་མི་ཊི་ གཱེཊ་ཚུ་ བཏོནམ་ཨིན། |
+| བརྒྱུད་འཕྲིན་/SLOs | Dashboards + I18NI000000040X འཛིན་བཟུང་མཐོ་ཚད་དང་ DA backlog, གཞིས་ཆགས་ཀྱི་ བར་ཆད་ དེ་ལས་ གཞུང་སྐྱོང་གྱལ་གཏད་འོག་ལུ་ ཉེན་བརྡ་འབདཝ་ཨིན། | [Telemetry བཅོས་སྒྲིག་འཆར་གཞི།](./nexus-telemetry-remediation) གིས་ བརྡ་རྟགས་དང་ཉེན་བརྡ་ དེ་ལས་ རྩིས་ཞིབ་སྒྲུབ་བྱེད་ཚུ་ བྲིས་ཏེ་ཡོདཔ་ཨིན། |
 
-## Rollout snapshot
+## བཤུད་བརྙན།
 
-| Phase | Focus | Exit criteria |
-|-------|-------|---------------|
-| N0 – Closed beta | Council-managed registrar (`.sora`), manual operator onboarding, static lane catalog. | Signed DS manifests + rehearsed governance hand-offs. |
-| N1 – Public launch | Adds `.nexus` suffixes, auctions, self-service registrar, XOR settlement wiring. | Resolver/gateway sync tests, billing reconciliation dashboards, dispute tabletop drills. |
-| N2 – Expansion | Introduces `.dao`, reseller APIs, analytics, dispute portal, steward scorecards. | Compliance artefacts versioned, policy-jury toolkit online, treasury transparency reports. |
-| NX-12/13/14 gate | Compliance engine, telemetry dashboards, and documentation must ship together before partner pilots. | [Nexus overview](./nexus-overview) + [Nexus operations](./nexus-operations) published, dashboards wired, policy engine merged. |
+| དུས་རིམ་ | གཙོ་བོར་བཏོན་ནི། | ཁྱད་ཚད་ |
+|----------------------------------------|
+| N0 – ཁ་བསྡམས་ཡོད་པའི་བེ་ཊ་ | ཚོགས་སྡེ་གིས་འཛིན་སྐྱོང་འཐབ་མི་ ཐོ་བཀོད་ (`.sora`), ལག་ཐོག་བཀོལ་སྤྱོད་འབད་ཐངས་དང་ གནས་སྟངས་འགྱུར་ལྡོག་མེད་པའི་ལམ་ཐིག་ཐོ་གཞུང་། | Signed DS གསལ་སྟོན་ + བསྐྱར་སྦྱོང་འབད་བའི་ གཞུང་སྐྱོང་ལག་གདུབ། |
+| N1 – མི་མང་འགོ་འཛུགས་ | `.nexus` རྗེས་འཇུག་ རིན་བསྡུར་ རང་དོན་ཞབས་ཏོག་ཐོ་བཀོད་འབད་མི་ XOR གཞིས་ཆགས་གློག་ཐག་ཚུ་ ཁ་སྐོང་འབདཝ་ཨིན། | སེལ་མི་/གཱེཊི་ཝེ་མཉམ་འབྱུང་བརྟག་དཔྱད། བྱུང་འཛིན་མཐུན་སྒྲིག་བརྡ་བཀོད་ རྩོད་རྙོགས་ཐིག་ཁྲམ་གྱི་སྦྱོང་བརྡར་ཚུ། |
+| N2 – རྒྱ་བསྐྱེད་ | `.dao`, བསྐྱར་ཚོང་པ་ APIs, དབྱེ་དཔྱད་, རྩོད་རྙོགས་ཀྱི་དྲྭ་ཚིགས་, བཀག་འཛིན་གྱི་ སྐུགས་ཤོག་བྱང་ཚུ་ ངོ་སྤྲོད་འབདཝ་ཨིན། | བསྟར་སྤྱོད་ཀྱི་ཅ་ཆས་ཚུ་ ཐོན་རིམ་བཟོ་ཡོདཔ་ཨིན་ ཡོངས་འབྲེལ་ཐོག་ལས་ སྲིད་བྱུས་ཁྲིམས་དཔོན་གྱི་ ལག་ཆས་ཅ་ཆས་ ཡོངས་འབྲེལ་ཐོག་ལས་ དངུལ་ཁང་དྭངས་གསལ་སྙན་ཞུ་ཚུ་ སྙན་ཞུ་འབདཝ་ཨིན། |
+| NX-12/13/14 སྒོ་སྒྲིག | མཐུན་སྒྲིག་འཕྲུལ་ཆས་དང་ ཊེ་ལི་མི་ཊི་ ཌེཤ་བོརཌ་ དེ་ལས་ ཡིག་ཆ་ཚུ་ མཉམ་འབྲེལ་པ་ མཁའ་འགྲུལ་གྱི་ཧེ་མ་ གཅིག་ཁར་ བསྐྱལ་དགོ། | [Nexus སྤྱིར་བཏང་ལྟ་རྟོག](I18NU000000020X) + [I18NT0000012X བཀོལ་སྤྱོད་](I18NU000000021X) དཔར་བསྐྲུན་ ཌེཤ་བོཌི་ཝའིཊི་ སྲིད་བྱུས་འཕྲུལ་ཆས་མཉམ་བསྡོམས་འབད་ཡོདཔ། |
 
-## Operator responsibilities
+## བཀོལ་སྤྱོད་པའི་འགན་འཁྲི།
 
-1. **Config hygiene** – keep `config/config.toml` synced with the published lane &
-   dataspace catalog; archive `--trace-config` output with every release ticket.
-2. **Manifest tracking** – reconcile catalog entries with the latest Space
-   Directory bundle before joining or upgrading nodes.
-3. **Telemetry coverage** – expose the `nexus_lanes.json`, `nexus_settlement.json`,
-   and related SDK dashboards; wire alerts to PagerDuty and run quarterly reviews per the telemetry remediation plan.
-4. **Incident reporting** – follow the severity matrix in
-   [Nexus operations](./nexus-operations) and file RCAs within five business days.
-5. **Governance readiness** – attend Nexus council votes impacting your lanes and
-   rehearse rollback instructions quarterly (tracked via
-   `docs/source/project_tracker/nexus_config_deltas/`).
+1. **གཙང་སྦྲ་འཕྲོད་བསྟེན་** – དཔར་བསྐྲུན་འབད་ཡོད་པའི་ལམ་དང་གཅིག་ཁར་ མཉམ་འབྱུང་འབད་བཞག་དགོ།
+   གནས་སྡུད་ས་སྟོང་ཐོ་གཞུང་; གཏན་མཛོད་ `--trace-config` གསར་བཏོན་གྱི་ ཤོག་འཛིན་ག་ར་དང་གཅིག་ཁར་ ཐོན་འབྲས་ཡོདཔ།
+2. **རྗེས་འཇགས་རྗེས་འདེད་** – འཕྲལ་གྱི་ས་སྟོང་དང་གཅིག་ཁར་ ཐོ་གཞུང་ཐོ་བཀོད་ཚུ་ མཐུན་སྒྲིག་འབད།
+   མཐུད་མཚམས་ ཡང་ན་ ཡར་འཕར་མ་འབད་བའི་ཧེ་མར་ སྣོད་ཐོའི་བང་བདེན།
+3. **Telemetry ཁྱབ་ཁོངས་** – `nexus_lanes.json`, `nexus_settlement.json`, གསལ་སྟོན་འབདཝ་ཨིན།
+   དང་ འབྲེལ་ཡོད་ཨེསི་ཌི་ཀེ་ བརྡ་བཀོད་ཚུ་; PagerDuty ལུ་ གློག་ཐག་དྲན་སྐུལ་ཚུ་དང་ བརྡ་འཕྲིན་བཅོས་ཐབས་འཆར་གཞི་རེ་ལུ་ ཟླཝ་གསུམ་གྱི་བསྐྱར་ཞིབ་ཚུ་ འགོ་འདྲེན་འཐབ་ཨིན།
+4. **རྐྱེན་གྱི་སྙན་ཞུ་** – 2 ནང་ཚབས་ཆེ་ཆུང་གི་མེ་ཊིགསི་ལུ་རྗེས་སུ་འབྲང་།
+   [I18NT0000013X བཀོལ་སྤྱོད་](./nexus-operations) དང་ཚོང་ལས་ཉིན་ལྔའི་ནང་དུ་ RCAs དང་།
+༥. **གཞུང་སྐྱོང་གྲ་སྒྲིག་** – ཁྱོད་ཀྱི་ལམ་དང་ལམ་ལུ་གནོད་སྐྱོན་བརྐྱབ་སྟེ་ Nexus ཚོགས་སྡེའི་ཚོགས་རྒྱན་ཚུ་གིས་ བཅའ་མར་གཏོགས་ཡོདཔ།
+   བསྐྱར་སྦྱོང་འབད་ནི། ལོ་གསུམ་རེའི་ནང་ (བརྒྱུད་དེ་འགྱོ་ཡི།
+   I18NI0000048X).
 
-## See also
+## ད་དུང་གཟིགས།
 
-- Canonical overview: `docs/source/nexus_overview.md`
-- Detailed spec: [./nexus-spec](./nexus-spec)
-- Lane geometry: [./nexus-lane-model](./nexus-lane-model)
-- Transition plan: [./nexus-transition-notes](./nexus-transition-notes)
-- Telemetry remediation plan: [./nexus-telemetry-remediation](./nexus-telemetry-remediation)
-- Operations runbook: [./nexus-operations](./nexus-operations)
-- Operator onboarding guide: `docs/source/sora_nexus_operator_onboarding.md`
+- ཀེ་ནོ་ནིག་གི་བལྟ་བཤལ་: `docs/source/nexus_overview.md`
+- ཁ་གསལ་གྱི་ཁྱད་ཆོས།: [./nex-spec](I18NU0000023X)
+- ལམ་ཐིག་དབྱིབས་རྩིས་རིག [./ནེག་སི་ལམ་ཐིག་-མོ་ཌེལ་](I18NU0000024X)
+- འགྱུར་བའི་འཆར་གཞི།: [./ནེག་སི་-འགྱུར་བའི་དྲན་ཐོ།](I18NU0000025X)
+- ཊེ་ལི་མི་ཊི་ བཅོ་ཁ་འཆར་གཞི། [./ཤུལ་མམ་གྱི་ བརྒྱུད་འཕྲིན་-བཅོ་ཁ་ ](I18NU0000026X)
+- བཀོལ་སྤྱོད་དེབ་: [./ཤུལ་མམ་གྱི་བཀོལ་སྤྱོད་ཚུ་](./nexus-operations)
+- བཀོལ་སྤྱོད་ཀྱི་ལམ་སྟོན་ལམ་སྟོན་པ་: `docs/source/sora_nexus_operator_onboarding.md`

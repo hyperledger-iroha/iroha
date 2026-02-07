@@ -11,34 +11,35 @@ id: preview-feedback-w2-summary
 title: W2 community feedback & status
 sidebar_label: W2 summary
 description: Live digest for the community preview wave (W2).
+translator: machine-google-reviewed
 ---
 
-| Item | Details |
+| Зүйл | Дэлгэрэнгүй |
 | --- | --- |
-| Wave | W2 — Community reviewers |
-| Invite window | 2025‑06‑15 → 2025‑06‑29 |
-| Artefact tag | `preview-2025-06-15` |
-| Tracker issue | `DOCS-SORA-Preview-W2` |
-| Participants | comm-vol-01 … comm-vol-08 |
+| Долгион | W2 — Олон нийтийн тоймчид |
+| Урих цонх | 2025‑06‑15 → 2025‑06‑29 |
+| Олдворын шошго | `preview-2025-06-15` |
+| Tracker асуудал | `DOCS-SORA-Preview-W2` |
+| Оролцогчид | comm-vol-01 … comm-vol-08 |
 
-## Highlights
+## Онцлох үйл явдал
 
-1. **Governance & tooling** — Community intake policy unanimously approved on 2025‑05‑20; updated request template with motivation/timezone fields lives under `docs/examples/docs_preview_request_template.md`.
-2. **Preflight evidence** — Try it proxy change `OPS-TRYIT-188` ran 2025‑06‑09, Grafana dashboards captured, and `preview-2025-06-15` descriptor/checksum/probe outputs archived under `artifacts/docs_preview/W2/`.
-3. **Invite wave** — Eight community reviewers invited 2025‑06‑15, with acknowledgements logged in the tracker invite table; all completed checksum verification before browsing.
-4. **Feedback** — `docs-preview/w2 #1` (tooltip wording) and `#2` (localization sidebar order) were filed on 2025‑06‑18 and resolved by 2025‑06‑21 (Docs-core-04/05); no incidents occurred during the wave.
+1. **Засаглал ба багаж хэрэгсэл** — 2025-05-20-ны өдөр олон нийтийн хэрэглээний бодлогыг санал нэгтэй баталсан; сэдэл/цагийн бүсийн талбар бүхий шинэчлэгдсэн хүсэлтийн загвар нь `docs/examples/docs_preview_request_template.md`-ийн дагуу амьдардаг.
+2. **Нислэгийн өмнөх нотлох баримт** — Проксины өөрчлөлтийг туршаад үзээрэй `OPS-TRYIT-188` 2025‑06‑09 ажиллаж, Grafana хяналтын самбарыг авч, `preview-2025-06-15` тодорхойлогч/шалгах нийлбэр/шинжилгээний гаралт18000X архивлагдсан.
+3. **Invite wave** — 2025‑06‑15-нд уригдсан олон нийтийн 8 шүүмжлэгч, хүлээн авагчийн урилгын хүснэгтэд нэвтэрсэн талархалтайгаар; үзэхийн өмнө шалгах нийлбэр баталгаажуулалт.
+4. **Санал хүсэлт** — `docs-preview/w2 #1` (хэрэгслийн үг хэллэг) болон `#2` (локалчлалын хажуугийн самбарын захиалга) 2025-06-18-нд бүртгэгдэж, 2025-06-21 (Docs-50-) гэхэд шийдвэрлэгдсэн; давалгааны үеэр ямар ч осол гараагүй.
 
-## Action items
+## Үйлдлийн зүйл
 
-| ID | Description | Owner | Status |
+| ID | Тодорхойлолт | Эзэмшигч | Статус |
 | --- | --- | --- | --- |
-| W2-A1 | Address `docs-preview/w2 #1` (tooltip wording). | Docs-core-04 | ✅ Completed 2025‑06‑21 |
-| W2-A2 | Address `docs-preview/w2 #2` (localization sidebar). | Docs-core-05 | ✅ Completed 2025‑06‑21 |
-| W2-A3 | Archive exit evidence + update roadmap/status. | Docs/DevRel lead | ✅ Completed 2025‑06‑29 |
+| W2-A1 | Хаяг `docs-preview/w2 #1` (хэрэгслийн үг хэллэг). | Doc-core-04 | ✅ Дууссан 2025‑06‑21 |
+| W2-A2 | `docs-preview/w2 #2` хаяг (нутагшуулах талбар). | Doc-core-05 | ✅ Дууссан 2025‑06‑21 |
+| W2-A3 | Архиваас гарах нотлох баримт + замын зураг/статусыг шинэчлэх. | Docs/DevRel тэргүүлэх | ✅ Дууссан 2025‑06‑29 |
 
-## Exit summary (2025-06-29)
+## Гаралтын хураангуй (2025-06-29)
 
-- All eight community reviewers confirmed completion and had preview access revoked; acknowledgements recorded in the tracker invite log.
-- Final telemetry snapshots (`docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals`) remained green; logs plus Try it proxy transcripts attached to `DOCS-SORA-Preview-W2`.
-- Evidence bundle (descriptor, checksum log, probe output, link report, Grafana screenshots, invite acknowledgements) archived under `artifacts/docs_preview/W2/preview-2025-06-15/`.
-- Tracker W2 checkpoint log updated through exit, ensuring the roadmap keeps an auditable record before W3 planning begins.
+- Нийгэмлэгийн найман хянагч бүгд дууссаныг баталгаажуулж, урьдчилан үзэх эрхийг цуцалсан; трекерийн урилгын бүртгэлд бүртгэгдсэн талархал.
+- Телеметрийн эцсийн агшин зуурын зургууд (`docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals`) ногоон хэвээр үлдсэн; logs plus `DOCS-SORA-Preview-W2`-д хавсаргасан прокси хуулбарыг туршаад үзээрэй.
+- `artifacts/docs_preview/W2/preview-2025-06-15/` дор архивлагдсан нотлох баримтын багц (тайлбарлагч, шалгах нийлбэрийн бүртгэл, шалгалтын гаралт, холбоосын тайлан, Grafana дэлгэцийн агшин, урилга сайшаал).
+- Tracker W2 шалган нэвтрүүлэх цэгийн бүртгэлийг гарцаар шинэчилж, W3 төлөвлөлт эхлэхээс өмнө замын зураглалыг хянаж болохуйц бүртгэл хөтөлдөг.

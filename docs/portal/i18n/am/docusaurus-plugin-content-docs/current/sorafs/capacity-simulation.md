@@ -8,41 +8,43 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraFS Capacity Simulation Runbook
 sidebar_label: Capacity Simulation Runbook
 description: Exercising the SF-2c capacity marketplace simulation toolkit with reproducible fixtures, Prometheus exports, and Grafana dashboards.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
-:::
+::: ማስታወሻ ቀኖናዊ ምንጭ
+::
 
-This runbook explains how to run the SF-2c capacity marketplace simulation kit and visualise the resulting metrics. It validates quota negotiation, failover handling, and slashing remediation end-to-end using the deterministic fixtures in `docs/examples/sorafs_capacity_simulation/`. Capacity payloads still use `sorafs_manifest_stub capacity`; use `iroha app sorafs toolkit pack` for manifest/CAR packaging flows.
+ይህ Runbook የ SF-2c አቅም የገበያ ቦታ ማስመሰያ ኪት እንዴት እንደሚሰራ ያብራራል እና የተገኙትን መለኪያዎች በዓይነ ሕሊናዎ ይሳሉ። በ`docs/examples/sorafs_capacity_simulation/` ውስጥ ያሉትን የመወሰኛ ዕቃዎች በመጠቀም የኮታ ድርድርን፣ ያልተሳካ አያያዝን እና የማስተካከያ ከጫፍ እስከ ጫፍ መቁረጥን ያረጋግጣል። የአቅም መጫዎቻዎች አሁንም `sorafs_manifest_stub capacity` ይጠቀማሉ; ለማንፀባረቅ/CAR ማሸጊያ ፍሰቶች `iroha app sorafs toolkit pack` ይጠቀሙ።
 
-## 1. Generate CLI artefacts
+## 1. CLI ቅርሶችን መፍጠር
 
 ```bash
 cd $REPO_ROOT/docs/examples/sorafs_capacity_simulation
 ./run_cli.sh ./artifacts
 ```
 
-`run_cli.sh` wraps `sorafs_manifest_stub capacity` to emit Norito payloads, base64 blobs, Torii request bodies, and JSON summaries for:
+`run_cli.sh` `sorafs_manifest_stub capacity` ይጠቀልላል Norito ክፍያ ጭነቶች፣ base64 blobs፣ Torii የጥያቄ አካላት እና JSON ማጠቃለያዎች ለ፡
 
-- Three provider declarations participating in the quota negotiation scenario.
-- A replication order allocating the staged manifest across those providers.
-- Telemetry snapshots for the pre-outage baseline, outage interval, and failover recovery.
-- A dispute payload requesting slashing after the simulated outage.
+- በኮታ ድርድር ሁኔታ ውስጥ የሚሳተፉ ሶስት የአቅራቢዎች መግለጫዎች።
+- የማባዛት ትእዛዝ በነዚያ አቅራቢዎች ላይ የተዘጋጀውን አንጸባራቂ የሚመደብ።
+- የቴሌሜትሪ ቅጽበታዊ ገጽ እይታዎች ለቅድመ-ውጪ መነሻ መስመር፣ የመቋረጡ ክፍተት እና ያልተሳካ ማገገም።
+- ከተመሳሰለው መቋረጥ በኋላ መቆራረጥን የሚጠይቅ የሙግት ጭነት።
 
-All artefacts land under `./artifacts` (override by passing a different directory as the first argument). Inspect the `_summary.json` files for human-readable context.
+ሁሉም ቅርሶች በ I18NI0000015X (የተለየ ማውጫን እንደ መጀመሪያው ክርክር በማለፍ ይሽሩት)። ሰው ሊነበብ ለሚችል አውድ የ`_summary.json` ፋይሎችን መርምር።
 
-## 2. Aggregate results & emit metrics
+## 2. አጠቃላይ ውጤቶችን እና ልቀት መለኪያዎች
 
 ```bash
 ./analyze.py --artifacts ./artifacts
 ```
 
-The analyzer produces:
+ተንታኙ የሚከተሉትን ያዘጋጃል-
 
-- `capacity_simulation_report.json` - aggregated allocations, failover deltas, and dispute metadata.
-- `capacity_simulation.prom` - Prometheus textfile metrics (`sorafs_simulation_*`) suitable for the node-exporter textfile collector or a standalone scrape job.
+- `capacity_simulation_report.json` - የተዋሃዱ ምደባዎች፣ ያልተሳካላቸው ዴልታዎች እና ሙግት ሜታዳታ።
+- `capacity_simulation.prom` - Prometheus textfile metrics (`sorafs_simulation_*`) ለኖድ ላኪ የጨርቃጨርቅ ሰብሳቢ ወይም ራሱን የቻለ የመቧጨር ሥራ።
 
-Example Prometheus scrape configuration:
+ምሳሌ Prometheus የመቧጨርቅ ውቅር፡
 
 ```yaml
 scrape_configs:
@@ -57,22 +59,22 @@ scrape_configs:
       format: ["prometheus"]
 ```
 
-Point the textfile collector at `capacity_simulation.prom` (when using node-exporter copy it into the directory passed via `--collector.textfile.directory`).
+የጽሑፍ ፋይል ሰብሳቢውን በ `capacity_simulation.prom` (node-exporter ሲጠቀሙ በ `--collector.textfile.directory` ወደ ተላለፈው ማውጫ ይቅዱት) ያመልክቱ።
 
-## 3. Import the Grafana dashboard
+## 3. Grafana ዳሽቦርዱን አስመጣ
 
-1. In Grafana, import `dashboards/grafana/sorafs_capacity_simulation.json`.
-2. Bind the `Prometheus` datasource variable to the scrape target configured above.
-3. Verify the panels:
-   - **Quota Allocation (GiB)** shows committed/assigned balances for each provider.
-   - **Failover Trigger** flips to *Failover Active* when the outage metrics stream in.
-   - **Uptime Drop During Outage** charts the percentage loss for provider `alpha`.
-   - **Requested Slash Percentage** visualises the remediation ratio extracted from the dispute fixture.
+1. በ I18NT0000004X, `dashboards/grafana/sorafs_capacity_simulation.json` አስመጣ.
+2. የI18NI0000023X የውሂብ ምንጭ ተለዋዋጭን ከላይ ከተዋቀረው የቧጨራ ዒላማ ጋር ያስሩ።
+3. ፓነሎችን ያረጋግጡ:
+   - **የኮታ ድልድል (ጊቢ)** ለእያንዳንዱ አገልግሎት አቅራቢ የተሰጡ/የተመደቡ ሂሳቦችን ያሳያል።
+   - ** ያልተሳካ ቀስቅሴ *** ወደ * ያልተሳካ ገቢር * የሚቀያየር የመውረጃ መለኪያዎች ወደ ውስጥ ሲገቡ።
+   - **በአገልግሎት ጊዜ መቋረጡ** የአቅራቢውን `alpha` መቶኛ ኪሳራ ይገልፃል።
+   - **የተጠየቀው Slash ፐርሰንት** ከክርክር አፕሊኬሽኑ የወጣውን የማስተካከያ ሬሾን በእይታ ያሳያል።
 
-## 4. Expected checks
+## 4. የሚጠበቁ ቼኮች
 
-- `sorafs_simulation_quota_total_gib{scope="assigned"}` equals `600` while the committed total remains >=600.
-- `sorafs_simulation_failover_triggered` reports `1` and the replacement provider metric highlights `beta`.
-- `sorafs_simulation_slash_requested` reports `0.15` (15% slash) for the `alpha` provider identifier.
+- `sorafs_simulation_quota_total_gib{scope="assigned"}` ከ `600` ጋር እኩል ሲሆን የተፈፀመው ድምር ይቀራል >= 600።
+- `sorafs_simulation_failover_triggered` ሪፖርቶች `1` እና የምትክ አቅራቢው ሜትሪክ ድምቀቶች `beta`.
+- `sorafs_simulation_slash_requested` ሪፖርት `0.15` (15% slash) ለI18NI0000032X አቅራቢ መለያ።
 
-Run `cargo test -p sorafs_car --features cli --test capacity_simulation_toolkit` to confirm the fixtures are still accepted by the CLI schema.
+መጫዎቻዎቹ አሁንም በCLI ዕቅዱ ተቀባይነት እንዳላቸው ለማረጋገጥ `cargo test -p sorafs_car --features cli --test capacity_simulation_toolkit` ን ያሂዱ።

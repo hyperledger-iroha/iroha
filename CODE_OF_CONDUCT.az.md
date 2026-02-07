@@ -7,51 +7,52 @@ generator: scripts/sync_docs_i18n.py
 source_hash: ece3b82ce3096e15d3cc4524fbb6033ab3fa5119da561a1aec40306564ba0193
 source_last_modified: "2025-12-29T18:16:34.771616+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Contributor Covenant Code of Conduct
+# Contributor Covenant Davranış Kodeksi
 
-## Our Pledge
+## Sözümüz
 
-In the interest of fostering an open and welcoming environment, we as contributors and maintainers pledge to making participation in our project and our community a harassment-free experience for everyone, regardless of age, body size, disability, ethnicity, gender identity and expression, level of experience, nationality, personal appearance, race, religion, or sexual identity and orientation.
+Açıq və qonaqpərvər bir mühit yaratmaq marağında biz töhfəçilər və dəstəkçilər olaraq layihəmizdə və icmamızda iştirakı yaşından, bədən ölçüsündən, əlilliyindən, etnik mənsubiyyətindən, cinsi kimliyindən və ifadəsindən, təcrübə səviyyəsindən, milliyyətindən, şəxsi görünüşündən, irqindən, dinindən və ya cinsi kimliyindən və oriyentasiyasından asılı olmayaraq hər kəs üçün təcavüzdən azad bir təcrübəyə çevirməyi öhdəsinə götürürük.
 
-## Our Standards
+## Standartlarımız
 
-Examples of behavior that contributes to creating a positive environment include:
+Müsbət bir mühit yaratmağa kömək edən davranış nümunələrinə aşağıdakılar daxildir:
 
-* Using welcoming and inclusive language
-* Being respectful of differing viewpoints and experiences
-* Gracefully accepting constructive criticism
-* Focusing on what is best for the community
-* Showing empathy towards other community members
+* Xoş və inklüziv dildən istifadə
+* Fərqli baxışlara və təcrübələrə hörmətlə yanaşmaq
+* Konstruktiv tənqidi nəzakətlə qəbul edin
+* Cəmiyyət üçün ən yaxşı olana diqqət yetirmək
+* Digər icma üzvlərinə empatiya göstərmək
 
-Examples of unacceptable behavior by participants include:
+İştirakçılar tərəfindən qəbuledilməz davranış nümunələrinə aşağıdakılar daxildir:
 
-* The use of sexualized language or imagery and unwelcome sexual attention or advances
-* Trolling, insulting/derogatory comments, and personal or political attacks
-* Public or private harassment
-* Publishing others' private information, such as a physical or electronic address, without explicit permission
-* Other conduct which could reasonably be considered inappropriate in a professional setting
+* Cinsiləşdirilmiş dil və ya təsvirlərin istifadəsi və arzuolunmaz cinsi diqqət və ya irəliləyişlər
+* Trolling, təhqiredici/alçaldıcı şərhlər və şəxsi və ya siyasi hücumlar
+* İctimai və ya özəl təcavüz
+* Başqalarının şəxsi məlumatlarını, məsələn, fiziki və ya elektron ünvanları açıq icazə olmadan dərc etmək
+* Peşəkar şəraitdə əsaslı olaraq qeyri-münasib sayıla bilən digər davranışlar
 
-## Our Responsibilities
+## Məsuliyyətlərimiz
 
-Project maintainers are responsible for clarifying the standards of acceptable behavior and are expected to take appropriate and fair corrective action in response to any instances of unacceptable behavior.
+Layihənin rəhbərləri məqbul davranış standartlarının aydınlaşdırılmasına cavabdehdirlər və hər hansı qəbuledilməz davranış hallarına cavab olaraq müvafiq və ədalətli düzəldici tədbirlər görmələri gözlənilir.
 
-Project maintainers have the right and responsibility to remove, edit, or reject comments, commits, code, wiki edits, issues, and other contributions that are not aligned to this Code of Conduct, or to ban temporarily or permanently any contributor for other behaviors that they deem inappropriate, threatening, offensive, or harmful.
+Layihə rəhbərlərinin bu Davranış Kodeksinə uyğun olmayan şərhləri, öhdəlikləri, kodu, viki redaktələrini, məsələləri və digər töhfələri silmək, redaktə etmək və ya rədd etmək və ya qeyri-münasib, hədələyici, təhqiredici və ya zərərli hesab etdikləri digər davranışlara görə hər hansı töhfə verəni müvəqqəti və ya daimi olaraq qadağan etmək hüququ və məsuliyyəti var.
 
-## Scope
+## Əhatə dairəsi
 
-This Code of Conduct applies both within project spaces and in public spaces when an individual is representing the project or its community. Examples of representing a project or community include using an official project e-mail address, posting via an official social media account, or acting as an appointed representative at an online or offline event. Representation of a project may be further defined and clarified by project maintainers.
+Bu Davranış Kodeksi həm layihə məkanlarında, həm də fərdin layihəni və ya onun icmasını təmsil etdiyi zaman ictimai yerlərdə tətbiq edilir. Layihəni və ya icmanı təmsil etməyə misal olaraq layihənin rəsmi e-poçt ünvanından istifadə etmək, rəsmi sosial media hesabı vasitəsilə yerləşdirmə və ya onlayn və ya oflayn tədbirdə təyin olunmuş nümayəndə kimi çıxış etmək daxildir. Layihənin təqdimatı layihənin icraçıları tərəfindən əlavə olaraq müəyyən edilə və dəqiqləşdirilə bilər.
 
-## Enforcement
+## İcra
 
-Instances of abusive, harassing, or otherwise unacceptable behavior may be reported by contacting the project team [here](./CONTRIBUTING.md#contact). All complaints will be reviewed and investigated and will result in a response that is deemed necessary and appropriate to the circumstances. The project team is obligated to maintain confidentiality with regard to the reporter of an incident. Further details of specific enforcement policies may be posted separately.
+Sui-istifadə, təqib və ya başqa yollarla qəbuledilməz davranış halları [burada](./CONTRIBUTING.md#contact) layihə komandası ilə əlaqə saxlamaqla bildirilə bilər. Bütün şikayətlər nəzərdən keçiriləcək və araşdırılacaq və lazımi və şəraitə uyğun cavab veriləcək. Layihə komandası hadisənin reportyoru ilə bağlı məxfiliyi qorumağa borcludur. Xüsusi icra siyasətlərinin əlavə təfərrüatları ayrıca yerləşdirilə bilər.
 
-Project maintainers who do not follow or enforce the Code of Conduct in good faith may face temporary or permanent repercussions as determined by other members of the project's leadership.
+Davranış Kodeksinə vicdanla əməl etməyən və ya tətbiq etməyən layihənin rəhbərləri layihə rəhbərliyinin digər üzvləri tərəfindən müəyyən edilmiş müvəqqəti və ya daimi əks-sədalarla üzləşə bilər.
 
-## Attribution
+## Atribut
 
-This Code of Conduct is adapted from the [Contributor Covenant][homepage], version 1.4, available at [http://contributor-covenant.org/version/1/4][version]
+Bu Davranış Kodeksi [http://contributor-covenant.org/version/1/4][versiya] ünvanında mövcud olan [Təqdimatçı Razılaşması][ana səhifə], versiya 1.4-dən uyğunlaşdırılmışdır.
 
 [homepage]: http://contributor-covenant.org
 [version]: http://contributor-covenant.org/version/1/4/

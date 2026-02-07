@@ -7,17 +7,18 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 8a8e6a4981a11faac56d9b04432773e94fd59f8e2524fa4c552be459291c7c39
 source_last_modified: "2025-12-29T18:16:35.068386+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Android Device Lab Reservation Request Template
+# Android მოწყობილობის ლაბორატორიის დაჯავშნის მოთხოვნის შაბლონი
 
-Copy this template into the `_android-device-lab` Jira queue when booking
-hardware. Attach links to Buildkite pipelines, compliance artefacts, and any
-partner tickets that depend on the run.
+დააკოპირეთ ეს შაბლონი `_android-device-lab` Jira რიგში დაჯავშნისას
+აპარატურა. მიამაგრეთ ბმულები Buildkite მილსადენებთან, შესაბამისობის არტეფაქტებთან და ნებისმიერ სხვასთან
+პარტნიორის ბილეთები, რომლებიც დამოკიდებულია რბენაზე.
 
 ```
 Summary: <Milestone / workload> – <lane(s)> – <date/time UTC>

@@ -7,217 +7,196 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 7c8262bacbb15b83bd70c824990e4948832418b59f184bca353eee899e44f4d4
 source_last_modified: "2025-12-29T18:16:35.960562+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Fraud Monitoring System
+# የማጭበርበር ቁጥጥር ስርዓት
 
-This document captures the reference design for the shared fraud monitoring capability that will accompany the core ledger. The goal is to provide payment service providers (PSPs) with high-quality risk signals for every transaction while keeping custody, privacy, and policy decisions under the control of designated operators outside the settlement engine.
+ይህ ሰነድ ከዋናው ደብተር ጋር አብሮ የሚመጣውን የጋራ ማጭበርበር የመከታተል ችሎታን የማጣቀሻ ንድፍ ይይዛል። ግቡ የጥበቃ፣ ግላዊነት እና የፖሊሲ ውሳኔዎችን ከመቋቋሚያ ሞተር ውጭ በተመረጡ ኦፕሬተሮች ቁጥጥር ስር እያለ ለእያንዳንዱ ግብይት የክፍያ አገልግሎት አቅራቢዎችን (PSPs) ከፍተኛ ጥራት ያላቸውን የአደጋ ምልክቶችን ማቅረብ ነው።
 
-## Goals and Success Criteria
-- Deliver real-time fraud risk assessments (<120 ms 95p, <40 ms median) for every payment touching the settlement engine.
-- Preserve user privacy by ensuring the central service never processes personally identifiable information (PII) and only ingests pseudonymous identifiers and behavioral telemetry.
-- Support multi-PSP environments where each provider keeps operational autonomy but can query shared intelligence.
-- Adapt continuously to new attack patterns via supervised and unsupervised models without introducing non-deterministic ledger behavior.
-- Provide auditable decision traces for regulators and independent reviewers without exposing sensitive wallets or counterparties.
+## ግቦች እና የስኬት መስፈርቶች
+- የሰፈራ ሞተሩን ለሚነኩ ለእያንዳንዱ ክፍያ የእውነተኛ ጊዜ የማጭበርበር ስጋት ግምገማዎችን (<120 ms 95p፣ <40 ms median) ያቅርቡ።
+- ማዕከላዊ አገልግሎቱ በግል የሚለይ መረጃን (PII) ፈጽሞ እንደማያስኬድ እና ስም የለሽ መለያዎችን እና የባህሪ ቴሌሜትሪ ብቻ እንደሚያስገባ በማረጋገጥ የተጠቃሚን ግላዊነት ይጠብቁ።
+- እያንዳንዱ አገልግሎት አቅራቢ የተግባር ራስን በራስ የማስተዳደር ነገር ግን የጋራ ዕውቀትን የሚጠይቅ የባለብዙ-PSP አካባቢዎችን ይደግፉ።
+- የማይወስን የሂሳብ መዝገብ ባህሪን ሳያስተዋውቅ ክትትል በሚደረግባቸው እና ቁጥጥር በማይደረግባቸው ሞዴሎች አማካኝነት ከአዳዲስ የጥቃት ቅጦች ጋር ያለማቋረጥ መላመድ።
+- ሚስጥራዊነት ያላቸው የኪስ ቦርሳዎችን ወይም ተጓዳኝዎችን ሳያሳዩ ኦዲት ሊደረጉ የሚችሉ የውሳኔ ዱካዎችን ለተቆጣጠሪዎች እና ለገለልተኛ ገምጋሚዎች ያቅርቡ።
 
-## Scope
-- **In-scope:** Transaction risk scoring, behavioral analytics, cross-PSP correlation, anomaly alerting, governance hooks, and PSP integration APIs.
-- **Out-of-scope:** Direct enforcement (remain PSP responsibility), sanctions screening (handled by existing compliance pipelines), and identity proofing (alias management covers this).
+## ወሰን
+- ** ውስጠ-ወሰን፡** የግብይት ስጋት ነጥብ፣ የባህሪ ትንተና፣ የPSP ተሻጋሪ ትስስር፣ ያልተለመደ ማንቂያ፣ የአስተዳደር መንጠቆዎች እና የPSP ውህደት ኤፒአይዎች።
+- **ከክልል ውጪ፡** ቀጥተኛ ማስፈጸሚያ (የ PSP ኃላፊነት ይቀራል)፣ የማዕቀብ ማጣሪያ (በነባር ተገዢ የቧንቧ መስመሮች የሚስተናገድ) እና የማንነት ማረጋገጫ (ቅፅል አስተዳደር ይህንን ይሸፍናል)።
 
-## Functional Requirements
-1. **Transaction Scoring API**: Synchronous API that PSPs call before forwarding a payment to the settlement engine, returning a risk score, categorical verdict, and reasoning features.
-2. **Event Ingestion**: Stream of settlement outcomes, wallet lifecycle events, device fingerprints, and PSP-level fraud feedback for continuous learning.
-3. **Model Lifecycle Management**: Versioned models with offline training, shadow deployment, staged rollout, and rollback support. Deterministic fallback heuristic must exist for every feature.
-4. **Feedback Loop**: PSPs must be able to submit confirmed fraud cases, false positives, and remediation notes. System aligns feedback with risk features and updates analytics.
-5. **Privacy Controls**: All data stored and transmitted must be alias-based. Any request containing raw identity metadata is rejected and logged.
-6. **Governance Reporting**: Scheduled exports of aggregated metrics (detections per PSP, typologies, response latency) plus ad-hoc investigation APIs for authorized auditors.
-7. **Resilience**: Active-active deployment across at least two facilities with automatic queue draining and replay. If the service is degraded, PSPs fall back to local rules without blocking the ledger.
+## ተግባራዊ መስፈርቶች
+1. **የግብይት ነጥብ ኤፒአይ**፡ ፒኤስፒዎች ክፍያን ወደ መቋቋሚያ ሞተር ከማስተላለፉ በፊት የሚጠሩት የተመሳሰለ ኤፒአይ፣ የአደጋ ነጥብ፣ የምድብ ብይን እና የማመዛዘን ባህሪያትን ከመመለስዎ በፊት።
+2. **የክስተት ማስመጣት**፡ የሰፈራ ውጤቶች ፍሰት፣ የኪስ ቦርሳ የህይወት ኡደት ክስተቶች፣ የመሳሪያ አሻራዎች እና የPSP-ደረጃ ማጭበርበር ለቀጣይ ትምህርት።
+3. **የህይወት ሳይክል አስተዳደር ሞዴል**፡ ከመስመር ውጭ ስልጠና፣ የጥላ ማሰማራት፣ የታቀደ ልቀት እና የመመለስ ድጋፍ ያላቸው የተሻሻሉ ሞዴሎች። ቆራጥ ውድቀት ሂዩሪስቲክ ለእያንዳንዱ ባህሪ መኖር አለበት።
+4. **የመልስ ምልልስ**፡ PSPs የተረጋገጡ የማጭበርበር ጉዳዮችን፣ የውሸት አወንታዊ ውጤቶችን እና የማሻሻያ ማስታወሻዎችን ማቅረብ መቻል አለባቸው። ስርዓቱ ግብረመልስን ከአደጋ ባህሪያት ጋር ያስተካክላል እና ትንታኔዎችን ያሻሽላል።
+5. **የግላዊነት ቁጥጥሮች**፡ ሁሉም የተከማቸ እና የሚተላለፉ መረጃዎች በቅጥያ ላይ የተመሰረቱ መሆን አለባቸው። ማንኛውም ጥሬ የማንነት ዲበ ውሂብን የያዘ ጥያቄ ውድቅ ተደርጓል እና ገብቷል።
+6. **የመንግስት ሪፖርት ማድረግ**፡ የታቀዱ የተዋሃዱ ልኬቶችን ወደ ውጭ መላክ (በ PSP ግኝቶች፣ ዓይነቶች፣ ምላሽ መዘግየት) እና ጊዜያዊ ምርመራ ኤፒአይዎች ለተፈቀደላቸው ኦዲተሮች።
+7. **የመቋቋም**፡ አውቶማቲክ ወረፋ በማፍሰስ እና በመድገም ቢያንስ በሁለት መገልገያዎች ላይ ንቁ-ንቁ ማሰማራት። አገልግሎቱ ከተበላሸ፣ PSPs የሂሳብ መዝገብን ሳይከለክሉ ወደ አካባቢያዊ ህጎች ይመለሳሉ።## ተግባራዊ ያልሆኑ መስፈርቶች
+- ** ቁርጠኝነት እና ወጥነት ***: የአደጋ ውጤቶች የ PSP ውሳኔዎችን ይመራሉ ነገር ግን የሂሳብ መዝገብ አፈፃፀምን አይቀይሩም። የሂሳብ ደብተር በመስቀለኛ መንገድ ላይ የሚወሰን ሆኖ ይቆያል።
+- ** የመጠን አቅም**፡ በሴኮንድ ≥10k የአደጋ ግምገማን በአግድመት ልኬት እና የመልእክት ክፍፍል በሃሰተኛ የኪስ ቦርሳ መለያዎች ያቆዩ።
+- ** ታዛቢነት ***: ለእያንዳንዱ የውጤት ጥሪ መለኪያዎችን (`fraud.scoring_latency_ms`፣ `fraud.risk_score_distribution`፣ `fraud.api_error_rate`፣ `fraud.model_version_active`) እና የተዋቀሩ ምዝግብ ማስታወሻዎች።
+- **ደህንነት**፡ የጋራ TLS በPSPs እና በማእከላዊ አገልግሎት መካከል፣ የምላሽ ፖስታዎችን ለመፈረም የሃርድዌር ደህንነት ሞጁሎች፣ ግልጽ የሆኑ የኦዲት መንገዶች።
+- ** ተገዢነት ***: ከ AML/CFT መስፈርቶች ጋር ይጣጣሙ፣ ሊዋቀሩ የሚችሉ የማቆያ ጊዜዎችን ያቅርቡ እና ከማስረጃ ጥበቃ የስራ ፍሰቶች ጋር ያዋህዱ።
 
-## Non-Functional Requirements
-- **Determinism & Consistency**: Risk scores guide PSP decisions but do not mutate ledger execution. Ledger commits remain deterministic across nodes.
-- **Scalability**: Sustain ≥10k risk evaluations per second with horizontal scaling and message partitioning keyed by pseudo-wallet identifiers.
-- **Observability**: Expose metrics (`fraud.scoring_latency_ms`, `fraud.risk_score_distribution`, `fraud.api_error_rate`, `fraud.model_version_active`) and structured logs for each scoring call.
-- **Security**: Mutual TLS between PSPs and the central service, hardware security modules for signing response envelopes, tamper-evident audit trails.
-- **Compliance**: Align with AML/CFT requirements, provide configurable retention periods, and integrate with evidence preservation workflows.
+## አርክቴክቸር አጠቃላይ እይታ
+1. ** ኤፒአይ ጌትዌይ ንብርብር ***
+  - በተረጋገጡ HTTP/JSON APIs ላይ የውጤት እና የግብረመልስ ጥያቄዎችን ይቀበላል።
+   - Norito ኮዴኮችን በመጠቀም የመርሃግብር ማረጋገጫን ያከናውናል እና በPSP መታወቂያ የተመጣጠነ ገደቦችን ያስፈጽማል።
 
-## Architecture Overview
-1. **API Gateway Layer**
-  - Receives scoring and feedback requests over authenticated HTTP/JSON APIs.
-   - Performs schema validation using Norito codecs and enforces rate limits per PSP id.
+2. **የባህሪ ማሰባሰብ አገልግሎት**
+   - መጪ ጥያቄዎችን በጊዜ ተከታታይ የባህሪ ማከማቻ ውስጥ ከተከማቹ ታሪካዊ ድምር (ፍጥነት፣ የጂኦስፓሻል ቅጦች፣ የመሳሪያ አጠቃቀም) ጋር ይቀላቀላል።
+   - የሚወስኑ የመደመር ተግባራትን በመጠቀም ሊዋቀሩ የሚችሉ መስኮቶችን (ደቂቃዎች ፣ ሰዓታት ፣ ቀናት) ይደግፋል።
 
-2. **Feature Aggregation Service**
-   - Joins incoming requests with historical aggregates (velocity, geospatial patterns, device usage) stored in a time-series feature store.
-   - Supports configurable feature windows (minutes, hours, days) using deterministic aggregation functions.
+3. **የአደጋ ሞተር**
+   - ገባሪውን ሞዴል የቧንቧ መስመር (በግራዲየንት ከፍ ያሉ ዛፎች ስብስብ ፣ ያልተለመዱ ጠቋሚዎች ፣ ህጎች) ያስፈጽማል።
+   - የሞዴል ውጤቶች በማይገኙበት ጊዜ የተገደቡ ምላሾችን ዋስትና ለመስጠት የሚወስን የውድቀት ደንብን ያካትታል።
+   - `FraudAssessment` ፖስታዎችን በውጤት፣ ባንድ፣ አስተዋፅዖ አድራጊ ባህሪያት እና የሞዴል ስሪት ያወጣል።## የውጤት አሰጣጥ ሞዴሎች እና ሂዩሪስቲክስ
+- ** የውጤት ልኬት እና ባንዶች ***፡ የአደጋ ውጤቶች ወደ 0–1,000 ተስተካክለዋል። ባንዶች የሚገለጹት፡- `0–249` (ዝቅተኛ)፣ `250–549` (መካከለኛ)፣ `550–749` (ከፍተኛ)፣ `750+` (ወሳኝ) ነው። ባንዶች ለፒኤስፒዎች የሚመከሩ ድርጊቶችን (በራስ-አጽድቅ፣ ደረጃ መውጣት፣ ወረፋ-ለመገምገም፣ ራስ-አለመቀበሉ) ነገር ግን ማስፈጸሚያ PSP-ተኮር ሆኖ ይቆያል።
+- ** የሞዴል ስብስብ ***:
+  - ቀስ በቀስ የተሻሻሉ የውሳኔ ዛፎች እንደ መጠን፣ ተለዋጭ ስም/የመሣሪያ ፍጥነት፣ የነጋዴ ምድብ፣ የማረጋገጫ ጥንካሬ፣ የ PSP እምነት ደረጃ እና የኪስ ቦርሳ ግራፍ ባህሪያት ያሉ የተዋቀሩ ባህሪያትን ያስገባሉ።
+  - በአውቶኢንኮደር ላይ የተመሰረተ ያልተለመደ ፈላጊ በጊዜ መስኮት በተቀመጡ የባህርይ ቬክተሮች ላይ ይሰራል (በአንድ-ተለዋጭ ስም ያሳልፋሉ፣ መሳሪያ መቀየር፣ ጊዜያዊ ኢንትሮፒ)። መንሸራተትን ለመገደብ ውጤቶች ከቅርብ ጊዜ የPSP እንቅስቃሴ ጋር ተስተካክለዋል።
+  - ቆራጥ የፖሊሲ ደንቦች በመጀመሪያ ይፈጸማሉ; ውጤታቸው የስታቲስቲክስ ሞዴሎችን እንደ ሁለትዮሽ/ቀጣይ ባህሪያት ይመገባል ስለዚህም ስብስቡ መስተጋብርን መማር ይችላል።
+- ** ውድቀት ሂዩሪስቲክስ ***፡ የሞዴል አፈጻጸም ሳይሳካ ሲቀር፣ የሚወስነው ንብርብር አሁንም የሕግ ቅጣቶችን በማዋሃድ የተገደበ ነጥብ ያስገኛል። እያንዳንዱ ህግ ሊዋቀር የሚችል ክብደትን ያበረክታል፣ ተደምሮ ከዚያም ከ0-1,000 ሚዛኑ ጋር ተጣብቆ፣ የከፋ የጉዳይ መዘግየት እና ገላጭነት ዋስትና ይሰጣል።
+- ** የቆይታ ጊዜ ማበጀት**፡ የቧንቧ መስመር ኢላማዎችን ማስቆጠር <20 ሚሴ ለኤፒአይ ጌትዌይ + ማረጋገጫ፣ <30 ms ለባህሪ ማጠቃለያ (ከማህደረ ትውስታ መሸጎጫዎች ከጽሑፍ ጀርባ እስከ ቋሚ ማከማቻዎች የቀረበ) እና <40 ms ለስብስብ ግምገማ። የኤምኤል መረጃ ከበጀት በላቀ በ<10 ms ውስጥ ይመለሳል፣ይህም አጠቃላይ P95 ከ120 ሚሴ በታች መቆየቱን ያረጋግጣል።
+ - ** የቆይታ ጊዜ ማበጀት**፡ የቧንቧ መስመር ኢላማዎችን ማስቆጠር <20 ሚሴ ለኤፒአይ ጌትዌይ + ማረጋገጫ፣ <30 ms ለባህሪ ማጠቃለያ (ከማህደረ ትውስታ መሸጎጫዎች ከጽሑፍ ጀርባ እስከ ቋሚ ማከማቻዎች የቀረበ) እና <40 ms ለስብስብ ግምገማ። የኤምኤል መረጃ ከበጀት በላቀ በ<10 ms ውስጥ ይመለሳል፣ይህም አጠቃላይ P95 ከ120 ሚሴ በታች መቆየቱን ያረጋግጣል።## የማህደረ ትውስታ ባህሪ መሸጎጫ ንድፍ
+- **የሻርድ አቀማመጥ**፡ የባህሪ መደብሮች በ64-ቢት ተለዋጭ ስም ሃሽ ወደ `N = 256` ሻርዶች ተከፋፍለዋል። እያንዳንዱ ቁራጭ የራሱ አለው:
+  - መሸጎጫ-መስመር አካባቢን ከፍ ለማድረግ ከመቆለፊያ ነፃ የሆነ የቀለበት ቋት ለቅርብ ጊዜ የግብይት ዴልታዎች (5 ደቂቃ + 1 ሰአታት መስኮቶች) እንደ መዋቅር-ኦፍ-ድርድር ተከማችቷል።
+  - የታመቀ የፌንዊክ ዛፍ (ቢት-የታሸጉ 16-ቢት ባልዲዎች) የ24 ሰአት/7 ቀን ድምርን ያለ ሙሉ ስሌት ለማቆየት።
+  - የሆፕ-ስኮች ሃሽ ካርታ አቻዎች → ሮሊንግ ስታቲስቲክስ (ቁጥር፣ ድምር፣ ልዩነት፣ የመጨረሻ ጊዜ ማህተም) በአንድ ቅፅል 1,024 ግቤቶች ላይ ይያዛል።
+- ** የማስታወሻ ነዋሪነት ***: ትኩስ ሻርዶች በ RAM ውስጥ ይቆያሉ. በመጨረሻው ሰዓት ውስጥ 1% ገቢር ላለው 50M ተለዋጭ ዩኒቨርስ፣የመሸጎጫ ነዋሪነት ~500k ተለዋጭ ስሞች ነው። በ ~ 320 B በአንድ የንቁ ሜታዳታ ስም ፣ የስራ ስብስብ ~ 160 ሜባ ነው - በዘመናዊ አገልጋዮች ላይ ለ L3 መሸጎጫ የሚሆን ትንሽ።
+- **መለዋወጫ**፡ አንባቢዎች የማይለወጡ ማጣቀሻዎችን በጊዜ-ተኮር መልሶ ማቋቋም ይዋሳሉ። ጸሃፊዎች ንጽጽር-እና-መለዋወጥን በመጠቀም ዴልታዎችን ይጨምራሉ እና ድምርን ያዘምኑ። ይህ የ mutex ክርክርን ያስወግዳል እና ሙቅ መንገዶችን ወደ ሁለት አቶሚክ ኦፕስ + ወሰን ጠቋሚ ማሳደዱን ያቆያል።
+- **ቅድመ ዝግጅት**፡ የውጤት ሰጭ ሰራተኛው ማኑዋልን ያወጣል `prefetch_read` ለሚቀጥለው ተለዋጭ ስም ፍንጭ አንዴ ጥያቄው ሲጠናቀቅ የዋናውን ማህደረ ትውስታ መዘግየትን (~80 ns) ከባህሪ ድምር ጀርባ ይደብቃል።
+- ** ከኋላ ይፃፉ ምዝግብ ማስታወሻ ***፡ በአንድ ሻርድ WAL በየ 50 ሚሴ (ወይም 4 ኪባ) ዴልታዎችን ያዘጋጃል እና ወደ ዘላቂው መደብር ይወጣል። የማገገሚያ ድንበሮችን ለመጠበቅ የፍተሻ ነጥቦች በየ 5 ደቂቃው ይሰራሉ።
 
-3. **Risk Engine**
-   - Executes the active model pipeline (ensemble of gradient boosted trees, anomaly detectors, rules).
-   - Includes a deterministic fallback rule-set to guarantee bounded responses when model scores are unavailable.
-   - Emits `FraudAssessment` envelopes with score, band, contributing features, and model version.
+### ቲዎሬቲካል የቆይታ ብልሽት (ኢንቴል አይስ ሐይቅ ክፍል አገልጋይ፣ 3.1 ጊኸ)
+- **የሻርድ ፍለጋ + ቅድመ ፍጥረት**፡ 1 መሸጎጫ ማጣት (~80 ns) እና ሃሽ ስሌት (<10 ns)።
+- ** የቀለበት ቋት ድግግሞሽ (32 ግቤቶች) ***: 32 × 2 ጭነቶች = 64 ጭነቶች; በ 32 B መሸጎጫ መስመሮች እና ተከታታይ መዳረሻ ይህ በ L1 → ~ 20 ns ውስጥ ይቆያል።
+- ** የፌንዊክ ዝመናዎች (ሎግ₂ 2048 ≈ 11 ደረጃዎች) ***: 11 ጠቋሚ ሆፕስ; ግማሽ L1፣ ግማሹ L2 ይመታል → ~30 ns።
+- ** የሆፕ-ስኮች ካርታ ምርመራ (የጭነት መጠን 0.75 ፣ 2 መመርመሪያዎች) ***: 2 መሸጎጫ መስመሮች ፣ ~ 2 × 15 ns።
+- ** የሞዴል ባህሪ ስብሰባ **: 150 scalar ops (<0.1 ns እያንዳንዱ) → ~ 15 ns.እነዚህን ማጠቃለል ~160 ns ስሌት እና ~120 ns የማህደረ ትውስታ መሸጫ ቦታዎች በጥያቄ (~0.28µs) ይሰጣል። በአንድ ኮር አራት በአንድ ጊዜ የመደመር ሰራተኞች መድረኩ በቀላሉ የ30 ms በጀትን በፍንዳታ ጭነት ውስጥ ያሟላል። ትክክለኛ ማሰማራት ሂስቶግራም መመዝገብ አለበት (በ`fraud.feature_cache_lookup_ms` በኩል)።
+- ** የዊንዶውስ እና ድምር ባህሪ ***:
+  - የአጭር ጊዜ (የሚንከባለል 5 ደቂቃ፣ 1 ሰዐት) እና የረዥም ጊዜ (24 ሰዐት፣ 7 ቀን) የመስኮቶች የወጪ ፍጥነቶችን፣ የመሣሪያ ድጋሚ አጠቃቀምን እና የግራፍ ዲግሪዎችን ይከታተላሉ።
+  - የግራፍ ገፅታዎች (ለምሳሌ፡ የተጋሩ መሳሪያዎች በቅጥያ ስሞች፣ ድንገተኛ አድናቂዎች፣ ከፍተኛ ተጋላጭነት ያላቸው ስብስቦች ውስጥ ያሉ አዳዲስ ተጓዳኞች) በመደበኛነት በተጨናነቁ ማጠቃለያዎች ላይ ስለሚመሰረቱ መጠይቆች በንዑስ ሰከንድ ይቆያሉ።
+  - የአካባቢ ሂዩሪስቲክስ ሸካራማ ጂኦቡኬቶችን ከታሪካዊ ባህሪ ጋር ያወዳድራሉ፣ የማይቻሉ መዝለሎችን (ለምሳሌ፣ ብዙ ሩቅ ቦታዎችን በደቂቃ ውስጥ) በመጠቆም በ Haversine ላይ የተመሰረተ የአደጋ መጨመር።
+  - የወራጅ ቅርጽ መመርመሪያዎች የመቀላቀል/የሚያወድቁ ፊርማዎችን ለመለየት ወደ ውስጥ የሚገቡ/የሚወጡት መጠኖች እና ተጓዳኞች የሚሽከረከሩ ሂስቶግራሞችን ያቆያሉ (ፈጣን ደጋፊ-ውስጥ በተመሳሳይ የደጋፊ-ውጭ፣ ሳይክሊካል ሆፕ ቅደም ተከተሎች፣ የአጭር ጊዜ አማላጆች)።
+- **የደንብ ካታሎግ (ያልተሟጠጠ)**፡
+  - ** የፍጥነት መጣስ**፡ ፈጣን ተከታታይ ከፍተኛ ዋጋ ያለው ዝውውሮች በየመተላለፊያው ወይም በመሳሪያው ገደብ ያልፋሉ።
+  - ** ተለዋጭ ስም ግራፍ anomaly ***: ተለዋጭ ስም ከተረጋገጡ የማጭበርበር ጉዳዮች ወይም ከሚታወቁ በቅሎ ቅጦች ጋር ከተገናኘ ክላስተር ጋር ይገናኛል።
+  - ** መሳሪያ እንደገና ጥቅም ላይ ማዋል ***፡ ያለቅድመ ትስስር ለተለያዩ የ PSP ተጠቃሚ ስብስቦች ንብረት የሆኑ የተጋራ መሳሪያ አሻራ።
+  - **የመጀመሪያ ጊዜ ከፍተኛ ዋጋ**: አዲስ ቅጽል ሙከራ ከ PSP ዓይነተኛ የመሳፈሪያ ኮሪደር በላይ ነው።
+  - **የማረጋገጫ ማሽቆልቆል**፡ ግብይቱ ከመለያው መነሻ መስመር (ለምሳሌ፡ ከባዮሜትሪክ ወደ ፒን መመለሻ) ደካማ ሁኔታዎችን ያለ PSP-የተገለጸ ማረጋገጫ ይጠቀማል።
+  - ** ማደባለቅ/ማወዛወዝ ንድፍ**፡ ተለዋጭ ስም በከፍተኛ ደጋፊ-ውስጥ/ደጋፊ-ውጭ ሰንሰለቶች ውስጥ በጥብቅ በተጣመረ የጊዜ አቆጣጠር፣ የድጋሚ ጉዞ መጠንን በመድገም ወይም በአጫጭር መስኮቶች ውስጥ በበርካታ ተለዋጭ ስሞች ላይ ክብ ፍሰቶችን ይሳተፋል። ደንቡ የግራፍ ማእከላዊ እሾሃማዎችን እና የፍሰት ቅርጽ ጠቋሚዎችን በመጠቀም ውጤትን ያሳድጋል; ከባድ ጉዳዮች ከኤምኤል ውፅዓት በፊትም ቢሆን ከ`high` ባንድ ጋር ተጣብቀዋል።
+  - ** የግብይት ጥቁር መዝገብ ተመታ ***፡ ተለዋጭ ስም ወይም ተጓዳኝ በተጋራው የተከለከሉ ዝርዝር ምግብ ላይ በሰንሰለት የአስተዳደር ድምጽ ወይም በ`sudo` መቆጣጠሪያዎች (ለምሳሌ፣ የቁጥጥር ትዕዛዞች፣ የተረጋገጠ ማጭበርበር) በተወከለው ባለስልጣን ተዘጋጅቷል። በ `critical` ባንድ ላይ መቆንጠጫዎችን ያስመዘግቡ እና `BLACKLIST_MATCH` ምክንያት ኮድ ያወጣል፤ PSPs ለኦዲት መሻሮችን መመዝገብ አለባቸው።
+  - **የማጠሪያ ፊርማ አለመመጣጠን**፡ PSP ጊዜው ያለፈበት ሞዴል ፊርማ ያለው ግምገማ ያቀርባል። ውጤቱ ወደ `critical` እና የኦዲት መንጠቆ ቀስቅሴዎች ያድጋል።
+- **የምክንያት ኮድ**፡ እያንዳንዱ ግምገማ በማሽን ሊነበብ የሚችል በአስተዋጽዖ ክብደት (ለምሳሌ፡ `VELOCITY_BREACH`፣ `NEW_DEVICE`፣ `GRAPH_HIGH_RISK`፣ `AUTH_DOWNGRADE`) ያካትታል። ፒኤስፒዎች ለተጠቃሚ መልእክት መላላኪያ እነዚህን ከዋኞች ወይም የኪስ ቦርሳዎች ሊያቀርቡ ይችላሉ።- ** የሞዴል አስተዳደር ***: የመለኪያ እና የመነሻ አቀማመጥ በሰነድ የተደገፉ የመጫወቻ መጽሐፍትን ይከተላሉ—ROC/PR ኩርባዎች በየሩብ ዓመቱ ይገመገማሉ፣ ከተሰየሙ ማጭበርበር ይደገፋሉ፣ እና ፈታኞች ሞዴሎች እስኪረጋጉ ድረስ በጥላ ውስጥ ይሰራሉ። ማንኛውም የመነሻ ዝማኔ ድርብ ማጽደቅን ይፈልጋል (የማጭበርበር ስራዎች + ገለልተኛ አደጋ)።
 
-## Scoring Models and Heuristics
-- **Score Scale & Bands**: Risk scores are normalized to 0–1,000. Bands are defined as: `0–249` (low), `250–549` (medium), `550–749` (high), `750+` (critical). Bands map to recommended actions for PSPs (auto-approve, step-up, queue-for-review, auto-decline) but enforcement remains PSP-specific.
-- **Model Ensemble**:
-  - Gradient-boosted decision trees ingest structured features such as amount, alias/device velocity, merchant category, authentication strength, PSP trust tier, and cross-wallet graph features.
-  - An autoencoder-based anomaly detector runs on time-windowed behavioural vectors (per-alias spend cadence, device switching, temporal entropy). Scores are calibrated against recent PSP activity to limit drift.
-  - Deterministic policy rules execute first; their outputs feed the statistical models as binary/continuous features so the ensemble can learn interactions.
-- **Fallback Heuristics**: When model execution fails, the deterministic layer still produces a bounded score by aggregating rule penalties. Each rule contributes a configurable weight, summed then clamped to the 0–1,000 scale, guaranteeing worst-case latency and explainability.
-- **Latency Budgeting**: Scoring pipeline targets <20 ms for API gateway + validation, <30 ms for feature aggregation (served from in-memory caches with write-behind to persistent stores), and <40 ms for ensemble evaluation. Deterministic fallback returns within <10 ms if ML inference exceeds its budget, ensuring overall P95 stays under 120 ms.
- - **Latency Budgeting**: Scoring pipeline targets <20 ms for API gateway + validation, <30 ms for feature aggregation (served from in-memory caches with write-behind to persistent stores), and <40 ms for ensemble evaluation. Deterministic fallback returns within <10 ms if ML inference exceeds its budget, ensuring overall P95 stays under 120 ms.
+## የአስተዳደር-ምንጭ የጥቁር መዝገብ ፍሰት
+- ** በሰንሰለት ላይ ፀሐፊ ***: የተከለከሉ መዝገብ መግባቶች በአስተዳደር ንዑስ ስርዓት (`iroha_core::smartcontracts::isi::governance`) እንደ `BlacklistProposal` ISI ሆነው የሚታገዱ ተለዋጭ ስሞችን፣ ፒኤስፒ መታወቂያዎችን ወይም የመሳሪያ አሻራዎችን ይዘረዝራል። ባለድርሻ አካላት መደበኛውን የድምጽ መስጫ ቧንቧ መስመር በመጠቀም ድምጽ ይሰጣሉ; ምልአተ ጉባኤው ከተጠናቀቀ በኋላ ሰንሰለቱ የጸደቁትን ተጨማሪዎች/ማስወገጃዎች እና በብቸኝነት የሚጨምር `GovernanceEvent::BlacklistUpdated` መዝገብ ያወጣል።
+- ** የተወከለው የሱዶ መንገድ ***: የአደጋ ጊዜ እርምጃዎች በ `sudo::Execute` መመሪያ በኩል ሊፈጸሙ ይችላሉ, እሱም ተመሳሳይ `BlacklistUpdated` ክስተትን ያመነጫል ነገር ግን ለውጡን እንደ `origin = Sudo` ይጠቁማል. ይህ በሰንሰለት ላይ ታሪክን በግልፅ ያሳያል ስለዚህ ኦዲተሮች የጋራ ስምምነትን ከውክልና ጣልቃገብነት መለየት ይችላሉ።
+- ** የስርጭት ቻናል**፡ የኤፍኤምኤስ ድልድይ አገልግሎት ለ`LedgerEvent` ዥረት (Norito-encoded) ተመዝግቧል እና ለ`BlacklistUpdated` ዝግጅቶችን ይመለከታል። እያንዳንዱ ክስተት በአስተዳደር Merkle ማረጋገጫ ላይ የተረጋገጠ እና ከመተግበሩ በፊት በብሎክ ፊርማ የተረጋገጠ ነው. ክስተቶች ኢምፖንት ናቸው; ድጋሚ ማጫወትን ለማስቀረት FMS የቅርብ ጊዜውን `blacklist_epoch` ይጠብቃል።
+- ** በFMS ውስጥ ያለ መተግበሪያ *** አንዴ ማሻሻያ ተቀባይነት ካገኘ፣ ግቤቶች ወደ ወሳኙ ደንብ ማከማቻ ይፃፋሉ (በኦዲት ምዝግብ ማስታወሻዎች በአባሪ-ብቻ ማከማቻ የተደገፈ)። የውጤት ማስመዝገቢያ ሞተር ትኩስ-ጥቁር መዝገብ በ30 ሰከንድ ውስጥ እንደገና ይጭናል፣ ይህም ተከታይ ግምገማዎች የ`BLACKLIST_MATCH` ህግን ያስነሳሉ እና ወደ `critical` ይጨመቃሉ።
+- ** ኦዲት እና መልሶ መመለሻ ***፡ ገቨርናንስ በተመሳሳይ የቧንቧ መስመር ግቤቶችን ለማስወገድ ድምጽ መስጠት ይችላል። ኦፕሬተሮች የፎረንሲክ ጥያቄዎችን እንዲመልሱ ወይም በምርመራ ጊዜ ያለፈውን ውሳኔ እንዲደግሙ FMS በ `blacklist_epoch` መለያ የተሰጡ ታሪካዊ ቅጽበተ-ፎቶዎችን ያስቀምጣል።
 
-## In-Memory Feature Cache Design
-- **Shard Layout**: Feature stores are sharded by 64-bit alias hash into `N = 256` shards. Each shard owns:
-  - A lock-free ring buffer for recent transaction deltas (5 min + 1 hr windows) stored as struct-of-arrays to maximise cache-line locality.
-  - A compressed Fenwick tree (bit-packed 16-bit buckets) to maintain 24 hr / 7 day aggregates without full recomputation.
-  - A hop-scotch hash map mapping counterparties → rolling stats (count, sum, variance, last timestamp) capped at 1,024 entries per alias.
-- **Memory Residency**: Hot shards stay in RAM. For a 50 M alias universe with 1% active in the last hour, cache residency is ~500k aliases. At ~320 B per alias of active metadata, the working set is ~160 MB—small enough for L3 cache on modern servers.
-- **Concurrency**: Readers borrow immutable references via epoch-based reclamation; writers append deltas and update aggregates using compare-and-swap. This avoids mutex contention and keeps hot paths to two atomic ops + bounded pointer chasing.
-- **Prefetching**: The scoring worker issues manual `prefetch_read` hints for the next alias shard once request validation completes, hiding main-memory latency (~80 ns) behind feature aggregation.
-- **Write-behind Log**: A per-shard WAL batches deltas every 50 ms (or 4 KB) and flushes to the durable store. Checkpoints run every 5 minutes to keep recovery bounds tight.
+4. **የመማሪያ እና የትንታኔ መድረክ**
+   - የተረጋገጡ የማጭበርበር ክስተቶችን፣ የሰፈራ ውጤቶችን እና የPSP ግብረመልስ በአባሪ-ብቻ መዝገብ (ለምሳሌ በካፍካ + የነገር ማከማቻ) ይቀበላል።
+   - ለመረጃ ሳይንቲስቶች ሞዴሎችን እንደገና ለማሰልጠን ከመስመር ውጭ ማስታወሻ ደብተሮች/ስራዎችን ያቀርባል። የሞዴል ቅርሶች ከማስታወቂያ በፊት ተዘጋጅተው ተፈርመዋል።
 
-### Theoretical Latency Breakdown (Intel Ice Lake-class server, 3.1 GHz)
-- **Shard lookup + prefetch**: 1 cache miss (~80 ns) plus hash calculation (<10 ns).
-- **Ring buffer iteration (32 entries)**: 32 × 2 loads = 64 loads; with 32 B cache lines and sequential access this stays in L1 → ~20 ns.
-- **Fenwick updates (log₂ 2048 ≈ 11 steps)**: 11 pointer hops; assuming half L1, half L2 hits → ~30 ns.
-- **Hop-scotch map probe (load factor 0.75, 2 probes)**: 2 cache lines, ~2 × 15 ns.
-- **Model feature assembly**: 150 scalar ops (<0.1 ns each) → ~15 ns.
+5. **የአስተዳደር ፖርታል**
+   - ለኦዲተሮች አዝማሚያዎችን ለመገምገም፣ የታሪክ ግምገማዎችን ለመፈለግ እና የክስተት ሪፖርቶችን ወደ ውጭ የሚልኩ የተገደበ በይነገጽ።
+   - ያለ PSP ትብብር መርማሪዎች ወደ PII መግባት እንዳይችሉ የፖሊሲ ፍተሻዎችን ተግባራዊ ያደርጋል።
 
-Summing these gives ~160 ns of compute and ~120 ns of memory stalls per request (~0.28 µs). With four concurrent aggregation workers per core, the stage easily meets the 30 ms budget even under burst load; actual deployment should record histograms to validate (via `fraud.feature_cache_lookup_ms`).
-- **Feature Windows & Aggregation**:
-  - Short-term (rolling 5 min, 1 hr) and long-term (24 hr, 7 day) windows track spend velocity, device reuse, and alias graph degrees.
-  - Graph features (e.g., shared devices across aliases, sudden fan-out, new counterparties in high-risk clusters) rely on regularly compacted summaries so queries stay sub-millisecond.
-  - Location heuristics compare coarse geobuckets with historical behaviour, flagging improbable jumps (e.g., multiple distant locations within minutes) using a capped Haversine-based risk increment.
-  - Flow-shape detectors maintain rolling histograms of inbound/outbound amounts and counterparties to spot mixing/tumbling signatures (rapid fan-in followed by similar fan-out, cyclical hop sequences, short-lived intermediaries).
-- **Rule Catalogue (non-exhaustive)**:
-  - **Velocity breach**: Rapid series of high-value transfers exceeding per-alias or per-device thresholds.
-  - **Alias graph anomaly**: Alias interacts with a cluster linked to confirmed fraud cases or known mule patterns.
-  - **Device reuse**: Shared device fingerprint across aliases belonging to different PSP user cohorts without prior linkage.
-  - **First-time high-value**: New alias attempting amounts above the PSP’s typical onboarding corridor.
-  - **Authentication downgrade**: Transaction uses weaker factors than the account’s baseline (e.g., fallback from biometric to PIN) without PSP-declared justification.
-  - **Mixing/tumbling pattern**: Alias participates in high fan-in/fan-out chains with tightly coupled timing, repeating round-trip amounts, or circular flows across multiple aliases within short windows. Rule boosts score using graph centrality spikes and flow-shape detectors; severe cases clamp to the `high` band even before ML output.
-  - **Transaction blacklist hit**: Alias or counterparty appears on the shared blacklist feed curated via on-chain governance voting or a delegated authority with `sudo` controls (e.g., regulatory orders, confirmed fraud). Score clamps to the `critical` band and emits `BLACKLIST_MATCH` reason code; PSPs must log overrides for audit.
-  - **Sandbox signature mismatch**: PSP submits an assessment generated with an outdated model signature; score escalates to `critical` and audit hook triggers.
-- **Reason Codes**: Every assessment includes machine-readable reason codes ranked by contribution weight (e.g., `VELOCITY_BREACH`, `NEW_DEVICE`, `GRAPH_HIGH_RISK`, `AUTH_DOWNGRADE`). PSPs can surface these to operators or wallets for user messaging.
-- **Model Governance**: Calibration and threshold setting follow documented playbooks—ROC/PR curves reviewed quarterly, back-testing against labelled fraud, and challenger models run in shadow until stable. Any threshold update requires dual approval (fraud operations + independent risk).
+6. ** የውህደት አስማሚዎች ***
+   - የNorito ጥያቄዎችን/ምላሾችን እና የአካባቢ መሸጎጫ በመተግበር ላይ ያሉ ቀላል ኤስዲኬዎች ለፒኤስፒዎች (ዝገት፣ ኮትሊን፣ ስዊፍት፣ ታይፕስክሪፕት)።
+   - የመቋቋሚያ ሞተር መንጠቆ (በ`iroha_core` ውስጥ) PSPs ከቼክ በኋላ ግብይቶችን ሲያስተላልፍ የአደጋ ግምገማ ማጣቀሻዎችን ይመዘግባል።## የውሂብ ፍሰት
+1. ፒኤስፒ ለኤፒአይ መግቢያ በር አረጋግጦ `RiskQuery` ያስገባል፡-
+   - ለከፋይ/ተከፋይ ተለዋጭ መለያዎች፣ የተበላሸ መሣሪያ መታወቂያ፣ የግብይት መጠን፣ ምድብ፣ የጂኦግራፊያዊ አካባቢ ሻካራ ባልዲ፣ የPSP እምነት ባንዲራዎች እና የቅርብ ክፍለ ጊዜ ዲበ ውሂብ።
+2. ጌትዌይ የደመወዝ ጭነትን ያረጋግጣል፣ በPSP ሜታዳታ (የፍቃድ ደረጃ፣ SLA) ያበለጽጋል እና ለባህሪ ማሰባሰብ ሰልፍ።
+3. የባህሪ አገልግሎት የቅርብ ጊዜ ስብስቦችን ይጎትታል, ሞዴሉን ቬክተር ይሠራል እና ወደ አደጋ ሞተር ይልካል.
+4. የአደጋ ሞተር ጥያቄውን ይገመግማል፣ ወሳኙን ምክንያት ኮድ አያይዞ `FraudAssessment` ይፈርማል እና ወደ PSP ይመልሳል።
+5. PSP ምዘናውን ከአካባቢው ፖሊሲዎች ጋር በማጣመር ግብይቱን ለማጽደቅ፣ ላለመቀበል ወይም ደረጃ ከፍ ለማድረግ።
+6. ውጤት (የፀደቀ/የቀነሰ፣ ማጭበርበር የተረጋገጠ/ሐሰተኛ አወንታዊ) በተከታታይ መሻሻል ወደ መማሪያ መድረክ በተመሳሳይ መልኩ ይገፋል።
+7. ዕለታዊ ባች ሂደቶች ለአስተዳደር ሪፖርት ማድረጊያ መለኪያዎችን ያዘጋጃሉ እና የፖሊሲ ማንቂያዎችን (ለምሳሌ የማህበራዊ ምህንድስና ጉዳዮችን) ወደ ፒኤስፒ ዳሽቦርድ ይገፋሉ።
 
-## Governance-Sourced Blacklist Flow
-- **On-chain authoring**: Blacklist entries are introduced through the governance subsystem (`iroha_core::smartcontracts::isi::governance`) as a `BlacklistProposal` ISI that lists aliases, PSP ids, or device fingerprints to block. Stakeholders vote using the standard ballot pipeline; once quorum is met, the chain emits a `GovernanceEvent::BlacklistUpdated` record carrying the approved additions/removals plus a monotonically increasing `blacklist_epoch`.
-- **Delegated sudo path**: Emergency actions can be executed via the `sudo::Execute` instruction, which emits the same `BlacklistUpdated` event but flags the change as `origin = Sudo`. This mirrors on-chain history with explicit provenance so auditors can distinguish consensus votes from delegated interventions.
-- **Distribution channel**: The FMS bridge service subscribes to the `LedgerEvent` stream (Norito-encoded) and watches for `BlacklistUpdated` events. Each event is validated against the governance Merkle proof and verified with the block signature before being applied. Events are idempotent; the FMS maintains the latest `blacklist_epoch` to avoid replays.
-- **Application inside FMS**: Once an update is accepted, the entries are written to the deterministic rule store (backed by append-only storage with audit logs). The scoring engine hot-reloads the blacklist within 30 seconds, ensuring subsequent assessments trigger the `BLACKLIST_MATCH` rule and clamp to `critical`.
-- **Audit & rollback**: Governance can vote to remove entries via the same pipeline. The FMS keeps historical snapshots tagged by `blacklist_epoch` so operators can answer forensic questions or replay past decisions during investigations.
-
-4. **Learning & Analytics Platform**
-   - Receives confirmed fraud events, settlement outcomes, and PSP feedback via an append-only ledger (e.g., Kafka + object storage).
-   - Provides offline notebooks/jobs for data scientists to retrain models. Model artifacts are versioned and signed before promotion.
-
-5. **Governance Portal**
-   - Restricted interface for auditors to review trends, search historical assessments, and export incident reports.
-   - Implements policy checks so investigators cannot drill down to PII without PSP cooperation.
-
-6. **Integration Adapters**
-   - Lightweight SDKs for PSPs (Rust, Kotlin, Swift, TypeScript) implementing the Norito requests/responses and local caching.
-   - Settlement engine hook (within `iroha_core`) that records risk assessment references when PSPs forward transactions post-check.
-
-## Data Flow
-1. PSP authenticates to the API gateway and submits a `RiskQuery` containing:
-   - Alias identifiers for payer/payee, hashed device id, transaction amount, category, geolocation coarse bucket, PSP confidence flags, and recent session metadata.
-2. Gateway validates payload, enriches with PSP metadata (licence tier, SLA) and queues for feature aggregation.
-3. Feature service pulls the latest aggregates, constructs the model vector, and sends it to the risk engine.
-4. Risk engine evaluates the request, attaches deterministic reason codes, signs the `FraudAssessment`, and returns it to the PSP.
-5. PSP combines the assessment with its local policies to approve, decline, or step-up authenticate the transaction.
-6. Outcome (approved/declined, fraud confirmed/false positive) is pushed asynchronously to the learning platform for continuous improvement.
-7. Daily batch processes roll up metrics for governance reporting and push policy alerts (e.g., rising social-engineering cases) to PSP dashboards.
-
-## Integration with Iroha Components
-- **Core Host Hooks**: Transaction admission now enforces the `fraud_assessment_band` metadata whenever `fraud_monitoring.enabled` and `required_minimum_band` are set. The host rejects transactions missing the field or carrying a band below the configured minimum, and emits a deterministic warning when `missing_assessment_grace_secs` is non-zero (grace window scheduled for removal in milestone FM-204 once the remote verifier is wired). Assessments must also include `fraud_assessment_score_bps`; the host cross-checks the score against the declared band (0–249 ➜ low, 250–549 ➜ medium, 550–749 ➜ high, 750+ ➜ critical, with basis-point values supported up to 10 000). When `fraud_monitoring.attesters` is configured, transactions must attach a Norito-encoded `fraud_assessment_envelope` (base64) and a matching `fraud_assessment_digest` (hex). The daemon deterministically decodes the envelope, verifies the Ed25519 signature against the attester registry, recomputes the digest over the unsigned payload, and rejects mismatches so only attested assessments reach consensus.
-- **Configuration**: Add configuration entries under `iroha_config::fraud_monitoring` for the risk service endpoints, timeouts, and required assessment bands. Defaults disable enforcement for local development.
-
-  | Key | Type | Default | Notes |
+## ከIroha አካላት ጋር ውህደት
+- **የኮር አስተናጋጅ መንጠቆዎች**፡ የግብይት ምዝገባ አሁን `fraud_assessment_band` ሜታዳታ `fraud_monitoring.enabled` እና `required_minimum_band` በተቀናበረ ቁጥር ያስፈጽማል። አስተናጋጁ በመስክ ላይ የጎደሉትን ግብይቶች ወይም ከተዋቀረው ዝቅተኛው በታች ባንድ ይዞ አይቀበልም፣ እና `missing_assessment_grace_secs` ዜሮ ካልሆነ (የርቀት አረጋጋጭ ከተጣመረ በኋላ የጸጋ መስኮት እንዲወገድ የታቀደለት) ማስጠንቀቂያ ይሰጣል። ግምገማዎች `fraud_assessment_score_bps` ማካተት አለባቸው; አስተናጋጁ ውጤቱን ከታወጀው ባንድ ጋር ያቋርጣል (0–249 ➜ ዝቅተኛ፣ 250–549 ➜ መካከለኛ፣ 550–749 ➜ ከፍተኛ፣ 750+ ➜ ወሳኝ፣ በመሠረታዊ ነጥብ እሴቶች እስከ 10000 ይደገፋሉ)። `fraud_monitoring.attesters` ሲዋቀር ግብይቶች Norito-encoded `fraud_assessment_envelope` (base64) እና ተዛማጅ `fraud_assessment_digest` (ሄክስ) ማያያዝ አለባቸው። ዴሞን በፖስታው ላይ ያለውን ኮድ በመለየት የEd25519 ፊርማ ከአማካሪው መዝገብ ጋር በማነፃፀር፣ ባልተፈረመበት የደመወዝ ጭነት ላይ ያለውን መረጃ ያሰላል እና አለመዛመጃዎችን ውድቅ ያደርጋል ስለዚህ የተረጋገጡ ግምገማዎች ብቻ መግባባት ላይ ይደርሳሉ።
+- **ማዋቀር**፡ ለአደጋ አገልግሎት የመጨረሻ ነጥቦች፣ ጊዜያቶች እና አስፈላጊ የግምገማ ባንዶች በ`iroha_config::fraud_monitoring` ስር የውቅር ግቤቶችን ያክሉ። ነባሪዎች ለአካባቢ ልማት ማስፈጸሚያን ያሰናክላሉ።| ቁልፍ | አይነት | ነባሪ | ማስታወሻ |
   | --- | --- | --- | --- |
-  | `enabled` | bool | `false` | Master switch for admission checks; without `required_minimum_band` the host logs a warning and skips enforcement. |
-  | `service_endpoints` | array<URL> | `[]` | Ordered list of fraud service base URLs. Duplicates are removed deterministically; reserved for the upcoming verifier. |
-  | `connect_timeout_ms` | duration | `500` | Milliseconds before connection attempts abort; zero values fold back to the default. |
-  | `request_timeout_ms` | duration | `1500` | Milliseconds to await a response from the risk service. |
-  | `missing_assessment_grace_secs` | duration | `0` | Grace window allowing missing assessments; non-zero values trigger a deterministic fallback that logs and allows the transaction. |
-  | `required_minimum_band` | enum (`low`, `medium`, `high`, `critical`) | `null` | When set, transactions must attach an assessment at or above this severity band; lower values are rejected. Set to `null` to disable gating even if `enabled` is true. |
-  | `attesters` | array<{ engine_id, public_key }> | `[]` | Optional registry of attestation engines. When populated, envelopes must be signed by one of the listed keys and include a matching digest. |
+  | `enabled` | ቡል | `false` | ለመግቢያ ቼኮች ዋና ማብሪያ / ማጥፊያ; ያለ `required_minimum_band` አስተናጋጁ ማስጠንቀቂያ ይመዘግባል እና ማስፈጸሚያውን ይዘላል። |
+  | `service_endpoints` | አደራደር | `[]` | የታዘዘ የማጭበርበር አገልግሎት መሠረት ዩአርኤሎች ዝርዝር። ብዜቶች በቆራጥነት ይወገዳሉ; ለመጪው አረጋጋጭ የተጠበቀ። |
+  | `connect_timeout_ms` | ቆይታ | `500` | የግንኙነቶች ሙከራዎች ከመቋረጥ በፊት ሚሊሰከንዶች; ዜሮ እሴቶች ወደ ነባሪው ይመለሳሉ። |
+  | `request_timeout_ms` | ቆይታ | `1500` | ከአደጋ አገልግሎቱ ምላሽ ለመጠበቅ ሚሊሰከንዶች። |
+  | `missing_assessment_grace_secs` | ቆይታ | `0` | የጎደሉ ግምገማዎችን የሚፈቅድ ጸጋ መስኮት; ዜሮ ያልሆኑ እሴቶች ግብይቱን የሚመዘግብ እና የሚፈቅደውን ቆራጥ ውድቀት ያስከትላሉ። |
+  | `required_minimum_band` | enum (`low`፣ `medium`፣ `high`፣ `critical`) | `null` | ሲዋቀር፣ ግብይቶች በዚህ የክብደት ባንድ ላይ ወይም ከዚያ በላይ ግምገማን ማያያዝ አለባቸው። ዝቅተኛ ዋጋዎች ውድቅ ናቸው. `enabled` እውነት ቢሆንም ጌቲንግን ለማሰናከል ወደ `null` ያቀናብሩ። |
+  | `attesters` | አደራደር | `[]` | የማረጋገጫ ሞተሮች አማራጭ መዝገብ. ሰዎች ሲሞሉ፣ ኤንቨሎፖች ከተዘረዘሩት ቁልፎች በአንዱ መፈረም አለባቸው እና ተዛማጅ መፍጨትን ያካትቱ። |
 
-- **Validation**: Unit tests in `crates/iroha_core/tests/fraud_monitoring.rs` cover disabled, missing, and insufficient-band paths; `integration_tests::fraud_monitoring_requires_assessment_bands` exercises the mocked-assessment flow end-to-end.
+- ** ማረጋገጫ ***: በ `crates/iroha_core/tests/fraud_monitoring.rs` ሽፋን ውስጥ ያሉ የክፍል ሙከራዎች ተሰናክለዋል ፣ የጎደሉ እና በቂ ያልሆነ ባንድ ዱካዎች; `integration_tests::fraud_monitoring_requires_assessment_bands` የተሳለቀውን የግምገማ ፍሰት ከጫፍ እስከ ጫፍ ይለማመዳል።
 
-- **Telemetry**: `iroha_telemetry` exports PSP-facing collectors capturing assessment counts (`fraud_psp_assessments_total{tenant,band,lane,subnet}`), missing metadata (`fraud_psp_missing_assessment_total{tenant,lane,subnet,cause}`), latency histograms (`fraud_psp_latency_ms{tenant,lane,subnet}`), score distributions (`fraud_psp_score_bps{tenant,band,lane,subnet}`), invalid payloads (`fraud_psp_invalid_metadata_total{tenant,field,lane,subnet}`), attestation outcomes (`fraud_psp_attestation_total{tenant,engine,lane,subnet,status}`), and outcome mismatches (`fraud_psp_outcome_mismatch_total{tenant,direction,lane,subnet}`). Metadata keys expected on every transaction are `fraud_assessment_band`, `fraud_assessment_tenant`, `fraud_assessment_score_bps`, `fraud_assessment_latency_ms`, the attester envelope/digest pair (`fraud_assessment_envelope`, `fraud_assessment_digest`), and the post-incident `fraud_assessment_disposition` flag (values: `approved`, `declined`, `manual_review`, `confirmed_fraud`, `false_positive`, `chargeback`, `loss`).
-- **Norito Schema**: Define Norito types for `RiskQuery`, `FraudAssessment`, and governance reports. Provide roundtrip tests to guarantee codec stability.
+- ** ቴሌሜትሪ ***: `iroha_telemetry` ወደ ውጪ መላክ PSP የሚገጥሙ ሰብሳቢዎች የግምገማ ቆጠራዎችን (`fraud_psp_assessments_total{tenant,band,lane,subnet}`) ፣ የጎደሉ ሜታዳታ (`fraud_psp_missing_assessment_total{tenant,lane,subnet,cause}`) ፣ የዘገየ ሂስቶግራም (`fraud_psp_latency_ms{tenant,lane,subnet}`) ፣ የውጤት ማከፋፈያዎች (I0000000083X) ፣ የነጥብ ማከፋፈያዎች (I10800008) (`fraud_psp_invalid_metadata_total{tenant,field,lane,subnet}`)፣ የማረጋገጫ ውጤቶች (`fraud_psp_attestation_total{tenant,engine,lane,subnet,status}`) እና የውጤት አለመዛመድ (`fraud_psp_outcome_mismatch_total{tenant,direction,lane,subnet}`)። በእያንዳንዱ ግብይት ላይ የሚጠበቁ ዲበ ዳታ ቁልፎች `fraud_assessment_band`፣ `fraud_assessment_tenant`፣ `fraud_assessment_score_bps`፣ `fraud_assessment_latency_ms`፣ የማረጋገጫ ፖስታ/የመፍጨት ጥንዶች (`fraud_assessment_envelope`)፣ I18000 `fraud_assessment_disposition` ባንዲራ (እሴቶች፡ `approved`፣ `declined`፣ `manual_review`፣ `confirmed_fraud`፣ `false_positive`፣ Prometheus)።
+- **Norito Schema**፡ የNorito አይነቶችን ለ`RiskQuery`፣ `FraudAssessment` እና የአስተዳደር ሪፖርቶችን ይግለጹ። የኮዴክ መረጋጋትን ለማረጋገጥ የጉዞ ሙከራዎችን ያቅርቡ።
 
-## Privacy & Data Minimization
-- Aliases, hashed device IDs, and coarse geolocation buckets form the entire data plane shared with the central service.
-- PSPs retain mapping from aliases to real identities; no such mapping leaves their perimeter.
-- Risk models operate only on pseudonymous behavioral signals plus PSP-submitted context (merchant category, channel, authentication strength).
-- Audit exports are aggregated (e.g., counts per PSP per day). Any drill-down requires dual control and PSP-side de-anonymization.
+## ግላዊነት እና የውሂብ ማሳነስ
+- ተለዋጭ ስሞች፣ ሃሽድ የመሳሪያ መታወቂያዎች እና ግዙፍ የጂኦግራፊያዊ አካባቢ ባልዲዎች ከማዕከላዊ አገልግሎት ጋር የተጋራውን አጠቃላይ የመረጃ አውሮፕላን ይመሰርታሉ።
+- PSPs ከተለዋዋጭ ስሞች ወደ እውነተኛ ማንነቶች ካርታ ይይዛሉ; እንዲህ ዓይነቱ ካርታ ከአካባቢያቸው አይወጣም.
+- የአደጋ ሞዴሎች የሚሠሩት በስም ባልታወቁ የባህርይ ምልክቶች እና PSP በቀረበው አውድ (የነጋዴ ምድብ፣ ቻናል፣ የማረጋገጫ ጥንካሬ) ላይ ብቻ ነው።
+- የኦዲት ኤክስፖርት ተደምሮ ነው (ለምሳሌ፣ በቀን PSP ቆጠራዎች)። ማንኛውም መሰርሰሪያ ድርብ ቁጥጥር እና PSP-side de-nonymization ያስፈልገዋል።## ኦፕሬሽኖች እና ማሰማራት
+- የውጤት መስጫ መድረኩን ከማዕከላዊ ባንክ መስቀለኛ መንገድ ኦፕሬተሮች በተለየ በተሾመ ኦፕሬተር የሚተዳደር ራሱን የቻለ ንዑስ ስርዓት ማሰማራት።
+- ሰማያዊ/አረንጓዴ አካባቢዎችን ያቅርቡ፡ `fraud-scoring-prod`፣ `fraud-scoring-shadow`፣ `fraud-lab`።
+- አውቶማቲክ የጤና ፍተሻዎችን (ኤፒአይ መዘግየት፣ የመልዕክት መዝገብ፣ የሞዴል ጭነት ስኬት) መተግበር። የጤና ፍተሻዎች ካልተሳኩ፣ ፒኤስፒ ኤስዲኬዎች በራስ-ሰር ወደ አካባቢያዊ-ብቻ ሁነታ ይቀየራሉ እና ኦፕሬተሮችን ያሳውቃሉ።
+- የማቆያ ባልዲዎችን ማቆየት: ሙቅ ማከማቻ (በባህሪ መደብር ውስጥ 30 ቀናት) ፣ ሙቅ ማከማቻ (በዕቃ ማከማቻ ውስጥ 1 ዓመት) ፣ ቀዝቃዛ መዝገብ (5 ዓመታት የታመቀ)።
 
-## Operations & Deployment
-- Deploy the scoring platform as a dedicated subsystem managed by an appointed operator distinct from the central bank node operators.
-- Provide blue/green environments: `fraud-scoring-prod`, `fraud-scoring-shadow`, `fraud-lab`.
-- Implement automated health checks (API latency, message backlog, model load success). If health checks fail, PSP SDKs automatically switch to local-only mode and notify operators.
-- Maintain retention buckets: hot storage (30 days in feature store), warm storage (1 year in object storage), cold archive (5 years compressed).
+## ቴሌሜትሪ ሰብሳቢዎች እና ዳሽቦርዶች
 
-## Telemetry Collectors & Dashboards
+### የሚፈለጉ ሰብሳቢዎች
 
-### Required collectors
+- **Prometheus scrape**፡ `/metrics` በ PSP ውህደት ፕሮፋይል በሚያሄድ እያንዳንዱ አረጋጋጭ ላይ ያንቁ ስለዚህ `fraud_psp_*` ተከታታይ ወደ ውጭ ይላካሉ። ነባሪው መለያዎች ቦታ ያዥ `subnet="global"` እና `lane` መታወቂያዎችን ያካትታሉ ስለዚህ ዳሽቦርዶች ባለብዙ ሳብኔት ማዞሪያ መርከቦችን አንድ ጊዜ ይመሰርታሉ።
+- **የግምገማ ድምር ***: `fraud_psp_assessments_total{tenant,band}` በክብደት ባንድ ተቀባይነት ያላቸውን ግምገማዎች ይቆጥራል; ተከራይ ለ 5 ደቂቃዎች ሪፖርት ማድረግ ካቆመ እሳትን ያስጠነቅቃል።
+- ** የሚጎድል ሜታዳታ ***: `fraud_psp_missing_assessment_total{tenant,cause}` ጠንካራ ውድቅዎችን (`cause="missing"`) ከጸጋ-መስኮት አበል (`cause="grace"`) ይለያል። በጸጋው ባልዲ ውስጥ በተደጋጋሚ የሚወድቁ የበር ግብይቶች።
+- ** የላቲነት ሂስቶግራም ***፡ `fraud_psp_latency_ms_bucket` በPSP ሪፖርት የተደረገ የውጤት መዘግየትን ይከታተላል። ዒላማ 20% ከተለያየ።
+- **ልክ ያልሆነ ሜታዳታ***፡ `fraud_psp_invalid_metadata_total{field}` ባንዲራዎች የፒኤስፒ ክፍያ መልሶ ማገገም (ለምሳሌ፣ የጎደሉ የተከራይ መታወቂያዎች፣ የተበላሹ ሁኔታዎች) ስለዚህ የኤስዲኬ ዝመናዎች በፍጥነት ሊለቀቁ ይችላሉ።
+- ** የማረጋገጫ ሁኔታ ***: `fraud_psp_attestation_total{tenant,engine,status}` ኤንቨሎፕ እየተፈረመ መሆኑን ያረጋግጣል እና ይዋሃዳል። ለማንኛውም ተከራይ ወይም ሞተር `status!="verified"` ካስቸገረ አስጠንቅቅ።
 
-- **Prometheus scrape**: enable `/metrics` on every validator running the PSP integration profile so `fraud_psp_*` series are exported. Default labels include placeholder `subnet="global"` and `lane` IDs so dashboards can pivot once multi-subnet routing ships.
-- **Assessment totals**: `fraud_psp_assessments_total{tenant,band}` counts accepted assessments per severity band; alerts fire if a tenant stops reporting for 5 minutes.
-- **Missing metadata**: `fraud_psp_missing_assessment_total{tenant,cause}` distinguishes hard rejections (`cause="missing"`) from grace-window allowances (`cause="grace"`). Gate transactions that repeatedly fall into the grace bucket.
-- **Latency histogram**: `fraud_psp_latency_ms_bucket` traces PSP-reported scoring latency. Target <120 ms P95 with alerts at 150 ms.
-- **Score distribution**: `fraud_psp_score_bps_bucket{band}` snapshots risk-score drift; wire percentiles to the governance dashboard.
-- **Outcome mismatches**: `fraud_psp_outcome_mismatch_total{direction}` splits false positives (`direction="false_positive"`) from missed fraud (`"missed_fraud"`). Escalate if either direction deviates >20% from trailing 30-day mean.
-- **Invalid metadata**: `fraud_psp_invalid_metadata_total{field}` flags PSP payload regressions (e.g., missing tenant IDs, malformed dispositions) so SDK updates can be rolled out quickly.
-- **Attestation status**: `fraud_psp_attestation_total{tenant,engine,status}` confirms that envelopes are being signed and digests match. Alert if `status!="verified"` spikes for any tenant or engine.
+### ዳሽቦርድ ሽፋን
 
-### Dashboard coverage
+- **አስፈፃሚ አጠቃላይ እይታ**፡ የተቆለለ የቦታ ገበታ `fraud_psp_assessments_total` ባንድ ተከራይ፣የፒ95 መዘግየት እና አለመመጣጠን ቆጠራዎችን ከሚያጠቃልል ሠንጠረዥ ጋር ተጣምሮ።
+- **ኦፕሬሽኖች**፡ የሂስቶግራም ፓነሎች ለ`fraud_psp_latency_ms` እና `fraud_psp_score_bps` ከሳምንት በላይ-ሳምንት ንጽጽር፣ በተጨማሪም ነጠላ-ስታቲስቲክስ ለ `fraud_psp_missing_assessment_total` በ `cause` ተከፍሏል።
+- **የአደጋ ክትትል**፡ የባር ገበታ `fraud_psp_outcome_mismatch_total` ለአንድ ተከራይ፣የቅርብ ጊዜ `fraud_assessment_disposition=confirmed_fraud` ጉዳዮችን የሚዘረዝር `band` `low` ወይም `medium`።
+- ** የማንቂያ ደንቦች ***:
+  - `rate(fraud_psp_missing_assessment_total{cause="missing"}[5m]) > 0` → ፔጂንግ ማንቂያ (የ PSP ትራፊክን ውድቅ ማድረግ)።
+  - `histogram_quantile(0.95, sum(rate(fraud_psp_latency_ms_bucket[10m])) by (le,tenant)) > 150` → የዘገየ SLO መጣስ።
+  - `sum by (tenant) (rate(fraud_psp_outcome_mismatch_total{direction="missed_fraud"}[1h])) > 0.01` → የሞዴል ተንሸራታች / የፖሊሲ ክፍተት።
 
-- **Executive overview**: stacked area chart of `fraud_psp_assessments_total` by band per tenant, coupled with a table summarising P95 latency and mismatch counts.
-- **Operations**: histogram panels for `fraud_psp_latency_ms` and `fraud_psp_score_bps` with week-over-week comparison, plus single-stat counters for `fraud_psp_missing_assessment_total` split by `cause`.
-- **Risk monitoring**: bar chart of `fraud_psp_outcome_mismatch_total` per tenant, drill-down table listing recent `fraud_assessment_disposition=confirmed_fraud` cases where `band` was `low` or `medium`.
-- **Alert rules**:
-  - `rate(fraud_psp_missing_assessment_total{cause="missing"}[5m]) > 0` → paging alert (admission rejecting PSP traffic).
-  - `histogram_quantile(0.95, sum(rate(fraud_psp_latency_ms_bucket[10m])) by (le,tenant)) > 150` → latency SLO breach.
-  - `sum by (tenant) (rate(fraud_psp_outcome_mismatch_total{direction="missed_fraud"}[1h])) > 0.01` → model drift / policy gap.
+### የሚጠበቁትን አለመሳካት።- የፒኤስፒ ኤስዲኬዎች ሁለት ገቢር የውጤት ማብቂያ ነጥቦችን ይዘው በ15 ሰከንድ ውስጥ የትራንስፖርት ስህተቶችን ወይም የቆይታ ጊዜ ማሳለፊያዎችን > 200 ሚ. ደብተሩ ቢበዛ `fraud_monitoring.missing_assessment_grace_secs` የችሮታ ትራፊክን ይታገሣል። ኦፕሬተሮች በማምረት ሂደት ውስጥ በ 5ደቂቃዎች በችሮታ ከቆየ፣ PSP ወደ ማኑዋል ግምገማ መቀየር እና ከተጋራ የማጭበርበር ኦፕሬሽን ቡድን ጋር የ Sev2 ክስተት መክፈት አለበት።
+- የነቃ ማሰማራቶች በአደጋ ማገገሚያ ልምምዶች ወቅት የወረፋ ፍሳሽ/እንደገና መጫወት ማሳየት አለባቸው። የድጋሚ አጫውት መለኪያዎች `fraud_psp_latency_ms` P99ን በ400ms ስር ለድጋሚ መስኮቱ ማቆየት አለባቸው።
 
-### Failover expectations
+## የ PSP ውሂብ ማጋራት ማረጋገጫ ዝርዝር
 
-- PSP SDKs must maintain two active scoring endpoints and fail over within 15 seconds of detecting transport errors or latency spikes >200 ms. The ledger tolerates grace traffic for at most `fraud_monitoring.missing_assessment_grace_secs`; operators should keep the knob at <=30 seconds in production.
-- Validators record `fraud_psp_missing_assessment_total{cause="grace"}` while in fallback; if a tenant stays in grace for >5 minutes, the PSP must switch to manual review and open a Sev2 incident with the shared fraud operations team.
-- Active-active deployments must demonstrate queue drain/replay during disaster recovery drills. Replay metrics should keep `fraud_psp_latency_ms` P99 under 400 ms for the replay window.
+1. **የቴሌሜትሪ የቧንቧ ዝርጋታ**፡- ለመመዝገቢያ ደብተር በሚሰጥ ለእያንዳንዱ ግብይት ከላይ የተዘረዘሩትን የሜታዳታ ቁልፎች ማጋለጥ፤ ተከራይ ለዪዎች የውሸት ስማቸው እና ከ PSP ውል ጋር የተጣጣሙ መሆን አለባቸው።
+2. **ስም የለሽነት**፡ ከPSP ፔሪሜትር ከመውጣታቸው በፊት የመሣሪያ ሃሽ፣ ተለዋጭ መለያዎች እና አወቃቀሮች በስም መያዛቸውን ያረጋግጡ። ምንም PII በNorito ሜታዳታ ውስጥ መካተት አይችልም።
+3. ** የዘገየ ሪፖርት ማድረግ ***: `fraud_assessment_latency_ms` ከጫፍ-ወደ-ፍጻሜ ጊዜ አቆጣጠር (ወደ PSP መግቢያ) መሙላት ስለዚህ SLA regressions ወዲያውኑ ብቅ.
+4. **የውጤት ማስታረቅ**፡ የማጭበርበር ጉዳዮች ከተረጋገጠ በኋላ `fraud_assessment_disposition`ን ያዘምኑ (ለምሳሌ፣ ተመላሽ ክፍያ የተለጠፈ) የማይዛመድ መለኪያዎችን በትክክል ለማቆየት።
+5. **የማይሳካ ልምምዶች**፡ የተጋራውን የፍተሻ መዝገብ በመጠቀም በየሩብ ዓመቱ ይለማመዱ - አውቶማቲክ የመጨረሻ ነጥብ አለመሳካቱን ያረጋግጡ፣ የጸጋ-መስኮት ምዝግብ ማስታወሻዎችን ያረጋግጡ እና በ`scripts/ci/schedule_fraud_scoring.sh` ከተመዘገቡት የክትትል ስራዎች ጋር ያያይዙ።
+6. **የዳሽቦርድ ማረጋገጫ**፡ የፒኤስፒ ኦፕሬሽን ቡድኖች ከተሳፈሩ በኋላ እና ከእያንዳንዱ የቀይ ቡድን ልምምድ በኋላ መለኪያዎች በሚጠበቁ ተከራይ መለያዎች እየፈሰሱ መሆናቸውን ለማረጋገጥ የPrometheus ዳሽቦርዶችን መከለስ አለባቸው።
 
-## PSP Data-Sharing Checklist
+## የደህንነት ጉዳዮች
+- ሁሉም ምላሾች በሃርድዌር በሚደገፉ ቁልፎች የተፈረሙ ናቸው; PSPs ውጤቶች ከማመን በፊት ፊርማዎችን ያረጋግጣሉ።
+- የሞዴል ድንበሮችን ለመማር በማለም ላይ ያሉ የምርመራ ጥቃቶችን ለመቀነስ በተለዋጭ ስም/መሣሪያ።
+- የPSP ማንነትን በይፋ ሳያሳውቅ የወጡ ምላሾችን ለመፈለግ የውሃ ምልክትን በውስጥ ግምገማዎች ውስጥ ያስገቡ።
+- ከደህንነት WG (ሚልስቶን 0) ጋር በማስተባበር የሩብ አመት የቀይ ቡድን ልምምዶችን ያካሂዱ እና ግኝቶችን ወደ የመንገድ ካርታ ዝመናዎች ይመግቡ።## የትግበራ ደረጃዎች
+1. **ደረጃ 0 - መሠረቶች**
+   - የNorito መርሃግብሮችን፣ የፒኤስፒ ኤስዲኬ ስካፎልዲንግ፣ የውቅረት ሽቦን እና የመመዝገቢያ-የጎን የማረጋገጫ ወረቀትን ያጠናቅቁ።
+   - የግዴታ የአደጋ ፍተሻዎችን የሚሸፍን ወሳኙ ደንብ ሞተር ይገንቡ (ፍጥነት፣ ፍጥነቱ በአንድ ተለዋጭ ስም ጥንድ ፣ እንደገና ጥቅም ላይ ይውላል)።
+2. ** ደረጃ 1 - ማዕከላዊ ነጥብ ማስቆጠር MVP ***
+   - የባህሪ ማከማቻ፣ የውጤት አሰጣጥ አገልግሎት እና የቴሌሜትሪ ዳሽቦርዶችን አሰማር።
+   - የእውነተኛ ጊዜ ውጤትን ከተገደበ የፒኤስፒ ቡድን ጋር ያዋህዱ; የቆይታ እና የጥራት መለኪያዎችን ይያዙ።
+3. **ደረጃ 2 - የላቀ ትንታኔ**
+   - ያልተለመደ ፈልጎ ማግኘት፣ በግራፍ ላይ የተመሰረተ የአገናኝ ትንተና እና የመላመድ ገደቦችን ያስተዋውቁ።
+   - የአስተዳደር ፖርታል እና የቡድን ሪፖርት ማድረጊያ ቧንቧዎችን ያስጀምሩ።
+4. ** ደረጃ 3 - ቀጣይነት ያለው ትምህርት እና አውቶሜትድ ***
+   - የሞዴል ማሰልጠኛ/የማረጋገጫ ቧንቧዎችን በራስ ሰር ያድርጉ፣ የካናሪ ማሰማራቶችን ይጨምሩ እና የኤስዲኬ ሽፋንን ያስፋፉ።
+   - ከአቋራጭ ዳታ መጋራት ስምምነቶች ጋር አስተካክል እና ወደፊት የባለብዙ ሳብኔት ድልድዮችን ይሰኩ።
 
-1. **Telemetry plumbing**: expose the metadata keys listed above for every transaction handed to the ledger; tenant identifiers must be pseudonymous and scoped to the PSP contract.
-2. **Anonymisation**: confirm that device hashes, alias identifiers, and dispositions are pseudonymised before leaving the PSP perimeter; no PII can be embedded in Norito metadata.
-3. **Latency reporting**: populate `fraud_assessment_latency_ms` with end-to-end timing (gateway to PSP) so SLA regressions surface immediately.
-4. **Outcome reconciliation**: update `fraud_assessment_disposition` once fraud cases are confirmed (e.g., chargeback posted) to keep mismatch metrics accurate.
-5. **Failover drills**: rehearse quarterly using the shared checklist—verify automatic endpoint failover, ensure grace-window logging, and attach drill notes to the follow-up task filed by `scripts/ci/schedule_fraud_scoring.sh`.
-6. **Dashboard validation**: PSP operations teams must review Prometheus dashboards after onboarding and after every red-team exercise to confirm metrics are flowing with expected tenant labels.
-
-## Security Considerations
-- All responses are signed with hardware-backed keys; PSPs validate signatures before trusting scores.
-- Rate-limit by alias/device to mitigate probing attacks aiming to learn model boundaries.
-- Embed watermarking inside assessments to trace leaked responses without revealing PSP identity publicly.
-- Run quarterly red-team exercises in coordination with the Security WG (Milestone 0) and feed findings into roadmap updates.
-
-## Implementation Phases
-1. **Phase 0 – Foundations**
-   - Finalize Norito schemas, PSP SDK scaffolding, configuration wiring, and ledger-side verification stub.
-   - Build deterministic rule engine covering mandatory risk checks (velocity, velocity per alias pair, device reuse).
-2. **Phase 1 – Central Scoring MVP**
-   - Deploy feature store, scoring service, and telemetry dashboards.
-   - Integrate real-time scoring with a limited PSP cohort; capture latency and quality metrics.
-3. **Phase 2 – Advanced Analytics**
-   - Introduce anomaly detection, graph-based link analysis, and adaptive thresholds.
-   - Launch governance portal and batch reporting pipelines.
-4. **Phase 3 – Continuous Learning & Automation**
-   - Automate model training/validation pipelines, add canary deployments, and expand SDK coverage.
-   - Align with cross-jurisdiction data-sharing agreements and plug into future multi-subnet bridges.
-
-## Open Questions
-- What regulatory body will charter the operator of the fraud service, and how are oversight responsibilities shared?
-- How do PSPs expose end-user challenge flows while maintaining consistent UX across providers?
-- Which privacy-enhancing technologies (e.g., secure enclaves, homomorphic aggregation) should be prioritized once baseline service is stable?
+## ክፍት ጥያቄዎች
+- የትኛው ተቆጣጣሪ አካል የማጭበርበር አገልግሎቱን ኦፕሬተር ቻርተር ያደርጋል፣ እና የቁጥጥር ኃላፊነቶች እንዴት ይጋራሉ?
+- PSPs በአቅራቢዎች ላይ ወጥ የሆነ ዩኤክስን እየጠበቁ ለዋና ተጠቃሚ ፈታኝ ፍሰቶችን የሚያጋልጡት እንዴት ነው?
+- የመነሻ አገልግሎት ከተረጋጋ ለየትኞቹ ግላዊነትን የሚያሻሽሉ ቴክኖሎጂዎች (ለምሳሌ ደህንነቱ የተጠበቀ ኢንክላቭስ፣ ሆሞሞርፊክ ውህደት) ቅድሚያ ሊሰጣቸው ይገባል?

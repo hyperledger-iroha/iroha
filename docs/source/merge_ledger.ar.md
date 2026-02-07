@@ -6,63 +6,64 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 44f1c681730f1c94d9d00e8f829a0134374ce6cb29f21727a27685e096f0da40
 source_last_modified: "2026-01-18T05:31:56.955438+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Merge Ledger Design — Lane Finality and Global Reduction
+# دمج تصميم دفتر الأستاذ - نهاية المسار والتخفيض العالمي
 
-This note finalises the merge-ledger design for Milestone 5. It explains the
-non-empty block policy, cross-lane QC merge semantics, and the finality workflow
-that binds lane-level execution to the global world state commitment.
+تضع هذه المذكرة اللمسات الأخيرة على تصميم دفتر الأستاذ المدمج لـ Milestone 5. وهي تشرح
+سياسة الكتلة غير الفارغة، ودلالات دمج مراقبة الجودة عبر الممرات، وسير العمل النهائي
+الذي يربط التنفيذ على مستوى المسار بالتزام الدولة العالمية العالمية.
 
-The design extends the Nexus architecture described in `nexus.md`. Terms such as
-"lane block", "lane QC", "merge hint", and "merge ledger" inherit their
-definition from that document; this note focuses on behavioural rules and
-implementation guidance that must be enforced by the runtime, storage, and WSV
-layers.
+يمتد التصميم إلى بنية Nexus الموضحة في `nexus.md`. مصطلحات مثل
+ترث كل من "كتلة المسار" و"مراقبة الجودة في المسار" و"تلميح الدمج" و"دفتر الأستاذ المدمج".
+التعريف من تلك الوثيقة؛ تركز هذه المذكرة على القواعد السلوكية و
+إرشادات التنفيذ التي يجب تنفيذها بواسطة وقت التشغيل والتخزين وWSV
+طبقات.
 
-## 1. Non-Empty Block Policy
+## 1. سياسة الحظر غير الفارغ
 
-**Rule (MUST):** A lane proposer issues a block only when the block contains at
-least one executed transaction fragment, time-based trigger, or deterministic
-artifact update (e.g., DA artifact roll-up). Empty blocks are forbidden.
+**القاعدة (يجب):** يصدر مُقترح المسار كتلة فقط عندما تحتوي الكتلة على
+جزء معاملة تم تنفيذه على الأقل، أو مشغل يستند إلى الوقت، أو حتمية
+تحديث العناصر (على سبيل المثال، مجموعة عناصر DA). الكتل الفارغة محظورة.
 
-**Implications:**
+** الآثار: **
 
-- Slot keep-alive: when no transaction meets its deterministic commit window,
-the lane emits no block and simply advances to the next slot. The merge ledger
-remains on the previous tip for that lane.
-- Trigger batching: background triggers that produce no state transition (e.g.,
-cron that reaffirms invariants) are considered empty and MUST be skipped or
-bundled with other work before producing a block.
-- Telemetry: `pipeline_detached_merged` and follow-up metrics treat skipped
-slots explicitly—operators can distinguish "no work" from "pipeline stalled".
-- Replay: block storage does not insert synthetic empty placeholders. The Kura
-replay loop simply observes the same parent hash for consecutive slots if no
-block was emitted.
+- إبقاء الفتحة على قيد الحياة: عندما لا تستوفي أي معاملة نافذة الالتزام الحتمية الخاصة بها،
+لا يصدر المسار أي كتلة ويتقدم ببساطة إلى الفتحة التالية. دفتر الدمج
+يبقى على الطرف السابق لهذا المسار.
+- مجموعة المشغلات: مشغلات الخلفية التي لا تنتج أي انتقال للحالة (على سبيل المثال،
+cron الذي يعيد تأكيد الثوابت) يعتبر فارغًا ويجب تخطيه أو
+المجمعة مع أعمال أخرى قبل إنتاج كتلة.
+- القياس عن بعد: `pipeline_detached_merged` ومعالجة مقاييس المتابعة التي تم تخطيها
+الفتحات بشكل صريح - يمكن للمشغلين التمييز بين "لا يوجد عمل" و"خطوط الأنابيب متوقفة".
+- الإعادة: لا يقوم تخزين الكتل بإدخال عناصر نائبة فارغة اصطناعية. الكورا
+تلاحظ حلقة إعادة التشغيل ببساطة نفس التجزئة الأصلية لفتحات متتالية إذا لم يكن الأمر كذلك
+انبعثت الكتلة.
 
-**Canonical Check:** During block proposal and validation, `ValidBlock::commit`
-asserts that the associated `StateBlock` carries at least one committed overlay
-(delta, artifact, trigger). This aligns with the `StateBlock::is_empty` guard
-that already ensures no-op writes are elided. Enforcement happens before
-signatures are requested so committees never vote on empty payloads.
+**الفحص الأساسي:** أثناء اقتراح الكتلة والتحقق من صحتها، `ValidBlock::commit`
+يؤكد أن `StateBlock` المرتبط يحمل تراكبًا ملتزمًا واحدًا على الأقل
+(دلتا، قطعة أثرية، الزناد). يتوافق هذا مع واقي `StateBlock::is_empty`
+الذي يضمن بالفعل حذف عمليات الكتابة بدون إجراء. التنفيذ يحدث من قبل
+يتم طلب التوقيعات حتى لا تصوت اللجان أبدًا على الحمولات الفارغة.
 
-## 2. Cross-Lane QC Merge Semantics
+## 2. دلالات دمج مراقبة الجودة عبر الممرات
 
-Each lane block `B_i` finalised by its committee produces:
+كل كتلة حارة `B_i` تم الانتهاء منها من قبل لجنتها تنتج ما يلي:
 
-- `lane_state_root_i`: Poseidon2-SMT commitment over per-DS state roots touched
-in the block.
-- `merge_hint_root_i`: rolling candidate for the merge ledger (`tag =
+- `lane_state_root_i`: تم لمس التزام Poseidon2-SMT على جذور حالة كل DS
+في الكتلة.
+- `merge_hint_root_i`: المرشح المتجدد لدفتر الأستاذ المدمج (`tag =
 "iroha:merge:candidate:v1\0"`).
-- `lane_qc_i`: aggregated signatures from the lane committee over the
-  execution-vote preimage (block hash, `parent_state_root`,
-  `post_state_root`, height/view/epoch, chain_id, and mode tag).
+- `lane_qc_i`: التوقيعات المجمعة من لجنة المسار على
+  الصورة الأولية للتصويت على التنفيذ (تجزئة الكتلة، `parent_state_root`،
+  `post_state_root`، الارتفاع/العرض/العصر، chain_id، وعلامة الوضع).
 
-Merge nodes collect the latest tips `{(B_i, lane_qc_i, merge_hint_root_i)}` for
-all lanes `i ∈ [0, K)`.
+تقوم عقد الدمج بجمع أحدث النصائح `{(B_i, lane_qc_i, merge_hint_root_i)}` لـ
+جميع الممرات `i ∈ [0, K)`.
 
-**Merge Entry (MUST):**
+**دمج الإدخال (يجب):**
 
 ```
 MergeLedgerEntry {
@@ -72,23 +73,21 @@ MergeLedgerEntry {
     global_state_root: Hash32,
     merge_qc: QuorumCertificate,
 }
-```
+```- `lane_tips[i]` هو تجزئة المسار الذي يمنع أختام دخول الدمج للمسار
+  `i`. إذا لم يصدر أي كتلة من الممر منذ إدخال الدمج السابق، فستكون هذه القيمة
+  متكرر.
+- `merge_hint_root[i]` هو `merge_hint_root` من المسار المقابل
+  كتلة. ويتكرر عند تكرار `lane_tips[i]`.
+- `global_state_root` يساوي `ReduceMergeHints(merge_hint_root[0..K-1])`، أ
+  أضعاف Poseidon2 مع علامة فصل المجال
+  `"iroha:merge:reduce:v1\0"`. التخفيض أمر حتمي ويجب
+  إعادة بناء نفس القيمة عبر أقرانهم.
+- `merge_qc` هي شهادة النصاب القانوني BFT من لجنة الدمج على مدى
+  إدخال متسلسل.
 
-- `lane_tips[i]` is the hash of the lane block the merge entry seals for lane
-  `i`. If a lane emitted no block since the previous merge entry, this value is
-  repeated.
-- `merge_hint_root[i]` is the `merge_hint_root` from the corresponding lane
-  block. It is repeated when `lane_tips[i]` repeats.
-- `global_state_root` equals `ReduceMergeHints(merge_hint_root[0..K-1])`, a
-  Poseidon2 fold with domain separation tag
-  `"iroha:merge:reduce:v1\0"`. The reduction is deterministic and MUST
-  reconstruct the same value across peers.
-- `merge_qc` is a BFT quorum certificate from the merge committee over the
-  serialized entry.
+**دمج حمولة مراقبة الجودة (يجب):**
 
-**Merge QC Payload (MUST):**
-
-Merge committee members sign a deterministic digest:
+أعضاء لجنة الدمج يوقعون على ملخص حتمي:
 
 ```
 merge_qc_digest = blake2b32(
@@ -104,110 +103,106 @@ merge_qc_digest = blake2b32(
 )
 ```
 
-- `view` is the merge-committee view derived from the lane tips (max
-  `view_change_index` across the lane headers sealed by the entry).
-- `chain_id` is the configured chain identifier string (UTF-8 bytes).
-- The payload uses Norito encoding with the field order shown above.
+- `view` هو عرض لجنة الدمج المستمدة من أطراف الممرات (الحد الأقصى
+  `view_change_index` عبر رؤوس الممرات المختومة بالمدخل).
+- `chain_id` هي سلسلة معرف السلسلة التي تم تكوينها (UTF-8 بايت).
+- تستخدم الحمولة تشفير Norito مع ترتيب الحقل الموضح أعلاه.
 
-The resulting digest is stored in `merge_qc.message_digest` and is the message
-verified by BLS signatures.
+يتم تخزين الملخص الناتج في `merge_qc.message_digest` وهو الرسالة
+تم التحقق منها بواسطة توقيعات BLS.
 
-**Merge QC Construction (MUST):**
+**دمج إنشاء مراقبة الجودة (يجب):**
 
-- The merge committee roster is the current commit-topology validator set.
-- Required quorum = `commit_quorum_from_len(roster_len)`.
-- `merge_qc.signers_bitmap` encodes participating validator indices (LSB-first)
-  in commit-topology order.
-- `merge_qc.aggregate_signature` is the BLS-normal aggregate for the digest
-  above.
+- قائمة لجنة الدمج هي مجموعة أدوات التحقق من طوبولوجيا الالتزام الحالية.
+- النصاب القانوني المطلوب = `commit_quorum_from_len(roster_len)`.
+- يقوم `merge_qc.signers_bitmap` بتشفير مؤشرات المدقق المشاركة (LSB-first)
+  بترتيب الالتزام بالطوبولوجيا.
+- `merge_qc.aggregate_signature` هو التجميع العادي لـ BLS للملخص
+  أعلاه.
 
-**Validation (MUST):**
+**التحقق (يجب):**
 
-1. Verify each `lane_qc_i` against `lane_tips[i]` and confirm the block headers
-   include the matching `merge_hint_root_i`.
-2. Ensure no `lane_qc_i` points to an `Invalid` or unexecuted block. The
-   non-empty policy above ensures the header includes state overlays.
-3. Recompute `ReduceMergeHints` and compare with `global_state_root`.
-4. Recompute the merge QC digest and verify the signer bitmap, quorum threshold,
-   and aggregate signature against the commit-topology roster.
+1. تحقق من كل `lane_qc_i` مقابل `lane_tips[i]` وتأكد من رؤوس الكتلة
+   قم بتضمين `merge_hint_root_i` المطابق.
+2. تأكد من عدم وجود `lane_qc_i` يشير إلى `Invalid` أو كتلة غير منفذة. ال
+   تضمن السياسة غير الفارغة أعلاه أن يتضمن الرأس تراكبات الحالة.
+3. أعد حساب `ReduceMergeHints` وقارنه مع `global_state_root`.
+4. أعد حساب ملخص مراقبة الجودة للدمج وتحقق من الصورة النقطية للموقّع وعتبة النصاب القانوني
+   والتوقيع الكلي مقابل قائمة طوبولوجيا الالتزام.
 
-**Observability:** Merge nodes emit Prometheus counters for
-`merge_entry_lane_repeats_total{i}` to highlight lanes that skipped slots for
-operational visibility.
+**قابلية الملاحظة:** تنبعث العقد المدمجة من عدادات Prometheus لـ
+`merge_entry_lane_repeats_total{i}` لتسليط الضوء على الممرات التي تخطت الفتحات الخاصة بها
+الرؤية التشغيلية.
 
-## 3. Finality Workflow
+## 3. سير العمل النهائي
 
-### 3.1 Lane-Level Finality
+### 3.1 نهائية مستوى المسار
 
-1. Transactions are scheduled per lane in deterministic slots.
-2. The executor applies overlays into `StateBlock`, producing deltas and
-artifacts.
-3. Upon validation, the lane committee signs the execution-vote preimage that
-   binds the block hash, state roots, and height/view/epoch. The tuple
-   `(block_hash, lane_qc_i, merge_hint_root_i)` is considered lane-final.
-4. Light clients MAY treat the lane tip as final for DS-limited proofs, but
-must record the associated `merge_hint_root` to reconcile with the merge ledger
-later.
+1. تتم جدولة المعاملات لكل حارة في فتحات حتمية.
+2. يقوم المنفذ بتطبيق التراكبات على `StateBlock`، مما يؤدي إلى إنتاج دلتا و
+التحف.
+3. بعد المصادقة، تقوم لجنة المسار بالتوقيع على الصورة المسبقة للتصويت على التنفيذ
+   يربط تجزئة الكتلة وجذور الحالة والارتفاع/العرض/العصر. الصفوف
+   يعتبر `(block_hash, lane_qc_i, merge_hint_root_i)` هو المسار النهائي.
+4. قد يتعامل العملاء الخفيفون مع طرف المسار باعتباره نهائيًا للإثباتات المحدودة بـ DS، ولكن
+يجب تسجيل `merge_hint_root` المرتبط للتوفيق مع دفتر أستاذ الدمج
+في وقت لاحق.تكون لجان المسار مخصصة لكل مساحة بيانات ولا تحل محل الالتزام العالمي
+طوبولوجيا. تم تحديد حجم اللجنة عند `3f+1`، حيث يأتي `f` من
+كتالوج مساحة البيانات (`fault_tolerance`). تجمع المدقق هو مساحة البيانات
+أدوات التحقق من الصحة (بيانات إدارة المسار للممرات التي يديرها المسؤول، أو المسار العام
+تسجيل السجلات للممرات المنتخبة). عضوية اللجنة هي
+تم أخذ عينات حتمية مرة واحدة لكل عصر باستخدام بذرة عصر VRF المرتبطة بـ
+`dataspace_id` و`lane_id`. إذا كان التجمع أصغر من `3f+1`، فإن نهاية المسار
+يتوقف مؤقتًا حتى يتم استعادة النصاب القانوني (تتم معالجة عملية الاسترداد في حالات الطوارئ بشكل منفصل).
 
-Lane committees are per-dataspace and do not replace the global commit
-topology. Committee size is fixed at `3f+1`, where `f` comes from the
-dataspace catalog (`fault_tolerance`). The validator pool is the dataspace's
-validators (lane governance manifests for admin-managed lanes, or public-lane
-staking records for stake-elected lanes). Committee membership is
-deterministically sampled once per epoch using the VRF epoch seed bound with
-`dataspace_id` and `lane_id`. If the pool is smaller than `3f+1`, lane finality
-pauses until quorum is restored (emergency recovery is handled separately).
+### 3.2 نهائية دمج دفتر الأستاذ
 
-### 3.2 Merge-Ledger Finality
+1. تقوم لجنة الدمج بجمع أحدث نصائح المسار، والتحقق من كل `lane_qc_i`، و
+ينشئ `MergeLedgerEntry` كما هو محدد أعلاه.
+2. بعد التحقق من التخفيض الحتمي تقوم لجنة الدمج بالتوقيع على محضر التخفيض
+الإدخال (`merge_qc`).
+3. تقوم العقد بإلحاق الإدخال بسجل دفتر الأستاذ المدمج وتحتفظ به بجانب
+مراجع كتلة الممرات.
+4. يصبح `global_state_root` التزام الدولة العالمي الرسمي لـ
+العصر/الفتحة. تقوم العقد الكاملة بتحديث البيانات التعريفية لنقطة تفتيش WSV الخاصة بها لتعكس ذلك
+القيمة؛ إعادة التشغيل الحتمية يجب أن تنتج نفس التخفيض.
 
-1. Merge committee collects the latest lane tips, verifies each `lane_qc_i`, and
-constructs the `MergeLedgerEntry` as defined above.
-2. After verifying the deterministic reduction, the merge committee signs the
-entry (`merge_qc`).
-3. Nodes append the entry to the merge ledger log and persist it alongside the
-lane block references.
-4. `global_state_root` becomes the authoritative world state commitment for the
-epoch/slot. Full nodes update their WSV checkpoint metadata to mirror this
-value; deterministic replay must reproduce the same reduction.
+### 3.3 WSV وتكامل التخزين
 
-### 3.3 WSV and Storage Integration
+- يسجل `State::commit_merge_entry` جذور الحالة لكل حارة و
+  `global_state_root` النهائي، وهو عبارة عن جسر بين تنفيذ المسار والمجموع الاختباري العالمي.
+- تستمر كورا في `MergeLedgerEntry` بجوار قطعة أثرية من الحارة لذلك
+  يمكن لإعادة التشغيل إعادة بناء تسلسلات النهاية العالمية وعلى مستوى المسار.
+- عندما يتخطى أحد الممرات إحدى الفتحات، يحتفظ التخزين ببساطة بالطرف السابق؛ لا
+  يتم إنشاء إدخالات دمج العناصر النائبة حتى ينتج مسار واحد على الأقل مسارًا جديدًا
+  كتلة.
+- تعرض أسطح API (Torii، القياس عن بعد) أطراف المسار وأحدث عمليات الدمج
+  الدخول حتى يتمكن المشغلون والعملاء من التوفيق بين وجهات النظر العالمية والعالمية.
 
-- `State::commit_merge_entry` records the per-lane state roots and the
-  final `global_state_root`, bridging lane execution with the global checksum.
-- Kura persists `MergeLedgerEntry` adjacent to the lane block artifacts so a
-  replay can reconstruct both lane-level and global finality sequences.
-- When a lane skips a slot, storage simply retains the previous tip; no
-  placeholder merge entries are created until at least one lane produces a new
-  block.
-- API surfaces (Torii, telemetry) expose both lane tips and the latest merge
-  entry so operators and clients can reconcile per-lane and global views.
-
-## 4. Implementation Notes
-
-- `crates/iroha_core/src/state.rs`: `State::commit_merge_entry` validates the
-  reduction and wires the lane/global metadata into the world state so queries
-  and observers can access the merge hints and the authoritative global hash.
-- `crates/iroha_core/src/kura.rs`: `Kura::store_block_with_merge_entry` enqueues
-  the block and persists the associated merge entry in one step, rolling back
-  the in-memory block when the append fails so storage never records a block
-  without its sealing metadata. The merge-ledger log is pruned in lock-step
-  with the validated block height during startup recovery, and cached in memory
-  with a bounded window (`kura.merge_ledger_cache_capacity`, default 256) to
-  avoid unbounded growth on long-running nodes. Recovery truncates partial or
-  oversized merge-ledger tail entries, and append rejects entries above the
-  maximum payload size guard to cap allocations.
-- `crates/iroha_core/src/block.rs`: block validation rejects blocks without
-  entrypoints (external transactions or time triggers) and without deterministic
-  artifacts such as DA bundles (`BlockValidationError::EmptyBlock`), ensuring
-  the non-empty policy is enforced before signatures are requested and carried
-  into the merge ledger.
-- Deterministic reduction helper lives in the merge service: `reduce_merge_hint_roots`
-  (`crates/iroha_core/src/merge.rs`) implements the Poseidon2 fold described above.
-  Hardware acceleration hooks remain future work, but the scalar path now enforces
-  the canonical reduction deterministically.
-- Telemetry integration: exposing per-lane merge repeats and the
-  `global_state_root` gauge remains tracked in the observability backlog so the
-  dashboard work can ship alongside the merge service rollout.
-- Cross-component tests: golden replay coverage for the merge reduction is
-  tracked with the integration-test backlog to ensure future changes to
-  `reduce_merge_hint_roots` keep the recorded roots stable.
+## 4. ملاحظات التنفيذ- `crates/iroha_core/src/state.rs`: يقوم `State::commit_merge_entry` بالتحقق من صحة
+  التخفيض وتوصيل البيانات الوصفية للممر/العالمية إلى الحالة العالمية لذلك يتم الاستعلام
+  ويمكن للمراقبين الوصول إلى تلميحات الدمج والتجزئة العالمية الرسمية.
+- `crates/iroha_core/src/kura.rs`: قوائم الانتظار `Kura::store_block_with_merge_entry`
+  الكتلة ويستمر في إدخال الدمج المرتبط بها في خطوة واحدة، مع التراجع
+  الكتلة الموجودة في الذاكرة عند فشل الإلحاق، لذا لا يسجل التخزين أي كتلة أبدًا
+  بدون البيانات الوصفية الختمية. يتم تقليم سجل دفتر الأستاذ المدمج في خطوة القفل
+  مع ارتفاع الكتلة الذي تم التحقق منه أثناء استرداد بدء التشغيل، وتخزينه مؤقتًا في الذاكرة
+  مع نافذة محددة (`kura.merge_ledger_cache_capacity`، الافتراضي 256) إلى
+  تجنب النمو غير المحدود على العقد طويلة الأمد. يقتطع الاسترداد جزئيًا أو
+  إدخالات ذيل دفتر الأستاذ كبيرة الحجم، وإلحاق إدخالات الرفض أعلى
+  الحد الأقصى لحجم الحمولة الصافية للحد من التخصيصات.
+- `crates/iroha_core/src/block.rs`: التحقق من صحة الكتلة يرفض الكتل بدونها
+  نقاط الدخول (المعاملات الخارجية أو مشغلات الوقت) وبدون حتمية
+  التحف مثل حزم DA (`BlockValidationError::EmptyBlock`)، وضمان
+  يتم فرض السياسة غير الفارغة قبل طلب التوقيعات وحملها
+  في دفتر الأستاذ الدمج.
+- مساعد التخفيض الحتمي موجود في خدمة الدمج: `reduce_merge_hint_roots`
+  (`crates/iroha_core/src/merge.rs`) يطبق طية Poseidon2 الموضحة أعلاه.
+  تظل خطافات تسريع الأجهزة عملاً مستقبليًا، ولكن يتم فرض المسار العددي الآن
+  التخفيض الكنسي بشكل حتمي.
+- تكامل القياس عن بعد: الكشف عن تكرارات الدمج لكل حارة و
+  يظل مقياس `global_state_root` متتبعًا في تراكم إمكانية الملاحظة، لذا فإن
+  يمكن شحن عمل لوحة المعلومات جنبًا إلى جنب مع طرح خدمة الدمج.
+- الاختبارات عبر المكونات: تغطية إعادة التشغيل الذهبية لتقليل الدمج
+  يتم تتبعها مع تراكم اختبار التكامل لضمان التغييرات المستقبلية
+  `reduce_merge_hint_roots` يحافظ على استقرار الجذور المسجلة.

@@ -4,18 +4,20 @@ direction: rtl
 source: docs/portal/docs/reference/README.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: Индекс справочников
-slug: /reference
+العنوان: فهرس الكلمات
+سبيكة: / مرجع
 ---
 
-Этот раздел собирает материалы «читайте как спецификацию» для Iroha. Эти страницы остаются стабильными даже по мере развития гайдов и туториалов.
+تم تجميع هذه المواد "اقرأ حسب المواصفات" لـ Iroha. تتمتع هذه الدول بالاستقرار حتى الآن من خلال تقديم إرشادات وتعليمات بسيطة.
 
-## Доступно сегодня
+## الآن بكل سهولة
 
-- **Обзор кодека Norito** - `reference/norito-codec.md` напрямую ссылается на авторитетную спецификацию `norito.md`, пока таблица портала заполняется.
-- **Torii OpenAPI** - `/reference/torii-openapi` отображает последнюю спецификацию REST Torii через Redoc. Перегенерируйте spec командой `npm run sync-openapi -- --version=current --latest` (добавьте `--mirror=<label>` для копирования snapshot в дополнительные исторические версии).
-- **Таблицы конфигурации** - Полный каталог параметров хранится в `docs/source/references/configuration.md`. Пока портал не предоставляет auto-import, обращайтесь к этому Markdown файлу за точными значениями по умолчанию и переопределениями окружения.
-- **Версионирование docs** - Выпадающий список версий в навбаре показывает замороженные snapshots, созданные с помощью `npm run docs:version -- <label>`, что упрощает сравнение рекомендаций между релизами.
+- **رمز البحث Norito** - `reference/norito-codec.md` يتوافق مع مواصفات التفويض `norito.md`، على الطاولة يتم إغلاق البوابة.
+- **Torii OpenAPI** - يتم تحديد `/reference/torii-openapi` بالمواصفات التالية REST Torii من خلال Redoc. قم بإعادة إنشاء أمر المواصفات `npm run sync-openapi -- --version=current --latest` (أضف `--mirror=<label>` لنسخ اللقطة في الإصدارات التاريخية الإضافية).
+- **تكوينات اللوحة** - يتم وضع معلمة الكتالوج الكامل في `docs/source/references/configuration.md`. حتى لا تسمح البوابة بالاستيراد التلقائي، قم بالتغطية من خلال هذا الملف Markdown لأهم نصائح التحسين والاقتراحات تكاثر.
+- **إصدار المستندات** - قم بإضافة نسخة القائمة في القائمة لإظهار اللقطات المحمية، والتي تم إنشاؤها باستخدام `npm run docs:version -- <label>`، من أجل تنفيذ التوصية الصحيحة بين الإعلانات.

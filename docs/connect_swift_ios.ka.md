@@ -7,31 +7,32 @@ generator: scripts/sync_docs_i18n.py
 source_hash: e3f492c3253124b1066f1ca4389c5ccf4b96a723a2cd9c30ca28ec92775eeaf4
 source_last_modified: "2026-01-05T18:22:23.396018+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-## Recommended SDK Flow (ConnectClient + Norito bridge)
+## რეკომენდებული SDK ნაკადი (ConnectClient + Norito ხიდი)
 
-Need a full Xcode integration walkthrough (SPM/CocoaPods, XCFramework wiring, ChaChaPoly helpers)?
-See `docs/connect_swift_integration.md` for the end-to-end packaging guide.
+გჭირდებათ სრული Xcode ინტეგრაციის გზამკვლევი (SPM/CocoaPods, XCFramework გაყვანილობა, ChaChaPoly დამხმარეები)?
+იხილეთ `docs/connect_swift_integration.md` ბოლოდან ბოლომდე შეფუთვის სახელმძღვანელოსთვის.
 
-The Swift SDK ships a Norito-backed Connect stack:
+Swift SDK აგზავნის Norito მხარდაჭერილ Connect stack-ს:
 
-- `ConnectClient` maintains the WebSocket (`/v1/connect/ws?...`) transport on top of
+- `ConnectClient` ინარჩუნებს WebSocket (`/v1/connect/ws?...`) ტრანსპორტს თავზე
   `URLSessionWebSocketTask`.
-- `ConnectSession` orchestrates the lifecycle (open → approve/reject → sign → close) and
-  decrypts ciphertext frames once direction keys are installed.
-- `ConnectCrypto` exposes X25519 key generation plus Norito-compliant direction-key
-  derivation so apps never have to implement HKDF/HMAC plumbing manually.
-- `ConnectEnvelope`/`ConnectControl` represent the typed Norito frames emitted by the
-  Rust bridge (`connect_norito_bridge`); ciphertext envelopes are decrypted via the
-  same FFI helpers used on Android/Rust, guaranteeing parity.
+- `ConnectSession` არეგულირებს სიცოცხლის ციკლს (გახსნა → დამტკიცება/უარი → ნიშანი → დახურვა) და
+  გაშიფვრავს შიფრული ტექსტის ჩარჩოებს მიმართულების ღილაკების დაყენების შემდეგ.
+- `ConnectCrypto` ასახავს X25519 გასაღების გენერაციას პლუს Norito-თან თავსებადი მიმართულების კლავიშს
+  დერივაცია, ასე რომ აპებს არასოდეს მოუწევთ HKDF/HMAC სანტექნიკის ხელით განხორციელება.
+- `ConnectEnvelope`/`ConnectControl` წარმოადგენს აკრეფილ Norito ჩარჩოებს, რომლებიც გამოშვებულია
+  ჟანგის ხიდი (`connect_norito_bridge`); შიფრული ტექსტის კონვერტები გაშიფრულია მეშვეობით
+  იგივე FFI დამხმარეები გამოიყენება Android/Rust-ზე, რაც უზრუნველყოფს პარიტეტს.
 
-Before starting a session:
-1. Derive the 32-byte session identifier (`sid`) using the same BLAKE2b recipe as other
-   SDKs (`"iroha-connect|sid|" || chain_id || app_pk || nonce16`).
-2. Generate a Connect key pair via `ConnectCrypto.generateKeyPair()` or reuse a stored
-   private key (public keys can be recomputed with `ConnectCrypto.publicKey(fromPrivateKey:)`).
-3. Create the WebSocket client and start it inside an async context.
+სესიის დაწყებამდე:
+1. გამოიღეთ 32-ბაიტიანი სესიის იდენტიფიკატორი (`sid`) იგივე BLAKE2b რეცეპტის გამოყენებით, როგორც სხვა
+   SDK-ები (`"iroha-connect|sid|" || chain_id || app_pk || nonce16`).
+2. შექმენით Connect გასაღებების წყვილი `ConnectCrypto.generateKeyPair()`-ის საშუალებით ან ხელახლა გამოიყენეთ შენახული
+   პირადი გასაღები (საჯარო გასაღებების ხელახლა გამოთვლა შესაძლებელია `ConnectCrypto.publicKey(fromPrivateKey:)`-ით).
+3. შექმენით WebSocket კლიენტი და დაიწყეთ ის ასინქრონული კონტექსტში.
 
 ```swift
 import IrohaSwift
@@ -79,15 +80,15 @@ Task {
 }
 ```
 
-`ConnectSession` throws `ConnectSessionError.missingDecryptionKeys` if ciphertext frames
-arrive before direction keys are installed; derive them immediately after processing an
-`Approve` control (wallet public key is included in the payload). To inspect ciphertext
-frames manually, call `ConnectEnvelope.decrypt(frame:symmetricKey:)` with the directional
-key that matches the frame’s direction.
+`ConnectSession` აგდებს `ConnectSessionError.missingDecryptionKeys`-ს, თუ დაშიფრული ტექსტის ჩარჩოებია
+ჩამოსვლა მიმართულების ღილაკების დაყენებამდე; გამოიყვანეთ ისინი დამუშავებისთანავე
+`Approve` კონტროლი (საფულის საჯარო გასაღები შედის დატვირთვაში). შიფრული ტექსტის შესამოწმებლად
+ჩარჩოები ხელით, დარეკეთ `ConnectEnvelope.decrypt(frame:symmetricKey:)` მიმართულებით
+გასაღები, რომელიც შეესაბამება ჩარჩოს მიმართულებას.
 
-> **Tip:** When the Norito bridge is missing (e.g., Swift Package Manager builds without
-> the XCFramework), the SDK automatically falls back to a JSON shim. Encryption helpers
-> (`ConnectCrypto.*`) require the bridge, so link the XCFramework in production apps.
+> **მინიშნება:** როდესაც Norito ხიდი აკლია (მაგ., Swift Package Manager აშენების გარეშე
+> XCFramework), SDK ავტომატურად ბრუნდება JSON შიმში. დაშიფვრის დამხმარეები
+> (`ConnectCrypto.*`) მოითხოვს ხიდს, ამიტომ დააკავშირეთ XCFramework საწარმოო აპებში.
 
 ```swift
 import Foundation
@@ -287,19 +288,19 @@ let ctReject = sealEnvelopeV1(key: kWallet, sid: sid, dir: 1, seq: 2, payload: r
 let frameReject = frameCiphertextV1Demo(sid: sid, dir: 1, seq: 2, aead: ctReject)
 ws.send(.data(frameReject)) { err in if let err = err { print("ws send reject:", err) } }
 ```
-## CI validation
+## CI ვალიდაცია
 
-- Before making Connect or bridge integration changes, run:
+- სანამ Connect ან Bridge ინტეგრაციის ცვლილებებს განახორციელებთ, გაუშვით:
 
   ```bash
   make swift-ci
   ```
 
-  The command validates Swift fixtures, checks the dashboard feeds, and renders the CLI
-  summaries. The CI workflow relies on Buildkite metadata
-  (`ci/xcframework-smoke:<lane>:device_tag`) to map results back to the simulator or
-  StrongBox lanes—after changing pipelines or agent tags, confirm the metadata still
-  appears in the logs.
-- If the run fails, follow `docs/source/swift_parity_triage.md` and inspect the
-  `mobile_ci` output to determine which lane needs regeneration or further incident
-  handling.
+  ბრძანება ამოწმებს Swift-ის მოწყობილობებს, ამოწმებს დაფის არხებს და ახდენს CLI-ს
+  რეზიუმეები. CI სამუშაო პროცესი ეყრდნობა Buildkite მეტამონაცემებს
+  (`ci/xcframework-smoke:<lane>:device_tag`) შედეგების დასაბრუნებლად სიმულატორზე ან
+  StrongBox ზოლები — მილსადენების ან აგენტის ტეგების შეცვლის შემდეგ, კვლავ დაადასტურეთ მეტამონაცემები
+  ჩნდება ჟურნალებში.
+- თუ გაშვება ვერ მოხერხდა, მიჰყევით `docs/source/swift_parity_triage.md` და შეამოწმეთ
+  `mobile_ci` გამომავალი, რათა დადგინდეს, რომელ ზოლს სჭირდება რეგენერაცია ან შემდგომი ინციდენტი
+  დამუშავება.

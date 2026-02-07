@@ -4,41 +4,43 @@ direction: ltr
 source: docs/portal/docs/sorafs/dispute-revocation-runbook.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: dispute-revocation-runbook
-title: دليل تشغيل نزاعات وإلغاءات SoraFS
-sidebar_label: دليل تشغيل النزاعات والإلغاءات
-description: سير عمل الحوكمة لتقديم نزاعات سعة SoraFS وتنسيق الإلغاءات وإخلاء البيانات بشكل حتمي.
+идентификатор: книга споров-отзывов
+Название: دليل تشغيل نزاعات وإلغاءات SoraFS
+Sidebar_label: دليل تشغيل النزاعات والإلغاءات
+описание: سير عمل الحوكمة لتقديم نزاعات سعة SoraFS وتنسيق الإلغاءات وإخلاء Он сказал, что это действительно так.
 ---
 
-:::note المصدر المعتمد
-تعكس هذه الصفحة `docs/source/sorafs/dispute_revocation_runbook.md`. احرص على إبقاء النسختين متزامنتين إلى أن يتم سحب توثيق Sphinx القديم.
+:::примечание
+Был установлен `docs/source/sorafs/dispute_revocation_runbook.md`. Он был назван в честь Сфинкса в Сфинксе.
 :::
 
 ## الهدف
 
-يرشد هذا الدليل مشغلي الحوكمة خلال تقديم نزاعات سعة SoraFS، وتنسيق الإلغاءات، وضمان اكتمال إخلاء البيانات بشكل حتمي.
+Он был создан в 18NT00000002X, на сайте SoraFS. Он был убит в 2007 году в 1980-х годах.
 
 ## 1. تقييم الحادث
 
-- **شروط الإطلاق:** رصد خرق SLA (التوفر/فشل PoR)، نقص التكرار، أو خلاف في الفوترة.
-- **تأكيد التليمترية:** التقط لقطات `/v1/sorafs/capacity/state` و`/v1/sorafs/capacity/telemetry` للمزوّد.
-- **إخطار أصحاب المصلحة:** Storage Team (عمليات المزوّد)، Governance Council (جهة القرار)، Observability (تحديثات لوحات المتابعة).
+- **Обязательство:** Соглашение об уровне обслуживания (соглашение/открытие PoR), а также соглашение об уровне обслуживания.
+- **Отключено:** Установите `/v1/sorafs/capacity/state` и `/v1/sorafs/capacity/telemetry`.
+- **Обработка данных:** Группа хранения (عمليات المزوّد), Совет управления (جهة القرار), Наблюдательность (تحديثات لوحات). المتابعة).
 
 ## 2. إعداد حزمة الأدلة
 
-1. اجمع الآرتيفاكتات الخام (telemetry JSON، سجلات CLI، ملاحظات المدققين).
-2. وحّدها في أرشيف حتمي (مثل tarball)؛ وسجّل:
-   - digest BLAKE3-256 (`evidence_digest`)
-   - نوع الوسائط (`application/zip`، `application/jsonl`، وما إلى ذلك)
-   - URI الاستضافة (object storage، أو SoraFS pin، أو نقطة نهاية متاحة عبر Torii)
-3. خزّن الحزمة في حاوية جمع الأدلة الخاصة بالحوكمة مع وصول كتابة لمرة واحدة.
+1. Создание файла телеметрии (телеметрия JSON, интерфейс CLI, удаленный доступ).
+2. Создано в формате tarball; Ответ:
+   - дайджест BLAKE3-256 (`evidence_digest`)
+   - نوع الوسائط (`application/zip`, `application/jsonl`, وما إلى ذلك)
+   - URI-запрос (хранилище объектов, контакт SoraFS, а также входной сигнал Torii)
+3. Он был выбран в честь Дня святого Валентина в Вашингтоне. واحدة.
 
 ## 3. تقديم النزاع
 
-1. أنشئ مواصفة JSON لـ `sorafs_manifest_stub capacity dispute`:
+1. Создайте файл JSON для `sorafs_manifest_stub capacity dispute`:
 
    ```json
    {
@@ -58,7 +60,7 @@ description: سير عمل الحوكمة لتقديم نزاعات سعة SoraF
    }
    ```
 
-2. شغّل CLI:
+2. Интерфейс командной строки:
 
    ```bash
    sorafs_manifest_stub capacity dispute \
@@ -71,32 +73,32 @@ description: سير عمل الحوكمة لتقديم نزاعات سعة SoraF
      --private-key=ed25519:<key>
    ```
 
-3. راجع `dispute_summary.json` (تأكد من النوع، digest الأدلة، والطوابع الزمنية).
-4. أرسل JSON الطلب إلى Torii `/v1/sorafs/capacity/dispute` عبر طابور معاملات الحوكمة. التقط قيمة الاستجابة `dispute_id_hex`؛ فهي تثبّت إجراءات الإلغاء اللاحقة وتقارير التدقيق.
+3. راجع `dispute_summary.json` (отправлено в дайджест الأدلة, والطوابع الزمنية).
+4. Создайте JSON-файл Torii `/v1/sorafs/capacity/dispute` и сохраните его. Дополнительный файл `dispute_id_hex`; Он был убит в 1990-х годах.
 
 ## 4. الإخلاء والإلغاء
 
-1. **نافذة السماح:** أخطر المزوّد بقرب الإلغاء؛ واسمح بإخلاء البيانات المثبتة عندما تسمح السياسة.
-2. **أنشئ `ProviderAdmissionRevocationV1`:**
-   - استخدم `sorafs_manifest_stub provider-admission revoke` مع السبب المعتمد.
-   - تحقّق من التواقيع وdigest الإلغاء.
-3. **نشر الإلغاء:**
+1. **Настройка:** أخطر المزوّد بقرب الإلغاء؛ Он был убит в 2007 году.
+2. **Вход `ProviderAdmissionRevocationV1`:**
+   - استخدم `sorafs_manifest_stub provider-admission revoke` в приложении.
+   - تحقّق в التواقيع и дайджесте الإلغاء.
+3. **Напоминание:**
    - أرسل طلب الإلغاء إلى Torii.
-   - تأكد من حظر adverts الخاصة بالمزوّد (توقع ارتفاع `torii_sorafs_admission_total{result="rejected",reason="admission_missing"}`).
-4. **حدّث لوحات المتابعة:** علّم المزوّد على أنه مُلغى، وأشر إلى معرّف النزاع، واربط حزمة الأدلة.
+   - Показана реклама الخاصة بالمزوّد (توقع ارتفاع `torii_sorafs_admission_total{result="rejected",reason="admission_missing"}`).
+4. **Обращение к врачу:** علّم المزوّد على أنه مُلغى, وأشر إلى معرّف Вы можете сделать это.
 
 ## 5. ما بعد الحادث والمتابعة
 
-- سجّل الجدول الزمني والسبب الجذري وإجراءات المعالجة في متتبع حوادث الحوكمة.
-- حدّد التعويض (slashing للرهان، clawbacks للرسوم، وتعويضات العملاء).
-- وثّق الدروس المستفادة؛ حدّث عتبات SLA أو تنبيهات المراقبة إذا لزم الأمر.
+- Скалли Уилсон и его коллега по работе над фильмом "Мир" حوكمة.
+- حدّد التعويض (режущие للرهان, откатные удары للرسوم, وتعويضات العملاء).
+- وثّق الدروس المستفادة؛ Это соглашение об уровне обслуживания и соглашение о сотрудничестве.
 
-## 6. مواد مرجعية
+## 6. Удалить
 
 - `sorafs_manifest_stub capacity dispute --help`
 - `docs/source/sorafs/storage_capacity_marketplace.md` (قسم النزاعات)
 - `docs/source/sorafs/provider_admission_policy.md` (سير عمل الإلغاء)
-- لوحة المراقبة: `SoraFS / Capacity Providers`
+- Код запроса: `SoraFS / Capacity Providers`.
 
 ## قائمة التحقق
 

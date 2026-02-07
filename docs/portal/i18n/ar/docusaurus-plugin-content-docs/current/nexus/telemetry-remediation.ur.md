@@ -4,32 +4,34 @@ direction: rtl
 source: docs/portal/docs/nexus/telemetry-remediation.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: nexus-telemetry-remediation
-title: Nexus ٹیلیمیٹری ریمیڈی ایشن پلان (B2)
-description: `docs/source/nexus_telemetry_remediation_plan.md` کا آئینہ، جو ٹیلیمیٹری گیپ میٹرکس اور آپریشنل ورک فلو دستاویز کرتا ہے۔
+المعرف: معالجة العلاقة بين القياس عن بعد
+العنوان: Nexus خطة الريمنجتون (B2)
+الوصف: `docs/source/nexus_telemetry_remediation_plan.md` هو هذا، جو ليب ميركس وعمل خرافي في كرتا.
 ---
 
-# جائزہ
+#جائزہ
 
-روڈ میپ آئٹم **B2 - ٹیلیمیٹری گیپس کی ملکیت** ایک شائع شدہ پلان کا تقاضا کرتا ہے جو Nexus کی ہر زیر التواء ٹیلیمیٹری گیپ کو سگنل، الرٹ گارڈ ریل، اونر، ڈیڈ لائن اور ویریفیکیشن آرٹیفیکٹ سے جوڑے، تاکہ Q1 2026 کی آڈٹ ونڈوز شروع ہونے سے پہلے سب کچھ واضح ہو۔ یہ صفحہ `docs/source/nexus_telemetry_remediation_plan.md` کی عکاسی کرتا ہے تاکہ release engineering، telemetry ops اور SDK اونرز routed-trace اور `TRACE-TELEMETRY-BRIDGE` کی ریہرسل سے پہلے کوریج کی تصدیق کر سکیں۔
+روڈ ميب آياتم **B2 - ٹيليمتري جيپس مليكت** عبارة عن خطة شائعة مطلوبة ومطلوبة من قبل Nexus وهي في ما بعد ٹيليميري جيت، الجريدة الرسمية، أونر، أي شبكة إنترنت وإصدار افتراضي واضح، حتى الربع الأول من عام 2026، بدأت نهاية الأسبوع في نهاية المطاف. تحتوي هذه الصفحة `docs/source/nexus_telemetry_remediation_plan.md` على هندسة الإصدار وعمليات القياس عن بعد وSDK تتبع التتبع و`TRACE-TELEMETRY-BRIDGE` الذي يرسل أحدث برامج البحث.
 
-# گیپ میٹرکس
+# گيپ ميتركس
 
-| گیپ ID | سگنل اور الرٹ گارڈ ریل | اونر / اسکیلشن | ڈیڈ لائن (UTC) | ثبوت اور ویریفیکیشن |
-|--------|-------------------------|--------------------|-----------|-------------------------|
-| `GAP-TELEM-001` | ہسٹوگرام `torii_lane_admission_latency_seconds{lane_id,endpoint}` اور الرٹ **`SoranetLaneAdmissionLatencyDegraded`** جو اس وقت فائر ہوتا ہے جب `histogram_quantile(0.95, rate(bucket[5m])) * 1000 > 750` پانچ منٹ تک برقرار رہے (`dashboards/alerts/soranet_lane_rules.yml`). | `@torii-sdk` (سگنل) + `@telemetry-ops` (الرٹ)؛ Nexus routed-trace on-call کے ذریعے اسکیلشن۔ | 2026-02-23 | الرٹ ٹیسٹس `dashboards/alerts/tests/soranet_lane_rules.test.yml` کے تحت، ساتھ `TRACE-LANE-ROUTING` ریہرسل کی کیپچر جس میں الرٹ فائر/ریکور دکھایا گیا ہو اور Torii `/metrics` اسکریپ [Nexus transition notes](./nexus-transition-notes) میں محفوظ ہو۔ |
-| `GAP-TELEM-002` | کاؤنٹر `nexus_config_diff_total{knob,profile}` اور گارڈ ریل `increase(nexus_config_diff_total{profile="active"}[5m]) > 0` جو ڈپلائز کو گیٹ کرتا ہے (`docs/source/telemetry.md`). | `@nexus-core` (انسٹرومنٹیشن) -> `@telemetry-ops` (الرٹ)؛ غیر متوقع بڑھوتری پر گورننس ڈیوٹی آفیسر پیج ہوتا ہے۔ | 2026-02-26 | گورننس dry-run آؤٹ پٹس `docs/source/project_tracker/nexus_config_deltas/2026Q1.md` کے ساتھ محفوظ؛ ریلیز چیک لسٹ میں Prometheus کوئری اسکرین شاٹ اور `StateTelemetry::record_nexus_config_diff` کے diff emit کرنے کا لاگ اقتباس شامل ہو۔ |
-| `GAP-TELEM-003` | ایونٹ `TelemetryEvent::AuditOutcome` (میٹرک `nexus.audit.outcome`) اور الرٹ **`NexusAuditOutcomeFailure`** جب failures یا missing outcomes 30 منٹ سے زیادہ برقرار رہیں (`dashboards/alerts/nexus_audit_rules.yml`). | `@telemetry-ops` (pipeline) اور اسکیلشن `@sec-observability` تک۔ | 2026-02-27 | CI گیٹ `scripts/telemetry/check_nexus_audit_outcome.py` NDJSON payloads محفوظ کرتا ہے اور اگر TRACE ونڈو میں کامیابی کا ایونٹ نہ ہو تو فیل ہو جاتا ہے؛ الرٹ اسکرین شاٹس routed-trace رپورٹ کے ساتھ منسلک ہوں۔ |
-| `GAP-TELEM-004` | گیج `nexus_lane_configured_total` اور گارڈ ریل `nexus_lane_configured_total != EXPECTED_LANE_COUNT` جو SRE on-call چیک لسٹ کو فیڈ کرتا ہے۔ | `@telemetry-ops` (gauge/export) اور اسکیلشن `@nexus-core` کی طرف جب نوڈز کیٹلاگ سائز میں عدم مطابقت رپورٹ کریں۔ | 2026-02-28 | scheduler ٹیلیمیٹری ٹیسٹ `crates/iroha_core/tests/scheduler_telemetry.rs::records_lane_catalog_size` ایمیشن ثابت کرتا ہے؛ آپریٹرز Prometheus diff + `StateTelemetry::set_nexus_catalogs` لاگ اقتباس TRACE ریہرسل پیکیج کے ساتھ جوڑتے ہیں۔ |
+| معرف گیپ | السغنل والرٹ گرڈ رايل | اونر / اسکیلشن | عبر الإنترنت (UTC) | ثبوت و ویریفیکیشن |
+|--------|----------------------------------------|-----|----------|-------------------------|
+| `GAP-TELEM-001` | لقد تم إنشاء `torii_lane_admission_latency_seconds{lane_id,endpoint}` والرٹ **`SoranetLaneAdmissionLatencyDegraded`** لقد حان الوقت للمضي قدماً إلى `histogram_quantile(0.95, rate(bucket[5m])) * 1000 > 750` من خلال حل المشكلة (`dashboards/alerts/soranet_lane_rules.yml`). | `@torii-sdk` (سگنل) + `@telemetry-ops` (الرٹ)؛ Nexus تتبع التوجيه عند الطلب. | 2026-02-23 | القائمة `dashboards/alerts/tests/soranet_lane_rules.test.yml` تحت، ساتيه `TRACE-LANE-ROUTING` تشير إلى كمبيوتر محمول يعمل بالفحم/السجل الإضافي وTorii `/metrics` سكريپ [Nexus ملاحظات الانتقال](./nexus-transition-notes) محفوظه و۔ |
+| `GAP-TELEM-002` | تم الترحيب بالرقم `nexus_config_diff_total{knob,profile}` والريل `increase(nexus_config_diff_total{profile="active"}[5m]) > 0` (`docs/source/telemetry.md`). | `@nexus-core` (انسٹرومينٹیشن) -> `@telemetry-ops` (الرٹ)؛ ستعود التوقعات المستقبلية للمحرك الكهربائي في المستقبل القريب. | 2026-02-26 | تشغيل التشغيل الجاف آؤٹ پٹس `docs/source/project_tracker/nexus_config_deltas/2026Q1.md` وهو محفوظ؛ ريليز تشيك هي Prometheus وهي متوافقة مع سكرين الشات و`StateTelemetry::record_nexus_config_diff` diff emmit كرنفالية وهي لا تحتوي على نصوص شاملة. |
+| `GAP-TELEM-003` | أيون `TelemetryEvent::AuditOutcome` (ميتر `nexus.audit.outcome`) والرلت **`NexusAuditOutcomeFailure`** بعد الفشل أو فقدان النتائج 30 شهرًا أكثر (`dashboards/alerts/nexus_audit_rules.yml`). | `@telemetry-ops` (خط الأنابيب) واسكيلشن `@sec-observability` ت. | 2026-02-27 | يتم حفظ حمولات CI `scripts/telemetry/check_nexus_audit_outcome.py` NDJSON وإذا لم يتم تنزيل TRACE ونڈمیابی کایونٹ؛ تم نشر تقرير التتبع الموجه للصفحة على الشاشة. |
+| `GAP-TELEM-004` | يتم قطع كل من `nexus_lane_configured_total` وGRILL `nexus_lane_configured_total != EXPECTED_LANE_COUNT` SRE عند الطلب. | `@telemetry-ops` (قياس/تصدير) وسكيلشن `@nexus-core` قلم سريع لا يتوافق مع التقرير. | 2026-02-28 | جدولة ٹیليمیٹر ٹیست `crates/iroha_core/tests/scheduler_telemetry.rs::records_lane_catalog_size` إيميشن ثابت کرتا؛ البروتوكولات Prometheus diff + `StateTelemetry::set_nexus_catalogs` لاگرس المرسل TRACE پيكیج پیكیج یتم تسويته. |
 
-# آپریشنل ورک فلو
+# آبريشنل عمل فلو
 
-1. **ہفتہ وار ٹریاج۔** اونرز Nexus readiness کال میں پیش رفت رپورٹ کرتے ہیں؛ blockers اور الرٹ ٹیسٹ آرٹیفیکٹس `status.md` میں درج ہوتے ہیں۔
-2. **الرٹ dry-run۔** ہر الرٹ رول کے ساتھ `dashboards/alerts/tests/*.test.yml` انٹری دی جاتی ہے تاکہ guardrail بدلنے پر CI `promtool test rules` چلائے۔
-3. **آڈٹ ایویڈنس۔** `TRACE-LANE-ROUTING` اور `TRACE-TELEMETRY-BRIDGE` ریہرسل کے دوران آن کال Prometheus کوئریز کے نتائج، الرٹ ہسٹری، اور متعلقہ اسکرپٹس کی آؤٹ پٹس (`scripts/telemetry/check_nexus_audit_outcome.py`, `scripts/telemetry/check_redaction_status.py` برائے correlated signals) جمع کرتا ہے اور routed-trace آرٹیفیکٹس کے ساتھ محفوظ کرتا ہے۔
-4. **اسکیلشن۔** اگر کوئی guardrail ریہرسل ونڈو کے باہر فائر ہو تو متعلقہ ٹیم اس پلان کے حوالہ سے Nexus incident ٹکٹ فائل کرتی ہے، میٹرک اسنیپ شاٹ اور mitigation steps شامل کر کے آڈٹس دوبارہ شروع کرتی ہے۔
+1. **افتتاح حرب الحرب.** Nexus الاستعداد لنشر تقرير كامل؛ تم وضع حاصرات والقائمة المصورة `status.md` في الدرج.
+2. **التشغيل الجاف الخلفي.** الدور الرئيسي هو `dashboards/alerts/tests/*.test.yml` بوابة داخلية ودرزة حماية بديلة لـ CI `promtool test rules`.
+3. **آيوان.** `TRACE-LANE-ROUTING` و`TRACE-TELEMETRY-BRIDGE` يرسلان ما يدور حولهما إلى Prometheus ويتوافقان مع النتائج والصورة وما يتعلق بالسكربت. پٹس (`scripts/telemetry/check_nexus_audit_outcome.py`، `scripts/telemetry/check_redaction_status.py` الإشارات المترابطة) تم جمع الكرتا والتتبع الموجه آرٹیفیكٹس وهو محفوظات كرتا.
+4. **اسكيلشن.** إذا تعلق الأمر بحادثة مواصلات Nexus في حادثة 21NT00000008X، فإن ميرك أسنيپ ٹ و تتضمن خطوات التخفيف المزيد من الخطوات الأولى.
 
-اس میٹرکس کی اشاعت - اور `roadmap.md` و `status.md` میں حوالہ دینے کے ساتھ - روڈ میپ آئٹم **B2** اب "ذمہ داری، ڈیڈ لائن، الرٹ، ویریفیکیشن" کی قبولیت معیار پر پورا اترتا ہے۔
+تم نشر هذه العلامات التجارية - و`roadmap.md` و`status.md` حول حوالة يومية - روڤر ميب **B2** اب "ذم، عبر الإنترنت، الإنترنت، ويريفيكون" معاير پرپورا اترتا ہے۔

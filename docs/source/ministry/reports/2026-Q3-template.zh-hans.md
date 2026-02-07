@@ -10,6 +10,7 @@ translation_last_reviewed: 2026-02-07
 title: Ministry Transparency Report — 2026 Q3 (Template)
 summary: Scaffold for the MINFO-8 quarterly transparency packet; replace all tokens before publication.
 quarter: 2026-Q3
+translator: machine-google-reviewed
 ---
 
 <!--
@@ -19,126 +20,124 @@ quarter: 2026-Q3
     3. Attach supporting artefacts (data appendix, CSVs, manifest, Grafana export) under artifacts/ministry/transparency/<YYYY-Q>/.
 -->
 
-# Executive Summary
+# 执行摘要
 
-> Provide a one-paragraph summary of moderation accuracy, appeal outcomes, denylist churn, and treasury highlights. Mention whether release met the T+14 deadline.
+> 提供一段关于审核准确性、申诉结果、拒绝名单流失和财务亮点的摘要。提及发布是否满足 T+14 截止日期。
 
-## Quarter in Review
+## 季度回顾
 
-### Highlights
+### 亮点
 - {{HIGHLIGHT_1}}
 - {{HIGHLIGHT_2}}
 - {{HIGHLIGHT_3}}
 
-### Risks & Mitigations
+### 风险与缓解措施
 
-| Risk | Impact | Mitigation | Owner | Status |
-|------|--------|------------|-------|--------|
-| {{RISK_1}} | {{Impact}} | {{Mitigation}} | {{Owner}} | {{Status}} |
-| {{RISK_2}} | {{Impact}} | {{Mitigation}} | {{Owner}} | {{Status}} |
+|风险|影响 |缓解措施 |业主|状态 |
+|------|--------|------------|--------|--------|
+| {{RISK_1}} | {{影响}} | {{缓解}} | {{所有者}} | {{状态}} |
+| {{RISK_2}} | {{影响}} | {{缓解}} | {{所有者}} | {{状态}} |
 
-## Metrics Overview
+## 指标概述
 
-All metrics originate from `ministry_transparency_builder` (Norito bundle) after the DP sanitizer runs. Attach corresponding CSV slices referenced below.
+所有指标均源自 DP sanitizer 运行后的 `ministry_transparency_builder`（Norito 捆绑包）。附上下面引用的相应 CSV 切片。
 
-### AI Moderation Accuracy
+### AI 审核准确性
 
-| Model Profile | Region | FP Rate (Target) | FN Rate (Target) | Drift vs Calibration | Sample Size | Notes |
-|---------------|--------|------------------|------------------|----------------------|-------------|-------|
-| {{profile}} | {{region}} | {{fp_rate}} ({{fp_target}}) | {{fn_rate}} ({{fn_target}}) | {{drift}} | {{samples}} | {{notes}} |
+|型号简介 |地区 | FP 率（目标）| FN 利率（目标）|漂移与校准|样本量|笔记|
+|--------------|--------|------------------|------------------|------------------------|----------|------|
+| {{个人资料}} | {{地区}} | {{fp_rate}} ({{fp_target}}) | {{fn_rate}} ({{fn_target}}) | {{fn_rate}} {{漂移}} | {{样本}} | {{注释}} |
 
-### Appeals & Panel Activity
+### 上诉和小组活动
 
-| Metric | Value | SLA Target | Trend vs Q-1 | Notes |
-|--------|-------|------------|--------------|-------|
-| Appeals received | {{appeals_received}} | {{sla}} | {{delta}} | {{notes}} |
-| Median resolution time | {{median_resolution}} | {{sla}} | {{delta}} | {{notes}} |
-| Reversal rate | {{reversal_rate}} | {{target}} | {{delta}} | {{notes}} |
-| Panel utilization | {{panel_utilization}} | {{target}} | {{delta}} | {{notes}} |
+|公制|价值| SLA 目标 |趋势与 Q-1 |笔记|
+|--------|--------|------------|----------------|--------|
+|收到的上诉 | {{appeals_received}} | {{sla}} | {{delta}} | {{注释}} |
+|中值解决时间 | {{中位数分辨率}} | {{sla}} | {{delta}} | {{注释}} |
+|反转率 | {{reversal_rate}} | {{目标}} | {{delta}} | {{注释}} |
+|面板利用率| {{panel_utilization}} | {{目标}} | {{delta}} | {{注释}} |
 
-### Denylist & Emergency Canon
+### 拒绝名单和紧急佳能
 
-| Metric | Count | DP Noise (ε) | Emergency Flags | TTL Compliance | Notes |
-|--------|-------|--------------|-----------------|----------------|-------|
-| Hash additions | {{additions}} | {{epsilon_counts}} | {{flags}} | {{ttl_status}} | {{notes}} |
-| Hash removals | {{removals}} | {{epsilon_counts}} | {{flags}} | {{ttl_status}} | {{notes}} |
-| Canon invocations | {{canon_invocations}} | n/a | {{flags}} | {{ttl_status}} | {{notes}} |
+|公制|计数 |差压噪声 (ε) |紧急标志| TTL 合规性 |笔记|
+|--------|--------|--------------|------------------|----------------|--------------------|
+|哈希添加 | {{补充}} | {{epsilon_counts}} | {{flags}} | {{ttl_status}} | {{注释}} |
+|哈希删除 | {{删除}} | {{epsilon_counts}} | {{flags}} | {{ttl_status}} | {{注释}} |
+|佳能调用 | {{canon_incalls}} |不适用 | {{flags}} | {{ttl_status}} | {{注释}} |
 
-### Treasury Movements
+### 国债变动
 
-| Flow | Amount (MINFO) | Source Reference | Notes |
-|------|----------------|------------------|-------|
-| Appeal deposits | {{amount}} | {{tx_ref}} | {{notes}} |
-| Panel rewards | {{amount}} | {{tx_ref}} | {{notes}} |
-| Operational spend | {{amount}} | {{tx_ref}} | {{notes}} |
+|流量|金额 (MINFO) |来源参考|笔记|
+|------|----------------|--------------------|--------|
+|上诉存款 | {{金额}} | {{tx_ref}} | {{注释}} |
+|小组奖励 | {{金额}} | {{tx_ref}} | {{注释}} |
+|运营支出| {{金额}} | {{tx_ref}} | {{注释}} |
 
-### Volunteer & Outreach Signals
+### 志愿者和外展信号
 
-| Metric | Value | Target | Notes |
-|--------|-------|--------|-------|
-| Volunteer briefs published | {{value}} | {{target}} | {{notes}} |
-| Languages covered | {{value}} | {{target}} | {{notes}} |
-| Governance workshops hosted | {{value}} | {{target}} | {{notes}} |
+|公制|价值|目标|笔记|
+|--------|--------|--------|--------|
+|志愿者简介发布| {{值}} | {{目标}} | {{注释}} |
+|涵盖的语言 | {{值}} | {{目标}} | {{注释}} |
+|举办治理研讨会| {{值}} | {{目标}} | {{注释}} |
 
-## Differential Privacy & Sanitization
+## 差异化隐私和消毒
 
-Summarise the sanitizer run and include the RNG commitment.
+总结消毒剂的运行情况并包括 RNG 的承诺。
 
-- Sanitizer job: `{{CI_JOB_URL}}`
-- DP parameters: ε = {{epsilon_total}}, δ = {{delta_total}}
-- RNG commitment: `{{blake3_seed_commitment}}`
-- Buckets suppressed: {{suppressed_buckets}}
-- QA reviewer: {{reviewer}}
+- 消毒剂工作：`{{CI_JOB_URL}}`
+- DP参数：ε={{epsilon_total}}，δ={{delta_total}}
+- RNG承诺：`{{blake3_seed_commitment}}`
+- 抑制的存储桶：{{suppressed_buckets}}
+- 质量检查审核员：{{审核员}}
 
-Attach `artifacts/ministry/transparency/{{Quarter}}/dp_report.json` and note any manual interventions.
+附上 `artifacts/ministry/transparency/{{Quarter}}/dp_report.json` 并记下任何手动干预。## 数据附件
 
-## Data Attachments
+|文物|路径| SHA-256 |已上传至 SoraFS？ |笔记|
+|----------|------|---------|----------|--------|
+|摘要 PDF | `artifacts/ministry/transparency/{{Quarter}}/summary.pdf` | {{哈希}} | {{是/否}} | {{注释}} |
+| Norito 数据附录 | `artifacts/ministry/transparency/{{Quarter}}/data/appendix.norito` | {{哈希}} | {{是/否}} | {{注释}} |
+|指标 CSV 包 | `artifacts/ministry/transparency/{{Quarter}}/data/csv/` | {{哈希}} | {{是/否}} | {{注释}} |
+| Grafana 出口 | `dashboards/grafana/ministry_transparency_overview.json` | {{哈希}} | {{是/否}} | {{注释}} |
+|警报规则| `dashboards/alerts/ministry_transparency_rules.yml` | {{哈希}} | {{是/否}} | {{注释}} |
+|出处清单 | `artifacts/ministry/transparency/{{Quarter}}/manifest.json` | {{哈希}} | {{是/否}} | {{注释}} |
+|清单签名 | `artifacts/ministry/transparency/{{Quarter}}/manifest.json.sig` | {{哈希}} | {{是/否}} | {{注释}} |
 
-| Artefact | Path | SHA-256 | Uploaded to SoraFS? | Notes |
-|----------|------|---------|---------------------|-------|
-| Summary PDF | `artifacts/ministry/transparency/{{Quarter}}/summary.pdf` | {{hash}} | {{Yes/No}} | {{notes}} |
-| Norito data appendix | `artifacts/ministry/transparency/{{Quarter}}/data/appendix.norito` | {{hash}} | {{Yes/No}} | {{notes}} |
-| Metrics CSV bundle | `artifacts/ministry/transparency/{{Quarter}}/data/csv/` | {{hash}} | {{Yes/No}} | {{notes}} |
-| Grafana export | `dashboards/grafana/ministry_transparency_overview.json` | {{hash}} | {{Yes/No}} | {{notes}} |
-| Alert rules | `dashboards/alerts/ministry_transparency_rules.yml` | {{hash}} | {{Yes/No}} | {{notes}} |
-| Provenance manifest | `artifacts/ministry/transparency/{{Quarter}}/manifest.json` | {{hash}} | {{Yes/No}} | {{notes}} |
-| Manifest signature | `artifacts/ministry/transparency/{{Quarter}}/manifest.json.sig` | {{hash}} | {{Yes/No}} | {{notes}} |
+## 出版物元数据
 
-## Publication Metadata
-
-| Field | Value |
-|-------|-------|
-| Release quarter | {{Quarter}} |
-| Release timestamp (UTC) | {{timestamp}} |
+|领域|价值|
+|--------|--------|
+|发布季度 | {{季度}} |
+|发布时间戳 (UTC) | {{时间戳}} |
 | SoraFS CID | `{{cid}}` |
-| Governance vote ID | {{vote_id}} |
-| Manifest digest (`blake2b`) | `{{manifest_digest}}` |
-| Git commit / tag | `{{git_rev}}` |
-| Release owner | {{owner}} |
+|治理投票ID | {{vote_id}} |
+|清单摘要 (`blake2b`) | `{{manifest_digest}}` |
+| Git 提交/标记 | `{{git_rev}}` |
+|发布所有者 | {{所有者}} |
 
-## Approvals
+## 批准
 
-| Role | Name | Decision | Timestamp | Notes |
-|------|------|----------|-----------|-------|
-| Ministry Observability TL | {{name}} | ✅/⚠️ | {{timestamp}} | {{notes}} |
-| Governance Council Liaison | {{name}} | ✅/⚠️ | {{timestamp}} | {{notes}} |
-| Docs/Comms Lead | {{name}} | ✅/⚠️ | {{timestamp}} | {{notes}} |
+|角色 |名称 |决定|时间戳|笔记|
+|------|------|----------|------------|--------|
+|部委可观察性 TL | {{名称}} | ✅/⚠️ | {{时间戳}} | {{注释}} |
+|治理委员会联络| {{名称}} | ✅/⚠️ | {{时间戳}} | {{注释}} |
+|文档/通讯主管 | {{名称}} | ✅/⚠️ | {{时间戳}} | {{注释}} |
 
-## Changelog & Follow-Ups
+## 变更日志和后续行动
 
 - {{CHANGELOG_ITEM_1}}
 - {{CHANGELOG_ITEM_2}}
 
-### Open Action Items
+### 打开操作项
 
-| Item | Owner | Due | Status | Notes |
-|------|-------|-----|--------|-------|
-| {{Action}} | {{Owner}} | {{Due}} | {{Status}} | {{Notes}} |
+|项目 |业主|到期|状态 |笔记|
+|------|--------|-----|--------|--------|
+| {{行动}} | {{所有者}} | {{到期}} | {{状态}} | {{注释}} |
 
-### Contact
+### 联系方式
 
-- Primary contact: {{contact_name}} (`{{chat_handle}}`)
-- Escalation path: {{escalation_details}}
-- Distribution list: {{mailing_list}}
+- 主要联系人：{{contact_name}} (`{{chat_handle}}`)
+- 升级路径：{{escalation_details}}
+- 分发列表：{{mailing_list}}
 
-_Template version: 2026-03-25. Update the revision date when making structural changes._
+_模板版本：2026-03-25。进行结构更改时更新修订日期。_

@@ -6,95 +6,93 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: e7116d28e32d8bd77434edd6767427cc3d2ae0624f4de132b1d0cec3c7d44b86
 source_last_modified: "2026-01-03T18:07:57.069144+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% SM2/SM3/SM4 Product Filing (开发备案) Template
-% Hyperledger Iroha Compliance Working Group
+% SM2/SM3/SM4 תבנית תיוק מוצר (开发备案)
+% Hyperledger Iroha קבוצת עבודה של תאימות
 % 2026-05-06
 
-# Instructions
+# הוראות
 
-Use this template when submitting a *product development filing* to a provincial
-or municipal State Cryptography Administration (SCA) office before distributing
-SM-enabled binaries or source artefacts from within mainland China. Replace the
-placeholders with project-specific details, export the completed form as PDF if
-required, and attach the artefacts referenced in the checklist.
+השתמש בתבנית זו בעת הגשת *תיק לפיתוח מוצר* לפרובינציאל
+או המשרד העירוני של מינהל קריפטוגרפיה (SCA) לפני ההפצה
+קבצים בינאריים התומכים ב-SM או חפצי מקור מתוך סין היבשתית. החלף את
+מצייני מיקום עם פרטים ספציפיים לפרויקט, ייצא את הטופס המלא כ-PDF אם
+נדרש, וצרף את החפצים המוזכרים ברשימת הבדיקה.
 
-# 1. Applicant & Product Summary
+# 1. סיכום מועמד ומוצר
 
-| Field | Value |
+| שדה | ערך |
 |-------|-------|
-| Organisation name | {{ ORGANISATION }} |
-| Registered address | {{ ADDRESS }} |
-| Legal representative | {{ LEGAL_REP }} |
-| Primary contact (name / title / email / phone) | {{ CONTACT }} |
-| Product name | Hyperledger Iroha {{ RELEASE_NAME }} |
-| Product version / build ID | {{ VERSION }} |
-| Filing type | Product development (开发备案) |
-| Filing date | {{ YYYY-MM-DD }} |
+| שם הארגון | {{ ארגון }} |
+| כתובת רשומה | {{ כתובת }} |
+| נציג משפטי | {{ LEGAL_REP }} |
+| איש קשר ראשי (שם/כותרת/מייל/טלפון) | {{ יצירת קשר }} |
+| שם המוצר | Hyperledger Iroha {{ RELEASE_NAME }} |
+| גרסת מוצר / מזהה בנייה | {{ גרסה }} |
+| סוג תיוק | פיתוח מוצר (开发备案) |
+| תאריך הגשה | {{ YYYY-MM-DD }} |
 
-# 2. Cryptography Usage Overview
+# 2. סקירת שימוש בקריפטוגרפיה
 
-- Supported algorithms: `SM2`, `SM3`, `SM4` (provide usage matrix below).
-- Usage context:
-  | Algorithm | Component | Purpose | Deterministic safeguards |
-  |-----------|-----------|---------|--------------------------|
-  | SM2 | {{ COMPONENT }} | {{ PURPOSE }} | RFC6979 + canonical r∥s enforcement |
-  | SM3 | {{ COMPONENT }} | {{ PURPOSE }} | Deterministic hashing via `Sm3Digest` |
-  | SM4 | {{ COMPONENT }} | {{ PURPOSE }} | AEAD (GCM/CCM) with enforced nonce policy |
-- Non-SM algorithms in build: {{ OTHER_ALGORITHMS }} (for completeness).
+- אלגוריתמים נתמכים: `SM2`, `SM3`, `SM4` (ספק מטריצת שימוש למטה).
+- הקשר שימוש:
+  | אלגוריתם | רכיב | מטרה | אמצעי הגנה דטרמיניסטיים |
+  |-----------|--------|--------|------------------------|
+  | SM2 | {{ רכיב }} | {{ תכלית }} | RFC6979 + אכיפת r∥s קנונית |
+  | SM3 | {{ רכיב }} | {{ תכלית }} | גיבוב דטרמיניסטי דרך `Sm3Digest` |
+  | SM4 | {{ רכיב }} | {{ תכלית }} | AEAD (GCM/CCM) עם מדיניות אי-סיום אכיפה |
+- אלגוריתמים שאינם SM ב-build: {{ OTHER_ALGORITHMS }} (לשלמות).
 
-# 3. Development & Supply Chain Controls
+# 3. פיתוח ובקרות שרשרת אספקה
 
-- Source code repository: {{ REPOSITORY_URL }}
-- Deterministic build instructions:
+- מאגר קוד מקור: {{ REPOSITORY_URL }}
+- הוראות בנייה דטרמיניסטיות:
   1. `git clone {{ REPOSITORY_URL }} && git checkout {{ COMMIT_SHA }}`
-  2. `cargo build --workspace --locked --release --features "sm sm-ffi-openssl"` (adjust as needed).
-  3. SBOM generated via `cargo auditable` / CycloneDX (`{{ SBOM_PATH }}`).
-- Continuous integration environment summary:
-  | Item | Value |
+  2. `cargo build --workspace --locked --release --features "sm sm-ffi-openssl"` (להתאים לפי הצורך).
+  3. SBOM שנוצר באמצעות `cargo auditable` / CycloneDX (`{{ SBOM_PATH }}`).
+- סיכום סביבת אינטגרציה רציפה:
+  | פריט | ערך |
   |------|-------|
-  | Build OS / version | {{ BUILD_OS }} |
-  | Compiler toolchain | {{ TOOLCHAIN }} |
-  | OpenSSL / Tongsuo source | {{ OPENSSL_SOURCE }} |
-  | Reproducibility checksum | {{ CHECKSUM }} |
+  | בניית מערכת הפעלה / גרסה | {{ BUILD_OS }} |
+  | שרשרת כלים מהדר | {{ TOOLCHAIN ​​}} |
+  | מקור OpenSSL / Tongsuo | {{ OPENSSL_SOURCE }} |
+  | בדיקת שכפול | {{ CHECKSUM }} |
 
-# 4. Key Management & Security
+# 4. ניהול מפתחות ואבטחה
 
-- Default enabled SM features: {{ DEFAULTS }} (e.g., verify-only).
-- Configuration flags required for signing: {{ CONFIG_FLAGS }}.
-- Key custody approach:
-  | Item | Details |
-  |------|---------|
-  | Key generation tool | {{ KEY_TOOL }} |
-  | Storage medium | {{ STORAGE_MEDIUM }} |
-  | Backup policy | {{ BACKUP_POLICY }} |
-  | Access controls | {{ ACCESS_CONTROLS }} |
-- Incident response contacts (24/7):
-  | Role | Name | Phone | Email |
+- תכונות SM המופעלות כברירת מחדל: {{ ברירת מחדל }} (לדוגמה, אימות בלבד).
+- דגלי תצורה נדרשים לחתימה: {{ CONFIG_FLAGS }}.
+- גישת משמורת מפתח:
+  | פריט | פרטים |
+  |------|--------|
+  | כלי ליצירת מפתחות | {{ KEY_TOOL }} |
+  | אמצעי אחסון | {{ STORAGE_MEDIUM }} |
+  | מדיניות גיבוי | {{ BACKUP_POLICY }} |
+  | בקרות גישה | {{ ACCESS_CONTROLS }} |
+- אנשי קשר לתקרית (24/7):
+  | תפקיד | שם | טלפון | דוא"ל |
   |------|------|-------|-------|
-  | Crypto lead | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} |
-  | Platform ops | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} |
-  | Legal liaison | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} |
+  | עופרת קריפטו | {{ שם }} | {{ טלפון }} | {{ דוא"ל }} |
+  | פלטפורמת פעולות | {{ שם }} | {{ טלפון }} | {{ דוא"ל }} |
+  | קשר משפטי | {{ שם }} | {{ טלפון }} | {{ דוא"ל }} |
 
-# 5. Attachments Checklist
+# 5. רשימת קבצים מצורפים- [ ] תמונת מצב של קוד המקור (`{{ SOURCE_ARCHIVE }}`) ו-hash.
+- [ ] הערות בנייה דטרמיניסטיות / הערות לשחזור.
+- [ ] SBOM (`{{ SBOM_PATH }}`) ומניפסט תלות (`Cargo.lock` טביעת אצבע).
+- [ ] תמלול מבחן דטרמיניסטי (`scripts/sm_openssl_smoke.sh`, `cargo test -p iroha_crypto sm`).
+- [ ] ייצוא לוח מחוונים של טלמטריה המדגים צפייה ב-SM.
+- [ ] הצהרת בקרת ייצוא (ראה תבנית נפרדת).
+- [ ] דוחות ביקורת או הערכות של צד שלישי (אם כבר הושלמו).
 
-- [ ] Source code snapshot (`{{ SOURCE_ARCHIVE }}`) and hash.
-- [ ] Deterministic build script / reproducibility notes.
-- [ ] SBOM (`{{ SBOM_PATH }}`) and dependency manifest (`Cargo.lock` fingerprint).
-- [ ] Deterministic test transcripts (`scripts/sm_openssl_smoke.sh`, `cargo test -p iroha_crypto sm`).
-- [ ] Telemetry dashboard export demonstrating SM observability.
-- [ ] Export-control statement (see separate template).
-- [ ] Audit reports or third-party assessments (if already completed).
+# 6. הצהרת מבקש
 
-# 6. Applicant Declaration
+> אני מאשר שהמידע הנ"ל מדויק, כי הנחשף
+> פונקציונליות קריפטוגרפית תואמת לחוקים ולתקנות החלים ב-PRC,
+> ושהארגון ישמור על החפצים שהוגשו לפחות
+> שלוש שנים.
 
-> I confirm that the above information is accurate, that the disclosed
-> cryptographic functionality complies with applicable PRC laws and regulations,
-> and that the organisation will maintain the submitted artefacts for at least
-> three years.
-
-- Signature (legal representative): ________________________
-- Date: ________________________
-
+- חתימה (נציג משפטי): ____________________
+- תאריך: __________________________

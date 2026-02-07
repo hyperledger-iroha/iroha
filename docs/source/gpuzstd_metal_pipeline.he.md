@@ -7,115 +7,114 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 019b3aa25ae224c1595467ac809f2c53290813e91a78b78b94ca71c3dd950264
 source_last_modified: "2026-01-31T19:25:45.072449+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# GPU Zstd (Metal) Pipeline
+# צינור GPU Zstd (מתכת).
 
-This document describes the deterministic GPU pipeline used by the Metal helper
-for zstd compression. It is a design and implementation guide for the
-`gpuzstd_metal` helper that emits standard zstd frames and deterministic bytes
-for a given sequence stream. Outputs must roundtrip with CPU decoders; byte-for-
-byte parity with the CPU compressor is not required because sequence generation
-differs.
+מסמך זה מתאר את צינור ה-GPU הדטרמיניסטי המשמש את ה-Metal Helper
+עבור דחיסת zstd. זהו מדריך עיצוב ויישום עבור
+עוזר `gpuzstd_metal` שפולט מסגרות zstd סטנדרטיות ובייטים דטרמיניסטיים
+עבור זרם רצף נתון. יציאות חייבות להופיע הלוך ושוב עם מפענחי CPU; בייט-עבור-
+שוויון בתים עם מדחס ה-CPU לא נדרש בגלל יצירת רצף
+שונה.
 
-## Goals
+## יעדים
 
-- Emit standard zstd frames that decode identically with CPU zstd; byte parity
-  with the CPU compressor is not required.
-- Deterministic outputs across hardware, drivers, and thread scheduling.
-- Explicit bounds checks and predictable buffer lifetimes.
+- פליט מסגרות zstd סטנדרטיות המפענחות באופן זהה ל-CPU zstd; זוגיות בתים
+  עם מדחס המעבד אינו נדרש.
+- פלטים דטרמיניסטים על פני חומרה, מנהלי התקנים ותזמון חוטים.
+- בדיקות גבולות מפורשות ותקופות חיים ניתנות לחיזוי של חיץ.
 
-## Current implementation note
+## הערת יישום נוכחית
 
-- Match finding and sequence generation run on GPU.
-- Frame assembly and entropy coding (Huffman/FSE) currently run on the host
-  using the in-crate encoder; GPU Huffman/FSE kernels are parity-tested but not
-  yet wired into the full frame path.
-- Decode uses the in-crate frame decoder with a CPU zstd fallback for unsupported frames;
-  full GPU block decode remains in progress.
+- מציאת התאמה ויצירת רצף פועלת על GPU.
+- הרכבת מסגרת וקידוד אנטרופיה (Huffman/FSE) פועלים כעת על המארח
+  שימוש במקודד בתוך הארגז; ליבות GPU Huffman/FSE נבדקות זוגיות אך לא
+  ובכל זאת מחוברים לנתיב המסגרת המלאה.
+- פענוח משתמש במפענח המסגרת בתוך הארגז עם CPU zstd fallback עבור מסגרות לא נתמכות;
+  פענוח בלוק מלא של GPU נשאר בתהליך.
 
-## Encoding pipeline (high level)
+## צינור קידוד (רמה גבוהה)
 
-1. Input staging
-   - Copy the input into a device buffer.
-   - Partition into fixed-size chunks (for sequence generation) and blocks (for
-     zstd frame assembly).
-2. Match finding and sequence emission
-   - GPU kernels scan each chunk and emit sequences (literal length, match
-     length, offset).
-   - Sequence ordering is stable and deterministic.
-3. Literal preparation
-   - Collect literals referenced by sequences.
-   - Build literal histograms and select literal block mode (raw, RLE, or
-     Huffman) deterministically.
-4. Huffman tables (literals)
-   - Generate code lengths from the histogram.
-   - Build canonical tables with deterministic tie-breaking that matches CPU
-     zstd output.
-5. FSE tables (LL/ML/OF)
-   - Normalize frequency counts.
-   - Build FSE decoding/encoding tables deterministically.
-6. Bitstream writer
-   - Pack bits little-endian (LSB-first).
-   - Flush on byte boundaries; pad with zeros only.
-   - Mask values to declared bit widths and enforce capacity checks.
-7. Block and frame assembly
-   - Emit block headers (type, size, last-block flag).
-   - Serialize literals and sequences into compressed blocks.
-   - Emit standard zstd frame headers and optional checksums.
+1. בימוי קלט
+   - העתק את הקלט למאגר מכשיר.
+   - חלוקה לנתחים בגודל קבוע (ליצירת רצף) ולבלוקים (עבור
+     מכלול מסגרת zstd).
+2. מציאת התאמה ופליטת רצף
+   - גרעיני GPU סורקים כל נתח ופולטים רצפים (אורך מילולי, התאמה
+     אורך, היסט).
+   - סדר הרצף יציב ודטרמיניסטי.
+3. הכנה מילולית
+   - אסוף מילים המתייחסות לפי רצפים.
+   - בנה היסטוגרמות מילוליות ובחר במצב בלוק מילולי (גולמי, RLE או
+     האפמן) באופן דטרמיניסטי.
+4. שולחנות האפמן (מילוליים)
+   - צור אורכי קוד מההיסטוגרמה.
+   - בנו טבלאות קנוניות עם שובר שוויון דטרמיניסטי התואם למעבד
+     פלט zstd.
+5. טבלאות FSE (LL/ML/OF)
+   - נרמל את ספירת התדרים.
+   - בניית טבלאות פענוח/קידוד FSE באופן דטרמיניסטי.
+6. כותב ביטסטרים
+   - ארוז סיביות little-endian (LSB-first).
+   - שטיפה בגבולות בתים; רפידה עם אפסים בלבד.
+   - מסווה ערכים לרוחבי סיביות מוצהרים ואכפת בדיקות קיבולת.
+7. הרכבת בלוק ומסגרת
+   - פלט כותרות בלוק (סוג, גודל, דגל בלוק אחרון).
+   - סדרי מילים ורצפים לבלוקים דחוסים.
+   - פלט כותרות מסגרת zstd סטנדרטיות וסיכומי בדיקה אופציונליים.
 
-## Decoding pipeline (high level)
+## צינור פענוח (רמה גבוהה)
 
-1. Frame parse
-   - Validate magic bytes, window settings, and frame header fields.
-2. Bitstream reader
-   - Read LSB-first bit sequences with strict bounds checks.
-3. Literal decode
-   - Decode literal blocks (raw, RLE, or Huffman) into the literal buffer.
-4. Sequence decode
-   - Decode LL/ML/OF values using FSE tables.
-   - Reconstruct matches using the sliding window.
-5. Output and checksum
-   - Write reconstructed bytes into the output buffer.
-   - Verify optional checksums when enabled.
+1. ניתוח מסגרת
+   - אמת בתים קסמים, הגדרות חלונות ושדות כותרות מסגרת.
+2. קורא ביטסטרים
+   - קרא רצפי סיביות של LSB ראשון עם בדיקות גבולות קפדניות.
+3. פענוח מילולי
+   - פענוח בלוקים מילוליים (raw, RLE, או Huffman) לתוך המאגר המילולי.
+4. פענוח רצף
+   - פענוח ערכי LL/ML/OF באמצעות טבלאות FSE.
+   - שחזר גפרורים באמצעות חלון ההזזה.
+5. פלט וסכום ביקורת
+   - כתוב בתים משוחזרים למאגר הפלט.
+   - אמת סכימי בדיקה אופציונליים כאשר מופעל.
 
-## Buffer lifetimes and ownership
+## משך חיים של מאגר ובעלות- מאגר קלט: מארח -> מכשיר, לקריאה בלבד.
+- מאגר רצף: מכשיר, מיוצר על ידי איתור התאמה ונצרך על ידי אנטרופיה
+  קידוד; אין שימוש חוזר בלוק חוצה.
+- חיץ מילולי: מכשיר, מיוצר עבור כל בלוק ומשוחרר אחרי בלוק
+  פליטה.
+- מאגר פלט: התקן, מחזיק את בתים הסופיים של המסגרת עד שהמארח מעתיק אותם
+  החוצה.
+- מאגרי שריטות: בשימוש חוזר על פני גרעינים, אך תמיד מוחלף באופן דטרמיניסטי.
 
-- Input buffer: host -> device, read-only.
-- Sequence buffer: device, produced by match-finding and consumed by entropy
-  coding; no cross-block reuse.
-- Literal buffer: device, produced for each block and released after block
-  emission.
-- Output buffer: device, holds the final frame bytes until the host copies them
-  out.
-- Scratch buffers: reused across kernels, but always overwritten deterministically.
+## אחריות ליבה
 
-## Kernel responsibilities
+- גרעיני מציאת התאמה: מצא התאמות ופלוט רצפים (LL/ML/OF + מילוליים).
+- האפמן בונה גרעינים: גזר אורכי קוד וטבלאות קנוניות.
+- גרעיני בניית FSE: בניית טבלאות LL/ML/OF ומכונות מצב.
+- ליבות קידוד בלוק: בצע סדרות מילוליות ורצפים לזרם הסיביות.
+- בלוק ליבות פענוח: נתח זרם סיביות ובנה מחדש מילוליות/רצפים.
 
-- Match finding kernels: find matches and emit sequences (LL/ML/OF + literals).
-- Huffman build kernels: derive code lengths and canonical tables.
-- FSE build kernels: build LL/ML/OF tables and state machines.
-- Block encode kernels: serialize literals and sequences into the bitstream.
-- Block decode kernels: parse bitstream and reconstruct literals/sequences.
+## דטרמיניזם ואילוצי זוגיות
 
-## Determinism and parity constraints
-
-- Canonical table builds must use the same ordering and tie-breaking as CPU
+- בניית טבלאות קנונית חייבת להשתמש באותו סדר ושבירת שוויון כמו CPU
   zstd.
-- No atomics or reductions that depend on thread scheduling for any output byte.
-- Bitstream packing is little-endian, LSB-first; byte alignment pads with zeros.
-- All bounds checks are explicit; invalid inputs fail deterministically.
+- אין אטומים או הפחתות התלויות בתזמון חוט עבור כל בייט פלט.
+- אריזה ביטסטרים היא Little-endian, LSB-first; משטחי יישור בתים עם אפסים.
+- כל בדיקות הגבולות מפורשות; קלט לא חוקי נכשל באופן דטרמיניסטי.
 
-## Validation
+## אימות
 
-- CPU golden vectors for the bitstream writer/reader.
-- Corpus parity tests comparing GPU and CPU outputs.
-- Fuzz coverage for malformed frames and boundary conditions.
+- וקטורים מוזהבים של מעבד לכותב/קורא ה-bitstream.
+- מבחני שוויון קורפוס המשווים בין יציאות GPU ו-CPU.
+- כיסוי מטושטש עבור מסגרות פגומות ותנאי גבול.
 
-## Benchmarking
+## בנצ'מרקינג
 
-Run `cargo test -p gpuzstd_metal gpu_vs_cpu_benchmark -- --ignored --nocapture` to
-compare CPU vs GPU encode latency across payload sizes. The test skips on hosts
-without a Metal-capable device; capture the output alongside hardware details
-when adjusting the GPU offload thresholds. Norito enforces the same cutoff in
-`gpu_zstd::encode_all`, so direct callers match the heuristic gate.
+הפעל את `cargo test -p gpuzstd_metal gpu_vs_cpu_benchmark -- --ignored --nocapture` ל
+השווה זמן השהייה של קידוד CPU לעומת GPU בין גדלי מטען. הבדיקה מדלגת על מארחים
+ללא מכשיר בעל יכולת מתכת; ללכוד את הפלט לצד פרטי החומרה
+בעת התאמת ספי ההורדה של GPU. Norito אוכף את אותו חתך ב
+`gpu_zstd::encode_all`, כך שמתקשרים ישירים מתאימים לשער היוריסטי.

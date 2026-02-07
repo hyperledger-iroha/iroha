@@ -9,13 +9,14 @@ source_last_modified: "2026-01-03T19:37:11.140795+00:00"
 translation_last_reviewed: 2026-02-07
 title: SoraFS CI Cookbook
 summary: Reference GitHub Actions workflow bundling sign + verify steps with review notes.
+translator: machine-google-reviewed
 ---
 
-# SoraFS CI Cookbook
+#SoraFS CI ဟင်းချက်စာအုပ်
 
-This snippet mirrors the guidance in `docs/source/sorafs_ci_templates.md` and
-demonstrates how to integrate signing, verification, and proof checks into a
-single GitHub Actions job.
+ဤအတိုအထွာသည် `docs/source/sorafs_ci_templates.md` တွင် လမ်းညွှန်ချက်ကို ထင်ဟပ်စေသည်
+လက်မှတ်ရေးထိုးခြင်း၊ အတည်ပြုခြင်းနှင့် အထောက်အထားစစ်ဆေးမှုများကို မည်သို့ပေါင်းစပ်ရမည်ကို သရုပ်ပြသည်။
+GitHub Actions အလုပ်တစ်ခုတည်း။
 
 ```yaml
 name: sorafs-cli-release
@@ -78,18 +79,18 @@ jobs:
         run: cosign verify-blob --bundle artifacts/manifest.bundle.json artifacts/manifest.to
 ```
 
-## Notes
+## မှတ်ချက်
 
-- `sorafs_cli` must be available on the runner (e.g., `cargo install --path crates/sorafs_car --features cli` prior to these steps).
-- The workflow must supply an explicit OIDC audience (here `sorafs`); adjust `--identity-token-audience` to match your Fulcio policy.
-- The release pipeline should archive `artifacts/manifest.bundle.json`, `artifacts/manifest.sig`, and `artifacts/proof.json` for governance review.
-- Deterministic sample artefacts live in `fixtures/sorafs_manifest/ci_sample`; copy them into tests when you need golden manifests, chunk plans, or bundle JSON without recomputing the pipeline.
+- `sorafs_cli` ကို အပြေးသမားတွင် ရနိုင်ရမည် (ဥပမာ၊ `cargo install --path crates/sorafs_car --features cli` ဤအဆင့်များမတိုင်မီ)။
+- အလုပ်အသွားအလာသည် ရှင်းလင်းပြတ်သားသော OIDC ပရိသတ်ကို ပေးဆောင်ရမည် (ဤနေရာတွင် `sorafs`); သင်၏ Fulcio မူဝါဒနှင့် ကိုက်ညီစေရန် `--identity-token-audience` ကို ချိန်ညှိပါ။
+- လွှတ်တင်ရေးပိုက်လိုင်းသည် အုပ်ချုပ်မှုပြန်လည်သုံးသပ်ရန်အတွက် `artifacts/manifest.bundle.json`၊ `artifacts/manifest.sig` နှင့် `artifacts/proof.json` ကို သိမ်းဆည်းထားသင့်သည်။
+- အဆုံးအဖြတ်ပေးသော နမူနာလက်ရာများသည် `fixtures/sorafs_manifest/ci_sample` တွင် နေထိုင်သည်; ရွှေရောင်ဖော်ပြချက်များ၊ အတုံးအခဲအစီအမံများ သို့မဟုတ် ပိုက်လိုင်းကို ပြန်လည်တွက်ချက်ခြင်းမပြုဘဲ JSON အတွဲလိုက် လိုအပ်သည့်အခါ ၎င်းတို့ကို စမ်းသပ်မှုအဖြစ် ကူးယူပါ။
 
 ## Fixture Verification
 
-Deterministic artefacts for this workflow live under
-`fixtures/sorafs_manifest/ci_sample`. Pipelines can replay the steps above and
-diff their outputs against the canonical files, for example:
+ဤလုပ်ငန်းအသွားအလာအတွက် အဆုံးအဖြတ်ပေးသည့်အရာများ အောက်တွင် နေထိုင်ပါသည်။
+`fixtures/sorafs_manifest/ci_sample`။ ပိုက်လိုင်းများသည် အထက်ဖော်ပြပါ အဆင့်များနှင့် ပြန်ဖွင့်နိုင်သည်။
+ဥပမာ- Canonical ဖိုင်များနှင့် ၎င်းတို့၏ အထွက်များ ကွဲပြားသည်-
 
 ```bash
 diff -u fixtures/sorafs_manifest/ci_sample/car_summary.json artifacts/car_summary.json
@@ -100,7 +101,7 @@ diff -u fixtures/sorafs_manifest/ci_sample/manifest.verify.summary.json artifact
 diff -u fixtures/sorafs_manifest/ci_sample/proof.json artifacts/proof.json
 ```
 
-Empty diffs confirm the build produced byte-identical manifests, plans, and
-signature bundles. See `fixtures/sorafs_manifest/ci_sample/README.md` for a full
-directory listing and tips on templating release notes from the captured
-summaries.
+အချည်းနှီးသောကွဲပြားမှုများသည် ထုတ်လုပ်ထားသော ဘိုက်-ထပ်တူကျသော သရုပ်ပြမှုများ၊ အစီအစဉ်များနှင့် တည်ဆောက်မှုကို အတည်ပြုသည်။
+လက်မှတ်အစုအဝေးများ။ အပြည့်အစုံအတွက် `fixtures/sorafs_manifest/ci_sample/README.md` ကိုကြည့်ပါ။
+မှတ်တမ်းစာရင်းနှင့် ဖမ်းယူထားသော ထုတ်ဝေမှုမှတ်စုများကို ပုံစံထုတ်ခြင်းဆိုင်ရာ အကြံပြုချက်များ
+အနှစ်ချုပ်

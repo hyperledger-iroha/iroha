@@ -7,94 +7,92 @@ generator: scripts/sync_docs_i18n.py
 source_hash: e7116d28e32d8bd77434edd6767427cc3d2ae0624f4de132b1d0cec3c7d44b86
 source_last_modified: "2025-12-29T18:16:35.938246+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% SM2/SM3/SM4 Product Filing (开发备案) Template
-% Hyperledger Iroha Compliance Working Group
+% SM2/SM3/SM4 Ապրանքի ներկայացում (开发备案) Կաղապար
+% Hyperledger Iroha Համապատասխանության աշխատանքային խումբ
 % 2026-05-06
 
-# Instructions
+# Հրահանգներ
 
-Use this template when submitting a *product development filing* to a provincial
-or municipal State Cryptography Administration (SCA) office before distributing
-SM-enabled binaries or source artefacts from within mainland China. Replace the
-placeholders with project-specific details, export the completed form as PDF if
-required, and attach the artefacts referenced in the checklist.
+Օգտագործեք այս ձևանմուշը՝ *ապրանքի մշակման ֆայլ* գավառին ներկայացնելիս
+կամ մունիցիպալ պետական կրիպտոգրաֆիայի վարչության (SCA) գրասենյակ՝ նախքան տարածելը
+SM-ով միացված երկուական կամ աղբյուրի արտեֆակտներ մայրցամաքային Չինաստանից: Փոխարինեք
+Ծրագրին հատուկ մանրամասներով տեղապահներ, լրացված ձևը արտահանեք որպես PDF, եթե
+պահանջվում է և կցեք ստուգաթերթում նշված արտեֆակտները:
 
-# 1. Applicant & Product Summary
+# 1. Դիմորդ և արտադրանքի ամփոփում
 
-| Field | Value |
+| Դաշտային | Արժեք |
 |-------|-------|
-| Organisation name | {{ ORGANISATION }} |
-| Registered address | {{ ADDRESS }} |
-| Legal representative | {{ LEGAL_REP }} |
-| Primary contact (name / title / email / phone) | {{ CONTACT }} |
-| Product name | Hyperledger Iroha {{ RELEASE_NAME }} |
-| Product version / build ID | {{ VERSION }} |
-| Filing type | Product development (开发备案) |
-| Filing date | {{ YYYY-MM-DD }} |
+| Կազմակերպության անվանումը | {{ ԿԱԶՄԱԿԵՐՊՈՒԹՅՈՒՆ }} |
+| Գրանցված հասցե | {{ ՀԱՍՑԵ }} |
+| Իրավական ներկայացուցիչ | {{ LEGAL_REP }} |
+| Հիմնական կոնտակտ (անուն / անվանում / էլփոստ / հեռախոս) | {{ ԿԱՊ }} |
+| Ապրանքի անվանումը | Hyperledger Iroha {{ RELEASE_NAME }} |
+| Ապրանքի տարբերակ / կառուցման ID | {{ ՏԱՐԲԵՐԱԿ }} |
+| Ներկայացման տեսակը | Ապրանքի մշակում (开发备案) |
+| Ներկայացման ամսաթիվը | {{ YYYY-MM-DD }} |
 
-# 2. Cryptography Usage Overview
+# 2. Կրիպտոգրաֆիայի օգտագործման ակնարկ
 
-- Supported algorithms: `SM2`, `SM3`, `SM4` (provide usage matrix below).
-- Usage context:
-  | Algorithm | Component | Purpose | Deterministic safeguards |
-  |-----------|-----------|---------|--------------------------|
-  | SM2 | {{ COMPONENT }} | {{ PURPOSE }} | RFC6979 + canonical r∥s enforcement |
-  | SM3 | {{ COMPONENT }} | {{ PURPOSE }} | Deterministic hashing via `Sm3Digest` |
-  | SM4 | {{ COMPONENT }} | {{ PURPOSE }} | AEAD (GCM/CCM) with enforced nonce policy |
-- Non-SM algorithms in build: {{ OTHER_ALGORITHMS }} (for completeness).
+- Աջակցվող ալգորիթմներ՝ `SM2`, `SM3`, `SM4` (ներքևում տրամադրեք օգտագործման մատրիցան):
+- Օգտագործման համատեքստ.
+  | Ալգորիթմ | Բաղադրիչ | Նպատակը | Դետերմինիստական ​​երաշխիքներ |
+  |-----------|--------------------------------------------------|
+  | SM2 | {{ ԲԱՂԱԴՐԻՉ }} | {{ ՆՊԱՏԱԿԸ }} | RFC6979 + կանոնական r∥s կիրարկում |
+  | SM3 | {{ ԲԱՂԱԴՐԻՉ }} | {{ ՆՊԱՏԱԿԸ }} | Deterministic hashing միջոցով `Sm3Digest` |
+  | SM4 | {{ ԲԱՂԱԴՐԻՉ }} | {{ ՆՊԱՏԱԿԸ }} | AEAD (GCM/CCM) պարտադրված ոչ մի քաղաքականությամբ |
+- Ոչ SM ալգորիթմներ կառուցման մեջ՝ {{ OTHER_ALGORITHMS }} (լրիվության համար):
 
-# 3. Development & Supply Chain Controls
+# 3. Զարգացում և մատակարարման շղթայի վերահսկում
 
-- Source code repository: {{ REPOSITORY_URL }}
-- Deterministic build instructions:
+- Աղբյուրի կոդերի պահեստ՝ {{ REPOSITORY_URL }}
+- Դետերմինիստական կառուցման հրահանգներ.
   1. `git clone {{ REPOSITORY_URL }} && git checkout {{ COMMIT_SHA }}`
-  2. `cargo build --workspace --locked --release --features "sm sm-ffi-openssl"` (adjust as needed).
-  3. SBOM generated via `cargo auditable` / CycloneDX (`{{ SBOM_PATH }}`).
-- Continuous integration environment summary:
-  | Item | Value |
+  2. `cargo build --workspace --locked --release --features "sm sm-ffi-openssl"` (կարգավորել ըստ անհրաժեշտության):
+  3. SBOM-ը ստեղծվել է `cargo auditable` / CycloneDX (`{{ SBOM_PATH }}`) միջոցով:
+- Շարունակական ինտեգրման միջավայրի ամփոփում.
+  | Նյութ | Արժեք |
   |------|-------|
-  | Build OS / version | {{ BUILD_OS }} |
-  | Compiler toolchain | {{ TOOLCHAIN }} |
-  | OpenSSL / Tongsuo source | {{ OPENSSL_SOURCE }} |
-  | Reproducibility checksum | {{ CHECKSUM }} |
+  | Կառուցել OS / տարբերակ | {{ BUILD_OS }} |
+  | Կազմող գործիքաշար | {{ ԳՈՐԾԻՔԻ ՇԵՋԱՆ }} |
+  | OpenSSL / Tongsuo աղբյուր | {{ OPENSL_SOURCE }} |
+  | Վերարտադրելիության ստուգաչափ | {{ ՍԱՀՄԱՆՈՒՄ }} |
 
-# 4. Key Management & Security
+# 4. Բանալիների կառավարում և անվտանգություն
 
-- Default enabled SM features: {{ DEFAULTS }} (e.g., verify-only).
-- Configuration flags required for signing: {{ CONFIG_FLAGS }}.
-- Key custody approach:
-  | Item | Details |
+- Լռելյայն միացված SM գործառույթները՝ {{ DEFAULTS }} (օրինակ՝ միայն ստուգում):
+- Ստորագրման համար անհրաժեշտ կազմաձևման դրոշներ՝ {{ CONFIG_FLAGS }}:
+- Հիմնական խնամակալության մոտեցում.
+  | Նյութ | Մանրամասն |
   |------|---------|
-  | Key generation tool | {{ KEY_TOOL }} |
-  | Storage medium | {{ STORAGE_MEDIUM }} |
-  | Backup policy | {{ BACKUP_POLICY }} |
-  | Access controls | {{ ACCESS_CONTROLS }} |
-- Incident response contacts (24/7):
-  | Role | Name | Phone | Email |
+  | Բանալի ստեղծման գործիք | {{ KEY_TOOL }} |
+  | Պահպանման միջավայր | {{ STORAGE_MEDIUM }} |
+  | Պահուստային քաղաքականություն | {{ ՊԱՀՊԱՆՎԱԾ_ՔԱՂԱՔԱԿԱՆՈՒԹՅՈՒՆ }} |
+  | Մուտքի վերահսկում | {{ ACCESS_CONTROLS }} |
+- Միջադեպի արձագանքման կոնտակտներ (24/7):
+  | Դերը | Անունը | Հեռախոս | փոստ |
   |------|------|-------|-------|
-  | Crypto lead | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} |
-  | Platform ops | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} |
-  | Legal liaison | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} |
+  | Ծպտյալ կապար | {{ ԱՆՈՒՆ }} | {{ ՀԵՌԱԽՈՍ }} | {{ EMAIL }} |
+  | Պլատֆորմի օպերացիա | {{ ԱՆՈՒՆ }} | {{ ՀԵՌԱԽՈՍ }} | {{ EMAIL }} |
+  | Իրավական կապ | {{ ԱՆՈՒՆ }} | {{ ՀԵՌԱԽՈՍ }} | {{ EMAIL }} |
 
-# 5. Attachments Checklist
+# 5. Հավելվածների ստուգաթերթ- [ ] Աղբյուրի կոդի լուսանկար (`{{ SOURCE_ARCHIVE }}`) և հեշ:
+- [ ] Դետերմինիստական ​​կառուցման սցենար / վերարտադրելիության նշումներ:
+- [ ] SBOM (`{{ SBOM_PATH }}`) և կախվածության դրսևորում (`Cargo.lock` մատնահետք):
+- [ ] Դետերմինիստական ​​թեստի տառադարձումներ (`scripts/sm_openssl_smoke.sh`, `cargo test -p iroha_crypto sm`):
+- [ ] Հեռաչափության վահանակի արտահանում, որը ցույց է տալիս SM դիտելիությունը:
+- [ ] Արտահանման վերահսկման հայտարարություն (տես առանձին ձևանմուշ):
+- [ ] Աուդիտի հաշվետվություններ կամ երրորդ կողմի գնահատումներ (եթե արդեն ավարտված են):
 
-- [ ] Source code snapshot (`{{ SOURCE_ARCHIVE }}`) and hash.
-- [ ] Deterministic build script / reproducibility notes.
-- [ ] SBOM (`{{ SBOM_PATH }}`) and dependency manifest (`Cargo.lock` fingerprint).
-- [ ] Deterministic test transcripts (`scripts/sm_openssl_smoke.sh`, `cargo test -p iroha_crypto sm`).
-- [ ] Telemetry dashboard export demonstrating SM observability.
-- [ ] Export-control statement (see separate template).
-- [ ] Audit reports or third-party assessments (if already completed).
+# 6. Հայտատուի հայտարարություն
 
-# 6. Applicant Declaration
+> Ես հաստատում եմ, որ վերը նշված տեղեկատվությունը ճշգրիտ է, որ բացահայտվածը
+> գաղտնագրման գործառույթը համապատասխանում է ՉԺՀ-ի գործող օրենքներին և կանոնակարգերին,
+> և որ կազմակերպությունը կպահպանի ներկայացված արտեֆակտները առնվազն
+> երեք տարի:
 
-> I confirm that the above information is accurate, that the disclosed
-> cryptographic functionality complies with applicable PRC laws and regulations,
-> and that the organisation will maintain the submitted artefacts for at least
-> three years.
-
-- Signature (legal representative): ________________________
-- Date: ________________________
-
+- Ստորագրություն (օրինական ներկայացուցիչ) _______________________
+- Ամսաթիվ՝ ________________________

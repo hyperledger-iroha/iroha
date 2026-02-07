@@ -4,54 +4,56 @@ direction: ltr
 source: docs/portal/docs/sorafs/chunker-registry.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: chunker-registry
-title: سجل ملفات chunker في SoraFS
-sidebar_label: سجل chunker
-description: معرفات الملفات والمعلمات وخطة التفاوض لسجل chunker في SoraFS.
+ID: チャンカーレジストリ
+タイトル: チャンカー SoraFS
+サイドバーラベル: チャンカー
+説明: チャンカー SoraFS。
 ---
 
-:::note المصدر المعتمد
-تعكس هذه الصفحة `docs/source/sorafs/chunker_registry.md`. احرص على إبقاء النسختين متزامنتين إلى أن يتم إيقاف مجموعة توثيق Sphinx القديمة.
+:::note ノート
+テストは `docs/source/sorafs/chunker_registry.md` です。スフィンクスの正体は、スフィンクスです。
 :::
 
-## سجل ملفات chunker في SoraFS (SF-2a)
+## チャンカー SoraFS (SF-2a)
 
-تتفاوض حزمة SoraFS على سلوك chunking عبر سجل صغير بفضاءات اسمية.
-يُسند كل ملف معلمات CDC حتمية وبيانات semver ووظيفة digest/multicodec المتوقعة المستخدمة في manifests وأرشيفات CAR.
+SoraFS チャンク処理を実行してください。
+CDC は、ダイジェスト/マルチコーデックと CAR をマニフェストします。
 
 على مؤلفي الملفات الرجوع إلى
 [`docs/source/sorafs/chunker_profile_authoring.md`](./chunker-profile-authoring.md)
-للاطلاع على البيانات المطلوبة وقائمة التحقق وقالب المقترح قبل إرسال أي إدخال جديد.
+ログインしてください。
 وبعد أن تعتمد الحوكمة أي تغيير، اتبع
 [قائمة تحقق إطلاق السجل](./chunker-registry-rollout-checklist.md) و
-[دليل manifest في staging](./staging-manifest-playbook) لترقية
-الـ fixtures إلى staging والإنتاج.
+[マニフェストステージング](./staging-manifest-playbook)
+備品とステージング。
 
-### الملفات
+### ああ
 
-| Namespace | الاسم | SemVer | معرف الملف | الحد الأدنى (بايت) | الهدف (بايت) | الحد الأقصى (بايت) | قناع القطع | Multihash | البدائل | ملاحظات |
-|-----------|-------|--------|------------|--------------------|--------------|--------------------|-----------|-----------|--------|---------|
-| `sorafs`  | `sf1` | `1.0.0` | `1` | 65536 | 262144 | 524288 | `0x0000ffff` | `0x1f` (BLAKE3-256) | `["sorafs.sf1@1.0.0", "sorafs.sf1@1.0.0"]` | الملف المعتمد المستخدم في fixtures SF-1 |
+|ネームスペース |ああ |セミバージョン | और देखें और देखें और देखें और देखें और देखेंマルチハッシュ |翻訳 |重要 |
+|----------|----------|----------|-----------|---------|--------------|---------|-----------|-----------|--------|---------|
+| `sorafs` | `sf1` | `1.0.0` | `1` | 65536 | 262144 | 524288 | `0x0000ffff` | `0x1f` (ブレイク3-256) | `["sorafs.sf1@1.0.0", "sorafs.sf1@1.0.0"]` |フィクスチャ SF-1 | フィクスチャ SF-1
 
-يعيش السجل في الشيفرة ضمن `sorafs_manifest::chunker_registry` (ويحكمه [`chunker_registry_charter.md`](./chunker-registry-charter.md)). ويُعبَّر عن كل إدخال كـ `ChunkerProfileDescriptor` يضم:
+يعيش السجل في الشيفرة ضمن `sorafs_manifest::chunker_registry` (ويحكمه [`chunker_registry_charter.md`](./chunker-registry-charter.md))。 عن كل إدخال كـ `ChunkerProfileDescriptor` يضم:
 
-* `namespace` – تجميع منطقي للملفات ذات الصلة (مثل `sorafs`).
-* `name` – تسمية مقروءة للبشر (`sf1`, `sf1-fast`, …).
-* `semver` – سلسلة نسخة دلالية لمجموعة المعلمات.
-* `profile` – `ChunkProfile` الفعلي (min/target/max/mask).
-* `multihash_code` – الـ multihash المستخدم لإنتاج digests للـ chunk (`0x1f`
-  للإعداد الافتراضي في SoraFS).
+* `namespace` – تجميع منطقي للملفات ذات الصلة (مثل `sorafs`)。
+* `name` – テスト (`sf1`、`sf1-fast`、…)。
+* `semver` – ログインしてください。
+* `profile` – `ChunkProfile` (最小/ターゲット/最大/マスク)。
+* `multihash_code` – マルチハッシュ、チャンクのダイジェスト (`0x1f`)
+  (SoraFS)。
 
-يقوم manifest بتسلسل الملفات عبر `ChunkingProfileV1`. تسجل البنية بيانات السجل (namespace, name, semver) إلى جانب
-معلمات CDC الخام وقائمة البدائل أعلاه. ينبغي على المستهلكين أولاً محاولة البحث في السجل عبر `profile_id`
-والرجوع إلى المعلمات المضمّنة عند ظهور معرفات غير معروفة؛ تضمن قائمة البدائل استمرار العملاء HTTP في إرسال
-المقابض القديمة ضمن `Accept-Chunker` دون تخمين. وتفرض قواعد ميثاق السجل أن يكون المقبض المعتمد
-(`namespace.name@semver`) أول إدخال في `profile_aliases`، تليه أي بدائل قديمة.
+マニフェストは `ChunkingProfileV1` です。評価 (名前空間、名前、セムバー) 評価
+CDC を参照してください。 ينبغي على المستهلكين أولاً محاولة البحث في السجل عبر `profile_id`
+والرجوع إلى المعلمات المضمّنة عند ظهور معرفات غير معروفة؛ HTTP メッセージを受信する
+`Accept-Chunker` 認証済み。 قواعد ميثاق السجل أن يكون المقبض المعتمد
+(`namespace.name@semver`) は、`profile_aliases` を意味します。
 
-لفحص السجل من الأدوات، شغّل CLI المساعد:
+CLI での操作:
 
 ```
 $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
@@ -71,35 +73,33 @@ $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profi
 ]
 ```
 
-تقبل كل أعلام CLI التي تكتب JSON (`--json-out`, `--por-json-out`, `--por-proof-out`,
-`--por-sample-out`) المسار `-`، ما يبث الحمولة إلى stdout بدل إنشاء ملف. يسهل ذلك تمرير
-البيانات إلى الأدوات مع الحفاظ على السلوك الافتراضي لطباعة التقرير الرئيسي.
+CLI と JSON (`--json-out`、`--por-json-out`、`--por-proof-out`、
+`--por-sample-out`) `-` は、標準出力をテストします。 سهل ذلك تمرير
+最高のパフォーマンスを見せてください。
 
 ### مصفوفة التوافق وخطة الإطلاق
 
 
-يلخص الجدول التالي حالة الدعم الحالية لـ `sorafs.sf1@1.0.0` عبر المكونات الأساسية. يشير "Bridge"
-إلى مسار التوافق CARv1 + SHA-256 الذي يتطلب تفاوضًا صريحًا من العميل (`Accept-Chunker` + `Accept-Digest`).
+セキュリティは、`sorafs.sf1@1.0.0` をサポートしています。 「橋」
+CARv1 + SHA-256 バージョン (`Accept-Chunker` + `Accept-Digest`)。
 
-| المكون | الحالة | ملاحظات |
-|--------|--------|---------|
-| `sorafs_manifest_chunk_store` | ✅ مدعوم | يتحقق من المقبض المعتمد + البدائل، ويبث التقارير عبر `--json-out=-`، ويفرض ميثاق السجل عبر `ensure_charter_compliance()`. |
-| `sorafs_manifest_stub` | ⚠️ قديم | مُنشئ manifest قديم؛ استخدم `iroha app sorafs toolkit pack` لتغليف CAR/manifest وأبقِ `--plan=-` لإعادة التحقق الحتمية. |
-| `sorafs_provider_advert_stub` | ⚠️ قديم | مساعد تحقق offline فقط؛ يجب إنتاج provider adverts عبر خط أنابيب النشر والتحقق منها عبر `/v1/sorafs/providers`. |
-| `sorafs_fetch` (developer orchestrator) | ✅ مدعوم | يقرأ `chunk_fetch_specs` ويفهم حمولة قدرة `range` ويجمع إخراج CARv2. |
-| Fixtures للـ SDK (Rust/Go/TS) | ✅ مدعوم | يُعاد توليدها عبر `export_vectors`؛ المقبض المعتمد يظهر أولاً في كل قائمة بدائل ويُوقَّع بواسطة أظرف المجلس. |
-| تفاوض ملفات gateway Torii | ✅ مدعوم | يطبق كامل قواعد `Accept-Chunker`، ويتضمن ترويسات `Content-Chunker`، ويعرض Bridge CARv1 فقط لطلبات downgrade الصريحة. |
+|ああ、ああ |重要 |
+|----------|--------|----------|
+| `sorafs_manifest_chunk_store` | ✅ और देखें يتحقق من المقبض المعتمد + البدائل، ويبث التقارير عبر `--json-out=-`، ويفرض ميثاق السجل عبر `ensure_charter_compliance()`。 |
+| `sorafs_manifest_stub` | ⚠️ और देखेंマニフェスト マニフェスト`iroha app sorafs toolkit pack` CAR/マニフェスト `--plan=-` を確認してください。 |
+| `sorafs_provider_advert_stub` | ⚠️ और देखेंオフラインで使用できます。プロバイダーの広告は、`/v1/sorafs/providers` です。 |
+| `sorafs_fetch` (開発者オーケストレーター) | ✅ और देखें CARv2 は `chunk_fetch_specs` 、`range` は CARv2 です。 |
+|フィクスチャ SDK (Rust/Go/TS) | ✅ और देखें يُعاد توليدها عبر `export_vectors`؛あなたのことを忘れないでください。 |
+|ゲートウェイ Torii | 重要なゲートウェイ✅ और देखेंブリッジ CARv1 は、`Accept-Chunker` をダウングレードします。 |
 
-طرح التليمترية:
+名前:
 
-- **تليمترية جلب الـ chunks** — يصدر CLI الخاص بـ Iroha `sorafs toolkit pack` digests للـ chunk، وبيانات CAR، وجذور PoR لإدخالها في لوحات المتابعة.
-- **Provider adverts** — تتضمن حمولة الإعلانات بيانات القدرات والبدائل؛ تحقّق من التغطية عبر `/v1/sorafs/providers` (مثل وجود قدرة `range`).
-- **مراقبة الـ gateway** — على المشغلين الإبلاغ عن أزواج `Content-Chunker`/`Content-Digest` لاكتشاف أي خفض غير متوقع؛ ومن المتوقع أن ينخفض استخدام الـ bridge إلى الصفر قبل الإيقاف.
+- **チャンク** — CLI および Iroha `sorafs toolkit pack` ダイジェスト チャンク CAR および PoR 、、、、、、、、、、。
+- **プロバイダーの広告** — 評価とレビューحقّق من التغطية عبر `/v1/sorafs/providers` (مثل وجود قدرة `range`)。
+- **مراقبة الـ ゲートウェイ** — على المشغلين الإبلاغ عن أزواج `Content-Chunker`/`Content-Digest` لاكتشاف أي خفض غيرすごい橋を渡って、橋を渡ってください。
 
-سياسة الإيقاف: بعد اعتماد ملف خلف، حدّد نافذة نشر مزدوجة (موثقة في المقترح) قبل وسم
-`sorafs.sf1@1.0.0` بأنه متوقف ضمن السجل وإزالة Bridge CARv1 من بوابات الإنتاج.
-
-لفحص شاهد PoR محدد، قدم مؤشرات chunk/segment/leaf واحفظ البرهان على القرص إذا رغبت:
+سياسة الإيقاف: بعد اعتماد ملف خلف، حدّد نافذة نشر مزدوجة (موثقة في المقترح) قبلうーん
+`sorafs.sf1@1.0.0` ブリッジ CARv1 がサポートされています。PoR のチャンク/セグメント/リーフの定義:
 
 ```
 $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
@@ -107,10 +107,10 @@ $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
 ```
 
 يمكنك اختيار ملف عبر معرف رقمي (`--profile-id=1`) أو عبر المقبض المسجل
-(`--profile=sorafs.sf1@1.0.0`)؛ صيغة المقبض مناسبة للسكريبتات التي تمرر namespace/name/semver
-مباشرة من بيانات الحوكمة.
+(`--profile=sorafs.sf1@1.0.0`)名前空間/名前/semver 名前空間/名前/semver
+重要な意味を持っています。
 
-استخدم `--promote-profile=<handle>` لإخراج كتلة JSON من البيانات الوصفية (بما في ذلك كل البدائل
+ستخدم `--promote-profile=<handle>` لإخراج كتلة JSON من البيانات الوصفية (بما في ذلك كل البدائل
 المسجلة) يمكن لصقها في `chunker_registry_data.rs` عند ترقية ملف افتراضي جديد:
 
 ```
@@ -118,9 +118,9 @@ $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
     --promote-profile=sorafs.sf1@1.0.0
 ```
 
-يتضمن التقرير الرئيسي (وملف البرهان الاختياري) الـ digest الجذري، وbytes الأوراق المُعاينة
-(مشفرة بالهيكس)، وdigests الأشقاء للـ segment/chunk بحيث يمكن للمدققين إعادة هاش طبقات
-64 KiB/4 KiB مقابل قيمة `por_root_hex`.
+セキュリティ (وملف البرهان الاختياري) ダイジェスト الجذري، وbytes الأوراق المُعاينة
+(مشفرة بالهيكس) ダイジェスト الأشقاء للـ セグメント/チャンク بحيث يمكن للمدققين إعادة هاش طبقات
+64 KiB/4 KiB مقابل قيمة `por_root_hex`。
 
 للتحقق من برهان موجود مقابل حمولة، مرر المسار عبر
 `--por-proof-verify` (تضيف CLI الحقل `"por_proof_verified": true` عندما يتطابق الشاهد مع الجذر المحسوب):
@@ -130,9 +130,9 @@ $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
     --por-proof-verify=leaf.proof.json
 ```
 
-لأخذ عينات على دفعات، استخدم `--por-sample=<count>` ويمكنك تمرير seed/مسار إخراج اختياري.
-تضمن CLI ترتيبًا حتميًا (`splitmix64` seeded) وتقوم بالاقتطاع تلقائيًا عندما تتجاوز
-الطلبات الأوراق المتاحة:
+أخذ عينات على دفعات، استخدم `--por-sample=<count>` ويمكنك تمرير シード/مسار إخراج اختياري。
+CLI の評価 (`splitmix64` シード) の評価 (`splitmix64` シード) の評価。
+回答:
 
 ```
 $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
@@ -145,21 +145,21 @@ $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
 (`--profile=sorafs.sf1@1.0.0`) لتجنب ترميز معرفات رقمية صلبة في سكريبتات البناء:
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- --list-chunker-profiles
+$ Cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- --list-chunker-profiles
 [
   {
-    "profile_id": 1,
-    "namespace": "sorafs",
-    "name": "sf1",
+    「プロファイルID」: 1、
+    "名前空間": "sorafs",
+    "名前": "sf1",
     "semver": "1.0.0",
-    "handle": "sorafs.sf1@1.0.0",
-    "min_size": 65536,
-    "target_size": 262144,
-    "max_size": 524288,
-    "break_mask": "0x0000ffff",
-    "multihash_code": 31
+    "ハンドル": "sorafs.sf1@1.0.0",
+    "min_size": 65536、
+    「ターゲットサイズ」: 262144、
+    "最大サイズ": 524288、
+    "ブレークマスク": "0x0000ffff",
+    「マルチハッシュコード」: 31
   }
-]
+】
 ```
 
 يتطابق الحقل `handle` (`namespace.name@semver`) مع ما تقبله CLIs عبر
@@ -173,7 +173,7 @@ $ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- --list-chunker-prof
 ProviderAdvertBodyV1 {
     ...
     chunk_profile: profile_id (ضمنيًا عبر السجل)
-    capabilities: [...]
+    能力: [...]
 }
 ```
 
@@ -188,24 +188,24 @@ ProviderAdvertBodyV1 {
 ```
 
 تختار البوابات ملفًا مدعومًا من الطرفين (الافتراضي `sorafs.sf1@1.0.0`) وتعكس القرار عبر ترويسة
-الاستجابة `Content-Chunker`. تضمن manifests الملف المختار كي تتمكن العقد اللاحقة من التحقق
-من تخطيط الـ chunks دون الاعتماد على تفاوض HTTP.
+`Content-Chunker`。は、マニフェスト الملف المختار كي تتمكن العقد اللاحقة من التحقق
+HTTP のチャンクを取得します。
 
-### توافق CAR
+### 車
 
-تستخدم حزمة manifest المعتمدة جذور CIDv1 مع `dag-cbor` (`0x71`). وللتوافق القديم نحتفظ
-بمسار تصدير CARv1+SHA-2:
+CIDv1 マニフェスト `dag-cbor` (`0x71`)。 حتفق القديم نحتفظ
+CARv1+SHA-2:
 
-* **المسار الأساسي** – CARv2، digest حمولة BLAKE3 (`0x1f` multihash)،
-  `MultihashIndexSorted`، والملف مسجل كما سبق.
-  هذا الخيار عندما يهمل العميل `Accept-Chunker` أو يطلب `Accept-Digest: sha2-256`.
+* ** セキュリティ** – CARv2 ダイジェスト BLAKE3 (`0x1f` マルチハッシュ)
+  `MultihashIndexSorted`، والملف مسجل كما سبق。
+  هذا الخيار عندما يهمل العميل `Accept-Chunker` أو يطلب `Accept-Digest: sha2-256`。
 
-لكن يجب ألا تستبدل الـ digest المعتمد.
+ダイジェスト版をご覧ください。
 
-### المطابقة
+### ああ
 
-* يطابق ملف `sorafs.sf1@1.0.0` الـ fixtures العامة في
-  `fixtures/sorafs_chunker` والمجموعات المسجلة تحت
-  `fuzz/sorafs_chunker`. يتم اختبار التكافؤ الطرفي في Rust وGo وNode عبر الاختبارات المتاحة.
+* يطابق ملف `sorafs.sf1@1.0.0` الـ 備品 العامة في
+  `fixtures/sorafs_chunker` 認証済み
+  `fuzz/sorafs_chunker`。 Rust وGo وNode を開発してください。
 * تؤكد `chunker_registry::lookup_by_profile` أن معلمات الوصف تطابق `ChunkProfile::DEFAULT` للحماية من الانحرافات العرضية.
-* تتضمن manifests الناتجة عن `iroha app sorafs toolkit pack` و `sorafs_manifest_stub` بيانات السجل.
+* は、`iroha app sorafs toolkit pack` と `sorafs_manifest_stub` を表します。

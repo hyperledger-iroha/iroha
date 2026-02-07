@@ -6,27 +6,28 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 035600f179f4dd225778fae57c927b2a6c9a0f1c45ca949e3536b99283c2dde3
 source_last_modified: "2026-01-28T17:58:57+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Rust SDK Quickstart
+# התחלה מהירה של Rust SDK
 
-The Rust client API lives in the `iroha` crate, which exposes a `client::Client`
-type for talking to Torii. Use it when you need to submit transactions,
-subscribe to events, or query state from a Rust application.
+ה-API של הלקוח של Rust מתגורר בארגז `iroha`, אשר חושף `client::Client`
+הקלד כדי לדבר עם Torii. השתמש בו כאשר אתה צריך לשלוח עסקאות,
+הירשם לאירועים או מצב שאילתה מאפליקציית Rust.
 
-## 1. Add the crate
+## 1. הוסף את הארגז
 
 ```toml title="Cargo.toml"
 [dependencies]
 iroha = { path = "../../crates/iroha", features = ["client"] }
 ```
 
-The workspace example unlocks the client module via the `client` feature. If you
-consume the published crate, replace the `path` attribute with the current
-version string.
+דוגמה של סביבת העבודה פותחת את מודול הלקוח באמצעות תכונת `client`. אם אתה
+לצרוך את הארגז שפורסם, להחליף את התכונה `path` בתכונה הנוכחית
+מחרוזת גרסה.
 
-## 2. Configure the client
+## 2. הגדר את הלקוח
 
 ```rust title="src/main.rs"
 use iroha::client::{Client, ClientConfiguration};
@@ -45,10 +46,10 @@ fn main() -> eyre::Result<()> {
 }
 ```
 
-`ClientConfiguration` mirrors the CLI configuration file: it includes Torii and
-telemetry URLs, authentication material, timeouts, and batching preferences.
+`ClientConfiguration` משקף את קובץ התצורה של CLI: הוא כולל Torii ו
+כתובות URL של טלמטריה, חומרי אימות, פסק זמן והעדפות אצווה.
 
-## 3. Submit a transaction
+## 3. שלח עסקה
 
 ```rust
 use iroha::client::{Client, ClientConfiguration};
@@ -88,11 +89,11 @@ fn submit_example() -> eyre::Result<()> {
 }
 ```
 
-Under the hood the client uses Norito to encode the transaction payload before
-posting it to Torii. If submission succeeds, the returned hash can be used to
-track status via `client.poll_transaction_status(hash)`.
+מתחת למכסה המנוע המשתמש משתמש ב-Norito כדי לקודד את מטען העסקה לפני
+מפרסם אותו ב-Torii. אם ההגשה תצליח, ניתן להשתמש ב-hash המוחזר
+עקוב אחר מצב באמצעות `client.poll_transaction_status(hash)`.
 
-## 4. Submit DA blobs
+## 4. שלח כתמי DA
 
 ```rust
 use iroha::client::{Client, ClientConfiguration};
@@ -115,11 +116,11 @@ fn submit_da_blob() -> eyre::Result<()> {
 }
 ```
 
-When you need to inspect or persist the Norito payload without sending it to
-Torii, call `client.build_da_ingest_request(...)` to obtain the signed request
-and render it as JSON/bytes, mirroring `iroha app da submit --no-submit`.
+כאשר אתה צריך לבדוק או להתמיד במטען Norito מבלי לשלוח אותו אל
+Torii, התקשר ל-`client.build_da_ingest_request(...)` כדי לקבל את הבקשה החתומה
+ולעבד אותו כ-JSON/בתים, תוך שיקוף של `iroha app da submit --no-submit`.
 
-## 5. Query data
+## 5. נתוני שאילתה
 
 ```rust
 use iroha::client::{Client, ClientConfiguration};
@@ -135,11 +136,11 @@ fn list_domains() -> eyre::Result<()> {
 }
 ```
 
-Queries follow the request/response pattern: construct a query type from
-`iroha_data_model::query`, send it via `client.request`, and iterate over the
-results. Responses use Norito-backed JSON, so the wire format is deterministic.
+שאילתות עוקבות אחר דפוס הבקשה/תגובה: בניית סוג שאילתה מ
+`iroha_data_model::query`, שלח אותו דרך `client.request`, וחזור על
+תוצאות. התגובות משתמשות ב-JSON מגובה Norito, כך שפורמט החוט הוא דטרמיניסטי.
 
-## 6. Explorer QR snapshots
+## 6. צילומי מצב QR של Explorer
 
 ```rust
 use iroha::client::{
@@ -160,15 +161,15 @@ fn download_qr() -> eyre::Result<()> {
 }
 ```
 
-`ExplorerAccountQrSnapshot` mirrors the `/v1/explorer/accounts/{id}/qr` JSON
-surface: it includes the canonical account id, the literal rendered with the
-requested format, network prefix/error-correction metadata, QR dimensions, and
-the inline SVG payload that wallets/explorers can embed directly. Omit
-`ExplorerAccountQrOptions` to default to the preferred IH58 output or set
-`address_format: Some(AddressFormat::Compressed)` to retrieve the second-best
-`sora…` variant used by ADDR-6b.
+`ExplorerAccountQrSnapshot` משקף את `/v1/explorer/accounts/{id}/qr` JSON
+משטח: הוא כולל את מזהה החשבון הקנוני, המילולי המוצג עם
+פורמט מבוקש, מטא נתונים של קידומת רשת/תיקון שגיאות, ממדי QR ו
+מטען ה-SVG המוטבע שארנקים/חוקרים יכולים להטמיע ישירות. השמט
+`ExplorerAccountQrOptions` לברירת המחדל לפלט או לסט המועדפים של IH58
+`address_format: Some(AddressFormat::Compressed)` כדי לאחזר את השני הטוב ביותר
+גרסת `sora…` בשימוש על ידי ADDR-6b.
 
-## 7. Subscribe to events
+## 7. הירשם לאירועים
 
 ```rust
 use iroha::client::{Client, ClientConfiguration};
@@ -188,29 +189,27 @@ async fn listen_for_blocks() -> eyre::Result<()> {
 }
 ```
 
-The client exposes async streams for Torii’s SSE endpoints, including pipeline
-events, data events, and telemetry feeds.
+הלקוח חושף זרמי אסינכרון עבור נקודות הקצה SSE של Torii, כולל צינור
+אירועים, אירועי נתונים והזנות טלמטריה.
 
-## More examples
+## דוגמאות נוספות
 
-- End-to-end flows live under `tests/` in `crates/iroha`. Search for integration
-  tests such as `transaction_submission.rs` for richer scenarios.
-- The CLI (`iroha_cli`) uses the same client module; browse
-  `crates/iroha_cli/src/` to see how authentication, batching, and retries are
-  handled in production tooling.
-- Keep Norito in mind: the client never falls back to `serde_json`. When you
-  extend the SDK, rely on `norito::json` helpers for JSON endpoints and
-  `norito::codec` for binary payloads.
+- זרימות מקצה לקצה חיות תחת `tests/` ב-`crates/iroha`. חפש אינטגרציה
+  בדיקות כגון `transaction_submission.rs` עבור תרחישים עשירים יותר.
+- ה-CLI (`iroha_cli`) משתמש באותו מודול לקוח; לדפדף
+  `crates/iroha_cli/src/` כדי לראות איך אימות, אצווה וניסיונות חוזרים
+  מטופל בכלי ייצור.
+- זכור את Norito: הלקוח לעולם לא יחזור ל-`serde_json`. כאשר אתה
+  להרחיב את ה-SDK, להסתמך על עוזרי `norito::json` עבור נקודות קצה של JSON ו
+  `norito::codec` עבור מטענים בינאריים.
 
-## Related Norito examples
+## דוגמאות Norito קשורות- [שלד נקודת כניסה של האג'ימארי](../norito/examples/hajimari-entrypoint) - קומפיל, הרץ ופריסה
+  פיגום Kotodama המינימלי שמשקף את שלב ההתקנה בהתחלה מהירה זו.
+- [רישום דומיין ונכסי מנטה](../norito/examples/register-and-mint) - מתיישר עם
+  זרימת `Register` + `Mint` המוצגת למעלה כך שתוכל להפעיל מחדש את אותן פעולות מחוזה.
+- [העברת נכס בין חשבונות](../norito/examples/transfer-asset) — מדגים את
+  `transfer_asset` syscall עם אותם מזהי חשבון שבהם משתמשות ההתחלה המהירה של SDK.
 
-- [Hajimari entrypoint skeleton](../norito/examples/hajimari-entrypoint) — compile, run, and deploy
-  the minimal Kotodama scaffold that mirrors the setup phase in this quickstart.
-- [Register domain and mint assets](../norito/examples/register-and-mint) — aligns with the
-  `Register` + `Mint` flow shown above so you can replay the same operations from a contract.
-- [Transfer asset between accounts](../norito/examples/transfer-asset) — demonstrates the
-  `transfer_asset` syscall with the same account IDs the SDK quickstarts use.
-
-With these building blocks you can integrate Torii into Rust services or CLIs.
-Refer to the generated documentation and data-model crates for the full set of
-instructions, queries, and events.
+בעזרת אבני הבניין הללו תוכלו לשלב את Torii בשירותי Rust או CLI.
+עיין בתיעוד שנוצר ובארגזי מודל הנתונים לקבלת הסט המלא של
+הוראות, שאילתות ואירועים.

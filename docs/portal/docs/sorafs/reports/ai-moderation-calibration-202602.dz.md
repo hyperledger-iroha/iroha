@@ -9,64 +9,65 @@ source_last_modified: "2025-12-29T18:16:35.199423+00:00"
 translation_last_reviewed: 2026-02-07
 title: AI Moderation Calibration Report (2026-02)
 summary: Baseline calibration dataset, thresholds, and scoreboard for the first MINFO-1 governance release.
+translator: machine-google-reviewed
 ---
 
-# AI Moderation Calibration Report - February 2026
+# AI བསྒྱིར་ཚད་རྩིས་ཞིབ་སྙན་ཞུ། - ༢༠༢༦ ཟླ་ ༢ པ།
 
-This report packages the inaugural calibration artefacts for **MINFO-1**. The
-dataset, manifest, and scoreboard were produced on 2026-02-05, reviewed by the
-Ministry council on 2026-02-10, and anchored in the governance DAG at height
+སྙན་ཞུ་འདི་གིས་ **MINFO-1** གི་དོན་ལུ་ འགོ་འབྱེད་ཚད་འཇལ་གྱི་ ཅ་ཆས་ཚུ་ ཐུམ་སྒྲིལ་འབདཝ་ཨིན། ཚིག༌ཕྲད
+གནད་སྡུད་ཆ་ཚན་དང་ གསལ་སྟོན་ དེ་ལས་ སྐུགས་བཀོད་སྒྲིག་ཚུ་ ༢༠༢༦-༠༢-༠༥ ལུ་བཟོ་ཡོདཔ་ད་ དེ་ཡང་ བསྐྱར་ཞིབ་འབད་ཡོདཔ་ཨིན།
+ལྷན་ཁག་གི་ཚོགས་སྡེ་ ༢༠༢༦-༠༢-༡༠ ལུ་ གཞུང་སྐྱོང་ ཌི་ཨེ་ཇི་ མཐོ་ཚད་ལུ་ གཞི་བཙུགས་འབད་ཡོདཔ་ཨིན།
 `912044`.
 
-## Dataset Manifest
+## གནད་སྡུད་ཆ་ཚན་ངོ་རྟགས།
 
-- **Dataset reference:** `c0956583-355a-43cc-9a60-e3a5d9a0f7d0`
-- **Slug:** `ai-moderation-calibration-202602`
-- **Entries:** manifest 480, chunk 12,800, metadata 920, audio 160
-- **Label mix:** safe 68%, suspect 19%, escalate 13%
-- **Artefact digest:** `9c4f86a3c099a48d0e3d7cfbf14d22bb9492960c41cba3858f0722519ff612ab`
-- **Distribution:** `sora://datasets/ministry/ai-moderation/calibration/2026-02.tar.zst`
+- **ཌེ་ཊ་སེཊ་གཞི་བསྟུན་:** I18NI0000004X
+- **སལག:** I18NI0000005X
+- **ཐོ་བཀོད་ཚུ་:** གསལ་སྟོན་ ༤༨༠, ཆ་ཤས་༡༢,༨༠༠, མེ་ཊ་ཌེ་ཊ་༩༢༠, སྒྲ་སྐད་ ༡༦༠,
+- **ཁ་བྱལ་སླ་བསྲེ་:** ཉེན་སྲུང་ཅན་ ༦༨%, དོགས་པ་ཅན་ ༡༩%, ཡར་སེང་ ༡༣% .
+- **Aruce digest:** I18NI0000006X
+- **བཀྲམ་སྤེལ་:** `sora://datasets/ministry/ai-moderation/calibration/2026-02.tar.zst`
 
-The full manifest lives in `docs/examples/ai_moderation_calibration_manifest_202602.json`
-and contains the governance signature plus runner hash captured at release
-time.
+མངོན་གསལ་ཆ་ཚང་འདི་ `docs/examples/ai_moderation_calibration_manifest_202602.json` ནང་།
+དང་ གསར་བཏོན་འབད་བའི་སྐབས་ གཞུང་སྐྱོང་མཚན་རྟགས་དང་ རྒྱུག་འགྲན་འབད་མི་ ཧེ་ཤི་ཚུ་ཡོདཔ་ཨིན།
+དུས་ཚོད།
 
-## Scoreboard Summary
+## སྐུགས་བསྡོམས།
 
-Calibrations ran with opset 17 and the deterministic seed pipeline. The
-complete scoreboard JSON (`docs/examples/ai_moderation_calibration_scorecard_202602.json`)
-records the hashes and telemetry digests; the table below highlights the most
-important metrics.
+ཚད་འཇལ་ཚུ་ opset 17 དང་ གཏན་འབེབས་སོན་གྱི་ སོན་གྱི་ དུང་ཅུང་དང་གཅིག་ཁར་ བརྒྱུགས་ཡོདཔ་ཨིན། ཚིག༌ཕྲད
+ཆ་ཚང་སྐུགས་ཤོག་ JSON (I18NI0000009X)
+ཧེསི་དང་ ཊེ་ལི་མི་ཊི་ བཞུ་ནི་ཚུ་ ཐོ་བཀོད་འབདཝ་ཨིན། འོག་གི་ཐིག་ཁྲམ་འདི་གིས་ མང་ཤོས་རང་འོད་རྟགས་བཀལཝ་ཨིན།
+གལ་ཆེ་བའི་མེ་ཊིགསི་ཚུ།
 
-| Model (family) | Brier | ECE | AUROC | Precision@Quarantine | Recall@Escalate |
-| -------------- | ----- | --- | ----- | -------------------- | --------------- |
-| ViT-H/14 Safety (vision) | 0.141 | 0.031 | 0.987 | 0.964 | 0.912 |
-| LLaVA-1.6 34B Safety (multimodal) | 0.118 | 0.028 | 0.978 | 0.942 | 0.904 |
-| Perceptual ensemble (perceptual) | 0.162 | 0.047 | 0.953 | 0.883 | 0.861 |
+| དཔེ་སྟོན་ (བཟའ་ཚང་) | བྲི་རར་ | ECE | AUROC | ངེས་མེད་@Quarantine | Recall@Escalate |
+| --------------- | ----- | --- | ----- | ---------------------- | ---------------- |
+| ཝི་ཊི་-ཨེཆ་/༡༤ ཉེན་སྲུང་ (མཐོང་ཚུལ།) | ༠.༡༤༡ | ༠.༠༣༡ | ༠.༩༨༧ | ༠.༩༦༤ | ༠.༩༡༢ |
+| LLaVA-1.6 34B ཉེན་སྲུང་ (multimodal) | ༠.༡༡༨ | ༠.༠༢༨ | ༠.༩༧༨ | ༠.༩༤༢ | ༠.༩༠༤ |
+| མཐོང་སྣང་ཅན་གྱི་སྡེ་ཚན་ (ཤེས་རྟོགས་) | ༠.༡༦༢ | ༠.༠༤༧ | ༠.༩༥༣ | ༠.༨༨༣ | ༠.༨༦༡ |
 
-Combined metrics: `Brier = 0.126`, `ECE = 0.034`, `AUROC = 0.982`. The verdict
-distribution across the calibration window was pass 91.2%, quarantine 6.8%,
-escalate 2.0%, matching the policy expectations recorded in the manifest
-summary. False-positive backlog remained at zero, and the drift score (7.1%)
-fell well below the 20% alert threshold.
+མཉམ་སྡེབ་མེ་ཊིགསི་: `Brier = 0.126`, I18NI000000011X, I18NI000000012X. འཁྲུན་ཆོད་འདི་
+ཚད་འཇལ་སྒོ་སྒྲིག་ནང་ བཀྲམ་སྤེལ་འདི་ བརྒྱ་ཆ་༩༡.༢ བརྒྱུད་དེ་ ཟུར་བཞག་ནད་བརྟག་ ༦.༨%,༨,༨,༨,
+གསལ་སྟོན་ནང་ཐོ་བཀོད་འབད་ཡོད་པའི་སྲིད་བྱུས་རེ་བ་དང་མཐུན་སྒྲིག་འབད་དེ་ ༢.༠% ཡར་སེང་།
+བཅུད༌བསྡུ། རྫུན་མའི་རྒྱབ་ལོག་འདི་ ཀླད་ཀོར་དང་ ཌིཕཊ་སྐུགས་ (༧.༡%) ལུ་སྡོད་ཡོདཔ་ཨིན།
+བརྒྱ་ཆ་ ༢༠% གི་ དྲན་སྐུལ་ཚད་གཞི་ལས་ ལེགས་ཤོམ།
 
-## Thresholds & Sign-off
+## ཐིག་ལེ་དང་ནང་བར།
 
 - `thresholds.quarantine = 0.42`
 - `thresholds.escalate = 0.78`
-- Governance motion: `MINFO-2026-02-07`
-- Signed by `ministry-council-seat-03` at `2026-02-10T11:33:12Z`
+- གཞུང་སྐྱོང་གི་གཡོ་འགུལ་: I18NI0000015X
+- `ministry-council-seat-03` གིས་ I18NI000000017X ལུ།
 
-CI stored the signed bundle in `artifacts/ministry/ai_moderation/2026-02/`
-alongside the moderation runner binaries. The manifest digest and scoreboard
-hashes above must be referenced during audits and appeals.
+CI གིས་ `artifacts/ministry/ai_moderation/2026-02/` ནང་ མིང་རྟགས་བཀོད་ཡོད་པའི་ བཱན་ཌལ་འདི་ གསོག་འཇོག་འབད་ཡོདཔ།
+བར་མའི་རྒྱུག་འགྲན་གཉིས་ལྡན་གྱི་མཉམ་དུ། གསལ་སྟོན་ བཞུ་ དང་ སྐུགས་ བང་ཚད།
+གོང་འཁོད་ཀྱི་ཧེ་ཚུ་ རྩིས་ཞིབ་དང་ མཐོ་གཏུགས་འབད་བའི་སྐབས་ གཞི་བསྟུན་འབད་དགོ།
 
-## Dashboards & Alerts
+## ཌེཤ་བོརཌི་དང་ཉེན་བརྡ་ཚུ།
 
-Moderation SREs should import the Grafana dashboard at
-`dashboards/grafana/ministry_moderation_overview.json` and the matching
-Prometheus alert rules in `dashboards/alerts/ministry_moderation_rules.yml`
-(test coverage lives under `dashboards/alerts/tests/ministry_moderation_rules.test.yml`).
-These artifacts emit alerts for ingest stalls, drift spikes, and quarantine
-queue growth, satisfying the monitoring requirements called out in
-the [AI Moderation Runner Specification](../../ministry/ai-moderation-runner.md).
+བར་མཚམས་ཨེསི་ཨར་ཨི་ཚུ་གིས་ Grafana ཌེཤ་བོརཌ་འདི་ ནང་འདྲེན་འབད་དགོ།
+I18NI000000019X དང་མཐུན་པ།
+Prometheus `dashboards/alerts/ministry_moderation_rules.yml` ནང་གི་སྒྲིག་གཞི།
+( བརྟག་དཔྱད་ཀྱི་ཁྱབ་ཁོངས་ `dashboards/alerts/tests/ministry_moderation_rules.test.yml` གི་འོག་ལུ་སྡོད་ཡོདཔ་ཨིན།)
+འདི་བཟུམ་གྱི་ ཅ་ཆས་ཚུ་གིས་ ཟ་སྤྱོད་ཁང་དང་ ཌིརཕཊ་ སྤི་ དེ་ལས་ ཟུར་བཞག་ནད་བརྟག་ཚུ་ལུ་ ཉེན་བརྡ་འབདཝ་ཨིན།
+གྱལ་རིམ་གོང་འཕེལ། ༢༠༠༨ ལུ་ བལྟ་རྟོག་དགོས་མཁོ་ཚུ་ གྲུབ་ཚུགསཔ་ཨིན།
+the [AI Moderation གཡོག་བཀོལ་ནི་ཁྱད་ཚད་](I18NU0000002X).

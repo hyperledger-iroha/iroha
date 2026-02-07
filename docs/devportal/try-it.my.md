@@ -9,32 +9,33 @@ source_last_modified: "2025-12-29T18:16:35.067551+00:00"
 translation_last_reviewed: 2026-02-07
 title: Try It Sandbox Guide
 summary: How to run the Torii staging proxy and developer portal sandbox.
+translator: machine-google-reviewed
 ---
 
-The developer portal ships a “Try it” console for the Torii REST API. This guide
-explains how to launch the supporting proxy and connect the console to a staging
-gateway without exposing credentials.
+developer portal သည် Torii REST API အတွက် "စမ်းကြည့်ပါ" ကွန်ဆိုးလ်တစ်ခု ပေးပို့သည်။ ဒီလမ်းညွှန်
+ပံ့ပိုးပေးသည့် ပရောက်စီကို မည်သို့စတင်ရန်နှင့် ကွန်ဆိုးလ်အား ဇာတ်ညွှန်းတစ်ခုသို့ ချိတ်ဆက်နည်းကို ရှင်းပြသည်။
+အထောက်အထားများကို မဖော်ပြဘဲ တံခါးပေါက်။
 
-## Prerequisites
+## လိုအပ်ချက်များ
 
-- Iroha repository checkout (workspace root).
-- Node.js 18.18+ (matches the portal baseline).
-- Torii endpoint reachable from your workstation (staging or local).
+- Iroha repository checkout (workspace root)။
+- Node.js 18.18+ (ပေါ်တယ်အခြေခံလိုင်းနှင့် ကိုက်ညီသည်)။
+- Torii အဆုံးမှတ်ကို သင်၏ workstation (staging သို့မဟုတ် local) မှ ရယူနိုင်သည်။
 
-## 1. Generate the OpenAPI snapshot (optional)
+## 1. OpenAPI လျှပ်တစ်ပြက်ရိုက်ချက် ဖန်တီးပါ (ချန်လှပ်ထားနိုင်သည်)
 
-The console reuses the same OpenAPI payload as the portal reference pages. If
-you have changed Torii routes, regenerate the snapshot:
+ကွန်ဆိုးလ်သည် တူညီသော OpenAPI payload ကို portal ရည်ညွှန်းစာမျက်နှာများအဖြစ် ပြန်လည်အသုံးပြုသည်။ အကယ်လို့
+သင်သည် Torii လမ်းကြောင်းများကို ပြောင်းလဲပြီး လျှပ်တစ်ပြက်ကို ပြန်လည်ထုတ်ပါ-
 
 ```bash
 cargo xtask openapi
 ```
 
-The task writes `docs/portal/static/openapi/torii.json`.
+အလုပ်က `docs/portal/static/openapi/torii.json` လို့ရေးတယ်။
 
-## 2. Start the Try It proxy
+## 2. Try It proxy ကို စတင်ပါ။
 
-From the repository root:
+repository root မှ
 
 ```bash
 cd docs/portal
@@ -48,26 +49,26 @@ export TRYIT_PROXY_LISTEN="127.0.0.1:8787"
 npm run tryit-proxy
 ```
 
-### Environment variables
+### ပတ်ဝန်းကျင် ပြောင်းလဲမှု
 
-| Variable | Description |
+| ပြောင်းလဲနိုင်သော | ဖော်ပြချက် |
 |----------|-------------|
-| `TRYIT_PROXY_TARGET` | Torii base URL (required). |
-| `TRYIT_PROXY_ALLOWED_ORIGINS` | Comma-separated list of origins allowed to use the proxy (defaults to `http://localhost:3000`). |
-| `TRYIT_PROXY_BEARER` | Optional default bearer token applied to all proxied requests. |
-| `TRYIT_PROXY_ALLOW_CLIENT_AUTH` | Set to `1` to forward the caller’s `Authorization` header verbatim. |
-| `TRYIT_PROXY_RATE_LIMIT` / `TRYIT_PROXY_RATE_WINDOW_MS` | In-memory rate limiter settings (defaults: 60 requests per 60 s). |
-| `TRYIT_PROXY_MAX_BODY` | Maximum request payload accepted (bytes, default 1 MiB). |
-| `TRYIT_PROXY_TIMEOUT_MS` | Upstream timeout for Torii requests (default 10 000 ms). |
+| `TRYIT_PROXY_TARGET` | Torii အခြေခံ URL (လိုအပ်သည်)။ |
+| `TRYIT_PROXY_ALLOWED_ORIGINS` | ပရောက်စီကို အသုံးပြုရန် ခွင့်ပြုထားသော မူရင်းများစာရင်း (`http://localhost:3000`)။ |
+| `TRYIT_PROXY_BEARER` | ပရောက်ဆီထည့်ထားသော တောင်းဆိုမှုအားလုံးတွင် ရွေးချယ်နိုင်သော ပုံသေကိုင်ဆောင်သူ တိုကင်ကို အသုံးပြုထားသည်။ |
+| `TRYIT_PROXY_ALLOW_CLIENT_AUTH` | ခေါ်ဆိုသူ၏ `Authorization` ခေါင်းစီးစကားလုံးကို ထပ်ဆင့်ပေးပို့ရန် `1` သို့ သတ်မှတ်ပါ။ |
+| `TRYIT_PROXY_RATE_LIMIT` / `TRYIT_PROXY_RATE_WINDOW_MS` | မမ်မိုရီအတွင်းနှုန်းကန့်သတ်ဆက်တင်များ (မူရင်းများ- 60s လျှင် တောင်းဆိုမှု 60)။ |
+| `TRYIT_PROXY_MAX_BODY` | အများဆုံး တောင်းဆိုချက် ပေးချေမှုအား လက်ခံသည် (ဘိုက်များ၊ မူရင်း 1MiB)။ |
+| `TRYIT_PROXY_TIMEOUT_MS` | Torii တောင်းဆိုမှုများအတွက် ရေစီးကြောင်းတွင် အချိန်ကုန်ခြင်း (မူလ 10000ms)။ |
 
-The proxy exposes:
+ပရောက်စီသည် ဖော်ထုတ်သည်-
 
-- `GET /healthz` — readiness check.
-- `/proxy/*` — proxied requests, preserving the path and query string.
+- `GET /healthz` — အဆင်သင့်စစ်ဆေးမှု။
+- `/proxy/*` — proxyed တောင်းဆိုမှုများ၊ လမ်းကြောင်းနှင့် query string ကို ထိန်းသိမ်းထားသည်။
 
-## 3. Launch the portal
+## 3. ပေါ်တယ်ကိုဖွင့်ပါ။
 
-In a separate terminal:
+သီးခြား terminal တွင်-
 
 ```bash
 cd docs/portal
@@ -75,23 +76,23 @@ export TRYIT_PROXY_PUBLIC_URL="http://localhost:8787"
 npm run start
 ```
 
-Visit `http://localhost:3000/api/overview` and use the Try It console. The same
-environment variables configure the Swagger UI and RapiDoc embeds.
+`http://localhost:3000/api/overview` သို့ဝင်ရောက်ပြီး Try It console ကိုအသုံးပြုပါ။ အတူတူပါပဲ။
+ပတ်ဝန်းကျင်ပြောင်းလဲမှုများသည် Swagger UI နှင့် RapiDoc မြှုပ်နှံမှုများကို စီစဉ်သတ်မှတ်ပေးသည်။
 
-## 4. Running unit tests
+## 4. အပြေးယူနစ်စစ်ဆေးမှုများ
 
-The proxy exposes a fast Node-based test suite:
+ပရောက်စီသည် လျင်မြန်သော Node-based စမ်းသပ်မှုအစုံကို ပြသသည်-
 
 ```bash
 npm run test:tryit-proxy
 ```
 
-The tests cover address parsing, origin handling, rate limiting, and bearer
-injection.
+စမ်းသပ်မှုများတွင် လိပ်စာခွဲခြမ်းစိတ်ဖြာခြင်း၊ မူရင်းကိုင်တွယ်ခြင်း၊ နှုန်းကန့်သတ်ခြင်းနှင့် ကိုင်ဆောင်ခြင်းတို့ ပါဝင်သည်။
+ဆေးထိုး။
 
-## 5. Probe automation & metrics
+## 5. အလိုအလျောက်စနစ်နှင့် တိုင်းတာမှုများကို စစ်ဆေးပါ။
 
-Use the bundled probe to verify `/healthz` and a sample endpoint:
+`/healthz` နှင့် နမူနာ အဆုံးမှတ်ကို စစ်ဆေးရန် အစုလိုက်အပြုံလိုက် စုံစမ်းစစ်ဆေးမှုကို အသုံးပြုပါ-
 
 ```bash
 TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" \
@@ -99,18 +100,18 @@ TRYIT_PROXY_SAMPLE_PATH="/v1/status" \
 npm run probe:tryit-proxy
 ```
 
-Environment knobs:
+ပတ်ဝန်းကျင် ခလုတ်များ-
 
-- `TRYIT_PROXY_SAMPLE_PATH` — optional Torii route (without `/proxy`) to exercise.
-- `TRYIT_PROXY_SAMPLE_METHOD` — defaults to `GET`; set to `POST` for write routes.
-- `TRYIT_PROXY_PROBE_TOKEN` — injects a temporary bearer token for the sample call.
-- `TRYIT_PROXY_PROBE_TIMEOUT_MS` — overrides the default 5 s timeout.
-- `TRYIT_PROXY_PROBE_METRICS_FILE` — Prometheus textfile destination for `probe_success`/`probe_duration_seconds`.
-- `TRYIT_PROXY_PROBE_LABELS` — comma-separated `key=value` pairs appended to the metrics (defaults to `job=tryit-proxy` and `instance=<proxy URL>`).
+- `TRYIT_PROXY_SAMPLE_PATH` — ရွေးချယ်နိုင်သော Torii လမ်းကြောင်း (`/proxy` မပါဘဲ) လေ့ကျင့်ခန်း။
+- `TRYIT_PROXY_SAMPLE_METHOD` — `GET` သို့ ပုံသေများ။ လမ်းကြောင်းများရေးသားရန်အတွက် `POST` ဟုသတ်မှတ်ထားသည်။
+- `TRYIT_PROXY_PROBE_TOKEN` — နမူနာခေါ်ဆိုမှုအတွက် ယာယီကိုင်ဆောင်သူ တိုကင်ကို ထိုးသွင်းသည်။
+- `TRYIT_PROXY_PROBE_TIMEOUT_MS` — ပုံသေ 5s အချိန်လွန်မှုကို အစားထိုးသည်။
+- `TRYIT_PROXY_PROBE_METRICS_FILE` — Prometheus `probe_success`/`probe_duration_seconds` အတွက် စာသားဖိုင် ဦးတည်ရာ။
+- `TRYIT_PROXY_PROBE_LABELS` — ကော်မာ-ခြားထားသော `key=value` အတွဲများကို မက်ထရစ်များတွင် ထည့်ထားသည် (ပုံသေများမှာ `job=tryit-proxy` နှင့် `instance=<proxy URL>`)။
 
-When `TRYIT_PROXY_PROBE_METRICS_FILE` is set, the script rewrites the file
-atomically so your node_exporter/textfile collector always sees a complete
-payload. Example:
+`TRYIT_PROXY_PROBE_METRICS_FILE` ကို သတ်မှတ်သောအခါ၊ script သည် ဖိုင်ကို ပြန်လည်ရေးသားသည်။
+အက်တမ်နည်းအားဖြင့် သင်၏ node_exporter/textfile စုဆောင်းသူသည် ပြီးပြည့်စုံမှုကို အမြဲမြင်နေရသည်။
+payload ဥပမာ-
 
 ```bash
 TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" \
@@ -119,16 +120,16 @@ TRYIT_PROXY_PROBE_LABELS="job=tryit-proxy,cluster=staging" \
 npm run probe:tryit-proxy
 ```
 
-Forward the resulting metrics to Prometheus and reuse the sample alert in the
-developer-portal docs to page when `probe_success` drops to `0`.
+ရလဒ်မက်ထရစ်များကို Prometheus သို့ ပေးပို့ပြီး နမူနာသတိပေးချက်ကို ပြန်သုံးပါ။
+`probe_success` မှ `0` သို့ကျသွားသောအခါ developer-portal docs
 
-## 6. Production hardening checklist
+## 6. ထုတ်လုပ်မှု တင်းမာမှု စစ်ဆေးရန်စာရင်း
 
-Before publishing the proxy beyond local development:
+ဒေသဆိုင်ရာ ဖွံ့ဖြိုးတိုးတက်မှုထက် ကျော်လွန်၍ ပရောက်စီကို မထုတ်ဝေမီ-
 
-- Terminate TLS ahead of the proxy (reverse proxy or managed gateway).
-- Configure structured logging and forward to observability pipelines.
-- Rotate bearer tokens and store them in your secrets manager.
-- Monitor the proxy’s `/healthz` endpoint and aggregate latency metrics.
-- Align rate limits with your Torii staging quotas; adjust the `Retry-After`
-  behaviour to communicate throttling to clients.
+- ပရောက်စီ၏ရှေ့တွင် TLS (ပြောင်းပြန်ပရောက်စီ သို့မဟုတ် စီမံထားသော ဂိတ်ဝ) ကိုပိတ်ပါ။
+- စနစ်တကျ သစ်ခုတ်ခြင်းကို စီစဉ်သတ်မှတ်ပြီး မြင်နိုင်စွမ်းရှိသော ပိုက်လိုင်းများဆီသို့ ပို့ဆောင်ပါ။
+- ကိုင်ဆောင်သူတိုကင်များကို လှည့်၍ သင်၏လျှို့ဝှက်ချက်များမန်နေဂျာတွင် သိမ်းဆည်းပါ။
+- ပရောက်စီ၏ `/healthz` အဆုံးမှတ်နှင့် ပေါင်းစည်း latency မက်ထရစ်များကို စောင့်ကြည့်ပါ။
+- သင်၏ Torii အဆင့်သတ်မှတ်ခွဲတမ်းများနှင့် ကန့်သတ်နှုန်းများကို ချိန်ညှိပါ။ `Retry-After` ကို ချိန်ညှိပါ။
+  ဖောက်သည်များနှင့် ဆက်သွယ်ရန် အတားအဆီးဖြစ်စေသော အပြုအမူ။

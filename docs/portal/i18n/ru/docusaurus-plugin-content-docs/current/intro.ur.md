@@ -4,28 +4,30 @@ direction: ltr
 source: docs/portal/docs/intro.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# SORA Nexus Developer Portal میں خوش آمدید
+# SORA Nexus Портал для разработчиков
 
-SORA Nexus developer portal Nexus operators اور Hyperledger Iroha contributors کے لئے interactive documentation، SDK tutorials، اور API references کو یکجا کرتا ہے۔ یہ main docs site کو اس repository سے براہ راست generated specs اور hands-on guides سامنے لا کر مکمل کرتا ہے۔ landing page اب themed Norito/SoraFS entry points، signed OpenAPI snapshots، اور ایک dedicated Norito Streaming reference فراہم کرتا ہے تاکہ contributors root spec کھنگالے بغیر streaming control-plane contract تک پہنچ سکیں۔
+SORA Nexus Портал для разработчиков Nexus Операторы и Hyperledger Iroha Соавторы интерактивная документация, учебные пособия по SDK, а также ссылки на API. یکجا کرتا ہے۔ یہ основной сайт документации کو اس репозиторий سے براہ راست сгенерированные спецификации اور практические руководства سامنے لا کر مکمل کرتا ہے۔ целевая страница, тематические точки входа Norito/SoraFS, подписанные снимки OpenAPI, выделенный Norito, ссылка на потоковую передачу. Корневая спецификация для участников Контракт плоскости управления потоковой передачей
 
 ## آپ یہاں کیا کر سکتے ہیں
 
-- **Norito سیکھیں** - overview اور quickstart سے آغاز کریں تاکہ serialization model اور bytecode tooling سمجھ سکیں۔
-- **SDKs bootstrap کریں** - JavaScript اور Rust کے quickstarts آج فالو کریں؛ Python، Swift، اور Android guides recipes migrate ہونے کے ساتھ شامل ہوں گے۔
-- **API references دیکھیں** - Torii OpenAPI page تازہ ترین REST specification render کرتا ہے، اور configuration tables canonical Markdown sources کی طرف link کرتے ہیں۔
-- **Deployments تیار کریں** - operational runbooks (telemetry, settlement, Nexus overlays) `docs/source/` سے port ہو رہے ہیں اور migration کے ساتھ اس سائٹ پر آئیں گے۔
+- **Norito Приложение** - краткий обзор Краткое руководство по модели сериализации Инструменты для работы с байт-кодом
+- **Загрузка SDK** - Использование JavaScript в Rust и краткие руководства по использованию Руководства по Python, Swift и Android-руководствам по переносу рецептов.
+- **Ссылки на API** - Torii OpenAPI страница Создание спецификации REST визуализация таблиц конфигурации канонические источники Markdown или ссылка کرتے ہیں۔
+- **Развертывания и развертывания** - рабочие книги Runbook (телеметрия, расчет, оверлеи Nexus) `docs/source/` порт и миграция سائٹ پر آئیں گے۔
 
 ## موجودہ حالت
 
-- ✅ themed Docusaurus v3 landing جس میں refreshed typography، gradient-driven hero/cards، اور resource tiles شامل ہیں جو Norito Streaming summary رکھتے ہیں۔
-- ✅ Torii OpenAPI plugin کو `npm run sync-openapi` سے wired کیا گیا ہے، signed snapshot checks اور CSP guards `buildSecurityHeaders` کے ذریعے نافذ ہیں۔
-- ✅ Preview اور probe coverage CI (`docs-portal-preview.yml` + `scripts/portal-probe.mjs`) میں چلتی ہے، اور اب streaming doc، SoraFS quickstarts، اور reference checklists کو artifacts publish ہونے سے پہلے gate کرتی ہے۔
-- ✅ Norito، SoraFS، اور SDK quickstarts کے ساتھ reference sections sidebar میں live ہیں؛ `docs/source/` سے نئی imports (streaming, orchestration, runbooks) جب لکھی جاتی ہیں تو یہاں شامل ہوتی ہیں۔
+- ✅ тематическая посадка Docusaurus v3, обновленная типографика, герои/карты с градиентным управлением, новые плитки ресурсов, а также Norito Сводка потоковой передачи رکھتے ہیں۔
+- ✅ Torii OpenAPI плагин `npm run sync-openapi` Подключение к проводной сети Проверка подписанных снимков и защита CSP `buildSecurityHeaders` کے ذریعے نافذ ہیں۔
+- ✅ Предварительный просмотр пробного покрытия CI (`docs-portal-preview.yml` + `scripts/portal-probe.mjs`) и просмотр потоковой передачи документов, краткие руководства SoraFS, контрольные списки ссылок и публикация артефактов. ہونے سے پہلے ворота کرتی ہے۔
+- ✅ Norito, SoraFS, краткие руководства по SDK, боковая панель справочных разделов и живая информация. `docs/source/` импорт импорта (потоковая передача, оркестровка, модули Runbook)
 
 ## شمولیت کیسے کریں
 
-- لوکل development commands کے لئے `docs/portal/README.md` دیکھیں (`npm install`, `npm run start`, `npm run build`)۔
-- Content migration tasks `DOCS-*` roadmap items کے ساتھ track کی جاتی ہیں۔ Contributions خوش آمدید ہیں - `docs/source/` سے sections port کریں اور page کو sidebar میں شامل کریں۔
-- اگر آپ کوئی generated artifact (specs, config tables) شامل کریں تو build command دستاویز کریں تاکہ آئندہ contributors اسے آسانی سے refresh کر سکیں۔
+- Команды разработки: `docs/portal/README.md` или `npm install`, `npm run start`, `npm run build`.
+- Задачи по переносу контента `DOCS-*`. Элементы дорожной карты. Вклады خوش آمدید ہیں - `docs/source/` سے разделы порт کریں اور страница и боковая панель میں شامل کریں۔
+- Создать и создать артефакт (спецификации, таблицы конфигурации). Создать команду сборки. Добавить участников. سے обновить کر سکیں۔

@@ -4,34 +4,36 @@ direction: ltr
 source: docs/portal/docs/da/ingest-plan.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Fonte canonica
-Espelha `docs/source/da/ingest_plan.md`. Mantenha as duas versoes em
+:::nota Fuente canónica
+España `docs/source/da/ingest_plan.md`. Mantenha como dos versos em
 :::
 
-# Plano de ingestao de Data Availability da Sora Nexus
+# Plano de ingesta de Data Availability de Sora Nexus
 
 _Redigido: 2026-02-20 - Responsaveis: Core Protocol WG / Storage Team / DA WG_
 
-O workstream DA-2 estende Torii com uma API de ingestao de blobs que emite
-metadados Norito e semeia a replicacao SoraFS. Este documento captura o esquema
-proposto, a superficie de API e o fluxo de validacao para que a implementacao
-avance sem bloquear em simulacoes pendentes (seguimentos DA-1). Todos os
-formatos de payload DEVEM usar codecs Norito; nao sao permitidos fallbacks
+El flujo de trabajo DA-2 incluye Torii con una API de ingesta de blobs que emite
+metadados Norito y algunas réplicas SoraFS. Este documento captura o esquema
+propuesta, una superficie de API y el flujo de validación para que a implementar
+avance sin bloquear em simulacoes pendentes (seguimentos DA-1). Todos os
+formatos de carga útil DEVEM usar códecs Norito; nao sao permitidos retrocesos
 serde/JSON.
 
 ## Objetivos
 
 - Aceitar blobs grandes (segmentos Taikai, sidecars de lane, artefatos de
-  governanca) de forma deterministica via Torii.
-- Produzir manifests Norito canonicos que descrevam o blob, parametros de codec,
+  Gobernanza) de forma determinística vía Torii.
+- Produzir manifiesta Norito canónicos que descrevam o blob, parámetros de codec,
   perfil de erasure e politica de retencao.
-- Persistir metadata de chunks no storage hot de SoraFS e enfileirar jobs de
+- Persistir metadatos de fragmentos sin almacenamiento en caliente de SoraFS y enfileirar trabajos de
   replicacao.
-- Publicar intents de pin + tags de politica no registry SoraFS e observadores
-  de governanca.
-- Expor receipts de admissao para que os clientes recuperem prova deterministica
+- Publicar intents de pin + etiquetas de política no registro SoraFS e observadores
+  de gobernancia.
+- Exportación de recibos de admisión para que os clientes recuperem prova determinística
   de publicacao.
 
 ## Superficie API (Torii)
@@ -39,22 +41,20 @@ serde/JSON.
 ```
 POST /v1/da/ingest
 Content-Type: application/norito+v1
-```
+```La carga útil es un `DaIngestRequest` codificado en Norito. Como respuestas usamos
+`application/norito+v1` y regrese `DaIngestReceipt`.
 
-O payload e um `DaIngestRequest` codificado em Norito. As respostas usam
-`application/norito+v1` e retornam `DaIngestReceipt`.
-
-| Resposta | Significado |
+| Respuesta | SIGNIFICADO |
 | --- | --- |
-| 202 Accepted | Blob enfileirado para chunking/replicacao; receipt retornado. |
-| 400 Bad Request | Violacao de esquema/tamanho (veja validacoes). |
-| 401 Unauthorized | Token API ausente/invalido. |
-| 409 Conflict | Duplicado `client_blob_id` com metadata divergente. |
-| 413 Payload Too Large | Excede o limite configurado de tamanho do blob. |
-| 429 Too Many Requests | Rate limit atingido. |
-| 500 Internal Error | Falha inesperada (log + alerta). |
+| 202 Aceptado | Blob almacenado para fragmentación/replicación; recibo retornado. |
+| 400 Solicitud incorrecta | Violacao de esquema/tamanho (veja validacoes). |
+| 401 No autorizado | API de token ausente/inválido. |
+| 409 Conflicto | Duplicado `client_blob_id` con metadatos divergentes. |
+| 413 Carga útil demasiado grande | Exceda el límite configurado de tamaño del blob. |
+| 429 Demasiadas solicitudes | Límite de tarifa atingido. |
+| 500 Error interno | Falha inesperada (log + alerta). |
 
-## Esquema Norito proposto
+## Esquema Norito propuesta
 
 ```rust
 /// Top-level ingest request.
@@ -132,150 +132,138 @@ pub struct DaIngestReceipt {
 }
 ```
 
-> Nota de implementacao: as representacoes canonicas em Rust para esses payloads
-> agora vivem em `iroha_data_model::da::types`, com wrappers de request/receipt
-> em `iroha_data_model::da::ingest` e a estrutura de manifest em
+> Nota de implementación: como representantes canónicos en Rust para esses payloads
+> agora vivem em `iroha_data_model::da::types`, com envoltorios de solicitud/recibo
+> em `iroha_data_model::da::ingest` y una estructura de manifiesto em
 > `iroha_data_model::da::manifest`.
 
-O campo `compression` informa como os callers prepararam o payload. Torii aceita
-`identity`, `gzip`, `deflate`, e `zstd`, descomprimindo os bytes antes de hash,
-chunking e verificacao de manifests opcionais.
+El campo `compression` informa cómo las personas que llaman preparan la carga útil. Torii aceita
+`identity`, `gzip`, `deflate`, e `zstd`, descomprimiendo los bytes antes de hash,
+fragmentación y verificación de manifiestos opcionales.
 
-### Checklist de validacao
-
-1. Verificar se o header Norito da requisicao corresponde a `DaIngestRequest`.
-2. Falhar se `total_size` diferir do tamanho canonico do payload (descomprimido)
-   ou exceder o maximo configurado.
-3. Forcar alinhamento de `chunk_size` (potencia de dois, <= 2 MiB).
-4. Garantir `data_shards + parity_shards` <= maximo global e parity >= 2.
-5. `retention_policy.required_replica_count` deve respeitar a baseline de
-   governanca.
-6. Verificacao de assinatura contra hash canonico (excluindo o campo signature).
-7. Rejeitar `client_blob_id` duplicado, exceto se o hash do payload e a metadata
-   forem identicos.
-8. Quando `norito_manifest` for fornecido, verificar schema + hash coincide com
-   o manifest recalculado apos o chunking; caso contrario o node gera o manifest
+### Lista de verificación de validación1. Verifique si el encabezado Norito da requisicao corresponde a `DaIngestRequest`.
+2. Falhar se `total_size` difiere del tamaño canónico de la carga útil (descomprimido)
+   o exceder el máximo configurado.
+3. Forcar alinhamento de `chunk_size` (potencia de dos, = 2.
+5. `retention_policy.required_replica_count` debe respetar una línea base de
+   gobernancia.
+6. Verificacao de assinatura contra hash canonico (excluyendo la firma de campo).
+7. Rejeitar `client_blob_id` duplicado, excepto el hash de la carga útil y los metadatos
+   anteriores idénticos.
+8. Cuando `norito_manifest` para fornecido, verificar esquema + hash coinciden com
+   o manifiesto recalculado apos o fragmentación; caso contrario o nodo gera o manifiesto
    e o armazena.
-9. Forcar a politica de replicacao configurada: Torii reescreve o
-   `RetentionPolicy` enviado com `torii.da_ingest.replication_policy` (veja
-   `replication-policy.md`) e rejeita manifests preconstruidos cuja metadata de
-   retencao nao coincide com o perfil imposto.
+9. Forcar a política de replicación configurada: Torii reescreve o
+   `RetentionPolicy` enviado con `torii.da_ingest.replication_policy` (veja
+   `replication-policy.md`) e rejeita manifiesta preconstruidos cuja metadata de
+   retencao nao coincide con el perfil imposto.
 
-### Fluxo de chunking e replicacao
-
-1. Fatiar o payload em `chunk_size`, calcular BLAKE3 por chunk + raiz Merkle.
-2. Construir Norito `DaManifestV1` (struct nova) capturando compromissos de
-   chunk (role/group_id), layout de erasure (contagens de paridade de linhas e
-   colunas mais `ipa_commitment`), politica de retencao e metadata.
-3. Enfileirar os bytes do manifest canonico sob
-   `config.da_ingest.manifest_store_dir` (Torii escreve arquivos
-   `manifest.encoded` por lane/epoch/sequence/ticket/fingerprint) para que a
-   orquestracao SoraFS os ingira e vincule o storage ticket aos dados
+### Flujo de fragmentación y replicación1. Fatiar la carga útil en `chunk_size`, calcular BLAKE3 por chunk + raíz Merkle.
+2. Construir Norito `DaManifestV1` (struct nova) capturando compromisos de
+   trozo (role/group_id), diseño de borrado (contagens de paridade de linhas e
+   columnas más `ipa_commitment`), política de retención y metadatos.
+3. Enfileirar os bytes do manifest canonico sollozo
+   `config.da_ingest.manifest_store_dir` (Torii escreve archivos
+   `manifest.encoded` por carril/época/secuencia/ticket/huella digital) para que a
+   orquestracao SoraFS os ingira e vincule o ticket de almacenamiento aos dados
    persistidos.
-4. Publicar intents de pin via `sorafs_car::PinIntent` com tag de governanca e
-   politica.
+4. Publicar intents de pin via `sorafs_car::PinIntent` com tag degobernanca e
+   política.
 5. Emitir evento Norito `DaIngestPublished` para notificar observadores
-   (clientes leves, governanca, analitica).
+   (clientes leves, gobernadora, analítica).
 6. Retornar `DaIngestReceipt` ao caller (assinado pela chave de servico DA de
-   Torii) e emitir o header `Sora-PDP-Commitment` para que os SDKs capturem o
-   commitment codificado de imediato. O receipt agora inclui `rent_quote`
-   (um Norito `DaRentQuote`) e `stripe_layout`, permitindo que os remetentes
-   exibam a renda base, a reserva, expectativas de bonus PDP/PoTR e o layout de
-   erasure 2D ao lado do storage ticket antes de comprometer fundos.
+   Torii) y emite el encabezado `Sora-PDP-Commitment` para que los SDK capturen
+   compromiso codificado de inmediato. O recibo ágora incluido `rent_quote`
+   (um Norito `DaRentQuote`) e `stripe_layout`, permitiendo que los remetentes
+   exibam a renda base, a reserva, expectativas de bonificación PDP/PoTR e o diseño de
+   borrado 2D al lado del ticket de almacenamiento antes de comprometer fondos.
 
-## Atualizacoes de storage/registry
+## Actualizaciones de almacenamiento/registro- Estender `sorafs_manifest` con `DaManifestV1`, habilitando parsing
+  determinista.
+- Agregar nueva secuencia de registro `da.pin_intent` con carga útil versionada
+  referenciando hash de manifiesto + ID del ticket.
+- Actualizar tuberías de observabilidad para rastrear la latencia de ingesta,
+  rendimiento de fragmentación, trabajo pendiente de replicación y contagios de errores.
 
-- Estender `sorafs_manifest` com `DaManifestV1`, habilitando parsing
-  deterministico.
-- Adicionar novo stream de registry `da.pin_intent` com payload versionado
-  referenciando hash de manifest + ticket id.
-- Atualizar pipelines de observabilidade para rastrear latencia de ingestao,
-  throughput de chunking, backlog de replicacao e contagens de falhas.
+## Estrategia de testículos
 
-## Estrategia de testes
-
-- Tests unitarios para validacao de schema, checks de assinatura, deteccao de
+- Pruebas unitarias para validación de esquema, comprobaciones de assinatura, detección de
   duplicados.
-- Tests golden verificando encoding Norito de `DaIngestRequest`, manifest e
-  receipt.
-- Harness de integracao subindo mock SoraFS + registry, validando fluxos de
-  chunk + pin.
-- Tests de propriedades cobrindo perfis de erasure e combinacoes de retencao
-  aleatorias.
-- Fuzzing de payloads Norito para proteger contra metadata malformada.
+- Pruebas golden verificando codificación Norito de `DaIngestRequest`, manifiesto e
+  recibo.
+- Arnés de integracao subindo simulado SoraFS + registro, validando flujos de
+  trozo + alfiler.
+- Tests de propiedades cobrindo perfis de erasure e combinacoes de retencao
+  aleatorios.
+- Fuzzing de payloads Norito para proteger contra metadatos malformados.
 
-## Tooling de CLI & SDK (DA-8)
-
-- `iroha app da submit` (novo entrypoint CLI) agora envolve o builder/publisher de
-  ingestao compartilhado para que operadores possam ingerir blobs arbitrarios
-  fora do fluxo de Taikai bundle. O comando vive em
-  `crates/iroha_cli/src/commands/da.rs:1` e consome um payload, perfil de
+## Herramientas de CLI y SDK (DA-8)- `iroha app da submit` (nuevo punto de entrada CLI) ahora involucra al constructor/editor de
+  ingestao compartilhado para que los operadores possam ingerir blobs arbitrarios
+  fora do flujo de paquete Taikai. O comando vive em
+  `crates/iroha_cli/src/commands/da.rs:1` y consume una carga útil, perfil de
   erasure/retencao e arquivos opcionais de metadata/manifest antes de assinar o
-  `DaIngestRequest` canonico com a chave de config da CLI. Execucoes bem-sucedidas
-  persistem `da_request.{norito,json}` e `da_receipt.{norito,json}` sob
-  `artifacts/da/submission_<timestamp>/` (override via `--artifact-dir`) para que
-  os artefatos de release registrem os bytes Norito exatos usados durante a
-  ingestao.
+  `DaIngestRequest` canonico con una chave de config da CLI. Ejecucoes bem-sucedidas
+  persiste `da_request.{norito,json}` e `da_receipt.{norito,json}` sollozo
+  `artifacts/da/submission_<timestamp>/` (anulación mediante `--artifact-dir`) para que
+  Los artefactos de liberación registran los bytes Norito exatos usados durante un
+  ingesta.
 - O comando usa por padrao `client_blob_id = blake3(payload)` mas aceita
-  overrides via `--client-blob-id`, honra mapas JSON de metadata (`--metadata-json`)
+  anulaciones a través de `--client-blob-id`, honra mapas JSON de metadatos (`--metadata-json`)
   e manifests pre-gerados (`--manifest`), e suporta `--no-submit` para preparacao
-  offline mais `--endpoint` para hosts Torii personalizados. O receipt JSON e
+  Sin conexión más `--endpoint` para hosts Torii personalizados. O recibo JSON e
   impresso no stdout alem de ser escrito no disco, fechando o requisito de
-  tooling "submit_blob" da DA-8 e destravando o trabalho de paridade do SDK.
-- `iroha app da get` adiciona um alias focado em DA para o orquestrador multi-source
+  herramienta "submit_blob" del DA-8 y destravando el trabajo de paridad del SDK.
+- `iroha app da get` agrega un alias enfocado en DA para el orquestador multifuente
   que ja alimenta `iroha app sorafs fetch`. Operadores podem apontar para artefatos
-  de manifest + chunk-plan (`--manifest`, `--plan`, `--manifest-id`) **ou**
-  passar um storage ticket Torii via `--storage-ticket`. Quando o caminho do
-  ticket e usado, a CLI baixa o manifest de `/v1/da/manifests/<ticket>`,
-  persiste o bundle sob `artifacts/da/fetch_<timestamp>/` (override com
-  `--manifest-cache-dir`), deriva o hash do blob para `--manifest-id`, e entao
-  executa o orquestrador com a lista `--gateway-provider` fornecida. Todos os
-  knobs avancados do fetcher SoraFS permanecem intactos (manifest envelopes,
-  labels de cliente, guard caches, overrides de transporte anonimo, export de
-  scoreboard e paths `--output`), e o endpoint de manifest pode ser sobrescrito
-  via `--manifest-endpoint` para hosts Torii personalizados, entao os checks
-  end-to-end de availability vivem totalmente sob o namespace `da` sem duplicar
-  logica do orquestrador.
+  manifiesto + plan de fragmentos (`--manifest`, `--plan`, `--manifest-id`) **ou**
+  pasar un ticket de almacenamiento Torii a través de `--storage-ticket`. Cuando el camino lo hagoticket e usado, a CLI baixa o manifest de `/v1/da/manifests/<ticket>`,
+  persistir o paquete sollozo `artifacts/da/fetch_<timestamp>/` (anular com
+  `--manifest-cache-dir`), deriva del hash del blob para `--manifest-id`, y entao
+  ejecuta el orquestador con la lista `--gateway-provider` fornecida. Todos os
+  perillas avancados do fetcher SoraFS permanecem intactos (sobres manifiestos,
+  etiquetas de cliente, cachés de guardia, anulaciones de transporte anónimo, exportación de
+  marcador y rutas `--output`), y o punto final de manifiesto pode ser sobrescrito
+  vía `--manifest-endpoint` para hosts Torii personalizados, entao os checks
+  La disponibilidad de extremo a extremo vive totalmente sob o namespace `da` sin duplicar
+  lógica del orquestador.
 - `iroha app da get-blob` baixa manifests canonicos direto de Torii via
   `GET /v1/da/manifests/{storage_ticket}`. O comando escreve
-  `manifest_{ticket}.norito`, `manifest_{ticket}.json` e
-  `chunk_plan_{ticket}.json` sob `artifacts/da/fetch_<timestamp>/` (ou um
+  `manifest_{ticket}.norito`, `manifest_{ticket}.json` y
+  `chunk_plan_{ticket}.json` sollozo `artifacts/da/fetch_<timestamp>/` (ou um
   `--output-dir` fornecido pelo usuario) enquanto imprime o comando exato de
-  `iroha app da get` (incluindo `--manifest-id`) necessario para o fetch do
-  orquestrador. Isso mantem operadores fora dos diretorios spool de manifests e
-  garante que o fetcher sempre use os artefatos assinados emitidos por Torii. O
-  cliente Torii JavaScript espelha o mesmo fluxo via
-  `ToriiClient.getDaManifest(storageTicketHex)`, retornando os bytes Norito
-  decodificados, manifest JSON e chunk plan para que callers de SDK hidratem
-  sessoes de orquestrador sem usar a CLI. O SDK Swift agora expoe as mesmas
-  superficies (`ToriiClient.getDaManifestBundle(...)` mais
-  `fetchDaPayloadViaGateway(...)`), canalizando bundles para o wrapper nativo do
-  orquestrador SoraFS para que clientes iOS possam baixar manifests, executar
-  fetches multi-source e capturar provas sem invocar a CLI.
+  `iroha app da get` (incluido `--manifest-id`) necesario para buscar
+  orquestador. Isso mantem operadores fora dos diretorios spool de manifests e
+  garante que o fetcher siempre use os artefatos assinados emitidos por Torii. oh
+  cliente Torii JavaScript escribe o mesmo fluxo vía
+  `ToriiClient.getDaManifest(storageTicketHex)`, retornando los bytes Norito
+  decodificados, manifiesto JSON y plan de fragmentos para que las personas que llaman del SDK hidratenLas sesiones de orquestador sem usan CLI. El SDK Swift ahora expone como mesmas
+  superficies (`ToriiClient.getDaManifestBundle(...)` más
+  `fetchDaPayloadViaGateway(...)`), canalizando paquetes para el wrapper nativo
+  orquestador SoraFS para que los clientes iOS puedan descargar manifiestos, ejecutar
+  recupera múltiples fuentes y captura pruebas sin invocar una CLI.
   [IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:240][IrohaSwift/Sources/IrohaSwift/SorafsOrchestratorClient.swift:12]
-- `iroha app da rent-quote` calcula rentas deterministicas e o detalhamento de
-  incentivos para um tamanho de storage e janela de retencao fornecidos. O helper
-  consome a `DaRentPolicyV1` ativa (JSON ou bytes Norito) ou o default embutido,
-  valida a politica e imprime um resumo JSON (`gib`, `months`, metadata de
-  politica e campos de `DaRentQuote`) para que auditores citem charges XOR exatas
-  em atas de governanca sem scripts ad hoc. O comando tambem emite um resumo em
-  uma linha `rent_quote ...` antes do payload JSON para manter logs de console
-  legiveis durante drills de incidente. Emparelhe
-  `--quote-out artifacts/da/rent_quotes/<stamp>.json` com
+- `iroha app da rent-quote` calcula las rentas determinísticas y el detalle de
+  incentivos para un tamaño de almacenamiento y janela de retencao fornecidos. Oh ayudante
+  consome una `DaRentPolicyV1` activa (JSON o bytes Norito) o embutido por defecto,
+  valida a política e imprime un resumen JSON (`gib`, `months`, metadatos de
+  politica e campos de `DaRentQuote`) para que auditores citan cargos XOR exatas
+  em atas degobernanca sem scripts ad hoc. El comando también emite un resumen en
+  Una línea `rent_quote ...` antes de hacer la carga útil JSON para mantener los registros de la consola.
+  legiveis durante simulacros de incidente. empareje
+  `--quote-out artifacts/da/rent_quotes/<stamp>.json` con
   `--policy-label "governance ticket #..."` para persistir artefatos bonitos que
-  citem o voto ou bundle de config exatos; a CLI corta o label personalizado e
+  citar el voto o paquete de configuración exatos; a CLI corta o etiqueta personalizada e
   recusa strings vazias para que valores `policy_source` permanecam acionaveis
-  nos dashboards de tesouraria. Veja
-  `crates/iroha_cli/src/commands/da.rs` para o subcomando e
-  `docs/source/da/rent_policy.md` para o schema de politica.
+  nos tableros de tesouraria. Veja
+  `crates/iroha_cli/src/commands/da.rs` para el subcomando e`docs/source/da/rent_policy.md` para el esquema político.
   [crates/iroha_cli/src/commands/da.rs:1][docs/source/da/rent_policy.md:1]
-- `iroha app da prove-availability` encadeia tudo acima: recebe um storage ticket,
-  baixa o bundle canonico de manifest, executa o orquestrador multi-source
-  (`iroha app sorafs fetch`) contra a lista `--gateway-provider` fornecida, persiste
-  o payload baixado + scoreboard sob `artifacts/da/prove_availability_<timestamp>/`,
-  e invoca imediatamente o helper PoR existente (`iroha app da prove`) usando os
-  bytes baixados. Operadores podem ajustar os knobs do orquestrador
-  (`--max-peers`, `--scoreboard-out`, overrides de endpoint de manifest) e o
-  sampler de proof (`--sample-count`, `--leaf-index`, `--sample-seed`) enquanto um
+- `iroha app da prove-availability` encadeia todo acima: recibir un ticket de almacenamiento,
+  baixa o bundle canonico de manifest, ejecuta o orquestador multi-source
+  (`iroha app sorafs fetch`) contra la lista `--gateway-provider` fornecida, persiste
+  o carga útil baixado + marcador sollozo `artifacts/da/prove_availability_<timestamp>/`,
+  e invoca inmediatamente el helper PoR existente (`iroha app da prove`) usando el sistema operativo
+  bytes bajos. Operadores podem ajustar os perillas do orquestador
+  (`--max-peers`, `--scoreboard-out`, anula el punto final de manifiesto) e o
+  muestra de prueba (`--sample-count`, `--leaf-index`, `--sample-seed`) en cuanto
   unico comando produz os artefatos esperados por auditorias DA-5/DA-9: copia do
-  payload, evidencia de scoreboard e resumos de prova JSON.
+  carga útil, evidencia de marcador y resúmenes de prueba JSON.

@@ -7,51 +7,50 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 788902cfafc6c7db6d52d4237b46ffe78193efd57852bc3427a16d7f3cda2f9c
 source_last_modified: "2025-12-29T18:16:35.954370+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Sparse Merkle Update Example
+# Sparse Merkle དུས་མཐུན་དཔེ།
 
-This worked example illustrates how the FASTPQ Stage 2 trace encodes a
-non-membership witness using the `neighbour_leaf` column. The sparse Merkle tree
-is binary over Poseidon2 field elements. Keys are converted to canonical
-32-byte little-endian strings, hashed to a field element, and the most
-significant bits select the branch at each level.
+འདི་གིས་དཔེ་འདི་གིས་ FASTPQ གནས་རིམ་༢ པའི་རྗེས་ཤུལ་འདི་གིས་ a a a a a a
+`neighbour_leaf` ཀེར་ཐིག་ལག་ལེན་འཐབ་སྟེ་ འཐུས་མི་མེན་པའི་དཔང་པོ་། The markle ཤིང་།
+འདི་ Poseidon2 ས་སྒོ་ཆ་ཤས་གུ་གཉིས་ལྡན་ཨིན། ལྡེ་མིག་ཚུ་ ཀེ་ནོ་ནིཀ་ལུ་གཞི་བསྒྱུར་འབད་ཡོད།
+32-byte ཆུང་ཆུང་མཐའ་མཇུག་གི་ཡིག་རྒྱུན་ཚུ་, ས་སྒོའི་ཆ་ཤས་ཅིག་ལུ་གནོད་སྐྱོན་བཏང་ཡོདཔ་དང་ མང་ཤོས་ཅིག་
+གལ་གནད་ཅན་གྱི་བིཊི་ཚུ་གིས་ གནས་རིམ་རེ་རེ་ལུ་ ཡན་ལག་འདི་སེལ་འཐུ་འབདཝ་ཨིན།
 
-## Scenario
+## པར་སྐྲུན།
 
-- Pre-state leaves
-  - `asset::alice::rose` -> hashed key `0x12b7...` with value `0x0000_0000_0000_0005`.
-  - `asset::bob::rose`   -> hashed key `0x1321...` with value `0x0000_0000_0000_0003`.
-- Update request: insert `asset::carol::rose` with value 2.
-- The canonical key hash for Carol expands to the 5-bit prefix `0b01011`. The
-  existing neighbours have prefixes `0b01010` (Alice) and `0b01101` (Bob).
+- སྔོན་འགྲོའི་འདབ་མ་ཚུ།
+  - `asset::alice::rose` -> hashed ལྡེ་མིག་ `0x12b7...` དང་བཅས་པའི་གནས་གོང་ `0x0000_0000_0000_0005`.
+  - `asset::bob::rose` -> hashed ke `0x1321...` དང་མཉམ་པའི་གནས་གོང་ `0x0000_0000_0000_0003`.
+- དུས་མཐུན་བཟོ་ནིའི་ཞུ་བ་: གནས་གོང་ ༢ དང་གཅིག་ཁར་ `asset::carol::rose` བཙུགས།
+- ཀེ་རོལ་གྱི་དོན་ལུ་ ཀེ་ནོ་ནིག་ལྡེ་མིག་ཧེཤ་འདི་ ༥-བིཊི་སྔོན་སྒྲིག་ `0b01011` ལུ་རྒྱ་སྐྱེད་འབདཝ་ཨིན། ཚིག༌ཕྲད
+  ད་ལྟོ་ཡོད་པའི་ཁྱིམ་ཚང་ཚུ་ལུ་ སྔོན་འཇུག་ `0b01010` (Alice) དང་ `0b01101` (Bob) ཡོདཔ་ཨིན།
 
-Because there is no leaf whose prefix matches `0b01011`, the prover must provide
-additional evidence that the interval `(alice, bob)` is empty. Stage 2 populates
-the trace row across the columns `path_bit_{level}`, `sibling_{level}`,
-`node_in_{level}`, and `node_out_{level}` (with `level` in `[0, 31]`). All values
-are Poseidon2 field elements encoded in little-endian form:
+ག་ཅི་འབད་ཟེར་བ་ཅིན་ འདབ་མ་མེདཔ་ལས་ སྔོན་སྒྲིག་འདི་ `0b01011` དང་མཐུན་སྒྲིག་ཡོདཔ་ལས་ དཔེ་སྟོན་འདི་གིས་ བྱིན་དགོཔ་ཨིན།
+བར་མཚམས་ `(alice, bob)` འདི་ སྟོངམ་ཨིན་པའི་ ཁ་སྐོང་སྒྲུབ་བྱེད་ཨིན། གོ་རིམ་༢ པའི་མི་རློབས་ཚུ།
+ཀེར་ཐིག་ `path_bit_{level}`, `sibling_{level}`, བརྒྱུད་དེ་ འཚོལ་ཞིབ་གྲལ་ཐིག་འདི་
+`node_in_{level}`, དང་ `node_out_{level}` (`level` དང་ `[0, 31]` དང་མཉམ་དུ།) གནས་གོང་ཆ་མཉམ་ལུ།
+wis Poseidon2 ས་སྒོ་ཆ་ཤས་ཚུ་ ཆུང་བའི་ དབྱིབས་ནང་ བཀོད་ཡོདཔ་ཨིན།
 
-| level | `path_bit_level` | `sibling_level`             | `node_in_level`                      | `node_out_level`                     | Notes |
-| ----- | ---------------- | --------------------------- | ------------------------------------ | ------------------------------------ | ----- |
-| 0 | 1             | `0x241f...` (Alice leaf hash) | `0x0000...`                          | `0x4b12...` (`value_2 = 2`)          | Insert: start from zero, store new value. |
-| 1 | 1             | `0x7d45...` (empty right)     | Poseidon2(`node_out_0`, `sibling_0`) | Poseidon2(`sibling_1`, `node_out_1`) | Follow prefix bit 1. |
-| 2 | 0             | `0x03ae...` (Bob branch)      | Poseidon2(`node_out_1`, `sibling_1`) | Poseidon2(`node_in_2`, `sibling_2`)  | Branch flips because bit = 0. |
-| 3 | 1             | `0x9bc4...`                   | Poseidon2(`node_out_2`, `sibling_2`) | Poseidon2(`sibling_3`, `node_out_3`) | Higher levels continue hashing upward. |
-| 4 | 0             | `0xe112...`                   | Poseidon2(`node_out_3`, `sibling_3`) | Poseidon2(`node_in_4`, `sibling_4`)  | Root level; result is the post-state root. |
+| གནས་རིམ་ | `path_bit_level` | `sibling_level` | `node_in_level` | `node_out_level` | དྲན་ཐོ། |
+| ----- | ----------------- | --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- ----- |
+| 0 | 1 | `0x241f...` (ཨེ་ལིས་འདབ་མ་ཧེ་ཤི་) | `0x0000...` | `0x4b12...` (`value_2 = 2`) | བཙུགས་: ཀླད་ཀོར་ལས་འགོ་བཙུགས་ གནས་གོང་གསརཔ་གསོག་འཇོག་འབད། |
+| 1 | 1 | `0x7d45...` (སྟོང་ཆ་ཐོབ་ཐང་) | པོ་སི་ཌོན་༢(ཨའི་༡༨ཨེན་ཨའི་ཡུ་༠༠༠༠༠༢༩ཨེགསི་, ཨའི་༡༨ཨེན་ཨའི་༠༠༠༠༠༠༠༣༠ཨེགསི་) | པོ་སི་ཌོན་༢(ཨའི་༡༨ཨེན་ཨའི་ཡུ་༠༠༠༠༠༣༡ཨེགསི་, ཨའི་༡༨ཨེན་ཨའི་ཡུ་༠༠༠༠༠༣༢ཨེགསི་) | སྔོན་འཇུག་བིཊི་ ༡. |
+| 2 | 0 | `0x03ae...` (བོབ་ཡན་ལག་) | པོ་སི་ཌོན་༢(ཨའི་༡༨ཨེན་ཨའི་ཡུ་༠༠༠༠༠༣༤ཨེགསི་, ཨའི་༡༨ཨེན་ཨའི་ཡུ་༠༠༠༠༣༥ཨེགསི་) | པོ་སི་ཌོན་༢(ཨའི་༡༨ཨེན་ཨའི་ཡུ་༠༠༠༠༠༣༦ཨེགསི་, ཨའི་༡༨ཨེན་ཨའི་ཡུ་༠༠༠༠༠༣༧ཨེགསི་) | ཡན་ལག་ཕིལཔ་ དེ་ལས་བརྟེན་ཏེ་ བིཊི་ = ༠. |
+| 3 | 1 | `0x9bc4...` | པོ་སི་ཌོན་༢(ཨའི་༡༨ཨེན་ཨའི་ཡུ་༠༠༠༠༠༣༩ཨེགསི་, ཨའི་༡༨ཨེན་ཨའི་ཡུ་༠༠༠༠༠༠༤༠ཨེགསི་) | པོ་སི་ཌོན་༢(ཨའི་༡༨ཨེན་ཨའི་ཡུ་༠༠༠༠༠༤༡ཨེགསི་, ཨའི་༡༨ཨེན་ཨའི་ཡུ་༠༠༠༠༠༤༢ཨེགསི་) | མཐོ་རིམ་མཐོ་རིམ་འདི་ ཡར་ལུ་ ཧེང་ཤིང་འདི་ འཕྲོ་མཐུད་དེ་རང་ འབད་དགོ། |
+| 4 | 0 | `0xe112...` | པོ་སི་ཌོན་༢(ཨའི་༡༨ཨེན་ཨའི་ཡུ་༠༠༠༠༠༤༤ཨེགསི་, ཨའི་༡༨ཨེན་ཨའི་ཡུ་༠༠༠༠༤༥ཨེགསི་) | པོ་སི་ཌོན་༢(ཨའི་༡༨ཨེན་ཨའི་ཡུ་༠༠༠༠༠༤༦ཨེགསི་, ཨའི་༡༨ཨེན་ཨའི་ཡུ་༠༠༠༠༠༤༧ཨེགསི་) | རྩ་བའི་གནས་རིམ། གྲུབ་འབྲས་འདི་ མངའ་སྡེ་གི་ཤུལ་ལས་ རྩ་བ་ཨིན། |
 
-The `neighbour_leaf` column for this row is populated with Bob's leaf
-(`key = 0x1321...`, `value = 3`, `hash = Poseidon2(key, value) = 0x03ae...`). When
-verifying, the AIR checks that:
+གྲལ་ཐིག་འདི་གི་དོན་ལུ་ `neighbour_leaf` ཀེར་ཐིག་འདི་ བོབ་ཀྱི་འདབ་མ་དང་གཅིག་ཁར་ མི་རློབས་བཙུགས་ཡོདཔ་ཨིན།
+(I 18NI00000049X, `value = 3`, `hash = Poseidon2(key, value) = 0x03ae...`). ནམ
+བདེན་དཔྱད་འབད་ནི། AIR གིས་ དེ་ བརྟག་དཔྱད་འབདཝ་ཨིན།
 
-1. The supplied neighbour corresponds to the sibling used at level 2.
-2. The neighbour key is lexicographically greater than the inserted key and the
-   left sibling (Alice) is lexicographically smaller.
-3. Replacing the inserted leaf with the neighbour reproduces the pre-state root.
-
-Together these checks prove that no leaf existed for the interval `(0b01010,
-0b01101)` before the update. Implementations generating FASTPQ traces can use
-this layout verbatim; the numerical constants above are illustrative. For a full
-JSON witness, emit the columns exactly as they appear in the table above (with
-numeric suffixes per level), using little-endian byte strings serialized with
-Norito JSON helpers.
+༡ བཀྲམ་སྤེལ་འབད་ཡོད་པའི་ཁྱིམ་ཚང་འདི་ གནས་རིམ་༢ པའི་ནང་ལག་ལེན་འཐབ་མི་ སྤུན་ཆ་དང་མཐུན་སྒྲིག་འབདཝ་ཨིན།
+༢ ཁྱིམ་ཚང་ལྡེ་མིག་འདི་ ཚིག་མཛོད་ནང་ བཙུགས་ཡོད་པའི་ལྡེ་མིག་ལས་ མཐོ་དྲགས།
+   གཡོན་ཕྱོགས་ཀྱི་སྤུན་ཆ་ (Alice) འདི་ ཚིག་མཛོད་ཀྱི་ཐོག་ལས་ ཆུང་ཀུ་སྦེ་ཡོདཔ་ཨིན།
+༣ བཙུགས་ཡོད་པའི་འདབ་མ་འདི་ ཁྱིམ་ཚང་དང་གཅིག་ཁར་ ཚབ་བཙུགས་མི་འདི་གིས་ ཧེ་མའི་གནས་སྟངས་ཀྱི་རྩ་བ་འདི་ བསྐྱར་བཟོ་འབདཝ་ཨིན།འ་ནི་ཞིབ་དཔྱད་ཚུ་གཅིག་ཁར་ `(0b01010, for གི་དོན་ལུ་ འདབ་མ་མེདཔ་སྦེ་ བདེན་ཁུངས་བསྐྱལཝ་ཨིན།
+0b01101)` དུས་མཐུན་མ་འབད་བའི་ཧེ་མ། ལག་ལེན་འཐབ་མི་འདི་གིས་ FASTTPQ གི་རྗེས་ཤུལ་ཚུ་ལག་ལེན་འཐབ་བཏུབ།
+འདི་བཀོད་སྒྲིག་ཚིག་གྲུབ་; གོང་འཁོད་ཀྱི་ཨང་གྲངས་ཀྱི་ངེས་མེད་ཚུ་ པར་རིས་ཅན་ཅིག་ཨིན། ཆ་ཚང་ཅིག་འབད་དགོ་ ག་ཅི་སྨོ་ཟེར་བ་ཅིན་
+JSON དཔང་པོ་ ཀེར་ཐིག་ཚུ་ གོང་འཁོད་ཐིག་ཁྲམ་ནང་འབྱུང་མི་བཟུམ་སྦེ་ ཏག་ཏག་སྦེ་བཏོནམ་ཨིན།
+གནས་རིམ་རེ་ལུ་ ཨང་གྲངས་རྗེས་འཇུག་) དང་ རིམ་སྒྲིག་འབད་ཡོད་པའི་ བཱའིཊི་ཡིག་རྒྱུན་ཚུ་ལག་ལེན་འཐབ་ནི།
+Norito JSON གྲོགས་རམ་པ།

@@ -4,61 +4,63 @@ direction: ltr
 source: docs/portal/docs/sorafs/chunker-registry-charter.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
 id: chunker-registry-charter
-title: Carta do registro de chunker da SoraFS
-sidebar_label: Carta do registro de chunker
-description: Carta de governanca para submissao e aprovacao de perfis de chunker.
+título: Carta de registro de chunker da SoraFS
+sidebar_label: Carta de registro do chunker
+descrição: Carta de governança para submissão e aprovação de perfis de chunker.
 ---
 
-:::note Fonte canonica
-Esta pagina espelha `docs/source/sorafs/chunker_registry_charter.md`. Mantenha ambas as copias sincronizadas.
+:::nota Fonte canônica
+Esta página espelha `docs/source/sorafs/chunker_registry_charter.md`. Mantenha ambas as cópias sincronizadas.
 :::
 
-# Carta de governanca do registro de chunker da SoraFS
+# Carta de governança do registro de chunker da SoraFS
 
 > **Ratificado:** 2025-10-29 pelo Sora Parliament Infrastructure Panel (veja
 > `docs/source/sorafs/council_minutes_2025-10-29.md`). Qualquer emenda requer um
-> voto formal de governanca; equipes de implementacao devem tratar este documento como
-> normativo ate que uma carta substituta seja aprovada.
+> voto formal de governança; equipes de implementação deverão tratar este documento como
+> normativo até que uma carta substituta seja aprovada.
 
-Esta carta define o processo e os papeis para evoluir o registro de chunker da SoraFS.
+Esta carta define o processo e os papéis para evoluir o registro de chunker da SoraFS.
 Ela complementa o [Guia de autoria de perfis de chunker](./chunker-profile-authoring.md) ao descrever como novos
-perfis sao propostos, revisados, ratificados e eventualmente descontinuados.
+perfis são propostos, revisados, ratificados e eventualmente descontinuados.
 
 ## Escopo
 
-A carta se aplica a cada entrada em `sorafs_manifest::chunker_registry` e
-a qualquer tooling que consome o registro (manifest CLI, provider-advert CLI,
-SDKs). Ela impoe os invariantes de alias e handle verificados por
+A carta é aplicada a cada entrada em `sorafs_manifest::chunker_registry` e
+a qualquer ferramenta que consome o registro (CLI manifesto, CLI fornecedor-anúncio,
+SDK). Ela impõe invariantes de alias e handle selecionados por
 `chunker_registry::ensure_charter_compliance()`:
 
-- IDs de perfil sao inteiros positivos que aumentam de forma monotona.
-- O handle canonico `namespace.name@semver` **deve** aparecer como a primeira
-  entrada em `profile_aliases`. Aliases alternativos vem em seguida.
-- As strings de alias sao aparadas, unicas e nao colidem com handles canonicos
+- IDs de perfil são inteiros positivos que aumentam de forma monótona.
+- O identificador canônico `namespace.name@semver` **deve** aparecer como a primeira
+  entrada em `profile_aliases`. Aliases alternativos vêm em seguida.
+- As strings de alias são aparadas, unicas e não colidem com handles canonicos
   de outras entradas.
 
 ## Papeis
 
-- **Autor(es)** - preparam a proposta, regeneram fixtures e coletam a
-  evidencia de determinismo.
-- **Tooling Working Group (TWG)** - valida a proposta usando as checklists
-  publicadas e assegura que os invariantes do registro sejam atendidos.
-- **Governance Council (GC)** - revisa o relatorio do TWG, assina o envelope da proposta
-  e aprova os prazos de publicacao/deprecacao.
-- **Storage Team** - mantem a implementacao do registro e publica
-  atualizacoes de documentacao.
+- **Autor(es)** - preparam uma proposta, regeneram luminárias e coletam a
+  evidência de determinismo.
+- **Grupo de Trabalho de Ferramentas (TWG)** - valida a proposta usando as listas de verificação
+  publicadas e garantimos que as invariantes do registro sejam atendidas.
+- **Conselho de Governança (CG)** - revisão do relatorio do TWG, assinatura do envelope da proposta
+  e aprova os prazos de publicação/depreciação.
+- **Storage Team** - mantem a implementação do registro e publicação
+  atualizações de documentação.
 
 ## Fluxo do ciclo de vida
 
-1. **Submissao de proposta**
-   - O autor executa a checklist de validacao do guia de autoria e cria
+1. **Envio de proposta**
+   - O autor executa um checklist de validação do guia de autoria e criação
      um JSON `ChunkerProfileProposalV1` sob
      `docs/source/sorafs/proposals/`.
-   - Inclua a saida do CLI de:
+   - Inclui a frase do CLI de:
      ```bash
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
@@ -66,60 +68,58 @@ SDKs). Ela impoe os invariantes de alias e handle verificados por
      cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
        --chunker-profile=<handle> --json-out=-
      ```
-   - Envie um PR contendo fixtures, proposta, relatorio de determinismo e
-     atualizacoes do registro.
+   - Envie um PR contendo jogos, proposta, relatorio de determinismo e
+     atualizações do registro.
 
-2. **Revisao de tooling (TWG)**
-   - Repita a checklist de validacao (fixtures, fuzz, pipeline de manifest/PoR).
+2. **Revisão de ferramentas (TWG)**
+   - Repita um checklist de validação (fixtures, fuzz, pipeline de manifest/PoR).
    - Execute `cargo test -p sorafs_car --chunker-registry` e garanta que
      `ensure_charter_compliance()` passe com a nova entrada.
    - Verifique que o comportamento do CLI (`--list-profiles`, `--promote-profile`, streaming
-     `--json-out=-`) reflita os aliases e handles atualizados.
-   - Produza um relatorio curto resumindo achados e status de aprovacao/reprovacao.
+     `--json-out=-`) reflita os aliases e identificadores atualizados.
+   - Produza um relatorio curto resumindo achados e status de aprovação/reprovação.3. **Aprovação do conselho (GC)**
+   - Revisar o relatorio do TWG e os metadados da proposta.
+   - Assinatura do resumo da proposta (`blake3("sorafs-chunker-profile-v1" || bytes)`)
+     e anexo as assinaturas ao envelope do conselho fechado junto aos jogos.
+   - Registrar o resultado da votação nas atas de governança.
 
-3. **Aprovacao do conselho (GC)**
-   - Revise o relatorio do TWG e os metadados da proposta.
-   - Assine o digest da proposta (`blake3("sorafs-chunker-profile-v1" || bytes)`)
-     e anexe as assinaturas ao envelope do conselho mantido junto aos fixtures.
-   - Registre o resultado da votacao nas atas de governanca.
-
-4. **Publicacao**
+4. **Publicação**
    - Faca merge do PR, atualizando:
-     - `sorafs_manifest::chunker_registry_data`.
-     - Documentacao (`chunker_registry.md`, guias de autoria/conformidade).
+     -`sorafs_manifest::chunker_registry_data`.
+     - Documentação (`chunker_registry.md`, guias de autoria/conformidade).
      - Fixtures e relatorios de determinismo.
    - Notifique operadores e equipes SDK sobre o novo perfil e o rollout planejado.
 
-5. **Deprecacao / Encerramento**
-   - Propostas que substituem um perfil existente devem incluir uma janela de publicacao
-     dupla (periodos de carencia) e um plano de upgrade.
-     no registro e atualize o ledger de migracao.
+5. **Depreciação/Encerramento**
+   - Propostas que substituam um perfil existente deverão incluir uma janela de publicação
+     dupla (períodos de carência) e um plano de atualização.
+     no registro e atualizar o ledger de migração.
 
-6. **Mudancas de emergencia**
-   - Remocoes ou hotfixes exigem voto do conselho com aprovacao por maioria.
-   - O TWG deve documentar as etapas de mitigacao de risco e atualizar o log de incidentes.
+6. **Mudanças de emergência**
+   - Remoções ou hotfixes desativar voto do conselho com aprovação por maioria.
+   - O TWG deve documentar as etapas de mitigação de risco e atualização do log de incidentes.
 
-## Expectativas de tooling
+## Expectativas de ferramentas
 
-- `sorafs_manifest_chunk_store` e `sorafs_manifest_stub` expoem:
-  - `--list-profiles` para inspecao do registro.
-  - `--promote-profile=<handle>` para gerar o bloco de metadados canonico usado
+- Exposição `sorafs_manifest_chunk_store` e `sorafs_manifest_stub`:
+  - `--list-profiles` para inspeção do registro.
+  - `--promote-profile=<handle>` para gerar o bloco de metadados canônicos usados
     ao promover um perfil.
-  - `--json-out=-` para transmitir relatorios para stdout, habilitando logs de revisao
+  - `--json-out=-` para transmitir relatórios para stdout, habilitando logs de revisão
     reproduziveis.
-- `ensure_charter_compliance()` e invocado na inicializacao dos binarios relevantes
-  (`manifest_chunk_store`, `provider_advert_stub`). Os testes de CI devem falhar se
+- `ensure_charter_compliance()` e invocado na inicialização dos binários relevantes
+  (`manifest_chunk_store`, `provider_advert_stub`). Os testes de CI devem falhar
   novas entradas violarem a carta.
 
 ## Registro
 
-- Armazene todos os relatorios de determinismo em `docs/source/sorafs/reports/`.
-- As atas do conselho que referenciam decisoes de chunker ficam em
+- Armazene todos os relatos de determinismo em `docs/source/sorafs/reports/`.
+- As atas do conselho que referenciam decisões de chunker em ficam
   `docs/source/sorafs/migration_ledger.md`.
-- Atualize `roadmap.md` e `status.md` apos cada mudanca maior no registro.
+- Atualizar `roadmap.md` e `status.md` após cada mudança maior no registro.
 
-## Referencias
+## Referências
 
 - Guia de autoria: [Guia de autoria de perfis de chunker](./chunker-profile-authoring.md)
 - Checklist de conformidade: `docs/source/sorafs/chunker_conformance.md`
-- Referencia do registro: [Registro de perfis de chunker](./chunker-registry.md)
+- Referência do registro: [Registro de perfis de chunker](./chunker-registry.md)

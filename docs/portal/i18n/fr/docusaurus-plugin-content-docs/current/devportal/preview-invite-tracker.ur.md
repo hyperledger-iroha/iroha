@@ -4,121 +4,105 @@ direction: ltr
 source: docs/portal/docs/devportal/preview-invite-tracker.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 # پریویو دعوت ٹریکر
 
-یہ ٹریکر docs پورٹل کی ہر پریویو ویو ریکارڈ کرتا ہے تاکہ DOCS-SORA کے مالکان اور governance reviewers دیکھ سکیں کہ کون سی cohort فعال ہے، کس نے دعوتیں منظور کیں، اور کون سے artifacts ابھی توجہ چاہتے ہیں۔ جب بھی دعوتیں بھیجی جائیں، واپس لی جائیں یا مؤخر ہوں تو اسے اپ ڈیٹ کریں تاکہ audit trail ریپوزٹری کے اندر رہے۔
+یہ ٹریکر docs پورٹل کی ہر پریویو ویو ریکارڈ کرتا ہے تاکہ DOCS-SORA کے مالکان اور examinateurs de gouvernance Il y a une cohorte d'artisans et des artefacts. چاہتے ہیں۔ Vous avez besoin d'une piste d'audit pour vérifier la piste d'audit ریپوزٹری کے اندر رہے۔
 
-## ویو اسٹیٹس
-
-| ویو | cohort | ٹریکر ایشو | approver(s) | اسٹیٹس | ہدف ونڈو | نوٹس |
+## ویو اسٹیٹس| et | cohorte | ٹریکر ایشو | approbateur(s) | اسٹیٹس | ہدف ونڈو | نوٹس |
 | --- | --- | --- | --- | --- | --- | --- |
-| **W0 - Core maintainers** | Docs + SDK maintainers جو checksum فلو validate کرتے ہیں | `DOCS-SORA-Preview-W0` (GitHub/ops tracker) | Docs/DevRel lead + Portal TL | مکمل | Q2 2025 ہفتے 1-2 | دعوتیں 2025-03-25 کو بھیجی گئیں، ٹیلی میٹری سبز رہی، exit summary 2025-04-08 کو شائع ہوا۔ |
-| **W1 - Partners** | SoraFS آپریٹرز، Torii integrators تحت NDA | `DOCS-SORA-Preview-W1` | Docs/DevRel lead + governance liaison | مکمل | Q2 2025 ہفتہ 3 | دعوتیں 2025-04-12 -> 2025-04-26، تمام آٹھ پارٹنرز کی تصدیق؛ evidence [`preview-feedback/w1/log.md`](./preview-feedback/w1/log.md) میں اور exit digest [`preview-feedback/w1/summary.md`](./preview-feedback/w1/summary.md) میں۔ |
-| **W2 - Community** | منتخب community waitlist (<=25 ایک وقت میں) | `DOCS-SORA-Preview-W2` | Docs/DevRel lead + community manager | مکمل | Q3 2025 ہفتہ 1 (عارضی) | دعوتیں 2025-06-15 -> 2025-06-29، پوری مدت میں ٹیلی میٹری سبز؛ evidence + findings [`preview-feedback/w2/summary.md`](./preview-feedback/w2/summary.md) میں۔ |
-| **W3 - Beta cohorts** | finance/observability beta + SDK partner + ecosystem advocate | `DOCS-SORA-Preview-W3` | Docs/DevRel lead + governance liaison | مکمل | Q1 2026 ہفتہ 8 | دعوتیں 2026-02-18 -> 2026-02-28؛ digest + portal data `preview-20260218` ویو سے تیار (دیکھیں [`preview-feedback/w3/summary.md`](./preview-feedback/w3/summary.md)). |
-
-> نوٹ: ہر ٹریکر ایشو کو متعلقہ preview request tickets سے لنک کریں اور انہیں `docs-portal-preview` پروجیکٹ میں archive کریں تاکہ approvals قابلِ دریافت رہیں۔
+| **W0 - Mainteneurs principaux** | Docs + responsables du SDK avec somme de contrôle et validation | `DOCS-SORA-Preview-W0` (suivi GitHub/ops) | Responsable Docs/DevRel + Portal TL | مکمل | T2 2025 1-2 | دعوتیں 2025-03-25 کو بھیجی گئیں، ٹیلی میٹری سبز رہی، résumé de sortie 2025-04-08 کو شائع ہوا۔ |
+| **W1 - Partenaires** | SoraFS intégrateurs Torii et NDA | `DOCS-SORA-Preview-W1` | Responsable Docs/DevRel + liaison gouvernance | مکمل | T2 2025 partie 3 | دعوتیں 2025-04-12 -> 2025-04-26, تمام آٹھ پارٹنرز کی تصدیق؛ preuve [`preview-feedback/w1/log.md`](./preview-feedback/w1/log.md) میں اور exit digest [`preview-feedback/w1/summary.md`](./preview-feedback/w1/summary.md) میں۔ |
+| **W2 - Communauté** | Liste d'attente de la communauté منتخب ( 2025-06-29، پوری مدت میں ٹیلی میٹری سبز؛ preuves + conclusions [`preview-feedback/w2/summary.md`](./preview-feedback/w2/summary.md) میں۔ |
+| **W3 - Cohortes bêta** | finance/observabilité bêta + partenaire SDK + défenseur de l'écosystème | `DOCS-SORA-Preview-W3` | Responsable Docs/DevRel + liaison gouvernance | مکمل | T1 2026 8 | Du 2026-02-18 -> 2026-02-28؛ résumé + données du portail `preview-20260218` ویو سے تیار (دیکھیں [`preview-feedback/w3/summary.md`](./preview-feedback/w3/summary.md)). |> نوٹ: ہر ٹریکر ایشو کو متعلقہ preview request tickets سے لنک کریں اور انہیں `docs-portal-preview` پروجیکٹ میں archive کریں تاکہ approbations قابلِ دریافت رہیں۔
 
 ## فعال کام (W0)
 
-- preflight artifacts ریفریش (GitHub Actions `docs-portal-preview` رن 2025-03-24، descriptor `scripts/preview_verify.sh` کے ذریعے `preview-2025-03-24` ٹیگ سے verify)۔
-- ٹیلی میٹری baselines محفوظ (`docs.preview.integrity`, `TryItProxyErrors` dashboard snapshot W0 issue میں محفوظ)۔
-- outreach متن [`docs/examples/docs_preview_invite_template.md`](../../../examples/docs_preview_invite_template.md) کے ساتھ lock، preview tag `preview-2025-03-24`۔
-- پہلے پانچ maintainers کے لئے intake requests لاگ (tickets `DOCS-SORA-Preview-REQ-01` ... `-05`).
-- پہلی پانچ دعوتیں 2025-03-25 10:00-10:20 UTC کو بھیجیں، سات دن مسلسل سبز ٹیلی میٹری کے بعد؛ acknowledgements `DOCS-SORA-Preview-W0` میں محفوظ۔
-- ٹیلی میٹری مانیٹرنگ + host office hours (2025-03-31 تک روزانہ check-ins; checkpoint log نیچے)۔
-- midpoint feedback / issues اکٹھے کر کے `docs-preview/w0` ٹیگ (دیکھیں [W0 digest](./preview-feedback/w0/summary.md))۔
-- ویو summary شائع + invite exit confirmations (exit bundle تاریخ 2025-04-08; دیکھیں [W0 digest](./preview-feedback/w0/summary.md))۔
-- W3 beta wave ٹریک; مستقبل کی ویوز governance review کے بعد شیڈول۔
+- artefacts de contrôle en amont (GitHub Actions `docs-portal-preview` publié le 2025-03-24, descripteur `scripts/preview_verify.sh` pour vérifier `preview-2025-03-24`)
+- ٹیلی میٹری lignes de base محفوظ (`docs.preview.integrity`, `TryItProxyErrors` instantané du tableau de bord, problème W0 میں محفوظ)۔
+- sensibilisation avec [`docs/examples/docs_preview_invite_template.md`](../../../examples/docs_preview_invite_template.md) et verrouillage de la balise d'aperçu `preview-2025-03-24`۔
+- پہلے پانچ mainteneurs کے لئے demandes d'admission لاگ (billets `DOCS-SORA-Preview-REQ-01` ... `-05`).
+- پہلی پانچ دعوتیں 2025-03-25 10:00-10:20 UTC کو بھیجیں، سات دن مسلسل سبز ٹیلی میٹری کے بعد؛ remerciements `DOCS-SORA-Preview-W0` میں محفوظ۔
+- ٹیلی میٹری مانیٹرنگ + heures du bureau hôte (2025-03-31 تک روزانہ check-ins ; journal des points de contrôle نیچے)۔
+- commentaires / problèmes à mi-parcours اکٹھے کر کے `docs-preview/w0` ٹیگ (دیکھیں [W0 digest](./preview-feedback/w0/summary.md))۔
+- ویو résumé شائع + confirmations de sortie d'invitation (lot de sortie تاریخ 2025-04-08; دیکھیں [W0 digest](./preview-feedback/w0/summary.md))۔
+- Vague bêta W3 ٹریک ; مستقبل کی ویوز examen de la gouvernance کے بعد شیڈول۔
 
-## W1 partners ویو خلاصہ
+## Partenaires W1 et خلاصہ- قانونی اور approbations de gouvernance۔ Addendum partenaire 2025-04-05 ici agréments `DOCS-SORA-Preview-W1` میں اپ لوڈ۔
+- Télémétrie + Essayez-le par mise en scène۔ Changer de ticket `OPS-TRYIT-147` 2025-04-06 کو اجرا؛ `docs.preview.integrity`, `TryItProxyErrors`, et `DocsPortal/GatewayRefusals` et Grafana instantanés
+- Artefact + préparation de la somme de contrôle Vérification du bundle `preview-2025-04-12`؛ descripteur/somme de contrôle/journaux de sonde `artifacts/docs_preview/W1/preview-2025-04-12/` میں محفوظ۔
+- Liste d'invitations + expédition۔ آٹھ demandes de partenaires (`DOCS-SORA-Preview-REQ-P01...P08`) منظور؛ Aujourd'hui 2025-04-12 15:00-15:21 UTC Je vous réponds par le critique et vous recevez un accusé de réception.
+- Instrumentation de rétroaction۔ Horaires de bureau + points de contrôle télémétriques résumé کے لئے [`preview-feedback/w1/summary.md`](./preview-feedback/w1/summary.md) دیکھیں۔
+- Liste finale/journal de sortie۔ [`preview-feedback/w1/log.md`](./preview-feedback/w1/log.md) Pour les horodatages d'invitation/ack, les preuves de télémétrie, les exportations de quiz, et les pointeurs d'artefacts 2025-04-26. سکے۔
 
-- قانونی اور governance approvals۔ Partner addendum 2025-04-05 کو سائن؛ approvals `DOCS-SORA-Preview-W1` میں اپ لوڈ۔
-- Telemetry + Try it staging۔ Change ticket `OPS-TRYIT-147` 2025-04-06 کو اجرا؛ `docs.preview.integrity`, `TryItProxyErrors`, اور `DocsPortal/GatewayRefusals` کے Grafana snapshots آرکائیو۔
-- Artefact + checksum prep۔ `preview-2025-04-12` bundle verify؛ descriptor/checksum/probe logs `artifacts/docs_preview/W1/preview-2025-04-12/` میں محفوظ۔
-- Invite roster + dispatch۔ آٹھ partner requests (`DOCS-SORA-Preview-REQ-P01...P08`) منظور؛ دعوتیں 2025-04-12 15:00-15:21 UTC کو بھیجیں، ہر reviewer کا ack ریکارڈ۔
-- Feedback instrumentation۔ روزانہ office hours + telemetry checkpoints ریکارڈ؛ digest کے لئے [`preview-feedback/w1/summary.md`](./preview-feedback/w1/summary.md) دیکھیں۔
-- Final roster/exit log۔ [`preview-feedback/w1/log.md`](./preview-feedback/w1/log.md) اب invite/ack timestamps، telemetry evidence، quiz exports، اور artefact pointers 2025-04-26 تک ریکارڈ کرتا ہے تاکہ governance wave کو reproduce کر سکے۔
-
-## Invite log - W0 core maintainers
-
-| Reviewer ID | Role | Request ticket | Invite sent (UTC) | Expected exit (UTC) | Status | Notes |
+## Journal d'invitation - Mainteneurs principaux de W0| ID du réviseur | Rôle | Demander un billet | Invitation envoyée (UTC) | Sortie prévue (UTC) | Statut | Remarques |
 | --- | --- | --- | --- | --- | --- | --- |
-| docs-core-01 | Portal maintainer | `DOCS-SORA-Preview-REQ-01` | 2025-03-25 10:05 | 2025-04-08 10:00 | Active | checksum verification کی تصدیق؛ nav/sidebar review پر توجہ۔ |
-| sdk-rust-01 | Rust SDK lead | `DOCS-SORA-Preview-REQ-02` | 2025-03-25 10:08 | 2025-04-08 10:00 | Active | SDK recipes + Norito quickstarts ٹیسٹ کر رہا ہے۔ |
-| sdk-js-01 | JS SDK maintainer | `DOCS-SORA-Preview-REQ-03` | 2025-03-25 10:12 | 2025-04-08 10:00 | Active | Try it console + ISO flows ویلیڈیٹ۔ |
-| sorafs-ops-01 | SoraFS operator liaison | `DOCS-SORA-Preview-REQ-04` | 2025-03-25 10:15 | 2025-04-08 10:00 | Active | SoraFS runbooks + orchestration docs آڈٹ۔ |
-| observability-01 | Observability TL | `DOCS-SORA-Preview-REQ-05` | 2025-03-25 10:18 | 2025-04-08 10:00 | Active | telemetry/incident appendices کا جائزہ؛ Alertmanager coverage کے ذمہ دار۔ |
+| docs-core-01 | Responsable du portail | `DOCS-SORA-Preview-REQ-01` | 2025-03-25 10:05 | 2025-04-08 10:00 | Actif | vérification de la somme de contrôle nav/sidebar review پر توجہ۔ |
+| sdk-rouille-01 | Responsable du SDK Rust | `DOCS-SORA-Preview-REQ-02` | 2025-03-25 10:08 | 2025-04-08 10:00 | Actif | Recettes SDK + démarrages rapides Norito ici |
+| sdk-js-01 | Responsable du SDK JS | `DOCS-SORA-Preview-REQ-03` | 2025-03-25 10:12 | 2025-04-08 10:00 | Actif | Essayez-le console + flux ISO |
+| sorafs-ops-01 | SoraFS liaison opérateur | `DOCS-SORA-Preview-REQ-04` | 2025-03-25 10:15 | 2025-04-08 10:00 | Actif | Runbooks SoraFS + documents d'orchestration |
+| observabilité-01 | Observabilité TL | `DOCS-SORA-Preview-REQ-05` | 2025-03-25 10:18 | 2025-04-08 10:00 | Actif | annexes télémétrie/incident Couverture d'Alertmanager en anglais |
 
-تمام دعوتیں ایک ہی `docs-portal-preview` artefact (run 2025-03-24، tag `preview-2025-03-24`) اور `DOCS-SORA-Preview-W0` میں محفوظ verification transcript کو ریفرنس کرتی ہیں۔ کسی بھی اضافے/وقفے کو اگلی ویو پر جانے سے پہلے اوپر والی ٹیبل اور tracker issue دونوں میں لاگ کریں۔
+Il s'agit de l'artefact `docs-portal-preview` (exécuté le 24/03/2025, balise `preview-2025-03-24`) et de la transcription de vérification `DOCS-SORA-Preview-W0`. ریفرنس کرتی ہیں۔ کسی بھی اضافے/وقفے کو اگلی ویو پر جانے سے پہلے اوپر والی ٹیبل اور tracker issue دونوں میں لاگ کریں۔
 
-## Checkpoint log - W0
-
-| Date (UTC) | Activity | Notes |
+## Journal des points de contrôle - W0| Date (UTC) | Activité | Remarques |
 | --- | --- | --- |
-| 2025-03-26 | Telemetry baseline review + office hours | `docs.preview.integrity` + `TryItProxyErrors` سبز رہے؛ office hours نے checksum verification مکمل ہونے کی تصدیق کی۔ |
-| 2025-03-27 | Midpoint feedback digest posted | Summary [`preview-feedback/w0/summary.md`](./preview-feedback/w0/summary.md) میں محفوظ؛ دو چھوٹے nav issues `docs-preview/w0` کے تحت، کوئی incident نہیں۔ |
-| 2025-03-31 | Final week telemetry spot check | آخری office hours؛ reviewers نے باقی کام تصدیق کیا، کوئی alert نہیں۔ |
-| 2025-04-08 | Exit summary + invite closures | reviews مکمل، عارضی رسائی منسوخ، findings [`preview-feedback/w0/summary.md`](./preview-feedback/w0/summary.md#exit-summary-2025-04-08) میں آرکائیو؛ W1 سے پہلے tracker اپ ڈیٹ۔ |
+| 2025-03-26 | Examen de base de la télémétrie + heures de bureau | `docs.preview.integrity` + `TryItProxyErrors` sont disponibles heures de bureau et vérification de la somme de contrôle |
+| 2025-03-27 | Publication d'un résumé des commentaires à mi-parcours | Résumé [`preview-feedback/w0/summary.md`](./preview-feedback/w0/summary.md) میں محفوظ؛ Les problèmes de navigation `docs-preview/w0` sont liés à un incident de navigation |
+| 2025-03-31 | Vérification ponctuelle de télémétrie de la dernière semaine | آخری heures de bureau؛ critiques نے باقی کام تصدیق کیا، کوئی alert نہیں۔ |
+| 2025-04-08 | Résumé de sortie + fermetures d'invitations | avis مکمل، عارضی رسائی منسوخ، conclusions [`preview-feedback/w0/summary.md`](./preview-feedback/w0/summary.md#exit-summary-2025-04-08) W1 سے پہلے tracker اپ ڈیٹ۔ |
 
-## Invite log - W1 partners
-
-| Reviewer ID | Role | Request ticket | Invite sent (UTC) | Expected exit (UTC) | Status | Notes |
+## Journal d'invitation - Partenaires W1| ID du réviseur | Rôle | Demander un billet | Invitation envoyée (UTC) | Sortie prévue (UTC) | Statut | Remarques |
 | --- | --- | --- | --- | --- | --- | --- |
-| sorafs-op-01 | SoraFS operator (EU) | `DOCS-SORA-Preview-REQ-P01` | 2025-04-12 15:00 | 2025-04-26 15:00 | Completed | orchestrator ops feedback 2025-04-20 کو دیا؛ exit ack 15:05 UTC۔ |
-| sorafs-op-02 | SoraFS operator (JP) | `DOCS-SORA-Preview-REQ-P02` | 2025-04-12 15:03 | 2025-04-26 15:00 | Completed | rollout comments `docs-preview/w1` میں لاگ؛ exit ack 15:10 UTC۔ |
-| sorafs-op-03 | SoraFS operator (US) | `DOCS-SORA-Preview-REQ-P03` | 2025-04-12 15:06 | 2025-04-26 15:00 | Completed | dispute/blacklist edits فائل؛ exit ack 15:12 UTC۔ |
-| torii-int-01 | Torii integrator | `DOCS-SORA-Preview-REQ-P04` | 2025-04-12 15:09 | 2025-04-26 15:00 | Completed | Try it auth walkthrough قبول؛ exit ack 15:14 UTC۔ |
-| torii-int-02 | Torii integrator | `DOCS-SORA-Preview-REQ-P05` | 2025-04-12 15:12 | 2025-04-26 15:00 | Completed | RPC/OAuth comments لاگ؛ exit ack 15:16 UTC۔ |
-| sdk-partner-01 | SDK partner (Swift) | `DOCS-SORA-Preview-REQ-P06` | 2025-04-12 15:15 | 2025-04-26 15:00 | Completed | preview integrity feedback merge؛ exit ack 15:18 UTC۔ |
-| sdk-partner-02 | SDK partner (Android) | `DOCS-SORA-Preview-REQ-P07` | 2025-04-12 15:18 | 2025-04-26 15:00 | Completed | telemetry/redaction review مکمل؛ exit ack 15:22 UTC۔ |
-| gateway-ops-01 | Gateway operator | `DOCS-SORA-Preview-REQ-P08` | 2025-04-12 15:21 | 2025-04-26 15:00 | Completed | gateway DNS runbook comments فائل؛ exit ack 15:24 UTC۔ |
+| sorafs-op-01 | Opérateur SoraFS (UE) | `DOCS-SORA-Preview-REQ-P01` | 2025-04-12 15:00 | 2025-04-26 15:00 | Terminé | Commentaires sur les opérations de l'orchestrateur 2025-04-20 ici accusé de réception à 15h05 UTC۔ |
+| sorafs-op-02 | Opérateur SoraFS (JP) | `DOCS-SORA-Preview-REQ-P02` | 2025-04-12 15:03 | 2025-04-26 15:00 | Terminé | commentaires sur le déploiement `docs-preview/w1` میں لاگ؛ accusé de réception à 15h10 UTC۔ |
+| sorafs-op-03 | Opérateur SoraFS (États-Unis) | `DOCS-SORA-Preview-REQ-P03` | 2025-04-12 15:06 | 2025-04-26 15:00 | Terminé | litige/modifications sur liste noire فائل؛ accusé de réception à 15:12 UTC۔ |
+| torii-int-01 | Intégrateur Torii | `DOCS-SORA-Preview-REQ-P04` | 2025-04-12 15:09 | 2025-04-26 15:00 | Terminé | Essayez-le, procédure pas à pas d'authentification accusé de réception à 15:14 UTC۔ |
+| torii-int-02 | Intégrateur Torii | `DOCS-SORA-Preview-REQ-P05` | 2025-04-12 15:12 | 2025-04-26 15:00 | Terminé | Commentaires RPC/OAuth ici accusé de réception à 15:16 UTC۔ |
+| sdk-partenaire-01 | Partenaire SDK (Swift) | `DOCS-SORA-Preview-REQ-P06` | 2025-04-12 15:15 | 2025-04-26 15:00 | Terminé | aperçu de la fusion des commentaires sur l'intégrité؛ accusé de réception à 15:18 UTC۔ |
+| sdk-partenaire-02 | Partenaire SDK (Android) | `DOCS-SORA-Preview-REQ-P07` | 2025-04-12 15:18 | 2025-04-26 15:00 | Terminé | revue de télémétrie/rédaction مکمل؛ accusé de réception à 15:22 UTC۔ || passerelle-ops-01 | Opérateur de passerelle | `DOCS-SORA-Preview-REQ-P08` | 2025-04-12 15:21 | 2025-04-26 15:00 | Terminé | commentaires sur le runbook DNS de la passerelle accusé de réception à 15:24 UTC۔ |
 
-## Checkpoint log - W1
+## Journal des points de contrôle - W1
 
-| Date (UTC) | Activity | Notes |
+| Date (UTC) | Activité | Remarques |
 | --- | --- | --- |
-| 2025-04-12 | Invite dispatch + artefact verification | `preview-2025-04-12` descriptor/archive کے ساتھ آٹھ partners کو ای میل؛ acknowledgements tracker میں محفوظ۔ |
-| 2025-04-13 | Telemetry baseline review | `docs.preview.integrity`, `TryItProxyErrors`, اور `DocsPortal/GatewayRefusals` سبز؛ office hours نے checksum verification مکمل ہونے کی تصدیق کی۔ |
-| 2025-04-18 | Mid-wave office hours | `docs.preview.integrity` سبز رہا؛ دو doc نٹس `docs-preview/w1` کے تحت لاگ (nav wording + Try it screenshot)۔ |
-| 2025-04-22 | Final telemetry spot check | proxy + dashboards صحت مند؛ کوئی نئی issues نہیں، exit سے پہلے tracker میں نوٹ۔ |
-| 2025-04-26 | Exit summary + invite closures | تمام partners نے review completion کی تصدیق کی، invites revoke، evidence [`preview-feedback/w1/summary.md`](./preview-feedback/w1/summary.md#exit-summary-2025-04-26) میں آرکائیو۔ |
+| 2025-04-12 | Envoi d'invitations + vérification des artefacts | `preview-2025-04-12` descripteur/archive pour les partenaires partenaires suivi des remerciements میں محفوظ۔ |
+| 2025-04-13 | Examen de base de la télémétrie | `docs.preview.integrity`, `TryItProxyErrors`, et `DocsPortal/GatewayRefusals` ici heures de bureau et vérification de la somme de contrôle |
+| 2025-04-18 | Horaires de bureau en moyenne vague | `docs.preview.integrity` pour le client دو doc نٹس `docs-preview/w1` کے تحت لاگ (formulation de navigation + capture d'écran Essayez-le)۔ |
+| 2025-04-22 | Vérification ponctuelle finale de télémétrie | proxy + tableaux de bord صحت مند؛ کوئی نئی issues نہیں، exit سے پہلے tracker میں نوٹ۔ |
+| 2025-04-26 | Résumé de sortie + fermetures d'invitations | Les partenaires terminent l'examen et invitent à révoquer les preuves [`preview-feedback/w1/summary.md`](./preview-feedback/w1/summary.md#exit-summary-2025-04-26) میں آرکائیو۔ |
 
-## W3 beta cohort recap
+## Récapitulatif de la cohorte bêta W3
 
-- 2026-02-18 کو invites بھیجی گئیں، checksum verification + acknowledgements اسی دن لاگ۔
-- feedback `docs-preview/20260218` میں جمع، governance issue `DOCS-SORA-Preview-20260218`؛ digest + summary `npm run --prefix docs/portal preview:wave -- --wave preview-20260218` سے تیار۔
-- 2026-02-28 کو final telemetry check کے بعد access revoke؛ tracker + portal tables اپ ڈیٹ کر کے W3 مکمل دکھایا۔
+- 2026-02-18 کو invite گئیں، vérification de la somme de contrôle + accusés de réception اسی دن لاگ۔
+- feedback `docs-preview/20260218` concernant le problème de gouvernance `DOCS-SORA-Preview-20260218`؛ résumé + résumé `npm run --prefix docs/portal preview:wave -- --wave preview-20260218` سے تیار۔
+- 2026-02-28 کو contrôle télémétrique final کے بعد révocation d'accès؛ tracker + tables de portail pour W3
 
-## Invite log - W2 community
-
-| Reviewer ID | Role | Request ticket | Invite sent (UTC) | Expected exit (UTC) | Status | Notes |
+## Journal des invitations - Communauté W2| ID du réviseur | Rôle | Demander un billet | Invitation envoyée (UTC) | Sortie prévue (UTC) | Statut | Remarques |
 | --- | --- | --- | --- | --- | --- | --- |
-| comm-vol-01 | Community reviewer (SDK) | `DOCS-SORA-Preview-REQ-C01` | 2025-06-15 16:00 | 2025-06-29 16:00 | Completed | Ack 16:06 UTC; SDK quickstarts پر فوکس؛ exit 2025-06-29 کو کنفرم۔ |
-| comm-vol-02 | Community reviewer (Governance) | `REQ-C02` | 2025-06-15 16:03 | 2025-06-29 16:00 | Completed | governance/SNS review مکمل؛ exit 2025-06-29 کو کنفرم۔ |
-| comm-vol-03 | Community reviewer (Norito) | `REQ-C03` | 2025-06-15 16:06 | 2025-06-29 16:00 | Completed | Norito walkthrough feedback لاگ؛ exit ack 2025-06-29۔ |
-| comm-vol-04 | Community reviewer (SoraFS) | `REQ-C04` | 2025-06-15 16:09 | 2025-06-29 16:00 | Completed | SoraFS runbook review مکمل؛ exit ack 2025-06-29۔ |
-| comm-vol-05 | Community reviewer (Accessibility) | `REQ-C05` | 2025-06-15 16:12 | 2025-06-29 16:00 | Completed | Accessibility/UX notes شیئر؛ exit ack 2025-06-29۔ |
-| comm-vol-06 | Community reviewer (Localization) | `REQ-C06` | 2025-06-15 16:15 | 2025-06-29 16:00 | Completed | Localization feedback لاگ؛ exit ack 2025-06-29۔ |
-| comm-vol-07 | Community reviewer (Mobile) | `REQ-C07` | 2025-06-15 16:18 | 2025-06-29 16:00 | Completed | Mobile SDK doc checks مکمل؛ exit ack 2025-06-29۔ |
-| comm-vol-08 | Community reviewer (Observability) | `REQ-C08` | 2025-06-15 16:21 | 2025-06-29 16:00 | Completed | Observability appendix review مکمل؛ exit ack 2025-06-29۔ |
+| comm-vol-01 | Réviseur communautaire (SDK) | `DOCS-SORA-Preview-REQ-C01` | 2025-06-15 16:00 | 2025-06-29 16:00 | Terminé | Accusé de réception à 16h06 UTC ; Démarrages rapides du SDK ici sortie 2025-06-29 کو کنفرم۔ |
+| comm-vol-02 | Réviseur communautaire (Gouvernance) | `REQ-C02` | 2025-06-15 16:03 | 2025-06-29 16:00 | Terminé | examen de la gouvernance/SNS مکمل؛ sortie 2025-06-29 کو کنفرم۔ |
+| comm-vol-03 | Réviseur communautaire (Norito) | `REQ-C03` | 2025-06-15 16:06 | 2025-06-29 16:00 | Terminé | Commentaires pas à pas sur la procédure Norito accusé de réception 2025-06-29۔ |
+| comm-vol-04 | Réviseur communautaire (SoraFS) | `REQ-C04` | 2025-06-15 16:09 | 2025-06-29 16:00 | Terminé | Examen du runbook SoraFS Mise à jour accusé de réception 2025-06-29۔ |
+| comm-vol-05 | Réviseur communautaire (Accessibilité) | `REQ-C05` | 2025-06-15 16:12 | 2025-06-29 16:00 | Terminé | Notes sur l'accessibilité/UX accusé de réception 2025-06-29۔ |
+| comm-vol-06 | Réviseur communautaire (localisation) | `REQ-C06` | 2025-06-15 16:15 | 2025-06-29 16:00 | Terminé | Commentaires sur la localisation accusé de réception 2025-06-29۔ |
+| comm-vol-07 | Réviseur communautaire (Mobile) | `REQ-C07` | 2025-06-15 16:18 | 2025-06-29 16:00 | Terminé | Vérifications de la documentation du SDK mobile accusé de réception 2025-06-29۔ || comm-vol-08 | Réviseur communautaire (Observabilité) | `REQ-C08` | 2025-06-15 16:21 | 2025-06-29 16:00 | Terminé | Examen de l'annexe sur l'observabilité accusé de réception 2025-06-29۔ |
 
-## Checkpoint log - W2
+## Journal des points de contrôle - W2
 
-| Date (UTC) | Activity | Notes |
+| Date (UTC) | Activité | Remarques |
 | --- | --- | --- |
-| 2025-06-15 | Invite dispatch + artefact verification | `preview-2025-06-15` descriptor/archive 8 community reviewers کے ساتھ شیئر؛ acknowledgements tracker میں محفوظ۔ |
-| 2025-06-16 | Telemetry baseline review | `docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals` dashboards سبز؛ Try it proxy logs میں community tokens فعال۔ |
-| 2025-06-18 | Office hours & issue triage | دو suggestions (`docs-preview/w2 #1` tooltip wording، `#2` localization sidebar) - دونوں Docs کو routed۔ |
-| 2025-06-21 | Telemetry check + doc fixes | Docs نے `docs-preview/w2 #1/#2` حل کیا؛ dashboards سبز، کوئی incident نہیں۔ |
-| 2025-06-24 | Final week office hours | reviewers نے باقی feedback submissions کنفرم کیے؛ کوئی alert نہیں۔ |
-| 2025-06-29 | Exit summary + invite closures | acks ریکارڈ، preview access revoke، telemetry snapshots + artefacts آرکائیو (دیکھیں [`preview-feedback/w2/summary.md`](./preview-feedback/w2/summary.md#exit-summary-2025-06-29)). |
-| 2025-04-15 | Office hours & issue triage | دو documentation suggestions `docs-preview/w1` کے تحت لاگ؛ کوئی incidents یا alerts نہیں۔ |
+| 2025-06-15 | Envoi d'invitations + vérification des artefacts | `preview-2025-06-15` descripteur/archive 8 évaluateurs de la communauté کے ساتھ شیئر؛ suivi des remerciements میں محفوظ۔ |
+| 2025-06-16 | Examen de base de la télémétrie | Tableaux de bord `docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals` Essayez-le, journaux proxy et jetons de communauté |
+| 2025-06-18 | Horaires de bureau et tri des problèmes | Suggestions (formulation de l'info-bulle `docs-preview/w2 #1`, barre latérale de localisation `#2`) - Docs est routé |
+| 2025-06-21 | Vérification de télémétrie + correctifs de documentation | Docs نے `docs-preview/w2 #1/#2` pour کیا؛ tableaux de bord concernant les incidents |
+| 2025-06-24 | Horaires de bureau de la dernière semaine | les évaluateurs ont soumis des commentaires et soumis des commentaires کوئی alerte نہیں۔ |
+| 2025-06-29 | Résumé de sortie + fermetures d'invitations | accusés de réception de la révocation de l'accès à l'aperçu, des instantanés de télémétrie + des artefacts (دیکھیں [`preview-feedback/w2/summary.md`] (./preview-feedback/w2/summary.md#exit-summary-2025-06-29)). |
+| 2025-04-15 | Horaires de bureau et tri des problèmes | Voir les suggestions de documentation `docs-preview/w1` pour plus de détails. Incidents et alertes |
 
-## Reporting hooks
-
-- ہر بدھ، اوپر والی table اور active invite issue کو مختصر status note سے اپ ڈیٹ کریں (invites sent, active reviewers, incidents).
-- جب کوئی ویو بند ہو، feedback summary path شامل کریں (مثال: `docs/portal/docs/devportal/preview-feedback/w0/summary.md`) اور اسے `status.md` سے لنک کریں۔
-- اگر [preview invite flow](./preview-invite-flow.md) کے pause criteria ٹرگر ہوں تو invites دوبارہ شروع کرنے سے پہلے remediation steps یہاں شامل کریں۔
+## Crochets de rapport- Il y a une table d'invitation et un problème d'invitation actif et une note d'état de la note d'état (invitations envoyées, réviseurs actifs, incidents).
+- Il s'agit d'un chemin récapitulatif des commentaires et d'un chemin d'accès récapitulatif des commentaires (`docs/portal/docs/devportal/preview-feedback/w0/summary.md`) et `status.md`.
+- اگر [prévisualiser le flux d'invitation](./preview-invite-flow.md) کے critères de pause ٹرگر ہوں تو invites دوبارہ شروع کرنے سے پہلے étapes de remédiation یہاں شامل کریں۔

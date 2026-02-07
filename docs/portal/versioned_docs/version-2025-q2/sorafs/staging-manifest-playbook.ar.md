@@ -6,21 +6,21 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 9f708c9c597c0455761049a17989369498d318be348e28f71196bb82761dd36b
 source_last_modified: "2026-01-03T18:07:58.297179+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-
-:::note Canonical Source
-Mirrors `docs/source/sorafs/runbooks/staging_manifest_playbook.md`. Keep both copies aligned across releases.
+:::ملاحظة المصدر الكنسي
+المرايا `docs/source/sorafs/runbooks/staging_manifest_playbook.md`. حافظ على محاذاة كلا النسختين عبر الإصدارات.
 :::
 
-## Overview
+## نظرة عامة
 
-This playbook walks through enabling the Parliament-ratified chunker profile on a staging Torii deployment before promoting the change to production. It assumes the SoraFS governance charter has been ratified and the canonical fixtures are available in the repository.
+يتناول دليل التشغيل هذا تمكين ملف تعريف القطع الذي تم التصديق عليه من قبل البرلمان على النشر المرحلي Torii قبل الترويج للتغيير إلى الإنتاج. ويفترض أنه تم التصديق على ميثاق الحوكمة SoraFS وأن التركيبات الأساسية متوفرة في المستودع.
 
-## 1. Prerequisites
+## 1. المتطلبات الأساسية
 
-1. Sync the canonical fixtures and signatures:
+1. مزامنة التركيبات والتوقيعات الأساسية:
 
    ```bash
    cargo xtask sorafs-fetch-fixture \
@@ -29,8 +29,8 @@ This playbook walks through enabling the Parliament-ratified chunker profile on 
    ci/check_sorafs_fixtures.sh
    ```
 
-2. Prepare the admission envelope directory that Torii will read at startup (example path): `/var/lib/iroha/admission/sorafs`.
-3. Ensure the Torii config enables the discovery cache and admission enforcement:
+2. قم بإعداد دليل مغلف القبول الذي سيقرأه Torii عند بدء التشغيل (مثال للمسار): `/var/lib/iroha/admission/sorafs`.
+3. تأكد من أن تكوين Torii يمكّن اكتشاف ذاكرة التخزين المؤقت وفرض القبول:
 
    ```toml
    [torii.sorafs.discovery]
@@ -48,43 +48,43 @@ This playbook walks through enabling the Parliament-ratified chunker profile on 
    enforce_capabilities = true
    ```
 
-## 2. Publish Admission Envelopes
+## 2. نشر مظاريف القبول
 
-1. Copy the approved provider admission envelopes into the directory referenced by `torii.sorafs.discovery.admission.envelopes_dir`:
+1. انسخ مظاريف قبول المزود المعتمد في الدليل المشار إليه بـ `torii.sorafs.discovery.admission.envelopes_dir`:
 
    ```bash
    install -m 0644 fixtures/sorafs_manifest/provider_admission/*.json \
      /var/lib/iroha/admission/sorafs/
    ```
 
-2. Restart Torii (or send a SIGHUP if you wrapped the loader with on-the-fly reload).
-3. Tail the logs for admission messages:
+2. أعد تشغيل Torii (أو أرسل SIGHUP إذا قمت بلف أداة التحميل بإعادة التحميل الفوري).
+3. ذيل سجلات رسائل القبول:
 
    ```bash
    torii | grep "loaded provider admission envelope"
    ```
 
-## 3. Validate Discovery Propagation
+## 3. التحقق من صحة نشر الاكتشاف
 
-1. Post the signed provider advert payload (Norito bytes) produced by your
-   provider pipeline:
+1. انشر حمولة إعلان الموفر الموقع (Norito بايت) التي تم إنتاجها بواسطة
+   خط أنابيب المزود:
 
    ```bash
    curl -sS -X POST --data-binary @provider_advert.to \
      http://staging-torii:8080/v1/sorafs/provider/advert
    ```
 
-2. Query the discovery endpoint and confirm the advert appears with canonical aliases:
+2. استعلم عن نقطة نهاية الاكتشاف وتأكد من ظهور الإعلان باستخدام الأسماء المستعارة الأساسية:
 
    ```bash
    curl -sS http://staging-torii:8080/v1/sorafs/providers | jq .
    ```
 
-   Ensure `profile_aliases` includes `"sorafs.sf1@1.0.0"` as the first entry.
+   تأكد من أن `profile_aliases` يتضمن `"sorafs.sf1@1.0.0"` كمدخل أول.
 
-## 4. Exercise Manifest & Plan Endpoints
+## 4. بيان التمرين ونقاط نهاية الخطة
 
-1. Fetch the manifest metadata (requires a stream token if admission is enforced):
+1. قم بإحضار البيانات الوصفية للبيان (يتطلب رمزًا مميزًا للتدفق إذا تم فرض القبول):
 
    ```bash
    sorafs-fetch \
@@ -95,25 +95,25 @@ This playbook walks through enabling the Parliament-ratified chunker profile on 
      --json-out=reports/staging_manifest.json
    ```
 
-2. Inspect the JSON output and verify:
-   - `chunk_profile_handle` is `sorafs.sf1@1.0.0`.
-   - `manifest_digest_hex` matches the determinism report.
-   - `chunk_digests_blake3` align with the regenerated fixtures.
+2. افحص مخرجات JSON وتحقق:
+   - `chunk_profile_handle` هو `sorafs.sf1@1.0.0`.
+   - `manifest_digest_hex` يطابق تقرير الحتمية.
+   - `chunk_digests_blake3` تتماشى مع التركيبات المجددة.
 
-## 5. Telemetry Checks
+## 5. فحوصات القياس عن بعد
 
-- Confirm Prometheus exposes the new profile metrics:
+- تأكد من أن Prometheus يعرض مقاييس الملف الشخصي الجديدة:
 
   ```bash
   curl -sS http://staging-torii:8080/metrics | grep torii_sorafs_chunk_range_requests_total
   ```
 
-- Dashboards should show the staging provider under the expected alias and keep brownout counters at zero while the profile is active.
+- يجب أن تعرض لوحات المعلومات موفر التدريج تحت الاسم المستعار المتوقع وتبقي عدادات التوقف عند الصفر أثناء تنشيط ملف التعريف.
 
-## 6. Rollout Readiness
+## 6. الاستعداد للطرح
 
-1. Capture a short report with the URLs, manifest ID, and telemetry snapshot.
-2. Share the report in the Nexus rollout channel alongside the planned production activation window.
-3. Proceed to the production checklist (Section 4 in `chunker_registry_rollout_checklist.md`) once stakeholders sign off.
+1. التقط تقريرًا قصيرًا يتضمن عناوين URL ومعرف البيان ولقطة القياس عن بعد.
+2. قم بمشاركة التقرير في قناة طرح Nexus بجانب نافذة تنشيط الإنتاج المخطط لها.
+3. انتقل إلى قائمة مراجعة الإنتاج (القسم 4 في `chunker_registry_rollout_checklist.md`) بمجرد توقيع أصحاب المصلحة.
 
-Keeping this playbook updated ensures every chunker/admission rollout follows the same deterministic steps across staging and production.
+يضمن الحفاظ على تحديث قواعد اللعبة هذه أن كل عملية طرح للقسم/القبول تتبع نفس الخطوات الحاسمة عبر التدريج والإنتاج.

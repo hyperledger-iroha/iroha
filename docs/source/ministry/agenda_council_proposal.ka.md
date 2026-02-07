@@ -7,73 +7,72 @@ generator: scripts/sync_docs_i18n.py
 source_hash: d2a7a47fdf0c80d189c912baafa5d6ce81a17a4c90f2b1797e532989a56f5060
 source_last_modified: "2025-12-29T18:16:35.977493+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Agenda Council Proposal Schema (MINFO-2a)
+# დღის წესრიგის საბჭოს წინადადების სქემა (MINFO-2a)
 
-Roadmap reference: **MINFO-2a — Proposal format validator.**
+საგზაო რუკის მითითება: **MINFO-2a — წინადადების ფორმატის ვალიდატორი.**
 
-The Agenda Council workflow batches citizen-submitted blacklist and policy change
-proposals before the governance panels review them. This document defines the
-canonical payload schema, evidence requirements, and duplication detection rules
-consumed by the new validator (`cargo xtask ministry-agenda validate`) so
-proposers can lint JSON submissions locally before uploading them to the portal.
+დღის წესრიგის საბჭოს სამუშაო პროცესი აერთიანებს მოქალაქეთა მიერ წარდგენილ შავ სიას და პოლიტიკის ცვლილებას
+წინადადებები მმართველი პანელის განხილვამდე. ეს დოკუმენტი განსაზღვრავს
+კანონიკური დატვირთვის სქემა, მტკიცებულების მოთხოვნები და დუბლირების გამოვლენის წესები
+მოხმარებული ახალი ვალიდატორის მიერ (`cargo xtask ministry-agenda validate`) ისე
+პროპაგანდებს შეუძლიათ JSON-ის წარდგენის ლოკალურად დაბეჭდვა პორტალზე ატვირთვამდე.
 
-## Payload overview
+## დატვირთვის მიმოხილვა
 
-Agenda proposals use the `AgendaProposalV1` Norito schema
-(`iroha_data_model::ministry::AgendaProposalV1`). Fields are encoded as JSON when
-submitting through CLI/portal surfaces.
+დღის წესრიგის წინადადებები იყენებს `AgendaProposalV1` Norito სქემას
+(`iroha_data_model::ministry::AgendaProposalV1`). ველები დაშიფრულია როგორც JSON, როდესაც
+გაგზავნა CLI/პორტალის ზედაპირების მეშვეობით.
 
-| Field | Type | Requirements |
+| ველი | ტიპი | მოთხოვნები |
 |-------|------|--------------|
-| `version` | `1` (u16) | Must equal `AGENDA_PROPOSAL_VERSION_V1`. |
-| `proposal_id` | string (`AC-YYYY-###`) | Stable identifier; enforced during validation. |
-| `submitted_at_unix_ms` | u64 | Milliseconds since Unix epoch. |
-| `language` | string | BCP‑47 tag (`"en"`, `"ja-JP"`, etc.). |
-| `action` | enum (`add-to-denylist`, `remove-from-denylist`, `amend-policy`) | Requested Ministry action. |
-| `summary.title` | string | ≤256 chars recommended. |
-| `summary.motivation` | string | Why the action is required. |
-| `summary.expected_impact` | string | Outcomes if the action is accepted. |
-| `tags[]` | lowercase strings | Optional triage labels. Allowed values: `csam`, `malware`, `fraud`, `harassment`, `impersonation`, `policy-escalation`, `terrorism`, `spam`. |
-| `targets[]` | objects | One or more hash family entries (see below). |
-| `evidence[]` | objects | One or more evidence attachments (see below). |
-| `submitter.name` | string | Display name or organization. |
-| `submitter.contact` | string | Email, Matrix handle, or phone; redacted from public dashboards. |
-| `submitter.organization` | string (optional) | Visible in reviewer UI. |
-| `submitter.pgp_fingerprint` | string (optional) | 40-hex uppercase fingerprint. |
-| `duplicates[]` | strings | Optional references to previously submitted proposal IDs. |
+| `version` | `1` (u16) | უნდა იყოს ტოლი `AGENDA_PROPOSAL_VERSION_V1`. |
+| `proposal_id` | სტრიქონი (`AC-YYYY-###`) | სტაბილური იდენტიფიკატორი; შესრულებულია ვალიდაციის დროს. |
+| `submitted_at_unix_ms` | u64 | მილიწამები Unix-ის ეპოქიდან. |
+| `language` | სიმებიანი | BCP‑47 თეგი (`"en"`, `"ja-JP"` და ა.შ.). |
+| `action` | enum (`add-to-denylist`, `remove-from-denylist`, `amend-policy`) | სამინისტროს ქმედება მოითხოვა. |
+| `summary.title` | სიმებიანი | რეკომენდებულია ≤256 სიმბოლო. |
+| `summary.motivation` | სიმებიანი | რატომ არის საჭირო მოქმედება. |
+| `summary.expected_impact` | სიმებიანი | შედეგები, თუ მოქმედება მიიღება. |
+| `tags[]` | მცირე ასოები | არჩევითი ტრიაჟის ეტიკეტები. დასაშვები მნიშვნელობები: `csam`, `malware`, `fraud`, `harassment`, `impersonation`, `policy-escalation`, I1803NI00, `spam`. |
+| `targets[]` | ობიექტები | ერთი ან მეტი ჰეშის ოჯახის ჩანაწერი (იხ. ქვემოთ). |
+| `evidence[]` | ობიექტები | ერთი ან მეტი მტკიცებულების დანართი (იხ. ქვემოთ). |
+| `submitter.name` | სიმებიანი | საჩვენებელი სახელი ან ორგანიზაცია. |
+| `submitter.contact` | სიმებიანი | ფოსტა, მატრიქსის სახელური ან ტელეფონი; რედაქტირებულია საჯარო დაფებიდან. |
+| `submitter.organization` | სტრიქონი (სურვილისამებრ) | ხილულია მიმომხილველის ინტერფეისში. |
+| `submitter.pgp_fingerprint` | სტრიქონი (სურვილისამებრ) | 40 თექვსმეტიანი თითის ანაბეჭდი. |
+| `duplicates[]` | სიმები | არჩევითი მითითებები ადრე წარდგენილ წინადადებების ID-ებზე. |
 
-### Target entries (`targets[]`)
+### სამიზნე ჩანაწერები (`targets[]`)
 
-Each target represents a hash family digest referenced by the proposal.
+თითოეული სამიზნე წარმოადგენს ჰეშის ოჯახის შეჯამებას, რომელიც მითითებულია წინადადებაში.
 
-| Field | Description | Validation |
-|-------|-------------|------------|
-| `label` | Friendly name for reviewer context. | Non-empty. |
-| `hash_family` | Hash identifier (`blake3-256`, `sha256`, etc.). | ASCII letters/digits/`-_.`, ≤48 chars. |
-| `hash_hex` | Digest encoded in lowercase hex. | ≥16 bytes (32 hex chars) and must be valid hex. |
-| `reason` | Short description of why the digest should be actioned. | Non-empty. |
+| ველი | აღწერა | ვალიდაცია |
+|-------|------------|------------|
+| `label` | მეგობრული სახელი მიმომხილველი კონტექსტისთვის. | არა ცარიელი. |
+| `hash_family` | ჰეშის იდენტიფიკატორი (`blake3-256`, `sha256` და ა.შ.). | ASCII ასოები/ციფრები/`-_.`, ≤48 სიმბოლო. |
+| `hash_hex` | დაიჯესტი დაშიფრულია მცირე თექვსმეტობით. | ≥16 ბაიტი (32 თექვსმეტობით სიმბოლო) და უნდა იყოს მართებული თექვსმეტობითი. |
+| `reason` | მოკლე აღწერა იმის შესახებ, თუ რატომ უნდა მოხდეს დაიჯესტის მოქმედება. | არა ცარიელი. |
 
-The validator rejects duplicate `hash_family:hash_hex` pairs within the same
-proposal and reports conflicts when the same fingerprint already exists in the
-duplicate registry (see below).
+ვალიდატორი უარყოფს `hash_family:hash_hex` წყვილების დუბლიკატს იმავე ფარგლებში
+შეთავაზება და აცნობებს კონფლიქტებს, როდესაც იგივე თითის ანაბეჭდი უკვე არსებობს
+რეესტრის დუბლიკატი (იხ. ქვემოთ).
 
-### Evidence attachments (`evidence[]`)
+### მტკიცებულებების დანართები (`evidence[]`)
 
-Evidence entries document where reviewers can fetch supporting context.
-
-| Field | Type | Notes |
+მტკიცებულებების ჩანაწერების დოკუმენტი, სადაც მიმომხილველებს შეუძლიათ მიიღონ დამხმარე კონტექსტი.| ველი | ტიპი | შენიშვნები |
 |-------|------|-------|
-| `kind` | enum (`url`, `torii-case`, `sorafs-cid`, `attachment`) | Determines digest requirements. |
-| `uri` | string | HTTP(S) URL, Torii case ID, or SoraFS URI. |
-| `digest_blake3_hex` | string | Required for `sorafs-cid` and `attachment` kinds; optional for others. |
-| `description` | string | Optional free-form text for reviewers. |
+| `kind` | enum (`url`, `torii-case`, `sorafs-cid`, `attachment`) | განსაზღვრავს საჭმლის მონელების მოთხოვნებს. |
+| `uri` | სიმებიანი | HTTP(S) URL, Torii case ID, ან SoraFS URI. |
+| `digest_blake3_hex` | სიმებიანი | საჭიროა `sorafs-cid` და `attachment` ტიპისთვის; სურვილისამებრ სხვებისთვის. |
+| `description` | სიმებიანი | სურვილისამებრ თავისუფალი ფორმის ტექსტი რეცენზენტებისთვის. |
 
-### Duplicate registry
+### რეესტრის დუბლიკატი
 
-Operators can maintain a registry of existing fingerprints to prevent duplicate
-cases. The validator accepts a JSON file shaped as:
+ოპერატორებს შეუძლიათ შეინახონ არსებული თითის ანაბეჭდების რეესტრი, რათა თავიდან აიცილონ დუბლიკატი
+შემთხვევები. ვალიდატორი იღებს JSON ფაილს, რომლის ფორმაა:
 
 ```json
 {
@@ -88,15 +87,15 @@ cases. The validator accepts a JSON file shaped as:
 }
 ```
 
-When a proposal target matches an entry, the validator aborts unless
-`--allow-registry-conflicts` is specified (warnings are still emitted).
-Use [`cargo xtask ministry-agenda impact`](impact_assessment_tooling.md) to
-generate the referendum-ready summary that cross-references the duplicate
-registry and policy snapshots.
+როდესაც წინადადების სამიზნე ემთხვევა ჩანაწერს, ვალიდატორი წყვეტს, თუ არ არის
+მითითებულია `--allow-registry-conflicts` (გაფრთხილებები ჯერ კიდევ არის გამოშვებული).
+გამოიყენეთ [`cargo xtask ministry-agenda impact`](impact_assessment_tooling.md)
+შექმენით რეფერენდუმისთვის მზა რეზიუმე, რომელიც ასახავს დუბლიკატს
+რეესტრის და პოლიტიკის ანაბეჭდები.
 
-## CLI usage
+## CLI გამოყენება
 
-Lint a single proposal and check it against a duplicate registry:
+განათავსეთ ერთი წინადადება და შეამოწმეთ იგი დუბლიკატი რეესტრის მიხედვით:
 
 ```bash
 cargo xtask ministry-agenda validate \
@@ -104,19 +103,19 @@ cargo xtask ministry-agenda validate \
   --registry docs/examples/ministry/agenda_duplicate_registry.json
 ```
 
-Pass `--allow-registry-conflicts` to downgrade duplicate hits to warnings when
-performing historical audits.
+გაიარეთ `--allow-registry-conflicts` დუბლიკატი ჰიტების გაფრთხილებამდე შესამცირებლად, როდესაც
+ისტორიული აუდიტის ჩატარება.
 
-The CLI relies on the same Norito schema and validation helpers shipped in
-`iroha_data_model`, so SDKs/portals can reuse the `AgendaProposalV1::validate`
-method for consistent behaviour.
+CLI ეყრდნობა იმავე Norito სქემას და ვალიდაციის დამხმარეებს, რომლებიც გაგზავნილია
+`iroha_data_model`, ამიტომ SDK-ებს/პორტალებს შეუძლიათ ხელახლა გამოიყენონ `AgendaProposalV1::validate`
+თანმიმდევრული ქცევის მეთოდი.
 
-## Sortition CLI (MINFO-2b)
+## დახარისხება CLI (MINFO-2b)
 
-Roadmap reference: **MINFO-2b — Multi-slot sortition & audit log.**
+საგზაო რუკის მითითება: **MINFO-2b — მრავალ სლოტის დახარისხება და აუდიტის ჟურნალი.**
 
-The Agenda Council roster is now managed via deterministic sortition so citizens
-can independently audit every draw. Use the new command:
+დღის წესრიგის საბჭოს სია ახლა იმართება მოქალაქეების დეტერმინისტული დახარისხების გზით
+შეუძლია ყოველი გათამაშების დამოუკიდებლად შემოწმება. გამოიყენეთ ახალი ბრძანება:
 
 ```bash
 cargo xtask ministry-agenda sortition \
@@ -126,7 +125,7 @@ cargo xtask ministry-agenda sortition \
   --out artifacts/ministry/agenda_sortition_2026Q1.json
 ```
 
-- `--roster` — JSON file describing every eligible member:
+- `--roster` — JSON ფაილი, რომელიც აღწერს ყველა უფლებამოსილ წევრს:
 
   ```json
   {
@@ -148,74 +147,70 @@ cargo xtask ministry-agenda sortition \
   }
   ```
 
-  The example file lives at
-  `docs/examples/ministry/agenda_council_roster.json`. Optional fields (role,
-  organization, contact, metadata) are captured in the Merkle leaf so auditors
-  can prove the roster that fed the draw.
+  მაგალითის ფაილი ცხოვრობს
+  `docs/examples/ministry/agenda_council_roster.json`. არჩევითი ველები (როლი,
+  ორგანიზაცია, კონტაქტი, მეტამონაცემები) აღბეჭდილია მერკლის ფოთოლში, ასე რომ აუდიტორები
+  შეუძლია დაამტკიცოს სია, რომელიც კვებავდა გათამაშებას.
 
-- `--slots` — number of council seats to fill.
-- `--seed` — 32-byte BLAKE3 seed (64 lowercase hex characters) recorded in the
-  governance minutes for the draw.
-- `--out` — optional output path. When omitted, the JSON summary is printed to
+- `--slots` — საკრებულოს მანდატების რაოდენობა.
+- `--seed` — 32-ბაიტი BLAKE3 თესლი (64 მცირე თექვსმეტობითი სიმბოლო) ჩაწერილი
+  მმართველობის წუთები გათამაშებისთვის.
+- `--out` — სურვილისამებრ გამომავალი გზა. როდესაც გამოტოვებულია, JSON რეზიუმე იბეჭდება
   stdout.
 
-### Output summary
+### გამომავალი რეზიუმე
 
-The command emits a `SortitionSummary` JSON blob. Sample output is stored at
-`docs/examples/ministry/agenda_sortition_summary_example.json`. Key fields:
+ბრძანება გამოსცემს `SortitionSummary` JSON blob-ს. ნიმუშის გამომავალი ინახება
+`docs/examples/ministry/agenda_sortition_summary_example.json`. ძირითადი ველები:
 
-| Field | Description |
+| ველი | აღწერა |
 |-------|-------------|
-| `algorithm` | Sortition label (`agenda-sortition-blake3-v1`). |
-| `roster_digest` | BLAKE3 + SHA-256 digests of the roster file (used to confirm audits operate over the same member list). |
-| `seed_hex` / `slots` | Echo the CLI inputs so auditors can reproduce the draw. |
-| `merkle_root_hex` | Root of the roster Merkle tree (`hash_node`/`hash_leaf` helpers in `xtask/src/ministry_agenda.rs`). |
-| `selected[]` | Entries for each slot, including the canonical member metadata, eligible index, original roster index, deterministic draw entropy, leaf hash, and Merkle proof siblings. |
+| `algorithm` | დახარისხების ეტიკეტი (`agenda-sortition-blake3-v1`). |
+| `roster_digest` | BLAKE3 + SHA-256 აგროვებს ჩამონათვალის ფაილს (გამოიყენება იმისთვის, რომ დაადასტუროს აუდიტის მოქმედება იმავე წევრთა სიაში). |
+| `seed_hex` / `slots` | ეხმიანეთ CLI შეყვანებს, რათა აუდიტორებმა შეძლონ გათამაშების რეპროდუცირება. |
+| `merkle_root_hex` | მერკლის ხის ფესვი (`hash_node`/`hash_leaf` დამხმარეები `xtask/src/ministry_agenda.rs`-ში). |
+| `selected[]` | ჩანაწერები თითოეული სლოტისთვის, მათ შორის კანონიკური წევრის მეტამონაცემები, დასაშვები ინდექსი, ორიგინალური ჩამონათვალის ინდექსი, განმსაზღვრელი გათამაშების ენტროპია, ფოთლების ჰეში და Merkle-ის და-ძმები. |
 
-### Verifying a draw
+### გათამაშების შემოწმება1. მიიღეთ `roster_path` მიერ მითითებული სია და გადაამოწმეთ მისი BLAKE3/SHA-256
+   დაიჯესტები ემთხვევა შეჯამებას.
+2. ხელახლა გაუშვით CLI იგივე სათესლით/სლოტებით/როსტერით; შედეგად მიღებული `selected[].member_id`
+   შეკვეთა უნდა შეესაბამებოდეს გამოქვეყნებულ რეზიუმეს.
+3. კონკრეტული წევრისთვის გამოთვალეთ Merkle-ის ფოთოლი სერიული წევრის JSON-ის გამოყენებით
+   (`norito::json::to_vec(&sortition_member)`) და ჩაყარეთ ყოველი მტკიცებულების ჰეში. ფინალი
+   დაიჯესტი ტოლი უნდა იყოს `merkle_root_hex`. მაგალითის შეჯამებაში დამხმარე გვიჩვენებს
+   როგორ გავაერთიანოთ `eligible_index`, `leaf_hash_hex` და `merkle_proof[]`.
 
-1. Fetch the roster referenced by `roster_path` and verify its BLAKE3/SHA-256
-   digests match the summary.
-2. Re-run the CLI with the same seed/slots/roster; the resulting `selected[].member_id`
-   order should match the published summary.
-3. For a specific member, compute the Merkle leaf using the serialized member JSON
-   (`norito::json::to_vec(&sortition_member)`) and fold in each proof hash. The final
-   digest must equal `merkle_root_hex`. The helper in the example summary shows
-   how to combine `eligible_index`, `leaf_hash_hex`, and `merkle_proof[]`.
+ეს არტეფაქტები აკმაყოფილებს MINFO-2b მოთხოვნას შემოწმებადი შემთხვევითობისთვის,
+k-of-m შერჩევა და მხოლოდ აუდიტის ჩანაწერების დამატება, სანამ ჯაჭვზე API არ იქნება გაყვანილი.
 
-These artefacts satisfy the MINFO-2b requirement for verifiable randomness,
-k-of-m selection, and append-only audit logs until the on-chain API is wired.
+## დადასტურების შეცდომის მითითება
 
-## Validation error reference
-
-`AgendaProposalV1::validate` emits `AgendaProposalValidationError` variants
-whenever a payload fails linting. The table below summarises the most common
-errors so portal reviewers can translate CLI output into actionable guidance.
-
-| Error | Meaning | Remediation |
+`AgendaProposalV1::validate` ასხივებს `AgendaProposalValidationError` ვარიანტებს
+როდესაც ტვირთამწეობა ვერ იშლება. ქვემოთ მოყვანილი ცხრილი აჯამებს ყველაზე გავრცელებულს
+შეცდომები, ასე რომ, პორტალის მიმომხილველებს შეუძლიათ CLI გამომავალი მოქმედების სახელმძღვანელოდ გადათარგმნონ.| შეცდომა | მნიშვნელობა | გამოსწორება |
 |-------|---------|-------------|
-| `UnsupportedVersion { expected, found }` | Payload `version` differs from the validator’s supported schema. | Regenerate the JSON using the latest schema bundle so the version matches `expected`. |
-| `MissingProposalId` / `InvalidProposalIdFormat { value }` | `proposal_id` is empty or not in `AC-YYYY-###` form. | Populate a unique identifier following the documented format before re-submitting. |
-| `MissingSubmissionTimestamp` | `submitted_at_unix_ms` is zero or missing. | Record the submission timestamp in Unix milliseconds. |
-| `InvalidLanguageTag { value }` | `language` is not a valid BCP‑47 tag. | Use a standard tag such as `en`, `ja-JP`, or another locale recognised by BCP‑47. |
-| `MissingSummaryField { field }` | One of `summary.title`, `.motivation`, or `.expected_impact` is empty. | Provide non-empty text for the indicated summary field. |
-| `MissingSubmitterField { field }` | `submitter.name` or `submitter.contact` missing. | Supply the missing submitter metadata so reviewers can contact the proposer. |
-| `InvalidTag { value }` | `tags[]` entry not on the allowlist. | Remove or rename the tag to one of the documented values (`csam`, `malware`, etc.). |
-| `MissingTargets` | `targets[]` array is empty. | Provide at least one target hash family entry. |
-| `MissingTargetLabel { index }` / `MissingTargetReason { index }` | Target entry missing the `label` or `reason` fields. | Fill in the required field for the indexed entry before resubmitting. |
-| `InvalidHashFamily { index, value }` | Unsupported `hash_family` label. | Restrict hash family names to ASCII alphanumerics plus `-_`. |
-| `InvalidHashHex { index, value }` / `TargetDigestTooShort { index }` | Digest is not valid hex or is shorter than 16 bytes. | Provide a lowercase hex digest (≥32 hex chars) for the indexed target. |
-| `DuplicateTarget { index, fingerprint }` | Target digest duplicates an earlier entry or registry fingerprint. | Remove duplicates or merge the supporting evidence into a single target. |
-| `MissingEvidence` | No evidence attachments were supplied. | Attach at least one evidence record linking to reproduction material. |
-| `MissingEvidenceUri { index }` | Evidence entry missing the `uri` field. | Provide the fetchable URI or case identifier for the indexed evidence entry. |
-| `MissingEvidenceDigest { index }` / `InvalidEvidenceDigest { index, value }` | Evidence entry that requires a digest (SoraFS CID or attachment) is missing or has invalid `digest_blake3_hex`. | Supply a 64-character lowercase BLAKE3 digest for the indexed entry. |
+| `UnsupportedVersion { expected, found }` | Payload `version` განსხვავდება ვალიდატორის მხარდაჭერილი სქემისგან. | განაახლეთ JSON სქემის უახლესი ნაკრების გამოყენებით, რათა ვერსია ემთხვეოდეს `expected`-ს. |
+| `MissingProposalId` / `InvalidProposalIdFormat { value }` | `proposal_id` ცარიელია თუ არა `AC-YYYY-###` ფორმით. | ხელახლა გაგზავნამდე შეავსეთ უნიკალური იდენტიფიკატორი დოკუმენტირებული ფორმატის მიხედვით. |
+| `MissingSubmissionTimestamp` | `submitted_at_unix_ms` არის ნული ან აკლია. | ჩაწერეთ წარდგენის დროის შტამპი Unix მილიწამებში. |
+| `InvalidLanguageTag { value }` | `language` არ არის სწორი BCP‑47 თეგი. | გამოიყენეთ სტანდარტული თეგი, როგორიცაა `en`, `ja-JP` ან სხვა ლოკალი, რომელიც აღიარებულია BCP‑47-ით. |
+| `MissingSummaryField { field }` | ერთი `summary.title`, `.motivation` ან `.expected_impact` ცარიელია. | მიუთითეთ არა ცარიელი ტექსტი მითითებული შემაჯამებელი ველისთვის. |
+| `MissingSubmitterField { field }` | აკლია `submitter.name` ან `submitter.contact`. | მიაწოდეთ დაკარგული გამომგზავნის მეტამონაცემები, რათა მიმომხილველებმა შეძლონ დაკავშირება შემოთავაზებულთან. |
+| `InvalidTag { value }` | `tags[]` ჩანაწერი არ არის დაშვებულ სიაში. | წაშალეთ ან დაარქვით ტეგი ერთ-ერთ დოკუმენტურ მნიშვნელობას (`csam`, `malware` და ა.შ.). |
+| `MissingTargets` | `targets[]` მასივი ცარიელია. | მიაწოდეთ მინიმუმ ერთი სამიზნე ჰეშის ოჯახის ჩანაწერი. |
+| `MissingTargetLabel { index }` / `MissingTargetReason { index }` | სამიზნე ჩანაწერს აკლია `label` ან `reason` ველები. | შეავსეთ საჭირო ველი ინდექსირებული ჩანაწერისთვის ხელახლა გაგზავნამდე. |
+| `InvalidHashFamily { index, value }` | მხარდაუჭერელი `hash_family` ლეიბლი. | შეზღუდეთ ჰეშის ოჯახის სახელები ASCII ალფაციფრებით პლუს `-_`. |
+| `InvalidHashHex { index, value }` / `TargetDigestTooShort { index }` | დაიჯესტი არ არის სწორი თექვსმეტობითი ან მოკლეა 16 ბაიტზე. | მიუთითეთ მცირე თექვსმეტობითი დაჯესტი (≥32 თექვსმეტობითი სიმბოლო) ინდექსირებული სამიზნისთვის. |
+| `DuplicateTarget { index, fingerprint }` | სამიზნე დაიჯესტი აორმაგებს ადრინდელ ჩანაწერს ან რეესტრის თითის ანაბეჭდს. | წაშალეთ დუბლიკატები ან გააერთიანეთ დამხმარე მტკიცებულებები ერთ სამიზნეში. |
+| `MissingEvidence` | არანაირი მტკიცებულება არ იყო მოწოდებული. | დაურთეთ მინიმუმ ერთი დამადასტურებელი ჩანაწერი, რომელიც დაკავშირებულია გამრავლების მასალასთან. |
+| `MissingEvidenceUri { index }` | მტკიცებულების ჩანაწერს აკლია `uri` ველი. | მიაწოდეთ მოტანილი URI ან საქმის იდენტიფიკატორი ინდექსირებული მტკიცებულების ჩანაწერისთვის. |
+| `MissingEvidenceDigest { index }` / `InvalidEvidenceDigest { index, value }` | მტკიცებულების ჩანაწერი, რომელიც მოითხოვს დაიჯესტს (SoraFS CID ან დანართი) აკლია ან აქვს არასწორი `digest_blake3_hex`. | მიაწოდეთ 64-სიმბოლოიანი პატარა BLAKE3 დაიჯესტი ინდექსირებული ჩანაწერისთვის. |
 
-## Examples
+## მაგალითები
 
-- `docs/examples/ministry/agenda_proposal_example.json` — canonical,
-  lint-clean proposal payload with two evidence attachments.
-- `docs/examples/ministry/agenda_duplicate_registry.json` — starter registry
-  containing a single BLAKE3 fingerprint and rationale.
+- `docs/examples/ministry/agenda_proposal_example.json` — კანონიკური,
+  lint-clean წინადადების დატვირთვა ორი მტკიცებულების დანართით.
+- `docs/examples/ministry/agenda_duplicate_registry.json` — დამწყებ რეესტრი
+  შეიცავს BLAKE3 თითის ანაბეჭდს და დასაბუთებას.
 
-Reuse these files as templates when integrating portal tooling or writing CI
-checks for automated submissions.
+ხელახლა გამოიყენეთ ეს ფაილები, როგორც შაბლონები პორტალის ხელსაწყოების ინტეგრირებისას ან CI ჩაწერისას
+ამოწმებს ავტომატურ წარდგენას.

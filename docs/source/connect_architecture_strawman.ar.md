@@ -6,31 +6,32 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: a1a6bcc6bca3d7f70b82e35734b71d706ac46d8dc9c728351fabbd8a61dd3f31
 source_last_modified: "2026-01-04T10:50:53.610255+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Connect Session Architecture Strawman (Swift / Android / JS)
+# توصيل بنية الجلسة Strawman (Swift / Android / JS)
 
-This strawman proposal outlines the shared design for Nexus Connect workflows
-across the Swift, Android, and JavaScript SDKs. It is intended to support the
-Feb 2026 cross-SDK workshop and capture open questions before implementation.
+يوضح مقترح رجل القش هذا التصميم المشترك لعمليات سير عمل Nexus Connect
+عبر Swift، وAndroid، وJavaScript SDKs. ويهدف إلى دعم
+ورشة عمل شاملة لأدوات تطوير البرامج (SDK) في فبراير 2026 والتقاط الأسئلة المفتوحة قبل التنفيذ.
 
-> Last updated: 2026-01-29  
-> Authors: Swift SDK Lead, Android Networking TL, JS Lead  
-> Status: Draft for council review (threat model + data retention alignment added 2026-03-12)
+> آخر تحديث: 2026-01-29  
+> المؤلفون: Swift SDK Lead، Android Networking TL، JS Lead  
+> الحالة: مسودة لمراجعة المجلس (تمت إضافة نموذج التهديد + محاذاة الاحتفاظ بالبيانات في 12-03-2026)
 
-## Goals
+## الأهداف
 
-1. Align wallet ↔ dApp session lifecycle, including connection bootstrapping,
-   approvals, signing requests, and teardown.
-2. Define the Norito envelope schema (open/approve/sign/control) shared by all
-   SDKs and ensure parity with `connect_norito_bridge`.
-3. Split responsibilities between transport (WebSocket/WebRTC), encryption
-   (Norito Connect frames + key exchange), and application layers (SDK facades).
-4. Ensure deterministic behaviour across desktop/mobile platforms, including
-   offline buffering and reconnection.
+1. محاذاة دورة حياة جلسة المحفظة ↔ dApp، بما في ذلك تمهيد الاتصال،
+   الموافقات وطلبات التوقيع والتفكيك.
+2. حدد مخطط المغلف Norito (فتح/موافقة/توقيع/تحكم) المشترك بين الجميع
+   SDKs والتأكد من التكافؤ مع `connect_norito_bridge`.
+3. تقسيم المسؤوليات بين النقل (WebSocket/WebRTC)، والتشفير
+   (Norito ربط الإطارات + تبادل المفاتيح)، وطبقات التطبيق (واجهات SDK).
+4. ضمان السلوك الحتمي عبر منصات سطح المكتب/المحمول، بما في ذلك
+   التخزين المؤقت وإعادة الاتصال دون اتصال.
 
-## Session Lifecycle (High-Level)
+## دورة حياة الجلسة (عالية المستوى)
 
 ```
 ┌────────────┐      ┌─────────────┐      ┌────────────┐
@@ -56,363 +57,342 @@ Feb 2026 cross-SDK workshop and capture open questions before implementation.
       │ 6. control frames for reject/close, error propagation, heartbeats.
 ```
 
-## Envelope/Norito Schema
+## مخطط المغلف/Norito
 
-All SDKs MUST use the canonical Norito schema defined in `connect_norito_bridge`:
+يجب أن تستخدم جميع حزم SDK مخطط Norito الأساسي المحدد في `connect_norito_bridge`:
 
-- `EnvelopeV1` (open / approve / sign / control)
-- `ConnectFrameV1` (ciphertext frames w/ AEAD payload)
-- Control codes:
-  - `open_ext` (metadata, permissions)
-  - `approve_ext` (account, permissions, proofs, signature)
-  - `reject`, `close`, `ping/pong`, `error`
+- `EnvelopeV1` (فتح/موافقة/توقيع/تحكم)
+- `ConnectFrameV1` (إطارات النص المشفر مع حمولة AEAD)
+- رموز التحكم:
+  - `open_ext` (بيانات التعريف، الأذونات)
+  - `approve_ext` (الحساب، الأذونات، البراهين، التوقيع)
+  - `reject`، `close`، `ping/pong`، `error`
 
-Swift previously shipped placeholder JSON encoders (`ConnectCodec.swift`). As of Apr 2026 the SDK
-always uses the Norito bridge and fails closed when the XCFramework is missing, but this strawman
-still captures the mandate that led to the bridge integration:
+تم شحن وحدات تشفير JSON للعنصر النائب مسبقًا من Swift (`ConnectCodec.swift`). اعتبارًا من أبريل 2026، تم تطوير SDK
+يستخدم دائمًا الجسر Norito ويفشل في الإغلاق عندما يكون XCFramework مفقودًا، ولكن رجل القش هذا
+لا يزال يجسد التفويض الذي أدى إلى تكامل الجسر:
 
-| Function | Description | Status |
-|----------|-------------|--------|
-| `connect_norito_encode_control_open_ext` | dApp open frame | Implemented in bridge |
-| `connect_norito_encode_control_approve_ext` | Wallet approval | Implemented |
-| `connect_norito_encode_envelope_sign_request_tx/raw` | Sign requests | Implemented |
-| `connect_norito_encode_envelope_sign_result_ok/err` | Sign results | Implemented |
-| `connect_norito_decode_*` | Parsing for wallets/dApps | Implemented |
+| وظيفة | الوصف | الحالة |
+|----------|------------|--------|
+| `connect_norito_encode_control_open_ext` | dApp open frame | تم التنفيذ في الجسر |
+| `connect_norito_encode_control_approve_ext` | موافقة المحفظة | تم التنفيذ |
+| `connect_norito_encode_envelope_sign_request_tx/raw` | طلبات التوقيع | تم التنفيذ |
+| `connect_norito_encode_envelope_sign_result_ok/err` | نتائج التوقيع | تم التنفيذ |
+| `connect_norito_decode_*` | تحليل للمحافظ/dApps | تم التنفيذ |
 
-### Required Work
+### العمل المطلوب
 
-- Swift: Replace placeholder `ConnectCodec` JSON helpers with bridge calls and surface
-  typed wrappers (`ConnectFrame`, `ConnectEnvelope`) using the shared Norito types. ✅ (Apr 2026)
-- Android/JS: Ensure the same wrappers exist; align error codes and metadata keys.
-- Shared: Document encryption (X25519 key exchange, AEAD) with consistent key derivation
-  per Norito spec, and provide sample integration tests using the Rust bridge.
+- Swift: استبدل العنصر النائب `ConnectCodec` مساعدي JSON باستدعاءات الجسر والسطح
+  الأغلفة المكتوبة (`ConnectFrame`، `ConnectEnvelope`) باستخدام أنواع Norito المشتركة. ✅ (أبريل 2026)
+- Android/JS: تأكد من وجود نفس الأغلفة؛ محاذاة رموز الخطأ ومفاتيح البيانات الوصفية.
+- مشترك: تشفير المستندات (تبادل المفاتيح X25519، AEAD) مع اشتقاق مفاتيح متسق
+  وفقًا لمواصفات Norito، وتوفير نماذج اختبارات التكامل باستخدام Rust Bridge.
 
-## Transport Contract
+##عقد النقل- النقل الأساسي: WebSocket (`/v1/connect/ws?sid=<session_id>`).
+- مستقبل اختياري: WebRTC (TBD) – خارج نطاق رجل القش الأولي.
+- استراتيجية إعادة الاتصال: التراجع الأسي مع الارتعاش الكامل (قاعدة 5 ثوان، حد أقصى 60 ثانية)؛ الثوابت المشتركة عبر Swift وAndroid وJS بحيث تظل عمليات إعادة المحاولة قابلة للتنبؤ بها.
+- إيقاع بينج/بونج: نبضات قلب لمدة 30 ثانية مع التسامح مع ثلاث كرات بونج ضائعة قبل إعادة الاتصال؛ يقوم JS بتثبيت الحد الأدنى للفاصل الزمني إلى 15 ثانية لتلبية قواعد تقييد المتصفح.
+- خطافات الدفع: يعرض Android Wallet SDK تكامل FCM الاختياري لعمليات التنبيه، بينما يظل JS قائمًا على الاستقصاء (القيود الموثقة لأذونات دفع المتصفح).
+- مسؤوليات SDK:
+  - الحفاظ على ضربات القلب بينج/بونج (تجنب استنزاف البطاريات على الهاتف المحمول).
+  - تخزين الإطارات الصادرة مؤقتًا في حالة عدم الاتصال بالإنترنت (قائمة الانتظار المحدودة، مستمرة في dApp).
+- توفير واجهة برمجة تطبيقات دفق الأحداث (Swift Combine `AsyncStream`، Android Flow، JS async iter).
+- إعادة توصيل الخطافات السطحية والسماح بإعادة الاشتراك اليدوي.
+- تنقيح القياس عن بعد: يتم إصدار عدادات مستوى الجلسة فقط (`sid` التجزئة، الاتجاه،
+  نافذة التسلسل، وعمق قائمة الانتظار) مع الأملاح الموثقة في قياس الاتصال عن بعد
+  دليل؛ يجب ألا تظهر الرؤوس/المفاتيح مطلقًا في السجلات أو سلاسل التصحيح.
 
-- Primary transport: WebSocket (`/v1/connect/ws?sid=<session_id>`).
-- Optional future: WebRTC (TBD) – out of scope for initial strawman.
-- Reconnect strategy: exponential back-off with full jitter (base 5 s, max 60 s); shared constants across Swift, Android, and JS so retries remain predictable.
-- Ping/pong cadence: 30 s heartbeat with tolerance for three missed pongs before reconnect; JS clamps minimum interval to 15 s to satisfy browser throttling rules.
-- Push hooks: Android wallet SDK exposes optional FCM integration for wake-ups, while JS stays polling-based (documented limitations for browser push permissions).
-- SDK responsibilities:
-  - Maintain ping/pong heartbeats (avoid draining batteries on mobile).
-  - Buffer outgoing frames when offline (bounded queue, persisted for dApp).
-- Provide event stream API (Swift Combine `AsyncStream`, Android Flow, JS async iter).
-- Surface reconnect hooks and allow manual re-subscribe.
-- Telemetry redaction: only emit session-level counters (`sid` hash, direction,
-  sequence window, queue depth) with salts documented in the Connect telemetry
-  guide; headers/keys must never appear in logs or debug strings.
+## التشفير وإدارة المفاتيح
 
-## Encryption & Key Management
+### معرفات الجلسة والأملاح
 
-### Session identifiers & salts
+- `sid` هو معرف 32 بايت مشتق من `BLAKE2b-256("iroha-connect|sid|" || chain_id || app_ephemeral_pk || nonce16)`.  
+  تحسبها التطبيقات اللامركزية قبل الاتصال بـ `/v1/connect/session`؛ تردد المحافظ صدى ذلك في إطارات `approve` حتى يتمكن كلا الجانبين من مفتاح المجلات والقياس عن بعد بشكل متسق.
+- يغذي نفس الملح كل خطوة لاشتقاق المفتاح، لذا لا تعتمد مجموعات تطوير البرامج (SDK) أبدًا على الإنتروبيا التي يتم حصادها من النظام الأساسي المضيف.
 
-- `sid` is a 32-byte identifier derived from `BLAKE2b-256("iroha-connect|sid|" || chain_id || app_ephemeral_pk || nonce16)`.  
-  DApps compute it before calling `/v1/connect/session`; wallets echo it in `approve` frames so both sides can key journals and telemetry consistently.
-- The same salt feeds every key-derivation step so SDKs never rely on entropy harvested from the host platform.
+### التعامل مع المفاتيح سريعة الزوال
 
-### Ephemeral key handling
-
-- Every session uses fresh X25519 key material.  
-  Swift stores it in the Keychain/Secure Enclave via `ConnectCrypto`, Android wallets default to StrongBox (falling back to TEE-backed keystores), and JS requires a secure-context WebCrypto instance or the native `iroha_js_host` plug-in.
-- Open frames include the dApp ephemeral public key plus an optional attestation bundle. Wallet approvals return the wallet public key and any hardware attestation needed for compliance flows.
-- Attestation payloads follow the accepted schema:  
+- تستخدم كل جلسة مادة رئيسية X25519 جديدة.  
+  يقوم Swift بتخزينها في Keychain/Secure Enclave عبر `ConnectCrypto`، ومحافظ Android الافتراضية هي StrongBox (تعود إلى مخازن المفاتيح المدعومة بـ TEE)، وتتطلب JS مثيل WebCrypto ذي السياق الآمن أو المكون الإضافي `iroha_js_host` الأصلي.
+- تتضمن الإطارات المفتوحة المفتاح العام المؤقت لـ dApp بالإضافة إلى حزمة تصديق اختيارية. تقوم موافقات المحفظة بإرجاع المفتاح العام للمحفظة وأي شهادة أجهزة مطلوبة لتدفقات الامتثال.
+- تتبع حمولات التصديق المخطط المقبول:  
   `attestation { platform, evidence_b64, statement_hash }`.  
-  Browsers may omit the block; native wallets include it whenever hardware-backed keys are in use.
+  قد تحذف المتصفحات الحظر؛ تقوم المحافظ الأصلية بتضمينها عند استخدام المفاتيح المدعومة بالأجهزة.
 
-### Directional keys & AEAD
+### مفاتيح الاتجاه وAEAD
 
-- Shared secrets are expanded with HKDF-SHA256 (via the Rust bridge helpers) and domain-separated info strings:
-  - `iroha-connect|k_app` → app→wallet traffic.
-  - `iroha-connect|k_wallet` → wallet→app traffic.
-- AEAD is ChaCha20-Poly1305 for the v1 envelope (`connect_norito_bridge` exposes helpers on every platform).  
-  Associated data equals `("connect:v1", sid, dir, seq_le, kind=ciphertext)` so tampering on headers is detected.
-- Nonces are derived from the 64-bit sequence counter (`nonce[0..4]=0`, `nonce[4..12]=seq_le`). Shared helper tests ensure BigInt/UInt conversions behave identically across SDKs.
+- يتم توسيع الأسرار المشتركة باستخدام HKDF-SHA256 (عبر مساعدي Rust Bridge) وسلاسل المعلومات المنفصلة عن المجال:
+  - `iroha-connect|k_app` → التطبيق → حركة مرور المحفظة.
+  - `iroha-connect|k_wallet` → المحفظة → حركة مرور التطبيق.
+- AEAD هو ChaCha20-Poly1305 للمغلف v1 (يعرض `connect_norito_bridge` المساعدين على كل منصة).  
+  البيانات المقترنة تساوي `("connect:v1", sid, dir, seq_le, kind=ciphertext)` لذا تم اكتشاف التلاعب بالرؤوس.
+- يتم اشتقاق الحروف غير من عداد التسلسل 64 بت (`nonce[0..4]=0`، `nonce[4..12]=seq_le`). تضمن اختبارات المساعد المشتركة أن تعمل تحويلات BigInt/UInt بشكل مماثل عبر مجموعات SDK.
 
-### Rotation & recovery handshake
+### مصافحة التدوير والاسترداد- يظل التدوير اختياريًا ولكن يتم تعريف البروتوكول: تُصدر التطبيقات اللامركزية إطار `Control::RotateKeys` عندما تقترب عدادات التسلسل من حاجز الالتفاف، وتستجيب المحافظ بالمفتاح العام الجديد بالإضافة إلى إقرار موقع، ويشتق الجانبان على الفور مفاتيح اتجاه جديدة دون إغلاق الجلسة.
+- يؤدي فقدان المفتاح من جانب المحفظة إلى تشغيل نفس المصافحة متبوعة بعنصر تحكم `resume` حتى تتمكن التطبيقات اللامركزية من مسح النص المشفر المخزن مؤقتًا الذي يستهدف المفتاح المتقاعد.
 
-- Rotation remains optional but the protocol is defined: dApps emit a `Control::RotateKeys` frame when sequence counters approach the wrap guard, wallets respond with the new public key plus a signed acknowledgement, and both sides immediately derive new directional keys without closing the session.
-- Wallet-side key loss triggers the same handshake followed by a `resume` control so dApps know to flush cached ciphertext that targeted the retired key.
+للاطلاع على احتياطيات CryptoKit التاريخية، راجع `docs/connect_swift_ios.md`؛ لدى Kotlin وJS مراجع مطابقة ضمن `docs/connect_kotlin_ws*.md`.
 
-For historic CryptoKit fallbacks see `docs/connect_swift_ios.md`; Kotlin and JS have matching references under `docs/connect_kotlin_ws*.md`.
+## الأذونات والبراهين
 
-## Permissions & Proofs
+- يجب أن تكون بيانات الأذونات ذهابًا وإيابًا عبر بنية Norito المشتركة التي تم تصديرها بواسطة الجسر.  
+  الحقول:
+  - `methods` — الأفعال (`sign_transaction`، `sign_raw`، `submit_proof`، …).  
+  - `events` - الاشتراكات التي يُسمح للتطبيق اللامركزي بالإرفاق بها.  
+  - `resources` - عوامل تصفية اختيارية للحساب/الأصول حتى تتمكن المحافظ من الوصول إلى النطاق.  
+  - `constraints` - معرّف السلسلة أو TTL أو مقابض السياسة المخصصة التي تفرضها المحفظة قبل التوقيع.
+- ركوب البيانات الوصفية للامتثال إلى جانب الأذونات:
+  - يحتوي `attachments[]` الاختياري على مراجع المرفقات Norito (حزم KYC، وإيصالات المنظم).  
+  - `compliance_manifest_id` يربط الطلب ببيان معتمد مسبقًا حتى يتمكن المشغلون من تدقيق المصدر.
+- تستخدم استجابات المحفظة الرموز المتفق عليها:
+  - `user_declined`، `permissions_mismatch`، `compliance_failed`، `internal_error`.  
+  قد يحمل كل منها `localized_message` لتلميحات واجهة المستخدم بالإضافة إلى `reason_code` المقروء آليًا.
+- تتضمن إطارات الموافقة الحساب/وحدة التحكم المحددة، وصدى الإذن، وحزمة الإثبات (إثبات ZK أو الشهادة)، وأي تبديل للسياسة (على سبيل المثال، `offline_queue_enabled`).  
+  تعكس عمليات الرفض نفس المخطط مع `proof` الفارغ ولكن لا تزال تسجل `sid` لقابلية التدقيق.
 
-- Permission manifests must round-trip through the shared Norito struct exported by the bridge.  
-  Fields:
-  - `methods` — verbs (`sign_transaction`, `sign_raw`, `submit_proof`, …).  
-  - `events` — subscriptions the dApp is allowed to attach to.  
-  - `resources` — optional account/asset filters so wallets can scope access.  
-  - `constraints` — chain ID, TTL, or custom policy knobs that the wallet enforces before signing.
-- Compliance metadata rides alongside permissions:
-  - Optional `attachments[]` contain Norito attachment references (KYC bundles, regulator receipts).  
-  - `compliance_manifest_id` ties the request to a previously approved manifest so operators can audit provenance.
-- Wallet responses use the agreed codes:
-  - `user_declined`, `permissions_mismatch`, `compliance_failed`, `internal_error`.  
-  Each may carry a `localized_message` for UI hints plus a machine-readable `reason_code`.
-- Approval frames include the selected account/controller, permission echo, proof bundle (ZK proof or attestation), and any policy toggles (e.g., `offline_queue_enabled`).  
-  Rejections mirror the same schema with empty `proof` but still record the `sid` for auditability.
+## واجهات SDK
 
-## SDK Facades
+| SDK | واجهة برمجة التطبيقات المقترحة | ملاحظات |
+|-----|-------------|-------|
+| سويفت | `ConnectClient`، `ConnectSession`، `ConnectRequest`، `ConnectApproval` | استبدل العناصر النائبة بأغلفة مكتوبة + تدفقات غير متزامنة. |
+| أندرويد | كوروتينات Kotlin + فئات مختومة للإطارات | تتماشى مع بنية Swift لسهولة النقل. |
+| شبيبة | التكرارات غير المتزامنة + تعدادات TypeScript لأنواع الإطارات | توفير SDK صديق للمجمع (المتصفح/العقدة). |
 
-| SDK | Proposed API | Notes |
-|-----|--------------|-------|
-| Swift | `ConnectClient`, `ConnectSession`, `ConnectRequest`, `ConnectApproval` | Replace placeholders with typed wrappers + async streams. |
-| Android | Kotlin coroutines + sealed classes for frames | Align with Swift structure for portability. |
-| JS | Async iterators + TypeScript enums for frame kinds | Provide bundler-friendly SDK (browser/node). |
-
-### Common behaviours
-
-- `ConnectSession` orchestrates lifecycle:
-  1. Establish WebSocket, perform handshake.
-  2. Exchange open/approve frames.
-  3. Handle sign requests/responses.
-  4. Emit events to application layer.
-- Provide high-level helpers:
-  - `requestSignature(tx, metadata)`
-  - `approveSession(account, permissions)`
-  - `reject(reason)`
-  - `cancelRequest(hash)` – emits a control frame acknowledged by the wallet.
-- Error handling: map Norito error codes to SDK-specific errors; include
-  domain-specific codes for UI using the shared taxonomy (`Transport`, `Codec`, `Authorization`, `Timeout`, `QueueOverflow`, `Internal`). Swift's baseline implementation + telemetry guide lives in [`connect_error_taxonomy.md`](connect_error_taxonomy.md) and is the reference for Android/JS parity.
-- Emit telemetry hooks for queue depth, reconnect counts, and request latency (`connect.queue_depth`, `connect.reconnects_total`, `connect.latency_ms`).
+### السلوكيات الشائعة- يقوم `ConnectSession` بتنظيم دورة الحياة:
+  1. إنشاء WebSocket، وإجراء المصافحة.
+  2. تبادل الإطارات المفتوحة/الموافقة.
+  3. التعامل مع طلبات التوقيع/الردود.
+  4. إرسال الأحداث إلى طبقة التطبيق.
+- توفير مساعدين رفيعي المستوى:
+  -`requestSignature(tx, metadata)`
+  -`approveSession(account, permissions)`
+  -`reject(reason)`
+  - `cancelRequest(hash)` – يصدر إطار تحكم تعترف به المحفظة.
+- معالجة الأخطاء: قم بتعيين رموز الخطأ Norito إلى الأخطاء الخاصة بـ SDK؛ تشمل
+  الرموز الخاصة بالمجال لواجهة المستخدم باستخدام التصنيف المشترك (`Transport`، `Codec`، `Authorization`، `Timeout`، `QueueOverflow`، `Internal`). يوجد تطبيق Swift الأساسي + دليل القياس عن بعد في [`connect_error_taxonomy.md`](connect_error_taxonomy.md) وهو المرجع لتكافؤ Android/JS.
+- قم بإصدار خطافات القياس عن بعد لمعرفة عمق قائمة الانتظار، وأعد توصيل الأعداد، واطلب زمن الاستجابة (`connect.queue_depth`، `connect.reconnects_total`، `connect.latency_ms`).
  
-## Sequence Numbers & Flow Control
+## الأرقام التسلسلية والتحكم في التدفق
 
-- Each direction keeps a dedicated 64-bit `sequence` counter that starts at zero when the session opens. The shared helper types clamp increments and trigger a `ConnectError.sequenceOverflow` + key-rotation handshake well before the counter would wrap.
-- Nonces and associated data reference the sequence number, so duplicates can be rejected without parsing payloads. SDKs must store `{sid, dir, seq, payload_hash}` in their journals to make deduplication deterministic across reconnects.
-- Wallets advertise back-pressure via a logical window (`FlowControl` control frames). DApps dequeue only when a window token is available; wallets emit new tokens after processing ciphertext to keep pipelines bounded.
-- Resume negotiation is explicit: both sides emit `Control::Resume { seq_app_max, seq_wallet_max, queue_depths }` after reconnecting so observers can verify how much data was re-sent and whether journals contain gaps.
-- Conflicts (e.g., two payloads with the same `(sid, dir, seq)` but different hashes) escalate to `ConnectError.Internal` and force a new `sid` to avoid silent divergence.
+- يحتفظ كل اتجاه بعداد `sequence` مخصص 64 بت يبدأ من الصفر عند فتح الجلسة. تقوم أنواع المساعد المشترك بزيادات التثبيت وتشغيل مصافحة دوران المفتاح `ConnectError.sequenceOverflow` + قبل وقت طويل من التفاف العداد.
+- تشير الأرقام غير المحددة والبيانات المرتبطة بها إلى الرقم التسلسلي، لذلك يمكن رفض التكرارات دون تحليل الحمولات. يجب أن تقوم مجموعات SDK بتخزين `{sid, dir, seq, payload_hash}` في يومياتها لجعل إلغاء البيانات المكررة أمرًا حتميًا عبر عمليات إعادة الاتصال.
+- تعلن المحافظ عن الضغط الخلفي عبر نافذة منطقية (إطارات التحكم `FlowControl`). يتم وضع DApps في قائمة الانتظار فقط عند توفر رمز مميز للنافذة؛ تُصدر المحافظ رموزًا جديدة بعد معالجة النص المشفر لإبقاء خطوط الأنابيب محدودة.
+- التفاوض على السيرة الذاتية واضح: يصدر كلا الجانبين `Control::Resume { seq_app_max, seq_wallet_max, queue_depths }` بعد إعادة الاتصال حتى يتمكن المراقبون من التحقق من كمية البيانات التي تم إعادة إرسالها وما إذا كانت المجلات تحتوي على فجوات.
+- تتصاعد التعارضات (على سبيل المثال، حمولتان بنفس `(sid, dir, seq)` لكن تجزئات مختلفة) إلى `ConnectError.Internal` وتفرض `sid` جديد لتجنب الاختلاف الصامت.
 
-## Threat model and data retention alignment
+## محاذاة نموذج التهديد والاحتفاظ بالبيانات- **الأسطح التي تم أخذها في الاعتبار:** نقل WebSocket، تشفير/فك تشفير الجسر Norito،
+  استمرارية المجلة، ومصدري القياس عن بعد، وعمليات الاسترجاعات التي تواجه التطبيق.
+- **الأهداف الأساسية:** حماية أسرار الجلسة (مفاتيح X25519، ومفاتيح AEAD المشتقة،
+  عدادات nonce/التسلسل) من التسريبات في السجلات/القياس عن بعد، ومنع إعادة التشغيل و
+  هجمات خفض المستوى، والاحتفاظ المقيد بالمجلات وتقارير الشذوذ.
+- ** عمليات التخفيف المقننة: **
+  - تحتوي المجلات على نص مشفر فقط؛ تقتصر البيانات التعريفية المخزنة على التجزئة والطول
+    الحقول والطوابع الزمنية والأرقام التسلسلية.
+  - تعمل حمولات القياس عن بعد على تنقيح أي محتوى رأسي/حمولة وتتضمن فقط
+    التجزئة المملحة `sid` بالإضافة إلى العدادات المجمعة؛ تمت مشاركة قائمة مراجعة التنقيح
+    بين SDKs لتكافؤ التدقيق.
+  - يتم تدوير سجلات الجلسة وتنتهي بعد 7 أيام بشكل افتراضي. محافظ تعرض
+    مقبض `connectLogRetentionDays` (SDK الافتراضي 7) وتوثيق السلوك
+    لذلك يمكن لعمليات النشر المنظمة تثبيت نوافذ أكثر صرامة.
+  - إساءة استخدام Bridge API (ارتباطات مفقودة، نص مشفر تالف، تسلسل غير صالح)
+    إرجاع الأخطاء المكتوبة دون تكرار الحمولات الأولية أو المفاتيح.
 
-- **Surfaces considered:** WebSocket transport, Norito bridge encode/decode,
-  journal persistence, telemetry exporters, and app-facing callbacks.
-- **Primary goals:** protect session secrets (X25519 keys, derived AEAD keys,
-  nonce/sequence counters) from leaks in logs/telemetry, prevent replay and
-  downgrade attacks, and bound retention of journals and anomaly reports.
-- **Mitigations codified:**
-  - Journals carry ciphertext only; metadata stored is limited to hashes, length
-    fields, timestamps, and sequence numbers.
-  - Telemetry payloads redacts any header/payload content and includes only
-    salted hashes of `sid` plus aggregate counters; redaction checklist shared
-    between SDKs for audit parity.
-  - Session logs are rotated and age out after 7 days by default. Wallets expose
-    a `connectLogRetentionDays` knob (SDK default 7) and document the behaviour
-    so regulated deployments can pin stricter windows.
-  - Bridge API misuse (missing bindings, corrupt ciphertext, invalid sequence)
-    returns typed errors without echoing raw payloads or keys.
+يتم تعقب الأسئلة المعلقة من المراجعة في `docs/source/sdk/swift/connect_workshop.md`
+وسيتم حلها في محضر المجلس؛ بمجرد إغلاق رجل القش سيكون
+تمت ترقيته من المسودة إلى المقبول.
 
-Pending questions from review are tracked in `docs/source/sdk/swift/connect_workshop.md`
-and will be resolved in the council minutes; once closed the strawman will be
-promoted from draft to accepted.
+## التخزين المؤقت وإعادة الاتصال دون اتصال
 
-## Offline Buffering & Reconnections
+### عقد اليومية
 
-### Journaling contract
+يحتفظ كل SDK بمجلة إلحاقية فقط لكل جلسة، لذا فإن التطبيق اللامركزي والمحفظة
+يمكن وضع الإطارات في قائمة الانتظار أثناء عدم الاتصال بالإنترنت، واستئناف العمل دون فقدان البيانات، وتقديم الأدلة
+للقياس عن بعد. يعكس العقد أنواع الجسر Norito وبالتالي نفس البايت
+يبقى التمثيل عبر مكدسات المحمول/JS.- تعيش المجلات تحت معرف جلسة مجزأة (`sha256(sid)`)، مما يؤدي إلى إنتاج اثنين
+  الملفات لكل جلسة: `app_to_wallet.queue` و`wallet_to_app.queue`. استخدامات سويفت
+  مجمّع ملفات في وضع الحماية، يقوم Android بتخزين الملفات عبر `Room`/`FileChannel`،
+  ويكتب JS إلى IndexedDB؛ جميع التنسيقات ثنائية ومستقرة.
+- يتم تسلسل كل سجل كـ `ConnectJournalRecordV1`:
+  - `direction: u8` (`0 = app→wallet`، `1 = wallet→app`)
+  -`sequence: u64`
+  - `payload_hash: [u8; 32]` (Blake3 للنص المشفر + الرؤوس)
+  -`ciphertext_len: u32`
+  -`received_at_ms: u64`
+  -`expires_at_ms: u64`
+  - `ciphertext: [u8; ciphertext_len]` (إطار Norito الدقيق مغلف بالفعل بـ AEAD)
+- تقوم المجلات بتخزين النص المشفر حرفيًا. نحن لا نقوم أبدًا بإعادة تشفير الحمولة؛ إيد
+  تقوم الرؤوس بالفعل بمصادقة مفاتيح الاتجاه، لذلك يتم تقليل الثبات إلى
+  fsyncing السجل الملحق.
+- تعكس بنية `ConnectQueueState` في الذاكرة البيانات التعريفية للملف (العمق،
+  البايتات المستخدمة، التسلسل الأقدم/الأحدث). إنه يغذي مصدري القياس عن بعد و
+  مساعد `FlowControl`.
+- الحد الأقصى للمجلات هو 32 إطارًا / 1 ميجابايت بشكل افتراضي؛ ضرب الغطاء يطرد
+  أقدم الإدخالات (`reason=overflow`). `ConnectFeatureConfig.max_queue_len`
+  يتجاوز هذه الإعدادات الافتراضية لكل عملية نشر.
+- تحتفظ المجلات بالبيانات لمدة 24 ساعة (`expires_at_ms`). الخلفية GC يزيل التي لا معنى لها
+  المقاطع بفارغ الصبر حتى تظل البصمة الموجودة على القرص محدودة.
+- السلامة من الأعطال: إلحاق مرآة الذاكرة وfsync وتحديثها قبل الإخطار
+  المتصل. عند بدء التشغيل، تقوم مجموعات تطوير البرامج (SDK) بفحص الدليل، والتحقق من صحة المجاميع الاختبارية للسجل،
+  وإعادة بناء `ConnectQueueState`. الفساد يتسبب في أن يكون السجل المخالف
+  تم تخطيها، ووضع علامة عليها عبر القياس عن بعد، وعزلها بشكل اختياري من أجل عمليات تفريغ الدعم.
+- نظرًا لأن النص المشفر يلبي بالفعل مظروف الخصوصية Norito، فإن الطريقة الوحيدة
+  البيانات التعريفية الإضافية المسجلة هي معرف الجلسة المجزأة. التطبيقات تحتاج إلى المزيد
+  يمكن للخصوصية الاشتراك في `telemetry_opt_in = false`، الذي يقوم بتخزين المجلات ولكن
+  ينقح الصادرات المتعمقة في قائمة الانتظار ويعطل مشاركة `sid` المجزأة في السجلات.
+- تكشف مجموعات SDK عن `ConnectQueueObserver` حتى تتمكن المحافظ/التطبيقات اللامركزية من فحص عمق قائمة الانتظار،
+  المصارف، ونتائج GC؛ يغذي هذا الخطاف واجهات مستخدم الحالة دون تحليل السجلات.
 
-Every SDK maintains an append-only journal per session so the dApp and wallet
-can queue frames while offline, resume without data loss, and provide evidence
-for telemetry. The contract mirrors the Norito bridge types so the same byte
-representation survives across the mobile/JS stacks.
+### إعادة واستئناف الدلالات
 
-- Journals live under a hashed session identifier (`sha256(sid)`), producing two
-  files per session: `app_to_wallet.queue` and `wallet_to_app.queue`. Swift uses
-  a sandboxed file wrapper, Android stores the files via `Room`/`FileChannel`,
-  and JS writes to IndexedDB; all formats are binary and endian-stable.
-- Each record serialises as `ConnectJournalRecordV1`:
-  - `direction: u8` (`0 = app→wallet`, `1 = wallet→app`)
-  - `sequence: u64`
-  - `payload_hash: [u8; 32]` (Blake3 of ciphertext + headers)
-  - `ciphertext_len: u32`
-  - `received_at_ms: u64`
-  - `expires_at_ms: u64`
-  - `ciphertext: [u8; ciphertext_len]` (exact Norito frame already AEAD-wrapped)
-- Journals store ciphertext verbatim. We never re-encrypt the payload; AEAD
-  headers already authenticate direction keys, so persistence reduces to
-  fsyncing the appended record.
-- A `ConnectQueueState` struct in memory mirrors the file metadata (depth,
-  bytes used, oldest/newest seq). It feeds the telemetry exporters and the
-  `FlowControl` helper.
-- Journals cap at 32 frames / 1 MiB by default; hitting the cap evicts the
-  oldest entries (`reason=overflow`). `ConnectFeatureConfig.max_queue_len`
-  overrides these defaults per deployment.
-- Journals retain data for 24 h (`expires_at_ms`). Background GC removes stale
-  segments eagerly so the on-disk footprint stays bounded.
-- Crash safety: append, fsync, and update the memory mirror _before_ notifying
-  the caller. On startup, SDKs scan the directory, validate record checksums,
-  and rebuild `ConnectQueueState`. Corruption causes the offending record to be
-  skipped, flagged via telemetry, and optionally quarantined for support dumps.
-- Because ciphertext already satisfies the Norito privacy envelope, the only
-  additional metadata recorded is the hashed session id. Apps wanting extra
-  privacy can opt into `telemetry_opt_in = false`, which stores journals but
-  redacts queue-depth exports and disables sharing hashed `sid` in logs.
-- SDKs expose `ConnectQueueObserver` so wallets/dApps can inspect queue depth,
-  drains, and GC outcomes; this hook feeds status UIs without parsing logs.
-
-### Replay & resume semantics
-
-1. When reconnecting, SDKs emit `Control::Resume` with `{seq_app_max,
-   seq_wallet_max, queued_app, queued_wallet, journal_hash}`. The hash is the
-   Blake3 digest of the append-only journal so mismatched peers can detect drift.
-2. The receiving peer compares the resume payload with its state, requests
-   retransmission when gaps exist, and acknowledges replayed frames via
+1. عند إعادة الاتصال، تصدر مجموعات SDK `Control::Resume` مع `{seq_app_max,
+   seq_wallet_max، queued_app، queued_wallet، Journal_hash}`. التجزئة هي
+   ملخص Blake3 لمجلة الإلحاق فقط حتى يتمكن الأقران غير المتطابقين من اكتشاف الانحراف.
+2. يقوم النظير المتلقي بمقارنة حمولة السيرة الذاتية مع حالتها وطلباتها
+   إعادة الإرسال عند وجود فجوات، والتعرف على الإطارات المعاد تشغيلها عبر
    `Control::ResumeAck`.
-3. Replayed frames always respect insertion order (`sequence` then write-time).
-   Wallet SDKs MUST apply back-pressure by issuing `FlowControl` tokens (also
-   journaled) so dApps cannot flood the queue while offline.
-4. Journals store ciphertext verbatim, so replay simply pumps the recorded bytes
-   back through the transport and decoder. No per-SDK re-encoding is allowed.
+3. تحترم الإطارات التي يتم إعادة تشغيلها دائمًا ترتيب الإدراج (`sequence` ثم وقت الكتابة).
+   يجب أن تطبق مجموعات SDK للمحفظة الضغط الخلفي عن طريق إصدار الرموز المميزة `FlowControl` (أيضًا
+   Journaled) لذلك لا يمكن لتطبيقات dApps إغراق قائمة الانتظار أثناء عدم الاتصال بالإنترنت.
+4. تقوم المجلات بتخزين النص المشفر حرفيًا، لذا فإن إعادة التشغيل تضخ ببساطة وحدات البايت المسجلة
+   مرة أخرى من خلال النقل وفك. لا يُسمح بإعادة ترميز كل SDK.
 
-### Reconnection flow
+### تدفق إعادة الاتصال1. يقوم النقل بإعادة إنشاء WebSocket والتفاوض على الفاصل الزمني ping الجديد.
+2. يقوم dApp بإعادة تشغيل الإطارات الموجودة في قائمة الانتظار بالترتيب، مع احترام الضغط الخلفي من المحفظة
+   (ينتج عن `ConnectSession.nextControlFrame()` الرموز المميزة `FlowControl`).
+3. تقوم المحفظة بفك تشفير النتائج المخزنة مؤقتًا، والتحقق من رتابة التسلسل، و
+   يعيد الموافقات المعلقة / النتائج.
+4. ينبعث من كلا الجانبين عنصر تحكم `resume` يلخص `seq_app_max`، `seq_wallet_max`،
+   وأعماق قائمة الانتظار للقياس عن بعد.
+5. يتم الإقرار بالإطارات المكررة (المطابقة لـ `sequence` + `payload_hash`) وإسقاطها؛ تؤدي التعارضات إلى رفع `ConnectError.Internal` وتؤدي إلى إعادة تشغيل الجلسة القسرية.
 
-1. Transport re-establishes WebSocket and negotiates new ping interval.
-2. dApp replays queued frames in order, respecting back-pressure from wallet
-   (`ConnectSession.nextControlFrame()` yields `FlowControl` tokens).
-3. Wallet decrypts buffered results, verifies sequence monotonicity, and
-   replays pending approvals/results.
-4. Both sides emit a `resume` control summarising `seq_app_max`, `seq_wallet_max`,
-   and queue depths for telemetry.
-5. Duplicate frames (matching `sequence` + `payload_hash`) are acknowledged and dropped; conflicts raise `ConnectError.Internal` and trigger a forced session restart.
+### أوضاع الفشل
 
-### Failure modes
+- إذا كانت الجلسة تعتبر قديمة (`offline_timeout_ms`، الافتراضي 5 دقائق)،
+  تتم إزالة الإطارات المخزنة مؤقتًا ويقوم SDK برفع `ConnectError.sessionExpired`.
+- في حالة تلف المجلة، تحاول مجموعات SDK إجراء إصلاح فك تشفير Norito واحد؛ على
+  في حالة الفشل، يقومون بإسقاط المجلة وإصدار القياس عن بعد `connect.queue_repair_failed`.
+- يؤدي عدم تطابق التسلسل إلى تشغيل `ConnectError.replayDetected` ويفرض تحديثًا
+  المصافحة (إعادة تشغيل الجلسة باستخدام `sid` الجديد).
 
-- If the session is considered stale (`offline_timeout_ms`, default 5 minutes),
-  buffered frames are purged and the SDK raises `ConnectError.sessionExpired`.
-- In case of journal corruption, SDKs attempt a single Norito decode repair; on
-  failure they drop the journal and emit `connect.queue_repair_failed` telemetry.
-- Sequence mismatch triggers `ConnectError.replayDetected` and forces a fresh
-  handshake (session restart with new `sid`).
+### خطة التخزين المؤقت دون اتصال وضوابط المشغل
 
-### Offline buffering plan & operator controls
+تتطلب مخرجات ورشة العمل خطة موثقة بحيث يتم شحن كل مجموعة أدوات تطوير (SDK) بنفس الطريقة
+السلوك خارج الإنترنت، وتدفق العلاج، وأسطح الأدلة. الخطة أدناه هي
+شائع عبر Swift (`ConnectSessionDiagnostics`)، Android
+(`ConnectDiagnosticsSnapshot`)، وJS (`ConnectQueueInspector`).
 
-The workshop deliverable requires a documented plan so every SDK ships the same
-offline behaviour, remediation flow, and evidence surfaces. The plan below is
-common across Swift (`ConnectSessionDiagnostics`), Android
-(`ConnectDiagnosticsSnapshot`), and JS (`ConnectQueueInspector`).
+| الدولة | الزناد | الرد التلقائي | التجاوز اليدوي | علم القياس عن بعد |
+|-------|-------------------------|------------------|----------------|
+| `Healthy` | استخدام قائمة الانتظار  5/دقيقة | إيقاف طلبات التوقيع الجديدة مؤقتًا، وإصدار رموز التحكم في التدفق بمعدل النصف | قد تتصل التطبيقات بـ `clearOfflineQueue(.app|.wallet)`؛ يقوم SDK بإعادة ترطيب الحالة من النظير مرة واحدة عبر الإنترنت | مقياس `connect.queue_state=\"throttled\"`، `connect.queue_watermark` |
+| `Quarantined` | الاستخدام ≥ `disk_watermark_drop` (الافتراضي 85%)، أو تم اكتشاف الفساد مرتين، أو تم تجاوز `offline_timeout_ms` | إيقاف التخزين المؤقت، رفع `ConnectError.QueueQuarantined`، يتطلب إقرار المشغل | `ConnectSessionDiagnostics.forceReset()` يحذف المجلات بعد تصدير الحزمة | `connect.queue_state=\"quarantined\"`، `connect.queue_quarantine_total` العداد |- العتبات موجودة في `ConnectFeatureConfig` (`disk_watermark_warn`،
+  `disk_watermark_drop`، `max_disk_bytes`، `offline_timeout_ms`). عندما يكون المضيف
+  إذا تجاهلت قيمة ما، ترجع مجموعات تطوير البرامج (SDK) إلى إعداداتها الافتراضية وتسجل تحذيرًا لذلك
+  يمكن تدقيقها من القياس عن بعد.
+- تكشف مجموعات SDK عن `ConnectQueueObserver` بالإضافة إلى مساعدي التشخيص:
+  - سويفت: `ConnectSessionDiagnostics.snapshot()` ينتج `{الحالة، العمق، البايتات،
+    السبب}` and `exportJournalBundle(url:)` يستمر في كلا قائمتي الانتظار للحصول على الدعم.
+  - أندرويد: `ConnectDiagnostics.snapshot()` + `exportJournalBundle(path)`.
+  - JS: `ConnectQueueInspector.read()` يُرجع نفس البنية ومقبض blob
+    يمكن تحميل رمز واجهة المستخدم هذا إلى أدوات دعم Torii.
+- عندما يقوم أحد التطبيقات بتبديل `offline_queue_enabled=false`، يتم استنزاف حزم SDK على الفور و
+  قم بتطهير كلتا المجلتين، وقم بوضع علامة على الحالة كـ `Disabled`، وقم بإصدار محطة طرفية
+  حدث القياس عن بعد. ينعكس التفضيل الذي يواجه المستخدم في Norito
+  إطار الموافقة حتى يعرف الزملاء ما إذا كان بإمكانهم استئناف الإطارات المخزنة مؤقتًا.
+- يقوم المشغلون بتشغيل `connect queue inspect --sid <sid>` (مجمع CLI حول SDK
+  التشخيص) أثناء اختبارات الفوضى؛ يطبع هذا الأمر انتقالات الحالة،
+  سجل العلامة المائية واستئناف الأدلة حتى لا تعتمد مراجعات الإدارة عليها
+  الأدوات الخاصة بالمنصة.
 
-| State | Trigger | Automatic response | Manual override | Telemetry flag |
-|-------|---------|--------------------|-----------------|----------------|
-| `Healthy` | Queue usage < `disk_watermark_warn` (default 60 %) and `ttl_ok` | None | N/A | `connect.queue_state=\"healthy\"` |
-| `Throttled` | Usage ≥ `disk_watermark_warn` or retries > 5/min | Pause new sign requests, emit flow-control tokens at half rate | Apps may call `clearOfflineQueue(.app|.wallet)`; SDK re-hydrates state from peer once online | `connect.queue_state=\"throttled\"`, `connect.queue_watermark` gauge |
-| `Quarantined` | Usage ≥ `disk_watermark_drop` (default 85 %), corruption detected twice, or `offline_timeout_ms` exceeded | Stop buffering, raise `ConnectError.QueueQuarantined`, require operator acknowledgement | `ConnectSessionDiagnostics.forceReset()` deletes journals after exporting bundle | `connect.queue_state=\"quarantined\"`, `connect.queue_quarantine_total` counter |
+### سير عمل حزمة الأدلة
 
-- Thresholds live in `ConnectFeatureConfig` (`disk_watermark_warn`,
-  `disk_watermark_drop`, `max_disk_bytes`, `offline_timeout_ms`). When a host
-  omits a value, SDKs fall back to their defaults and log a warning so configs
-  can be audited from telemetry.
-- SDKs expose `ConnectQueueObserver` plus diagnostics helpers:
-  - Swift: `ConnectSessionDiagnostics.snapshot()` yields `{state, depth, bytes,
-    reason}` and `exportJournalBundle(url:)` persists both queues for support.
-  - Android: `ConnectDiagnostics.snapshot()` + `exportJournalBundle(path)`.
-  - JS: `ConnectQueueInspector.read()` returns the same struct and a blob handle
-    that UI code can upload to Torii support tools.
-- When an app toggles `offline_queue_enabled=false`, SDKs immediately drain and
-  purge both journals, mark the state as `Disabled`, and emit a terminal
-  telemetry event. The user-facing preference is mirrored in the Norito
-  approval frame so peers know whether they can resume buffered frames.
-- Operators run `connect queue inspect --sid <sid>` (CLI wrapper around the SDK
-  diagnostics) during chaos tests; this command prints the state transitions,
-  watermark history, and resume evidence so governance reviews do not depend on
-  platform-specific tooling.
+تعتمد فرق الدعم والامتثال على الأدلة الحتمية عند التدقيق
+السلوك دون اتصال. وبالتالي، يقوم كل SDK بتنفيذ نفس عملية التصدير المكونة من ثلاث خطوات:
 
-### Evidence bundle workflow
+1. يكتب `exportJournalBundle(..)` `{app_to_wallet,wallet_to_app}.queue` بالإضافة إلى
+   بيان يصف تجزئة البناء، وأعلام الميزات، والعلامات المائية للقرص.
+2. يقوم `exportQueueMetrics(..)` بإصدار آخر 1000 عينة قياس عن بعد لذلك لوحات المعلومات
+   يمكن إعادة بنائها حاليا. تتضمن العينات معرف الجلسة المجزأة عندما يكون
+   قام المستخدم بالاشتراك.
+3. يقوم مساعد CLI بضغط كل من تصدير وإرفاق ملف البيانات التعريفية Norito الموقع
+   (`ConnectQueueEvidenceV1`) حتى يتمكن استيعاب Torii من أرشفة الحزمة في SoraFS.
 
-Support and compliance teams rely on deterministic evidence when auditing
-offline behaviour. Each SDK therefore implements the same three-step export:
+يتم رفض الحزم التي تفشل في التحقق من الصحة باستخدام `connect.evidence_invalid`
+القياس عن بعد حتى يتمكن فريق SDK من إعادة إنتاج المصدر وتصحيحه.
 
-1. `exportJournalBundle(..)` writes `{app_to_wallet,wallet_to_app}.queue` plus a
-   manifest describing the build hash, feature flags, and disk watermarks.
-2. `exportQueueMetrics(..)` emits the last 1 000 telemetry samples so dashboards
-   can be reconstructed offline. Samples include the hashed session id when the
-   user opted in.
-3. The CLI helper zips both exports and attaches a signed Norito metadata file
-   (`ConnectQueueEvidenceV1`) so Torii ingest can archive the bundle in SoraFS.
+## القياس والتشخيص- قم بإصدار أحداث Norito JSON عبر مصدري OpenTelemetry المشتركين. المقاييس الإلزامية:
+  - `connect.queue_depth{direction}` (المقياس) يتم تغذيته بواسطة `ConnectQueueState`.
+  - `connect.queue_bytes{direction}` (مقياس) للبصمة المدعومة بالقرص.
+  - `connect.queue_dropped_total{reason}` (العداد) لـ `overflow|ttl|repair`.
+  - `connect.offline_flush_total{direction}` (العداد) يزيد عند قوائم الانتظار
+    استنزاف بدون نقل زيادة حالات الفشل `connect.offline_flush_failed`.
+  -`connect.replay_success_total`/`connect.replay_error_total`.
+  - الرسم البياني `connect.resume_latency_ms` (الوقت بين إعادة الاتصال والثبات
+    الحالة) بالإضافة إلى `connect.resume_attempts_total`.
+  - رسم بياني `connect.session_duration_ms` (لكل جلسة مكتملة).
+  - الأحداث المنظمة `connect.error` مع `code`، `fatal`، `telemetry_profile`.
+- يجب على المصدرين إرفاق ملصقات `{platform, sdk_version, feature_hash}` بذلك
+  يمكن تقسيم لوحات المعلومات عن طريق إنشاء SDK. يعد `sid` المجزأ اختياريًا وفقط
+  تنبعث عندما يكون الاشتراك في القياس عن بعد صحيحًا.
+- تعرض الخطافات على مستوى SDK نفس الأحداث حتى تتمكن التطبيقات من تصدير المزيد من التفاصيل:
+  - سويفت: `ConnectSession.addObserver(_:) -> ConnectEvent`.
+  - أندرويد: `Flow<ConnectEvent>`.
+  - JS: مكرر غير متزامن أو رد الاتصال.
+- بوابة CI: تعمل وظائف Swift على تشغيل `make swift-ci`، ويستخدم Android `./gradlew sdkConnectCi`،
+  ويقوم JS بتشغيل `npm run test:connect` بحيث يظل القياس عن بعد/لوحات المعلومات باللون الأخضر من قبل
+  دمج تغييرات الاتصال.
+- تتضمن السجلات المنظمة `sid` و`seq` و`queue_depth` و`sid_epoch`
+  القيم حتى يتمكن المشغلون من ربط مشكلات العميل. المجلات التي تفشل في الإصلاح تنبعث منها
+  أحداث `connect.queue_repair_failed{reason}` بالإضافة إلى مسار تفريغ الأعطال الاختياري.
 
-Bundles that fail validation are rejected with `connect.evidence_invalid`
-telemetry so the SDK team can reproduce and patch the exporter.
+### خطافات القياس عن بعد وأدلة الإدارة
 
-## Telemetry & Diagnostics
+- `connect.queue_state` يتضاعف كمؤشر لمخاطر خريطة الطريق. مجموعة لوحات المعلومات
+  بواسطة `{platform, sdk_version}` وتقديم الوقت في الحالة حتى تتمكن الإدارة من أخذ عينات
+  أدلة التدريب الشهرية قبل الموافقة على عمليات الطرح المرحلية.
+- يقوم `connect.queue_watermark` و`connect.queue_bytes` بتغذية درجة مخاطر الاتصال
+  (`risk.connect.offline_buffer`)، والذي يقوم تلقائيًا بصفحات SRE عندما يكون هناك أكثر من
+  5% من الجلسات تقضي أكثر من 10 دقائق في `Throttled`.
+- يقوم المصدرون بإرفاق `feature_hash` بكل حدث حتى تتمكن أدوات المدقق من التأكد
+  أن برنامج الترميز Norito + الخطة غير المتصلة بالإنترنت يتطابق مع البنية التي تمت مراجعتها. فشل SDK CI
+  بسرعة عندما يُبلغ القياس عن بعد عن تجزئة غير معروفة.
+- لا يزال رجل القش يحتاج إلى ملحق نموذج التهديد؛ عندما تتجاوز المقاييس
+  عتبات السياسة، تصدر حزم SDK أحداث `connect.policy_violation` تلخص
+  المخالف sid (التجزئة)، والحالة، والإجراء الذي تم حله (`drain|purge|quarantine`).
+- الأدلة التي تم التقاطها عبر `exportQueueMetrics` تقع في نفس مساحة الاسم SoraFS
+  نظرًا لأن دليل التشغيل Connect مصنوع يدويًا حتى يتمكن مراجعو المجلس من تتبع كل تمرين
+  العودة إلى عينات القياس عن بعد المحددة دون طلب سجلات داخلية.
 
-- Emit Norito JSON events via shared OpenTelemetry exporters. Mandatory metrics:
-  - `connect.queue_depth{direction}` (gauge) fed by `ConnectQueueState`.
-  - `connect.queue_bytes{direction}` (gauge) for disk-backed footprint.
-  - `connect.queue_dropped_total{reason}` (counter) for `overflow|ttl|repair`.
-  - `connect.offline_flush_total{direction}` (counter) increments when queues
-    drain without transport; failures increment `connect.offline_flush_failed`.
-  - `connect.replay_success_total`/`connect.replay_error_total`.
-  - `connect.resume_latency_ms` histogram (time between reconnect and steady
-    state) plus `connect.resume_attempts_total`.
-  - `connect.session_duration_ms` histogram (per completed session).
-  - `connect.error` structured events with `code`, `fatal`, `telemetry_profile`.
-- Exporters MUST attach `{platform, sdk_version, feature_hash}` labels so
-  dashboards can split by SDK build. The hashed `sid` is optional and only
-  emitted when telemetry opt-in is true.
-- SDK-level hooks surface the same events so apps can export more detail:
-  - Swift: `ConnectSession.addObserver(_:) -> ConnectEvent`.
-  - Android: `Flow<ConnectEvent>`.
-  - JS: async iterator or callback.
-- CI gating: Swift jobs run `make swift-ci`, Android uses `./gradlew sdkConnectCi`,
-  and JS runs `npm run test:connect` so telemetry/dashboards remain green before
-  merging Connect changes.
-- Structured logs include the hashed `sid`, `seq`, `queue_depth`, and `sid_epoch`
-  values so operators can correlate client issues. Journals that fail repair emit
-  `connect.queue_repair_failed{reason}` events plus an optional crash dump path.
-
-### Telemetry hooks & governance evidence
-
-- `connect.queue_state` doubles as the roadmap risk indicator. Dashboards group
-  by `{platform, sdk_version}` and render time-in-state so governance can sample
-  monthly drill evidence before approving staged rollouts.
-- `connect.queue_watermark` and `connect.queue_bytes` feed the Connect risk score
-  (`risk.connect.offline_buffer`), which automatically pages SRE when more than
-  5 % of sessions spend >10 minutes in `Throttled`.
-- Exporters attach `feature_hash` to every event so auditor tooling can confirm
-  that the Norito codec + offline plan match the reviewed build. SDK CI fails
-  fast when telemetry reports an unknown hash.
-- The strawman still requires a threat-model appendix; when metrics exceed the
-  policy thresholds, SDKs emit `connect.policy_violation` events summarising the
-  offending sid (hashed), state, and resolved action (`drain|purge|quarantine`).
-- Evidence captured via `exportQueueMetrics` lands in the same SoraFS namespace
-  as the Connect runbook artefacts so council reviewers can trace every drill
-  back to specific telemetry samples without requesting internal logs.
-
-## Frame Ownership & Responsibilities
-
-| Frame / Control | Owner | Sequence domain | Journal persisted? | Telemetry labels | Notes |
+## ملكية الإطار والمسؤوليات| الإطار / التحكم | المالك | مجال التسلسل | استمرت المجلة؟ | تسميات القياس عن بعد | ملاحظات |
 |-----------------|-------|-----------------|--------------------|------------------|-------|
-| `Control::Open` | dApp | `seq_app` | ✅ (`app_to_wallet`) | `event=open` | Carries metadata + permission bitmap; wallets replay the latest open before prompts. |
-| `Control::Approve` | Wallet | `seq_wallet` | ✅ (`wallet_to_app`) | `event=approve` | Includes account, proofs, signatures. Metadata version increments recorded here. |
-| `Control::Reject` | Wallet | `seq_wallet` | ✅ | `event=reject`, `reason` | Optional localized message; dApp drops pending sign requests. |
-| `Control::Close` (init) | dApp | `seq_app` | ✅ | `event=close`, `initiator=app` | Wallet acknowledges with its own `Close`. |
-| `Control::Close` (ack) | Wallet | `seq_wallet` | ✅ | `event=close`, `initiator=wallet` | Confirms teardown; GC removes journals once both sides persist the frame. |
-| `SignRequest` | dApp | `seq_app` | ✅ | `event=sign_request`, `payload_hash` | Payload hash recorded for replay conflict detection. |
-| `SignResult` | Wallet | `seq_wallet` | ✅ | `event=sign_result`, `status=ok|err` | Includes BLAKE3 hash of signed bytes; failures raise `ConnectError.Signing`. |
-| `Control::Error` | Wallet (most) / dApp (transport) | matching owner domain | ✅ | `event=error`, `code` | Fatal errors force session restart; telemetry marks `fatal=true`. |
-| `Control::RotateKeys` | Wallet | `seq_wallet` | ✅ | `event=rotate_keys`, `reason` | Announces new direction keys; dApp replies with `RotateKeysAck` (journaled on app side). |
-| `Control::Resume` / `ResumeAck` | Both | local domain only | ✅ | `event=resume`, `direction=app|wallet` | Summarises queue depth + seq state; hashed journal digest aids diagnosis. |
+| `Control::Open` | التطبيق اللامركزي | `seq_app` | ✅(`app_to_wallet`) | `event=open` | يحمل البيانات الوصفية + الصورة النقطية للإذن؛ تقوم المحافظ بإعادة تشغيل آخر فتح قبل المطالبات. |
+| `Control::Approve` | المحفظة | `seq_wallet` | ✅(`wallet_to_app`) | `event=approve` | يشمل الحساب والبراهين والتوقيعات. زيادات إصدار البيانات الوصفية المسجلة هنا. |
+| `Control::Reject` | المحفظة | `seq_wallet` | ✅ | `event=reject`، `reason` | رسالة مترجمة اختيارية؛ يسقط dApp طلبات التوقيع المعلقة. |
+| `Control::Close` (الحرف الأول) | التطبيق اللامركزي | `seq_app` | ✅ | `event=close`، `initiator=app` | تعترف المحفظة برقم `Close` الخاص بها. |
+| `Control::Close` (آك) | المحفظة | `seq_wallet` | ✅ | `event=close`، `initiator=wallet` | يؤكد التدمير؛ يقوم GC بإزالة المجلات بمجرد استمرار كلا الجانبين في الإطار. |
+| `SignRequest` | التطبيق اللامركزي | `seq_app` | ✅ | `event=sign_request`، `payload_hash` | تم تسجيل تجزئة الحمولة لإعادة اكتشاف التعارض. |
+| `SignResult` | المحفظة | `seq_wallet` | ✅ | `event=sign_result`، `status=ok|err` | يتضمن تجزئة BLAKE3 للبايتات الموقعة؛ رفع الفشل `ConnectError.Signing`. |
+| `Control::Error` | المحفظة (معظم) / dApp (النقل) | مطابقة نطاق المالك | ✅ | `event=error`، `code` | أخطاء فادحة تفرض إعادة تشغيل الجلسة؛ علامات القياس عن بعد `fatal=true`. |
+| `Control::RotateKeys` | المحفظة | `seq_wallet` | ✅ | `event=rotate_keys`، `reason` | تعلن عن مفاتيح الاتجاه الجديدة؛ يرد dApp بـ `RotateKeysAck` (يتم تدوينه في جانب التطبيق). |
+| `Control::Resume` / `ResumeAck` | كلاهما | المجال المحلي فقط | ✅ | `event=resume`، `direction=app|wallet` | يلخص عمق قائمة الانتظار + الحالة التسلسلية؛ ملخص المجلة المجزأة يساعد على التشخيص. |
 
-- Directional cipher keys remain symmetric per role (`app→wallet`, `wallet→app`).
-  Wallet rotation proposals are advertised via `Control::RotateKeys`, and dApps
-  acknowledge by emitting `Control::RotateKeysAck`; both frames must hit disk
-  before keys swap to avoid replay gaps.
-- Metadata attachment (icons, localized names, compliance proofs) is signed by
-  the wallet and cached by the dApp; updates require a fresh approval frame with
-  incremented `metadata_version`.
-- Ownership matrix above is referenced from SDK docs so CLI/web/automation
-  clients follow the same contract and instrumentation defaults.
+- تظل مفاتيح التشفير الاتجاهي متماثلة لكل دور (`app→wallet`، `wallet→app`).
+  يتم الإعلان عن مقترحات تدوير المحفظة عبر `Control::RotateKeys` وdApps
+  الاعتراف بإصدار `Control::RotateKeysAck`؛ يجب أن يصل كلا الإطارين إلى القرص
+  قبل تبديل المفاتيح لتجنب فجوات إعادة التشغيل.
+- يتم التوقيع على مرفق البيانات الوصفية (الأيقونات والأسماء المحلية وإثباتات الامتثال).
+  المحفظة والمخزنة مؤقتًا بواسطة dApp؛ تتطلب التحديثات إطار موافقة جديدًا
+  تمت زيادة `metadata_version`.
+- تتم الإشارة إلى مصفوفة الملكية أعلاه من مستندات SDK، لذا CLI/web/automation
+  يتبع العملاء نفس العقد والافتراضات الافتراضية للأجهزة.
 
-## Open Questions
+## أسئلة مفتوحة
 
-1. **Session discovery**: Do we need QR codes / out-of-band handshake like WalletConnect? (Future work.)
-2. **Multisig**: How are multi-sign approvals represented? (Extend sign result to support multiple signatures.)
-3. **Compliance**: Which fields are mandatory for regulated flows (per roadmap)? (Await compliance team guidance.)
-4. **SDK packaging**: Should we factor shared code (e.g., Norito Connect codecs) into a cross-platform crate? (TBD.)
+1. **اكتشاف الجلسة**: هل نحتاج إلى رموز QR / المصافحة خارج النطاق مثل WalletConnect؟ (العمل المستقبلي.)
+2. **Multisig**: كيف يتم تمثيل الموافقات متعددة التوقيع؟ (تمديد نتيجة التوقيع لدعم التوقيعات المتعددة.)
+3. **الامتثال**: ما هي الحقول الإلزامية للتدفقات المنظمة (حسب خريطة الطريق)؟ (في انتظار توجيهات فريق الامتثال.)
+4. **تغليف SDK**: هل يجب علينا تحليل الكود المشترك (على سبيل المثال، Norito Connect codecs) إلى صندوق مشترك بين الأنظمة الأساسية؟ (سيتم تحديده لاحقًا.)
 
-## Next Steps
-
-- Circulate this strawman to the SDK council (Feb 2026 meeting).
-- Collect feedback on open questions and update doc accordingly.
-- Schedule implementation breakdown per SDK (Swift IOS7, Android AND7, JS Connect milestones).
-- Track progress via roadmap hot list; update `status.md` once strawman is ratified.
+## الخطوات التالية- قم بتعميم هذا الدليل على مجلس SDK (اجتماع فبراير 2026).
+- جمع التعليقات على الأسئلة المفتوحة وتحديث المستند وفقًا لذلك.
+- جدولة تفاصيل التنفيذ لكل SDK (معالم Swift IOS7 وAndroid AND7 وJS Connect).
+- تتبع التقدم من خلال القائمة الساخنة لخريطة الطريق؛ قم بتحديث `status.md` بمجرد التصديق على رجل القش.

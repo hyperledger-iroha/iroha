@@ -7,107 +7,102 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 5ee3613b544a847953f5ec152092cb2fe1da35279c5482486513d6b8d6dddf02
 source_last_modified: "2026-01-05T09:28:11.999717+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Android Release Checklist (AND6)
+# Android གསར་བཏོན་ཐོ་ཡིག་ (AND6)
 
-This checklist captures the **AND6 — CI & Compliance Hardening** gates from
-`roadmap.md` (§Priority 5). It aligns Android SDK releases with the Rust
-release RFC expectations by spelling out the CI jobs, compliance artefacts,
-device-lab evidence, and provenance bundles that must be attached before a GA,
-LTS, or hotfix train moves forward.
+བརྟག་ཞིབ་ཐོ་ཡིག་འདི་གིས་ **AND6 — CI & བསྟར་སྤྱོད་ཧར་ཌེ་ནིང་** གཱེཊིསི་འདི་ ལས་ འཛིན་བཟུང་འབདཝ་ཨིན།
+`roadmap.md` (§གཙོ་བསྟེན་ ༥)། འདི་གིས་ Android SDK ཚུ་ Rust དང་ཅིག་ཁར་ ཕྲང་སྒྲིག་འབདཝ་ཨིན།
+CI གི་ལས་ཀ་དང་ བསྟར་སྤྱོད་ཀྱི་ ཅ་ཆས་ཚུ་ ཡིག་སྡེབ་འབད་དེ་ RFC རེ་བ་ཚུ་ བཏོན་ཡོདཔ་ཨིན།
+ཐབས་འཕྲུལ་གྱི་བརྟག་དཔྱད་ཁང་གི་སྒྲུབ་བྱེད་དང་ GA གི་ཧེ་མ་ མཐུད་དགོ་པའི་ འབྱུང་ཁུངས་བང་སྒྲིག་ཚུ།
+LTS ཡང་ན་ ཧོཊ་ཕིགསི་རེ་ལི་འདི་ གདོང་ཁར་འགྱོཝ་ཨིན།
 
-Use this document together with:
+ཡིག་ཆ་འདི་དང་གཅིག་ཁར་::
 
-- `docs/source/android_support_playbook.md` — release calendar, SLAs, and
-  escalation tree.
-- `docs/source/android_runbook.md` — day‑to‑day operational runbooks.
-- `docs/source/compliance/android/and6_compliance_checklist.md` — regulator
-  artefact inventory.
-- `docs/source/release_dual_track_runbook.md` — dual-track release governance.
+- `docs/source/android_support_playbook.md` — གློད་གྲོལ་ཟླ་ཐོ།, SLAs, དང་།
+  ཡར་འཕར་ཤིང་།
+- `docs/source/android_runbook.md` — ཉིན་མར་ལས་བཀོལ་སྤྱོད་ཀྱི་རྒྱུག་དེབ་ཚུ།
+- `docs/source/compliance/android/and6_compliance_checklist.md` — ཉེན་སྐྱོབ།
+  ཅ་རྙིང་ཐོ་གཞུང་།
+- `docs/source/release_dual_track_runbook.md` — གཞུང་སྐྱོང་གཉིས་ལྡན་གྱི་གཞུང་སྐྱོང་གཉིས་ལྡན་གྱི་གཞུང་སྐྱོང་།
 
-## 1. Stage Gates at a Glance
+## 1. གཅེར་ཁུང་དུ་རིམ་པ་གི་སྒོ་བ།
 
-| Stage | Required Gates | Evidence |
-|-------|----------------|----------|
-| **T−7 days (pre-freeze)** | Nightly `ci/run_android_tests.sh` green for 14 days; `ci/check_android_fixtures.sh`, `ci/check_android_samples.sh`, and `ci/check_android_docs_i18n.sh` passing; lint/dependency scans queued. | Buildkite dashboards, fixture diff report, sample screenshot snapshots. |
-| **T−3 days (RC promotion)** | Device-lab reservation confirmed; StrongBox attestation CI run (`scripts/android_strongbox_attestation_ci.sh`); Robolectric/instrumented suites exercised on scheduled hardware; `./gradlew lintRelease ktlintCheck detekt dependencyGuard` clean. | Device matrix CSV, attestation bundle manifest, Gradle reports archived under `artifacts/android/lint/<version>/`. |
-| **T−1 day (go/no-go)** | Telemetry redaction status bundle refreshed (`scripts/telemetry/check_redaction_status.py --write-cache`); compliance artefacts updated per `and6_compliance_checklist.md`; provenance rehearsal completed (`scripts/android_sbom_provenance.sh --dry-run`). | `docs/source/compliance/android/evidence_log.csv`, telemetry status JSON, provenance dry-run log. |
-| **T0 (GA/LTS cutover)** | `scripts/publish_android_sdk.sh --dry-run` completed; provenance + SBOM signed; release checklist exported and attached to go/no-go minutes; `ci/sdk_sorafs_orchestrator.sh` smoke job green. | Release RFC attachments, Sigstore bundle, adoption artefacts under `artifacts/android/`. |
-| **T+1 day (post-cutover)** | Hotfix readiness verified (`scripts/publish_android_sdk.sh --validate-bundle`); dashboard diffs reviewed (`ci/check_android_dashboard_parity.sh`); evidence packet uploaded to `status.md`. | Dashboard diff export, link to `status.md` entry, archived release packet. |
+| གནས་སྟངས། | དགོས་མཁོའི་སྒོ་སྒྲིག་ | སྒྲུབ་བྱེད་ |
+|------------------------------------------- |
+| **T−7 ཉིནམ་ (སྔོན་འགྲོའི་སྔོན་འགྲོ)** | མཚན་མོ་ `ci/run_android_tests.sh` ཉིན་གྲངས་ ༡༤ རིང་ལྗང་ཁུ་དང་། `ci/check_android_fixtures.sh`, `ci/check_android_samples.sh`, དང་ `ci/check_android_docs_i18n.sh` ཆ་འཇོག་འབད་ཡོདཔ། lint/བརྟེན་པའི་ པར་ལེན་ཚུ་ གྱལ་རིམ་འབད་ཡོདཔ། | བཱའིལ་ཀི་ཊི་ ཌེཤ་བོརཌི་ སྒྲིག་ཆས་ཁྱབ་སྤེལ་གྱི་སྙན་ཞུ་ དཔེ་ཚད་གསལ་གཞི་པར་རིས་པར་རིས། |
+| **T−3 ཉིནམ་ (RR གོང་འཕེལ།)** | ཐབས་འཕྲུལ་གྱི་བརྟག་དཔྱད་ཁང་ཚུ་ ངེས་གཏན་བཟོ་ཡོདཔ། StrongBox གི་བདེན་དཔང་ CI (`scripts/android_strongbox_attestation_ci.sh`); དུས་ཚོད་བཀོད་ཡོད་པའི་ མཐུན་རྐྱེན་ནང་ རོ་བོ་ལེག་ཊིག/ བར་འཛུལ་འབད་མི་ ཁང་མིག་ནང་ ལག་ལེན་འཐབ་ཡོདཔ། `./gradlew lintRelease ktlintCheck detekt dependencyGuard` གཙང་། | ཐབས་འཕྲུལ་མེ་ཊིགསི་ CSV, བདེན་དཔང་འབད་བའི་ གསལ་སྟོན་ གྷི་ར་ཌལ་གྱིས་ `artifacts/android/lint/<version>/` གི་འོག་ལུ་ གཏན་མཛོད་འབད་ཡོདཔ་སྦེ་སྙན་ཞུ་འབདཝ་ཨིན། |
+| **T−1 ཉིནམ་ (གོ/མེ-འགྱོ་)** | བརྒྱུད་འཕྲིན་བསྐྱར་བཟོ་གནས་རིམ་གྱི་བཱན་ཌལ་གསར་བསྐྲུན་འབད་ཡོདཔ། (`scripts/telemetry/check_redaction_status.py --write-cache`); བསྟར་སྤྱོད་ཀྱི་ཅ་ཆས་ཚུ་ `and6_compliance_checklist.md` ལུ་དུས་མཐུན་བཟོ་ཡོདཔ། འབྱུང་ཁུངས་སྦྱོང་བརྡར་མཇུག་བསྡུ་ཡོདཔ་ (`scripts/android_sbom_provenance.sh --dry-run`). | `docs/source/compliance/android/evidence_log.csv`, བརྡ་འཕྲིན་གནས་རིམ་ JSON, འབྱུང་ཁུངས་སྐམ་གཡོག་དྲན་ཐོ་། |
+| **T0 (GA/LTS cutover)** | `scripts/publish_android_sdk.sh --dry-run` མཇུག་བསྡུ་ཡོདཔ།; ཁུངས་གཏུག་+ SBOM མཚན་རྟགས་བཀོད་ཡོད། བཏོན་གཏང་ཞིབ་དཔྱད་ཐོ་ཡིག་འདི་ ཕྱིར་འདྲེན་དང་ མཉམ་སྦྲགས་འབད་ཡོདཔ། `ci/sdk_sorafs_orchestrator.sh` ལཱ་གི་ལྗང་ཁུ་། | RFC མཉམ་སྦྲགས་ Sigstore བཱན་ཌལ་ `artifacts/android/` གི་འོག་ལུ་ ཆ་གནས་ཀྱི་ཅ་རྙིང་ཚུ་ བཏོན་གཏང་། |
+| **T+1 ཉིནམ་ (སྦྱར་ཡིག་-བཤག་བཅོས་)** | ཧོཊ་ཕིགསི་གྲ་སྒྲིག་བདེན་དཔྱད་འབད་ཡོདཔ་ (`scripts/publish_android_sdk.sh --validate-bundle`); བརྡ་བརྒྱུདཔ་ཚུ་གིས་ བསྐྱར་ཞིབ་འབད་ཡོདཔ་ཨིན། (`ci/check_android_dashboard_parity.sh`); སྒྲུབ་བྱེད་ཐུམ་སྒྲིལ་འདི་ `status.md` ལུ་སྐྱེལ་བཙུགས་འབད་ཡོདཔ་ཨིན། | ཌེཤ་བོརཌི་ཕྱིར་འདྲེན་འབད་ནི། `status.md` ཐོ་བཀོད་ གཏན་མཛོད་ཅན་གྱི་གསར་བཏོན་སྦུང་ཚན་། |
 
-## 2. CI & Quality Gate Matrix
+## 2. སི་ཨའི་ & སྤུས་ཚད་སྒོ་གི་མེ་ཊིགསི།| གེ་ཊི། | བརྡ་བཀོད་(s) / ཡིག་ཆ་ | དྲན་ཐོ། |
+|--|-|-|------------------------------------- |
+| ཡུ་ནིཊི་ + མཉམ་བསྡོམས་བརྟག་དཔྱད་ཚུ་ | `ci/run_android_tests.sh` (ཐིག་ལེ་ `ci/run_android_tests.sh`) | `artifacts/android/tests/test-summary.json` + བརྟག་ཞིབ་དྲན་ཐོ་ལུ་འཁྲིལཝ་ཨིན། འདི་ནང་ Norito གསང་ཡིག་དང་ གྱལ་རིམ་ སི་ཊོང་བོགསི་ ཕོལ་བེག་ དེ་ལས་ Torii མཁོ་སྤྲོད་འབད་མི་ ཧར་ནིསི་བརྟག་དཔྱད་ཚུ་ཚུདཔ་ཨིན། མཚན་མོ་དང་ མཚན་རྟགས་བཀོད་པའི་ཧེ་མ་ དགོས་མཁོ་ཡོདཔ་ཨིན། |
+| ཕིགསི་ཅུར་ ཆ་རྐྱེན། | `ci/check_android_fixtures.sh` (ཐིག་ལེབ་ `scripts/check_android_fixtures.py`) | Norito བསྐྱར་བཟོ་འདི་ Rust canonical set དང་མཐུན་སྒྲིག་འབདཝ་ཨིན། སྒོ་འདི་འཐུས་ཤོར་བྱུང་པའི་སྐབས་ ཇེ་ཨེསི་ཨོ་ཨེན་ཌིཕ་འདི་མཉམ་སྦྲགས་འབད། |
+| དཔེ་ཚད་གློག་རིམ་ཚུ་ | `ci/check_android_samples.sh` | `examples/android/{operator-console,retail-wallet}` གིས་ `scripts/android_sample_localization.py` བརྒྱུད་དེ་ ས་གནས་ཀྱི་གསལ་གཞི་པར་རིས་ཚུ་ བདེན་དཔྱད་འབདཝ་ཨིན། |
+| ཡིག་ཆ་/I18N | `ci/check_android_docs_i18n.sh` | README + ས་གནས་ཀྱི་མགྱོགས་མྱུར་འགོ་བཙུགས་ཡོདཔ། ཡིག་ཆ་ཚུ་ གསར་བཏོན་ཡན་ལག་ནང་ ཞུན་དག་འབད་ཚར་བའི་ཤུལ་ལས་ གཡོག་བཀོལ། |
+| ཌེཤ་བོརཌ་ ཆ་སྙོམས་ | `ci/check_android_dashboard_parity.sh` | CI/ཕྱིར་འདྲེན་འབད་ཡོད་པའི་མེ་ཊིགསི་ཚུ་ རཱསིཊི་མཉམ་བསྡོམས་ཚུ་དང་གཅིག་ཁར་ ཕྲང་སྒྲིག་འབདཝ་ཨིན། ཊི་+༡ བདེན་དཔྱད་སྐབས་དགོས་མཁོ་ཡོད། |
+| SDK ཆ་འཇོག་འབད་མི་དུ་བ། | `ci/sdk_sorafs_orchestrator.sh` | ད་ལྟོའི་ཨེསི་ཌི་ཀེ་དང་གཅིག་ཁར་ སྣ་མང་-འབྱུང་ཁུངས་སོ་རཕ་ཚུ་གི་ རོལ་དབྱངས་འཐེན་འཕྲུལ་ཚུ་ སྦྱོང་ལཱ་འབདཝ་ཨིན། གནས་རིམ་གྱི་ཅ་ཆས་ཚུ་ སྐྱེལ་བཙུགས་མ་འབད་བའི་ཧེ་མ་ དགོཔ་ཨིན། |
+| ཨེག་ཊི་ཤཱན་བདེན་དཔྱད། | `scripts/android_strongbox_attestation_ci.sh --summary-out artifacts/android/attestation/ci-summary.json` | `artifacts/android/attestation/**` གི་འོག་ལུ་ StrongBox/TEE གི་བདེན་ཁུངས་ཚུ་ བསྡོམས་ཡོདཔ་ཨིན། བཅུད་བསྡུས་འདི་ ཇི་ཨེ་ཐུམ་སྒྲིལ་ཚུ་ལུ་མཉམ་སྦྲགས་འབད། |
+| ཐབས་འཕྲུལ་བརྟག་དཔྱད་ཁང་བདེན་དཔྱད། | `scripts/check_android_device_lab_slot.py --root artifacts/android/device_lab/<slot> --json-out artifacts/android/device_lab/summary.json` | ཐུམ་སྒྲིལ་ཚུ་བཏོན་ནིའི་དོན་ལུ་ སྒྲུབ་བྱེད་མ་བཙུགས་པའི་ཧེ་མ་ ལག་ཆས་ཀྱི་སྡེ་ཚན་ཚུ་ བདེན་དཔྱད་འབདཝ་ཨིན། CI འདི་ `fixtures/android/device_lab/slot-sample` ནང་ལུ་ དཔེ་ཚད་ཀྱི་ ས་སྒོ་ལུ་ གཡོག་བཀོལཝ་ཨིན། |
 
-| Gate | Command(s) / Script | Notes |
-|------|--------------------|-------|
-| Unit + integration tests | `ci/run_android_tests.sh` (wraps `ci/run_android_tests.sh`) | Emits `artifacts/android/tests/test-summary.json` + test log. Includes Norito codec, queue, StrongBox fallback, and Torii client harness tests. Required nightly and before tagging. |
-| Fixture parity | `ci/check_android_fixtures.sh` (wraps `scripts/check_android_fixtures.py`) | Ensures regenerated Norito fixtures match the Rust canonical set; attach the JSON diff when the gate fails. |
-| Sample apps | `ci/check_android_samples.sh` | Builds `examples/android/{operator-console,retail-wallet}` and validates localized screenshots via `scripts/android_sample_localization.py`. |
-| Docs/I18N | `ci/check_android_docs_i18n.sh` | Guards README + localized quickstarts. Run again after doc edits land in the release branch. |
-| Dashboard parity | `ci/check_android_dashboard_parity.sh` | Confirms CI/exported metrics align with the Rust counterparts; required during T+1 verification. |
-| SDK adoption smoke | `ci/sdk_sorafs_orchestrator.sh` | Exercises the multi-source Sorafs orchestrator bindings with the current SDK. Required before uploading staged artefacts. |
-| Attestation verification | `scripts/android_strongbox_attestation_ci.sh --summary-out artifacts/android/attestation/ci-summary.json` | Aggregates the StrongBox/TEE attestation bundles under `artifacts/android/attestation/**`; attach the summary to GA packets. |
-| Device-lab slot validation | `scripts/check_android_device_lab_slot.py --root artifacts/android/device_lab/<slot> --json-out artifacts/android/device_lab/summary.json` | Validates instrumentation bundles before attaching evidence to release packets; CI runs against the sample slot in `fixtures/android/device_lab/slot-sample` (telemetry/attestation/queue/logs + `sha256sum.txt`). |
+> **Tip:** ལཱ་འདི་ཚུ་ `android-release` བཱའིལ་ཀའིཊ་པའིཔ་ལའིན་ལུ་ཁ་སྐོང་འབད།
+> གྱང་ཤུགས་ཅན་གྱི་བདུན་ཕྲག་ཚུ་ རང་བཞིན་གྱིས་ གསར་བཏོན་ཡན་ལག་གི་མཐའ་མ་དང་གཅིག་ཁར་ སྒོ་ར་རེ་རེ་བཞིན་དུ་ ལོག་བཙུགསཔ་ཨིན།
 
-> **Tip:** add these jobs to the `android-release` Buildkite pipeline so that
-> freeze weeks automatically re-run every gate with the release branch tip.
+མཉམ་བསྡོམས་ `.github/workflows/android-and6.yml` ལཱ་གཡོག་འདི་གིས་ ལིནཊི་འདི་ གཡོག་བཀོལཝ་ཨིན།
+བརྟག་དཔྱད་-སི་ཊི་ དང་བདེན་དཔང་-བཅུད་བསྡུས་ དེ་ལས་ ཐབས་འཕྲུལ་གྱི་བརྟག་དཔྱད་ཁང་ པི་ཨར་/པཤ་རེ་རེ་ལུ་ བརྟག་དཔྱད་འབད་ནི།
+Android འབྱུང་ཁུངས་ལུ་ཨེབ་སྟེ་ `artifacts/android/{lint,tests,attestation,device_lab}/` གི་འོག་ལུ་ སྒྲུབ་བྱེད་ཚུ་ སྐྱེལ་བཙུགས་འབད་ནི།
 
-The consolidated `.github/workflows/android-and6.yml` job runs the lint,
-test-suite, attestation-summary, and device-lab slot checks on every PR/push
-touching Android sources, uploading evidence under `artifacts/android/{lint,tests,attestation,device_lab}/`.
+## 3. ལྕུག་གུ་དང་རྟེན་འབྲེལ་གྱི་པར་ལེན།
 
-## 3. Lint & Dependency Scans
-
-Run `scripts/android_lint_checks.sh --version <semver>` from the repo root. The
-script executes:
+རི་པོ་རྩ་བ་ལས་ `scripts/android_lint_checks.sh --version <semver>` གཡོག་བཀོལ། ཚིག༌ཕྲད
+ཡིག་གཟུགས་ལག་ལེན་འཐབ་ཨིན།
 
 ```
 lintRelease ktlintCheck detekt dependencyGuardBaseline \
 :operator-console:lintRelease :retail-wallet:lintRelease
 ```
 
-- Reports and dependency-guard outputs are archived under
-  `artifacts/android/lint/<label>/` and a `latest/` symlink for release
-  pipelines.
-- Failing lint findings require either remediation or an entry in the release
-  RFC documenting the accepted risk (approved by Release Engineering + Program
-  Lead).
-- `dependencyGuardBaseline` regenerates the dependency lock; attach the diff
-  to the go/no-go packet.
+- སྙན་ཞུ་ཚུ་དང་ བརྟེན་པའི་ གཱར་ཌི་ཨའུཊི་པུཊི་ཚུ་ འོག་ལུ་ཡིག་མཛོད་བཀོད་དེ་ཡོད།
+  `artifacts/android/lint/<label>/` དང་ གསར་བཏོན་འབད་ནིའི་དོན་ལུ་ Torii synlink ཅིག།
+  མདོང་ལམ་ཚུ།
+- ལིན་ཊི་གི་ཤེས་རྟོགས་ལུ་ འཐུས་ཤོར་བྱུང་ནི་ལུ་ བཅོ་ཁ་རྐྱབ་ནི་དང་ ཡང་ན་ གསར་བཏོན་ནང་ ཐོ་བཀོད་དགོཔ་ཨིན།
+  ངོས་ལེན་འབད་ཡོད་པའི་ཉེན་ཁ་ཡིག་ཐོག་ལུ་བཀོད་མི་ RFC (Release Generiation + Program གིས་ཆ་འཇོག་འབད་ཡོདཔ།
+  འགོ་ཁྲིད་འབད་ནི)།
+- `dependencyGuardBaseline` བརྟེན་པའི་ལྡེ་མིག་འདི་ ལོག་བཟོཝ་ཨིན། དབྱེ་བ་འདི་མཉམ་སྦྲགས་འབད།
+  go/མ་གོའི་སྦུང་ཚན་ལུ་།
 
-## 4. Device Lab & StrongBox Coverage
+## 4. ཐབས་འཕྲུལ་བརྟག་དཔྱད་ཁང་དང་ StrongBox ཁྱབ་ཁོངས།
 
-1. Reserve Pixel + Galaxy devices using the capacity tracker referenced in
-   `docs/source/compliance/android/device_lab_contingency.md`. Blocks releases
-   if <70 % availability.
-2. Execute `scripts/android_strongbox_attestation_ci.sh --report \
-   artifacts/android/attestation/<version>` to refresh the attestation report.
-3. Run the instrumentation matrix (document the suite/ABI list in the device
-   tracker). Capture failures in the incident log even if retries succeed.
-4. File a ticket if fallback to Firebase Test Lab is required; link the ticket
-   in the checklist below.
+1. ནང་ གཞི་བསྟུན་འབད་ཡོད་པའི་ ལྕོགས་གྲུབ་འཚོལ་ཞིབ་འཕྲུལ་ཆས་ལག་ལེན་འཐབ་ཐོག་ལས་ པིག་སེལ་ + སྐར་ཚོམ་ཐབས་འཕྲུལ་ཚུ་ གསོག་འཇོག་འབད།
+   `docs/source/compliance/android/device_lab_contingency.md`. བཀག་ཆ་ཚུ་ གསར་བཏོན་ཚུ།
+   ག་དེམ་ཅིག་སྦེ་ ` བདེན་དཔང་སྙན་ཞུ་གསར་བསྐྲུན་འབད་ནི་ལུ་ཨིན།
+3. ལག་ཆས་མེ་ཊིགས་ (ཐབས་འཕྲུལ་ནང་ ཆ་ཤས་/ཨེ་བི་ཨའི་ཐོ་ཡིག་ཡིག་ཆ་ ཡིག་ཆ་ནང་བཀོད།
+   བརྟག་ཞིབ་པ་). བསྐྱར་ལོག་ཚུ་མཐར་འཁྱོལ་བྱུང་རུང་ བྱུང་རྐྱེན་དྲན་ཐོ་ནང་ འཐུས་ཤོར་ཚུ་ བཟུང་།
+༤ ཕ་ཡར་བེསི་བརྟག་དཔྱད་བརྟག་དཔྱད་ཁང་ལུ་ ཕོཝ་གི་ཤོག་བྱང་དགོ་པ་ཅིན་ ཤོག་འཛིན་བཙུགས་དགོ། ཤོག་འཛིན་འདི་འབྲེལ་མཐུད་འབད་ནི།
+   འོག་གི་ཞིབ་དཔྱད་ཐོ་ཡིག་ནང་།
 
-## 5. Compliance & Telemetry Artefacts
-
-- Follow `docs/source/compliance/android/and6_compliance_checklist.md` for EU
-  and JP submissions. Update `docs/source/compliance/android/evidence_log.csv`
-  with hashes + Buildkite job URLs.
-- Refresh telemetry redaction evidence via
-  `scripts/telemetry/check_redaction_status.py --write-cache \
+## 5. བསྟུད་དང་འཕྲིན་ལས་རིག་པ།- ཡུ་རོབ་མཐུན་ཚོགས་ཀྱི་དོན་ལུ་ `docs/source/compliance/android/and6_compliance_checklist.md` ལུ་རྗེས་སུ་འབྲང་།
+  དང་ JP བཙུགས་ནི། `docs/source/compliance/android/evidence_log.csv` དུས་ཚོད།
+  with hashes + Buildkite ལཱ་གི་ URLs.
+- བརྒྱུད་འཕྲིན་བསྐྱར་གསོའི་སྒྲུབ་བྱེད་ བརྒྱུད་དེ་གསར་བསྐྲུན་འབད་ནི།
+  `ཡིག་གཟུགས་/བརྒྱུད་འཕྲིན་/ཞིབ་དཔྱད་_འོད་ཚད་_གནས་སྟངས་.པི་ --བྲིས་-འདྲ་མཛོད་ \
    --status-url https://android-observability.example/status.json`.
-  Store the resulting JSON under
+  འོག་ལུ་ཐོན་པའི་JSON གསོག་འཇོག་འབད།
   `artifacts/android/telemetry/<version>/status.json`.
-- Record the schema diff output from
+- ལས་ ལས་འཆར་ཁྱབ་སྤེལ་ཨའུཊི་པུཊི་ ལས་ ཐོ་བཀོད་འབད།
   `scripts/telemetry/run_schema_diff.sh --android-config ... --rust-config ...`
-  to prove parity with Rust exporters.
+  རསཊ་ཕྱིར་ཚོང་པ་ཚུ་དང་གཅིག་ཁར་ འདྲ་མཉམ་གྱི་བདེན་ཁུངས་བཀལ་ནིའི་དོན་ལུ་ཨིན།
 
-## 6. Provenance, SBOM, and Publishing
+## 6. སྐུལ་འདེད་དང་ SBOM, དང་དཔེ་སྐྲུན་ཁང་།
 
-1. Dry-run the publish pipeline:
+1. པར་སྐྲུན་མདོང་ལམ་འདི་སྐམ་བཏང་།
 
    ```bash
    scripts/publish_android_sdk.sh \
@@ -116,7 +111,7 @@ lintRelease ktlintCheck detekt dependencyGuardBaseline \
      --dry-run
    ```
 
-2. Generate SBOM + Sigstore provenance:
+2. SBOM + Sigstore འབྱུང་ཁུངས་:
 
    ```bash
    scripts/android_sbom_provenance.sh \
@@ -124,39 +119,39 @@ lintRelease ktlintCheck detekt dependencyGuardBaseline \
      --out artifacts/android/provenance/<semver>
    ```
 
-3. Attach `artifacts/android/provenance/<semver>/manifest.json` and signed
-   `checksums.sha256` to the release RFC.
-4. When promoting to the real Maven repository, rerun
-   `scripts/publish_android_sdk.sh` without `--dry-run`, capture the console
-   log, and upload the resulting artefacts to `artifacts/android/maven/<semver>`.
+3. `artifacts/android/provenance/<semver>/manifest.json` དང་མཚན་རྟགས་བཀོད་ཡོད།
+   `checksums.sha256` གསར་བཏོན་ཨར་ཨེཕ་སི་ལུ།
+༤ མེ་ཝེན་མཛོད་ཁང་ངོ་མ་ལུ་ཁྱབ་སྤེལ་འབད་བའི་སྐབས་ ལོག་སྟེ་གཡོག་བཀོལ།
+   `scripts/publish_android_sdk.sh` `--dry-run` མེད་པར་ Console བཟུང་ཡོད།
+   log, དང་དེ་ལས་ཐོན་པའི་དངོས་པོ་ཚུ་ `artifacts/android/maven/<semver>` ལུ་སྐྱེལ་བཙུགས་འབད།
 
-## 7. Submission Packet Template
+## 7. ཕུལ་བའི་ཐུམ་སྒྲིལ་གྱི་དཔེ་ཚད།
 
-Every GA/LTS/hotfix release should include:
+GA/LTS/hotfix རེ་རེ་བཞིན་ གཤམ་གསལ་ལྟར་ :
 
-1. **Completed checklist** — copy this file’s table, tick each item, and link
-   to supporting artefacts (Buildkite run, logs, doc diffs).
-2. **Device lab evidence** — attestation report summary, reservation log, and
-   any contingency activations.
-3. **Telemetry packet** — redaction status JSON, schema diff, link to
-   `docs/source/sdk/android/telemetry_redaction.md` updates (if any).
-4. **Compliance artefacts** — entries added/updated in the compliance folder
-   plus the refreshed evidence log CSV.
-5. **Provenance bundle** — SBOM, Sigstore signature, and `checksums.sha256`.
-6. **Release summary** — one‑page overview attached to `status.md` summarising
-   the above (date, version, highlight of any waived gates).
+1. **མཇུག་བསྡུ་ཡོད་པའི་ཞིབ་དཔྱད་ཐོ་ཡིག་** — ཡིག་སྣོད་ཀྱི་ཐིག་ཁྲམ་འདི་འདྲ་བཤུས་རྐྱབས་ཞིནམ་ལས་ རྣམ་གྲངས་རེ་རེ་ལུ་རྟགས་བཀལ་ནི་ དེ་ལས་ འབྲེལ་མཐུད་འབད།
+   རྒྱབ་སྐྱོར་འབད་མི་ ཅ་རྙིང་ཚུ་ (Buildkite ran, logs, doc diffs).
+2. **ཐབས་འཕྲུལ་བརྟག་དཔྱད་ཁང་གི་སྒྲུབ་བྱེད་** — བདེན་ཁུངས་སྙན་ཞུའི་བཅུད་བསྡུས་དང་ བཀག་ཆ་དྲན་ཐོ་དང་།
+   གློ་བུར་གྱི་སྒུལ་ཤུགས་གང་རུང་།
+༣. **ཊེ་ལི་མི་ཊི་སྦུང་ཚན་** བསྐྱར་བཟོ་གནས་རིམ་ JSON, schema diff, འབྲེལ་མཐུད།
+   `docs/source/sdk/android/telemetry_redaction.md` དུས་མཐུན་བཟོ་ནི་ (གལ་སྲིད་ཡོད་ན་)།
+4. **ཁ་ཐུག་ལས་ ཅ་རྙིང་ཚུ་** — བསྟར་སྤྱོད་སྣོད་འཛིན་ནང་ ཁ་སྐོང་/དུས་མཐུན་བཟོ་ཡོད་པའི་ཐོ་བཀོད་ཚུ་/དུས་མཐུན་བཟོ་ཡོདཔ།
+   དང་ བསྐྱར་གསོ་འབད་ཡོད་པའི་སྒྲུབ་བྱེད་ CSV.
+༥. **Provenance bundle** — SBOM, Sigstore མཚན་རྟགས་, དང་ `checksums.sha256`.
+6. **གསར་བཏོན་བཅུད་དོན་** — `status.md` ལུ་བསྡོམས་ཡོད་པའི་ཤོག་ལེབ་གཅིག་མཐོང་སྣང་གཅིག་བསྡོམས་རྩིས་བཤུས།
+   གོང་འཁོད་ཀྱི་ (ཚེས་གྲངས་, ཐོན་རིམ་, འོད་རྟགས་གང་རུང་ཅིག་གི་ འོད་རྟགས་གང་རུང་ཅིག་)།
 
-Store the packet under `artifacts/android/releases/<version>/` and reference it
-in `status.md` and the release RFC.
+སྦུང་ཚན་འདི་ `artifacts/android/releases/<version>/` གི་འོག་ལུ་གསོག་འཇོག་འབད་ཞིནམ་ལས་ དེ་ལུ་གཞི་བསྟུན་འབད།
+in `status.md` དང་ གསར་བཏོན་ཨར་ཨེཕ་སི།
 
-- `scripts/run_release_pipeline.py --publish-android-sdk ...` automatically
-  copies the latest lint archive (`artifacts/android/lint/latest`) and the
-  compliance evidence log into `artifacts/android/releases/<version>/` so the
-  submission packet always has a canonical location.
+- `scripts/run_release_pipeline.py --publish-android-sdk ...` རང་བཞིན་གྱིས་རང་བཞིན་ཅན།
+  མཐའ་མའི་ལིན་ཊི་ཡིག་མཛོད་ (`artifacts/android/lint/latest`) དང་
+  བསྟུན་པའི་སྒྲུབ་བྱེད་ཀྱི་ནང་དོ་ `artifacts/android/releases/<version>/` ནང་།
+  ཕུལ་ཕུལ་ཐུམ་སྒྲིལ་འདི་ ཨ་རྟག་ར་ ཀེ་ནོ་ནིག་གི་ས་གནས་ཡོདཔ་ཨིན།
 
 ---
 
-**Reminder:** update this checklist whenever new CI jobs, compliance artefacts,
-or telemetry requirements are added. Roadmap item AND6 stays open until the
-checklist and associated automation prove stable for two consecutive release
-trains.
+**དྲན་སྐུལ་:** སི་ཨའི་ལཱ་གསརཔ་དང་ བསྟར་སྤྱོད་ཀྱི་ཅ་ཆས་ཚུ་ཡོད་པའི་སྐབས་ ཞིབ་དཔྱད་ཐོ་ཡིག་འདི་དུས་མཐུན་བཟོ་དགོ།
+ཡང་ན་ ཊེ་ལི་མི་ཊི་དགོས་མཁོ་ཚུ་ ཁ་སྐོང་བརྐྱབ་ཡོདཔ་ཨིན། ལམ་སྟོན་གྱི་ཅ་ཆས་ AND6 འདི་ ཁ་ཕྱེ་ཚུན་ཚོད་ ཕྱེ་སྟེ་སྡོདཔ་ཨིན།
+བརྟག་ཞིབ་ཐོ་ཡིག་དང་ དེ་དང་འབྲེལ་བའི་རང་བཞིན་གྱིས་ བསྟར་ཆགས་གཉིས་ འཕྲོ་མཐུད་དེ་ བཏོན་གཏང་ནི་ལུ་ བརྟན་ཏོག་ཏོ་སྦེ་ བཏོནམ་ཨིན།
+སྦྱོང་བརྡར་ཚུ།

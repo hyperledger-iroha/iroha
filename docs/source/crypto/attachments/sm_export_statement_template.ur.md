@@ -6,51 +6,51 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 6742d2b87b8fbbc1493c5ae2704147b0f8d5d23af78004c2c9a112fe881efb11
 source_last_modified: "2026-01-03T18:07:57.071790+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% SM2/SM3/SM4 Export-Control Statement Template
-% Hyperledger Iroha Compliance Working Group
-% 2026-05-06
+٪ SM2/SM3/SM4 ایکسپورٹ کنٹرول بیان ٹیمپلیٹ
+٪ Hyperledger Iroha تعمیل ورکنگ ورکنگ گروپ
+٪ 2026-05-06
 
-# Usage
+# استعمال
 
-Embed this statement in release notes, manifests, or legal correspondence when
-distributing SM-enabled artefacts. Update the placeholders to match the release,
-jurisdiction, and applicable license exceptions. Retain a signed copy with the
-release checklist.
+اس بیان کو ریلیز نوٹ ، ظاہر ہونے یا قانونی خط و کتابت میں شامل کریں
+ایس ایم سے چلنے والے نمونے تقسیم کرنا۔ رہائی سے ملنے کے لئے پلیس ہولڈرز کو اپ ڈیٹ کریں ،
+دائرہ اختیار ، اور قابل اطلاق لائسنس سے مستثنیات۔ اس کے ساتھ ایک دستخط شدہ کاپی برقرار رکھیں
+چیک لسٹ جاری کریں۔
 
-# Statement
+# بیان
 
-> **Product:** Hyperledger Iroha {{ RELEASE_VERSION }} (`{{ ARTEFACT_ID }}`)
+> ** پروڈکٹ: ** Hyperledger Iroha {{release_version}} (`{{ ARTEFACT_ID }}`)
 >
-> **Algorithms Included:** SM2 digital signature, SM3 hashing, SM4 symmetric
-> encryption (GCM/CCM)
+> ** الگورتھم شامل ہیں: ** ایس ایم 2 ڈیجیٹل دستخط ، ایس ایم 3 ہیشنگ ، ایس ایم 4 توازن
+> خفیہ کاری (GCM/CCM)
 >
-> **Export Classification:** United States EAR Category 5, Part 2 (5D002.c.1);
-> European Union Regulation 2021/821 Annex 1, 5D002.
+> ** برآمدی درجہ بندی: ** ریاستہائے متحدہ امریکہ کا زمرہ 5 ، حصہ 2 (5d002.c.1) ؛
+> یوروپی یونین ریگولیشن 2021/821 ضمیمہ 1 ، 5D002۔
 >
-> **License Exception(s):** {{ LICENSE_EXCEPTION }} (e.g., ENC §740.17(b)(2),
-> TSU §740.13 for source distribution).
+> ** لائسنس استثناء (زبانیں): ** {{لائسنس_ایسیسیشن}} (جیسے ، ENC §740.17 (b) (2) ،
+> سورس کی تقسیم کے لئے TSU §740.13)۔
 >
-> **Distribution Scope:** {{ DISTRIBUTION_SCOPE }} (e.g., “Global, excluding
-> embargoed territories listed in 15 CFR 746”).
+> ** تقسیم کا دائرہ: ** {{تقسیم_سکوپ}} (جیسے ، "عالمی ، چھوڑ کر
+> 15 CFR 746 ") میں درج آب و ہوا والے علاقوں۔
 >
-> **Operator Obligations:** Recipients must comply with applicable export,
-> import, and usage regulations. Deployments within the People’s Republic of
-> China require product and usage filings with the State Cryptography
-> Administration and adherence to mainland data residency requirements.
+> ** آپریٹر کی ذمہ داری: ** وصول کنندگان کو قابل اطلاق برآمد پر عمل کرنا ہوگا ،
+> درآمد ، اور استعمال کے ضوابط۔ عوامی جمہوریہ کے اندر تعیناتی
+> چین کو ریاستی خفیہ نگاری کے ساتھ مصنوع اور استعمال کی فائلنگ کی ضرورت ہے
+> انتظامیہ اور سرزمین کے ڈیٹا رہائش گاہ کی ضروریات پر عمل پیرا۔
 >
-> **Contact:** {{ LEGAL_CONTACT_NAME }} — {{ LEGAL_CONTACT_EMAIL }} /
-> {{ LEGAL_CONTACT_PHONE }}
+> ** رابطہ: ** {{قانونی_کونٹیکٹ_ نام}} - {{قانونی_کونٹیکٹ_ ای میل}} /
+> {{قانونی_کونٹیکٹ_ فون}}
 >
-> This statement accompanies the cryptography compliance checklist and filing
-> templates provided in `docs/source/crypto/sm_compliance_brief.md`. Retain this
-> document and associated filings for a minimum of three years.
+> یہ بیان خفیہ نگاری کی تعمیل چیک لسٹ اور فائلنگ کے ساتھ ہے
+> `docs/source/crypto/sm_compliance_brief.md` میں فراہم کردہ ٹیمپلیٹس۔ اسے برقرار رکھیں
+> کم از کم تین سال کے لئے دستاویز اور اس سے وابستہ فائلنگ۔
 
-# Signature
+# دستخط
 
-- Authorised representative: ________________________
-- Title: ________________________
-- Date: ________________________
-
+- مجاز نمائندہ: ________________________
+- عنوان: ________________________
+- تاریخ: ________________________

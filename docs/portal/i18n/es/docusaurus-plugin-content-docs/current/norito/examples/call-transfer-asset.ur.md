@@ -4,16 +4,18 @@ direction: ltr
 source: docs/portal/docs/norito/examples/call-transfer-asset.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
 slug: /norito/examples/call-transfer-asset
-title: Kotodama سے ہوسٹ ٹرانسفر کال کریں
-description: دکھاتا ہے کہ Kotodama انٹری پوائنٹ کس طرح ہوسٹ کی `transfer_asset` انسٹرکشن کو inline میٹا ڈیٹا ویلیڈیشن کے ساتھ کال کر سکتا ہے۔
-source: crates/ivm/docs/examples/08_call_transfer_asset.ko
+título: Kotodama سے ہوسٹ ٹرانسفر کال کریں
+descripción: دکھاتا ہے کہ Kotodama انٹری پوائنٹ کس طرح ہوسٹ کی `transfer_asset` انسٹرکشن کو inline میٹا ڈیٹا ویلیڈیشن کے ساتھ کال کر سکتا ہے۔
+fuente: crates/ivm/docs/examples/08_call_transfer_asset.ko
 ---
 
-دکھاتا ہے کہ Kotodama انٹری پوائنٹ کس طرح ہوسٹ کی `transfer_asset` انسٹرکشن کو inline میٹا ڈیٹا ویلیڈیشن کے ساتھ کال کر سکتا ہے۔
+دکھاتا ہے کہ Kotodama انٹری پوائنٹ کس طرح ہوسٹ کی `transfer_asset` انسٹرکشن کو en línea ڈیٹا ویلیڈیشن کے ساتھ کال کر سکتا ہے۔
 
 ## لیجر واک تھرو
 
@@ -23,9 +25,9 @@ source: crates/ivm/docs/examples/08_call_transfer_asset.ko
 
 ## متعلقہ SDK گائیڈز
 
-- [Rust SDK quickstart](/sdks/rust)
-- [Python SDK quickstart](/sdks/python)
-- [JavaScript SDK quickstart](/sdks/javascript)
+- [Inicio rápido del SDK de Rust](/sdks/rust)
+- [Inicio rápido del SDK de Python](/sdks/python)
+- [Inicio rápido del SDK de JavaScript](/sdks/javascript)
 
 [Kotodama سورس ڈاؤن لوڈ کریں](/norito-snippets/call-transfer-asset.ko)
 

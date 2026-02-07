@@ -7,51 +7,52 @@ generator: scripts/sync_docs_i18n.py
 source_hash: ece3b82ce3096e15d3cc4524fbb6033ab3fa5119da561a1aec40306564ba0193
 source_last_modified: "2025-12-29T18:16:34.771616+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Contributor Covenant Code of Conduct
+# Ҡатнашыусы килешеү кодексы
 
-## Our Pledge
+## Беҙҙең залог
 
-In the interest of fostering an open and welcoming environment, we as contributors and maintainers pledge to making participation in our project and our community a harassment-free experience for everyone, regardless of age, body size, disability, ethnicity, gender identity and expression, level of experience, nationality, personal appearance, race, religion, or sexual identity and orientation.
+Асыҡ һәм ҡаршы алыу мөхитен тәрбиәләү мәнфәғәтендә, беҙ үҙ өлөшөн индергән һәм хеҙмәтләндергәндәр булараҡ, беҙҙең проектта һәм беҙҙең йәмәғәтселектә ҡатнашыуҙы вәғәҙә итәбеҙ, һәр кем өсөн, йәшкә, тән ҙурлығына, инвалидлыҡҡа, этник, гендер үҙенсәлеге һәм һүҙҙәре, тәжрибә кимәле, милләт, шәхси тышҡы ҡиәфәт, раса, дин, йәки енси үҙенсәлек һәм йүнәлешкә ҡарамаҫтан.
 
-## Our Standards
+## Беҙҙең стандарттар
 
-Examples of behavior that contributes to creating a positive environment include:
+Ыңғай мөхит булдырыуға булышлыҡ итеүсе тәртип миҫалдары:
 
-* Using welcoming and inclusive language
-* Being respectful of differing viewpoints and experiences
-* Gracefully accepting constructive criticism
-* Focusing on what is best for the community
-* Showing empathy towards other community members
+* Сәләмләү һәм инклюзив тел ярҙамында
+* Төрлө ҡараштар һәм тәжрибәгә ихтирамлы булыу
+* Конструктив тәнҡитте нәфис ҡабул итеү
+* Йәмәғәтселек өсөн иң яҡшы нәмәгә иғтибар итеү
+* Башҡа йәмәғәтселек ағзаларына ҡарата ҡыҙғаныу күрһәтеү
 
-Examples of unacceptable behavior by participants include:
+Ҡатнашыусылар тарафынан ҡабул ителмәгән тәртипкә миҫалдар:
 
-* The use of sexualized language or imagery and unwelcome sexual attention or advances
-* Trolling, insulting/derogatory comments, and personal or political attacks
-* Public or private harassment
-* Publishing others' private information, such as a physical or electronic address, without explicit permission
-* Other conduct which could reasonably be considered inappropriate in a professional setting
+* сексуализацияланған тел йәки образлылыҡ һәм енси иғтибарҙы теләмәгән йәки алға китештәр ҡулланыу
+* Тролл, кәмһетеү/кәмһетеүле комментарийҙар, һәм шәхси йәки сәйәси һөжүмдәр
+* Йәмәғәт йәки шәхси йәберләү
+* Башҡаларҙың шәхси мәғлүмәттәрен, мәҫәлән, физик йәки электрон адресты асыҡ рөхсәтһеҙ баҫтырыу
+* Башҡа тәртип, уларҙы нигеҙле тип иҫәпләргә мөмкин, профессиональ шарттарҙа урынһыҙ тип иҫәпләнә
 
-## Our Responsibilities
+## Беҙҙең яуаплылыҡ
 
-Project maintainers are responsible for clarifying the standards of acceptable behavior and are expected to take appropriate and fair corrective action in response to any instances of unacceptable behavior.
+Проекттарҙы һаҡлаусылар ҡабул итеү тәртибе стандарттарын асыҡлау өсөн яуаплы һәм ҡабул ителмәгән тәртиптең теләһә ниндәй осраҡтарына яуап итеп тейешле һәм ғәҙел төҙәтеү сараларын күрергә көтөлә.
 
-Project maintainers have the right and responsibility to remove, edit, or reject comments, commits, code, wiki edits, issues, and other contributions that are not aligned to this Code of Conduct, or to ban temporarily or permanently any contributor for other behaviors that they deem inappropriate, threatening, offensive, or harmful.
+Проекттарҙы хеҙмәтләндереүҙе дөрөҫ һәм яуаплылыҡты бөтөрөү, мөхәррирләү, йәки кире ҡағыу өсөн комментарийҙар, ҡылған, код, вики мөхәррирләү, мәсьәләләр, һәм башҡа иғәнә, был тәртип кодексы тура килмәй, йәки тыйыу өсөн ваҡытлыса йәки даими рәүештә теләһә ниндәй өлөш индереүсе башҡа тәртип, улар тип һанамай, урынһыҙ, янаусы, рәнйеткес, йәки зарарлы.
 
-## Scope
+## Масштаб
 
-This Code of Conduct applies both within project spaces and in public spaces when an individual is representing the project or its community. Examples of representing a project or community include using an official project e-mail address, posting via an official social media account, or acting as an appointed representative at an online or offline event. Representation of a project may be further defined and clarified by project maintainers.
+Был тәртип кодексы проект киңлектәрендә лә, йәмәғәт киңлектәрендә лә айырым кеше проектты йәки уның йәмәғәтселеген күрһәтә. Проект йәки йәмәғәтселек күрһәтеү миҫалдары рәсми проект электрон почта адресы ҡулланыу, рәсми социаль медиа иҫәбенә урынлаштырыу, йәки онлайн йәки офлайн сарала тәғәйенләнгән вәкил булып сығыш яһау. Проектты күрһәтеүҙе артабан билдәләргә һәм проектты тотоусылар тарафынан асыҡларға мөмкин.
 
-## Enforcement
+##
 
-Instances of abusive, harassing, or otherwise unacceptable behavior may be reported by contacting the project team [here](./CONTRIBUTING.md#contact). All complaints will be reviewed and investigated and will result in a response that is deemed necessary and appropriate to the circumstances. The project team is obligated to maintain confidentiality with regard to the reporter of an incident. Further details of specific enforcement policies may be posted separately.
+Йәберләү, ҡыйырһытыу, йәки башҡа ҡабул итеү мөмкин булмаған тәртип инстанциялары проект командаһы менән бәйләнешкә инеү тураһында хәбәр итә ала [бында](I18NU0000002X). Бөтә ялыуҙар ҙа тикшереләсәк һәм тикшереләсәк һәм һөҙөмтәлә кәрәкле һәм шарттарға тап килгән яуапҡа килтерәсәк. Проект командаһы инцидент хәбәрсеһе менән бәйле конфиденциальлыҡты һаҡларға бурыслы. Артабанғы реквизиттар аныҡ үтәү сәйәсәте айырым урынлаштырырға мөмкин.
 
-Project maintainers who do not follow or enforce the Code of Conduct in good faith may face temporary or permanent repercussions as determined by other members of the project's leadership.
+Проекттарҙы һаҡлаусылар, улар үтәмәй йәки үтәй кодексы яҡшы ниәт менән осрашырға мөмкин ваҡытлыса йәки даими эҙемтәләр, тип билдәләнгән башҡа ағзалары проект етәкселеге.
 
-## Attribution
+## Атрибуция
 
-This Code of Conduct is adapted from the [Contributor Covenant][homepage], version 1.4, available at [http://contributor-covenant.org/version/1/4][version]
+Был тәртип кодексы [үҙгәртеүсе килешү][хоместика], 1.4 версияһынан яраҡлаштырылған, [I18NU0000003X][версия]
 
 [homepage]: http://contributor-covenant.org
 [version]: http://contributor-covenant.org/version/1/4/

@@ -4,65 +4,67 @@ direction: ltr
 source: docs/portal/docs/da/replication-policy.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-title: Data Availability Replication Policy
-sidebar_label: Replication Policy
-description: Governance-enforced retention profiles applied to all DA ingest submissions.
+վերնագիր. Տվյալների հասանելիության կրկնօրինակման քաղաքականություն
+sidebar_label. Replication Policy
+Նկարագրություն. Կառավարման կողմից կիրառվող պահպանման պրոֆիլները կիրառվում են DA ներածման բոլոր ներկայացումների համար:
 ---
 
-:::note Canonical Source
+:::note Կանոնական աղբյուր
 :::
 
-# Data Availability Replication Policy (DA-4)
+# Տվյալների հասանելիության կրկնօրինակման քաղաքականություն (DA-4)
 
-_Status: In Progress — Owners: Core Protocol WG / Storage Team / SRE_
+_ Կարգավիճակ՝ ընթացքի մեջ է — Սեփականատերեր՝ Core Protocol WG / Storage Team / SRE_
 
-The DA ingestion pipeline now enforces deterministic retention targets for
-every blob class described in `roadmap.md` (workstream DA-4). Torii refuses to
-persist caller-provided retention envelopes that do not match the configured
-policy, guaranteeing that every validator/storage node retains the required
-number of epochs and replicas without relying on submitter intent.
+DA կլանման խողովակաշարն այժմ կիրառում է դետերմինիստական պահպանման թիրախներ
+`roadmap.md`-ում նկարագրված յուրաքանչյուր բլբի դաս (աշխատանքային հոսք DA-4): Torii-ը հրաժարվում է
+պահպանում են զանգահարողի կողմից տրամադրված պահման ծրարները, որոնք չեն համապատասխանում կազմաձևվածին
+քաղաքականությունը՝ երաշխավորելով, որ յուրաքանչյուր վավերացնող/պահեստային հանգույց պահպանում է պահանջվողը
+դարաշրջանների և կրկնօրինակների քանակը՝ առանց հենվելու հանձնողի մտադրությանը:
 
-## Default policy
+## Կանխադրված քաղաքականություն
 
-| Blob class | Hot retention | Cold retention | Required replicas | Storage class | Governance tag |
-|------------|---------------|----------------|-------------------|----------------|----------------|
-| `taikai_segment` | 24 hours | 14 days | 5 | `hot` | `da.taikai.live` |
-| `nexus_lane_sidecar` | 6 hours | 7 days | 4 | `warm` | `da.sidecar` |
-| `governance_artifact` | 12 hours | 180 days | 3 | `cold` | `da.governance` |
-| _Default (all other classes)_ | 6 hours | 30 days | 3 | `warm` | `da.default` |
+| Բլոբ դաս | Տաք պահպանում | Սառը պահպանում | Պահանջվող կրկնօրինակներ | Պահպանման դաս | Կառավարման պիտակ |
+|--------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+| `taikai_segment` | 24 ժամ | 14 օր | 5 | `hot` | `da.taikai.live` |
+| `nexus_lane_sidecar` | 6 ժամ | 7 օր | 4 | `warm` | `da.sidecar` |
+| `governance_artifact` | 12 ժամ | 180 օր | 3 | `cold` | `da.governance` |
+| _Լռելյայն (բոլոր մյուս դասերը)_ | 6 ժամ | 30 օր | 3 | `warm` | `da.default` |
 
-These values are embedded in `torii.da_ingest.replication_policy` and applied to
-all `/v1/da/ingest` submissions. Torii rewrites manifests with the enforced
-retention profile and emits a warning when callers provide mismatched values so
-operators can detect stale SDKs.
+Այս արժեքները ներդրված են `torii.da_ingest.replication_policy`-ում և կիրառվում են
+բոլոր `/v1/da/ingest` ներկայացումները: Torii-ը վերագրում է դրսևորումները հարկադրվածի հետ
+պահպանման պրոֆիլը և արձակում է նախազգուշացում, երբ զանգահարողները անհամապատասխան արժեքներ են տալիս
+օպերատորները կարող են հայտնաբերել հնացած SDK-ներ:
 
-### Taikai availability classes
+### Taikai մատչելիության դասեր
 
-Taikai routing manifests (`taikai.trm`) declare an `availability_class`
-(`hot`, `warm`, or `cold`). Torii enforces the matching policy before chunking
-so operators can scale replica counts per stream without editing the global
-table. Defaults:
+Taikai երթուղային մանիֆեստները (`taikai.trm`) հայտարարում են `availability_class`
+(`hot`, `warm` կամ `cold`): Torii-ն կիրառում է համապատասխանության քաղաքականությունը նախքան մասնատելը
+այնպես որ օպերատորները կարող են չափել կրկնօրինակների քանակը յուրաքանչյուր հոսքի համար՝ առանց գլոբալը խմբագրելու
+սեղան. Կանխադրվածներ:
 
-| Availability class | Hot retention | Cold retention | Required replicas | Storage class | Governance tag |
-|--------------------|---------------|----------------|-------------------|----------------|----------------|
-| `hot` | 24 hours | 14 days | 5 | `hot` | `da.taikai.live` |
-| `warm` | 6 hours | 30 days | 4 | `warm` | `da.taikai.warm` |
-| `cold` | 1 hour | 180 days | 3 | `cold` | `da.taikai.archive` |
+| Հասանելիության դաս | Տաք պահպանում | Սառը պահպանում | Պահանջվող կրկնօրինակներ | Պահպանման դաս | Կառավարման պիտակ |
+|--------------------------------------------------------------------------------------------------------------|
+| `hot` | 24 ժամ | 14 օր | 5 | `hot` | `da.taikai.live` |
+| `warm` | 6 ժամ | 30 օր | 4 | `warm` | `da.taikai.warm` |
+| `cold` | 1 ժամ | 180 օր | 3 | `cold` | `da.taikai.archive` |
 
-Missing hints default to `hot` so live broadcasts retain the strongest policy.
-Override the defaults via
-`torii.da_ingest.replication_policy.taikai_availability` if your network uses
-different targets.
+Ակնարկները բացակայում են որպես `hot`, այնպես որ ուղիղ հեռարձակումները պահպանում են ամենաուժեղ քաղաքականությունը:
+Անտեսել կանխադրվածները միջոցով
+`torii.da_ingest.replication_policy.taikai_availability`, եթե ձեր ցանցն օգտագործում է
+տարբեր թիրախներ.
 
-## Configuration
+## Կազմաձևում
 
-The policy lives under `torii.da_ingest.replication_policy` and exposes a
-*default* template plus an array of per-class overrides. Class identifiers are
-case-insensitive and accept `taikai_segment`, `nexus_lane_sidecar`,
-`governance_artifact`, or `custom:<u16>` for governance-approved extensions.
-Storage classes accept `hot`, `warm`, or `cold`.
+Քաղաքականությունը գործում է `torii.da_ingest.replication_policy`-ի ներքո և բացահայտում է ա
+*լռելյայն* ձևանմուշ, գումարած մեկ դասի վերափոխումների զանգված: Դասի նույնացուցիչներն են
+մեծատառերի համար անզգայուն և ընդունում է `taikai_segment`, `nexus_lane_sidecar`,
+`governance_artifact` կամ `custom:<u16>` կառավարման կողմից հաստատված ընդլայնումների համար:
+Պահպանման դասերը ընդունում են `hot`, `warm` կամ `cold`:
 
 ```toml
 [torii.da_ingest.replication_policy.default_retention]
@@ -82,11 +84,11 @@ storage_class = "hot"
 governance_tag = "da.taikai.live"
 ```
 
-Leave the block untouched to run with the defaults listed above. To tighten a
-class, update the matching override; to change the baseline for new classes,
-edit `default_retention`.
+Բլոկը թողեք անձեռնմխելի, որպեսզի գործարկվի վերը թվարկված լռելյայններով: Խստացնել ա
+դաս, թարմացնել համապատասխանող վերագրումը; փոխել բազային նոր դասերի համար,
+խմբագրել `default_retention`.
 
-Taikai availability classes can be overridden independently via
+Taikai-ի առկայության դասերը կարող են անջատվել ինքնուրույն միջոցով
 `torii.da_ingest.replication_policy.taikai_availability`:
 
 ```toml
@@ -100,30 +102,30 @@ storage_class = "cold"
 governance_tag = "da.taikai.archive"
 ```
 
-## Enforcement semantics
+## Կիրառման իմաստաբանություն
 
-- Torii replaces the user-supplied `RetentionPolicy` with the enforced profile
-  before chunking or manifest emission.
-- Pre-built manifests that declare a mismatched retention profile are rejected
-  with `400 schema mismatch` so stale clients cannot weaken the contract.
-- Every override event is logged (`blob_class`, submitted vs expected policy)
-  to surface non-compliant callers during rollout.
+- Torii-ը փոխարինում է օգտագործողի կողմից տրամադրված `RetentionPolicy`-ին պարտադրված պրոֆիլով
+  նախքան փշրվելը կամ ակնհայտ արտանետումը:
+- Նախապես կառուցված մանիֆեստները, որոնք հայտարարում են պահպանման անհամապատասխան պրոֆիլը, մերժվում են
+  `400 schema mismatch`-ով, այնպես որ հնացած հաճախորդները չեն կարող թուլացնել պայմանագիրը:
+- Յուրաքանչյուր անտեսման իրադարձություն գրանցված է (`blob_class`, ներկայացված է ընդդեմ սպասվող քաղաքականության)
+  դուրս բերել չհամապատասխանող զանգահարողներին՝ թողարկման ընթացքում:
 
-See [Data Availability Ingest Plan](ingest-plan.md) (Validation checklist) for the updated gate
-covering retention enforcement.
+Թարմացված դարպասի համար տե՛ս [Տվյալների հասանելիության մուտքագրման պլանը] (ingest-plan.md) (Վավերացման ստուգացանկ)
+ծածկում է պահպանման կիրարկումը:
 
-## Re-replication workflow (DA-4 follow-up)
+## Կրկնօրինակման աշխատանքային հոսք (DA-4 հետևում)
 
-Retention enforcement is only the first step. Operators must also prove that
-live manifests and replication orders stay aligned with the configured policy so
-that SoraFS can automatically re-replicate out-of-compliance blobs.
+Պահպանման կիրառումը միայն առաջին քայլն է: Օպերատորները նույնպես պետք է ապացուցեն դա
+կենդանի մանիֆեստները և կրկնօրինակման պատվերները համահունչ են մնում կազմաձևված քաղաքականությանը
+որ SoraFS-ը կարող է ավտոմատ կերպով կրկնօրինակել անհամապատասխանության բլբերը:
 
-1. **Watch for drift.** Torii emits
-   `overriding DA retention policy to match configured network baseline` whenever
-   a caller submits stale retention values. Pair that log with
-   `torii_sorafs_replication_*` telemetry to spot replica shortfalls or delayed
-   redeployments.
-2. **Diff intent vs live replicas.** Use the new audit helper:
+1. **Դիտեք դրեյֆի համար։** Torii-ն արտանետում է
+   `overriding DA retention policy to match configured network baseline` երբ էլ լինի
+   զանգահարողը ներկայացնում է հնացած պահպանման արժեքներ: Զուգակցել այդ մատյանը
+   `torii_sorafs_replication_*` հեռաչափություն՝ կրկնօրինակների թերությունները կամ ուշացումը հայտնաբերելու համար
+   վերաբաշխումներ.
+2. **Տարբերության մտադրությունն ընդդեմ կենդանի կրկնօրինակների։** Օգտագործեք աուդիտի նոր օգնականը՝
 
    ```bash
    cargo xtask da-replication-audit \
@@ -133,29 +135,29 @@ that SoraFS can automatically re-replicate out-of-compliance blobs.
      --json-out artifacts/da/replication_audit.json
    ```
 
-   The command loads `torii.da_ingest.replication_policy` from the provided
-   config, decodes each manifest (JSON or Norito), and optionally matches any
-   `ReplicationOrderV1` payloads by manifest digest. The summary flags two
-   conditions:
+   Հրամանը բեռնում է `torii.da_ingest.replication_policy` տրամադրվածից
+   config, վերծանում է յուրաքանչյուր մանիֆեստ (JSON կամ Norito) և կամայականորեն համընկնում է ցանկացած
+   `ReplicationOrderV1` օգտակար բեռներ՝ ըստ մանիֆեստի ամփոփման: Ամփոփագիրը նշում է երկու
+   պայմաններ:
 
-   - `policy_mismatch` – the manifest retention profile diverges from the enforced
-     policy (this should never happen unless Torii is misconfigured).
-   - `replica_shortfall` – the live replication order requests fewer replicas than
-     `RetentionPolicy.required_replicas` or provides fewer assignments than its
-     target.
+   - `policy_mismatch` – մանիֆեստի պահպանման պրոֆիլը տարբերվում է պարտադրվածից
+     քաղաքականություն (սա երբեք չպետք է տեղի ունենա, քանի դեռ Torii սխալ կազմաձևված չէ):
+   - `replica_shortfall` – կենդանի կրկնօրինակման կարգը պահանջում է ավելի քիչ կրկնօրինակներ, քան
+     `RetentionPolicy.required_replicas` կամ տրամադրում է ավելի քիչ առաջադրանքներ, քան իրը
+     թիրախ.
 
-   A non-zero exit status indicates an active shortfall so CI/on-call automation
-   can page immediately. Attach the JSON report to the
+   Ոչ զրոյական ելքի կարգավիճակը ցույց է տալիս ակտիվ դեֆիցիտ, ուստի CI/զանգի ավտոմատացում
+   կարող է էջ անմիջապես. Կցեք JSON հաշվետվությունը
    `docs/examples/da_manifest_review_template.md`
-   packet for Parliament votes.
-3. **Trigger re-replication.** When the audit reports a shortfall, issue a fresh
-   `ReplicationOrderV1` via the governance tooling described in
-   [SoraFS storage capacity marketplace](../sorafs/storage-capacity-marketplace.md) and re-run the audit
-   until the replica set converges. For emergency overrides, pair the CLI output
-   with `iroha app da prove-availability` so that SREs can reference the same digest
-   and PDP evidence.
+   փաթեթ՝ խորհրդարանի քվեարկության համար։
+3. **Ձեռնարկեք վերարտադրումը:** Երբ աուդիտը հայտնում է թերության մասին, թողարկեք թարմ
+   `ReplicationOrderV1` կառավարման գործիքակազմի միջոցով, որը նկարագրված է
+   [SoraFS պահեստային հզորության շուկա] (../sorafs/storage-capacity-marketplace.md) և նորից գործարկեք աուդիտը
+   մինչև կրկնօրինակների հավաքածուն միանա: Արտակարգ իրավիճակների վերացման դեպքում զուգակցեք CLI ելքը
+   `iroha app da prove-availability`-ով, որպեսզի SRE-ները կարողանան հղում կատարել նույն ամփոփմանը
+   և PDP ապացույցներ:
 
-Regression coverage lives in `integration_tests/tests/da/replication_policy.rs`;
-the suite submits a mismatched retention policy to `/v1/da/ingest` and verifies
-that the fetched manifest exposes the enforced profile instead of the caller
-intent.
+Ռեգրեսիայի ծածկույթն ապրում է `integration_tests/tests/da/replication_policy.rs`-ում;
+փաթեթը անհամապատասխան պահման քաղաքականություն է ներկայացնում `/v1/da/ingest`-ին և հաստատում է
+որ բեռնված մանիֆեստը բացահայտում է պարտադրված պրոֆիլը զանգողի փոխարեն
+մտադրություն.

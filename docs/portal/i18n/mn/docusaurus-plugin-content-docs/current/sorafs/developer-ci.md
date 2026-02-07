@@ -8,19 +8,21 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraFS CI Recipes
 sidebar_label: CI Recipes
 description: Run the SoraFS CLI inside GitHub and GitLab pipelines with keyless signing.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
+::: Каноник эх сурвалжийг анхаарна уу
 :::
 
-# CI Recipes
+# CI жор
 
-SoraFS pipelines benefit from deterministic chunking, manifest signing, and
-proof verification. The `sorafs_cli` command surface keeps those steps portable
-across CI providers. This page highlights the canonical recipes and points to
-ready-to-use templates.
+SoraFS дамжуулах шугамууд нь тодорхой бүлэглэх, манифест гарын үсэг зурах болон
+нотлох баримт баталгаажуулалт. `sorafs_cli` командын гадаргуу нь эдгээр алхмуудыг зөөврийн байдлаар хадгалдаг
+CI үйлчилгээ үзүүлэгч даяар. Энэ хуудас нь каноник жорыг онцолж, онцолж байна
+ашиглахад бэлэн загварууд.
 
-## GitHub Actions (keyless)
+## GitHub үйлдэл (түлхүүргүй)
 
 ```yaml
 name: sorafs-artifacts
@@ -93,11 +95,11 @@ jobs:
           path: artifacts/
 ```
 
-Key points:
+Гол цэгүүд:
 
-- No static signing keys are stored; OIDC tokens are fetched on-demand.
-- Artefacts (CAR, manifest, bundle, proof summaries) are uploaded for review.
-- The job reuses the same Norito schemas used in production rollouts.
+- Статик гарын үсэг зурах түлхүүр хадгалагдаагүй; OIDC жетоныг хүсэлтээр татаж авдаг.
+- Олдворуудыг (CAR, манифест, багц, нотлох хураангуй) хянаж үзэхээр байршуулсан.
+- Уг ажил нь үйлдвэрлэлийг нэвтрүүлэхэд ашигладаг Norito схемүүдийг дахин ашигладаг.
 
 ## GitLab CI
 
@@ -133,15 +135,15 @@ sorafs:publish:
       - artifacts/
 ```
 
-- Provision `SIGSTORE_ID_TOKEN` via GitLab’s workload identity federation or a
-  sealed secret before executing the publish stage.
-- Failure of any CLI step causes the pipeline to halt, preserving consistent
-  artefacts.
+- `SIGSTORE_ID_TOKEN`-г GitLab-ийн ажлын ачааллын таних холбоо эсвэл
+  нийтлэх үе шатыг гүйцэтгэхийн өмнө битүүмжилсэн нууц.
+- Ямар нэгэн CLI алхам амжилтгүй болбол дамжуулах хоолой зогсонги байдалд ордог
+  олдворууд.
 
-## Additional resources
+## Нэмэлт нөөц
 
-- End-to-end templates (includes Bash helpers, federated identity configuration,
-  and clean-up steps): `docs/examples/sorafs_ci.md`
-- CLI reference covering every option: `docs/source/sorafs_cli.md`
-- Governance/alias requirements prior to submission:
+- Төгсгөлийн загварууд (Bash туслахууд, нэгдсэн таних тохиргоо,
+  болон цэвэрлэх алхмууд): `docs/examples/sorafs_ci.md`
+- Сонголт бүрийг хамарсан CLI лавлагаа: `docs/source/sorafs_cli.md`
+- Өргөдөл гаргахаас өмнө засаглал/захиргааны шаардлага:
   `docs/source/sorafs/provider_admission_policy.md`
