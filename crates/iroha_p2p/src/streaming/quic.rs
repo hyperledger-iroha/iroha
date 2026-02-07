@@ -770,6 +770,11 @@ where
 
 fn build_transport_config(settings: TransportConfigSettings) -> Result<Arc<TransportConfig>> {
     let mut transport = TransportConfig::default();
+    // Quinn defaults to zero concurrent streams, which makes `open_uni()`/`accept_uni()` hang
+    // indefinitely. Streaming sessions always use at least one uni stream in each direction for
+    // control frames.
+    transport.max_concurrent_uni_streams(VarInt::from_u32(16));
+    transport.max_concurrent_bidi_streams(VarInt::from_u32(16));
     transport.datagram_receive_buffer_size(Some(settings.datagram_receive_buffer));
     transport.datagram_send_buffer_size(settings.datagram_send_buffer);
     transport.keep_alive_interval(Some(settings.idle_timeout / 2));
@@ -823,6 +828,8 @@ impl ServerCertVerifier for NoCertificateVerification {
 
 #[cfg(all(test, feature = "quic"))]
 mod tests {
+    use std::future::Future;
+
     use iroha_crypto::streaming::StreamingSession;
     use norito::streaming::{
         AudioCapability, CapabilityAck, CapabilityFlags, CapabilityReport, CapabilityRole,
@@ -835,6 +842,12 @@ mod tests {
     use super::*;
 
     const TEST_TIMEOUT: TokioDuration = TokioDuration::from_secs(10);
+
+    async fn within<T>(label: &'static str, fut: impl Future<Output = T>) -> T {
+        timeout(TEST_TIMEOUT, fut)
+            .await
+            .unwrap_or_else(|_| panic!("{label} timed out"))
+    }
 
     fn hash(byte: u8) -> Hash {
         [byte; 32]
@@ -896,15 +909,18 @@ mod tests {
         let server_task = {
             let server = server.clone();
             async move {
-                let mut conn = server.accept().await.expect("accept");
+                let mut conn = within("server.accept", server.accept()).await.expect("accept");
                 let publisher_caps = TransportCapabilities {
                     max_segment_datagram_size: settings.max_datagram_size as u16,
                     ..TransportCapabilities::kyber768_default()
                 };
-                let (report, transport_resolution) = CapabilityNegotiation::publisher_handshake(
-                    &mut conn,
-                    publisher_caps.clone(),
-                    |_| {},
+                let (report, transport_resolution) = within(
+                    "publisher_handshake",
+                    CapabilityNegotiation::publisher_handshake(
+                        &mut conn,
+                        publisher_caps.clone(),
+                        |_| {},
+                    ),
                 )
                 .await
                 .expect("report");
@@ -924,20 +940,27 @@ mod tests {
                     dplpmtud: report.dplpmtud,
                 };
                 let ack_frame = ControlFrame::CapabilityAck(ack.clone());
-                conn.send_control_frame(&ack_frame).await.expect("ack");
+                within("send_ack", conn.send_control_frame(&ack_frame))
+                    .await
+                    .expect("ack");
 
                 let announce = manifest();
                 let transport_hash = transport_resolution.capabilities_hash();
                 let mut manifest_with_hash = announce.clone();
                 manifest_with_hash.manifest.transport_capabilities_hash = transport_hash;
-                conn.send_control_frame(&ControlFrame::ManifestAnnounce(Box::new(
-                    manifest_with_hash.clone(),
-                )))
+                within(
+                    "send_manifest_announce",
+                    conn.send_control_frame(&ControlFrame::ManifestAnnounce(Box::new(
+                        manifest_with_hash.clone(),
+                    ))),
+                )
                 .await
                 .expect("announce");
 
                 let chunk = vec![0xDE, 0xAD, 0xBE, 0xEF];
-                conn.send_datagram(&chunk).await.expect("datagram");
+                within("send_datagram", conn.send_datagram(&chunk))
+                    .await
+                    .expect("datagram");
 
                 // allow the viewer to read before we close
                 sleep(TokioDuration::from_millis(50)).await;
@@ -946,9 +969,12 @@ mod tests {
         };
 
         let viewer_task = async {
-            let mut client = StreamingClient::connect(
-                &format!("/ip4/127.0.0.1/udp/{}/quic", listen_addr.port()),
-                settings,
+            let mut client = within(
+                "client.connect",
+                StreamingClient::connect(
+                    &format!("/ip4/127.0.0.1/udp/{}/quic", listen_addr.port()),
+                    settings,
+                ),
             )
             .await
             .expect("client");
@@ -978,14 +1004,17 @@ mod tests {
                 ..TransportCapabilities::kyber768_default()
             };
             let recorded_clone = Arc::clone(&recorded_hash);
-            let (ack, transport_resolution) = CapabilityNegotiation::viewer_handshake(
-                client.connection(),
-                viewer_caps,
-                report,
-                move |resolution| {
-                    *recorded_clone.lock().expect("recorded hash lock") =
-                        Some(resolution.capabilities_hash());
-                },
+            let (ack, transport_resolution) = within(
+                "viewer_handshake",
+                CapabilityNegotiation::viewer_handshake(
+                    client.connection(),
+                    viewer_caps,
+                    report,
+                    move |resolution| {
+                        *recorded_clone.lock().expect("recorded hash lock") =
+                            Some(resolution.capabilities_hash());
+                    },
+                ),
             )
             .await
             .unwrap();
@@ -997,7 +1026,9 @@ mod tests {
                 Some(transport_resolution.capabilities_hash())
             );
 
-            let frame = client.connection().next_control_frame().await.unwrap();
+            let frame = within("next_control_frame", client.connection().next_control_frame())
+                .await
+                .unwrap();
             match frame {
                 ControlFrame::ManifestAnnounce(frame) => {
                     assert_eq!(frame.manifest.stream_id, hash(1));
@@ -1009,15 +1040,16 @@ mod tests {
                 other => panic!("unexpected frame: {other:?}"),
             }
 
-            let chunk = client.connection().recv_datagram().await.unwrap();
+            let chunk = within("recv_datagram", client.connection().recv_datagram())
+                .await
+                .unwrap();
             assert_eq!(chunk.as_ref(), &[0xDE, 0xAD, 0xBE, 0xEF]);
 
-            client.close().await;
+            within("client.close", client.close()).await;
         };
 
-        let res = timeout(TEST_TIMEOUT, async { tokio::join!(server_task, viewer_task) }).await;
-        server.shutdown().await;
-        res.expect("capability_negotiation_and_datagram_roundtrip timed out");
+        tokio::join!(server_task, viewer_task);
+        within("server.shutdown", server.shutdown()).await;
     }
 
     #[tokio::test]
@@ -1037,14 +1069,17 @@ mod tests {
         let server_task = {
             let server = server.clone();
             async move {
-                let mut conn = server.accept().await.expect("accept");
+                let mut conn = within("server.accept", server.accept()).await.expect("accept");
                 let mut session = StreamingSession::new(CapabilityRole::Publisher);
 
                 let publisher_caps = TransportCapabilities::kyber768_default();
-                let (report, resolution) = CapabilityNegotiation::publisher_handshake(
-                    &mut conn,
-                    publisher_caps.clone(),
-                    |_| {},
+                let (report, resolution) = within(
+                    "publisher_handshake",
+                    CapabilityNegotiation::publisher_handshake(
+                        &mut conn,
+                        publisher_caps.clone(),
+                        |_| {},
+                    ),
                 )
                 .await
                 .expect("handshake");
@@ -1057,14 +1092,20 @@ mod tests {
                     max_datagram_size: resolution.max_segment_datagram_size,
                     dplpmtud: report.dplpmtud,
                 };
-                conn.send_control_frame(&ControlFrame::CapabilityAck(ack))
-                    .await
-                    .expect("ack");
+                within(
+                    "send_ack",
+                    conn.send_control_frame(&ControlFrame::CapabilityAck(ack)),
+                )
+                .await
+                .expect("ack");
 
                 let mut received_hint = false;
                 let mut received_report = false;
                 while !(received_hint && received_report) {
-                    match conn.next_control_frame().await.expect("frame") {
+                    match within("server.next_control_frame", conn.next_control_frame())
+                        .await
+                        .expect("frame")
+                    {
                         ControlFrame::FeedbackHint(hint) => {
                             session.process_feedback_hint(&hint);
                             received_hint = true;
@@ -1087,9 +1128,12 @@ mod tests {
         };
 
         let viewer_task = async move {
-            let mut client = StreamingClient::connect(
-                &format!("/ip4/127.0.0.1/udp/{}/quic", listen_addr.port()),
-                settings,
+            let mut client = within(
+                "client.connect",
+                StreamingClient::connect(
+                    &format!("/ip4/127.0.0.1/udp/{}/quic", listen_addr.port()),
+                    settings,
+                ),
             )
             .await
             .expect("client");
@@ -1115,11 +1159,14 @@ mod tests {
                 max_segment_datagram_size: settings.max_datagram_size as u16,
                 ..TransportCapabilities::kyber768_default()
             };
-            let (_ack, _resolution) = CapabilityNegotiation::viewer_handshake(
-                client.connection(),
-                viewer_caps,
-                report,
-                |_| {},
+            let (_ack, _resolution) = within(
+                "viewer_handshake",
+                CapabilityNegotiation::viewer_handshake(
+                    client.connection(),
+                    viewer_caps,
+                    report,
+                    |_| {},
+                ),
             )
             .await
             .expect("viewer handshake");
@@ -1150,23 +1197,28 @@ mod tests {
                 sync_diagnostics: None,
             };
 
-            client
-                .connection()
-                .send_control_frame(&ControlFrame::FeedbackHint(hint))
-                .await
-                .expect("send hint");
-            client
-                .connection()
-                .send_control_frame(&ControlFrame::ReceiverReport(recv_report))
-                .await
-                .expect("send report");
+            within(
+                "send_hint",
+                client
+                    .connection()
+                    .send_control_frame(&ControlFrame::FeedbackHint(hint)),
+            )
+            .await
+            .expect("send hint");
+            within(
+                "send_report",
+                client
+                    .connection()
+                    .send_control_frame(&ControlFrame::ReceiverReport(recv_report)),
+            )
+            .await
+            .expect("send report");
 
-            client.close().await;
+            within("client.close", client.close()).await;
         };
 
-        let res = timeout(TEST_TIMEOUT, async { tokio::join!(server_task, viewer_task) }).await;
-        server.shutdown().await;
-        res.expect("feedback_frames_roundtrip_over_quic timed out");
+        tokio::join!(server_task, viewer_task);
+        within("server.shutdown", server.shutdown()).await;
     }
 
     #[tokio::test]
@@ -1186,14 +1238,16 @@ mod tests {
         let server_task = {
             let server = server.clone();
             async move {
-                let mut conn = server.accept().await.expect("accept");
+                let mut conn = within("server.accept", server.accept()).await.expect("accept");
 
                 let mut publisher_caps = TransportCapabilities::kyber768_default();
                 publisher_caps.max_segment_datagram_size = 1100;
-                let (report, resolution) =
-                    CapabilityNegotiation::publisher_handshake(&mut conn, publisher_caps, |_| {})
-                        .await
-                        .expect("handshake");
+                let (report, resolution) = within(
+                    "publisher_handshake",
+                    CapabilityNegotiation::publisher_handshake(&mut conn, publisher_caps, |_| {}),
+                )
+                .await
+                .expect("handshake");
                 assert!(resolution.use_datagram);
                 assert_eq!(resolution.max_segment_datagram_size, 900);
                 assert_eq!(conn.max_datagram_size(), 900);
@@ -1208,18 +1262,24 @@ mod tests {
                     max_datagram_size: resolution.max_segment_datagram_size,
                     dplpmtud: report.dplpmtud,
                 };
-                conn.send_control_frame(&ControlFrame::CapabilityAck(ack))
-                    .await
-                    .expect("ack");
+                within(
+                    "send_ack",
+                    conn.send_control_frame(&ControlFrame::CapabilityAck(ack)),
+                )
+                .await
+                .expect("ack");
 
                 conn.close();
             }
         };
 
         let viewer_task = async move {
-            let mut client = StreamingClient::connect(
-                &format!("/ip4/127.0.0.1/udp/{}/quic", listen_addr.port()),
-                settings,
+            let mut client = within(
+                "client.connect",
+                StreamingClient::connect(
+                    &format!("/ip4/127.0.0.1/udp/{}/quic", listen_addr.port()),
+                    settings,
+                ),
             )
             .await
             .expect("client");
@@ -1245,11 +1305,14 @@ mod tests {
                 dplpmtud: true,
             };
 
-            let (ack, resolution) = CapabilityNegotiation::viewer_handshake(
-                client.connection(),
-                viewer_caps,
-                report,
-                |_| {},
+            let (ack, resolution) = within(
+                "viewer_handshake",
+                CapabilityNegotiation::viewer_handshake(
+                    client.connection(),
+                    viewer_caps,
+                    report,
+                    |_| {},
+                ),
             )
             .await
             .expect("handshake");
@@ -1260,23 +1323,20 @@ mod tests {
             assert!(client.connection().datagram_enabled());
 
             let payload = vec![0_u8; 901];
-            let err = client
-                .connection()
-                .send_datagram(&payload)
-                .await
-                .unwrap_err();
+            let err =
+                within("send_oversized_datagram", client.connection().send_datagram(&payload))
+                    .await
+                    .unwrap_err();
             match err {
                 Error::DatagramTooLarge { max, .. } => assert_eq!(max, 900),
                 other => panic!("unexpected error: {other:?}"),
             }
 
-            client.close().await;
+            within("client.close", client.close()).await;
         };
 
-        let res =
-            timeout(TEST_TIMEOUT, async { tokio::join!(server_task, viewer_task) }).await;
-        server.shutdown().await;
-        res.expect("mtu_negotiation_clamps_to_smallest_limit timed out");
+        tokio::join!(server_task, viewer_task);
+        within("server.shutdown", server.shutdown()).await;
     }
 
     #[tokio::test]
@@ -1296,14 +1356,16 @@ mod tests {
         let server_task = {
             let server = server.clone();
             async move {
-                let mut conn = server.accept().await.expect("accept");
+                let mut conn = within("server.accept", server.accept()).await.expect("accept");
 
                 let mut publisher_caps = TransportCapabilities::kyber768_default();
                 publisher_caps.supports_datagram = false;
-                let (report, resolution) =
-                    CapabilityNegotiation::publisher_handshake(&mut conn, publisher_caps, |_| {})
-                        .await
-                        .expect("handshake");
+                let (report, resolution) = within(
+                    "publisher_handshake",
+                    CapabilityNegotiation::publisher_handshake(&mut conn, publisher_caps, |_| {}),
+                )
+                .await
+                .expect("handshake");
                 assert!(!resolution.use_datagram);
                 assert_eq!(resolution.max_segment_datagram_size, 0);
                 assert_eq!(conn.max_datagram_size(), 0);
@@ -1316,18 +1378,24 @@ mod tests {
                     max_datagram_size: 0,
                     dplpmtud: report.dplpmtud,
                 };
-                conn.send_control_frame(&ControlFrame::CapabilityAck(ack))
-                    .await
-                    .expect("ack");
+                within(
+                    "send_ack",
+                    conn.send_control_frame(&ControlFrame::CapabilityAck(ack)),
+                )
+                .await
+                .expect("ack");
 
                 conn.close();
             }
         };
 
         let viewer_task = async move {
-            let mut client = StreamingClient::connect(
-                &format!("/ip4/127.0.0.1/udp/{}/quic", listen_addr.port()),
-                settings,
+            let mut client = within(
+                "client.connect",
+                StreamingClient::connect(
+                    &format!("/ip4/127.0.0.1/udp/{}/quic", listen_addr.port()),
+                    settings,
+                ),
             )
             .await
             .expect("client");
@@ -1353,11 +1421,14 @@ mod tests {
                 dplpmtud: false,
             };
 
-            let (ack, resolution) = CapabilityNegotiation::viewer_handshake(
-                client.connection(),
-                viewer_caps,
-                report,
-                |_| {},
+            let (ack, resolution) = within(
+                "viewer_handshake",
+                CapabilityNegotiation::viewer_handshake(
+                    client.connection(),
+                    viewer_caps,
+                    report,
+                    |_| {},
+                ),
             )
             .await
             .expect("handshake");
@@ -1368,9 +1439,7 @@ mod tests {
             assert!(!client.connection().datagram_enabled());
 
             let payload = vec![0_u8; 1];
-            let err = client
-                .connection()
-                .send_datagram(&payload)
+            let err = within("send_datagram", client.connection().send_datagram(&payload))
                 .await
                 .unwrap_err();
             match err {
@@ -1378,11 +1447,10 @@ mod tests {
                 other => panic!("unexpected error: {other:?}"),
             }
 
-            client.close().await;
+            within("client.close", client.close()).await;
         };
 
-        let res = timeout(TEST_TIMEOUT, async { tokio::join!(server_task, viewer_task) }).await;
-        server.shutdown().await;
-        res.expect("datagram_disabled_sets_zero_limit timed out");
+        tokio::join!(server_task, viewer_task);
+        within("server.shutdown", server.shutdown()).await;
     }
 }

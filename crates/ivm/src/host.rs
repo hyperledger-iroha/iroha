@@ -2270,8 +2270,13 @@ mod tests {
     fn expect_tlv_enforces_pointer_policy() {
         crate::set_banner_enabled(false);
         let mut vm = IVM::new(u64::MAX);
-        let program = ProgramMetadata::default_for(1, 0, 2).encode();
+        let program = ProgramMetadata::default_for(1, 0, 1).encode();
         vm.load_program(&program).expect("load program");
+        // The first release only admits ABI v1 programs, but we still want to
+        // ensure the pointer policy mechanism is enforced when a host installs
+        // a stricter policy (e.g., for experiments).
+        let _guard =
+            crate::pointer_abi::PointerPolicyGuard::install(crate::SyscallPolicy::Experimental(2), 2);
         let mut tlv = Vec::new();
         tlv.extend_from_slice(&(PointerType::AccountId as u16).to_be_bytes());
         tlv.push(1);
